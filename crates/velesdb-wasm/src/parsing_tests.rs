@@ -177,3 +177,26 @@ fn test_parse_search_quality_unknown() {
     assert!(err.is_err());
     assert!(err.unwrap_err().contains("Unknown search quality"));
 }
+
+/// Each ef is bounded as on every other surface (#2275): WASM applies no ef,
+/// but it refuses the modes the server refuses.
+#[test]
+fn test_parse_advanced_quality_bounds_every_ef() {
+    use velesdb_core::api_types::{MAX_EF_SEARCH, MIN_EF_SEARCH};
+    for mode in [
+        format!("custom:{}", MAX_EF_SEARCH + 1),
+        format!("custom:{}", MIN_EF_SEARCH - 1),
+        format!("adaptive:0:{MAX_EF_SEARCH}"),
+        format!("adaptive:{MIN_EF_SEARCH}:{}", MAX_EF_SEARCH + 1),
+    ] {
+        let err = parse_search_quality_inner(&mode).expect_err(&mode);
+        assert!(
+            err.contains("ef_search must be an integer between"),
+            "{mode}: {err}"
+        );
+    }
+    assert!(parse_search_quality_inner(&format!("custom:{MAX_EF_SEARCH}")).is_ok());
+    assert!(
+        parse_search_quality_inner(&format!("adaptive:{MIN_EF_SEARCH}:{MAX_EF_SEARCH}")).is_ok()
+    );
+}

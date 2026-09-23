@@ -685,7 +685,14 @@ fn test_parse_search_mode_names_the_out_of_range_ef() {
         (format!("custom:{too_big}"), too_big.clone()),
         (format!("CUSTOM:{past_u64}"), past_u64),
         (format!("adaptive:0:{MAX_EF_SEARCH}"), "0".to_string()),
-        (format!("adaptive:{MIN_EF_SEARCH}:{too_big}"), too_big),
+        (
+            format!("adaptive:{MIN_EF_SEARCH}:{too_big}"),
+            too_big.clone(),
+        ),
+        // Negative: an integer, so out of range, as `ef_search = -5` is.
+        ("custom:-5".to_string(), "-5".to_string()),
+        // Out of order too, but no order makes 4097 a valid bound.
+        (format!("adaptive:{too_big}:32"), too_big),
     ] {
         let err = parse_search_mode(&mode).expect_err(&mode);
         let expected = format!("Search mode '{mode}': {}", ef_search_out_of_range(shown));
@@ -693,8 +700,9 @@ fn test_parse_search_mode_names_the_out_of_range_ef() {
     }
 }
 
-/// An out-of-range bound does not turn a malformed or out-of-order
-/// `adaptive:` mode into a range error: it stays an unknown mode (#2275).
+/// A malformed `adaptive:` mode stays an unknown one whatever its other
+/// bound holds, and so does an out-of-order one whose bounds are both in
+/// range (#2275).
 #[cfg(feature = "persistence")]
 #[test]
 fn test_parse_search_mode_malformed_adaptive_stays_unknown() {

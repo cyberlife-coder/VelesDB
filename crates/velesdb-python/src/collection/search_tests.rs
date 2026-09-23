@@ -71,7 +71,7 @@ fn test_parse_custom_invalid_value() {
     init_python();
     let err = parse_search_quality("custom:abc").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("Invalid custom ef_search"), "got: {msg}");
+    assert!(msg.contains("Unknown search mode"), "got: {msg}");
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn test_parse_custom_empty_value() {
     init_python();
     let err = parse_search_quality("custom:").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("Invalid custom ef_search"), "got: {msg}");
+    assert!(msg.contains("Unknown search mode"), "got: {msg}");
 }
 
 // ---- Adaptive mode ----
@@ -128,7 +128,7 @@ fn test_parse_adaptive_inverted_range() {
     init_python();
     let err = parse_search_quality("adaptive:512:32").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("must be <= max_ef"), "got: {msg}");
+    assert!(msg.contains("Unknown search mode"), "got: {msg}");
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn test_parse_adaptive_missing_max() {
     init_python();
     let err = parse_search_quality("adaptive:32").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("Invalid adaptive format"), "got: {msg}");
+    assert!(msg.contains("Unknown search mode"), "got: {msg}");
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn test_parse_adaptive_non_numeric() {
     init_python();
     let err = parse_search_quality("adaptive:a:b").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("Invalid adaptive min_ef"), "got: {msg}");
+    assert!(msg.contains("Unknown search mode"), "got: {msg}");
 }
 
 // ---- ef range (#2275) ----
@@ -187,7 +187,7 @@ fn test_parse_unknown_mode() {
     init_python();
     let err = parse_search_quality("nonexistent").unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("Unknown search quality"), "got: {msg}");
+    assert!(msg.contains("Unknown search mode"), "got: {msg}");
     assert!(
         msg.contains("custom:<ef>"),
         "error should mention custom syntax: {msg}"

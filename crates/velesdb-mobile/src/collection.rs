@@ -112,11 +112,18 @@ impl VelesCollection {
     ///
     /// * `vector` - Query vector
     /// * `limit` - Maximum number of results to return
-    /// * `quality` - Search quality profile (Fast, Balanced, Accurate, etc.)
+    /// * `quality` - Search quality profile (Fast, Balanced, Accurate, etc.).
+    ///   `Custom`'s `ef` and `Adaptive`'s bounds must lie in the `ef_search`
+    ///   range, 16 to 4096.
     ///
     /// # Returns
     ///
     /// Vector of search results sorted by similarity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VelesError::Database`] when a `Custom` or `Adaptive` ef falls
+    /// outside that range (#2275), or when the search itself fails.
     pub fn search_with_quality(
         &self,
         vector: Vec<f32>,

@@ -128,7 +128,7 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | Method | Returns | Notes |
 |---|---|---|
 | `search(query, k)` | `[[id, score], …]` | Brute-force k-NN over every vector. |
-| `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity. |
+| `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity, and is checked as the server checks it: each ef in 16–4096, or it throws (#2275). |
 | `search_with_filter(query, k, filter)` | `[{id, score, payload}, …]` | Metadata-filtered search. |
 | `text_search(query, k, field?)` | `[{id, score, payload}, …]` | Full-text over payload fields. |
 | `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion. |

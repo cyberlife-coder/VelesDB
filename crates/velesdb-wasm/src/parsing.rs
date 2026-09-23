@@ -87,9 +87,11 @@ fn warn_if_pq_fallback(_core: velesdb_core::StorageMode) {}
 ///
 /// In WASM, search is brute-force O(n) — there is no HNSW graph, so
 /// `ef_search` has no effect. This function validates the quality string
-/// (rejecting unknown modes) for forward-compatibility. The core
-/// `SearchQuality` enum is behind the `persistence` feature gate, so we
-/// validate locally without depending on it.
+/// (rejecting unknown modes) for forward-compatibility, and bounds each ef to
+/// the range every other surface enforces, `validate_ef_search`'s, so a mode
+/// the server refuses is refused here too (#2275). The core `SearchQuality`
+/// enum and `parse_search_mode` are behind the `persistence` feature gate, so
+/// the shape is read locally.
 ///
 /// # Supported values
 ///
@@ -118,13 +120,13 @@ fn parse_search_quality_inner(mode: &str) -> Result<(), String> {
 /// Validates `custom:<ef>` and `adaptive:<min_ef>:<max_ef>` quality modes.
 fn parse_advanced_quality(mode: &str) -> Result<(), String> {
     if let Some(ef_str) = mode.strip_prefix("custom:") {
-        ef_str.parse::<usize>().map_err(|_| {
+        let ef = ef_str.parse::<usize>().map_err(|_| {
             format!(
                 "Invalid custom ef_search value: '{ef_str}'. Expected integer, \
                  e.g. 'custom:256'"
             )
         })?;
-        return Ok(());
+        return velesdb_core::api_types::validate_ef_search(ef);
     }
     if let Some(params) = mode.strip_prefix("adaptive:") {
         return parse_adaptive_params(params);
@@ -149,6 +151,8 @@ fn parse_adaptive_params(params: &str) -> Result<(), String> {
     let max_ef = parts[1]
         .parse::<usize>()
         .map_err(|_| format!("Invalid adaptive max_ef: '{}'", parts[1]))?;
+    velesdb_core::api_types::validate_ef_search(min_ef)?;
+    velesdb_core::api_types::validate_ef_search(max_ef)?;
     if min_ef > max_ef {
         return Err(format!(
             "Adaptive min_ef ({min_ef}) must be <= max_ef ({max_ef})"

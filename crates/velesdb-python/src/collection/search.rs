@@ -700,74 +700,14 @@ fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
 
 /// Parse a Python quality mode string into [`SearchQuality`].
 ///
-/// Supports named modes (`fast`, `balanced`, `accurate`, `perfect`, `autotune`)
-/// plus advanced modes:
-/// - `"custom:<ef>"` for a custom `ef_search` value
-/// - `"adaptive:<min_ef>:<max_ef>"` for two-phase adaptive search
+/// Delegates to [`velesdb_core::api_types::parse_search_mode`], the parser
+/// REST, VelesQL, the CLI and Tauri use, so a mode means the same thing, and
+/// fails with the same message, on every surface: the named modes
+/// (`fast`, `balanced`, `accurate`, `perfect`, `autotune`), `custom:<ef>`
+/// and `adaptive:<min_ef>:<max_ef>`, each ef in the `ef_search` range
+/// (#2275). A copy of that parser lived here and answered differently.
 fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
-    let lower = mode.to_lowercase();
-    match lower.as_str() {
-        "fast" => Ok(velesdb_core::SearchQuality::Fast),
-        "balanced" => Ok(velesdb_core::SearchQuality::Balanced),
-        "accurate" => Ok(velesdb_core::SearchQuality::Accurate),
-        "perfect" => Ok(velesdb_core::SearchQuality::Perfect),
-        "autotune" | "auto_tune" | "auto" => Ok(velesdb_core::SearchQuality::AutoTune),
-        other => parse_advanced_quality(other),
-    }
-}
-
-/// Parse advanced quality modes: `custom:<ef>` and `adaptive:<min_ef>:<max_ef>`.
-///
-/// `ef` is checked against the same range as `search_with_ef`'s dedicated
-/// `ef_search` argument, [`velesdb_core::api_types::validate_ef_search`]'s,
-/// so this spelling of the option cannot reach the search path with an
-/// unbounded `ef` (#2275).
-fn parse_advanced_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
-    if let Some(ef_str) = mode.strip_prefix("custom:") {
-        let ef = ef_str.parse::<usize>().map_err(|_| {
-            PyValueError::new_err(format!(
-                "Invalid custom ef_search value: '{ef_str}'. Expected a positive integer, \
-                 e.g. 'custom:256'"
-            ))
-        })?;
-        velesdb_core::api_types::validate_ef_search(ef).map_err(PyValueError::new_err)?;
-        return Ok(velesdb_core::SearchQuality::Custom(ef));
-    }
-    if let Some(params) = mode.strip_prefix("adaptive:") {
-        return parse_adaptive_params(params);
-    }
-    Err(PyValueError::new_err(format!(
-        "Unknown search quality: '{mode}'. Valid: fast, balanced, accurate, perfect, \
-         autotune, custom:<ef>, adaptive:<min_ef>:<max_ef>"
-    )))
-}
-
-/// Parse `<min_ef>:<max_ef>` for the adaptive quality mode.
-///
-/// `min_ef` and `max_ef` are each checked against the same `ef_search` range
-/// `custom:<ef>` enforces (#2275).
-fn parse_adaptive_params(params: &str) -> PyResult<velesdb_core::SearchQuality> {
-    let parts: Vec<&str> = params.split(':').collect();
-    if parts.len() != 2 {
-        return Err(PyValueError::new_err(format!(
-            "Invalid adaptive format: 'adaptive:{params}'. \
-             Expected 'adaptive:<min_ef>:<max_ef>', e.g. 'adaptive:32:512'"
-        )));
-    }
-    let min_ef = parts[0]
-        .parse::<usize>()
-        .map_err(|_| PyValueError::new_err(format!("Invalid adaptive min_ef: '{}'", parts[0])))?;
-    let max_ef = parts[1]
-        .parse::<usize>()
-        .map_err(|_| PyValueError::new_err(format!("Invalid adaptive max_ef: '{}'", parts[1])))?;
-    if min_ef > max_ef {
-        return Err(PyValueError::new_err(format!(
-            "Adaptive min_ef ({min_ef}) must be <= max_ef ({max_ef})"
-        )));
-    }
-    velesdb_core::api_types::validate_ef_search(min_ef).map_err(PyValueError::new_err)?;
-    velesdb_core::api_types::validate_ef_search(max_ef).map_err(PyValueError::new_err)?;
-    Ok(velesdb_core::SearchQuality::Adaptive { min_ef, max_ef })
+    velesdb_core::api_types::parse_search_mode(mode).map_err(PyValueError::new_err)
 }
 
 #[cfg(test)]

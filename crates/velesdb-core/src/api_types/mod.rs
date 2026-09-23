@@ -147,7 +147,8 @@ pub(crate) const SEARCH_MODE_FORMS: &str = concat!(
 /// them (an unknown name, or `custom:`/`adaptive:` with a malformed or
 /// out-of-order argument), and one naming the value when a `custom:` or
 /// `adaptive:` ef is an integer outside `[MIN_EF_SEARCH, MAX_EF_SEARCH]`,
-/// the range the dedicated `ef_search` option enforces (#2275).
+/// the range the dedicated `ef_search` option enforces (#2275). The range
+/// is checked first: `adaptive:5000:32` names 5000.
 #[cfg(feature = "persistence")]
 pub fn parse_search_mode(mode: &str) -> Result<crate::SearchQuality, String> {
     let quality = match mode.to_lowercase().as_str() {
@@ -163,8 +164,10 @@ pub fn parse_search_mode(mode: &str) -> Result<crate::SearchQuality, String> {
 }
 
 /// Parses the advanced search quality modes, `custom:<ef>` and
-/// `adaptive:<min_ef>:<max_ef>`: `Ok(None)` for a malformed or out-of-order
-/// one, `Err` for a well-formed one whose ef is out of range.
+/// `adaptive:<min_ef>:<max_ef>`: `Err` when an ef is an integer out of
+/// range, which is checked before the order of the adaptive bounds, since no
+/// order makes such a bound valid; `Ok(None)` for a malformed mode, or an
+/// out-of-order one whose bounds are both in range.
 #[cfg(feature = "persistence")]
 fn parse_advanced_quality(mode: &str) -> Result<Option<crate::SearchQuality>, String> {
     if let Some(ef) = mode.strip_prefix("custom:") {
@@ -188,13 +191,18 @@ fn parse_advanced_quality(mode: &str) -> Result<Option<crate::SearchQuality>, St
 }
 
 /// Reads one ef of an advanced search mode: `None` when `raw` is not an
-/// integer, `Some(Err)` when it is one outside the `ef_search` range, one
-/// past `usize::MAX` included.
+/// integer, `Some(Err)` when it is one outside the `ef_search` range: a
+/// negative one, and one past `usize::MAX`, included, as `WITH (ef_search =
+/// ...)` reads them.
 #[cfg(feature = "persistence")]
 fn parse_mode_ef(raw: &str) -> Option<Result<usize, String>> {
-    match raw.parse::<usize>() {
-        Ok(ef) => Some(validate_ef_search(ef).map(|()| ef)),
-        Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => {
+    use std::num::IntErrorKind::{NegOverflow, PosOverflow};
+    let in_range = |ef: usize| validate_ef_search(ef).map(|()| ef);
+    match raw.parse::<i128>() {
+        Ok(ef) => {
+            Some(usize::try_from(ef).map_or_else(|_| Err(ef_search_out_of_range(raw)), in_range))
+        }
+        Err(e) if matches!(e.kind(), PosOverflow | NegOverflow) => {
             Some(Err(ef_search_out_of_range(raw)))
         }
         Err(_) => None,

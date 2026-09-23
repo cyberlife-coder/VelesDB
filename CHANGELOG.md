@@ -1132,9 +1132,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     4096, got 5000` — instead of calling a well-formed mode unknown; an
     integer past `usize::MAX` is out of range too, not malformed.
     `mode_to_search_quality` is now `parse_search_mode(..).ok()`, one
-    implementation instead of two;
-  - `velesdb-python`'s own mode parser raises `ValueError` with the message
-    `search_with_ef` already gives;
+    implementation instead of two. A negative ef is out of range too, as
+    `WITH (ef_search = -5)` is, and the range is checked before the order of
+    the adaptive bounds: `adaptive:5000:32` names 5000;
+  - `velesdb-python` drops its own copy of that parser and calls
+    `parse_search_mode`, raising `ValueError` with its message. A malformed
+    mode's message changes with it, from `Unknown search quality`,
+    `Invalid custom ef_search value`, `Invalid adaptive ...` or
+    `Adaptive min_ef ... must be <= max_ef` to core's
+    `Unknown search mode '...'. Valid values: ...`;
+  - `velesdb-wasm`'s `search_with_quality` applies no ef, but now refuses
+    what the server refuses: an ef outside the range throws;
   - `velesdb-mobile`'s conversion to the core `SearchQuality` is now
     `TryFrom` instead of `From`, and `search_with_quality` throws
     `VelesError.Database` where `Custom { ef: u32::MAX }` used to run an
@@ -1143,8 +1151,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Breaking for a client that sent such a mode and got results: it now gets a
   `400` (REST), a `422` with `V013` (VelesQL over `/query`), a `ValueError`
-  (Python) or a thrown `VelesError` (mobile). The WASM executor reads no
-  `WITH` option, so it neither applies nor checks these modes.
+  (Python), a thrown `VelesError` (mobile) or a thrown error (WASM's
+  `search_with_quality`). The WASM executor reads no `WITH` option, so a
+  VelesQL query there neither applies nor checks these modes.
 
 - **`.vectors` now has a v2 format: the payload starts page-aligned at byte
   4096 instead of byte 16.** The header fields are unchanged and at the same
