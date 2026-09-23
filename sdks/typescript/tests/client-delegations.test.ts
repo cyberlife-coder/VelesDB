@@ -345,12 +345,19 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
 });
 
 describe('VelesDB — batch write delegations', () => {
-  it('upsertBatchRaw validates each document and returns the backend count', async () => {
+  it('upsertBatchRaw returns the backend count and refuses a non-array', async () => {
     const { db, backend } = setup();
     const docs = [{ id: 1, vector: [0.1] }, { id: 2, vector: [0.2] }];
     await expect(db.upsertBatchRaw('c', docs)).resolves.toBe(2);
     expect(backend.upsertBatchRaw).toHaveBeenCalledWith('c', docs);
     await expect(db.upsertBatchRaw('c', null as never)).rejects.toThrow(ValidationError);
+  });
+
+  it('upsertBatchRaw refuses the whole batch on one malformed document', async () => {
+    const { db, backend } = setup();
+    const docs = [{ id: 1, vector: [0.1] }, { id: 2, vector: 'x' as never }];
+    await expect(db.upsertBatchRaw('c', docs)).rejects.toThrow(ValidationError);
+    expect(backend.upsertBatchRaw).not.toHaveBeenCalled();
   });
 
   it('bulkDelete returns the backend count', async () => {

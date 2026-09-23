@@ -45,6 +45,14 @@ async function initBackend(): Promise<RestBackend> {
   return backend;
 }
 
+/** The point count and dimension a raw-bulk body declares (little-endian, bytes 4 and 8). */
+function rawBulkHeader(body: unknown): { count: number; dim: number } {
+  expect(body).toBeInstanceOf(Uint8Array);
+  const bytes = body as Uint8Array;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { count: view.getUint32(4, true), dim: view.getUint32(8, true) };
+}
+
 function mockOk(body: unknown) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
@@ -128,14 +136,14 @@ describe('RestBackend — CRUD facade delegation', () => {
     ]);
     const [url, opts] = mockFetch.mock.calls[0]!;
     expect(String(url)).toContain('/collections/docs/points/raw');
-    expect(opts?.body).toBeInstanceOf(Uint8Array);
+    expect(rawBulkHeader(opts?.body)).toEqual({ count: 2, dim: 2 });
     expect(count).toBe(2);
   });
 
-  it('upsertBatchRaw accepts an empty batch, with no first vector to size it from', async () => {
+  it('upsertBatchRaw sizes an empty batch at dimension 0', async () => {
     mockOk({ count: 0 });
     await expect(backend.upsertBatchRaw('docs', [])).resolves.toBe(0);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(rawBulkHeader(mockFetch.mock.calls[0]![1]?.body)).toEqual({ count: 0, dim: 0 });
   });
 
   it('scroll delegates to scroll-backend', async () => {
@@ -185,19 +193,23 @@ describe('RestBackend — search facade delegation', () => {
     const [url, opts] = mockFetch.mock.calls[0]!;
     expect(String(url)).toContain('/collections/docs/search/multi/ids');
     expect(opts?.method).toBe('POST');
+    expect(JSON.parse(opts!.body as string)).toMatchObject({
+      vectors: [[0.1], [0.2]],
+      top_k: 10,
+      strategy: 'rrf',
+    });
     expect(result).toEqual([{ id: 3, score: 0.7 }]);
   });
 
   it('sparseSearchNamed posts the named sparse index', async () => {
     mockOk({ results: [{ id: 4, score: 0.6 }] });
-    const result = await backend.sparseSearchNamed(
-      'docs',
-      { indices: [1], values: [0.5] },
-      'title',
-    );
+    const result = await backend.sparseSearchNamed('docs', { 1: 0.5 }, 'title');
     const [url, opts] = mockFetch.mock.calls[0]!;
     expect(String(url)).toContain('/collections/docs/search');
-    expect(JSON.parse(opts!.body as string)).toMatchObject({ sparse_index: 'title' });
+    expect(JSON.parse(opts!.body as string)).toMatchObject({
+      sparse_vectors: { title: { '1': 0.5 } },
+      sparse_index: 'title',
+    });
     expect(result).toEqual([{ id: 4, score: 0.6 }]);
   });
 });

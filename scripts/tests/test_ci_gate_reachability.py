@@ -2499,10 +2499,10 @@ class TypeScriptSdkIsLintedTests(unittest.TestCase):
             r"\bvitest run\b.*--coverage\b",
             f"`npm run test:coverage` no longer runs vitest under coverage ({script!r})",
         )
-        self.assertIn(
-            "thresholds",
+        self.assertRegex(
             TS_SDK_VITEST_CONFIG.read_text(encoding="utf-8"),
-            "vitest.config.ts declares no coverage thresholds, so running under "
+            re.compile(r"^\s*thresholds\s*:\s*\{", re.MULTILINE),
+            "vitest.config.ts declares no `thresholds:` key, so running under "
             "coverage enforces nothing",
         )
 
