@@ -118,3 +118,23 @@ fn test_a_small_index_keeps_its_upper_layers_small() {
         );
     }
 }
+
+/// Past the 256-slot floor the slow path's headroom is an eighth of the
+/// nodes held: every layer stays within that of the count, where a doubling
+/// growth would leave up to as many slots unused as used.
+#[test]
+fn test_growth_past_the_floor_stays_within_an_eighth() {
+    let hnsw = graph(0);
+    for i in 0..3_000_u16 {
+        hnsw.insert(&[f32::from(i), 0.0, 0.0, 0.0]).expect("insert");
+    }
+    let held = hnsw.len();
+    let bound = held + held / 8 + 1;
+    for (level, layer) in hnsw.layers.read().iter().enumerate() {
+        assert!(
+            layer.neighbors.len() <= bound,
+            "layer {level} holds {} slots for {held} nodes, past {bound}",
+            layer.neighbors.len()
+        );
+    }
+}
