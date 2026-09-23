@@ -120,6 +120,24 @@ describe('RestBackend — CRUD facade delegation', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  it('upsertBatchRaw posts a binary body to the raw route', async () => {
+    mockOk({ count: 2 });
+    const count = await backend.upsertBatchRaw('docs', [
+      { id: 1, vector: [0.1, 0.2] },
+      { id: 2, vector: [0.3, 0.4] },
+    ]);
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/points/raw');
+    expect(opts?.body).toBeInstanceOf(Uint8Array);
+    expect(count).toBe(2);
+  });
+
+  it('upsertBatchRaw accepts an empty batch, with no first vector to size it from', async () => {
+    mockOk({ count: 0 });
+    await expect(backend.upsertBatchRaw('docs', [])).resolves.toBe(0);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('scroll delegates to scroll-backend', async () => {
     mockOk({ points: [], next_cursor: null });
     await backend.scroll('docs');
@@ -159,6 +177,28 @@ describe('RestBackend — search facade delegation', () => {
     mockOk({ results: [{ id: 1, score: 0.9 }] });
     const result = await backend.searchIds('docs', [0.1]);
     expect(result).toEqual([{ id: 1, score: 0.9 }]);
+  });
+
+  it('multiQuerySearchIds posts to the ids-only fusion route', async () => {
+    mockOk({ results: [{ id: 3, score: 0.7 }] });
+    const result = await backend.multiQuerySearchIds('docs', [[0.1], [0.2]]);
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/search/multi/ids');
+    expect(opts?.method).toBe('POST');
+    expect(result).toEqual([{ id: 3, score: 0.7 }]);
+  });
+
+  it('sparseSearchNamed posts the named sparse index', async () => {
+    mockOk({ results: [{ id: 4, score: 0.6 }] });
+    const result = await backend.sparseSearchNamed(
+      'docs',
+      { indices: [1], values: [0.5] },
+      'title',
+    );
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/search');
+    expect(JSON.parse(opts!.body as string)).toMatchObject({ sparse_index: 'title' });
+    expect(result).toEqual([{ id: 4, score: 0.6 }]);
   });
 });
 
@@ -383,6 +423,14 @@ describe('RestBackend — streaming facade delegation', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     backend = await initBackend();
+  });
+
+  it('enableStreaming posts the snake_case config', async () => {
+    mockOk({});
+    await backend.enableStreaming('docs', { bufferSize: 64 });
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/stream/enable');
+    expect(JSON.parse(opts!.body as string)).toEqual({ buffer_size: 64 });
   });
 
   it('trainPq delegates', async () => {

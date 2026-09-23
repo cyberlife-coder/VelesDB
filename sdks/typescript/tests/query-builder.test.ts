@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { VelesQLBuilder, velesql } from '../src/query-builder';
+import { velesql } from '../src/query-builder';
 
 describe('VelesQLBuilder', () => {
   describe('Basic MATCH patterns', () => {

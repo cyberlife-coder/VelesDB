@@ -4,7 +4,7 @@
  * The pre-existing query-builder tests only string-matched the builder
  * output, which is exactly why three invalid-VelesQL bugs shipped
  * (`vector NEAR $x TOP n`, MATCH-only output with ORDER BY/LIMIT before
- * the mandatory RETURN, and fusion rendered as an inert `/* FUSION ... *​/`
+ * the mandatory RETURN, and fusion rendered as an inert FUSION block
  * comment).
  *
  * This suite feeds every `toVelesQL()` output through the REAL core parser

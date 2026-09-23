@@ -35,6 +35,8 @@ function buildBackend(): IVelesDBBackend {
 
     upsert: vi.fn(() => Promise.resolve()),
     upsertBatch: vi.fn(() => Promise.resolve()),
+    upsertBatchRaw: vi.fn(() => Promise.resolve(2)),
+    bulkDelete: vi.fn(() => Promise.resolve(2)),
     delete: vi.fn(() => Promise.resolve(true)),
     get: vi.fn(() => Promise.resolve(null)),
     isEmpty: vi.fn(() => Promise.resolve(true)),
@@ -45,6 +47,7 @@ function buildBackend(): IVelesDBBackend {
     textSearch: vi.fn(() => Promise.resolve([])),
     hybridSearch: vi.fn(() => Promise.resolve([])),
     multiQuerySearch: vi.fn(() => Promise.resolve([])),
+    multiQuerySearchIds: vi.fn(() => Promise.resolve([{ id: 1, score: 0.5 }])),
     searchIds: vi.fn(() => Promise.resolve([])),
     sparseSearchNamed: vi.fn(() => Promise.resolve([])),
 
@@ -116,8 +119,10 @@ function injectBackend(
   (db as unknown as { backend: IVelesDBBackend }).backend = backend;
 }
 
-function setup(): { db: VelesDB; backend: IVelesDBBackend } {
-  const db = new VelesDB({ backend: 'wasm' });
+function setup(
+  config: ConstructorParameters<typeof VelesDB>[0] = { backend: 'wasm' }
+): { db: VelesDB; backend: IVelesDBBackend } {
+  const db = new VelesDB(config);
   const backend = buildBackend();
   injectBackend(db, backend);
   return { db, backend };
@@ -226,6 +231,23 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
     );
   });
 
+  it('multiQuerySearchIds validates every vector and delegates', async () => {
+    const vectors = [[0.1], new Float32Array([0.2])];
+    await expect(db.multiQuerySearchIds('c', vectors, { k: 2 })).resolves.toEqual([
+      { id: 1, score: 0.5 },
+    ]);
+    expect(backend.multiQuerySearchIds).toHaveBeenCalledWith('c', vectors, { k: 2 });
+  });
+
+  it('multiQuerySearchIds refuses an empty, non-array or ill-typed batch before the backend', async () => {
+    await expect(db.multiQuerySearchIds('c', [])).rejects.toThrow('non-empty array');
+    await expect(db.multiQuerySearchIds('c', null as never)).rejects.toThrow('non-empty array');
+    await expect(db.multiQuerySearchIds('c', [[0.1], 'x' as never])).rejects.toThrow(
+      'Each vector must be an array or Float32Array'
+    );
+    expect(backend.multiQuerySearchIds).not.toHaveBeenCalled();
+  });
+
   it('searchIds delegates', async () => {
     await db.searchIds('c', [0.1], { k: 3 });
     expect(backend.searchIds).toHaveBeenCalledWith('c', [0.1], { k: 3 });
@@ -319,6 +341,28 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
     await db.collectionSanity('c');
     expect(backend.collectionSanity).toHaveBeenCalledWith('c');
     await expect(db.collectionSanity('')).rejects.toThrow(ValidationError);
+  });
+});
+
+describe('VelesDB — batch write delegations', () => {
+  it('upsertBatchRaw validates each document and returns the backend count', async () => {
+    const { db, backend } = setup();
+    const docs = [{ id: 1, vector: [0.1] }, { id: 2, vector: [0.2] }];
+    await expect(db.upsertBatchRaw('c', docs)).resolves.toBe(2);
+    expect(backend.upsertBatchRaw).toHaveBeenCalledWith('c', docs);
+    await expect(db.upsertBatchRaw('c', null as never)).rejects.toThrow(ValidationError);
+  });
+
+  it('bulkDelete returns the backend count', async () => {
+    const { db, backend } = setup();
+    await expect(db.bulkDelete('c', [1, 2])).resolves.toBe(2);
+    expect(backend.bulkDelete).toHaveBeenCalledWith('c', [1, 2]);
+  });
+
+  it('bulkDelete on REST refuses the whole batch on one invalid id', async () => {
+    const { db, backend } = setup({ backend: 'rest', url: 'http://localhost:8080' });
+    await expect(db.bulkDelete('c', [1, -1])).rejects.toThrow(ValidationError);
+    expect(backend.bulkDelete).not.toHaveBeenCalled();
   });
 });
 
