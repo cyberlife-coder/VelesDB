@@ -529,6 +529,15 @@ class ReDerivesTests(unittest.TestCase):
             "time grep -q x f",
             "if grep -q x f; then true; fi",
             "grep -q x f; echo done",
+            # Round 3: each member of the sets has a case of its own, and a
+            # quoted backtick or `$(` is literal text, not a substitution.
+            "printf 42",
+            ": ; grep -q x f",
+            "exec grep -q x f",
+            "if false; then :; elif grep -q x f; then :; else :; fi",
+            "grep -qF '`velesdb-server` 14 MB' README.md",
+            "grep -qF '$(nproc) threads' README.md",
+            "grep -q x f > /dev/null",
         ]:
             claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
             self.assertEqual(len(cpc.re_derives_failures(claims)), 1, command)
@@ -541,6 +550,11 @@ class ReDerivesTests(unittest.TestCase):
             "grep -qx 54 <(python3 count.py)",
             "grep -q `python3 c.py` f",
             "grep -q x f\npython3 count.py",
+            "grep -q 54 >(python3 c.py)",
+            "grep -qF \"`python3 c.py`\" f",
+            # Operator runs shlex keeps together: the stage after them runs.
+            "grep -q x f;(cargo bench)",
+            "cat f |& python3 x.py",
         ]:
             claims = [{"id": "a", "executable": True, "re_derives": True, "validation_command": command}]
             self.assertEqual(cpc.re_derives_failures(claims), [], command)

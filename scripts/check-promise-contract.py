@@ -227,18 +227,45 @@ def check_provenance(claims: list[dict]) -> list[str]:
 # nothing, whatever its flags, quoting or plumbing (`grep -Fq`, `rg -q`,
 # `cat f | grep -q`, `grep -c`, `|| true`).
 _TEXT_ONLY_PROGRAMS = frozenset(
-    {"grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "true", "echo", "printf", ":"}
+    {"grep", "egrep", "fgrep", "rg", "cat", "head", "tail", "true", "false", "echo", "printf", ":"}
 )
-_SHELL_SEPARATORS = frozenset({"&&", "||", "|", ";", "&"})
+_SHELL_SEPARATORS = frozenset({"&&", "||", "|", "|&", ";", "&"})
 # Words that precede or wrap a program without being one: a stage's program
 # is the first token after them.
 _SHELL_PREFIXES = frozenset(
     {"(", ")", "{", "}", "!", "command", "time", "exec", "if", "then", "elif", "else", "fi"}
 )
-# Where a command can compute something the stage splitter cannot see: a
-# substitution, or a second line.
-_OPAQUE_SHELL = ("$(", "`", "<(", ">(", "\n")
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+# shlex groups a run of operator characters into one token (`;(`, `|&`):
+# this splits such a run back into the operators it holds.
+_OPERATOR = re.compile(r"&&|\|\||\|&|>>|[;|&()<>]")
+_REDIRECTS = frozenset({"<", ">", ">>"})
+
+
+def _has_hidden_computation(command: str) -> bool:
+    """Whether ``command`` can compute something the stage walk cannot see:
+    a substitution (`$(`, a backtick, `<(`, `>(`) or a second line, read as
+    the shell reads them. Inside single quotes every character is literal,
+    so a pattern holding a backtick is not a substitution; inside double
+    quotes `$(` and backticks still run, and a newline is literal."""
+    in_single = in_double = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if in_single:
+            in_single = char != "'"
+        elif char == "\\":
+            index += 1
+        elif char == "'" and not in_double:
+            in_single = True
+        elif char == '"':
+            in_double = not in_double
+        elif char == "`" or command.startswith("$(", index):
+            return True
+        elif not in_double and (command.startswith(("<(", ">("), index) or char == "\n"):
+            return True
+        index += 1
+    return False
 
 
 def re_derives(claim: dict) -> bool:
@@ -258,17 +285,25 @@ def _only_finds_text(command: str) -> bool:
     or one shlex cannot read, counts as one that may compute its figure, so
     the mark stays the author's to justify in review: a false refusal would
     fail a claim that really re-derives."""
-    if any(marker in command for marker in _OPAQUE_SHELL):
+    if _has_hidden_computation(command):
         return False
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
-        tokens = list(lexer)
+        raw_tokens = list(lexer)
     except ValueError:
         return False
-    programs, expect_program = [], True
+    tokens = []
+    for token in raw_tokens:
+        operators = _OPERATOR.findall(token)
+        tokens.extend(operators if "".join(operators) == token else [token])
+    programs, expect_program, skip_next = [], True, False
     for token in tokens:
-        if token in _SHELL_SEPARATORS:
+        if skip_next:
+            skip_next = False
+        elif token in _REDIRECTS:
+            skip_next = True
+        elif token in _SHELL_SEPARATORS:
             expect_program = True
         elif expect_program and (token in _SHELL_PREFIXES or _ASSIGNMENT.fullmatch(token)):
             continue
