@@ -100,14 +100,21 @@ unsafe fn neon_fma_compat(
     std::arch::aarch64::vfmaq_f32(acc, a, b)
 }
 
-/// Loop bounds of the 16-wide 4-accumulator kernels: the end of `a`'s main
-/// body (`len / 16 * 16` elements) and its one-past-the-end pointer, where the
-/// scalar tail stops. Both come from safe slicing: no pointer arithmetic here.
+/// Loop bounds of the 16-wide 4-accumulator kernels: the length of `a`'s main
+/// body (`len / 16 * 16` elements), the pointer where it ends and the scalar
+/// tail starts, and `a`'s one-past-the-end pointer, where the tail stops.
+///
+/// Both pointers are derived from `a` itself, not from a subslice: the tail
+/// dereferences from the first one on, which a pointer derived from `a[..main]`
+/// may not do (it would read past its own borrow, whatever the address).
+/// `wrapping_add` is safe code and keeps `a`'s provenance; `main <= len`, so
+/// the result stays within `a` or at its end.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-fn bounds_16wide(a: &[f32]) -> (*const f32, *const f32) {
+fn bounds_16wide(a: &[f32]) -> (usize, *const f32, *const f32) {
     let main = a.len() / 16 * 16;
-    (a[..main].as_ptr_range().end, a.as_ptr_range().end)
+    let range = a.as_ptr_range();
+    (main, range.start.wrapping_add(main), range.end)
 }
 
 /// ARM NEON dot product with 4 accumulators for large vectors.
@@ -122,7 +129,7 @@ fn bounds_16wide(a: &[f32]) -> (*const f32, *const f32) {
 unsafe fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
-    let (end_main, end_ptr) = bounds_16wide(a);
+    let (_, end_main, end_ptr) = bounds_16wide(a);
 
     // SAFETY: 4-accumulator ILP loop of 16-wide NEON loads from `a` and `b`.
     // - Condition 1: `end_main` bounds every load of `a`; `b` is read at the same
@@ -149,7 +156,8 @@ unsafe fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     while a_ptr < end_ptr {
         // SAFETY: Raw pointer dereference for scalar tail processing.
         // - Condition 1: Loop condition `a_ptr < end_ptr` guarantees both pointers are within slice bounds.
-        // - Condition 2: `b_ptr` advances in step with `a_ptr` so it remains within the `b` slice.
+        // - Condition 2: `b_ptr` advances in step with `a_ptr`, and this function's
+        //   `# Safety` precondition, `a.len() == b.len()`, keeps it within `b`.
         // SAFETY: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
         unsafe {
             result += *a_ptr * *b_ptr;
@@ -263,13 +271,12 @@ unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len();
-    let main_end = len / 16 * 16;
-    let (end_main, end_ptr) = bounds_16wide(a);
+    let (main_end, end_main, end_ptr) = bounds_16wide(a);
 
     // SAFETY: both helpers read `b` over the span they read of `a`.
     // - Condition 1: `a.as_ptr()..end_main` is `a`'s first `main_end` elements,
-    //   a multiple of 16, and `end_main..end_ptr` the rest of `a`.
+    //   a multiple of 16, and `end_main..end_ptr` the rest of `a`; every pointer
+    //   is derived from `a` itself (`bounds_16wide`), so the tail may read it.
     // - Condition 2: this function's own `# Safety` precondition,
     //   `a.len() == b.len()`, so `b` is readable over both spans, and
     //   `b.as_ptr().add(main_end)` stays within `b`.
@@ -354,6 +361,8 @@ unsafe fn cosine_fused_neon_main_loop(
     while a_ptr < end_main {
         // SAFETY: Loop condition guarantees 16 elements remain before `end_main`.
         // - Condition 1: `vld1q_f32` supports unaligned loads on ARM64.
+        // - Condition 2: this function's `# Safety`: the span is a multiple of 16,
+        //   so 16 elements remain, and `b_ptr` is readable for as many elements.
         // SAFETY: 16-wide single-pass accumulation with 4-way ILP.
         let va0 = vld1q_f32(a_ptr);
         let vb0 = vld1q_f32(b_ptr);
@@ -383,6 +392,9 @@ unsafe fn cosine_fused_neon_main_loop(
         b_ptr = b_ptr.add(16);
     }
 
+    // SAFETY: `reduce_4acc_neon` only adds registers.
+    // - Condition 1: its `# Safety` asks for nothing beyond NEON, always present on aarch64.
+    // Reason: collapse the 12 accumulators into (dot, norm_a_sq, norm_b_sq).
     (
         reduce_4acc_neon(d0, d1, d2, d3),
         reduce_4acc_neon(na0, na1, na2, na3),
@@ -408,6 +420,8 @@ unsafe fn cosine_fused_neon_scalar_tail(
     while a_ptr < end_ptr {
         // SAFETY: Loop condition guarantees both pointers are within slice bounds.
         // - Condition 1: `b_ptr` advances in step with `a_ptr`.
+        // - Condition 2: this function's `# Safety`: `b_ptr` is readable for as
+        //   many elements as `a_ptr..end_ptr`.
         // SAFETY: Handle remaining elements the 16-wide loop did not cover.
         let x = *a_ptr;
         let y = *b_ptr;
@@ -529,7 +543,7 @@ unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 unsafe fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
-    let (end_main, end_ptr) = bounds_16wide(a);
+    let (_, end_main, end_ptr) = bounds_16wide(a);
 
     // SAFETY: 4-accumulator ILP loop of 16-wide NEON loads from `a` and `b`.
     // - Condition 1: `end_main` bounds every load of `a`; `b` is read at the same
@@ -558,7 +572,8 @@ unsafe fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     while a_ptr < end_ptr {
         // SAFETY: Raw pointer dereference for scalar tail processing.
         // - Condition 1: Loop condition `a_ptr < end_ptr` guarantees both pointers are within slice bounds.
-        // - Condition 2: `b_ptr` advances in step with `a_ptr` so it remains within the `b` slice.
+        // - Condition 2: `b_ptr` advances in step with `a_ptr`, and this function's
+        //   `# Safety` precondition, `a.len() == b.len()`, keeps it within `b`.
         // SAFETY: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
         unsafe {
             let d = *a_ptr - *b_ptr;
