@@ -3,10 +3,13 @@
 
 use tempfile::TempDir;
 
-use super::cmd_bench;
+use velesdb_core::SearchQuality;
+
+use super::{bench_quality, cmd_bench};
 use crate::repl::ReplConfig;
 use crate::repl_commands::CommandResult;
-use crate::repl_execute::repl_execute_tests::seed_docs_refusing_perfect;
+use crate::session::SessionSettings;
+use crate::test_fixtures::{seed_docs_configured, seed_docs_refusing_perfect};
 
 /// Runs `.bench` over three queries on a `docs` collection whose Perfect
 /// (brute-force) mode refuses it: a search that really runs at `perfect`
@@ -39,7 +42,24 @@ fn bench_runs_at_the_session_ef_search_over_its_mode() {
     );
 }
 
+/// An untouched session benches at the default the database was opened
+/// with, and prints it as such; a session that set a quality benches at it.
 #[test]
-fn bench_at_an_untouched_session_runs_every_query() {
-    assert!(matches!(bench_with(&[]), CommandResult::Continue));
+fn bench_at_an_untouched_session_runs_at_the_configured_default() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let db = seed_docs_configured(&dir, "[search]\ndefault_mode = \"fast\"\n", 3);
+    let untouched = SessionSettings::new();
+    assert_eq!(
+        bench_quality(&db, &untouched),
+        (None, "fast (configured default)".to_string())
+    );
+    let result = cmd_bench(&db, &ReplConfig::default(), &[".bench", "docs", "3", "1"]);
+    assert!(matches!(result, CommandResult::Continue));
+
+    let mut set = SessionSettings::new();
+    set.set("ef_search", "64").expect("test: \\set ef_search");
+    assert_eq!(
+        bench_quality(&db, &set),
+        (Some(SearchQuality::Custom(64)), "custom:64".to_string())
+    );
 }

@@ -9,6 +9,7 @@ use velesdb_core::Database;
 use crate::collection_helpers;
 use crate::repl::{OutputFormat, ReplConfig};
 use crate::repl_commands::CommandResult;
+use crate::session::SessionSettings;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -95,21 +96,41 @@ fn warn_if_unwired(key: &str) {
 }
 
 pub(crate) fn cmd_show(db: &Database, config: &ReplConfig, parts: &[&str]) -> CommandResult {
-    let configured = db.config().search.resolved_quality();
-    if parts.len() < 2 {
+    let key = parts.get(1).copied();
+    let settings = match shown_settings(db, &config.session, key) {
+        Ok(settings) => settings,
+        Err(message) => return CommandResult::Error(message),
+    };
+    if key.is_none() {
         println!("\n{}", "Session Settings".bold().underline());
-        for (key, value) in config.session.all_settings(configured) {
+        for (key, value) in settings {
             println!("  {} = {}", key.cyan(), value.green());
         }
         println!();
     } else {
-        let key = parts[1];
-        match config.session.get(key, configured) {
-            Some(value) => println!("{} = {}\n", key.cyan(), value.green()),
-            None => return CommandResult::Error(format!("Unknown setting: {key}")),
+        for (key, value) in settings {
+            println!("{} = {}\n", key.cyan(), value.green());
         }
     }
     CommandResult::Continue
+}
+
+/// What `\show` prints: every setting, or the one `key` names, each with
+/// the value in force. An unset mode shows the default `db` was opened with,
+/// marked `(configured default)` (#2303).
+pub(crate) fn shown_settings(
+    db: &Database,
+    session: &SessionSettings,
+    key: Option<&str>,
+) -> Result<Vec<(String, String)>, String> {
+    let configured = db.config().search.resolved_quality();
+    match key {
+        None => Ok(session.all_settings(configured)),
+        Some(key) => session
+            .get(key, configured)
+            .map(|value| vec![(key.to_string(), value)])
+            .ok_or_else(|| format!("Unknown setting: {key}")),
+    }
 }
 
 pub(crate) fn cmd_reset(config: &mut ReplConfig, parts: &[&str]) -> CommandResult {
@@ -166,3 +187,7 @@ pub(crate) fn cmd_info(db: &Database, config: &ReplConfig) -> CommandResult {
     println!();
     CommandResult::Continue
 }
+
+#[cfg(test)]
+#[path = "repl_config_cmds_tests.rs"]
+mod repl_config_cmds_tests;

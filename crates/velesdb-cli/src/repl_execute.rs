@@ -337,4 +337,4 @@ pub(crate) fn contains_param_vector(condition: &velesdb_core::velesql::Condition
 
 #[cfg(test)]
 #[path = "repl_execute_tests.rs"]
-pub(crate) mod repl_execute_tests;
+mod repl_execute_tests;

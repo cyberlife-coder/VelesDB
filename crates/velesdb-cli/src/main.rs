@@ -286,3 +286,6 @@ fn dispatch_query(
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod main_tests;
+
+#[cfg(test)]
+mod test_fixtures;

@@ -4,42 +4,8 @@ use tempfile::TempDir;
 use velesdb_core::{Database, DistanceMetric, Point};
 
 use crate::repl_execute::execute_query;
+use crate::test_fixtures::{seed_docs, seed_docs_refusing_perfect};
 use crate::session::SessionSettings;
-
-/// Opens a fresh database with a single `docs` collection seeded with `n`
-/// 2-D points, used by the projection/limit/param regression tests.
-fn seed_docs(dir: &TempDir, n: u64) -> Database {
-    seed(Database::open(dir.path()).expect("open db"), n)
-}
-
-/// As [`seed_docs`], in a database that refuses `perfect` over more than one
-/// vector: which quality a REPL search runs at becomes observable.
-pub(crate) fn seed_docs_refusing_perfect(dir: &TempDir, n: u64) -> Database {
-    let mut config = velesdb_core::VelesConfig::default();
-    config.limits.max_perfect_mode_vectors = 1;
-    seed(
-        Database::open_with_config(dir.path(), config).expect("open db"),
-        n,
-    )
-}
-
-/// Adds the `docs` collection of `n` 2-D points to `db`.
-fn seed(db: Database, n: u64) -> Database {
-    db.create_collection("docs", 2, DistanceMetric::Cosine)
-        .expect("create collection");
-    let coll = db.get_vector_collection("docs").expect("vector collection");
-    let points: Vec<Point> = (1..=n)
-        .map(|i| {
-            Point::new(
-                i,
-                vec![1.0, i as f32],
-                Some(serde_json::json!({"category": "x"})),
-            )
-        })
-        .collect();
-    coll.upsert(points).expect("upsert");
-    db
-}
 
 /// Regression (parity backlog #2): the REPL must route `GROUP BY` / aggregate
 /// queries through the aggregate engine, not return raw rows. Previously
@@ -311,8 +277,8 @@ fn test_session_ef_search_reaches_the_search() {
 /// A session that never ran `\set` adds nothing to a query, not even an empty
 /// `WITH`, so the search runs at the database's configured default (`[search]`
 /// in `velesdb.toml`), as the configuration priority order says; before
-/// #2303 it injected `mode = 'balanced'` over it. `\show` prints the value in
-/// force, marked as the configured default.
+/// #2303 it injected `mode = 'balanced'` over it. `\show` printing that
+/// default is `repl_config_cmds_tests`'s.
 #[test]
 fn test_an_untouched_session_leaves_the_configured_quality_in_force() {
     let mut parsed = velesdb_core::velesql::Parser::parse(NEAR).expect("parse");
@@ -321,18 +287,6 @@ fn test_an_untouched_session_leaves_the_configured_quality_in_force() {
         parsed.select.with_clause.is_none(),
         "an untouched session injected {:?}",
         parsed.select.with_clause
-    );
-
-    let dir = TempDir::new().expect("temp dir");
-    let toml = dir.path().join("velesdb.toml");
-    std::fs::write(&toml, "[search]\ndefault_mode = \"fast\"\n").expect("write config");
-    let db = crate::helpers::open_database_with_config(&dir.path().join("data"), Some(&toml))
-        .expect("open with config");
-    let configured = db.config().search.resolved_quality();
-    assert_eq!(configured, velesdb_core::SearchQuality::Fast);
-    assert_eq!(
-        SessionSettings::new().get("mode", configured).as_deref(),
-        Some("fast (configured default)")
     );
 }
 

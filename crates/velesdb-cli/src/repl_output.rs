@@ -241,7 +241,7 @@ pub fn print_help() {
     println!("{}", "Session Settings:".bold().underline());
     println!();
     println!(
-        "  {} fast, balanced, accurate, perfect (unset: velesdb.toml [search])",
+        "  {} fast, balanced, accurate, perfect (unset: [search] of the --config file)",
         "mode".cyan()
     );
     println!("  {} 16-4096 (or auto from mode)", "ef_search".cyan());
