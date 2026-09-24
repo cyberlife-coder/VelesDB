@@ -343,10 +343,6 @@ mod unlink {
         assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
     }
 
-    /// rustdoc warns about a kind spaced from its `@` and shows the
-    /// brackets; the rewrite drops them and the guard flags them all the same
-    /// (#2330). The pseudo-random mix of `one_pass_is_final` cannot draw a
-    /// known kind before a spaced `@`, so these are named here.
     /// rustdoc reads no item in a label holding a `/`, fragment included,
     /// and checks its path marks over the whole label, generics included, so
     /// it links none of these: the rewrite leaves them as written and the
@@ -369,14 +365,24 @@ mod unlink {
         }
     }
 
-    /// rustdoc drops every backtick before it checks its path marks, so it
-    /// links a path whose generics hold code (#2330).
+    /// rustdoc drops every backtick of a label or a destination before it
+    /// checks its path marks, so it links a path that holds code anywhere,
+    /// not only one enclosed in a single code span, and so does the rewrite
+    /// since #2330. It stops on a `/` in a destination too.
     #[test]
-    fn code_inside_generics_is_rewritten_and_flagged() {
+    fn code_inside_a_path_is_rewritten_and_flagged() {
         assert_rewritten("see [Vec<`u8`>].", "see Vec<`u8`>.");
         assert_rewritten("see [Option<`S0`>].", "see Option<`S0`>.");
+        assert_rewritten("see [f`()`].", "see f`()`.");
+        assert_rewritten("see [``Foo``].", "see ``Foo``.");
+        assert_rewritten("see [x](crate::`Foo`).", "see x.");
+        assert_refused("see [x](a#b/c).");
     }
 
+    /// rustdoc warns about a kind spaced from its `@` and shows the
+    /// brackets; the rewrite drops them and the guard flags them all the same
+    /// (#2330). The pseudo-random mix of `one_pass_is_final` cannot draw a
+    /// known kind before a spaced `@`, so these are named here.
     #[test]
     fn a_spaced_disambiguator_is_rewritten_and_flagged() {
         assert_rewritten("see [struct @Foo].", "see Foo.");
