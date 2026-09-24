@@ -261,7 +261,9 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 /// disambiguator and generics aside, a path of letters, digits, `_`, `::`,
 /// and the `&`, `*` or `;` of a primitive (`&str`, `*const`). A URL, a
 /// relative path, prose with a space and a lone `:` (`mailto:`, `http:`) are
-/// not.
+/// not, and neither are generics holding a mark rustdoc never reads in a path
+/// (`Result<(), u8>`, `Vec<f32.5>`): rustdoc checks the whole path before it
+/// strips them.
 fn is_rustdoc_target(target: &str) -> bool {
     let target = target.trim();
     let target = target
@@ -274,13 +276,15 @@ fn is_rustdoc_target(target: &str) -> bool {
         .iter()
         .find_map(|suffix| path.strip_suffix(suffix))
         .unwrap_or(path);
-    without_generics(path).is_some_and(|path| {
-        path.chars().any(|c| c.is_alphabetic() || c == '_')
-            && path
-                .chars()
-                .all(|c| c.is_alphanumeric() || "_:&*;".contains(c))
-            && !path.replace("::", "").contains(':')
-    })
+    path.chars()
+        .all(|c| c.is_alphanumeric() || ":_<>, !*&;".contains(c))
+        && without_generics(path).is_some_and(|path| {
+            path.chars().any(|c| c.is_alphabetic() || c == '_')
+                && path
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || "_:&*;".contains(c))
+                && !path.replace("::", "").contains(':')
+        })
 }
 
 /// `path` less its `<…>` groups, or `None` when they do not balance.

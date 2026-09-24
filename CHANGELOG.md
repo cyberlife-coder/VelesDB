@@ -1011,7 +1011,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after a collapsed reference (`[a, b][](crate::Foo)`). It now passes the
   labels rustdoc neither links nor warns about that the memory guard failed:
   punctuation in a path (`[f(x)]`, `[a{}]`, `[Result<(), u8>]`) and a code
-  span that holds no path (`` [`()`] ``).
+  span that holds no path (`` [`()`] ``). velesdb-memory's schema rewrite,
+  which removes such links from the descriptions it publishes, likewise
+  leaves as written a label whose generics hold a mark rustdoc never reads
+  in a path (`[Result<(), u8>]`, `[Vec<f32.5>]`), as rustdoc shows it.
 - **The published crates declare dependency floors they can actually be built
   with (#1987).** `-Z direct-minimal-versions` found requirements below what
   the rest of the dependency graph, or the code itself, needs: `serde` "1.0"

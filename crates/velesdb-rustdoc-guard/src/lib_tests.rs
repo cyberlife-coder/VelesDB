@@ -101,6 +101,8 @@ fn passes_web_links_code_and_prose_brackets() {
         "see [f(x)] here",
         "see [(a)] and [a{}] and [x()y]",
         "see [()] and [ () ] and [!{}] and [`()`]",
+        // rustdoc reads a `/` anywhere in a label as no item, fragment included.
+        "see [a#/] and [S0#a/b] and [Vec<u8>#x/y]",
         // rustdoc checks its path marks inside generics too.
         "see [Result<(), u8>] and [Vec<f32.5>] and [Option<&'static str>]",
     ] {

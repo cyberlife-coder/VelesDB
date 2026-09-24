@@ -117,8 +117,8 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 
 /// Whether an unresolved shortcut or collapsed label reads as an item path,
 /// which rustdoc 1.90 treats as an intra-doc link. It takes rustdoc's
-/// `preprocess_link` steps in rustdoc's order: the label's backticks are
-/// dropped, so a code span reads as its code, and the item is what comes
+/// `preprocess_link` steps in rustdoc's order: a label holding a `/` is
+/// never a path (`[a#b/c]`); otherwise the label's backticks are dropped, so a code span reads as its code, and the item is what comes
 /// before a `#` fragment. A one-word kind before an `@` comes off (`fn@f`),
 /// then a call or macro suffix (`()`, `!`, `!()`, `!{}`, `![]`) that leaves
 /// something, each with the spaces around it. What is left must hold only
@@ -139,6 +139,10 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 /// read as an item (`[write to ops@x]`, `[*]`, `[0]`, `[<T>]`), which show
 /// as plain brackets too.
 fn names_an_item(label: &str) -> bool {
+    // rustdoc reads a `/` anywhere as a relative link, never an item.
+    if label.contains('/') {
+        return false;
+    }
     // rustdoc drops every backtick before it reads the path (`[f`()`]`).
     let label = label.trim().replace('`', "");
     // rustdoc resolves the item before a `#` fragment (`[X#method.id]`).

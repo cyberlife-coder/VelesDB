@@ -347,6 +347,23 @@ mod unlink {
     /// brackets; the rewrite drops them and the guard flags them all the same
     /// (#2330). The pseudo-random mix of `one_pass_is_final` cannot draw a
     /// known kind before a spaced `@`, so these are named here.
+    /// rustdoc checks its path marks over the whole label, generics
+    /// included, and links none of these: the rewrite leaves them as written
+    /// and the guard passes them (#2330).
+    #[test]
+    fn a_path_rustdoc_ignores_is_left_as_written() {
+        for text in [
+            "see [Result<(), u8>].",
+            "see [Vec<f32.5>].",
+            "see [Option<&'static str>].",
+            "see [Vec<a/b>].",
+            "see [Vec<f32.5>][].",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");
+        }
+    }
+
     #[test]
     fn a_spaced_disambiguator_is_rewritten_and_flagged() {
         assert_rewritten("see [struct @Foo].", "see Foo.");
@@ -628,6 +645,9 @@ mod unlink {
             "#x",
             ">\t",
             "\n\n",
+            "<",
+            ">",
+            ".",
         ];
         let mut seed: usize = 0x2265_2025;
         let mut next = || {
