@@ -673,12 +673,25 @@ fn validate_weight_sum(sum: f32) -> Result<(), FusionError> {
 /// relative-score fusion alike, so every surface returns ties in the same
 /// order.
 ///
-/// Scores compare with [`f32::total_cmp`], as core's strategies always did: a
-/// positive NaN sorts first and a negative NaN last. That is the opposite of
+/// Scores compare with [`f32::total_cmp`], as core's strategies always did,
+/// except that `-0.0` and `0.0` tie, so the id decides. A positive NaN
+/// sorts first and a negative NaN last. That is the opposite of
 /// `metric_score_order`, which ranks a NaN worst; a fused NaN comes only from
 /// a NaN input score.
 pub fn sort_fused_results(fused: &mut [(u64, f32)]) {
-    fused.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    fused.sort_unstable_by(|a, b| fused_score_cmp(b.1, a.1).then(a.0.cmp(&b.0)));
+}
+
+/// The order of two fused scores: [`f32::total_cmp`] with `-0.0` read as
+/// `0.0`. The two are one score, so they must tie and leave the order to the
+/// id; `total_cmp` alone ranks `0.0` above `-0.0`, which a mixed-direction
+/// fusion produces side by side (a zero distance negated next to a zero
+/// similarity). Shared by [`sort_fused_results`] and the hybrid search's
+/// top-k heap, so a cut by `k` and a full sort agree.
+pub(crate) fn fused_score_cmp(a: f32, b: f32) -> std::cmp::Ordering {
+    // `-0.0 + 0.0` is `+0.0` in round-to-nearest; every other value, NaN
+    // included, is unchanged by adding `0.0`.
+    (a + 0.0).total_cmp(&(b + 0.0))
 }
 
 /// Min-max normalize a branch of `(id, score)` pairs to the `[0, 1]` range.

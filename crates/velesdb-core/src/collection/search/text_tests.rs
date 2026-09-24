@@ -248,6 +248,15 @@ fn test_top_k_from_scores_breaks_ties_by_ascending_id() {
     );
 }
 
+/// `-0.0` and `0.0` tie in the heap too: the cut by `k` keeps the lower id,
+/// as `sort_fused_results` orders them (#2297 review).
+#[test]
+fn test_top_k_from_scores_ties_signed_zeros_by_ascending_id() {
+    let fused: rustc_hash::FxHashMap<u64, f32> = [(5, 0.0), (3, -0.0)].into_iter().collect();
+    let out = Collection::top_k_from_scores(fused, 1);
+    assert_eq!(out.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![3]);
+}
+
 /// Two documents whose vector and BM25 ranks are swapped fuse to the same
 /// RRF score; the filtered hybrid search returns them by ascending id,
 /// whichever id wins which branch (#2297).

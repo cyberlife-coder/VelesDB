@@ -28,6 +28,10 @@ mod strategy_tests;
 #[cfg(test)]
 mod weight_validation_tests;
 
+// For the hybrid search's top-k heap (`collection::search`), which exists
+// only with `persistence`.
+#[cfg(feature = "persistence")]
+pub(crate) use strategy::fused_score_cmp;
 pub use strategy::{
     min_max_normalize, sort_fused_results, FusionError, FusionStrategy, ScoreDirection,
     DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,

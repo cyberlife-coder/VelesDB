@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
 
 ### Added
+- **`velesdb_core::fusion::sort_fused_results` (#2297).** Orders fused
+  `(id, score)` pairs by score descending, then id ascending, the order
+  every fusion path returns; for a caller that fuses on its own, as
+  `velesdb-wasm` does.
 - **`impl Display for WithValue` (#2274).** A `WITH` option value renders
   in canonical VelesQL form, which the parser reads back as the same value:
   a string single-quoted with each quote doubled, a float in decimal with a
@@ -175,6 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   core's six strategies, hybrid dense + text search (whose top-k heap also
   keeps, when `k` cuts through a tie, the ids that order puts first, not
   the highest ones), and `velesdb-wasm`'s own relative-score fusion.
+  `-0.0` and `0.0` tie too, which a mixed-direction fusion produces side by
+  side (a zero distance negated next to a zero similarity).
 - **The promise contract no longer counts a figure as sourced, or as
   fresh, on the strength of a `grep` (#2300, #2309).** `check-promise-contract`
   exempted every `executable` claim from its staleness checks, but five of

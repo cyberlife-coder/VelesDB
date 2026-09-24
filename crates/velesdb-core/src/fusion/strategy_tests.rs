@@ -1,8 +1,8 @@
 //! Tests for `FusionStrategy` implementations.
 
 use super::strategy::{
-    min_max_normalize, FusionError, FusionStrategy, ScoreDirection, DEFAULT_WEIGHTED_AVG_WEIGHT,
-    DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
+    min_max_normalize, sort_fused_results, FusionError, FusionStrategy, ScoreDirection,
+    DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
 };
 
 // =============================================================================
@@ -1040,4 +1040,19 @@ fn test_rank_strategies_order_ties_by_ascending_id() {
         let fused = strategy.fuse(branches.clone()).expect("fuse");
         assert_eq!(ids(&fused), ascending_ids(), "{strategy:?}");
     }
+}
+
+/// `-0.0` and `0.0` are one score, so they tie and the id decides. A
+/// mixed-direction fusion produces the pair: it negates a zero distance to
+/// `-0.0` next to a zero similarity (#2297 review).
+#[test]
+fn test_signed_zero_scores_tie_by_ascending_id() {
+    let mut sorted = vec![(1, 0.0_f32), (0, -0.0)];
+    sort_fused_results(&mut sorted);
+    assert_eq!(ids(&sorted), vec![0, 1]);
+
+    let fused = FusionStrategy::Maximum
+        .fuse(vec![vec![(0, -0.0)], vec![(1, 0.0)]])
+        .expect("fuse");
+    assert_eq!(ids(&fused), vec![0, 1]);
 }
