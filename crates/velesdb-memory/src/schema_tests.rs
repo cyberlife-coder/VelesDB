@@ -376,7 +376,24 @@ mod unlink {
         assert_rewritten("see [f`()`].", "see f`()`.");
         assert_rewritten("see [``Foo``].", "see ``Foo``.");
         assert_rewritten("see [x](crate::`Foo`).", "see x.");
-        assert_refused("see [x](a#b/c).");
+        assert_rewritten("see [x](crate::Foo`).", "see x.");
+    }
+
+    /// A destination or a definition is read like a label: one holding a `/`
+    /// or a mark rustdoc never reads in a path is no item, and the rewrite
+    /// refuses the link, which the guard flags (#2330).
+    #[test]
+    fn a_target_rustdoc_reads_as_no_item_is_refused() {
+        for text in [
+            "see [x](a#b/c).",
+            "see [x](Foo<'a>).",
+            "see [x](Vec<f32.5>#a).",
+            "see [x](Vec<a/b>).",
+            "see [x][y].\n\n[y]: a#b/c\n",
+            "see [x][y].\n\n[y]: Vec<f32.5>\n",
+        ] {
+            assert_refused(text);
+        }
     }
 
     /// rustdoc warns about a kind spaced from its `@` and shows the

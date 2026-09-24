@@ -1046,15 +1046,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   punctuation in a path (`[f(x)]`, `[a{}]`, `[Result<(), u8>]`), a code span
   that holds no path (`` [`()`] ``), and a label holding a `/`, fragment
   included (`[S0#a/b]`). velesdb-memory's schema rewrite, which removes such
-  links from the descriptions it publishes, likewise leaves as written a
-  label whose generics hold a mark rustdoc never reads in a path
-  (`[Result<(), u8>]`, `[Vec<f32.5>]`) or that holds a `/` (`[S0#a/b]`), as
-  rustdoc shows it, and refuses an inline link whose destination holds a `/`
-  in its fragment (`[x](a#b/c)`), which the guard flags. It drops every
-  backtick before it reads a path, as rustdoc does, so it now also removes a
-  link whose label or destination holds code other than one enclosing span
-  (``[f`()`]``, ``[``Foo``]``, ``[x](crate::`Foo`)``), which rustdoc links, and
-  still removes one whose generics hold code (`` [Vec<`u8`>] ``).
+  links from the descriptions it publishes, reads every target the same way,
+  whether a label, an inline destination or a reference definition. It drops
+  every backtick first, as rustdoc does, and reads no path in a target that
+  holds a `/` anywhere or, generics included, a mark rustdoc never reads in
+  one. So it now leaves as written a label such as `[Result<(), u8>]` or
+  `[S0#a/b]`, as rustdoc shows it, and refuses a link whose destination or
+  definition is such a target (`[x](a#b/c)`, `[x](Foo<'a>)`, `[y]: a#b/c`),
+  which the guard flags; develop rewrote all of these. It now also removes a
+  link whose target holds backticks other than one enclosing code span
+  (``[f`()`]``, ``[``Foo``]``, ``[x](crate::`Foo`)``, ``[x](crate::Foo`)``),
+  which rustdoc links, and still removes one whose generics hold code
+  (`` [Vec<`u8`>] ``).
 - **The published crates declare dependency floors they can actually be built
   with (#1987).** `-Z direct-minimal-versions` found requirements below what
   the rest of the dependency graph, or the code itself, needs: `serde` "1.0"
