@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-
 from unittest import mock
 
 from scripts.tests import fresh_executable
@@ -29,8 +28,20 @@ class FreshExecutableTests(unittest.TestCase):
         """The guard line is shell syntax: a Python fake would die on it at warm-up."""
         with self.assertRaisesRegex(ValueError, "sh or bash"):
             guarded("#!/usr/bin/env python3\nprint(1)\n")
-        for shebang in ("#!/bin/sh", "#!/bin/bash", "#!/usr/bin/env bash", "#!/usr/bin/env sh"):
+        for shebang in (
+            "#!/bin/sh",
+            "#!/bin/bash",
+            "#!/usr/bin/env bash",
+            "#!/usr/bin/env sh",
+            "#!/bin/sh -e",
+            "#!/bin/bash -eu",
+        ):
             guarded(f"{shebang}\nexit 0\n")
+
+    def test_guarded_refuses_a_crlf_shebang(self) -> None:
+        """`/bin/sh\\r` is no interpreter: refused here, not as a confusing exec error."""
+        with self.assertRaisesRegex(ValueError, "sh or bash"):
+            guarded("#!/bin/sh\r\nexit 0\r\n")
 
     def test_guarded_keeps_the_shebang_first(self) -> None:
         text = guarded("#!/bin/sh\nexit 7\n")

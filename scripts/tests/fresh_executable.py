@@ -25,8 +25,12 @@ WARM_UP_ENV = "VELES_TEST_WARM_UP"
 # file that hangs still fails the test, only later.
 WARM_UP_PATIENCE_S = 600
 
-# The guard line is POSIX shell: only a sh-family interpreter can run it.
-SH_SHEBANG = re.compile(r"#!\s*(?:/bin/(?:ba)?sh|/usr/bin/env\s+(?:ba)?sh)\s*$")
+# The guard line is POSIX shell: only a sh-family interpreter can run it. Flags
+# (`-e`, `-eu`) are fine; only horizontal whitespace, so a CRLF shebang, which
+# the kernel cannot exec, is refused here rather than at the warm-up launch.
+SH_SHEBANG = re.compile(
+    r"#![ \t]*(?:/bin/(?:ba)?sh|/usr/bin/env[ \t]+(?:ba)?sh)(?:[ \t]+-[A-Za-z]+)*[ \t]*"
+)
 
 
 def guarded(script: str) -> str:
