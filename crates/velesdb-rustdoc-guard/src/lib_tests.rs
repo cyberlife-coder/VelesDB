@@ -58,6 +58,9 @@ fn flags_each_link_form() {
         "see [!].",
         "see [!][].",
         "see [()].",
+        // `[a, b][]` reads as a collapsed reference only once every reference
+        // is accepted; a client renders the inline link after it.
+        "see [a, b][](crate::Foo) end",
     ] {
         assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
     }
@@ -78,6 +81,7 @@ fn passes_web_links_code_and_prose_brackets() {
         "see [issue #2261](https://x.dev).",
         "see [Try it!](https://x.dev).",
         "write to [ops@x.dev](mailto:ops@x.dev).",
+        "write to <ops@x.dev>, a mail autolink.",
         "the syntax `[x](crate::y)` is code.",
         "a `&[Vec<f32>]` slice",
         "`MATCH (a)-[*1..5]->(b)` and `$.items[*]`",
@@ -89,6 +93,9 @@ fn passes_web_links_code_and_prose_brackets() {
         "write to [ops@x.dev]",
         "[write to ops@x]",
         "an empty [] pair",
+        // Punctuation rustdoc never reads in a path.
+        "see [f(x)] here",
+        "see [(a)] and [a{}] and [x()y]",
     ] {
         assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");
     }
@@ -102,6 +109,8 @@ fn flags_prose_that_reads_as_an_item_path() {
         "a bare [Point] reads like [sic].",
         "m[i][j] indexes",
         "MATCH (a:Person)-[:KNOWS]->(b)",
+        // rustdoc ignores the spaced unit; the guard trims first and flags it.
+        "see [ () ] here",
     ] {
         assert!(!rustdoc_links(text).is_empty(), "{text:?}");
     }

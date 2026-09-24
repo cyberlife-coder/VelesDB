@@ -343,6 +343,15 @@ mod unlink {
         assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
     }
 
+    /// rustdoc trims the kind before a disambiguator's `@`; so do the rewrite
+    /// and the guard (#2330). The pseudo-random mix of `one_pass_is_final`
+    /// cannot draw a known kind before a spaced `@`, so these are named here.
+    #[test]
+    fn a_spaced_disambiguator_is_rewritten_and_flagged() {
+        assert_rewritten("see [struct @Foo].", "see Foo.");
+        assert_rewritten("see [fn @ f].", "see f.");
+    }
+
     #[test]
     fn a_code_link_shows_its_code_span() {
         for (text, shown) in [
@@ -607,7 +616,6 @@ mod unlink {
             "\"",
             "# ",
             "fn@f",
-            " @",
             "\\",
             "    ",
             "- ",

@@ -24,6 +24,9 @@
 //! velesdb-memory's `one_pass_is_final` checks that it flags every text of a
 //! pseudo-random mix that memory's rewrite rewrites.
 
+use std::collections::BTreeSet;
+use std::ops::Range;
+
 use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
 use serde_json::Value;
 
@@ -37,35 +40,58 @@ const GUARD_MARKDOWN: Options = Options::ENABLE_TABLES
 /// The destinations a published link may have.
 const PUBLISHABLE_TARGETS: [&str; 4] = ["http://", "https://", "mailto:", "#"];
 
-/// The rustdoc links `text` holds, each as its source.
+/// The rustdoc links `text` holds, each as its source, in text order.
+///
+/// It reads `text` twice. As rustdoc does, with every reference accepted, so
+/// each bracket Markdown could read as a link is seen; and as a client
+/// renders it, with none invented, so a link the first reading folds into a
+/// reference (`[a, b][](crate::y)`, where `[a, b][]` hides the inline link
+/// `[](crate::y)` a client renders) is seen too. What either flags is a link.
 #[must_use]
 pub fn rustdoc_links(text: &str) -> Vec<String> {
-    let parser =
+    let as_rustdoc =
         Parser::new_with_broken_link_callback(text, GUARD_MARKDOWN, Some(accept_every_reference))
             .into_offset_iter();
-    let mut found: Vec<String> = parser
+    let mut spans: BTreeSet<(usize, usize)> = as_rustdoc
         .reference_definitions()
         .iter()
         .filter(|(_, definition)| !is_publishable(&definition.dest))
-        .map(|(_, definition)| text[definition.span.clone()].to_owned())
+        .map(|(_, definition)| (definition.span.start, definition.span.end))
         .collect();
-    for (event, range) in parser {
+    collect_links(as_rustdoc, &mut spans);
+    // No reference is left unresolved here, so each link is judged by its
+    // destination alone, as `is_rustdoc_link` judges a resolved one.
+    collect_links(
+        Parser::new_ext(text, GUARD_MARKDOWN).into_offset_iter(),
+        &mut spans,
+    );
+    spans
+        .into_iter()
+        .map(|(start, end)| text[start..end].to_owned())
+        .collect()
+}
+
+/// Adds to `spans` each rustdoc link of `events` ([`is_rustdoc_link`]), and
+/// each image to anything but a URL: rustdoc resolves no intra-doc link in an
+/// image, but an item path there is still no address a client can load.
+fn collect_links<'a>(
+    events: impl Iterator<Item = (Event<'a>, Range<usize>)>,
+    spans: &mut BTreeSet<(usize, usize)>,
+) {
+    for (event, range) in events {
         let flagged = match event {
             Event::Start(Tag::Link {
                 link_type,
                 dest_url,
                 ..
             }) => is_rustdoc_link(link_type, &dest_url),
-            // rustdoc resolves no intra-doc link in an image, but an item
-            // path there is still no address a client can load.
             Event::Start(Tag::Image { dest_url, .. }) => !is_publishable(&dest_url),
             _ => false,
         };
         if flagged {
-            found.push(text[range].to_owned());
+            spans.insert((range.start, range.end));
         }
     }
-    found
 }
 
 #[expect(
@@ -95,11 +121,15 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 /// backticks are dropped, the item is what comes before a `#` fragment, and a
 /// one-word disambiguator (`fn@`, `struct @`) and a call or macro suffix
 /// (`()`, `!`, `!()`, `!{}`, `![]`) come off with the spaces around them. What
-/// is left is a path when it is a word of letters, digits and path marks
-/// (`::`, `<…>`, `&`, `*`) holding a letter or an underscore, or the bare
-/// `&`, `!` or `()` of a primitive. A label with a space elsewhere (`[0, 1]`),
-/// a digit alone (`[0]`) or other punctuation (`[YYYY-MM-DD]`, `[ops@x.dev]`)
-/// is prose.
+/// is left is a path when it is a word of letters, digits and the path
+/// marks rustdoc's `should_ignore_link` keeps (`::`, `<…>`, `!`, `&`, `*`,
+/// `;`) holding a letter or an underscore, or the bare `&`, `!` or `()` of a
+/// primitive. Any other label is never linked: a space elsewhere (`[0, 1]`),
+/// a digit alone (`[0]`), other punctuation (`[YYYY-MM-DD]`, `[ops@x.dev]`,
+/// `[f(x)]`). rustdoc warns about a few of those it cannot resolve either
+/// (`[write to ops@x]`, `[*]`, `[<T>]`), which then show as plain brackets.
+/// The one label it reads differently from rustdoc, `[ () ]`, it flags: the
+/// cost of trimming before it strips a suffix.
 fn names_an_item(label: &str) -> bool {
     let label = label.trim();
     if is_one_code_span(label) {
@@ -137,7 +167,7 @@ fn names_an_item(label: &str) -> bool {
         .any(|c| c.is_alphabetic() || c == '_')
         && outside_generics
             .chars()
-            .all(|c| c.is_alphanumeric() || "_:@!(){}&*;".contains(c));
+            .all(|c| c.is_alphanumeric() || "_:!&*;".contains(c));
     path_like || outside_generics == "&"
 }
 
