@@ -124,7 +124,13 @@ so there is no `#[target_feature]` and no runtime detection):
    derived from `a`'s own `as_ptr_range()`, never from a subslice such as
    `a[..main]`: that pointer may not be read past its own end (Stacked
    Borrows), and the tail reads exactly there. `neon_bounds_tests` pins it
-   under Miri
+   under Miri when run by hand (the command is in the test's doc); no CI job
+   runs it yet, which #2397 tracks
+5. `hamming_neon_4acc` and `jaccard_neon_4acc` also run `len / 16 * 16`
+   elements in the main body, but handle the rest by slice indexing, which is
+   bounds-checked
+6. `hamming_binary_neon` loads two `u64` at a time while `i + 2 <= len`, then
+   handles an odd last word by indexing
 
 **Why It's Sound**:
 ```rust
