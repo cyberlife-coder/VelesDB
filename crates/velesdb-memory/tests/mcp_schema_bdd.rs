@@ -35,9 +35,6 @@ use tempfile::TempDir;
 use velesdb_memory::mcp::McpServer;
 use velesdb_memory::{DynEmbedder, HashEmbedder, MemoryService, DEFAULT_DIMENSION};
 
-#[path = "support/rustdoc_link_guard.rs"]
-mod rustdoc_link_guard;
-
 /// A `u64` id well past 2^53 — the range every real `fragment_id` lives in
 /// (they are FNV-1a 64 content hashes), and exactly the range a float-lossy
 /// JSON client must relay as a decimal string.
@@ -380,7 +377,7 @@ async fn no_polymorphic_exemption_is_stale() {
 /// #2261: schemars copies doc comments into the schemas, so the schemas the
 /// tools published carried rustdoc links no client resolves. Every tool the
 /// server lists is read, input and output schema, and no description may
-/// hold one (`support/rustdoc_link_guard.rs`).
+/// hold one (`velesdb-rustdoc-guard`).
 #[tokio::test]
 async fn every_tool_schema_publishes_no_rustdoc_link() {
     let (_store, client) = connected().await;
@@ -393,7 +390,8 @@ async fn every_tool_schema_publishes_no_rustdoc_link() {
         for schema in published.into_iter().flatten() {
             schemas += 1;
             let schema = Value::Object((**schema).clone());
-            for path in rustdoc_link_guard::descriptions_with_rustdoc_links(&schema) {
+            for path in velesdb_rustdoc_guard::strings_with_rustdoc_links(&schema, &["description"])
+            {
                 offenders.push(format!("{}: {path}", tool.name));
             }
         }

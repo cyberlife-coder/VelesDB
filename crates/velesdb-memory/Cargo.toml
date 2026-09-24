@@ -94,7 +94,7 @@ tower-http = { workspace = true, optional = true, features = ["limit"] }
 # found as rustdoc finds them rather than by a hand-written scan (#2261, see
 # `src/schema_walks.rs`). `mcp`-gated: the tool schemas are its only consumer.
 # No default features: the rewrite reads events and offsets, never HTML.
-pulldown-cmark = { version = "0.13.3", optional = true, default-features = false }
+pulldown-cmark = { workspace = true, optional = true }
 # `futures::Stream`, the bound `rmcp::SessionManager`'s streaming methods
 # return — needed to forward them from `BoundedSessionManager` (src/http/
 # session_limit.rs) to the wrapped `LocalSessionManager`.
@@ -230,6 +230,13 @@ extract = ["extractor-http"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# The guard on rustdoc link syntax in published descriptions (#2330). Path
+# only, no `version`: the crate is never published, and cargo strips this
+# entry when this crate publishes. So the packaged crate's tests do not
+# compile outside this workspace (`schema_tests.rs` and `mcp_schema_bdd.rs`
+# import it); they already read files the package does not ship
+# (`docs/reference/mcp-tools.json`), so they run here, not from the tarball.
+velesdb-rustdoc-guard = { path = "../velesdb-rustdoc-guard" }
 tokio = { workspace = true }
 criterion = { workspace = true }
 # session_limit_tests.rs implements rmcp's `EventStore` trait (an

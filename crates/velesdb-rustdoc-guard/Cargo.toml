@@ -1,0 +1,20 @@
+[package]
+name = "velesdb-rustdoc-guard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license-file = "../../LICENSE"
+repository.workspace = true
+authors.workspace = true
+description = "Test-only guard: flags rustdoc link syntax left in published descriptions (MCP schemas, OpenAPI)."
+# Never published. velesdb-memory and velesdb-server take it as a path-only
+# dev-dependency, which cargo strips when they publish; giving it a
+# `version =` there would make their publish look for it on crates.io.
+publish = false
+
+[dependencies]
+pulldown-cmark = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

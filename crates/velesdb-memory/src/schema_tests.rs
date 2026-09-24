@@ -326,10 +326,7 @@ mod unlink {
     use super::super::walks::{unlink_rustdoc, unlink_rustdoc_descriptions};
     use serde_json::{json, Value};
 
-    mod guard {
-        include!("../tests/support/rustdoc_link_guard.rs");
-    }
-    use guard::{descriptions_with_rustdoc_links, rustdoc_links};
+    use velesdb_rustdoc_guard::{rustdoc_links, strings_with_rustdoc_links};
 
     /// Asserts `text` is rewritten to `shown`, and that the guard flags the
     /// text and passes what it becomes.
@@ -344,6 +341,69 @@ mod unlink {
     fn assert_refused(text: &str) {
         assert_eq!(unlink_rustdoc(text), None, "{text:?}");
         assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
+    }
+
+    /// rustdoc reads no item in a label holding a `/`, fragment included,
+    /// and checks its path marks over the whole label, generics included, so
+    /// it links none of these: the rewrite leaves them as written and the
+    /// guard passes them (#2330).
+    #[test]
+    fn a_path_rustdoc_ignores_is_left_as_written() {
+        for text in [
+            "see [Result<(), u8>].",
+            "see [Vec<f32.5>].",
+            "see [Option<&'static str>].",
+            "see [Vec<a/b>].",
+            "see [Vec<f32.5>][].",
+            "see [a#/].",
+            "see [S0#a/b].",
+            "see [fn@f#a/b].",
+            "see [a#b/c][].",
+        ] {
+            assert_eq!(unlink_rustdoc(text), None, "{text:?}");
+            assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");
+        }
+    }
+
+    /// rustdoc drops every backtick of a label or a destination before it
+    /// checks its path marks, so it links a path that holds code anywhere,
+    /// not only one enclosed in a single code span, and so does the rewrite
+    /// since #2330.
+    #[test]
+    fn code_inside_a_path_is_rewritten_and_flagged() {
+        assert_rewritten("see [Vec<`u8`>].", "see Vec<`u8`>.");
+        assert_rewritten("see [Option<`S0`>].", "see Option<`S0`>.");
+        assert_rewritten("see [f`()`].", "see f`()`.");
+        assert_rewritten("see [``Foo``].", "see ``Foo``.");
+        assert_rewritten("see [x](crate::`Foo`).", "see x.");
+        assert_rewritten("see [x](crate::Foo`).", "see x.");
+    }
+
+    /// A destination or a definition is read like a label: one holding a `/`
+    /// or a mark rustdoc never reads in a path is no item, and the rewrite
+    /// refuses the link, which the guard flags (#2330).
+    #[test]
+    fn a_target_rustdoc_reads_as_no_item_is_refused() {
+        for text in [
+            "see [x](a#b/c).",
+            "see [x](Foo<'a>).",
+            "see [x](Vec<f32.5>#a).",
+            "see [x](Vec<a/b>).",
+            "see [x][y].\n\n[y]: a#b/c\n",
+            "see [x][y].\n\n[y]: Vec<f32.5>\n",
+        ] {
+            assert_refused(text);
+        }
+    }
+
+    /// rustdoc warns about a kind spaced from its `@` and shows the
+    /// brackets; the rewrite drops them and the guard flags them all the same
+    /// (#2330). The pseudo-random mix of `one_pass_is_final` cannot draw a
+    /// known kind before a spaced `@`, so these are named here.
+    #[test]
+    fn a_spaced_disambiguator_is_rewritten_and_flagged() {
+        assert_rewritten("see [struct @Foo].", "see Foo.");
+        assert_rewritten("see [fn @ f].", "see f.");
     }
 
     #[test]
@@ -621,6 +681,11 @@ mod unlink {
             "#x",
             ">\t",
             "\n\n",
+            "<",
+            ">",
+            ".",
+            "/",
+            "#",
         ];
         let mut seed: usize = 0x2265_2025;
         let mut next = || {
@@ -723,7 +788,7 @@ mod unlink {
         );
         let text = std::fs::read_to_string(path).expect("test: read the snapshot");
         let snapshot: Value = serde_json::from_str(&text).expect("test: snapshot is JSON");
-        let linked = descriptions_with_rustdoc_links(&snapshot);
+        let linked = strings_with_rustdoc_links(&snapshot, &["description"]);
         assert!(
             linked.is_empty(),
             "{} published descriptions still carry rustdoc link syntax, e.g. {:?}",
