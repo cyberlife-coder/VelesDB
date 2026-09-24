@@ -38,7 +38,7 @@ pub struct VelesCollection {
 /// Maps a batch of core search results into the UniFFI `SearchResult` shape
 /// (id + score, payload dropped — the mobile direct-search API is id/score
 /// oriented). Shared by every gated read leaf.
-fn to_mobile_results(results: Vec<velesdb_core::SearchResult>) -> Vec<SearchResult> {
+pub(crate) fn to_mobile_results(results: Vec<velesdb_core::SearchResult>) -> Vec<SearchResult> {
     results
         .into_iter()
         .map(|r| SearchResult {
