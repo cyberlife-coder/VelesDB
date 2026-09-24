@@ -184,16 +184,22 @@ pub(crate) unsafe fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
         // and len >= 64 (checked above).
         // - Condition 1: NEON is always present on aarch64.
         // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
+        // - Condition 3: this function's own `# Safety` precondition, `a.len() == b.len()`.
         // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { cosine_fused_neon_4acc(a, b) };
     }
     // SAFETY: `cosine_fused_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: this function's own `# Safety` precondition, `a.len() == b.len()`.
     // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { cosine_fused_neon_1acc(a, b) }
 }
 
 /// Single-accumulator fused cosine for vectors with < 64 elements.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
@@ -249,6 +255,10 @@ unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Uses 12 NEON registers (3 products x 4-way ILP) and processes 16
 /// elements per iteration, following the pattern from `cosine_fused_avx2_2acc`.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
@@ -565,11 +575,13 @@ pub(crate) unsafe fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
         // and len >= 64 (checked above).
         // - Condition 1: NEON is always present on aarch64.
         // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
+        // - Condition 3: this function's own `# Safety` precondition, `a.len() == b.len()`.
         // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { hamming_neon_4acc(a, b) };
     }
     // SAFETY: `hamming_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: this function's own `# Safety` precondition, `a.len() == b.len()`.
     // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { hamming_neon_1acc(a, b) }
 }
@@ -578,6 +590,10 @@ pub(crate) unsafe fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Binary-thresholds each lane at 0.5, XORs the masks, and counts differing
 /// positions. Accumulates in `uint32x4_t` for exact integer precision.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn hamming_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
@@ -648,6 +664,10 @@ unsafe fn hamming_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 /// Processes 16 elements per iteration with 4 independent `uint32x4_t` diff-count
 /// accumulators for instruction-level parallelism. Uses binary tree reduction
 /// at the end for the horizontal sum.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn hamming_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
@@ -798,11 +818,13 @@ pub(crate) unsafe fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
         // and len >= 64 (checked above).
         // - Condition 1: NEON is always present on aarch64.
         // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
+        // - Condition 3: this function's own `# Safety` precondition, `a.len() == b.len()`.
         // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
         return unsafe { jaccard_neon_4acc(a, b) };
     }
     // SAFETY: `jaccard_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: this function's own `# Safety` precondition, `a.len() == b.len()`.
     // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { jaccard_neon_1acc(a, b) }
 }
@@ -811,6 +833,10 @@ pub(crate) unsafe fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Accumulates `min(a, b)` for intersection and `max(a, b)` for union in
 /// `float32x4_t` registers, then horizontally reduces.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn jaccard_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
@@ -871,6 +897,10 @@ unsafe fn jaccard_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 /// Uses 8 NEON registers (4 intersection + 4 union) and processes 16 elements
 /// per iteration for instruction-level parallelism. Binary tree reduction
 /// merges accumulators at the end.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn jaccard_neon_4acc(a: &[f32], b: &[f32]) -> f32 {

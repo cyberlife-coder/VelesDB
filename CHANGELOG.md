@@ -196,8 +196,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check, so a crate-internal call with a shorter `b` read past its end with no
   `unsafe` in sight. The public entry points already asserted equal lengths,
   in release too, so no public call was affected; the precondition is now each
-  kernel's `# Safety` contract, as it already was for the x86 kernels, and
-  every call site names the assert it relies on.
+  kernel's `# Safety` contract, as the x86 dot-product kernels document it,
+  and every call site names the assert or precondition it relies on.
 - **An HNSW insert past the pre-allocated capacity no longer takes the
   layers' write lock for good, and a layer added late no longer drops
   neighbour writes (#2306).** `expand_layers`' slow path grew the layers to
