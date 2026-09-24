@@ -99,19 +99,23 @@ slices with popcount via `_mm256_set_epi8` LUT.
 
 **Functions** (`#[cfg(target_arch = "aarch64")]`; NEON is mandatory on AArch64,
 so there is no `#[target_feature]` and no runtime detection):
-- Safe `pub(crate) fn` kernels, each wrapping its intrinsics in `unsafe` blocks:
-  `dot_product_neon()` / `squared_l2_neon()` / `cosine_neon()` / `hamming_neon()` /
-  `jaccard_neon()` / `hamming_binary_neon()`
-- `unsafe fn` helpers those kernels call: `squared_l2_neon_1acc()`,
-  `hamming_neon_{1,4}acc()`, `jaccard_neon_{1,4}acc()`, the `cosine_fused_neon_*`
-  loops, `reduce_4acc_neon()` and `neon_fma_compat()`, whose callers uphold the
-  length invariants below
+- `pub(crate) unsafe fn` kernels: `dot_product_neon()` / `squared_l2_neon()` /
+  `cosine_neon()` / `hamming_neon()` / `jaccard_neon()` / `hamming_binary_neon()`,
+  and the private `dot_product_neon_4acc()` / `squared_l2_neon_4acc()` they call.
+  They were safe `fn`s until #1965, although nothing in them checks lengths: a
+  shorter `b` was read past its end with no `unsafe` at the call site.
+- `unsafe fn` helpers: `squared_l2_neon_1acc()`, `hamming_neon_{1,4}acc()`,
+  `jaccard_neon_{1,4}acc()`, the `cosine_fused_neon_*` loops, `reduce_4acc_neon()`
+  and `neon_fma_compat()`
 - The public entry points are the runtime-dispatched `simd_native::*_native`
-  functions; nothing outside `simd_native` calls these kernels
+  functions and `DistanceEngine`; nothing outside `simd_native` calls these kernels
 
 **Invariants**:
 1. `#[cfg(target_arch = "aarch64")]` guarantees NEON availability (mandatory on AArch64)
-2. `debug_assert_eq!(a.len(), b.len())` at function entry
+2. `a.len() == b.len()` is each kernel's `# Safety` precondition, checked by its
+   caller: every public entry point (`*_native`, `DistanceEngine::dispatch`) runs
+   `assert_eq!(a.len(), b.len())`, in release too, and each `unsafe` call site
+   names that assert in its `SAFETY` comment
 3. Loop bounds `chunks = len / 4` ensure pointer arithmetic stays in bounds
 4. Unrolled remainder handles `len % 4` elements via scalar indexing
 
@@ -119,7 +123,7 @@ so there is no `#[target_feature]` and no runtime detection):
 ```rust
 // SAFETY: NEON load and FMA require in-bounds pointers.
 // - Condition 1: Loop invariant `offset + 4 <= chunks * 4 <= len`.
-// - Condition 2: `a` and `b` have equal length (debug assertion).
+// - Condition 2: `a` and `b` have equal length (the kernel's `# Safety` precondition).
 let va = vld1q_f32(a.as_ptr().add(offset));
 let vb = vld1q_f32(b.as_ptr().add(offset));
 sum = vfmaq_f32(sum, va, vb);

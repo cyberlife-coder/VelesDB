@@ -22,15 +22,24 @@
 // =============================================================================
 
 /// ARM NEON dot product with 4 accumulators for ILP optimization (EPIC-052/US-009).
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
     let len = a.len();
 
     if len >= 64 {
-        return dot_product_neon_4acc(a, b);
+        // SAFETY: `dot_product_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // Reason: the 4-accumulator loop for vectors of 64 elements or more.
+        return unsafe { dot_product_neon_4acc(a, b) };
     }
 
     let simd_len = len / 4;
@@ -88,24 +97,34 @@ unsafe fn neon_fma_compat(
     std::arch::aarch64::vfmaq_f32(acc, a, b)
 }
 
-/// ARM NEON dot product with 4 accumulators for large vectors.
+/// Loop bounds of the 16-wide 4-accumulator kernels: the end of `a`'s main
+/// body (`len / 16 * 16` elements) and its one-past-the-end pointer, where the
+/// scalar tail stops. Both come from safe slicing: no pointer arithmetic here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
+fn bounds_16wide(a: &[f32]) -> (*const f32, *const f32) {
+    let main = a.len() / 16 * 16;
+    (a[..main].as_ptr_range().end, a.as_ptr_range().end)
+}
+
+/// ARM NEON dot product with 4 accumulators for large vectors.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
-    let len = a.len();
-    // SAFETY: `add` on a raw pointer derived from a valid slice.
-    // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
-    // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
-    // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
-    let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
-    // SAFETY: `add(len)` yields the one-past-the-end pointer (Condition 2 above),
-    // valid to form for comparison against the advancing pointer in the tail loop.
-    let end_ptr = unsafe { a.as_ptr().add(len) };
+    let (end_main, end_ptr) = bounds_16wide(a);
 
-    // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds
-    // guaranteed by `end_main`. `neon_fma_compat` reorders args to match macro convention.
+    // SAFETY: 4-accumulator ILP loop of 16-wide NEON loads from `a` and `b`.
+    // - Condition 1: `end_main` bounds every load of `a`; `b` is read at the same
+    //   offsets and is as long as `a` (this function's `# Safety` precondition).
+    // Reason: `neon_fma_compat` reorders args to match the macro's convention.
     let (combined, mut a_ptr, mut b_ptr) = unsafe {
         crate::simd_4acc_dot_loop!(
             a.as_ptr(),
@@ -151,9 +170,15 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 /// 12 accumulators (3 products x 4-way ILP).
 ///
 /// This replaces the prior 3-pass approach (`dot_product_neon` called 3x).
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
         // SAFETY: `cosine_fused_neon_4acc` requires NEON (guaranteed on aarch64)
         // and len >= 64 (checked above).
@@ -386,11 +411,20 @@ fn finalize_cosine(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {
 /// For vectors with >= 64 elements, delegates to [`squared_l2_neon_4acc`]
 /// which uses 4 independent accumulators to hide FMA latency through ILP.
 /// Smaller vectors use a single-accumulator loop.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
-        return squared_l2_neon_4acc(a, b);
+        // SAFETY: `squared_l2_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // Reason: the 4-accumulator loop for vectors of 64 elements or more.
+        return unsafe { squared_l2_neon_4acc(a, b) };
     }
     // SAFETY: `squared_l2_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
@@ -454,24 +488,24 @@ unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 /// per iteration, so two iterations fully consume one cache line.
 ///
 /// [`simd_4acc_l2_loop!`]: crate::simd_4acc_l2_loop!
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
+unsafe fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
-    let len = a.len();
-    // SAFETY: `add` on a raw pointer derived from a valid slice.
-    // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
-    // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
-    // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
-    let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
-    // SAFETY: `add(len)` yields the one-past-the-end pointer (Condition 2 above),
-    // valid to form for comparison against the advancing pointer in the tail loop.
-    let end_ptr = unsafe { a.as_ptr().add(len) };
+    let (end_main, end_ptr) = bounds_16wide(a);
 
-    // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds
-    // guaranteed by `end_main`. `neon_fma_compat` reorders args to match macro convention.
-    // `vsubq_f32` computes element-wise difference before FMA accumulates diff².
+    // SAFETY: 4-accumulator ILP loop of 16-wide NEON loads from `a` and `b`.
+    // - Condition 1: `end_main` bounds every load of `a`; `b` is read at the same
+    //   offsets and is as long as `a` (this function's `# Safety` precondition).
+    // Reason: `vsubq_f32` takes the element-wise difference, then `neon_fma_compat`
+    // (args reordered to the macro's convention) accumulates diff².
     let (combined, mut a_ptr, mut b_ptr) = unsafe {
         crate::simd_4acc_l2_loop!(
             a.as_ptr(),
@@ -517,9 +551,15 @@ fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 /// (threshold at 0.5), consistent with AVX2/AVX-512 Hamming kernels.
 /// For vectors with >= 64 elements, delegates to [`hamming_neon_4acc`] which
 /// uses 4-way ILP for higher throughput.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
         // SAFETY: `hamming_neon_4acc` requires NEON (guaranteed on aarch64)
         // and len >= 64 (checked above).
@@ -697,10 +737,12 @@ unsafe fn hamming_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// # Safety
 ///
-/// Uses NEON intrinsics that are always available on aarch64. Pointer
-/// arithmetic is bounded by `i + 2 <= len` loop guard.
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked
+/// (the `i + 2 <= len` guard bounds `a` only). `hamming_binary_native`
+/// asserts it, in release too, before dispatching here. NEON itself is always
+/// available on aarch64.
 #[cfg(target_arch = "aarch64")]
-pub(crate) fn hamming_binary_neon(a: &[u64], b: &[u64]) -> u32 {
+pub(crate) unsafe fn hamming_binary_neon(a: &[u64], b: &[u64]) -> u32 {
     use std::arch::aarch64::*;
 
     let len = a.len();
@@ -742,9 +784,15 @@ pub(crate) fn hamming_binary_neon(a: &[u64], b: &[u64]) -> u32 {
 /// `max` for union, consistent with AVX2/AVX-512 Jaccard kernels. For vectors
 /// with >= 64 elements, delegates to [`jaccard_neon_4acc`] which uses 8
 /// accumulators (4 intersection + 4 union) for ILP.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
         // SAFETY: `jaccard_neon_4acc` requires NEON (guaranteed on aarch64)
         // and len >= 64 (checked above).

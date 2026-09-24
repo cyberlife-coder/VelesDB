@@ -191,6 +191,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from 1024 dimensions), and nothing
   about the machine. It now prints `simd_native::simd_level()`, named by
   `SimdLevel`'s new `Display`, e.g. `Detected level: NEON (aarch64)`.
+- **The NEON distance kernels are `unsafe fn` (#1965).** They were safe
+  `pub(crate)` functions that read `b` at every index of `a` with no length
+  check, so a crate-internal call with a shorter `b` read past its end with no
+  `unsafe` in sight. The public entry points already asserted equal lengths,
+  in release too, so no public call was affected; the precondition is now each
+  kernel's `# Safety` contract, as it already was for the x86 kernels, and
+  every call site names the assert it relies on.
 - **An HNSW insert past the pre-allocated capacity no longer takes the
   layers' write lock for good, and a layer added late no longer drops
   neighbour writes (#2306).** `expand_layers`' slow path grew the layers to

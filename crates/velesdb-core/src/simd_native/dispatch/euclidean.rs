@@ -55,7 +55,12 @@ pub fn squared_l2_native(a: &[f32], b: &[f32]) -> f32 {
             unsafe { crate::simd_native::squared_l2_avx2_1acc(a, b) }
         }
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if a.len() >= 4 => crate::simd_native::squared_l2_neon(a, b),
+        SimdLevel::Neon if a.len() >= 4 => {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `squared_l2_native` asserted it, in release too, before dispatching here.
+            // Reason: NEON is always present on aarch64; this is its fast path.
+            unsafe { crate::simd_native::squared_l2_neon(a, b) }
+        }
         _ => super::squared_l2_scalar(a, b),
     }
 }
@@ -223,7 +228,13 @@ pub(super) fn resolve_squared_l2(level: SimdLevel, dim: usize) -> fn(&[f32], &[f
             }
         }
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if dim >= 4 => |a, b| crate::simd_native::squared_l2_neon(a, b),
+        SimdLevel::Neon if dim >= 4 => |a, b| {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `DistanceEngine::dispatch` asserts it, in release too,
+            //   before calling a resolved kernel.
+            // Reason: the resolver emitted the NEON kernel for this dimension.
+            unsafe { crate::simd_native::squared_l2_neon(a, b) }
+        },
         _ => super::squared_l2_scalar,
     }
 }

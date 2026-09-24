@@ -27,8 +27,8 @@ pub fn handle_simd(action: SimdAction) {
             println!();
         }
         SimdAction::Benchmark => {
-            println!("{}", "SIMD micro-benchmarks removed.".yellow());
-            println!("Use 'cargo bench --bench simd_benchmark' for detailed benchmarks.");
+            println!("{}", "The CLI does not benchmark SIMD.".yellow());
+            println!("Run: cargo bench -p velesdb-core --bench simd_benchmark");
             println!();
         }
     }
