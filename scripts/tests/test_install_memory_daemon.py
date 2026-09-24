@@ -14,7 +14,6 @@ import io
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -23,6 +22,8 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from scripts.tests.fresh_executable import write_warm_executable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -144,10 +145,9 @@ class InstallerHarness(unittest.TestCase):
         )
 
     def _write_executable(self, name: str, body: str) -> Path:
-        path = self.fake_bin / name
-        path.write_text(textwrap.dedent(body).lstrip(), encoding="utf-8")
-        path.chmod(path.stat().st_mode | stat.S_IXUSR)
-        return path
+        """A fake on the test's PATH, already launched once: the installer runs it under a
+        20 s deadline, which a new file's first launch on macOS can exceed (#2284)."""
+        return write_warm_executable(self.fake_bin / name, textwrap.dedent(body).lstrip())
 
     def _write_fake_node(self, name: str, version: str = "v20.18.1") -> Path:
         return self._write_executable(

@@ -61,6 +61,8 @@ import warnings
 from pathlib import Path
 from unittest import mock
 
+from scripts.tests.fresh_executable import warm_up
+
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "bench-memory-extraction.py"
 CASES_PATH = Path(__file__).resolve().parent.parent / "memory-extraction-cases.json"
 
@@ -2413,6 +2415,10 @@ class MinimumPythonTest(unittest.TestCase):
             binary = Path(bin_dir) / "velesdb-memory"
             binary.write_text(FAKE_BINARY_SCRIPT, encoding="utf-8")
             binary.chmod(0o755)
+            # The child asks it `--version` under the bench's own 30 s, which
+            # `patient_launches` cannot reach across the process boundary: its
+            # first launch is paid here instead (#2284).
+            warm_up(binary)
             done = subprocess.run([shutil.which(program), "-c", BENCH_CHILD + call, str(root),
                                    str(binary)], capture_output=True, text=True, check=False,
                                   timeout=LAUNCH_PATIENCE_S)
