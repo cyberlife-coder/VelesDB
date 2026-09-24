@@ -116,70 +116,96 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 }
 
 /// Whether an unresolved shortcut or collapsed label reads as an item path,
-/// which rustdoc 1.90 treats as an intra-doc link. It reads the label the way
-/// rustdoc's `preprocess_link` does: one code span is a path; otherwise its
-/// backticks are dropped, the item is what comes before a `#` fragment, and a
-/// one-word disambiguator (`fn@`, `struct @`) and a call or macro suffix
-/// (`()`, `!`, `!()`, `!{}`, `![]`) come off with the spaces around them. What
-/// is left is a path when it is a word of letters, digits and the path
-/// marks rustdoc's `should_ignore_link` keeps (`::`, `<…>`, `!`, `&`, `*`,
-/// `;`) holding a letter or an underscore, or the bare `&`, `!` or `()` of a
-/// primitive. Any other label is never linked: a space elsewhere (`[0, 1]`),
-/// a digit alone (`[0]`), other punctuation (`[YYYY-MM-DD]`, `[ops@x.dev]`,
-/// `[f(x)]`). rustdoc warns about a few of those it cannot resolve either
-/// (`[write to ops@x]`, `[*]`, `[<T>]`), which then show as plain brackets.
-/// The one label it reads differently from rustdoc, `[ () ]`, it flags: the
-/// cost of trimming before it strips a suffix.
+/// which rustdoc 1.90 treats as an intra-doc link. It takes rustdoc's
+/// `preprocess_link` steps in rustdoc's order: the label's backticks are
+/// dropped, so a code span reads as its code, and the item is what comes
+/// before a `#` fragment. A one-word kind before an `@` comes off (`fn@f`),
+/// then a call or macro suffix (`()`, `!`, `!()`, `!{}`, `![]`) that leaves
+/// something, each with the spaces around it. What is left must hold only
+/// letters, digits and the marks rustdoc's `should_ignore_link` keeps
+/// (`:_<>, !*&;`), inside its generics too (`[Result<(), u8>]` is prose).
+/// Its generics and the empty `::` segments they leave come off, and it is a
+/// path when it holds no space and a letter or an underscore, or is the bare
+/// `!` or `&` of a primitive (`[!]`, `[!<u8>]`, `[::<u8>&]`). Any other label
+/// is never linked: a space outside generics (`[0, 1]`), a digit alone
+/// (`[0]`), other punctuation (`[YYYY-MM-DD]`, `[ops@x.dev]`, `[f(x)]`,
+/// `[()]`, `[!{}]`).
+///
+/// Where rustdoc warns and shows the brackets as written, the guard fails
+/// closed: it flags a word before an `@` that rustdoc does not take for a
+/// kind (`[struct @Foo]`), a call suffix on a primitive (`[!()]`), generics
+/// rustdoc finds malformed (`[Vec<<u8>]`), and a path that resolves to
+/// nothing (`[sic]`). It passes the labels rustdoc warns about but cannot
+/// read as an item (`[write to ops@x]`, `[*]`, `[0]`, `[<T>]`), which show
+/// as plain brackets too.
 fn names_an_item(label: &str) -> bool {
-    let label = label.trim();
-    if is_one_code_span(label) {
-        return true;
-    }
     // rustdoc drops every backtick before it reads the path (`[f`()`]`).
-    let label = label.replace('`', "");
+    let label = label.trim().replace('`', "");
     // rustdoc resolves the item before a `#` fragment (`[X#method.id]`).
     let item = label
         .split_once('#')
         .map_or(label.as_str(), |(item, _)| item);
-    let path = without_disambiguator(item).trim();
-    let (path, suffixed) = CALL_SUFFIXES
-        .iter()
-        .find_map(|suffix| path.strip_suffix(suffix))
-        .map_or((path, false), |path| (path.trim(), true));
-    if path.is_empty() {
-        // `[!]`, `[()]`: the never and unit primitives.
-        return suffixed;
+    let path = without_call_suffix(without_disambiguator(item).trim());
+    if !path
+        .chars()
+        .all(|c| c.is_alphanumeric() || ":_<>, !*&;".contains(c))
+    {
+        return false;
     }
-    let mut depth = 0_usize;
-    let outside_generics: String = path
-        .chars()
-        .filter(|&c| {
-            match c {
-                '<' => depth += 1,
-                '>' => depth = depth.saturating_sub(1),
-                _ => return depth == 0,
-            }
-            false
-        })
-        .collect();
-    let path_like = outside_generics
-        .chars()
-        .any(|c| c.is_alphabetic() || c == '_')
-        && outside_generics
-            .chars()
-            .all(|c| c.is_alphanumeric() || "_:!&*;".contains(c));
-    path_like || outside_generics == "&"
+    let path = without_generics(path);
+    !path.contains(' ')
+        && (path.chars().any(|c| c.is_alphabetic() || c == '_') || path == "!" || path == "&")
 }
 
 /// The suffixes rustdoc strips from a path before resolving it, longest
 /// first: a macro's `!()`, `!{}` or `![]`, a function's `()`, a macro's `!`.
 const CALL_SUFFIXES: [&str; 5] = ["!()", "!{}", "![]", "()", "!"];
 
-/// `item` less a disambiguator: a one-word kind before an `@`, whatever the
-/// spaces around it (`fn@f`, `struct @ Foo`). rustdoc links a known kind and
-/// warns about an unknown one, and both show as raw brackets once published,
-/// so the kind is not checked. A label whose text before the `@` is not one
-/// word (`[write to ops@x]`) keeps its `@`, and reads as prose.
+/// `path` less the first suffix whose removal leaves something, and the
+/// spaces before it. Like rustdoc, it keeps `[!]` whole, the never primitive,
+/// and reads `[!()]` as `!` with a function's suffix.
+fn without_call_suffix(path: &str) -> &str {
+    CALL_SUFFIXES
+        .iter()
+        .find_map(|suffix| path.strip_suffix(suffix).filter(|rest| !rest.is_empty()))
+        .map_or(path, str::trim)
+}
+
+/// `path` less its `<…>` groups and the empty `::` segments they leave, as
+/// rustdoc's `strip_generics_from_path` returns it (`::<u8>&` gives `&`). A
+/// path without generics is kept whole. Like rustdoc, it counts the depth
+/// with a sign, so a `>` before any `<` takes it below zero (`[><f]` is `f`),
+/// and it strips generics rustdoc finds unbalanced all the same, where
+/// rustdoc warns instead.
+fn without_generics(path: &str) -> String {
+    if !path.contains(['<', '>']) {
+        return path.to_owned();
+    }
+    let mut depth = 0_isize;
+    let outside: String = path
+        .chars()
+        .filter(|&c| {
+            match c {
+                '<' => depth += 1,
+                '>' => depth -= 1,
+                _ => return depth == 0,
+            }
+            false
+        })
+        .collect();
+    outside
+        .split("::")
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// `item` less a disambiguator: a one-word kind before an `@`, with the
+/// spaces around it (`fn@f`, `struct @ Foo`). rustdoc links a known kind
+/// written flush against its `@`, trims the path after it, and warns about
+/// any other kind, spaced ones included; the guard checks no kind, and flags
+/// them all. A label whose text before the `@` is not one word
+/// (`[write to ops@x]`) keeps its `@`, and reads as prose.
 fn without_disambiguator(item: &str) -> &str {
     item.split_once('@')
         .filter(|(kind, _)| {
@@ -187,16 +213,6 @@ fn without_disambiguator(item: &str) -> &str {
             !kind.is_empty() && kind.chars().all(|c| c.is_alphanumeric() || c == '_')
         })
         .map_or(item, |(_, path)| path)
-}
-
-/// Whether `label` is code and nothing else (`` `X` ``, ``` ``a`b`` ```), not
-/// a list of code (`` `asc`, `desc` ``), which rustdoc reads as no path.
-fn is_one_code_span(label: &str) -> bool {
-    let fence = label.len() - label.trim_start_matches('`').len();
-    fence > 0
-        && label.len() > 2 * fence
-        && label.ends_with(&label[..fence])
-        && !label[fence..label.len() - fence].contains(&label[..fence])
 }
 
 /// Whether `destination` is a URL or a fragment. A `mailto:` followed by a

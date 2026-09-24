@@ -47,17 +47,21 @@ fn flags_each_link_form() {
         "see [vec`!`].",
         "see [&].",
         "see [x](mailto::X).",
-        // rustdoc trims the spaces around a disambiguator and a call or macro
-        // suffix before it resolves the path, and links the bare never and
-        // unit primitives.
+        // rustdoc trims the spaces before a call or macro suffix and after a
+        // disambiguator, reads a suffix after a disambiguator, and links the
+        // bare never primitive.
         "see [foo ()] end",
         "see [vec !].",
         "see [vec !()].",
-        "see [struct @Foo].",
-        "see [fn @ f].",
+        "see [fn@ f].",
+        "see [fn@f()].",
         "see [!].",
         "see [!][].",
-        "see [()].",
+        // rustdoc strips generics before it reads a primitive, drops the
+        // empty `::` segments they leave, and counts their depth with a sign.
+        "see [!<u8>].",
+        "see [::<u8>&].",
+        "see [><f].",
         // `[a, b][]` reads as a collapsed reference only once every reference
         // is accepted; a client renders the inline link after it.
         "see [a, b][](crate::Foo) end",
@@ -96,21 +100,29 @@ fn passes_web_links_code_and_prose_brackets() {
         // Punctuation rustdoc never reads in a path.
         "see [f(x)] here",
         "see [(a)] and [a{}] and [x()y]",
+        "see [()] and [ () ] and [!{}] and [`()`]",
+        // rustdoc checks its path marks inside generics too.
+        "see [Result<(), u8>] and [Vec<f32.5>] and [Option<&'static str>]",
     ] {
         assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");
     }
 }
 
 /// What failing closed costs: prose that reads as an item path fails, and
-/// is written as code instead.
+/// is written as code instead, and so does a label rustdoc warns about and
+/// shows as written.
 #[test]
 fn flags_prose_that_reads_as_an_item_path() {
     for text in [
         "a bare [Point] reads like [sic].",
         "m[i][j] indexes",
         "MATCH (a:Person)-[:KNOWS]->(b)",
-        // rustdoc ignores the spaced unit; the guard trims first and flags it.
-        "see [ () ] here",
+        // rustdoc warns about an unknown kind, spaced ones included, a
+        // function's suffix on a primitive, and malformed generics.
+        "see [struct @Foo].",
+        "see [fn @ f].",
+        "see [!()].",
+        "see [Vec<<u8>].",
     ] {
         assert!(!rustdoc_links(text).is_empty(), "{text:?}");
     }

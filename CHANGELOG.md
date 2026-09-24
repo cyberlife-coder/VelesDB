@@ -1000,10 +1000,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rustdoc resolves or warns about, while failing code spans and web links
   whose text holds code. The guard moves out of velesdb-memory's tests into
   `velesdb-rustdoc-guard`, a test-only crate that is never published and that
-  both crates take as a dev-dependency. It now also flags three forms it
-  missed and the server's scan caught: a label with backticks inside
-  (``[f`()`]``), the bare `[&]` primitive, and a `mailto::X` path used as a
-  link target.
+  both crates take as a dev-dependency. It reads each text twice, as rustdoc
+  does and as a client renders it, and reads a bare label in the order of
+  rustdoc 1.90's `preprocess_link`; against rustdoc on 22,621 generated
+  labels, it flags every one rustdoc links. It now also flags a label with
+  backticks inside (``[f`()`]``), the `[&]` and `[!]` primitives, generics
+  before one (`[!<u8>]`), a spaced call suffix (`[f ()]`, `[vec !]`), a kind
+  spaced from its `@` (`[struct @Foo]`, which rustdoc warns about), a
+  `mailto::X` path used as a link target, and the link a client renders
+  after a collapsed reference (`[a, b][](crate::Foo)`). It now passes the
+  labels rustdoc neither links nor warns about that the memory guard failed:
+  punctuation in a path (`[f(x)]`, `[a{}]`, `[Result<(), u8>]`) and a code
+  span that holds no path (`` [`()`] ``).
 - **The published crates declare dependency floors they can actually be built
   with (#1987).** `-Z direct-minimal-versions` found requirements below what
   the rest of the dependency graph, or the code itself, needs: `serde` "1.0"
