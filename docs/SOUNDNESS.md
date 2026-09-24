@@ -97,11 +97,17 @@ slices with popcount via `_mm256_set_epi8` LUT.
 
 ### Module: `crates/velesdb-core/src/simd_native/neon.rs`
 
-**Functions** (all `unsafe fn` with `#[target_feature(enable = "neon")]`,
-`#[cfg(target_arch = "aarch64")]`):
-- `dot_product_neon()` / `squared_l2_neon()` / `cosine_neon()` / `hamming_neon()`
-- `jaccard_neon()` / `hamming_binary_neon()`
-- Safe wrappers: `dot_product_neon_safe()`, `euclidean_neon_safe()`, etc.
+**Functions** (`#[cfg(target_arch = "aarch64")]`; NEON is mandatory on AArch64,
+so there is no `#[target_feature]` and no runtime detection):
+- Safe `pub(crate) fn` kernels, each wrapping its intrinsics in `unsafe` blocks:
+  `dot_product_neon()` / `squared_l2_neon()` / `cosine_neon()` / `hamming_neon()` /
+  `jaccard_neon()` / `hamming_binary_neon()`
+- `unsafe fn` helpers those kernels call: `squared_l2_neon_1acc()`,
+  `hamming_neon_{1,4}acc()`, `jaccard_neon_{1,4}acc()`, the `cosine_fused_neon_*`
+  loops, `reduce_4acc_neon()` and `neon_fma_compat()`, whose callers uphold the
+  length invariants below
+- The public entry points are the runtime-dispatched `simd_native::*_native`
+  functions; nothing outside `simd_native` calls these kernels
 
 **Invariants**:
 1. `#[cfg(target_arch = "aarch64")]` guarantees NEON availability (mandatory on AArch64)
