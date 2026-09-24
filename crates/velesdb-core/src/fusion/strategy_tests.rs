@@ -1056,3 +1056,20 @@ fn test_signed_zero_scores_tie_by_ascending_id() {
         .expect("fuse");
     assert_eq!(ids(&fused), vec![0, 1]);
 }
+
+/// Folding `-0.0` into `0.0` leaves every NaN bit-exact, so NaNs keep
+/// `total_cmp`'s order: a signalling NaN still sorts below a quiet one, which
+/// `x + 0.0` would reverse by quieting it (#2297 review).
+#[test]
+fn test_fused_score_cmp_keeps_nan_order() {
+    let signalling = f32::from_bits(0x7F80_0001);
+    let quiet = f32::from_bits(0x7FC0_0000);
+    assert_eq!(
+        super::strategy::fused_score_cmp(signalling, quiet),
+        signalling.total_cmp(&quiet)
+    );
+    assert_eq!(
+        super::strategy::fused_score_cmp(-quiet, 1.0),
+        std::cmp::Ordering::Less
+    );
+}

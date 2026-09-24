@@ -689,9 +689,11 @@ pub fn sort_fused_results(fused: &mut [(u64, f32)]) {
 /// similarity). Shared by [`sort_fused_results`] and the hybrid search's
 /// top-k heap, so a cut by `k` and a full sort agree.
 pub(crate) fn fused_score_cmp(a: f32, b: f32) -> std::cmp::Ordering {
-    // `-0.0 + 0.0` is `+0.0` in round-to-nearest; every other value, NaN
-    // included, is unchanged by adding `0.0`.
-    (a + 0.0).total_cmp(&(b + 0.0))
+    // `==` folds `-0.0` into `0.0` and leaves every other value bit-exact.
+    // Arithmetic would not: `x + 0.0` quiets a signalling NaN and gives a NaN
+    // result an unspecified sign, which moves it in `total_cmp`'s order.
+    let unsigned_zero = |x: f32| if x == 0.0 { 0.0 } else { x };
+    unsigned_zero(a).total_cmp(&unsigned_zero(b))
 }
 
 /// Min-max normalize a branch of `(id, score)` pairs to the `[0, 1]` range.
