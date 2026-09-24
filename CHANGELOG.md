@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
 
 ### Added
+- **`velesdb_core::fusion::sort_fused_results` (#2297).** Orders fused
+  `(id, score)` pairs by score descending, then id ascending, the order
+  every fusion path returns; for a caller that fuses on its own, as
+  `velesdb-wasm` does.
 - **`impl Display for WithValue` (#2274).** A `WITH` option value renders
   in canonical VelesQL form, which the parser reads back as the same value:
   a string single-quoted with each quote doubled, a float in decimal with a
@@ -198,6 +202,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in release too, so no public call was affected; the precondition is now each
   kernel's `# Safety` contract, as the x86 dot-product kernels document it,
   and every call site names the assert or precondition it relies on.
+- **Equal fused scores come back in one order, ascending id, on every
+  surface (#2297).** Every fusion strategy gathers its scores in a hash map,
+  whose iteration order changes from one map to the next, then sorted by
+  score alone: two identical multi-query searches returned tied documents
+  in different orders, in core and through the WASM binding and the TS
+  SDK on top of it. `fusion::sort_fused_results` now orders fused results
+  by score descending, then id ascending, and every fusion path uses it:
+  core's six strategies, hybrid dense + text search (whose top-k heap also
+  keeps, when `k` cuts through a tie, the ids that order puts first, not
+  the highest ones), and `velesdb-wasm`'s own relative-score fusion.
+  `-0.0` and `0.0` tie too, which a mixed-direction fusion produces side by
+  side (a zero distance negated next to a zero similarity).
 - **TypeScript SDK CI: tests/ is linted, and the coverage thresholds bind
   (#2364, #2383).** `lint` ran `eslint src`, and the eslint project excluded
   tests/, so tests/ was never linted: 7 errors hid there, now fixed. The SDK

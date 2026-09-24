@@ -51,10 +51,11 @@ impl PartialOrd for OrderedFloat {
 
 impl Ord for OrderedFloat {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // total_cmp gives a true total order: NaN is considered greater than any
-        // finite value. Callers wrap in Reverse<(OrderedFloat, _)> for a min-heap,
-        // so Reverse(NaN) is the minimum and is discarded first — NaN scores never
-        // survive to the output list.
-        self.0.total_cmp(&other.0)
+        // The fused-score order `sort_fused_results` uses, so the top-k heap
+        // and a full sort agree: `total_cmp` with `-0.0` tied to `0.0`. A
+        // positive NaN is the greatest score: the min-heap
+        // (`Reverse<(OrderedFloat, _)>`) never evicts it, so it is kept and
+        // sorts first, as `sort_fused_results` documents.
+        crate::fusion::fused_score_cmp(self.0, other.0)
     }
 }

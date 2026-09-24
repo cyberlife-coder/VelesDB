@@ -14,7 +14,6 @@ import io
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -23,6 +22,8 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+from scripts.tests.fresh_executable import write_warm_executable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -144,10 +145,9 @@ class InstallerHarness(unittest.TestCase):
         )
 
     def _write_executable(self, name: str, body: str) -> Path:
-        path = self.fake_bin / name
-        path.write_text(textwrap.dedent(body).lstrip(), encoding="utf-8")
-        path.chmod(path.stat().st_mode | stat.S_IXUSR)
-        return path
+        """A fake on the test's PATH, already launched once: the installer runs it under a
+        20 s deadline, which a new file's first launch on macOS can exceed (#2284)."""
+        return write_warm_executable(self.fake_bin / name, textwrap.dedent(body).lstrip())
 
     def _write_fake_node(self, name: str, version: str = "v20.18.1") -> Path:
         return self._write_executable(
@@ -344,9 +344,18 @@ class PwshLaunchBudgetTests(InstallerHarness):
         self.assertNotIn(os.environ.get("HOME"), homes)
 
 
-class ShellCodexWiringTests(InstallerHarness):
+class CodexWiringContract:
+    """The Codex wiring both installers must honour, run once per installer.
+
+    Not a `TestCase` itself, so unittest collects only the two subclasses
+    below; each supplies `run_installer`.
+    """
+
+    def run_installer(self, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        raise NotImplementedError
+
     def test_supported_codex_uses_native_http_without_remove(self) -> None:
-        result = self.run_shell(self.environment(version="codex-cli 0.146.0-alpha.9.2"))
+        result = self.run_installer(self.environment(version="codex-cli 0.146.0-alpha.9.2"))
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(
@@ -360,7 +369,7 @@ class ShellCodexWiringTests(InstallerHarness):
         self.assertIn("codex: wired (native HTTP)", result.stdout)
 
     def test_old_codex_is_skipped_without_mutation(self) -> None:
-        result = self.run_shell(
+        result = self.run_installer(
             self.environment(version="warning: helper 9.9.9\ncodex-cli 0.112.9")
         )
 
@@ -370,7 +379,7 @@ class ShellCodexWiringTests(InstallerHarness):
         self.assertIn("codex: not wired (requires >= 0.113)", result.stdout)
 
     def test_unrecognized_codex_version_is_skipped_without_mutation(self) -> None:
-        result = self.run_shell(self.environment(version="development build"))
+        result = self.run_installer(self.environment(version="development build"))
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(self.invocation_log(), ["--version"])
@@ -378,7 +387,7 @@ class ShellCodexWiringTests(InstallerHarness):
         self.assertIn("codex: not wired (unrecognized version)", result.stdout)
 
     def test_failed_add_never_removes_the_existing_entry(self) -> None:
-        result = self.run_shell(self.environment(add_exit=42))
+        result = self.run_installer(self.environment(add_exit=42))
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(
@@ -392,52 +401,14 @@ class ShellCodexWiringTests(InstallerHarness):
         self.assertIn("codex: not wired (add failed)", result.stdout)
 
 
-class PowerShellCodexWiringTests(InstallerHarness):
-    def test_supported_codex_uses_native_http_without_remove(self) -> None:
-        result = self.run_powershell(self.environment(version="codex-cli 0.146.0-alpha.9.2"))
+class ShellCodexWiringTests(CodexWiringContract, InstallerHarness):
+    def run_installer(self, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return self.run_shell(env)
 
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(
-            self.invocation_log(),
-            [
-                "--version",
-                "mcp add velesdb-memory --url https://127.0.0.1:18090/mcp",
-            ],
-        )
-        self.assertIn("native Streamable HTTP", result.stdout)
-        self.assertIn("codex: wired (native HTTP)", result.stdout)
 
-    def test_old_codex_is_skipped_without_mutation(self) -> None:
-        result = self.run_powershell(
-            self.environment(version="warning: helper 9.9.9\ncodex-cli 0.112.9")
-        )
-
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(self.invocation_log(), ["--version"])
-        self.assertIn("minimum 0.113", result.stdout)
-        self.assertIn("codex: not wired (requires >= 0.113)", result.stdout)
-
-    def test_unrecognized_codex_version_is_skipped_without_mutation(self) -> None:
-        result = self.run_powershell(self.environment(version="development build"))
-
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(self.invocation_log(), ["--version"])
-        self.assertIn("Unrecognized Codex version", result.stdout)
-        self.assertIn("codex: not wired (unrecognized version)", result.stdout)
-
-    def test_failed_add_never_removes_the_existing_entry(self) -> None:
-        result = self.run_powershell(self.environment(add_exit=42))
-
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(
-            self.invocation_log(),
-            [
-                "--version",
-                "mcp add velesdb-memory --url https://127.0.0.1:18090/mcp",
-            ],
-        )
-        self.assertIn("no existing velesdb-memory entry was removed", result.stdout)
-        self.assertIn("codex: not wired (add failed)", result.stdout)
+class PowerShellCodexWiringTests(CodexWiringContract, InstallerHarness):
+    def run_installer(self, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return self.run_powershell(env)
 
 
 class PowerShellClaudeWiringTests(InstallerHarness):
@@ -526,6 +497,45 @@ class PowerShellUninstallTests(InstallerHarness):
 
 
 class DesktopBridgeContractTests(InstallerHarness):
+    @staticmethod
+    def skipped_clients() -> list[str]:
+        """Every client but Claude Desktop, the one these tests wire."""
+        return ["claude-code", "codex", "windsurf", "devin"]
+
+    def shell_desktop_config(self) -> Path:
+        """An empty Claude Desktop config where the shell installer looks (macOS)."""
+        return self._empty_desktop_config(self.home / "Library" / "Application Support" / "Claude")
+
+    def powershell_desktop_config(self) -> Path:
+        """An empty Claude Desktop config where the PowerShell installer looks."""
+        return self._empty_desktop_config(self.root / "appdata" / "Claude")
+
+    @staticmethod
+    def _empty_desktop_config(desktop_dir: Path) -> Path:
+        desktop_dir.mkdir(parents=True)
+        config = desktop_dir / "claude_desktop_config.json"
+        config.write_text("{}\n", encoding="utf-8")
+        return config
+
+    def assert_pinned_bridge(self, config: Path, fake_npx: Path) -> dict:
+        """The wired entry runs the pinned mcp-remote through `fake_npx`; returns it."""
+        entry = json.loads(config.read_text(encoding="utf-8"))["mcpServers"][
+            "velesdb-memory"
+        ]
+        self.assertEqual(entry["command"], str(fake_npx))
+        self.assertEqual(
+            entry["args"],
+            [
+                "-y",
+                "mcp-remote@0.1.38",
+                "https://127.0.0.1:18090/mcp",
+                "--transport",
+                "http-only",
+            ],
+        )
+        self.assertNotIn("NODE_TLS_REJECT_UNAUTHORIZED", entry["env"])
+        return entry
+
     def test_shell_installer_pins_bridge_and_ignores_global_mcp_remote(self) -> None:
         if shutil.which("jq") is None:
             self.skipTest("jq is not installed")
@@ -533,122 +543,41 @@ class DesktopBridgeContractTests(InstallerHarness):
         fake_npx = self._write_executable("npx", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node")
         self._write_executable("mcp-remote", "#!/bin/sh\nexit 98\n")
-        desktop_dir = self.home / "Library" / "Application Support" / "Claude"
-        desktop_dir.mkdir(parents=True)
-        config = desktop_dir / "claude_desktop_config.json"
-        config.write_text("{}\n", encoding="utf-8")
+        config = self.shell_desktop_config()
 
-        env = self.environment()
-        command = [
-            "bash",
-            str(SHELL_INSTALLER),
-            "--wire-only",
-            "--skip-ca-trust",
-            "--skip-client=claude-code",
-            "--skip-client=codex",
-            "--skip-client=windsurf",
-            "--skip-client=devin",
-        ]
-        result = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=20,
-            check=False,
-        )
+        result = self.run_shell(self.environment())
 
         self.assertEqual(result.returncode, 0, result.stdout)
-        entry = json.loads(config.read_text(encoding="utf-8"))["mcpServers"][
-            "velesdb-memory"
-        ]
-        self.assertEqual(entry["command"], str(fake_npx))
-        self.assertEqual(
-            entry["args"],
-            [
-                "-y",
-                "mcp-remote@0.1.38",
-                "https://127.0.0.1:18090/mcp",
-                "--transport",
-                "http-only",
-            ],
-        )
+        entry = self.assert_pinned_bridge(config, fake_npx)
         self.assertEqual(
             entry["env"]["NODE_EXTRA_CA_CERTS"],
             str(self.home / ".velesdb-memory-tls" / "ca-cert.pem"),
         )
-        self.assertNotIn("NODE_TLS_REJECT_UNAUTHORIZED", entry["env"])
 
     def test_powershell_installer_writes_the_same_pinned_bridge(self) -> None:
         fake_npx = self._write_executable("npx.cmd", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node.exe")
         self._write_executable("mcp-remote.cmd", "#!/bin/sh\nexit 98\n")
-        desktop_dir = self.root / "appdata" / "Claude"
-        desktop_dir.mkdir(parents=True)
-        config = desktop_dir / "claude_desktop_config.json"
-        config.write_text("{}\n", encoding="utf-8")
+        config = self.powershell_desktop_config()
 
-        quoted_path = str(POWERSHELL_INSTALLER).replace("'", "''")
-        command = (
-            "$PSNativeCommandUseErrorActionPreference = $true; "
-            f"& '{quoted_path}' -WireOnly -SkipCaTrust "
-            "-SkipClient @('claude-code','codex','windsurf','devin')"
-        )
-        result = self.run_pwsh(command, self.environment())
+        result = self.run_powershell(self.environment())
 
         self.assertEqual(result.returncode, 0, result.stdout)
-        entry = json.loads(config.read_text(encoding="utf-8"))["mcpServers"][
-            "velesdb-memory"
-        ]
-        self.assertEqual(entry["command"], str(fake_npx))
-        self.assertEqual(
-            entry["args"],
-            [
-                "-y",
-                "mcp-remote@0.1.38",
-                "https://127.0.0.1:18090/mcp",
-                "--transport",
-                "http-only",
-            ],
-        )
+        entry = self.assert_pinned_bridge(config, fake_npx)
         ca_cert = entry["env"]["NODE_EXTRA_CA_CERTS"].replace("\\", "/")
         self.assertEqual(
             ca_cert,
             f"{self.home}/.velesdb-memory-tls/ca-cert.pem",
         )
-        self.assertNotIn("NODE_TLS_REJECT_UNAUTHORIZED", entry["env"])
 
     def test_shell_installer_refuses_disabled_tls_verification(self) -> None:
         self._write_executable("npx", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node")
-        desktop_dir = self.home / "Library" / "Application Support" / "Claude"
-        desktop_dir.mkdir(parents=True)
-        config = desktop_dir / "claude_desktop_config.json"
-        config.write_text("{}\n", encoding="utf-8")
+        config = self.shell_desktop_config()
 
         env = self.environment()
         env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-        result = subprocess.run(
-            [
-                "bash",
-                str(SHELL_INSTALLER),
-                "--wire-only",
-                "--skip-ca-trust",
-                "--skip-client=claude-code",
-                "--skip-client=codex",
-                "--skip-client=windsurf",
-                "--skip-client=devin",
-            ],
-            cwd=REPO_ROOT,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=20,
-            check=False,
-        )
+        result = self.run_shell(env)
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {})
@@ -657,20 +586,11 @@ class DesktopBridgeContractTests(InstallerHarness):
     def test_powershell_installer_refuses_disabled_tls_verification(self) -> None:
         self._write_executable("npx.cmd", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node.exe")
-        desktop_dir = self.root / "appdata" / "Claude"
-        desktop_dir.mkdir(parents=True)
-        config = desktop_dir / "claude_desktop_config.json"
-        config.write_text("{}\n", encoding="utf-8")
+        config = self.powershell_desktop_config()
 
         env = self.environment()
         env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-        quoted_path = str(POWERSHELL_INSTALLER).replace("'", "''")
-        command = (
-            "$PSNativeCommandUseErrorActionPreference = $true; "
-            f"& '{quoted_path}' -WireOnly -SkipCaTrust "
-            "-SkipClient @('claude-code','codex','windsurf','devin')"
-        )
-        result = self.run_pwsh(command, env)
+        result = self.run_powershell(env)
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {})
@@ -679,30 +599,9 @@ class DesktopBridgeContractTests(InstallerHarness):
     def test_shell_installer_refuses_unsupported_node(self) -> None:
         self._write_executable("npx", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node", "v20.18.0")
-        desktop_dir = self.home / "Library" / "Application Support" / "Claude"
-        desktop_dir.mkdir(parents=True)
-        config = desktop_dir / "claude_desktop_config.json"
-        config.write_text("{}\n", encoding="utf-8")
+        config = self.shell_desktop_config()
 
-        result = subprocess.run(
-            [
-                "bash",
-                str(SHELL_INSTALLER),
-                "--wire-only",
-                "--skip-ca-trust",
-                "--skip-client=claude-code",
-                "--skip-client=codex",
-                "--skip-client=windsurf",
-                "--skip-client=devin",
-            ],
-            cwd=REPO_ROOT,
-            env=self.environment(),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=20,
-            check=False,
-        )
+        result = self.run_shell(self.environment())
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {})
@@ -711,18 +610,9 @@ class DesktopBridgeContractTests(InstallerHarness):
     def test_powershell_installer_refuses_unsupported_node(self) -> None:
         self._write_executable("npx.cmd", "#!/bin/sh\nexit 99\n")
         self._write_fake_node("node.exe", "v18.20.8")
-        desktop_dir = self.root / "appdata" / "Claude"
-        desktop_dir.mkdir(parents=True)
-        config = desktop_dir / "claude_desktop_config.json"
-        config.write_text("{}\n", encoding="utf-8")
+        config = self.powershell_desktop_config()
 
-        quoted_path = str(POWERSHELL_INSTALLER).replace("'", "''")
-        command = (
-            "$PSNativeCommandUseErrorActionPreference = $true; "
-            f"& '{quoted_path}' -WireOnly -SkipCaTrust "
-            "-SkipClient @('claude-code','codex','windsurf','devin')"
-        )
-        result = self.run_pwsh(command, self.environment())
+        result = self.run_powershell(self.environment())
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {})
