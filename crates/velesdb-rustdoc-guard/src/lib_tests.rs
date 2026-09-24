@@ -47,6 +47,17 @@ fn flags_each_link_form() {
         "see [vec`!`].",
         "see [&].",
         "see [x](mailto::X).",
+        // rustdoc trims the spaces around a disambiguator and a call or macro
+        // suffix before it resolves the path, and links the bare never and
+        // unit primitives.
+        "see [foo ()] end",
+        "see [vec !].",
+        "see [vec !()].",
+        "see [struct @Foo].",
+        "see [fn @ f].",
+        "see [!].",
+        "see [!][].",
+        "see [()].",
     ] {
         assert!(!rustdoc_links(text).is_empty(), "the guard misses {text:?}");
     }
@@ -76,6 +87,8 @@ fn passes_web_links_code_and_prose_brackets() {
         "weights in [0, 1]: higher wins",
         "see [#2261]",
         "write to [ops@x.dev]",
+        "[write to ops@x]",
+        "an empty [] pair",
     ] {
         assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");
     }

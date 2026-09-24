@@ -232,7 +232,10 @@ extract = ["extractor-http"]
 serde_json = { workspace = true }
 # The guard on rustdoc link syntax in published descriptions (#2330). Path
 # only, no `version`: the crate is never published, and cargo strips this
-# entry when this crate publishes.
+# entry when this crate publishes. So the packaged crate's tests do not
+# compile outside this workspace (`schema_tests.rs` and `mcp_schema_bdd.rs`
+# import it); they already read files the package does not ship
+# (`docs/reference/mcp-tools.json`), so they run here, not from the tarball.
 velesdb-rustdoc-guard = { path = "../velesdb-rustdoc-guard" }
 tokio = { workspace = true }
 criterion = { workspace = true }

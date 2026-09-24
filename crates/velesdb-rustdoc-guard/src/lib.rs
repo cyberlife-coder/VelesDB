@@ -90,12 +90,16 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 }
 
 /// Whether an unresolved shortcut or collapsed label reads as an item path,
-/// which rustdoc 1.90 treats as an intra-doc link: one code span, or, its
-/// backticks dropped and before any `#` fragment, a word of letters, digits
-/// and path marks (`::`, `@`, `()`, `!`, `<…>`, `&`, `*`) holding a letter or
-/// an underscore, or the bare `&` of the reference primitive. A label with a
-/// space outside `<…>` (`[0, 1]`), a digit alone (`[0]`) or other punctuation
-/// (`[YYYY-MM-DD]`) is prose.
+/// which rustdoc 1.90 treats as an intra-doc link. It reads the label the way
+/// rustdoc's `preprocess_link` does: one code span is a path; otherwise its
+/// backticks are dropped, the item is what comes before a `#` fragment, and a
+/// one-word disambiguator (`fn@`, `struct @`) and a call or macro suffix
+/// (`()`, `!`, `!()`, `!{}`, `![]`) come off with the spaces around them. What
+/// is left is a path when it is a word of letters, digits and path marks
+/// (`::`, `<…>`, `&`, `*`) holding a letter or an underscore, or the bare
+/// `&`, `!` or `()` of a primitive. A label with a space elsewhere (`[0, 1]`),
+/// a digit alone (`[0]`) or other punctuation (`[YYYY-MM-DD]`, `[ops@x.dev]`)
+/// is prose.
 fn names_an_item(label: &str) -> bool {
     let label = label.trim();
     if is_one_code_span(label) {
@@ -103,20 +107,23 @@ fn names_an_item(label: &str) -> bool {
     }
     // rustdoc drops every backtick before it reads the path (`[f`()`]`).
     let label = label.replace('`', "");
-    let label = label.trim();
     // rustdoc resolves the item before a `#` fragment (`[X#method.id]`).
-    let label = label.split_once('#').map_or(label, |(item, _)| item);
+    let item = label
+        .split_once('#')
+        .map_or(label.as_str(), |(item, _)| item);
+    let path = without_disambiguator(item).trim();
+    let (path, suffixed) = CALL_SUFFIXES
+        .iter()
+        .find_map(|suffix| path.strip_suffix(suffix))
+        .map_or((path, false), |path| (path.trim(), true));
+    if path.is_empty() {
+        // `[!]`, `[()]`: the never and unit primitives.
+        return suffixed;
+    }
     let mut depth = 0_usize;
-    let mut after_disambiguator = false;
-    let outside_generics: String = label
+    let outside_generics: String = path
         .chars()
         .filter(|&c| {
-            // rustdoc trims the path after a disambiguator (`[struct@ Foo]`).
-            let skip = after_disambiguator && c.is_whitespace();
-            after_disambiguator = c == '@' || skip;
-            if skip {
-                return false;
-            }
             match c {
                 '<' => depth += 1,
                 '>' => depth = depth.saturating_sub(1),
@@ -132,6 +139,24 @@ fn names_an_item(label: &str) -> bool {
             .chars()
             .all(|c| c.is_alphanumeric() || "_:@!(){}&*;".contains(c));
     path_like || outside_generics == "&"
+}
+
+/// The suffixes rustdoc strips from a path before resolving it, longest
+/// first: a macro's `!()`, `!{}` or `![]`, a function's `()`, a macro's `!`.
+const CALL_SUFFIXES: [&str; 5] = ["!()", "!{}", "![]", "()", "!"];
+
+/// `item` less a disambiguator: a one-word kind before an `@`, whatever the
+/// spaces around it (`fn@f`, `struct @ Foo`). rustdoc links a known kind and
+/// warns about an unknown one, and both show as raw brackets once published,
+/// so the kind is not checked. A label whose text before the `@` is not one
+/// word (`[write to ops@x]`) keeps its `@`, and reads as prose.
+fn without_disambiguator(item: &str) -> &str {
+    item.split_once('@')
+        .filter(|(kind, _)| {
+            let kind = kind.trim();
+            !kind.is_empty() && kind.chars().all(|c| c.is_alphanumeric() || c == '_')
+        })
+        .map_or(item, |(_, path)| path)
 }
 
 /// Whether `label` is code and nothing else (`` `X` ``, ``` ``a`b`` ```), not
