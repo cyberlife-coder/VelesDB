@@ -84,9 +84,12 @@ pub(crate) unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 /// NEON `vfmaq_f32(acc, a, b)` = acc + a*b, but [`simd_4acc_dot_loop!`] expects
 /// `fmadd(a, b, acc)` = a*b + acc. This wrapper reorders the arguments.
 ///
-/// SAFETY: `vfmaq_f32` is a non-faulting register operation on aarch64.
-///
 /// [`simd_4acc_dot_loop!`]: crate::simd_4acc_dot_loop!
+///
+/// # Safety
+///
+/// None beyond NEON, which aarch64 always has: `vfmaq_f32` is a
+/// non-faulting register operation, with no memory access.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn neon_fma_compat(
@@ -180,12 +183,10 @@ unsafe fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 pub(crate) unsafe fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
-        // SAFETY: `cosine_fused_neon_4acc` requires NEON (guaranteed on aarch64)
-        // and len >= 64 (checked above).
-        // - Condition 1: NEON is always present on aarch64.
-        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // - Condition 3: this function's own `# Safety` precondition, `a.len() == b.len()`.
-        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
+        // SAFETY: `cosine_fused_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // - Condition 2: NEON is always present on aarch64.
+        // Reason: from 64 elements the 4-accumulator loop is faster; it has no length floor.
         return unsafe { cosine_fused_neon_4acc(a, b) };
     }
     // SAFETY: `cosine_fused_neon_1acc` requires NEON (guaranteed on aarch64).
@@ -264,13 +265,15 @@ unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
     let main_end = len / 16 * 16;
-    // SAFETY: `add` on a raw pointer derived from a valid slice.
-    // - Condition 1: `main_end <= len`, so pointer stays within the allocation.
-    // - Condition 2: `add(len)` yields one-past-end, valid for comparison.
-    // SAFETY: Establish loop bounds for 16-wide main body and scalar tail.
-    let end_main = a.as_ptr().add(main_end);
-    let end_ptr = a.as_ptr().add(len);
+    let (end_main, end_ptr) = bounds_16wide(a);
 
+    // SAFETY: both helpers read `b` over the span they read of `a`.
+    // - Condition 1: `a.as_ptr()..end_main` is `a`'s first `main_end` elements,
+    //   a multiple of 16, and `end_main..end_ptr` the rest of `a`.
+    // - Condition 2: this function's own `# Safety` precondition,
+    //   `a.len() == b.len()`, so `b` is readable over both spans, and
+    //   `b.as_ptr().add(main_end)` stays within `b`.
+    // Reason: the 16-wide main body, then the scalar tail.
     let (dot, norm_a_sq, norm_b_sq) = cosine_fused_neon_main_loop(a.as_ptr(), b.as_ptr(), end_main);
 
     let (dot, norm_a_sq, norm_b_sq) = cosine_fused_neon_scalar_tail(
@@ -287,7 +290,10 @@ unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 
 /// Reduces 4 NEON f32x4 accumulators to a single scalar sum.
 ///
-/// SAFETY: All inputs must be valid `float32x4_t` values.
+/// # Safety
+///
+/// None beyond NEON, which aarch64 always has: register additions only,
+/// with no memory access.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn reduce_4acc_neon(
@@ -308,6 +314,11 @@ unsafe fn reduce_4acc_neon(
 /// Main 16-wide SIMD loop for fused cosine (4-acc ILP).
 ///
 /// Returns `(dot, norm_a_sq, norm_b_sq)` accumulated over full 16-element blocks.
+///
+/// # Safety
+///
+/// `a_ptr..end_main` is readable and spans a multiple of 16 elements, and
+/// `b_ptr` is readable for as many elements.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_main_loop(
@@ -380,6 +391,10 @@ unsafe fn cosine_fused_neon_main_loop(
 }
 
 /// Scalar tail for fused cosine — handles the remaining 0..15 elements.
+///
+/// # Safety
+///
+/// `a_ptr..end_ptr` is readable, and `b_ptr` is readable for as many elements.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_scalar_tail(
@@ -438,11 +453,16 @@ pub(crate) unsafe fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
     }
     // SAFETY: `squared_l2_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: this function's own `# Safety` precondition, `a.len() == b.len()`.
     // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { squared_l2_neon_1acc(a, b) }
 }
 
 /// Single-accumulator NEON squared L2 distance for vectors with < 64 elements.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
@@ -571,12 +591,10 @@ unsafe fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 #[inline]
 pub(crate) unsafe fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
-        // SAFETY: `hamming_neon_4acc` requires NEON (guaranteed on aarch64)
-        // and len >= 64 (checked above).
-        // - Condition 1: NEON is always present on aarch64.
-        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // - Condition 3: this function's own `# Safety` precondition, `a.len() == b.len()`.
-        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
+        // SAFETY: `hamming_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // - Condition 2: NEON is always present on aarch64.
+        // Reason: from 64 elements the 4-accumulator loop is faster; it has no length floor.
         return unsafe { hamming_neon_4acc(a, b) };
     }
     // SAFETY: `hamming_neon_1acc` requires NEON (guaranteed on aarch64).
@@ -814,12 +832,10 @@ pub(crate) unsafe fn hamming_binary_neon(a: &[u64], b: &[u64]) -> u32 {
 #[inline]
 pub(crate) unsafe fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
-        // SAFETY: `jaccard_neon_4acc` requires NEON (guaranteed on aarch64)
-        // and len >= 64 (checked above).
-        // - Condition 1: NEON is always present on aarch64.
-        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // - Condition 3: this function's own `# Safety` precondition, `a.len() == b.len()`.
-        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
+        // SAFETY: `jaccard_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // - Condition 2: NEON is always present on aarch64.
+        // Reason: from 64 elements the 4-accumulator loop is faster; it has no length floor.
         return unsafe { jaccard_neon_4acc(a, b) };
     }
     // SAFETY: `jaccard_neon_1acc` requires NEON (guaranteed on aarch64).
