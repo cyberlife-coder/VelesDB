@@ -38,6 +38,11 @@ class FreshExecutableTests(unittest.TestCase):
         ):
             guarded(f"{shebang}\nexit 0\n")
 
+    def test_guarded_refuses_a_flag_after_env(self) -> None:
+        """Linux hands `bash -eu` to `env` as one argument: that shebang cannot exec."""
+        with self.assertRaisesRegex(ValueError, "sh or bash"):
+            guarded("#!/usr/bin/env bash -eu\nexit 0\n")
+
     def test_guarded_refuses_a_crlf_shebang(self) -> None:
         """`/bin/sh\\r` is no interpreter: refused here, not as a confusing exec error."""
         with self.assertRaisesRegex(ValueError, "sh or bash"):

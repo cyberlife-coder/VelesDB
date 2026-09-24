@@ -26,10 +26,12 @@ WARM_UP_ENV = "VELES_TEST_WARM_UP"
 WARM_UP_PATIENCE_S = 600
 
 # The guard line is POSIX shell: only a sh-family interpreter can run it. Flags
-# (`-e`, `-eu`) are fine; only horizontal whitespace, so a CRLF shebang, which
-# the kernel cannot exec, is refused here rather than at the warm-up launch.
+# (`-e`, `-eu`) are fine after a direct path, not after `env`: Linux passes
+# `bash -eu` to `env` as one argument, which it cannot find. Only horizontal
+# whitespace, so a CRLF shebang is refused too. Each is refused here rather than
+# at the warm-up launch.
 SH_SHEBANG = re.compile(
-    r"#![ \t]*(?:/bin/(?:ba)?sh|/usr/bin/env[ \t]+(?:ba)?sh)(?:[ \t]+-[A-Za-z]+)*[ \t]*"
+    r"#![ \t]*(?:/bin/(?:ba)?sh(?:[ \t]+-[A-Za-z]+)*|/usr/bin/env[ \t]+(?:ba)?sh)[ \t]*"
 )
 
 
