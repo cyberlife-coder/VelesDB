@@ -6,6 +6,17 @@ use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::perf_optimizations::ContiguousVectors;
 use std::sync::atomic::Ordering;
 
+/// Headroom the slow path of `expand_layers` adds past the node that needs
+/// it, as a fraction of the capacity already covered: growing by an eighth
+/// keeps the number of `layers.write` growths logarithmic in the index size,
+/// and the slots it adds that no node uses yet to an eighth of them, or
+/// `MIN_CAPACITY_GROWTH`.
+const CAPACITY_GROWTH_DIVISOR: usize = 8;
+
+/// Floor of that headroom, so a small index does not take `layers.write`
+/// every few inserts.
+const MIN_CAPACITY_GROWTH: usize = 256;
+
 impl<D: DistanceEngine> NativeHnsw<D> {
     /// Allocates vector storage if needed and pushes the vector, returning its node ID.
     ///
@@ -57,18 +68,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             15
         };
 
-        let mut layers = self.layers.write();
-        while layers.len() <= max_layer {
-            let level = layers.len();
-            layers.push(Layer::at_level(level, total_nodes));
-        }
-        for layer in layers.iter_mut() {
-            layer.ensure_capacity(total_nodes.saturating_sub(1));
-        }
-        // The capacity counter is atomic and independent of the layer data.
-        drop(layers);
-        self.pre_allocated_capacity
-            .store(total_nodes, Ordering::Relaxed);
+        self.grow_layers(max_layer, total_nodes);
     }
 
     /// Ensures all layers up to `node_layer` exist and have capacity for `node_id`.
@@ -79,15 +79,46 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         {
             return;
         }
-        // Slow path: acquire write lock (rare after pre-allocation)
+        // Slow path: past the capacity, grow it with headroom, so the inserts
+        // that follow return to the fast path instead of each taking
+        // `layers.write` (#2306); a missing layer alone keeps the capacity.
+        let covered = self.pre_allocated_capacity.load(Ordering::Relaxed);
+        let capacity = if node_id < covered {
+            covered
+        } else {
+            node_id + 1 + (covered / CAPACITY_GROWTH_DIVISOR).max(MIN_CAPACITY_GROWTH)
+        };
+        self.grow_layers(node_layer, capacity);
+    }
+
+    /// Adds the layers up to `top_layer` and grows every layer to at least
+    /// `capacity` slots, then publishes the capacity to the fast path of
+    /// [`Self::expand_layers`].
+    ///
+    /// Keeps the invariant that fast path relies on: every layer holds at
+    /// least `pre_allocated_capacity` slots. A layer added here therefore
+    /// covers what the fast path already trusts, not only the node that
+    /// created it: `Layer`'s accessors skip an id past a layer's end in
+    /// silence, so a shorter layer would drop the neighbour writes of every
+    /// later node sent to it. The capacity only grows, whatever `capacity`
+    /// asks for.
+    fn grow_layers(&self, top_layer: usize, capacity: usize) {
         let mut layers = self.layers.write();
-        while layers.len() <= node_layer {
+        let capacity = capacity.max(self.pre_allocated_capacity.load(Ordering::Relaxed));
+        while layers.len() <= top_layer {
             let level = layers.len();
-            layers.push(Layer::at_level(level, node_id + 1));
+            layers.push(Layer::at_level(level, capacity));
         }
-        for layer in layers.iter_mut() {
-            layer.ensure_capacity(node_id);
+        if let Some(last) = capacity.checked_sub(1) {
+            for layer in layers.iter_mut() {
+                layer.ensure_capacity(last);
+            }
         }
+        // Stored under the write guard: a fast-path reader that sees the new
+        // capacity takes `layers.read()` afterwards, which cannot be granted
+        // before this guard is released.
+        self.pre_allocated_capacity
+            .fetch_max(capacity, Ordering::Relaxed);
     }
 
     /// Inserts a vector into the index.
@@ -500,3 +531,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         self.connect_node(node_id, query, node_layer, current_ep);
     }
 }
+
+#[cfg(test)]
+#[path = "insert_tests.rs"]
+mod tests;

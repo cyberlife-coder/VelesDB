@@ -23,8 +23,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src",
-    "lint:fix": "eslint src --fix",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
     "format": "prettier --write src",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.examples.json",
     "prepublishOnly": "npm run build"

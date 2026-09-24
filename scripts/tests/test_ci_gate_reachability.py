@@ -2409,6 +2409,7 @@ if __name__ == "__main__":
 
 PROPAGATION_GUARD = WORKFLOW_DIR / "propagation-guard.yml"
 TS_SDK_PACKAGE = REPO_ROOT / "sdks" / "typescript" / "package.json"
+TS_SDK_VITEST_CONFIG = REPO_ROOT / "sdks" / "typescript" / "vitest.config.ts"
 
 
 def npm_scripts_run_by(workflow_text: str, job_name: str) -> set[str]:
@@ -2479,12 +2480,36 @@ class TypeScriptSdkIsLintedTests(unittest.TestCase):
         appeared to cover all three would be the illusion, not the coverage.
         """
         run = npm_scripts_run_by(self.workflow, self.JOB)
-        self.assertLessEqual({"typecheck", "lint"}, run, f"steps found: {sorted(run)}")
-        self.assertRegex(
-            job_block(self.workflow, self.JOB),
-            r"run:\s*npm test\b",
-            "the SDK job no longer runs its vitest suite",
+        self.assertLessEqual(
+            {"typecheck", "lint", "test:coverage"}, run, f"steps found: {sorted(run)}"
         )
+
+    def test_the_suite_runs_under_coverage_so_the_thresholds_bind(self) -> None:
+        """`vitest.config.ts` declares per-file thresholds; only `--coverage` reads them.
+
+        The job ran `npm test` (`vitest run`), so the thresholds were evaluated
+        by nothing and three files drifted below them unseen (#2383). Three
+        links, each droppable on its own: the job runs `test:coverage`, the
+        script passes `--coverage`, and the config still declares thresholds.
+        """
+        self.assertIn("test:coverage", npm_scripts_run_by(self.workflow, self.JOB))
+        script = self.package.get("scripts", {}).get("test:coverage", "")
+        self.assertRegex(
+            script,
+            r"\bvitest run\b.*--coverage\b",
+            f"`npm run test:coverage` no longer runs vitest under coverage ({script!r})",
+        )
+        self.assertRegex(
+            TS_SDK_VITEST_CONFIG.read_text(encoding="utf-8"),
+            re.compile(r"^\s*thresholds\s*:\s*\{", re.MULTILINE),
+            "vitest.config.ts declares no `thresholds:` key, so running under "
+            "coverage enforces nothing",
+        )
+
+    def test_the_lint_script_covers_the_tests_too(self) -> None:
+        """`eslint src` left tests/ unlinted, 7 errors deep (#2364)."""
+        targets = self.package.get("scripts", {}).get("lint", "").split()[1:]
+        self.assertLessEqual({"src", "tests"}, set(targets), f"lint targets: {targets}")
 
     def test_the_parser_refuses_a_job_that_lost_the_step(self) -> None:
         """The positive control, on the shape this replaces."""

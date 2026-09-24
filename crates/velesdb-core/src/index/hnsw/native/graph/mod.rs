@@ -109,9 +109,10 @@ pub struct NativeHnsw<D: DistanceEngine> {
     /// Maximum consecutive candidates without improving top-k before early termination.
     /// Default: `ef_construction / 2`. Set to `0` to disable.
     pub(crate) stagnation_limit: usize,
-    /// Node capacity pre-allocated by `pre_expand_layers()`. Allows `expand_layers()`
-    /// to skip the write lock when the insert falls within the pre-allocated range.
-    /// Transient: not serialized to disk.
+    /// Node slots every layer holds, at least: `expand_layers()` skips the
+    /// write lock for a node below it on an existing layer. Only grows, and
+    /// only under `layers.write`, after the layers it describes (#2306).
+    /// Transient: not serialized to disk, so a loaded index starts at 0.
     pub(in crate::index::hnsw::native) pre_allocated_capacity: AtomicUsize,
     /// Per-instance CSR cache for GPU traversal.
     ///
@@ -432,6 +433,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // The prior ef/4 caused premature termination at 100K+ vectors,
             // contributing to recall degradation (97% at 10K → 64% at 100K).
             stagnation_limit: ef_construction / 2,
+            // Not `max_elements`, although the base layer holds that many
+            // slots: every layer added later is grown to this capacity, so
+            // seeding it would make each upper layer as long as the base.
             pre_allocated_capacity: AtomicUsize::new(0),
             #[cfg(feature = "gpu")]
             gpu_csr_cache: crate::gpu::gpu_csr::CsrCache::new(),

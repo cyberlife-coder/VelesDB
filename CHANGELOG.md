@@ -181,6 +181,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the highest ones), and `velesdb-wasm`'s own relative-score fusion.
   `-0.0` and `0.0` tie too, which a mixed-direction fusion produces side by
   side (a zero distance negated next to a zero similarity).
+- **TypeScript SDK CI: tests/ is linted, and the coverage thresholds bind
+  (#2364, #2383).** `lint` ran `eslint src`, and the eslint project excluded
+  tests/, so tests/ was never linted: 7 errors hid there, now fixed. The SDK
+  job ran `npm test`, which never evaluates the per-file thresholds in
+  `vitest.config.ts`, and four files had drifted below them. It now runs
+  `npm run test:coverage`, and tests close the gaps, among them the wasm
+  error translator's degraded paths. No threshold was lowered.
+- **An HNSW insert past the pre-allocated capacity no longer takes the
+  layers' write lock for good, and a layer added late no longer drops
+  neighbour writes (#2306).** `expand_layers`' slow path grew the layers to
+  the one node that needed it and never raised `pre_allocated_capacity`, so
+  once an index outgrew it, a loaded index from its first insert, every
+  insert took `layers.write` and waited out whatever held the layers, a save
+  included. It now grows the capacity by an eighth (256 slots at least), and
+  the inserts that follow return to the fast path, which takes no
+  `layers.write`. The same path
+  created a layer above the pre-expanded top sized to the node that created
+  it, while the fast path went on sending later, higher node ids to it;
+  `Layer`'s accessors skip an id past a layer's end without a word, so those
+  nodes' links on that layer were lost. Every layer now covers the published
+  capacity, which only grows: a smaller `pre_expand_layers` no longer
+  lowered it either.
 - **The promise contract no longer counts a figure as sourced, or as
   fresh, on the strength of a `grep` (#2300, #2309).** `check-promise-contract`
   exempted every `executable` claim from its staleness checks, but five of
