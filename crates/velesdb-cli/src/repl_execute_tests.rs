@@ -4,8 +4,8 @@ use tempfile::TempDir;
 use velesdb_core::{Database, DistanceMetric, Point};
 
 use crate::repl_execute::execute_query;
-use crate::test_fixtures::{seed_docs, seed_docs_refusing_perfect};
 use crate::session::SessionSettings;
+use crate::test_fixtures::{seed_docs, seed_docs_refusing_perfect};
 
 /// Regression (parity backlog #2): the REPL must route `GROUP BY` / aggregate
 /// queries through the aggregate engine, not return raw rows. Previously
