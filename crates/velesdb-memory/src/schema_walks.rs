@@ -259,17 +259,18 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 
 /// Whether `target` reads as an item path rustdoc resolves: backticks, a
 /// disambiguator and generics aside, a path of letters, digits, `_`, `::`,
-/// and the `&`, `*` or `;` of a primitive (`&str`, `*const`). A URL, a
-/// relative path, prose with a space and a lone `:` (`mailto:`, `http:`) are
-/// not, and neither are generics holding a mark rustdoc never reads in a path
-/// (`Result<(), u8>`, `Vec<f32.5>`): rustdoc checks the whole path before it
-/// strips them.
+/// and the `&`, `*` or `;` of a primitive (`&str`, `*const`). It takes
+/// rustdoc's steps in rustdoc's order: a `/` anywhere, fragment included, is
+/// a relative link (`a#b/c`), then every backtick is dropped (`` Vec<`u8`> ``
+/// is `Vec<u8>`), and the whole path, generics included, must hold only the
+/// marks rustdoc reads in one (`Result<(), u8>` and `Vec<f32.5>` are not). A
+/// URL, prose with a space and a lone `:` (`mailto:`, `http:`) are not paths.
 fn is_rustdoc_target(target: &str) -> bool {
+    if target.contains('/') {
+        return false;
+    }
+    let target = target.replace('`', "");
     let target = target.trim();
-    let target = target
-        .strip_prefix('`')
-        .and_then(|code| code.strip_suffix('`'))
-        .map_or(target, str::trim);
     let item = target.split_once('#').map_or(target, |(item, _)| item);
     let path = without_disambiguator(item).unwrap_or(item);
     let path = CALL_SUFFIXES

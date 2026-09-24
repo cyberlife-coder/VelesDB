@@ -118,8 +118,9 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 /// Whether an unresolved shortcut or collapsed label reads as an item path,
 /// which rustdoc 1.90 treats as an intra-doc link. It takes rustdoc's
 /// `preprocess_link` steps in rustdoc's order: a label holding a `/` is
-/// never a path (`[a#b/c]`); otherwise the label's backticks are dropped, so a code span reads as its code, and the item is what comes
-/// before a `#` fragment. A one-word kind before an `@` comes off (`fn@f`),
+/// never a path (`[a#b/c]`); otherwise the label's backticks are dropped,
+/// so a code span reads as its code, and the item is what comes before a
+/// `#` fragment. A one-word kind before an `@` comes off (`fn@f`),
 /// then a call or macro suffix (`()`, `!`, `!()`, `!{}`, `![]`) that leaves
 /// something, each with the spaces around it. What is left must hold only
 /// letters, digits and the marks rustdoc's `should_ignore_link` keeps

@@ -347,9 +347,10 @@ mod unlink {
     /// brackets; the rewrite drops them and the guard flags them all the same
     /// (#2330). The pseudo-random mix of `one_pass_is_final` cannot draw a
     /// known kind before a spaced `@`, so these are named here.
-    /// rustdoc checks its path marks over the whole label, generics
-    /// included, and links none of these: the rewrite leaves them as written
-    /// and the guard passes them (#2330).
+    /// rustdoc reads no item in a label holding a `/`, fragment included,
+    /// and checks its path marks over the whole label, generics included, so
+    /// it links none of these: the rewrite leaves them as written and the
+    /// guard passes them (#2330).
     #[test]
     fn a_path_rustdoc_ignores_is_left_as_written() {
         for text in [
@@ -358,10 +359,22 @@ mod unlink {
             "see [Option<&'static str>].",
             "see [Vec<a/b>].",
             "see [Vec<f32.5>][].",
+            "see [a#/].",
+            "see [S0#a/b].",
+            "see [fn@f#a/b].",
+            "see [a#b/c][].",
         ] {
             assert_eq!(unlink_rustdoc(text), None, "{text:?}");
             assert_eq!(rustdoc_links(text), Vec::<String>::new(), "{text:?}");
         }
+    }
+
+    /// rustdoc drops every backtick before it checks its path marks, so it
+    /// links a path whose generics hold code (#2330).
+    #[test]
+    fn code_inside_generics_is_rewritten_and_flagged() {
+        assert_rewritten("see [Vec<`u8`>].", "see Vec<`u8`>.");
+        assert_rewritten("see [Option<`S0`>].", "see Option<`S0`>.");
     }
 
     #[test]
@@ -648,6 +661,8 @@ mod unlink {
             "<",
             ">",
             ".",
+            "/",
+            "#",
         ];
         let mut seed: usize = 0x2265_2025;
         let mut next = || {
