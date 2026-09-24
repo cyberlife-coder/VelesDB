@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { VelesDB } from '../src/client';
-import type { QueryResponse, QueryResult } from '../src/types';
+import type { QueryResponse } from '../src/types';
 
 describe('VelesQL v2.0', () => {
   let db: VelesDB;

@@ -4,7 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { RestBackend } from '../src/backends/rest';
-import { VelesDBError } from '../src/types';
 
 interface ConformanceCase {
   id: string;

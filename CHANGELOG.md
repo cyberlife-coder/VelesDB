@@ -198,6 +198,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in release too, so no public call was affected; the precondition is now each
   kernel's `# Safety` contract, as the x86 dot-product kernels document it,
   and every call site names the assert or precondition it relies on.
+- **TypeScript SDK CI: tests/ is linted, and the coverage thresholds bind
+  (#2364, #2383).** `lint` ran `eslint src`, and the eslint project excluded
+  tests/, so tests/ was never linted: 7 errors hid there, now fixed. The SDK
+  job ran `npm test`, which never evaluates the per-file thresholds in
+  `vitest.config.ts`, and four files had drifted below them. It now runs
+  `npm run test:coverage`, and tests close the gaps, among them the wasm
+  error translator's degraded paths. No threshold was lowered.
 - **An HNSW insert past the pre-allocated capacity no longer takes the
   layers' write lock for good, and a layer added late no longer drops
   neighbour writes (#2306).** `expand_layers`' slow path grew the layers to
