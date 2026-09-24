@@ -13,6 +13,7 @@ test's own deadline measures only what the test is about.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -24,12 +25,20 @@ WARM_UP_ENV = "VELES_TEST_WARM_UP"
 # file that hangs still fails the test, only later.
 WARM_UP_PATIENCE_S = 600
 
+# The guard line is POSIX shell: only a sh-family interpreter can run it.
+SH_SHEBANG = re.compile(r"#!\s*(?:/bin/(?:ba)?sh|/usr/bin/env\s+(?:ba)?sh)\s*$")
+
 
 def guarded(script: str) -> str:
-    """`script` with a first line that exits 0 at once when launched for warm-up."""
+    """`script` with a first line that exits 0 at once when launched for warm-up.
+
+    The guard is shell syntax, so `script` must start with a sh or bash shebang.
+    """
     shebang, newline, body = script.partition("\n")
-    if not shebang.startswith("#!"):
-        raise ValueError(f"a fake executable starts with a shebang, not {shebang!r}")
+    if not SH_SHEBANG.fullmatch(shebang):
+        raise ValueError(
+            f"a guarded fake starts with a sh or bash shebang, not {shebang!r}"
+        )
     return f'{shebang}{newline}[ -z "${{{WARM_UP_ENV}:-}}" ] || exit 0\n{body}'
 
 

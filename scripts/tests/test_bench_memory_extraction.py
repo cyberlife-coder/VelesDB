@@ -61,7 +61,7 @@ import warnings
 from pathlib import Path
 from unittest import mock
 
-from scripts.tests.fresh_executable import warm_up
+from scripts.tests import fresh_executable
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "bench-memory-extraction.py"
 CASES_PATH = Path(__file__).resolve().parent.parent / "memory-extraction-cases.json"
@@ -2418,7 +2418,7 @@ class MinimumPythonTest(unittest.TestCase):
             # The child asks it `--version` under the bench's own 30 s, which
             # `patient_launches` cannot reach across the process boundary: its
             # first launch is paid here instead (#2284).
-            warm_up(binary)
+            fresh_executable.warm_up(binary)
             done = subprocess.run([shutil.which(program), "-c", BENCH_CHILD + call, str(root),
                                    str(binary)], capture_output=True, text=True, check=False,
                                   timeout=LAUNCH_PATIENCE_S)
