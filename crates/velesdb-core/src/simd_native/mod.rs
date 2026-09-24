@@ -13,7 +13,8 @@
 //! - `x86_avx512` — AVX-512F kernel implementations (x86_64 only)
 //! - `x86_avx2` — AVX2+FMA dot product and squared L2 kernels (x86_64 only)
 //! - `x86_avx2_similarity` — AVX2+FMA cosine, Hamming, Jaccard kernels (x86_64 only)
-//! - `neon` — ARM NEON kernel implementations (aarch64 only)
+//! - `neon` — ARM NEON dot, cosine and L2 kernels (aarch64 only)
+//! - `neon_hamming_jaccard` — ARM NEON Hamming and Jaccard kernels (aarch64 only)
 //! - `dispatch` — Runtime SIMD level detection and dispatch wiring
 //!
 //! # Performance (based on arXiv research)
@@ -85,6 +86,9 @@ mod x86_avx2_similarity;
 #[cfg(target_arch = "aarch64")]
 mod neon;
 
+#[cfg(target_arch = "aarch64")]
+mod neon_hamming_jaccard;
+
 // Re-export ISA kernels so dispatch.rs can access them via `super::`
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_avx512::{
@@ -106,9 +110,10 @@ pub(crate) use x86_avx2_similarity::{
 };
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use neon::{
-    cosine_neon, dot_product_neon, hamming_binary_neon, hamming_neon, jaccard_neon, squared_l2_neon,
-};
+pub(crate) use neon::{cosine_neon, dot_product_neon, squared_l2_neon};
+
+#[cfg(target_arch = "aarch64")]
+pub(crate) use neon_hamming_jaccard::{hamming_binary_neon, hamming_neon, jaccard_neon};
 
 // =============================================================================
 // ADC (Asymmetric Distance Computation) for PQ search

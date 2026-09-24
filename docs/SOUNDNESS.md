@@ -26,7 +26,7 @@ VelesDB uses `unsafe` code in the following categories:
 
 | Category | Purpose | Files |
 |----------|---------|-------|
-| **SIMD (consolidated)** | AVX-512/AVX2/NEON distance kernels | `simd_native/x86_avx512.rs`, `simd_native/x86_avx2/`, `simd_native/x86_avx2_similarity.rs`, `simd_native/neon.rs` |
+| **SIMD (consolidated)** | AVX-512/AVX2/NEON distance kernels | `simd_native/x86_avx512.rs`, `simd_native/x86_avx2/`, `simd_native/x86_avx2_similarity.rs`, `simd_native/neon.rs`, `simd_native/neon_hamming_jaccard.rs` |
 | **SIMD (dispatch)** | Runtime feature detection + dispatch to ISA kernels | `simd_native/dispatch/` (`mod.rs`, `dot.rs`, `euclidean.rs`, `cosine.rs`, `hamming.rs`) |
 | **SIMD (reduction)** | Horizontal sum helpers for accumulator registers | `simd_native/reduction.rs` |
 | **SIMD (ADC)** | Asymmetric Distance Computation for PQ search | `simd_native/adc.rs` |
@@ -95,7 +95,7 @@ VelesDB uses `unsafe` code in the following categories:
 **Invariants**: Same as AVX2 dot/L2 above. `hamming_binary_avx2` operates on `&[u64]`
 slices with popcount via `_mm256_set_epi8` LUT.
 
-### Module: `crates/velesdb-core/src/simd_native/neon.rs`
+### Modules: `crates/velesdb-core/src/simd_native/neon.rs` and `neon_hamming_jaccard.rs`
 
 **Functions** (`#[cfg(target_arch = "aarch64")]`; NEON is mandatory on AArch64,
 so there is no `#[target_feature]` and no runtime detection):

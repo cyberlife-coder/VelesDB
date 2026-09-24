@@ -165,7 +165,6 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 | File | NLOC | Plan |
 |------|------|------|
 | `simd_native/x86_avx512.rs` | 1468 | Hard to split (intrinsics block); accepted exception |
-| `simd_native/neon.rs` | 902 | Same as above |
 | `velesdb-server/src/config.rs` | 837 | Refactor pending |
 | `velesdb-migrate/src/pipeline.rs` | 806 | Refactor pending |
 
