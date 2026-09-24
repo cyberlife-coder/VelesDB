@@ -188,6 +188,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **The CLI REPL leaves `velesdb.toml`'s `[search]` in force until a
+  `\set`, and `.bench` runs at the quality it prints (#2303).** A session that
+  never ran `\set` injected `mode = 'balanced'` into every query, so the
+  configured `[search]` default never applied in the REPL, against the
+  priority order `docs/guides/CONFIGURATION.md` states. An untouched session
+  now adds nothing, and `\show` prints the configured default, marked
+  `(configured default)`. `\reset mode` goes back to it rather than to
+  `balanced`. `.bench` printed the session mode but searched with neither the
+  mode nor `ef_search`, and dropped every failed query in silence, so a bench
+  whose queries were all refused still reported a throughput. It now searches
+  at the quality a query in the same session gets (the session's `ef_search`
+  when set, else its `mode` when set, else the configured default), prints
+  that quality, and returns the first query error.
 - **`velesdb simd info` names the SIMD level it detects (#1965).** It
   printed a fixed summary of the design, whose thresholds the code no longer
   applies (AVX2 switching at 1024 dimensions where the dispatcher switches at

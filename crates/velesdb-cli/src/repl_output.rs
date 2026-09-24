@@ -240,7 +240,10 @@ pub fn print_help() {
     println!();
     println!("{}", "Session Settings:".bold().underline());
     println!();
-    println!("  {} fast, balanced, accurate, perfect", "mode".cyan());
+    println!(
+        "  {} fast, balanced, accurate, perfect (unset: velesdb.toml [search])",
+        "mode".cyan()
+    );
     println!("  {} 16-4096 (or auto from mode)", "ef_search".cyan());
     println!("  {} Query timeout in ms", "timeout_ms".cyan());
     println!("  {} Enable reranking (true/false)", "rerank".cyan());

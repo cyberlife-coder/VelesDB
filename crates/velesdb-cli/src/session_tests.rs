@@ -3,8 +3,17 @@ use super::*;
 #[test]
 fn test_session_defaults() {
     let session = SessionSettings::new();
-    assert_eq!(session.mode(), SearchQuality::Balanced);
-    assert_eq!(session.effective_ef_search(), 160);
+    // No mode of its own: the configured default applies, and `\show` says so.
+    assert_eq!(session.search_quality(), None);
+    assert_eq!(session.mode_str(), None);
+    assert_eq!(
+        session.get("mode", SearchQuality::Fast).as_deref(),
+        Some("fast (configured default)")
+    );
+    assert_eq!(
+        session.get("ef_search", SearchQuality::Fast).as_deref(),
+        Some("auto (96)")
+    );
     assert_eq!(session.timeout_ms(), 30000);
     assert!(session.rerank());
     assert_eq!(session.max_results(), 100);
@@ -15,15 +24,23 @@ fn test_session_defaults() {
 fn test_set_mode() {
     let mut session = SessionSettings::new();
     session.set("mode", "fast").unwrap();
-    assert_eq!(session.mode(), SearchQuality::Fast);
-    assert_eq!(session.effective_ef_search(), 96);
+    assert_eq!(session.search_quality(), Some(SearchQuality::Fast));
+    // The session's mode, not the configured one, sets the shown ef_search.
+    assert_eq!(
+        session.get("ef_search", SearchQuality::Accurate).as_deref(),
+        Some("auto (96)")
+    );
 }
 
 #[test]
 fn test_set_ef_search() {
     let mut session = SessionSettings::new();
     session.set("ef_search", "512").unwrap();
-    assert_eq!(session.effective_ef_search(), 512);
+    assert_eq!(session.search_quality(), Some(SearchQuality::Custom(512)));
+    assert_eq!(
+        session.get("ef_search", SearchQuality::Balanced).as_deref(),
+        Some("512")
+    );
 }
 
 #[test]
@@ -61,7 +78,7 @@ fn test_reset_single() {
     let mut session = SessionSettings::new();
     session.set("mode", "fast").unwrap();
     session.reset(Some("mode"));
-    assert_eq!(session.mode(), SearchQuality::Balanced);
+    assert_eq!(session.search_quality(), None);
 }
 
 #[test]
@@ -70,14 +87,13 @@ fn test_reset_all() {
     session.set("mode", "fast").unwrap();
     session.set("ef_search", "512").unwrap();
     session.reset(None);
-    assert_eq!(session.mode(), SearchQuality::Balanced);
-    assert!(session.ef_search.is_none());
+    assert_eq!(session.search_quality(), None);
 }
 
 #[test]
 fn test_all_settings() {
     let session = SessionSettings::new();
-    let settings = session.all_settings();
+    let settings = session.all_settings(SearchQuality::Balanced);
     assert!(settings.iter().any(|(k, _)| k == "mode"));
     assert!(settings.iter().any(|(k, _)| k == "ef_search"));
 }
@@ -85,30 +101,39 @@ fn test_all_settings() {
 #[test]
 fn test_get_setting() {
     let session = SessionSettings::new();
-    assert_eq!(session.get("mode"), Some("balanced".to_string()));
-    assert!(session.get("unknown").is_none());
+    assert_eq!(
+        session.get("mode", SearchQuality::Balanced).as_deref(),
+        Some("balanced (configured default)")
+    );
+    assert!(session.get("unknown", SearchQuality::Balanced).is_none());
 }
 
 #[test]
 fn test_custom_setting() {
     let mut session = SessionSettings::new();
     session.set("custom_key", "custom_value").unwrap();
-    assert_eq!(session.get("custom_key"), Some("custom_value".to_string()));
+    assert_eq!(
+        session.get("custom_key", SearchQuality::Balanced),
+        Some("custom_value".to_string())
+    );
 }
 
 #[test]
 fn test_set_mode_autotune() {
     let mut session = SessionSettings::new();
     session.set("mode", "autotune").unwrap();
-    assert_eq!(session.mode(), SearchQuality::AutoTune);
+    assert_eq!(session.search_quality(), Some(SearchQuality::AutoTune));
 }
 
 #[test]
 fn test_set_mode_custom() {
     let mut session = SessionSettings::new();
     session.set("mode", "custom:256").unwrap();
-    assert_eq!(session.mode(), SearchQuality::Custom(256));
-    assert_eq!(session.effective_ef_search(), 256);
+    assert_eq!(session.search_quality(), Some(SearchQuality::Custom(256)));
+    assert_eq!(
+        session.get("ef_search", SearchQuality::Balanced).as_deref(),
+        Some("auto (256)")
+    );
 }
 
 #[test]
@@ -116,11 +141,11 @@ fn test_set_mode_adaptive() {
     let mut session = SessionSettings::new();
     session.set("mode", "adaptive:32:512").unwrap();
     assert_eq!(
-        session.mode(),
-        SearchQuality::Adaptive {
+        session.search_quality(),
+        Some(SearchQuality::Adaptive {
             min_ef: 32,
             max_ef: 512
-        }
+        })
     );
 }
 
@@ -142,4 +167,15 @@ fn test_set_mode_custom_out_of_range_is_rejected() {
     let mut session = SessionSettings::new();
     assert!(session.set("mode", "custom:99999999").is_err());
     assert!(session.set("mode", "adaptive:32:99999999").is_err());
+}
+
+#[test]
+fn test_search_quality_is_the_ef_search_when_set_else_the_mode_else_none() {
+    let mut session = SessionSettings::new();
+    assert_eq!(session.search_quality(), None);
+    session.set("ef_search", "64").unwrap();
+    assert_eq!(session.search_quality(), Some(SearchQuality::Custom(64)));
+    // `\set mode` resets the ef_search override.
+    session.set("mode", "fast").unwrap();
+    assert_eq!(session.search_quality(), Some(SearchQuality::Fast));
 }

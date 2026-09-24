@@ -36,12 +36,20 @@ pub(crate) fn cmd_bench(
                 cfg.point_count,
                 cfg.dimension
             );
-            println!(
-                "  {} queries, k={}, mode={:?}",
-                n_queries,
-                k,
-                config.session.mode()
+            // The session's quality when it set one, else the configured
+            // default, which `col.search` applies (#2303).
+            let quality = config.session.search_quality();
+            let shown = quality.map_or_else(
+                || {
+                    let configured = db.config().search.resolved_quality();
+                    format!(
+                        "{} (configured default)",
+                        crate::session::format_quality(configured)
+                    )
+                },
+                crate::session::format_quality,
             );
+            println!("  {n_queries} queries, k={k}, mode={shown}");
 
             // Generate random query vectors
             let start = Instant::now();
@@ -53,8 +61,20 @@ pub(crate) fn cmd_bench(
                     .map(|j| ((i * 31 + j * 17) % 1000) as f32 / 1000.0)
                     .collect();
 
-                if let Ok(results) = col.search(&query, k) {
-                    total_results += results.len();
+                // A failed query ends the bench: a throughput over queries
+                // that did not run would be a number about nothing.
+                let searched = match quality {
+                    Some(quality) => col.search_with_quality(&query, k, quality),
+                    None => col.search(&query, k),
+                };
+                match searched {
+                    Ok(results) => total_results += results.len(),
+                    Err(e) => {
+                        return CommandResult::Error(format!(
+                            "query {} of {n_queries} failed: {e}",
+                            i + 1
+                        ));
+                    }
                 }
             }
 
@@ -244,3 +264,7 @@ pub(crate) fn cmd_upsert(db: &Database, parts: &[&str]) -> CommandResult {
     }
     CommandResult::Continue
 }
+
+#[cfg(test)]
+#[path = "repl_data_cmds_tests.rs"]
+mod repl_data_cmds_tests;

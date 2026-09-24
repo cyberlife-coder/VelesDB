@@ -94,16 +94,17 @@ fn warn_if_unwired(key: &str) {
     }
 }
 
-pub(crate) fn cmd_show(config: &ReplConfig, parts: &[&str]) -> CommandResult {
+pub(crate) fn cmd_show(db: &Database, config: &ReplConfig, parts: &[&str]) -> CommandResult {
+    let configured = db.config().search.resolved_quality();
     if parts.len() < 2 {
         println!("\n{}", "Session Settings".bold().underline());
-        for (key, value) in config.session.all_settings() {
+        for (key, value) in config.session.all_settings(configured) {
             println!("  {} = {}", key.cyan(), value.green());
         }
         println!();
     } else {
         let key = parts[1];
-        match config.session.get(key) {
+        match config.session.get(key, configured) {
             Some(value) => println!("{} = {}\n", key.cyan(), value.green()),
             None => return CommandResult::Error(format!("Unknown setting: {key}")),
         }

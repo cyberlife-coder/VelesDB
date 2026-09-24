@@ -14,7 +14,7 @@ fn seed_docs(dir: &TempDir, n: u64) -> Database {
 
 /// As [`seed_docs`], in a database that refuses `perfect` over more than one
 /// vector: which quality a REPL search runs at becomes observable.
-fn seed_docs_refusing_perfect(dir: &TempDir, n: u64) -> Database {
+pub(crate) fn seed_docs_refusing_perfect(dir: &TempDir, n: u64) -> Database {
     let mut config = velesdb_core::VelesConfig::default();
     config.limits.max_perfect_mode_vectors = 1;
     seed(
@@ -283,8 +283,8 @@ fn quality_options_after(
 }
 
 /// `\set ef_search` reaches the search when the session also holds a mode.
-/// A session holding only its mode injects that mode alone (`balanced`
-/// untouched, as before #2274); once it also holds an `ef_search` it injects
+/// An untouched session injects nothing (#2303); a session holding only its
+/// mode injects that mode alone; once it also holds an `ef_search` it injects
 /// that alone, so a session at `perfect` then `ef_search = 512` runs where
 /// `perfect` alone is refused (#2274).
 #[test]
@@ -293,13 +293,7 @@ fn test_session_ef_search_reaches_the_search() {
     let dir = TempDir::new().expect("temp dir");
     let db = seed_docs_refusing_perfect(&dir, 3);
     let mut session = SessionSettings::new();
-    assert_eq!(
-        quality_options_after(NEAR, &session),
-        [(
-            "mode".to_string(),
-            WithValue::String("balanced".to_string())
-        )]
-    );
+    assert_eq!(quality_options_after(NEAR, &session), []);
     session.set("mode", "perfect").expect("set mode");
     let refused = execute_query(&db, NEAR, None, Some(&session)).expect_err("perfect is refused");
     assert!(
@@ -311,6 +305,34 @@ fn test_session_ef_search_reaches_the_search() {
     assert_eq!(
         quality_options_after(NEAR, &session),
         [("ef_search".to_string(), WithValue::Integer(512))]
+    );
+}
+
+/// A session that never ran `\set` adds nothing to a query, not even an empty
+/// `WITH`, so the search runs at the database's configured default (`[search]`
+/// in `velesdb.toml`), as the configuration priority order says; before
+/// #2303 it injected `mode = 'balanced'` over it. `\show` prints the value in
+/// force, marked as the configured default.
+#[test]
+fn test_an_untouched_session_leaves_the_configured_quality_in_force() {
+    let mut parsed = velesdb_core::velesql::Parser::parse(NEAR).expect("parse");
+    crate::repl_execute::apply_session_settings(&mut parsed, &SessionSettings::new());
+    assert!(
+        parsed.select.with_clause.is_none(),
+        "an untouched session injected {:?}",
+        parsed.select.with_clause
+    );
+
+    let dir = TempDir::new().expect("temp dir");
+    let toml = dir.path().join("velesdb.toml");
+    std::fs::write(&toml, "[search]\ndefault_mode = \"fast\"\n").expect("write config");
+    let db = crate::helpers::open_database_with_config(&dir.path().join("data"), Some(&toml))
+        .expect("open with config");
+    let configured = db.config().search.resolved_quality();
+    assert_eq!(configured, velesdb_core::SearchQuality::Fast);
+    assert_eq!(
+        SessionSettings::new().get("mode", configured).as_deref(),
+        Some("fast (configured default)")
     );
 }
 
