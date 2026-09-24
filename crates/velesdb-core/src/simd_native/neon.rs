@@ -1,8 +1,8 @@
 //! ARM NEON kernel implementations for aarch64.
 //!
-//! Contains hand-tuned NEON SIMD kernels for dot product, cosine similarity,
-//! squared L2 distance, Hamming distance, and Jaccard similarity with 1-acc
-//! and 4-acc variants for different vector sizes.
+//! Contains hand-tuned NEON SIMD kernels for dot product, cosine similarity and
+//! squared L2 distance, with 1-acc and 4-acc variants for different vector
+//! sizes. Hamming and Jaccard live in `neon_hamming_jaccard.rs`.
 //!
 //! NEON is always available on aarch64, so no runtime detection is needed.
 
@@ -22,15 +22,24 @@
 // =============================================================================
 
 /// ARM NEON dot product with 4 accumulators for ILP optimization (EPIC-052/US-009).
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
     let len = a.len();
 
     if len >= 64 {
-        return dot_product_neon_4acc(a, b);
+        // SAFETY: `dot_product_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // Reason: the 4-accumulator loop for vectors of 64 elements or more.
+        return unsafe { dot_product_neon_4acc(a, b) };
     }
 
     let simd_len = len / 4;
@@ -75,9 +84,12 @@ pub(crate) fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
 /// NEON `vfmaq_f32(acc, a, b)` = acc + a*b, but [`simd_4acc_dot_loop!`] expects
 /// `fmadd(a, b, acc)` = a*b + acc. This wrapper reorders the arguments.
 ///
-/// SAFETY: `vfmaq_f32` is a non-faulting register operation on aarch64.
-///
 /// [`simd_4acc_dot_loop!`]: crate::simd_4acc_dot_loop!
+///
+/// # Safety
+///
+/// None beyond NEON, which aarch64 always has: `vfmaq_f32` is a
+/// non-faulting register operation, with no memory access.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn neon_fma_compat(
@@ -88,24 +100,41 @@ unsafe fn neon_fma_compat(
     std::arch::aarch64::vfmaq_f32(acc, a, b)
 }
 
-/// ARM NEON dot product with 4 accumulators for large vectors.
+/// Loop bounds of the 16-wide 4-accumulator kernels: the length of `a`'s main
+/// body (`len / 16 * 16` elements), the pointer where it ends and the scalar
+/// tail starts, and `a`'s one-past-the-end pointer, where the tail stops.
+///
+/// Both pointers are derived from `a` itself, not from a subslice: the tail
+/// dereferences from the first one on, which a pointer derived from `a[..main]`
+/// may not do (it would read past its own borrow, whatever the address).
+/// `wrapping_add` is safe code and keeps `a`'s provenance; `main <= len`, so
+/// the result stays within `a` or at its end.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
+fn bounds_16wide(a: &[f32]) -> (usize, *const f32, *const f32) {
+    let main = a.len() / 16 * 16;
+    let range = a.as_ptr_range();
+    (main, range.start.wrapping_add(main), range.end)
+}
+
+/// ARM NEON dot product with 4 accumulators for large vectors.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
-    let len = a.len();
-    // SAFETY: `add` on a raw pointer derived from a valid slice.
-    // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
-    // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
-    // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
-    let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
-    // SAFETY: `add(len)` yields the one-past-the-end pointer (Condition 2 above),
-    // valid to form for comparison against the advancing pointer in the tail loop.
-    let end_ptr = unsafe { a.as_ptr().add(len) };
+    let (_, end_main, end_ptr) = bounds_16wide(a);
 
-    // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds
-    // guaranteed by `end_main`. `neon_fma_compat` reorders args to match macro convention.
+    // SAFETY: 4-accumulator ILP loop of 16-wide NEON loads from `a` and `b`.
+    // - Condition 1: `end_main` bounds every load of `a`; `b` is read at the same
+    //   offsets and is as long as `a` (this function's `# Safety` precondition).
+    // Reason: `neon_fma_compat` reorders args to match the macro's convention.
     let (combined, mut a_ptr, mut b_ptr) = unsafe {
         crate::simd_4acc_dot_loop!(
             a.as_ptr(),
@@ -127,7 +156,8 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     while a_ptr < end_ptr {
         // SAFETY: Raw pointer dereference for scalar tail processing.
         // - Condition 1: Loop condition `a_ptr < end_ptr` guarantees both pointers are within slice bounds.
-        // - Condition 2: `b_ptr` advances in step with `a_ptr` so it remains within the `b` slice.
+        // - Condition 2: `b_ptr` advances in step with `a_ptr`, and this function's
+        //   `# Safety` precondition, `a.len() == b.len()`, keeps it within `b`.
         // SAFETY: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
         unsafe {
             result += *a_ptr * *b_ptr;
@@ -151,24 +181,34 @@ fn dot_product_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 /// 12 accumulators (3 products x 4-way ILP).
 ///
 /// This replaces the prior 3-pass approach (`dot_product_neon` called 3x).
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
-        // SAFETY: `cosine_fused_neon_4acc` requires NEON (guaranteed on aarch64)
-        // and len >= 64 (checked above).
-        // - Condition 1: NEON is always present on aarch64.
-        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
+        // SAFETY: `cosine_fused_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // - Condition 2: NEON is always present on aarch64.
+        // Reason: from 64 elements the 4-accumulator loop is faster; it has no length floor.
         return unsafe { cosine_fused_neon_4acc(a, b) };
     }
     // SAFETY: `cosine_fused_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: this function's own `# Safety` precondition, `a.len() == b.len()`.
     // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { cosine_fused_neon_1acc(a, b) }
 }
 
 /// Single-accumulator fused cosine for vectors with < 64 elements.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
@@ -224,18 +264,23 @@ unsafe fn cosine_fused_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 ///
 /// Uses 12 NEON registers (3 products x 4-way ILP) and processes 16
 /// elements per iteration, following the pattern from `cosine_fused_avx2_2acc`.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
-    let len = a.len();
-    let main_end = len / 16 * 16;
-    // SAFETY: `add` on a raw pointer derived from a valid slice.
-    // - Condition 1: `main_end <= len`, so pointer stays within the allocation.
-    // - Condition 2: `add(len)` yields one-past-end, valid for comparison.
-    // SAFETY: Establish loop bounds for 16-wide main body and scalar tail.
-    let end_main = a.as_ptr().add(main_end);
-    let end_ptr = a.as_ptr().add(len);
+    let (main_end, end_main, end_ptr) = bounds_16wide(a);
 
+    // SAFETY: both helpers read `b` over the span they read of `a`.
+    // - Condition 1: `a.as_ptr()..end_main` is `a`'s first `main_end` elements,
+    //   a multiple of 16, and `end_main..end_ptr` the rest of `a`; every pointer
+    //   is derived from `a` itself (`bounds_16wide`), so the tail may read it.
+    // - Condition 2: this function's own `# Safety` precondition,
+    //   `a.len() == b.len()`, so `b` is readable over both spans, and
+    //   `b.as_ptr().add(main_end)` stays within `b`.
+    // Reason: the 16-wide main body, then the scalar tail.
     let (dot, norm_a_sq, norm_b_sq) = cosine_fused_neon_main_loop(a.as_ptr(), b.as_ptr(), end_main);
 
     let (dot, norm_a_sq, norm_b_sq) = cosine_fused_neon_scalar_tail(
@@ -252,7 +297,10 @@ unsafe fn cosine_fused_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
 
 /// Reduces 4 NEON f32x4 accumulators to a single scalar sum.
 ///
-/// SAFETY: All inputs must be valid `float32x4_t` values.
+/// # Safety
+///
+/// None beyond NEON, which aarch64 always has: register additions only,
+/// with no memory access.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn reduce_4acc_neon(
@@ -273,6 +321,11 @@ unsafe fn reduce_4acc_neon(
 /// Main 16-wide SIMD loop for fused cosine (4-acc ILP).
 ///
 /// Returns `(dot, norm_a_sq, norm_b_sq)` accumulated over full 16-element blocks.
+///
+/// # Safety
+///
+/// `a_ptr..end_main` is readable and spans a multiple of 16 elements, and
+/// `b_ptr` is readable for as many elements.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_main_loop(
@@ -308,6 +361,8 @@ unsafe fn cosine_fused_neon_main_loop(
     while a_ptr < end_main {
         // SAFETY: Loop condition guarantees 16 elements remain before `end_main`.
         // - Condition 1: `vld1q_f32` supports unaligned loads on ARM64.
+        // - Condition 2: this function's `# Safety`: the span is a multiple of 16,
+        //   so 16 elements remain, and `b_ptr` is readable for as many elements.
         // SAFETY: 16-wide single-pass accumulation with 4-way ILP.
         let va0 = vld1q_f32(a_ptr);
         let vb0 = vld1q_f32(b_ptr);
@@ -337,6 +392,9 @@ unsafe fn cosine_fused_neon_main_loop(
         b_ptr = b_ptr.add(16);
     }
 
+    // SAFETY: `reduce_4acc_neon` only adds registers.
+    // - Condition 1: its `# Safety` asks for nothing beyond NEON, always present on aarch64.
+    // Reason: collapse the 12 accumulators into (dot, norm_a_sq, norm_b_sq).
     (
         reduce_4acc_neon(d0, d1, d2, d3),
         reduce_4acc_neon(na0, na1, na2, na3),
@@ -345,6 +403,10 @@ unsafe fn cosine_fused_neon_main_loop(
 }
 
 /// Scalar tail for fused cosine — handles the remaining 0..15 elements.
+///
+/// # Safety
+///
+/// `a_ptr..end_ptr` is readable, and `b_ptr` is readable for as many elements.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn cosine_fused_neon_scalar_tail(
@@ -358,6 +420,8 @@ unsafe fn cosine_fused_neon_scalar_tail(
     while a_ptr < end_ptr {
         // SAFETY: Loop condition guarantees both pointers are within slice bounds.
         // - Condition 1: `b_ptr` advances in step with `a_ptr`.
+        // - Condition 2: this function's `# Safety`: `b_ptr` is readable for as
+        //   many elements as `a_ptr..end_ptr`.
         // SAFETY: Handle remaining elements the 16-wide loop did not cover.
         let x = *a_ptr;
         let y = *b_ptr;
@@ -386,19 +450,33 @@ fn finalize_cosine(dot: f32, norm_a_sq: f32, norm_b_sq: f32) -> f32 {
 /// For vectors with >= 64 elements, delegates to [`squared_l2_neon_4acc`]
 /// which uses 4 independent accumulators to hide FMA latency through ILP.
 /// Smaller vectors use a single-accumulator loop.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline]
-pub(crate) fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) unsafe fn squared_l2_neon(a: &[f32], b: &[f32]) -> f32 {
     if a.len() >= 64 {
-        return squared_l2_neon_4acc(a, b);
+        // SAFETY: `squared_l2_neon_4acc` reads `b` at every index of `a`.
+        // - Condition 1: this function's own `# Safety` precondition, `a.len() == b.len()`.
+        // Reason: the 4-accumulator loop for vectors of 64 elements or more.
+        return unsafe { squared_l2_neon_4acc(a, b) };
     }
     // SAFETY: `squared_l2_neon_1acc` requires NEON (guaranteed on aarch64).
     // - Condition 1: NEON is always present on aarch64.
+    // - Condition 2: this function's own `# Safety` precondition, `a.len() == b.len()`.
     // SAFETY: Single-accumulator variant for small/medium vectors.
     unsafe { squared_l2_neon_1acc(a, b) }
 }
 
 /// Single-accumulator NEON squared L2 distance for vectors with < 64 elements.
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
@@ -454,24 +532,24 @@ unsafe fn squared_l2_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
 /// per iteration, so two iterations fully consume one cache line.
 ///
 /// [`simd_4acc_l2_loop!`]: crate::simd_4acc_l2_loop!
+///
+/// # Safety
+///
+/// `a.len() == b.len()`: the loads read `b` at every index of `a`, unchecked.
+/// Every public `simd_native` entry point asserts it, in release too, before
+/// dispatching here.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
+unsafe fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     use std::arch::aarch64::*;
 
-    let len = a.len();
-    // SAFETY: `add` on a raw pointer derived from a valid slice.
-    // - Condition 1: `len / 16 * 16 <= len`, so `end_main` is within or at the end of the slice.
-    // - Condition 2: `add(len)` yields the one-past-the-end pointer, which is valid for comparison.
-    // SAFETY: Establish loop bounds for the 16-element-wide main body and scalar tail.
-    let end_main = unsafe { a.as_ptr().add(len / 16 * 16) };
-    // SAFETY: `add(len)` yields the one-past-the-end pointer (Condition 2 above),
-    // valid to form for comparison against the advancing pointer in the tail loop.
-    let end_ptr = unsafe { a.as_ptr().add(len) };
+    let (_, end_main, end_ptr) = bounds_16wide(a);
 
-    // SAFETY: 4-accumulator ILP loop using NEON intrinsics. All pointer bounds
-    // guaranteed by `end_main`. `neon_fma_compat` reorders args to match macro convention.
-    // `vsubq_f32` computes element-wise difference before FMA accumulates diff².
+    // SAFETY: 4-accumulator ILP loop of 16-wide NEON loads from `a` and `b`.
+    // - Condition 1: `end_main` bounds every load of `a`; `b` is read at the same
+    //   offsets and is as long as `a` (this function's `# Safety` precondition).
+    // Reason: `vsubq_f32` takes the element-wise difference, then `neon_fma_compat`
+    // (args reordered to the macro's convention) accumulates diff².
     let (combined, mut a_ptr, mut b_ptr) = unsafe {
         crate::simd_4acc_l2_loop!(
             a.as_ptr(),
@@ -494,7 +572,8 @@ fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     while a_ptr < end_ptr {
         // SAFETY: Raw pointer dereference for scalar tail processing.
         // - Condition 1: Loop condition `a_ptr < end_ptr` guarantees both pointers are within slice bounds.
-        // - Condition 2: `b_ptr` advances in step with `a_ptr` so it remains within the `b` slice.
+        // - Condition 2: `b_ptr` advances in step with `a_ptr`, and this function's
+        //   `# Safety` precondition, `a.len() == b.len()`, keeps it within `b`.
         // SAFETY: Handle the remaining 0-15 elements that the 16-wide SIMD loop did not cover.
         unsafe {
             let d = *a_ptr - *b_ptr;
@@ -507,406 +586,6 @@ fn squared_l2_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
     result
 }
 
-// =============================================================================
-// Hamming Distance
-// =============================================================================
-
-/// ARM NEON Hamming distance with adaptive accumulator selection.
-///
-/// Computes the number of positions where binary-thresholded values differ
-/// (threshold at 0.5), consistent with AVX2/AVX-512 Hamming kernels.
-/// For vectors with >= 64 elements, delegates to [`hamming_neon_4acc`] which
-/// uses 4-way ILP for higher throughput.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-pub(crate) fn hamming_neon(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() >= 64 {
-        // SAFETY: `hamming_neon_4acc` requires NEON (guaranteed on aarch64)
-        // and len >= 64 (checked above).
-        // - Condition 1: NEON is always present on aarch64.
-        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
-        return unsafe { hamming_neon_4acc(a, b) };
-    }
-    // SAFETY: `hamming_neon_1acc` requires NEON (guaranteed on aarch64).
-    // - Condition 1: NEON is always present on aarch64.
-    // SAFETY: Single-accumulator variant for small/medium vectors.
-    unsafe { hamming_neon_1acc(a, b) }
-}
-
-/// Single-accumulator NEON Hamming distance for vectors with < 64 elements.
-///
-/// Binary-thresholds each lane at 0.5, XORs the masks, and counts differing
-/// positions. Accumulates in `uint32x4_t` for exact integer precision.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-unsafe fn hamming_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
-    use std::arch::aarch64::*;
-
-    let len = a.len();
-    let simd_len = len / 4;
-
-    // SAFETY: `vdupq_n_u32` is a non-faulting register initialisation on aarch64.
-    // - Condition 1: NEON is always present on aarch64; no runtime detection needed.
-    // - Condition 2: Immediate value 0 is a valid u32 constant accepted by the instruction.
-    // SAFETY: Initialise the SIMD diff-count accumulator to zero before the reduction loop.
-    let mut diff_count = vdupq_n_u32(0);
-
-    // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
-    // - Condition 1: NEON is always present on aarch64.
-    // - Condition 2: Immediate value 0.5 is a valid f32 constant.
-    // SAFETY: Create threshold vector for binary comparison.
-    let threshold = vdupq_n_f32(0.5);
-
-    let a_ptr = a.as_ptr();
-    let b_ptr = b.as_ptr();
-
-    for i in 0..simd_len {
-        let offset = i * 4;
-        // SAFETY: `vld1q_f32`/`vcgtq_f32`/`veorq_u32`/`vshrq_n_u32`/`vaddq_u32` are
-        // non-faulting NEON operations.
-        // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, so both pointers stay within
-        //   slice bounds.
-        // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
-        // SAFETY: Binary-threshold each lane, XOR masks, shift to 0/1, accumulate count.
-        let va = vld1q_f32(a_ptr.add(offset));
-        let vb = vld1q_f32(b_ptr.add(offset));
-
-        // Compare > 0.5 yields all-1s (0xFFFF_FFFF) or all-0s per lane
-        let mask_a = vcgtq_f32(va, threshold);
-        let mask_b = vcgtq_f32(vb, threshold);
-
-        // XOR finds lanes where binary values differ
-        let diff = veorq_u32(mask_a, mask_b);
-
-        // Shift right by 31 to convert 0xFFFF_FFFF -> 1, 0x0000_0000 -> 0
-        let ones = vshrq_n_u32::<31>(diff);
-        diff_count = vaddq_u32(diff_count, ones);
-    }
-
-    // SAFETY: `vaddvq_u32` reduces a 128-bit u32 register to a scalar u32 on aarch64.
-    // - Condition 1: NEON is always present on aarch64; intrinsic is always available.
-    // - Condition 2: `diff_count` is a valid uint32x4_t value set by `vdupq_n_u32`/`vaddq_u32`.
-    // SAFETY: Horizontal reduction of the diff-count accumulator to a scalar result.
-    let mut result = vaddvq_u32(diff_count);
-
-    // Scalar tail for remainder 0-3 elements
-    let base = simd_len * 4;
-    for i in base..len {
-        let x = a[i] > 0.5;
-        let y = b[i] > 0.5;
-        if x != y {
-            result += 1;
-        }
-    }
-
-    result as f32
-}
-
-/// Four-accumulator NEON Hamming distance for vectors with >= 64 elements.
-///
-/// Processes 16 elements per iteration with 4 independent `uint32x4_t` diff-count
-/// accumulators for instruction-level parallelism. Uses binary tree reduction
-/// at the end for the horizontal sum.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-unsafe fn hamming_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
-    use std::arch::aarch64::*;
-
-    let len = a.len();
-    let main_end = len / 16 * 16;
-
-    // SAFETY: `vdupq_n_u32` / `vdupq_n_f32` are non-faulting register initialisations.
-    // - Condition 1: NEON is always present on aarch64.
-    // - Condition 2: Immediate values 0 / 0.5 are valid constants.
-    // SAFETY: Initialise 4 diff-count accumulators and threshold vector.
-    let mut dc0 = vdupq_n_u32(0);
-    let mut dc1 = vdupq_n_u32(0);
-    let mut dc2 = vdupq_n_u32(0);
-    let mut dc3 = vdupq_n_u32(0);
-    let threshold = vdupq_n_f32(0.5);
-
-    let a_ptr = a.as_ptr();
-    let b_ptr = b.as_ptr();
-
-    let mut offset = 0;
-    while offset < main_end {
-        // SAFETY: `vld1q_f32` loads 4 f32 values from an unaligned address on aarch64.
-        // - Condition 1: `offset + 16 <= main_end <= len`, so all 16 pointers stay within
-        //   slice bounds across the 4 blocks.
-        // - Condition 2: `vld1q_f32` is documented to support unaligned loads on ARM64.
-        // SAFETY: 16-wide single-pass binary comparison with 4-way ILP.
-
-        // Block 0
-        let va0 = vld1q_f32(a_ptr.add(offset));
-        let vb0 = vld1q_f32(b_ptr.add(offset));
-        let diff0 = veorq_u32(vcgtq_f32(va0, threshold), vcgtq_f32(vb0, threshold));
-        dc0 = vaddq_u32(dc0, vshrq_n_u32::<31>(diff0));
-
-        // Block 1
-        let va1 = vld1q_f32(a_ptr.add(offset + 4));
-        let vb1 = vld1q_f32(b_ptr.add(offset + 4));
-        let diff1 = veorq_u32(vcgtq_f32(va1, threshold), vcgtq_f32(vb1, threshold));
-        dc1 = vaddq_u32(dc1, vshrq_n_u32::<31>(diff1));
-
-        // Block 2
-        let va2 = vld1q_f32(a_ptr.add(offset + 8));
-        let vb2 = vld1q_f32(b_ptr.add(offset + 8));
-        let diff2 = veorq_u32(vcgtq_f32(va2, threshold), vcgtq_f32(vb2, threshold));
-        dc2 = vaddq_u32(dc2, vshrq_n_u32::<31>(diff2));
-
-        // Block 3
-        let va3 = vld1q_f32(a_ptr.add(offset + 12));
-        let vb3 = vld1q_f32(b_ptr.add(offset + 12));
-        let diff3 = veorq_u32(vcgtq_f32(va3, threshold), vcgtq_f32(vb3, threshold));
-        dc3 = vaddq_u32(dc3, vshrq_n_u32::<31>(diff3));
-
-        offset += 16;
-    }
-
-    // Binary tree reduction: (dc0+dc1) + (dc2+dc3) then horizontal sum
-    // SAFETY: `vaddq_u32`/`vaddvq_u32` are non-faulting register operations.
-    // - Condition 1: All accumulators hold valid uint32x4_t values.
-    // SAFETY: Reduce 4 accumulators to scalar diff count.
-    let ab01 = vaddq_u32(dc0, dc1);
-    let ab23 = vaddq_u32(dc2, dc3);
-    let mut result = vaddvq_u32(vaddq_u32(ab01, ab23));
-
-    // Scalar tail for remainder 0-15 elements
-    for i in main_end..len {
-        let x = a[i] > 0.5;
-        let y = b[i] > 0.5;
-        if x != y {
-            result += 1;
-        }
-    }
-
-    result as f32
-}
-
-// =============================================================================
-// Binary Hamming (packed u64)
-// =============================================================================
-
-/// ARM NEON binary Hamming distance for packed u64 vectors.
-///
-/// Processes 2 u64 (128 bits) per iteration using `vcntq_u8` (byte-level
-/// popcount) followed by `vaddlvq_u8` (horizontal sum across 16 bytes).
-/// NEON `cnt` is a single-cycle instruction on most ARM cores, making this
-/// significantly faster than scalar `count_ones()` loops.
-///
-/// # Safety
-///
-/// Uses NEON intrinsics that are always available on aarch64. Pointer
-/// arithmetic is bounded by `i + 2 <= len` loop guard.
-#[cfg(target_arch = "aarch64")]
-pub(crate) fn hamming_binary_neon(a: &[u64], b: &[u64]) -> u32 {
-    use std::arch::aarch64::*;
-
-    let len = a.len();
-    let mut total: u32 = 0;
-    let mut i = 0;
-
-    // Process 2 u64 (128 bits) per iteration using vcntq_u8 + horizontal sum
-    while i + 2 <= len {
-        // SAFETY: `vld1q_u64` loads 2 u64 from an unaligned address on aarch64.
-        // - Condition 1: `i + 2 <= len`, so both pointers stay within slice bounds.
-        // - Condition 2: `vld1q_u64` supports unaligned loads on ARM64.
-        // SAFETY: NEON XOR + byte-popcount for binary Hamming distance.
-        unsafe {
-            let va = vld1q_u64(a.as_ptr().add(i));
-            let vb = vld1q_u64(b.as_ptr().add(i));
-            let xor = veorq_u64(va, vb);
-            // Count set bits per byte, then sum all 16 bytes
-            let cnt = vcntq_u8(vreinterpretq_u8_u64(xor));
-            total += u32::from(vaddlvq_u8(cnt));
-        }
-        i += 2;
-    }
-
-    // Scalar tail for an odd trailing u64 element
-    if i < len {
-        total += (a[i] ^ b[i]).count_ones();
-    }
-
-    total
-}
-
-// =============================================================================
-// Jaccard Similarity
-// =============================================================================
-
-/// ARM NEON Jaccard similarity with adaptive accumulator selection.
-///
-/// Computes generalized Jaccard similarity using `min` for intersection and
-/// `max` for union, consistent with AVX2/AVX-512 Jaccard kernels. For vectors
-/// with >= 64 elements, delegates to [`jaccard_neon_4acc`] which uses 8
-/// accumulators (4 intersection + 4 union) for ILP.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-pub(crate) fn jaccard_neon(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() >= 64 {
-        // SAFETY: `jaccard_neon_4acc` requires NEON (guaranteed on aarch64)
-        // and len >= 64 (checked above).
-        // - Condition 1: NEON is always present on aarch64.
-        // - Condition 2: `a.len() >= 64` satisfies the 4-acc kernel's minimum length.
-        // SAFETY: Delegate to the 4-accumulator ILP variant for large vectors.
-        return unsafe { jaccard_neon_4acc(a, b) };
-    }
-    // SAFETY: `jaccard_neon_1acc` requires NEON (guaranteed on aarch64).
-    // - Condition 1: NEON is always present on aarch64.
-    // SAFETY: Single-accumulator variant for small/medium vectors.
-    unsafe { jaccard_neon_1acc(a, b) }
-}
-
-/// Single-accumulator NEON Jaccard similarity for vectors with < 64 elements.
-///
-/// Accumulates `min(a, b)` for intersection and `max(a, b)` for union in
-/// `float32x4_t` registers, then horizontally reduces.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-unsafe fn jaccard_neon_1acc(a: &[f32], b: &[f32]) -> f32 {
-    use std::arch::aarch64::*;
-
-    let len = a.len();
-    let simd_len = len / 4;
-
-    // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
-    // - Condition 1: NEON is always present on aarch64; no runtime detection needed.
-    // - Condition 2: Immediate value 0.0 is a valid f32 constant accepted by the instruction.
-    // SAFETY: Initialise intersection and union SIMD accumulators to zero.
-    let mut inter_acc = vdupq_n_f32(0.0);
-    let mut union_acc = vdupq_n_f32(0.0);
-
-    let a_ptr = a.as_ptr();
-    let b_ptr = b.as_ptr();
-
-    for i in 0..simd_len {
-        let offset = i * 4;
-        // SAFETY: `vld1q_f32`/`vminq_f32`/`vmaxq_f32`/`vaddq_f32` are non-faulting
-        // NEON operations.
-        // - Condition 1: `offset + 4 <= simd_len * 4 <= len`, so both pointers stay
-        //   within slice bounds.
-        // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
-        // SAFETY: Accumulate min (intersection) and max (union) per 4-element block.
-        let va = vld1q_f32(a_ptr.add(offset));
-        let vb = vld1q_f32(b_ptr.add(offset));
-        inter_acc = vaddq_f32(inter_acc, vminq_f32(va, vb));
-        union_acc = vaddq_f32(union_acc, vmaxq_f32(va, vb));
-    }
-
-    // SAFETY: `vaddvq_f32` reduces a 128-bit register to a scalar f32 on aarch64.
-    // - Condition 1: NEON is always present on aarch64; intrinsic is always available.
-    // - Condition 2: Both accumulators are valid float32x4_t values.
-    // SAFETY: Horizontal reduction of intersection and union accumulators.
-    let mut inter = vaddvq_f32(inter_acc);
-    let mut union_sum = vaddvq_f32(union_acc);
-
-    // Scalar tail for remainder 0-3 elements
-    let base = simd_len * 4;
-    for i in base..len {
-        let x = a[i];
-        let y = b[i];
-        inter += x.min(y);
-        union_sum += x.max(y);
-    }
-
-    if union_sum == 0.0 {
-        1.0
-    } else {
-        inter / union_sum
-    }
-}
-
-/// Four-accumulator NEON Jaccard similarity for vectors with >= 64 elements.
-///
-/// Uses 8 NEON registers (4 intersection + 4 union) and processes 16 elements
-/// per iteration for instruction-level parallelism. Binary tree reduction
-/// merges accumulators at the end.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-unsafe fn jaccard_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
-    use std::arch::aarch64::*;
-
-    let len = a.len();
-    let main_end = len / 16 * 16;
-
-    // SAFETY: `vdupq_n_f32` is a non-faulting register initialisation on aarch64.
-    // - Condition 1: NEON is always present on aarch64.
-    // - Condition 2: Immediate value 0.0 is valid for the instruction.
-    // SAFETY: Initialise 8 accumulators (4 intersection + 4 union) for ILP.
-    let mut i0 = vdupq_n_f32(0.0);
-    let mut i1 = vdupq_n_f32(0.0);
-    let mut i2 = vdupq_n_f32(0.0);
-    let mut i3 = vdupq_n_f32(0.0);
-    let mut u0 = vdupq_n_f32(0.0);
-    let mut u1 = vdupq_n_f32(0.0);
-    let mut u2 = vdupq_n_f32(0.0);
-    let mut u3 = vdupq_n_f32(0.0);
-
-    let a_ptr = a.as_ptr();
-    let b_ptr = b.as_ptr();
-
-    let mut offset = 0;
-    while offset < main_end {
-        // SAFETY: `vld1q_f32`/`vminq_f32`/`vmaxq_f32`/`vaddq_f32` are non-faulting
-        // NEON operations.
-        // - Condition 1: `offset + 16 <= main_end <= len`, so all 16 pointers stay
-        //   within slice bounds across the 4 blocks.
-        // - Condition 2: `vld1q_f32` supports unaligned loads on ARM64.
-        // SAFETY: 16-wide single-pass min/max accumulation with 4-way ILP.
-
-        // Block 0
-        let va0 = vld1q_f32(a_ptr.add(offset));
-        let vb0 = vld1q_f32(b_ptr.add(offset));
-        i0 = vaddq_f32(i0, vminq_f32(va0, vb0));
-        u0 = vaddq_f32(u0, vmaxq_f32(va0, vb0));
-
-        // Block 1
-        let va1 = vld1q_f32(a_ptr.add(offset + 4));
-        let vb1 = vld1q_f32(b_ptr.add(offset + 4));
-        i1 = vaddq_f32(i1, vminq_f32(va1, vb1));
-        u1 = vaddq_f32(u1, vmaxq_f32(va1, vb1));
-
-        // Block 2
-        let va2 = vld1q_f32(a_ptr.add(offset + 8));
-        let vb2 = vld1q_f32(b_ptr.add(offset + 8));
-        i2 = vaddq_f32(i2, vminq_f32(va2, vb2));
-        u2 = vaddq_f32(u2, vmaxq_f32(va2, vb2));
-
-        // Block 3
-        let va3 = vld1q_f32(a_ptr.add(offset + 12));
-        let vb3 = vld1q_f32(b_ptr.add(offset + 12));
-        i3 = vaddq_f32(i3, vminq_f32(va3, vb3));
-        u3 = vaddq_f32(u3, vmaxq_f32(va3, vb3));
-
-        offset += 16;
-    }
-
-    // Binary tree reduction for intersection: (i0+i1) + (i2+i3)
-    // SAFETY: `vaddq_f32`/`vaddvq_f32` are non-faulting register operations.
-    // - Condition 1: All accumulators hold valid float32x4_t values.
-    // SAFETY: Reduce 4 intersection and 4 union accumulators to scalar results.
-    let inter_01 = vaddq_f32(i0, i1);
-    let inter_23 = vaddq_f32(i2, i3);
-    let mut inter = vaddvq_f32(vaddq_f32(inter_01, inter_23));
-
-    // Binary tree reduction for union: (u0+u1) + (u2+u3)
-    let union_01 = vaddq_f32(u0, u1);
-    let union_23 = vaddq_f32(u2, u3);
-    let mut union_sum = vaddvq_f32(vaddq_f32(union_01, union_23));
-
-    // Scalar tail for remainder 0-15 elements
-    for idx in main_end..len {
-        let x = a[idx];
-        let y = b[idx];
-        inter += x.min(y);
-        union_sum += x.max(y);
-    }
-
-    if union_sum == 0.0 {
-        1.0
-    } else {
-        inter / union_sum
-    }
-}
+#[cfg(test)]
+#[path = "neon_bounds_tests.rs"]
+mod neon_bounds_tests;

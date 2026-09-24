@@ -36,7 +36,7 @@ pub enum Commands {
         shell: Shell,
     },
 
-    /// SIMD performance diagnostics and benchmarking
+    /// SIMD diagnostics: the level detected on this machine
     Simd {
         #[command(subcommand)]
         action: SimdAction,
@@ -445,10 +445,10 @@ pub enum QueryCommands {
 /// SIMD diagnostic actions.
 #[derive(Subcommand)]
 pub enum SimdAction {
-    /// Show current SIMD dispatch configuration
+    /// Show the SIMD level detected on this machine
     Info,
 
-    /// Force re-benchmark of all SIMD backends
+    /// Point to the SIMD micro-benchmarks (`cargo bench`); measures nothing itself
     Benchmark,
 }
 

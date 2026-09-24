@@ -30,6 +30,18 @@ pub enum SimdLevel {
     Scalar,
 }
 
+impl std::fmt::Display for SimdLevel {
+    /// The level as a diagnostic names it: `velesdb simd info` prints this.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Avx512 => "AVX-512F (x86_64, on the AVX2 + FMA baseline)",
+            Self::Avx2 => "AVX2 + FMA (x86_64)",
+            Self::Neon => "NEON (aarch64)",
+            Self::Scalar => "scalar (no SIMD level this build can use)",
+        })
+    }
+}
+
 static SIMD_LEVEL: std::sync::OnceLock<SimdLevel> = std::sync::OnceLock::new();
 
 #[inline]

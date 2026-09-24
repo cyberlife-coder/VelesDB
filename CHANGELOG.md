@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > and an `ef_search` outside `[16, 4096]` — given as the option or as a
 > `custom:`/`adaptive:` mode — now fail instead of running at the default
 > quality or an uncapped traversal, and a collection's own `execute_aggregate` refuses a
-> query the validator rejects. The declared SemVer policy (`docs/FAQ.md`)
+> query the validator rejects. It also removes a public module, the aarch64-only
+> `velesdb_core::simd_neon` (#1965, under `### Removed`). The declared SemVer policy (`docs/FAQ.md`)
 > makes a breaking change a major bump: tag the next release accordingly.
 
 ### Security
@@ -153,6 +154,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Removed
+- **BREAKING (Rust API, aarch64 only) — `velesdb_core::simd_neon` (#1965).**
+  A public module nothing called: a standalone duplicate of the NEON kernels
+  `simd_native` dispatches to at runtime. Two guides said mobile computed its
+  distances through it; it computes them through `simd_native`, as every
+  aarch64 build does. A direct caller moves to the safe, runtime-dispatched
+  functions of `velesdb_core::simd_native`:
+
+  | Removed (`simd_neon::`) | Replacement (`simd_native::`) |
+  |---|---|
+  | `dot_product_neon_safe`, `unsafe dot_product_neon` | `dot_product_native` |
+  | `euclidean_neon_safe`, `unsafe euclidean_neon` | `euclidean_native` |
+  | `unsafe euclidean_squared_neon` | `squared_l2_native` |
+  | `cosine_neon_safe`, `unsafe cosine_neon` | `cosine_similarity_native` |
+  | `cosine_normalized_neon_safe`, `unsafe cosine_normalized_neon` | `cosine_normalized_native` |
+
+  `cargo
+  semver-checks` runs on x86_64 and cannot see an aarch64-only module, hence
+  this entry. `simd_neon_prefetch` stays: `simd_native`'s prefetch uses it.
 - **The `mutants` job in `core-review.yml` (#2339).** It ran on every pull
   request touching `velesdb-core` and never once returned a verdict on a real
   diff: both runs that met one were cut at the 45-minute action limit — the
@@ -169,6 +188,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **`velesdb simd info` names the SIMD level it detects (#1965).** It
+  printed a fixed summary of the design, whose thresholds the code no longer
+  applies (AVX2 switching at 1024 dimensions where the dispatcher switches at
+  256, AVX-512 with 4/2/1 accumulators where it runs an 8-accumulator kernel
+  from 1024 dimensions), and nothing
+  about the machine. It now prints `simd_native::simd_level()`, named by
+  `SimdLevel`'s new `Display`, e.g. `Detected level: NEON (aarch64)`.
+- **The NEON distance kernels are `unsafe fn` (#1965).** They were safe
+  `pub(crate)` functions that read `b` at every index of `a` with no length
+  check, so a crate-internal call with a shorter `b` read past its end with no
+  `unsafe` in sight. The public entry points already asserted equal lengths,
+  in release too, so no public call was affected; the precondition is now each
+  kernel's `# Safety` contract, as the x86 dot-product kernels document it,
+  and every call site names the assert or precondition it relies on.
 - **Equal fused scores come back in one order, ascending id, on every
   surface (#2297).** Every fusion strategy gathers its scores in a hash map,
   whose iteration order changes from one map to the next, then sorted by

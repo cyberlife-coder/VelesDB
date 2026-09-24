@@ -66,7 +66,12 @@ fn hamming_simd(a: &[f32], b: &[f32]) -> f32 {
             unsafe { crate::simd_native::hamming_avx2(a, b) }
         }
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if a.len() >= 4 => crate::simd_native::hamming_neon(a, b),
+        SimdLevel::Neon if a.len() >= 4 => {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `hamming_distance_native` asserted it, in release too, before dispatching here.
+            // Reason: NEON is always present on aarch64; this is its fast path.
+            unsafe { crate::simd_native::hamming_neon(a, b) }
+        }
         _ => crate::simd_native::scalar::hamming_scalar(a, b),
     }
 }
@@ -105,7 +110,12 @@ fn jaccard_simd(a: &[f32], b: &[f32]) -> f32 {
             unsafe { crate::simd_native::jaccard_avx2(a, b) }
         }
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if a.len() >= 4 => crate::simd_native::jaccard_neon(a, b),
+        SimdLevel::Neon if a.len() >= 4 => {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `jaccard_similarity_native` asserted it, in release too, before dispatching here.
+            // Reason: NEON is always present on aarch64; this is its fast path.
+            unsafe { crate::simd_native::jaccard_neon(a, b) }
+        }
         _ => crate::simd_native::scalar::jaccard_scalar(a, b),
     }
 }
@@ -139,7 +149,13 @@ pub(super) fn resolve_hamming(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
             unsafe { crate::simd_native::hamming_avx2(a, b) }
         },
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if dim >= 4 => |a, b| crate::simd_native::hamming_neon(a, b),
+        SimdLevel::Neon if dim >= 4 => |a, b| {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `DistanceEngine::dispatch` asserts it, in release too,
+            //   before calling a resolved kernel.
+            // Reason: the resolver emitted the NEON kernel for this dimension.
+            unsafe { crate::simd_native::hamming_neon(a, b) }
+        },
         _ => crate::simd_native::scalar::hamming_scalar,
     }
 }
@@ -182,7 +198,13 @@ pub(super) fn resolve_jaccard(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32]
             unsafe { crate::simd_native::jaccard_avx2(a, b) }
         },
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if dim >= 4 => |a, b| crate::simd_native::jaccard_neon(a, b),
+        SimdLevel::Neon if dim >= 4 => |a, b| {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `DistanceEngine::dispatch` asserts it, in release too,
+            //   before calling a resolved kernel.
+            // Reason: the resolver emitted the NEON kernel for this dimension.
+            unsafe { crate::simd_native::jaccard_neon(a, b) }
+        },
         _ => crate::simd_native::scalar::jaccard_scalar,
     }
 }
@@ -239,7 +261,10 @@ pub fn hamming_binary_native(a: &[u64], b: &[u64]) -> u32 {
         #[cfg(target_arch = "aarch64")]
         SimdLevel::Neon if a.len() >= 2 => {
             // NEON binary hamming uses vcntq_u8 for byte-popcount on 2 u64 per iteration.
-            crate::simd_native::hamming_binary_neon(a, b)
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `hamming_binary_native` asserted it, in release too, before dispatching here.
+            // Reason: NEON is always present on aarch64; this is its fast path.
+            unsafe { crate::simd_native::hamming_binary_neon(a, b) }
         }
         _ => crate::simd_native::scalar::hamming_binary_scalar(a, b),
     }

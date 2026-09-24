@@ -26,7 +26,7 @@ VelesDB uses `unsafe` code in the following categories:
 
 | Category | Purpose | Files |
 |----------|---------|-------|
-| **SIMD (consolidated)** | AVX-512/AVX2/NEON distance kernels | `simd_native/x86_avx512.rs`, `simd_native/x86_avx2/`, `simd_native/x86_avx2_similarity.rs`, `simd_native/neon.rs`, `simd_neon.rs` |
+| **SIMD (consolidated)** | AVX-512/AVX2/NEON distance kernels | `simd_native/x86_avx512.rs`, `simd_native/x86_avx2/`, `simd_native/x86_avx2_similarity.rs`, `simd_native/neon.rs`, `simd_native/neon_hamming_jaccard.rs` |
 | **SIMD (dispatch)** | Runtime feature detection + dispatch to ISA kernels | `simd_native/dispatch/` (`mod.rs`, `dot.rs`, `euclidean.rs`, `cosine.rs`, `hamming.rs`) |
 | **SIMD (reduction)** | Horizontal sum helpers for accumulator registers | `simd_native/reduction.rs` |
 | **SIMD (ADC)** | Asymmetric Distance Computation for PQ search | `simd_native/adc.rs` |
@@ -95,35 +95,52 @@ VelesDB uses `unsafe` code in the following categories:
 **Invariants**: Same as AVX2 dot/L2 above. `hamming_binary_avx2` operates on `&[u64]`
 slices with popcount via `_mm256_set_epi8` LUT.
 
-### Module: `crates/velesdb-core/src/simd_native/neon.rs`
+### Modules: `crates/velesdb-core/src/simd_native/neon.rs` and `neon_hamming_jaccard.rs`
 
-**Functions** (all `unsafe fn` with `#[target_feature(enable = "neon")]`,
-`#[cfg(target_arch = "aarch64")]`):
-- `dot_product_neon()` / `squared_l2_neon()` / `cosine_neon()` / `hamming_neon()`
-- `jaccard_neon()` / `hamming_binary_neon()`
-- Safe wrappers: `dot_product_neon_safe()`, `euclidean_neon_safe()`, etc.
+**Functions** (`#[cfg(target_arch = "aarch64")]`; NEON is mandatory on AArch64,
+so there is no `#[target_feature]` and no runtime detection):
+- `pub(crate) unsafe fn` kernels: `dot_product_neon()` / `squared_l2_neon()` /
+  `cosine_neon()` / `hamming_neon()` / `jaccard_neon()` / `hamming_binary_neon()`,
+  and the private `dot_product_neon_4acc()` / `squared_l2_neon_4acc()` they call.
+  They were safe `fn`s until #1965, although nothing in them checks lengths: a
+  shorter `b` was read past its end with no `unsafe` at the call site.
+- `unsafe fn` helpers: `squared_l2_neon_1acc()`, `hamming_neon_{1,4}acc()`,
+  `jaccard_neon_{1,4}acc()`, the `cosine_fused_neon_*` loops, `reduce_4acc_neon()`
+  and `neon_fma_compat()`
+- The public entry points are the runtime-dispatched `simd_native::*_native`
+  functions and `DistanceEngine`; nothing outside `simd_native` calls these kernels
 
 **Invariants**:
 1. `#[cfg(target_arch = "aarch64")]` guarantees NEON availability (mandatory on AArch64)
-2. `debug_assert_eq!(a.len(), b.len())` at function entry
-3. Loop bounds `chunks = len / 4` ensure pointer arithmetic stays in bounds
-4. Unrolled remainder handles `len % 4` elements via scalar indexing
+2. `a.len() == b.len()` is each kernel's `# Safety` precondition, checked by its
+   caller: every public entry point (`*_native`, `DistanceEngine::dispatch`) runs
+   `assert_eq!(a.len(), b.len())`, in release too, and each `unsafe` call site
+   names that assert in its `SAFETY` comment
+3. The single-accumulator loops take `len / 4` chunks and handle the `len % 4`
+   left by scalar indexing
+4. The 16-wide kernels (`dot_product_neon_4acc`, `squared_l2_neon_4acc`,
+   `cosine_fused_neon_4acc`) run `len / 16 * 16` elements in the main body and
+   the 0–15 left through raw pointers. Both bounds come from `bounds_16wide`,
+   derived from `a`'s own `as_ptr_range()`, never from a subslice such as
+   `a[..main]`: that pointer may not be read past its own end (Stacked
+   Borrows), and the tail reads exactly there. `neon_bounds_tests` pins it
+   under Miri when run by hand (the command is in the test's doc); no CI job
+   runs it yet, which #2397 tracks
+5. `hamming_neon_4acc` and `jaccard_neon_4acc` also run `len / 16 * 16`
+   elements in the main body, but handle the rest by slice indexing, which is
+   bounds-checked
+6. `hamming_binary_neon` loads two `u64` at a time while `i + 2 <= len`, then
+   handles an odd last word by indexing
 
 **Why It's Sound**:
 ```rust
 // SAFETY: NEON load and FMA require in-bounds pointers.
 // - Condition 1: Loop invariant `offset + 4 <= chunks * 4 <= len`.
-// - Condition 2: `a` and `b` have equal length (debug assertion).
+// - Condition 2: `a` and `b` have equal length (the kernel's `# Safety` precondition).
 let va = vld1q_f32(a.as_ptr().add(offset));
 let vb = vld1q_f32(b.as_ptr().add(offset));
 sum = vfmaq_f32(sum, va, vb);
 ```
-
-### Module: `crates/velesdb-core/src/simd_neon.rs`
-
-Standalone NEON implementations (same pattern as `simd_native/neon.rs`).
-Contains `dot_product_neon`, `euclidean_squared_neon`, `cosine_neon`,
-`cosine_normalized_neon` with identical invariant structure.
 
 ### Module: `crates/velesdb-core/src/simd_native/dispatch/` (5 files)
 
