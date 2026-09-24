@@ -368,7 +368,7 @@ mod unlink {
     /// rustdoc drops every backtick of a label or a destination before it
     /// checks its path marks, so it links a path that holds code anywhere,
     /// not only one enclosed in a single code span, and so does the rewrite
-    /// since #2330. It stops on a `/` in a destination too.
+    /// since #2330.
     #[test]
     fn code_inside_a_path_is_rewritten_and_flagged() {
         assert_rewritten("see [Vec<`u8`>].", "see Vec<`u8`>.");
