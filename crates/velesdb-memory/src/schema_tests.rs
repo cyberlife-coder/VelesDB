@@ -326,10 +326,7 @@ mod unlink {
     use super::super::walks::{unlink_rustdoc, unlink_rustdoc_descriptions};
     use serde_json::{json, Value};
 
-    mod guard {
-        include!("../tests/support/rustdoc_link_guard.rs");
-    }
-    use guard::{descriptions_with_rustdoc_links, rustdoc_links};
+    use velesdb_rustdoc_guard::{rustdoc_links, strings_with_rustdoc_links};
 
     /// Asserts `text` is rewritten to `shown`, and that the guard flags the
     /// text and passes what it becomes.
@@ -723,7 +720,7 @@ mod unlink {
         );
         let text = std::fs::read_to_string(path).expect("test: read the snapshot");
         let snapshot: Value = serde_json::from_str(&text).expect("test: snapshot is JSON");
-        let linked = descriptions_with_rustdoc_links(&snapshot);
+        let linked = strings_with_rustdoc_links(&snapshot, &["description"]);
         assert!(
             linked.is_empty(),
             "{} published descriptions still carry rustdoc link syntax, e.g. {:?}",

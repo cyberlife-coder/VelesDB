@@ -993,6 +993,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+- **velesdb-server checks its OpenAPI descriptions for rustdoc links with
+  pulldown-cmark, through the guard velesdb-memory already used (#2330).**
+  Its hand-written raw-text scan passed an autolink to a path
+  (`<crate::Point>`) and bare item paths (`[SegmentInfo]`, `[u64]`), which
+  rustdoc resolves or warns about, while failing code spans and web links
+  whose text holds code. The guard moves out of velesdb-memory's tests into
+  `velesdb-rustdoc-guard`, a test-only crate that is never published and that
+  both crates take as a dev-dependency. It now also flags three forms it
+  missed and the server's scan caught: a label with backticks inside
+  (``[f`()`]``), the bare `[&]` primitive, and a `mailto::X` path used as a
+  link target.
 - **The published crates declare dependency floors they can actually be built
   with (#1987).** `-Z direct-minimal-versions` found requirements below what
   the rest of the dependency graph, or the code itself, needs: `serde` "1.0"

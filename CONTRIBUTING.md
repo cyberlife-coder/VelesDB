@@ -89,6 +89,7 @@ New to the codebase? Start with these documents (in order):
 | `velesdb-memory` | MCP agent-memory server. Three tool families, not one: durable memory (`remember`/`recall`/`why`/`relate`/`feedback`…), the deterministic context compiler (`compile_context`, `compile_transcript`, `explain_compilation`, `retrieve_context_source`, `context_savings`, `suggest_budget`), and cross-session working-context resumption (`save_working_context`, `load_working_context`, `list_working_contexts`) |
 | `velesdb-node` | Node.js binding of the memory wedge (napi-rs; `@wiscale/velesdb-memory-node`) |
 | `tauri-plugin-velesdb` | Tauri desktop integration |
+| `velesdb-rustdoc-guard` | Test-only, never published: flags rustdoc link syntax left in the descriptions velesdb-memory (MCP schemas) and velesdb-server (OpenAPI) publish |
 
 ## Quality Gates
 

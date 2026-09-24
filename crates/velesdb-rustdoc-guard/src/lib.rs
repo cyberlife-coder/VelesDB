@@ -1,28 +1,28 @@
-// The guard on rustdoc link syntax in published schema descriptions (#2261).
-//
-// Shared, not copied: `src/schema_tests.rs` includes this file (`include!`)
-// to check the rewrite and the committed `docs/reference/mcp-tools.json`, and
-// `tests/mcp_schema_bdd.rs` loads it (`#[path]`) to check the live schema of
-// every tool the server lists. It sits in a subdirectory so cargo builds no
-// test target of its own from it.
-//
-// It reads each description with pulldown-cmark, as the rewrite in
-// `src/schema_walks.rs` does, but decides on its own, and more broadly: its
-// broken-link callback accepts every reference, so it sees each bracket
-// Markdown could read as a link, and it flags
-// - a link, an autolink or an image to anything but an `http`, `https` or
-//   `mailto` URL or a fragment (`[x](crate::y)`, `[x](../y.html)`,
-//   `<crate::y>`, `![x](crate::y)`), whatever its text;
-// - a reference-style link no definition resolves (`[x][y]`);
-// - a shortcut or collapsed link no definition resolves whose label reads as an
-//   item path, which rustdoc 1.90 treats as an intra-doc link and warns about
-//   when it does not resolve (`` [`X`] ``, `[X]`, `[optional]`, `[a::B]`,
-//   `[fn@f]`, `[f()]`, `[X#method.id]`, `[X][]`);
-// - a reference definition to anything but such a URL (`[x]: crate::y`).
-// Code spans, code blocks and escaped brackets hold no link, so it passes
-// them, and it passes prose brackets that name no item (`[0, 1]`, `[a b]`).
-// `one_pass_is_final` in `src/schema_tests.rs` checks that it flags every
-// text of its pseudo-random mix that the rewrite rewrites.
+//! The guard on rustdoc link syntax in published descriptions (#2261, #2330).
+//!
+//! A doc comment becomes a published description twice in this workspace:
+//! velesdb-memory's MCP tool schemas and velesdb-server's `OpenAPI` document.
+//! A rustdoc link in either reaches a client as raw syntax, so both check
+//! what they publish with this one guard, as a dev-dependency. It is never
+//! published: velesdb-core and the release see nothing of it.
+//!
+//! It reads each text with pulldown-cmark, as rustdoc does, and decides on
+//! its own. Its broken-link callback accepts every reference, so it sees each
+//! bracket Markdown could read as a link, and it flags
+//! - a link, an autolink or an image to anything but an `http`, `https` or
+//!   `mailto` URL or a fragment (`[x](crate::y)`, `[x](../y.html)`,
+//!   `<crate::y>`, `![x](crate::y)`), whatever its text;
+//! - a reference-style link no definition resolves (`[x][y]`);
+//! - a shortcut or collapsed link no definition resolves whose label reads as
+//!   an item path, which rustdoc 1.90 treats as an intra-doc link and warns
+//!   about when it does not resolve (`` [`X`] ``, `[X]`, `[optional]`,
+//!   `[a::B]`, `[fn@f]`, `[f()]`, `[X#method.id]`, `[X][]`);
+//! - a reference definition to anything but such a URL (`[x]: crate::y`).
+//!
+//! Code spans, code blocks and escaped brackets hold no link, so it passes
+//! them, and it passes prose brackets that name no item (`[0, 1]`, `[a b]`).
+//! velesdb-memory's `one_pass_is_final` checks that it flags every text of a
+//! pseudo-random mix that memory's rewrite rewrites.
 
 use pulldown_cmark::{BrokenLink, CowStr, Event, LinkType, Options, Parser, Tag};
 use serde_json::Value;
@@ -38,6 +38,7 @@ const GUARD_MARKDOWN: Options = Options::ENABLE_TABLES
 const PUBLISHABLE_TARGETS: [&str; 4] = ["http://", "https://", "mailto:", "#"];
 
 /// The rustdoc links `text` holds, each as its source.
+#[must_use]
 pub fn rustdoc_links(text: &str) -> Vec<String> {
     let parser =
         Parser::new_with_broken_link_callback(text, GUARD_MARKDOWN, Some(accept_every_reference))
@@ -89,16 +90,20 @@ fn is_rustdoc_link(link_type: LinkType, destination: &str) -> bool {
 }
 
 /// Whether an unresolved shortcut or collapsed label reads as an item path,
-/// which rustdoc 1.90 treats as an intra-doc link: one code span, or, before
-/// any `#` fragment, a word of letters, digits and path marks (`::`, `@`,
-/// `()`, `!`, `<…>`, `&`, `*`) holding a letter or an underscore. A label
-/// with a space outside `<…>` (`[0, 1]`), a digit alone (`[0]`) or other
-/// punctuation (`[YYYY-MM-DD]`) is prose.
+/// which rustdoc 1.90 treats as an intra-doc link: one code span, or, its
+/// backticks dropped and before any `#` fragment, a word of letters, digits
+/// and path marks (`::`, `@`, `()`, `!`, `<…>`, `&`, `*`) holding a letter or
+/// an underscore, or the bare `&` of the reference primitive. A label with a
+/// space outside `<…>` (`[0, 1]`), a digit alone (`[0]`) or other punctuation
+/// (`[YYYY-MM-DD]`) is prose.
 fn names_an_item(label: &str) -> bool {
     let label = label.trim();
     if is_one_code_span(label) {
         return true;
     }
+    // rustdoc drops every backtick before it reads the path (`[f`()`]`).
+    let label = label.replace('`', "");
+    let label = label.trim();
     // rustdoc resolves the item before a `#` fragment (`[X#method.id]`).
     let label = label.split_once('#').map_or(label, |(item, _)| item);
     let mut depth = 0_usize;
@@ -120,12 +125,13 @@ fn names_an_item(label: &str) -> bool {
             false
         })
         .collect();
-    outside_generics
+    let path_like = outside_generics
         .chars()
         .any(|c| c.is_alphabetic() || c == '_')
         && outside_generics
             .chars()
-            .all(|c| c.is_alphanumeric() || "_:@!(){}&*;".contains(c))
+            .all(|c| c.is_alphanumeric() || "_:@!(){}&*;".contains(c));
+    path_like || outside_generics == "&"
 }
 
 /// Whether `label` is code and nothing else (`` `X` ``, ``` ``a`b`` ```), not
@@ -138,40 +144,48 @@ fn is_one_code_span(label: &str) -> bool {
         && !label[fence..label.len() - fence].contains(&label[..fence])
 }
 
+/// Whether `destination` is a URL or a fragment. A `mailto:` followed by a
+/// second `:` is a path rustdoc resolves (`mailto::X`), not an address.
 fn is_publishable(destination: &str) -> bool {
     PUBLISHABLE_TARGETS
         .iter()
         .any(|prefix| destination.starts_with(prefix))
+        && !destination.starts_with("mailto::")
 }
 
-/// The JSON pointer of every `description` string under `value`, at any
-/// depth, that holds a rustdoc link.
-pub fn descriptions_with_rustdoc_links(value: &Value) -> Vec<String> {
+/// The JSON pointer (RFC 6901) of every string under `value`, at any depth,
+/// held by one of `keys` and holding a rustdoc link.
+#[must_use]
+pub fn strings_with_rustdoc_links(value: &Value, keys: &[&str]) -> Vec<String> {
     let mut found = Vec::new();
-    collect(value, "", &mut found);
+    collect(value, keys, "", &mut found);
     found
 }
 
-fn collect(value: &Value, path: &str, found: &mut Vec<String>) {
+fn collect(value: &Value, keys: &[&str], pointer: &str, found: &mut Vec<String>) {
     match value {
         Value::Object(map) => {
             for (key, child) in map {
-                let here = format!("{path}/{key}");
+                let here = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
                 match child {
-                    Value::String(text) if key == "description" => {
+                    Value::String(text) if keys.contains(&key.as_str()) => {
                         if !rustdoc_links(text).is_empty() {
                             found.push(here);
                         }
                     }
-                    _ => collect(child, &here, found),
+                    _ => collect(child, keys, &here, found),
                 }
             }
         }
         Value::Array(items) => {
             for (index, item) in items.iter().enumerate() {
-                collect(item, &format!("{path}/{index}"), found);
+                collect(item, keys, &format!("{pointer}/{index}"), found);
             }
         }
         _ => {}
     }
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod lib_tests;
