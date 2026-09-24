@@ -78,8 +78,9 @@ pub fn apply_session_settings(
 /// the one setting it holds: its `ef_search` when set (`\set mode` resets
 /// it), else its `mode` when set. No query the REPL rewrites carries both, so
 /// none depends on which of the two wins. A session that set neither adds
-/// nothing, so the configured default (`[search]` in `velesdb.toml`) applies,
-/// as the configuration priority order says (#2303).
+/// nothing, so the configured default applies (the `[search]` of the
+/// `--config`/`VELESDB_CONFIG` file; `./velesdb.toml` is not read without
+/// it, #2400), as the configuration priority order says (#2303).
 fn inject_session_with_options(
     select: &mut velesdb_core::velesql::SelectStatement,
     session: &SessionSettings,

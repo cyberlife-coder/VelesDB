@@ -42,10 +42,13 @@ fn bench_runs_at_the_session_ef_search_over_its_mode() {
     );
 }
 
-/// An untouched session benches at the default the database was opened
-/// with, and prints it as such; a session that set a quality benches at it.
+/// An untouched session prints the default the database was opened with
+/// and takes the `col.search` arm, which applies it; a session that set a
+/// quality prints it and takes the `search_with_quality` arm. The search arm
+/// itself is left unpinned on purpose: it is the call an untouched query
+/// makes, and no test-sized collection tells it from a `balanced` search.
 #[test]
-fn bench_at_an_untouched_session_runs_at_the_configured_default() {
+fn bench_at_an_untouched_session_prints_the_configured_default() {
     let dir = TempDir::new().expect("test: temp dir");
     let db = seed_docs_configured(&dir, "[search]\ndefault_mode = \"fast\"\n", 3);
     let untouched = SessionSettings::new();

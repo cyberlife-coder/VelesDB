@@ -188,8 +188,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
-- **The CLI REPL leaves `velesdb.toml`'s `[search]` in force until a
-  `\set`, and `.bench` runs at the quality it prints (#2303).** A session that
+- **The CLI REPL leaves the `[search]` of its `--config`/`VELESDB_CONFIG`
+  file in force until a `\set` (`./velesdb.toml` is not read without it,
+  #2400), and `.bench` runs at the quality it prints (#2303).** A session that
   never ran `\set` injected `mode = 'balanced'` into every query, so the
   configured `[search]` default never applied in the REPL, against the
   priority order `docs/guides/CONFIGURATION.md` states. An untouched session
