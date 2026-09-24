@@ -277,9 +277,8 @@ fn test_session_ef_search_reaches_the_search() {
 /// A session that never ran `\set` adds nothing to a query, not even an empty
 /// `WITH`, so the search runs at the database's configured default (the
 /// `[search]` of the `--config` file, #2400), as the configuration priority
-/// order says; before
-/// #2303 it injected `mode = 'balanced'` over it. `\show` printing that
-/// default is `repl_config_cmds_tests`'s.
+/// order says; before #2303 it injected `mode = 'balanced'` over it. `\show`
+/// printing that default is `repl_config_cmds_tests`'s.
 #[test]
 fn test_an_untouched_session_leaves_the_configured_quality_in_force() {
     let mut parsed = velesdb_core::velesql::Parser::parse(NEAR).expect("parse");
