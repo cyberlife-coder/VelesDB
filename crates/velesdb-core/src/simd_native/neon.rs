@@ -1019,3 +1019,7 @@ unsafe fn jaccard_neon_4acc(a: &[f32], b: &[f32]) -> f32 {
         inter / union_sum
     }
 }
+
+#[cfg(test)]
+#[path = "neon_bounds_tests.rs"]
+mod neon_bounds_tests;

@@ -116,8 +116,15 @@ so there is no `#[target_feature]` and no runtime detection):
    caller: every public entry point (`*_native`, `DistanceEngine::dispatch`) runs
    `assert_eq!(a.len(), b.len())`, in release too, and each `unsafe` call site
    names that assert in its `SAFETY` comment
-3. Loop bounds `chunks = len / 4` ensure pointer arithmetic stays in bounds
-4. Unrolled remainder handles `len % 4` elements via scalar indexing
+3. The single-accumulator loops take `len / 4` chunks and handle the `len % 4`
+   left by scalar indexing
+4. The 16-wide kernels (`dot_product_neon_4acc`, `squared_l2_neon_4acc`,
+   `cosine_fused_neon_4acc`) run `len / 16 * 16` elements in the main body and
+   the 0–15 left through raw pointers. Both bounds come from `bounds_16wide`,
+   derived from `a`'s own `as_ptr_range()`, never from a subslice such as
+   `a[..main]`: that pointer may not be read past its own end (Stacked
+   Borrows), and the tail reads exactly there. `neon_bounds_tests` pins it
+   under Miri
 
 **Why It's Sound**:
 ```rust
