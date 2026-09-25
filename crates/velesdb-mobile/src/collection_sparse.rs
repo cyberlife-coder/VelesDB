@@ -137,7 +137,7 @@ impl VelesCollection {
     /// Performs multi-query search returning IDs and scores only.
     ///
     /// Id-only twin of [`Self::multi_query_search`]: reuses the same fusion
-    /// path but strips payloads, avoiding payload materialization.
+    /// path but never has core build the payloads, which neither returns.
     pub fn multi_query_search_ids(
         &self,
         vectors: Vec<Vec<f32>>,

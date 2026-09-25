@@ -991,7 +991,7 @@ fn test_multi_query_search_ids_matches_core() {
         .multi_query_search(vectors, 5, FusionStrategy::Rrf { k: 60 })
         .unwrap();
 
-    // id-only twin returns the same IDs/scores as the payload-carrying path.
+    // id-only twin returns the same IDs/scores as the full fusion path.
     // Compare as sorted sets: equal scores may tie-break in either order.
     let mut id_pairs: Vec<(u64, u32)> = id_results
         .iter()
@@ -1005,8 +1005,9 @@ fn test_multi_query_search_ids_matches_core() {
     full_pairs.sort_unstable();
     assert_eq!(id_pairs, full_pairs);
 
-    // Payloads are stripped from the id-only variant.
+    // Neither variant returns a payload.
     assert!(id_results.iter().all(|r| r.payload.is_none()));
+    assert!(full_results.iter().all(|r| r.payload.is_none()));
 }
 
 #[test]
