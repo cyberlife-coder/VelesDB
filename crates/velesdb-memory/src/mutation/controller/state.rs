@@ -6,6 +6,9 @@ use super::{
     assess, phase_for, validate_sample, ControllerConfig, ControllerPhase, ConvergenceSample,
     RECOVER_CUTOVER, RESUME_CATCH_UP,
 };
+use crate::mutation::atomic_file::{
+    path_exists, promote, sync_directory, validate_regular_file, validate_workspace,
+};
 use crate::MemoryError;
 
 const STATE_VERSION: u32 = 1;
@@ -38,7 +41,7 @@ impl StateStore {
         epoch_id: &str,
         config: ControllerConfig,
     ) -> Result<(Self, ControllerState, bool), MemoryError> {
-        validate_workspace(workspace)?;
+        validate_workspace(workspace, "controller")?;
         validate_epoch_id(epoch_id)?;
         let store = Self {
             workspace: workspace.to_owned(),
@@ -98,14 +101,14 @@ impl StateStore {
         if !path_exists(&staging)? {
             return Ok(());
         }
-        validate_regular_file(&staging)?;
+        validate_regular_file(&staging, "controller")?;
         std::fs::remove_file(&staging)
             .map_err(|err| capture(format!("cannot remove controller staging file: {err}")))
     }
 }
 
 fn read_state_bytes(path: &Path) -> Result<Vec<u8>, MemoryError> {
-    validate_regular_file(path)?;
+    validate_regular_file(path, "controller")?;
     let mut file =
         File::open(path).map_err(|err| capture(format!("cannot open controller state: {err}")))?;
     let length = file
@@ -265,63 +268,6 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), MemoryError> {
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all())
         .map_err(|err| capture(format!("cannot sync controller state: {err}")))
-}
-
-fn validate_workspace(workspace: &Path) -> Result<(), MemoryError> {
-    let metadata = std::fs::symlink_metadata(workspace)
-        .map_err(|err| capture(format!("cannot inspect controller workspace: {err}")))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(capture("controller workspace must be a real directory"));
-    }
-    Ok(())
-}
-
-fn validate_regular_file(path: &Path) -> Result<(), MemoryError> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| capture(format!("cannot inspect controller file: {err}")))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(capture("controller path must be a regular file"));
-    }
-    Ok(())
-}
-
-fn path_exists(path: &Path) -> Result<bool, MemoryError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(capture(format!(
-            "cannot inspect {}: {error}",
-            path.display()
-        ))),
-    }
-}
-
-#[cfg(unix)]
-fn promote(staging: &Path, final_path: &Path) -> std::io::Result<()> {
-    std::fs::rename(staging, final_path)
-}
-
-#[cfg(windows)]
-fn promote(staging: &Path, final_path: &Path) -> std::io::Result<()> {
-    atomicwrites::replace_atomic(staging, final_path)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn promote(_staging: &Path, _final_path: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "controller state replacement unsupported",
-    ))
-}
-
-#[cfg(unix)]
-fn sync_directory(workspace: &Path) -> std::io::Result<()> {
-    File::open(workspace)?.sync_all()
-}
-
-#[cfg(any(windows, not(any(unix, windows))))]
-fn sync_directory(_workspace: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 fn validate_epoch_id(epoch_id: &str) -> Result<(), MemoryError> {
