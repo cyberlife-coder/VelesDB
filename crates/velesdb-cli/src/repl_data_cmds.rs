@@ -4,11 +4,12 @@
 
 use colored::Colorize;
 use instant::Instant;
-use velesdb_core::Database;
+use velesdb_core::{Database, SearchQuality};
 
 use crate::collection_helpers;
 use crate::helpers;
 use crate::repl_commands::CommandResult;
+use crate::session::{format_quality, SessionSettings};
 
 pub(crate) fn cmd_bench(
     db: &Database,
@@ -36,12 +37,8 @@ pub(crate) fn cmd_bench(
                 cfg.point_count,
                 cfg.dimension
             );
-            println!(
-                "  {} queries, k={}, mode={:?}",
-                n_queries,
-                k,
-                config.session.mode()
-            );
+            let (quality, shown) = bench_quality(db, &config.session);
+            println!("  {n_queries} queries, k={k}, mode={shown}");
 
             // Generate random query vectors
             let start = Instant::now();
@@ -53,8 +50,20 @@ pub(crate) fn cmd_bench(
                     .map(|j| ((i * 31 + j * 17) % 1000) as f32 / 1000.0)
                     .collect();
 
-                if let Ok(results) = col.search(&query, k) {
-                    total_results += results.len();
+                // A failed query ends the bench: a throughput over queries
+                // that did not run would be a number about nothing.
+                let searched = match quality {
+                    Some(quality) => col.search_with_quality(&query, k, quality),
+                    None => col.search(&query, k),
+                };
+                match searched {
+                    Ok(results) => total_results += results.len(),
+                    Err(e) => {
+                        return CommandResult::Error(format!(
+                            "query {} of {n_queries} failed: {e}",
+                            i + 1
+                        ));
+                    }
                 }
             }
 
@@ -73,6 +82,26 @@ pub(crate) fn cmd_bench(
         }
     }
     CommandResult::Continue
+}
+
+/// The quality `.bench` searches at, and the name it prints for it (#2303).
+/// A session that set one (`ef_search` over `mode`) gives it, searched with
+/// `search_with_quality`. An untouched session gives `None`, searched with
+/// `col.search` as a query from that session is, which applies the default
+/// `db` was opened with, printed as `(configured default)`.
+pub(crate) fn bench_quality(
+    db: &Database,
+    session: &SessionSettings,
+) -> (Option<SearchQuality>, String) {
+    let quality = session.search_quality();
+    let shown = quality.map_or_else(
+        || {
+            let configured = db.config().search.resolved_quality();
+            format!("{} (configured default)", format_quality(configured))
+        },
+        format_quality,
+    );
+    (quality, shown)
 }
 
 pub(crate) fn cmd_export(db: &Database, parts: &[&str]) -> CommandResult {
@@ -244,3 +273,7 @@ pub(crate) fn cmd_upsert(db: &Database, parts: &[&str]) -> CommandResult {
     }
     CommandResult::Continue
 }
+
+#[cfg(test)]
+#[path = "repl_data_cmds_tests.rs"]
+mod repl_data_cmds_tests;

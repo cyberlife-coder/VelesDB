@@ -45,6 +45,14 @@ async function initBackend(): Promise<RestBackend> {
   return backend;
 }
 
+/** The point count and dimension a raw-bulk body declares (little-endian, bytes 4 and 8). */
+function rawBulkHeader(body: unknown): { count: number; dim: number } {
+  expect(body).toBeInstanceOf(Uint8Array);
+  const bytes = body as Uint8Array;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { count: view.getUint32(4, true), dim: view.getUint32(8, true) };
+}
+
 function mockOk(body: unknown) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
@@ -120,6 +128,27 @@ describe('RestBackend — CRUD facade delegation', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  it('upsertBatchRaw posts a binary body to the raw route', async () => {
+    // Three points of dimension 2: a count equal to the dimension could not
+    // tell one header field from the other.
+    mockOk({ count: 3 });
+    const count = await backend.upsertBatchRaw('docs', [
+      { id: 1, vector: [0.1, 0.2] },
+      { id: 2, vector: [0.3, 0.4] },
+      { id: 3, vector: [0.5, 0.6] },
+    ]);
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/points/raw');
+    expect(rawBulkHeader(opts?.body)).toEqual({ count: 3, dim: 2 });
+    expect(count).toBe(3);
+  });
+
+  it('upsertBatchRaw sizes an empty batch at dimension 0', async () => {
+    mockOk({ count: 0 });
+    await expect(backend.upsertBatchRaw('docs', [])).resolves.toBe(0);
+    expect(rawBulkHeader(mockFetch.mock.calls[0]![1]?.body)).toEqual({ count: 0, dim: 0 });
+  });
+
   it('scroll delegates to scroll-backend', async () => {
     mockOk({ points: [], next_cursor: null });
     await backend.scroll('docs');
@@ -159,6 +188,37 @@ describe('RestBackend — search facade delegation', () => {
     mockOk({ results: [{ id: 1, score: 0.9 }] });
     const result = await backend.searchIds('docs', [0.1]);
     expect(result).toEqual([{ id: 1, score: 0.9 }]);
+  });
+
+  it('multiQuerySearchIds posts to the ids-only fusion route', async () => {
+    mockOk({ results: [{ id: 3, score: 0.7 }] });
+    // Non-default options, so the body proves the facade forwards them.
+    const result = await backend.multiQuerySearchIds('docs', [[0.1], [0.2]], {
+      k: 3,
+      fusion: 'relative_score',
+    });
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/search/multi/ids');
+    expect(opts?.method).toBe('POST');
+    expect(JSON.parse(opts!.body as string)).toMatchObject({
+      vectors: [[0.1], [0.2]],
+      top_k: 3,
+      strategy: 'relative_score',
+    });
+    expect(result).toEqual([{ id: 3, score: 0.7 }]);
+  });
+
+  it('sparseSearchNamed posts the named sparse index', async () => {
+    mockOk({ results: [{ id: 4, score: 0.6 }] });
+    const result = await backend.sparseSearchNamed('docs', { 1: 0.5 }, 'title', { k: 3 });
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/search');
+    expect(JSON.parse(opts!.body as string)).toMatchObject({
+      sparse_vectors: { title: { '1': 0.5 } },
+      sparse_index: 'title',
+      top_k: 3,
+    });
+    expect(result).toEqual([{ id: 4, score: 0.6 }]);
   });
 });
 
@@ -383,6 +443,14 @@ describe('RestBackend — streaming facade delegation', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     backend = await initBackend();
+  });
+
+  it('enableStreaming posts the snake_case config', async () => {
+    mockOk({});
+    await backend.enableStreaming('docs', { bufferSize: 64 });
+    const [url, opts] = mockFetch.mock.calls[0]!;
+    expect(String(url)).toContain('/collections/docs/stream/enable');
+    expect(JSON.parse(opts!.body as string)).toEqual({ buffer_size: 64 });
   });
 
   it('trainPq delegates', async () => {

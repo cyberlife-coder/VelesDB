@@ -54,8 +54,8 @@ pub fn execute_query(
 
 /// Applies REPL session settings to a parsed query before execution.
 ///
-/// The session's search quality (its `ef_search` when set, else its `mode`)
-/// goes into the SELECT `WITH` options of a query that names none of its own
+/// The session's search quality (its `ef_search` when set, else its `mode`
+/// when set) goes into the SELECT `WITH` options of a query that names none of its own
 /// (an inline `mode`, `quality` or `ef_search` always wins), and
 /// `max_results` caps the effective `LIMIT`. Match/aggregate queries are not
 /// touched (those clauses only steer the vector-search pipeline).
@@ -76,29 +76,40 @@ pub fn apply_session_settings(
 /// next to it, and one the validator refuses still fails the query instead
 /// of running at the session's (#2267, #2274). Otherwise the session adds
 /// the one setting it holds: its `ef_search` when set (`\set mode` resets
-/// it), else its `mode`. No query the REPL rewrites carries both, so none
-/// depends on which of the two wins.
+/// it), else its `mode` when set. No query the REPL rewrites carries both, so
+/// none depends on which of the two wins. A session that set neither adds
+/// nothing, so the configured default applies (the `[search]` of the
+/// `--config`/`VELESDB_CONFIG` file; `./velesdb.toml` is not read without
+/// it, #2400), as the configuration priority order says (#2303).
 fn inject_session_with_options(
     select: &mut velesdb_core::velesql::SelectStatement,
     session: &SessionSettings,
 ) {
     use velesdb_core::velesql::{WithClause, WithOption, WithValue};
 
-    let with = select.with_clause.get_or_insert_with(WithClause::new);
-    if with.mode_value().is_some() || with.ef_search_value().is_some() {
+    let names_its_own = select
+        .with_clause
+        .as_ref()
+        .is_some_and(|with| with.mode_value().is_some() || with.ef_search_value().is_some());
+    if names_its_own {
         return;
     }
-    let (key, value) = match session.ef_search() {
-        Some(ef) => (
+    let (key, value) = match (session.ef_search(), session.mode_str()) {
+        (Some(ef), _) => (
             "ef_search",
             WithValue::Integer(i64::try_from(ef).unwrap_or(i64::MAX)),
         ),
-        None => ("mode", WithValue::String(session.mode_str())),
+        (None, Some(mode)) => ("mode", WithValue::String(mode)),
+        (None, None) => return,
     };
-    with.options.push(WithOption {
-        key: key.to_string(),
-        value,
-    });
+    select
+        .with_clause
+        .get_or_insert_with(WithClause::new)
+        .options
+        .push(WithOption {
+            key: key.to_string(),
+            value,
+        });
 }
 
 /// Caps the effective `LIMIT` at the session `max_results`: a missing `LIMIT`

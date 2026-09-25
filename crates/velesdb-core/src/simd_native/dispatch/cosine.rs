@@ -59,9 +59,11 @@ pub fn cosine_similarity_native(a: &[f32], b: &[f32]) -> f32 {
     // NEON cosine dispatch for aarch64 (EPIC-054 US-004).
     #[cfg(target_arch = "aarch64")]
     if a.len() >= 4 {
-        // `cosine_neon` is a safe pure-Rust NEON kernel; no CPU feature
-        // detection needed because NEON is always present on aarch64.
-        return crate::simd_native::cosine_neon(a, b);
+        // NEON is always present on aarch64: no CPU feature detection.
+        // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+        // - Condition 1: `cosine_similarity_native` asserted it, in release too, before dispatching here.
+        // Reason: NEON is always present on aarch64; this is its fast path.
+        return unsafe { crate::simd_native::cosine_neon(a, b) };
     }
     crate::simd_native::scalar::cosine_scalar(a, b)
 }
@@ -122,7 +124,13 @@ pub(super) fn resolve_cosine(level: SimdLevel, dim: usize) -> fn(&[f32], &[f32])
             }
         }
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if dim >= 4 => |a, b| crate::simd_native::cosine_neon(a, b),
+        SimdLevel::Neon if dim >= 4 => |a, b| {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `DistanceEngine::dispatch` asserts it, in release too,
+            //   before calling a resolved kernel.
+            // Reason: the resolver emitted the NEON kernel for this dimension.
+            unsafe { crate::simd_native::cosine_neon(a, b) }
+        },
         _ => crate::simd_native::scalar::cosine_scalar,
     }
 }

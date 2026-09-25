@@ -7018,6 +7018,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "velesdb-core",
+ "velesdb-rustdoc-guard",
 ]
 
 [[package]]
@@ -7087,6 +7088,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "velesdb-rustdoc-guard"
+version = "6.0.0"
+dependencies = [
+ "pulldown-cmark",
+ "serde_json",
+]
+
+[[package]]
 name = "velesdb-server"
 version = "6.0.0"
 dependencies = [
@@ -7116,6 +7125,7 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "velesdb-core",
+ "velesdb-rustdoc-guard",
 ]
 
 [[package]]

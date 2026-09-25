@@ -122,7 +122,7 @@ fn fuse_relative_score(all_results: &[Vec<(u64, f32)>]) -> Vec<(u64, f32)> {
             (*id, avg)
         })
         .collect();
-    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    velesdb_core::fusion::sort_fused_results(&mut fused);
     fused
 }
 

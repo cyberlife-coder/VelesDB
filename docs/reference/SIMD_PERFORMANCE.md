@@ -159,10 +159,6 @@ inference).
 - wasm is pure scalar (`simd128` not used); all wasm distance math delegates
   to core's `DistanceMetric::calculate`, so a core `simd128` path would light
   the browser up without touching `velesdb-wasm`.
-- `simd_neon.rs` is a legacy, unused duplicate of the live NEON kernels in
-  `simd_native/neon.rs` (removal candidate).
-- `velesdb simd info` prints a static summary rather than the detected
-  runtime level.
 
 ## Performance Benchmarks (March 2026)
 
@@ -301,9 +297,8 @@ punishes.
 | **Sporadic single queries** | AVX2 may be faster |
 | **Mixed workloads** | The static tiers already encode this trade-off |
 
-`velesdb simd info` prints a static summary of the dispatch design; it does
-not currently report the level detected on the running machine (see the
-Dispatch Registry's known gaps).
+`velesdb simd info` prints the level the dispatcher detected on the running
+machine (`simd_native::simd_level()`), e.g. `Detected level: NEON (aarch64)`.
 
 ## Best Practices
 

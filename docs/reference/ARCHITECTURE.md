@@ -58,7 +58,7 @@ VelesDB core architecture is explicitly **hybrid by design**:
 │  │  Cosine  │  Euclidean  │  Dot Product  │  Hamming  │  Jaccard   │   │
 │  │                                                                  │   │
 │  │  AVX2/AVX-512 │ ARM64 NEON │ Scalar fallback (incl. WASM —    │   │
-│  │               │ (simd_neon)│ SIMD128 planned)                 │   │
+│  │               │ simd_native│ SIMD128 planned)                 │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                          │
 └────────────────────────────────────┬────────────────────────────────────┘

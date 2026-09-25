@@ -88,6 +88,10 @@ swagger-ui = ["dep:utoipa-swagger-ui"]
 test-fault-injection = ["velesdb-core/test-fault-injection"]
 
 [dev-dependencies]
+# The guard on rustdoc link syntax in published descriptions (#2330). Path
+# only, no `version`: the crate is never published, and cargo strips this
+# entry when this crate publishes.
+velesdb-rustdoc-guard = { path = "../velesdb-rustdoc-guard" }
 # Use native-tls to avoid ring compilation issues on aarch64-apple-darwin
 reqwest = { version = "0.13.2", default-features = false, features = [
     "json",

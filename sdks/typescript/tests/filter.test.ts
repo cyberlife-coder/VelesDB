@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { Filter, Condition, CompareOp, JsonValue } from '../src/filter';
+import type { Filter, CompareOp, JsonValue } from '../src/filter';
 import { f, isTypedFilter, normalizeFilter } from '../src/filter';
 
 // ============================================================================

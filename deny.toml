@@ -150,6 +150,11 @@ expression = "LicenseRef-ELv2"
 license-files = []
 
 [[licenses.clarify]]
+name = "velesdb-rustdoc-guard"
+expression = "LicenseRef-ELv2"
+license-files = []
+
+[[licenses.clarify]]
 name = "velesdb-node"
 expression = "LicenseRef-ELv2"
 license-files = []

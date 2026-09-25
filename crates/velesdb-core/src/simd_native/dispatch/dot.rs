@@ -55,7 +55,12 @@ pub fn dot_product_native(a: &[f32], b: &[f32]) -> f32 {
             unsafe { crate::simd_native::dot_product_avx2_1acc(a, b) }
         }
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if a.len() >= 4 => crate::simd_native::dot_product_neon(a, b),
+        SimdLevel::Neon if a.len() >= 4 => {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `dot_product_native` asserted it, in release too, before dispatching here.
+            // Reason: NEON is always present on aarch64; this is its fast path.
+            unsafe { crate::simd_native::dot_product_neon(a, b) }
+        }
         _ => super::dot_product_scalar(a, b),
     }
 }
@@ -140,7 +145,13 @@ pub(super) fn resolve_dot_product(level: SimdLevel, dim: usize) -> fn(&[f32], &[
             }
         }
         #[cfg(target_arch = "aarch64")]
-        SimdLevel::Neon if dim >= 4 => |a, b| crate::simd_native::dot_product_neon(a, b),
+        SimdLevel::Neon if dim >= 4 => |a, b| {
+            // SAFETY: the NEON kernel's `# Safety` precondition is `a.len() == b.len()`.
+            // - Condition 1: `DistanceEngine::dispatch` asserts it, in release too,
+            //   before calling a resolved kernel.
+            // Reason: the resolver emitted the NEON kernel for this dimension.
+            unsafe { crate::simd_native::dot_product_neon(a, b) }
+        },
         _ => super::dot_product_scalar,
     }
 }

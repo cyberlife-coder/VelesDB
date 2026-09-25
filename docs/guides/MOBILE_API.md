@@ -408,8 +408,8 @@ from the FFI boundary without string matching.
 3. Run every call off the main thread (see [Threading](#threading)).
 4. Reuse the embedding buffers you hand to the binding; each call copies the vector
    across the FFI boundary.
-5. ARM64 builds use core's NEON paths (`velesdb_core::simd_neon`,
-   `simd_neon_prefetch`) for distance computation and prefetching.
+5. ARM64 builds use core's NEON distance kernels (`velesdb_core::simd_native`,
+   dispatched at runtime) and its NEON prefetching (`simd_neon_prefetch`).
 
 ## Memory footprint
 

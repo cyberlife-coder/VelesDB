@@ -522,7 +522,8 @@ SELECT * FROM docs WHERE vector NEAR $v WITH (ef_search = 512);
 Within one query, an explicit `ef_search` wins over `mode` (or its alias
 `quality`) on every surface: VelesQL's `WITH`, a REST search body, and the
 REPL, which adds its session setting only to a query that names neither —
-its `\set ef_search` when set, else its `\set mode` (#2274).
+its `\set ef_search` when set, else its `\set mode` (#2274). A session that
+set neither adds nothing, so `[search]` applies to it (#2303).
 
 > Any `WITH (ef_search = N)` value is passed through as the requested budget —
 > `N` is sent to HNSW (clamped to at least `k`, and still subject to the

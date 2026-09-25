@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > and an `ef_search` outside `[16, 4096]` — given as the option or as a
 > `custom:`/`adaptive:` mode — now fail instead of running at the default
 > quality or an uncapped traversal, and a collection's own `execute_aggregate` refuses a
-> query the validator rejects. The declared SemVer policy (`docs/FAQ.md`)
+> query the validator rejects. It also removes a public module, the aarch64-only
+> `velesdb_core::simd_neon` (#1965, under `### Removed`). The declared SemVer policy (`docs/FAQ.md`)
 > makes a breaking change a major bump: tag the next release accordingly.
 
 ### Security
@@ -27,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
 
 ### Added
+- **`velesdb_core::fusion::sort_fused_results` (#2297).** Orders fused
+  `(id, score)` pairs by score descending, then id ascending, the order
+  every fusion path returns; for a caller that fuses on its own, as
+  `velesdb-wasm` does.
 - **`impl Display for WithValue` (#2274).** A `WITH` option value renders
   in canonical VelesQL form, which the parser reads back as the same value:
   a string single-quoted with each quote doubled, a float in decimal with a
@@ -149,6 +154,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Removed
+- **BREAKING (Rust API, aarch64 only) — `velesdb_core::simd_neon` (#1965).**
+  A public module nothing called: a standalone duplicate of the NEON kernels
+  `simd_native` dispatches to at runtime. Two guides said mobile computed its
+  distances through it; it computes them through `simd_native`, as every
+  aarch64 build does. A direct caller moves to the safe, runtime-dispatched
+  functions of `velesdb_core::simd_native`:
+
+  | Removed (`simd_neon::`) | Replacement (`simd_native::`) |
+  |---|---|
+  | `dot_product_neon_safe`, `unsafe dot_product_neon` | `dot_product_native` |
+  | `euclidean_neon_safe`, `unsafe euclidean_neon` | `euclidean_native` |
+  | `unsafe euclidean_squared_neon` | `squared_l2_native` |
+  | `cosine_neon_safe`, `unsafe cosine_neon` | `cosine_similarity_native` |
+  | `cosine_normalized_neon_safe`, `unsafe cosine_normalized_neon` | `cosine_normalized_native` |
+
+  `cargo
+  semver-checks` runs on x86_64 and cannot see an aarch64-only module, hence
+  this entry. `simd_neon_prefetch` stays: `simd_native`'s prefetch uses it.
 - **The `mutants` job in `core-review.yml` (#2339).** It ran on every pull
   request touching `velesdb-core` and never once returned a verdict on a real
   diff: both runs that met one were cut at the 45-minute action limit — the
@@ -165,6 +188,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+- **The CLI REPL leaves the `[search]` of its `--config`/`VELESDB_CONFIG`
+  file in force until a `\set` (`./velesdb.toml` is not read without it,
+  #2400), and `.bench` runs at the quality it prints (#2303).** A session that
+  never ran `\set` injected `mode = 'balanced'` into every query, so the
+  configured `[search]` default never applied in the REPL, against the
+  priority order `docs/guides/CONFIGURATION.md` states. An untouched session
+  now adds nothing, and `\show` prints the configured default, marked
+  `(configured default)`. `\reset mode` goes back to it rather than to
+  `balanced`. `.bench` printed the session mode but searched with neither the
+  mode nor `ef_search`, and dropped every failed query in silence, so a bench
+  whose queries were all refused still reported a throughput. It now searches
+  at the quality a query in the same session gets (the session's `ef_search`
+  when set, else its `mode` when set, else the configured default), prints
+  that quality, and returns the first query error.
+- **`velesdb simd info` names the SIMD level it detects (#1965).** It
+  printed a fixed summary of the design, whose thresholds the code no longer
+  applies (AVX2 switching at 1024 dimensions where the dispatcher switches at
+  256, AVX-512 with 4/2/1 accumulators where it runs an 8-accumulator kernel
+  from 1024 dimensions), and nothing
+  about the machine. It now prints `simd_native::simd_level()`, named by
+  `SimdLevel`'s new `Display`, e.g. `Detected level: NEON (aarch64)`.
+- **The NEON distance kernels are `unsafe fn` (#1965).** They were safe
+  `pub(crate)` functions that read `b` at every index of `a` with no length
+  check, so a crate-internal call with a shorter `b` read past its end with no
+  `unsafe` in sight. The public entry points already asserted equal lengths,
+  in release too, so no public call was affected; the precondition is now each
+  kernel's `# Safety` contract, as the x86 dot-product kernels document it,
+  and every call site names the assert or precondition it relies on.
+- **Equal fused scores come back in one order, ascending id, on every
+  surface (#2297).** Every fusion strategy gathers its scores in a hash map,
+  whose iteration order changes from one map to the next, then sorted by
+  score alone: two identical multi-query searches returned tied documents
+  in different orders, in core and through the WASM binding and the TS
+  SDK on top of it. `fusion::sort_fused_results` now orders fused results
+  by score descending, then id ascending, and every fusion path uses it:
+  core's six strategies, hybrid dense + text search (whose top-k heap also
+  keeps, when `k` cuts through a tie, the ids that order puts first, not
+  the highest ones), and `velesdb-wasm`'s own relative-score fusion.
+  `-0.0` and `0.0` tie too, which a mixed-direction fusion produces side by
+  side (a zero distance negated next to a zero similarity).
+- **TypeScript SDK CI: tests/ is linted, and the coverage thresholds bind
+  (#2364, #2383).** `lint` ran `eslint src`, and the eslint project excluded
+  tests/, so tests/ was never linted: 7 errors hid there, now fixed. The SDK
+  job ran `npm test`, which never evaluates the per-file thresholds in
+  `vitest.config.ts`, and four files had drifted below them. It now runs
+  `npm run test:coverage`, and tests close the gaps, among them the wasm
+  error translator's degraded paths. No threshold was lowered.
 - **An HNSW insert past the pre-allocated capacity no longer takes the
   layers' write lock for good, and a layer added late no longer drops
   neighbour writes (#2306).** `expand_layers`' slow path grew the layers to
@@ -970,6 +1040,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+- **velesdb-server checks its OpenAPI descriptions for rustdoc links with
+  pulldown-cmark, through the guard velesdb-memory already used (#2330).**
+  Its hand-written raw-text scan passed an autolink to a path
+  (`<crate::Point>`) and bare item paths (`[SegmentInfo]`, `[u64]`), which
+  rustdoc resolves or warns about, while failing code spans and web links
+  whose text holds code. The guard moves out of velesdb-memory's tests into
+  `velesdb-rustdoc-guard`, a test-only crate that is never published and that
+  both crates take as a dev-dependency. It reads each text twice, as rustdoc
+  does and as a client renders it, and reads a bare label in the order of
+  rustdoc 1.90's `preprocess_link`; against rustdoc on 22,621 generated
+  labels, it flags every one rustdoc links. It now also flags a label with
+  backticks inside (``[f`()`]``), the `[&]` and `[!]` primitives, generics
+  before one (`[!<u8>]`), a spaced call suffix (`[f ()]`, `[vec !]`), a kind
+  spaced from its `@` (`[struct @Foo]`, which rustdoc warns about), a
+  `mailto::X` path used as a link target, and the link a client renders
+  after a collapsed reference (`[a, b][](crate::Foo)`). It now passes the
+  labels rustdoc neither links nor warns about that the memory guard failed:
+  punctuation in a path (`[f(x)]`, `[a{}]`, `[Result<(), u8>]`), a code span
+  that holds no path (`` [`()`] ``), and a label holding a `/`, fragment
+  included (`[S0#a/b]`). velesdb-memory's schema rewrite, which removes such
+  links from the descriptions it publishes, reads every target the same way,
+  whether a label, an inline destination or a reference definition. It drops
+  every backtick first, as rustdoc does, and reads no path in a target that
+  holds a `/` anywhere or, generics included, a mark rustdoc never reads in
+  one. So it now leaves as written a label such as `[Result<(), u8>]` or
+  `[S0#a/b]`, as rustdoc shows it, and refuses a link whose destination or
+  definition is such a target (`[x](a#b/c)`, `[x](Foo<'a>)`, `[y]: a#b/c`),
+  which the guard flags; develop rewrote all of these. It now also removes a
+  link whose target holds backticks other than one enclosing code span
+  (``[f`()`]``, ``[``Foo``]``, ``[x](crate::`Foo`)``, ``[x](crate::Foo`)``),
+  which rustdoc links, and still removes one whose generics hold code
+  (`` [Vec<`u8`>] ``).
 - **The published crates declare dependency floors they can actually be built
   with (#1987).** `-Z direct-minimal-versions` found requirements below what
   the rest of the dependency graph, or the code itself, needs: `serde` "1.0"

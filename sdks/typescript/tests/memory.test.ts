@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryService } from '../src/memory';
 import type { CompileContextFragment, MemoryMetadata } from '../src/memory';
-import { ConnectionError, NotFoundError, ValidationError } from '../src/types';
+import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../src/types';
 
 // Captures the most recently constructed mock instance so a test can
 // override one of its methods for that specific instance. Overriding
@@ -137,6 +137,7 @@ class MockWasmMemoryService {
   free = vi.fn();
 
   constructor(public dimension: number) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- publishes the instance memory.ts builds, so each test can drive it
     lastMockInstance = this;
   }
 }
@@ -686,11 +687,66 @@ describe('MemoryService', () => {
 
     it('wraps a thrown non-Error value in VelesDBError', async () => {
       lastMockInstance!.forget.mockImplementationOnce(() => {
-        // eslint-disable-next-line @typescript-eslint/no-throw-literal
         throw 'a raw string throw';
       });
 
       await expect(memory.forget('1')).rejects.toThrow('a raw string throw');
+    });
+
+    /** Rejects with a `VelesDBError` coded `INTERNAL` and exactly `message`. */
+    async function expectInternal(thrown: unknown, message: string): Promise<void> {
+      lastMockInstance!.forget.mockImplementationOnce(() => {
+        throw thrown;
+      });
+      await expect(memory.forget('1')).rejects.toSatisfy((e: unknown) => {
+        expect(e).toBeInstanceOf(VelesDBError);
+        expect((e as VelesDBError).code).toBe('INTERNAL');
+        expect((e as Error).message).toBe(message);
+        return true;
+      });
+    }
+
+    it('keeps the message of a non-Error whose string coercion throws', async () => {
+      const thrown = {
+        message: 'kernel refused the batch',
+        toString(): string {
+          throw new Error('toString detonated');
+        },
+      };
+      await expectInternal(thrown, 'wasm error (translation failed): kernel refused the batch');
+    });
+
+    it('names a non-Error that neither coerces nor carries a message', async () => {
+      // No prototype: `String()` finds no `toString` and throws a TypeError.
+      await expectInternal(
+        Object.create(null),
+        'non-coercible value thrown across the wasm boundary'
+      );
+    });
+
+    it('degrades an uncoded Error whose message getter throws', async () => {
+      const thrown = new Error('never read');
+      Object.defineProperty(thrown, 'message', {
+        get(): string {
+          throw new Error('getter detonated');
+        },
+      });
+      await expectInternal(thrown, 'wasm error (message unavailable)');
+    });
+
+    it('coerces a non-string message rather than dropping it', async () => {
+      const err = new Error();
+      Object.defineProperty(err, 'message', { value: 404 });
+      (err as Error & { code: string }).code = 'NOT_FOUND';
+      lastMockInstance!.relate.mockImplementationOnce(() => {
+        throw err;
+      });
+
+      await expect(memory.relate('404', '1', 'x')).rejects.toSatisfy((e: unknown) => {
+        expect(e).toBeInstanceOf(NotFoundError);
+        expect((e as Error).message).toBe('404');
+        return true;
+      });
     });
   });
 });

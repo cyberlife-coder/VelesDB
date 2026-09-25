@@ -100,9 +100,9 @@ jobs:
       - name: Lint
         working-directory: sdks/typescript
         run: npm run lint
-      - name: Run full vitest suite
+      - name: Run full vitest suite under its coverage thresholds
         working-directory: sdks/typescript
-        run: npm test
+        run: npm run test:coverage
 
   integrations-python:
     name: Python Integrations Check

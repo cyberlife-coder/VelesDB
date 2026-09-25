@@ -5,41 +5,7 @@ use velesdb_core::{Database, DistanceMetric, Point};
 
 use crate::repl_execute::execute_query;
 use crate::session::SessionSettings;
-
-/// Opens a fresh database with a single `docs` collection seeded with `n`
-/// 2-D points, used by the projection/limit/param regression tests.
-fn seed_docs(dir: &TempDir, n: u64) -> Database {
-    seed(Database::open(dir.path()).expect("open db"), n)
-}
-
-/// As [`seed_docs`], in a database that refuses `perfect` over more than one
-/// vector: which quality a REPL search runs at becomes observable.
-fn seed_docs_refusing_perfect(dir: &TempDir, n: u64) -> Database {
-    let mut config = velesdb_core::VelesConfig::default();
-    config.limits.max_perfect_mode_vectors = 1;
-    seed(
-        Database::open_with_config(dir.path(), config).expect("open db"),
-        n,
-    )
-}
-
-/// Adds the `docs` collection of `n` 2-D points to `db`.
-fn seed(db: Database, n: u64) -> Database {
-    db.create_collection("docs", 2, DistanceMetric::Cosine)
-        .expect("create collection");
-    let coll = db.get_vector_collection("docs").expect("vector collection");
-    let points: Vec<Point> = (1..=n)
-        .map(|i| {
-            Point::new(
-                i,
-                vec![1.0, i as f32],
-                Some(serde_json::json!({"category": "x"})),
-            )
-        })
-        .collect();
-    coll.upsert(points).expect("upsert");
-    db
-}
+use crate::test_fixtures::{seed_docs, seed_docs_refusing_perfect};
 
 /// Regression (parity backlog #2): the REPL must route `GROUP BY` / aggregate
 /// queries through the aggregate engine, not return raw rows. Previously
@@ -283,8 +249,8 @@ fn quality_options_after(
 }
 
 /// `\set ef_search` reaches the search when the session also holds a mode.
-/// A session holding only its mode injects that mode alone (`balanced`
-/// untouched, as before #2274); once it also holds an `ef_search` it injects
+/// An untouched session injects nothing (#2303); a session holding only its
+/// mode injects that mode alone; once it also holds an `ef_search` it injects
 /// that alone, so a session at `perfect` then `ef_search = 512` runs where
 /// `perfect` alone is refused (#2274).
 #[test]
@@ -293,13 +259,7 @@ fn test_session_ef_search_reaches_the_search() {
     let dir = TempDir::new().expect("temp dir");
     let db = seed_docs_refusing_perfect(&dir, 3);
     let mut session = SessionSettings::new();
-    assert_eq!(
-        quality_options_after(NEAR, &session),
-        [(
-            "mode".to_string(),
-            WithValue::String("balanced".to_string())
-        )]
-    );
+    assert_eq!(quality_options_after(NEAR, &session), []);
     session.set("mode", "perfect").expect("set mode");
     let refused = execute_query(&db, NEAR, None, Some(&session)).expect_err("perfect is refused");
     assert!(
@@ -311,6 +271,22 @@ fn test_session_ef_search_reaches_the_search() {
     assert_eq!(
         quality_options_after(NEAR, &session),
         [("ef_search".to_string(), WithValue::Integer(512))]
+    );
+}
+
+/// A session that never ran `\set` adds nothing to a query, not even an empty
+/// `WITH`, so the search runs at the database's configured default (the
+/// `[search]` of the `--config` file, #2400), as the configuration priority
+/// order says; before #2303 it injected `mode = 'balanced'` over it. `\show`
+/// printing that default is `repl_config_cmds_tests`'s.
+#[test]
+fn test_an_untouched_session_leaves_the_configured_quality_in_force() {
+    let mut parsed = velesdb_core::velesql::Parser::parse(NEAR).expect("parse");
+    crate::repl_execute::apply_session_settings(&mut parsed, &SessionSettings::new());
+    assert!(
+        parsed.select.with_clause.is_none(),
+        "an untouched session injected {:?}",
+        parsed.select.with_clause
     );
 }
 

@@ -210,8 +210,8 @@ Cross-compilation targets, as declared in `crates/velesdb-mobile/Cargo.toml`.
 | `x86_64-linux-android` | Supported, build from source | x86_64 emulator; not CI-built |
 | `i686-linux-android` | Declared in `Cargo.toml` | x86 emulator; never exercised in this repository |
 
-ARM64 devices get core's NEON paths (`velesdb_core::simd_neon`,
-`simd_neon_prefetch`) for distance computation and prefetching.
+ARM64 devices get core's NEON distance kernels (`velesdb_core::simd_native`,
+dispatched at runtime) and its NEON prefetching (`simd_neon_prefetch`).
 
 ## Troubleshooting
 

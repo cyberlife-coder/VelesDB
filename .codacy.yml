@@ -171,7 +171,6 @@ exclude_paths:
   - "crates/velesdb-core/src/index/hnsw/index/vacuum.rs"
   - "crates/velesdb-core/src/index/hnsw/vector_store.rs"
   # SIMD NEON intrinsics (ARM equivalent of AVX2)
-  - "crates/velesdb-core/src/simd_neon.rs"
   - "crates/velesdb-core/src/simd_neon_prefetch.rs"
   # Allocation guard — RAII-guarded aligned alloc/dealloc
   - "crates/velesdb-core/src/alloc_guard.rs"

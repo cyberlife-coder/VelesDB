@@ -76,7 +76,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         ".graph" => repl_graph_cmds::cmd_graph(db, &parts),
         // Session commands (backslash style)
         "\\set" | ".set" => repl_config_cmds::cmd_set(config, &parts),
-        "\\show" | ".show" => repl_config_cmds::cmd_show(config, &parts),
+        "\\show" | ".show" => repl_config_cmds::cmd_show(db, config, &parts),
         "\\reset" | ".reset" => repl_config_cmds::cmd_reset(config, &parts),
         "\\use" | ".use" => repl_config_cmds::cmd_use(db, config, &parts),
         "\\info" | ".info" => repl_config_cmds::cmd_info(db, config),
