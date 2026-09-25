@@ -6,6 +6,7 @@ use parking_lot::RwLock;
 
 use crate::MemoryError;
 
+pub(crate) mod atomic_file;
 pub(crate) mod catchup;
 pub(crate) mod controller;
 pub(crate) mod journal;

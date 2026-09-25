@@ -2,6 +2,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::mutation::atomic_file::{
+    path_exists, promote, sync_directory, validate_regular_file, validate_workspace,
+};
 use crate::mutation::catchup::CatchUpConfig;
 use crate::mutation::controller::{ControllerConfig, ConvergenceObservation};
 use crate::mutation::journal::EpochIdentity;
@@ -145,7 +148,7 @@ pub(crate) struct JobStore {
 
 impl JobStore {
     pub(crate) fn create(workspace: &Path, record: &JobRecord) -> Result<Self, MemoryError> {
-        validate_workspace(workspace)?;
+        validate_workspace(workspace, "online migration")?;
         record.validate()?;
         let store = Self {
             workspace: workspace.to_owned(),
@@ -159,7 +162,7 @@ impl JobStore {
     }
 
     pub(crate) fn try_open(workspace: &Path) -> Result<Option<Self>, MemoryError> {
-        validate_workspace(workspace)?;
+        validate_workspace(workspace, "online migration")?;
         let store = Self {
             workspace: workspace.to_owned(),
             path: workspace.join(JOB_FILE),
@@ -174,7 +177,7 @@ impl JobStore {
     }
 
     pub(crate) fn open(workspace: &Path) -> Result<Self, MemoryError> {
-        validate_workspace(workspace)?;
+        validate_workspace(workspace, "online migration")?;
         let store = Self {
             workspace: workspace.to_owned(),
             path: workspace.join(JOB_FILE),
@@ -227,7 +230,7 @@ impl JobStore {
         if !path_exists(&staging)? {
             return Ok(());
         }
-        validate_regular_file(&staging)?;
+        validate_regular_file(&staging, "online migration job")?;
         std::fs::remove_file(&staging)
             .map_err(|err| capture(format!("cannot remove job staging file: {err}")))
     }
@@ -288,7 +291,7 @@ fn validate_terminal_state(record: &JobRecord) -> Result<(), MemoryError> {
 }
 
 fn read_limited(path: &Path) -> Result<Vec<u8>, MemoryError> {
-    validate_regular_file(path)?;
+    validate_regular_file(path, "online migration job")?;
     let mut file = File::open(path)
         .map_err(|err| capture(format!("cannot open online migration job: {err}")))?;
     let length = file
@@ -316,65 +319,6 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), MemoryError> {
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all())
         .map_err(|err| capture(format!("cannot sync online migration job: {err}")))
-}
-
-fn validate_workspace(workspace: &Path) -> Result<(), MemoryError> {
-    let metadata = std::fs::symlink_metadata(workspace)
-        .map_err(|err| capture(format!("cannot inspect online migration workspace: {err}")))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(capture(
-            "online migration workspace must be a real directory",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_regular_file(path: &Path) -> Result<(), MemoryError> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| capture(format!("cannot inspect online migration job file: {err}")))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(capture("online migration job path must be a regular file"));
-    }
-    Ok(())
-}
-
-fn path_exists(path: &Path) -> Result<bool, MemoryError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(capture(format!(
-            "cannot inspect {}: {error}",
-            path.display()
-        ))),
-    }
-}
-
-#[cfg(unix)]
-fn promote(staging: &Path, final_path: &Path) -> std::io::Result<()> {
-    std::fs::rename(staging, final_path)
-}
-
-#[cfg(windows)]
-fn promote(staging: &Path, final_path: &Path) -> std::io::Result<()> {
-    atomicwrites::replace_atomic(staging, final_path)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn promote(_staging: &Path, _final_path: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "online migration job replacement unsupported",
-    ))
-}
-
-#[cfg(unix)]
-fn sync_directory(workspace: &Path) -> std::io::Result<()> {
-    File::open(workspace)?.sync_all()
-}
-
-#[cfg(any(windows, not(any(unix, windows))))]
-fn sync_directory(_workspace: &Path) -> std::io::Result<()> {
-    Ok(())
 }
 
 fn capture(message: impl Into<String>) -> MemoryError {
