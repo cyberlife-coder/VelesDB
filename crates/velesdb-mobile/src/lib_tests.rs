@@ -280,6 +280,65 @@ fn test_collection_upsert_and_search() {
     assert_eq!(results[0].id, 1);
 }
 
+/// `batch_search` answers each query with its own `top_k`, as id and score
+/// with no payload, the same hits a single `search` returns.
+#[test]
+fn test_collection_batch_search_cuts_each_query_to_its_top_k() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("batch".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("batch".to_string()).unwrap().unwrap();
+    col.upsert_batch(
+        [
+            (1, [1.0, 0.0, 0.0, 0.0]),
+            (2, [0.0, 1.0, 0.0, 0.0]),
+            (3, [1.0, 1.0, 0.0, 0.0]),
+        ]
+        .into_iter()
+        .map(|(id, vector)| VelesPoint {
+            id,
+            vector: vector.to_vec(),
+            payload: Some(r#"{"k":"v"}"#.to_string()),
+        })
+        .collect(),
+    )
+    .unwrap();
+
+    let results = col
+        .batch_search(vec![
+            IndividualSearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                top_k: 1,
+                filter: None,
+            },
+            IndividualSearchRequest {
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                top_k: 3,
+                filter: None,
+            },
+        ])
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].len(), 1);
+    assert_eq!(results[1].len(), 3);
+    for (hits, query) in results
+        .iter()
+        .zip([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+    {
+        let single = col.search(query.to_vec(), 3).unwrap();
+        for (hit, alone) in hits.iter().zip(&single) {
+            assert_eq!((hit.id, hit.score), (alone.id, alone.score));
+            assert_eq!(hit.payload, None);
+        }
+    }
+    assert_eq!(results[0][0].id, 1);
+    assert_eq!(results[1][0].id, 2);
+}
+
 #[test]
 fn test_collection_search_with_quality() {
     let tmp = TempDir::new().unwrap();

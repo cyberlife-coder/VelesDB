@@ -385,16 +385,9 @@ impl VelesCollection {
             .into_iter()
             .zip(searches)
             .map(
-                |(results, s): (Vec<velesdb_core::SearchResult>, IndividualSearchRequest)| {
-                    results
-                        .into_iter()
-                        .take(usize::try_from(s.top_k).unwrap_or(usize::MAX))
-                        .map(|r| SearchResult {
-                            id: r.point.id,
-                            score: r.score,
-                            payload: None,
-                        })
-                        .collect()
+                |(mut results, s): (Vec<velesdb_core::SearchResult>, IndividualSearchRequest)| {
+                    results.truncate(usize::try_from(s.top_k).unwrap_or(usize::MAX));
+                    to_mobile_results(results)
                 },
             )
             .collect())
