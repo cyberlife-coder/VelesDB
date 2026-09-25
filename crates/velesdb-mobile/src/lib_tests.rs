@@ -753,9 +753,10 @@ fn test_fusion_strategy_default() {
     assert!(matches!(strategy, FusionStrategy::Rrf { k: 60 }));
 }
 
-/// The sparse, hybrid and filtered multi-query leaves answer with the right
-/// hits, best first, as id and score with no payload: the mapping they share
-/// through `to_mobile_results` (#2394).
+/// The four leaves of `collection_sparse.rs` (sparse, hybrid, multi-query,
+/// filtered multi-query) answer with the right hits, best first, as id and
+/// score with no payload: the mapping they share through `to_mobile_results`
+/// (#2394).
 #[test]
 fn test_sparse_leaves_return_their_hits_without_payload() {
     let tmp = TempDir::new().unwrap();
@@ -803,13 +804,23 @@ fn test_sparse_leaves_return_their_hits_without_payload() {
     let hybrid = col
         .hybrid_sparse_search(vec![1.0, 0.0, 0.0, 0.0], query(), 3, None)
         .unwrap();
-    assert_eq!(hybrid.first().map(|h| h.id), Some(1), "{hybrid:?}");
+    // RRF (k = 60): point 1 ranks first in both lists, point 3 is in both
+    // (sparse 2nd, dense), point 2 only in the dense one, so the order is strict.
+    assert_eq!(ids(&hybrid), [1, 3, 2]);
     assert_mapped(&hybrid);
 
-    // Both queries lean to point 1, so the fused order is strict: 1, then 3.
+    // Both queries lean to point 1, then point 3; point 2 is orthogonal to
+    // both, so the fused order is strict: 1, 3, 2, and the filter drops 2.
+    let vectors = || vec![vec![1.0, 0.0, 0.2, 0.0], vec![1.0, 0.0, 0.6, 0.0]];
+    let unfiltered = col
+        .multi_query_search(vectors(), 3, FusionStrategy::Average)
+        .unwrap();
+    assert_eq!(ids(&unfiltered), [1, 3, 2]);
+    assert_mapped(&unfiltered);
+
     let filtered = col
         .multi_query_search_with_filter(
-            vec![vec![1.0, 0.0, 0.2, 0.0], vec![1.0, 0.0, 0.6, 0.0]],
+            vectors(),
             3,
             FusionStrategy::Average,
             r#"{"condition": {"type": "eq", "field": "category", "value": "a"}}"#.to_string(),
