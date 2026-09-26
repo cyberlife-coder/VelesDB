@@ -8,6 +8,7 @@ use crate::mutation::journal::EpochIdentity;
 
 const EPOCH: &str = "0123456789abcdef0123456789abcdef";
 const JOB_FILE: &str = "online-migration-job.json";
+#[cfg(unix)]
 const STAGING_FILE: &str = "online-migration-job.json.tmp";
 
 #[test]
@@ -30,7 +31,7 @@ fn future_job_version_is_refused_instead_of_guessed() {
     std::fs::create_dir(&workspace).expect("workspace");
     let record = record(root.path());
     let store = JobStore::create(&workspace, &record).expect("create job");
-    let path = workspace.join("online-migration-job.json");
+    let path = workspace.join(JOB_FILE);
     let mut value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).expect("read state")).expect("json");
     value["version"] = serde_json::json!(99);
@@ -129,18 +130,26 @@ fn a_symlinked_staging_file_is_refused_and_left_in_place() {
     let staging = workspace.join(STAGING_FILE);
     symlink(&victim, &staging).expect("symlink");
 
-    let error = JobStore::open(&workspace).err().expect("linked staging");
-    assert!(
-        error
-            .to_string()
-            .contains("online migration job path must be a regular file"),
-        "{error}"
-    );
-    assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
-    assert!(std::fs::symlink_metadata(&staging)
-        .expect("the link is still there")
-        .file_type()
-        .is_symlink());
+    let errors = [
+        JobStore::create(&workspace, &record(root.path()))
+            .err()
+            .expect("create"),
+        JobStore::try_open(&workspace).err().expect("try_open"),
+        JobStore::open(&workspace).err().expect("open"),
+    ];
+    for error in errors {
+        assert!(
+            error
+                .to_string()
+                .contains("online migration job path must be a regular file"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
+        assert!(std::fs::symlink_metadata(&staging)
+            .expect("the link is still there")
+            .file_type()
+            .is_symlink());
+    }
 }
 
 #[cfg(unix)]
@@ -175,15 +184,22 @@ fn a_symlinked_workspace_is_refused_by_every_entry_point() {
 #[test]
 fn a_missing_workspace_names_the_online_migration_store() {
     let root = tempfile::tempdir().expect("root");
-    let error = JobStore::open(&root.path().join("absent"))
-        .err()
-        .expect("absent");
-    assert!(
-        error
-            .to_string()
-            .contains("cannot inspect online migration workspace: "),
-        "{error}"
-    );
+    let absent = root.path().join("absent");
+    let errors = [
+        JobStore::create(&absent, &record(root.path()))
+            .err()
+            .expect("create"),
+        JobStore::try_open(&absent).err().expect("try_open"),
+        JobStore::open(&absent).err().expect("open"),
+    ];
+    for error in errors {
+        assert!(
+            error
+                .to_string()
+                .contains("cannot inspect online migration workspace: "),
+            "{error}"
+        );
+    }
 }
 
 fn record(root: &std::path::Path) -> JobRecord {

@@ -83,8 +83,40 @@ fn symlinked_state_is_refused_without_touching_its_target() {
     let error = ConvergenceController::open(root.path(), EPOCH, config())
         .err()
         .expect("symlink");
-    assert!(error.to_string().contains("regular file"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("controller path must be a regular file"),
+        "{error}"
+    );
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_staging_file_is_refused_at_open_and_left_in_place() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let victim = root.path().join("victim");
+    fs::write(&victim, b"untouched").expect("victim");
+    let staging = root.path().join(STAGING_FILE);
+    symlink(&victim, &staging).expect("symlink");
+
+    let error = ConvergenceController::open(root.path(), EPOCH, config())
+        .err()
+        .expect("linked staging");
+    assert!(
+        error
+            .to_string()
+            .contains("controller path must be a regular file"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+    assert!(fs::symlink_metadata(&staging)
+        .expect("the link is still there")
+        .file_type()
+        .is_symlink());
 }
 
 #[cfg(unix)]

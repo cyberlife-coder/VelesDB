@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use super::{path_exists, promote, sync_directory, validate_regular_file, validate_workspace};
+use super::{path_exists, promote, validate_regular_file, validate_workspace};
 
 /// The two stores that share these primitives each name themselves in every
 /// message, so each check runs under both names.
@@ -137,9 +137,13 @@ fn promote_replaces_the_target_whole_and_consumes_the_staging_file() {
     assert!(!staging.exists());
 }
 
+/// On unix the barrier opens the directory, so an absent one fails. The
+/// effect of the `fsync` itself is not observable from a test.
 #[cfg(unix)]
 #[test]
-fn sync_directory_needs_a_real_directory_on_unix() {
+fn sync_directory_fails_on_an_absent_directory() {
+    use super::sync_directory;
+
     let root = tempfile::tempdir().expect("root");
     sync_directory(root.path()).expect("sync a directory");
     sync_directory(&root.path().join("absent")).expect_err("an absent directory");
