@@ -88,7 +88,7 @@ impl Collection {
         outer_filter: Option<&crate::velesql::Condition>,
         results_map: &mut std::collections::HashMap<u64, SearchResult>,
     ) -> Result<()> {
-        let similarity_conditions = self.extract_all_similarity_conditions(sim_cond, params)?;
+        let similarity_conditions = Self::extract_all_similarity_conditions(sim_cond, params)?;
         if let Some((field, vec, op, threshold)) = similarity_conditions.first() {
             let overfetch_factor = 10;
             let candidates_k = limit.saturating_mul(overfetch_factor).min(MAX_LIMIT);

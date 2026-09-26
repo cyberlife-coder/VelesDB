@@ -290,7 +290,6 @@ impl Collection {
 
     /// Extracts all query components from the SELECT statement's WHERE clause.
     pub(super) fn extract_query_components(
-        &self,
         stmt: &crate::velesql::SelectStatement,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<ExtractedComponents> {
@@ -314,12 +313,12 @@ impl Collection {
             Self::validate_similarity_query_structure(cond)?;
             Self::collect_graph_match_predicates(cond, &mut graph_match_predicates);
             sparse_vector_search = Self::extract_sparse_vector_search(cond).cloned();
-            fused_search = self.extract_fused_vectors(cond, params)?;
+            fused_search = Self::extract_fused_vectors(cond, params)?;
 
             let mut extracted_cond = cond.clone();
-            vector_search = self.extract_vector_search(&mut extracted_cond, params)?;
+            vector_search = Self::extract_vector_search(&mut extracted_cond, params)?;
             similarity_conditions =
-                self.extract_all_similarity_conditions(&extracted_cond, params)?;
+                Self::extract_all_similarity_conditions(&extracted_cond, params)?;
             filter_condition = Some(extracted_cond);
         }
 
