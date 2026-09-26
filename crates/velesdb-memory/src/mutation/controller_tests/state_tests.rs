@@ -4,6 +4,7 @@ use std::time::Duration;
 use super::{open_controller, sample, ControllerConfig, ConvergenceController, EPOCH};
 
 const STATE_FILE: &str = "online-migration-controller.json";
+#[cfg(unix)]
 const STAGING_FILE: &str = "online-migration-controller.json.tmp";
 
 #[test]
