@@ -275,6 +275,37 @@ mod scan_score_semantics {
         );
     }
 
+    /// The scan reports each hit's score against the query vector of the
+    /// negated similarity leaf, read once through `extract_not_similarity_condition`.
+    #[test]
+    fn test_not_similarity_reports_the_score_against_the_query_vector() {
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                tagged_point(2, vec![1.0, 1.0]),
+            ],
+        );
+
+        // sim(id 1) = 1.0 is excluded; sim(id 2) = cos 45 degrees is kept.
+        let results = col
+            .execute_not_similarity_query_over(
+                &not_of(sim_gt(0.9)),
+                &std::collections::HashMap::new(),
+                10,
+                None,
+            )
+            .expect("test: NOT similarity scan");
+
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].point.id, 2);
+        assert!(
+            (results[0].score - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6,
+            "the score is the cosine to the query vector, got {}",
+            results[0].score
+        );
+    }
+
     /// `NOT (A OR B)` must mean `NOT A AND NOT B`.
     #[test]
     fn test_not_similarity_honours_de_morgan_over_disjunction() {

@@ -418,8 +418,12 @@ fn test_extract_vector_search_looks_through_and_and_group_but_not_or() {
 
 #[test]
 fn test_extract_vector_search_reports_a_missing_parameter() {
-    let condition = and(make_comparison("a", 1), vector_search_on("absent"));
-    assert_missing_parameter(Collection::extract_vector_search(&condition, &params()));
+    for condition in [
+        and(make_comparison("a", 1), vector_search_on("absent")),
+        and(vector_search_on("absent"), make_comparison("a", 1)),
+    ] {
+        assert_missing_parameter(Collection::extract_vector_search(&condition, &params()));
+    }
 }
 
 #[test]
@@ -454,8 +458,12 @@ fn test_extract_fused_vectors_looks_through_and_and_group_but_not_or() {
 
 #[test]
 fn test_extract_fused_vectors_reports_a_missing_parameter() {
-    let condition = group(fused_on(&["v", "absent"]));
-    assert_missing_parameter(Collection::extract_fused_vectors(&condition, &params()));
+    for condition in [
+        group(fused_on(&["v", "absent"])),
+        and(fused_on(&["absent"]), make_comparison("a", 1)),
+    ] {
+        assert_missing_parameter(Collection::extract_fused_vectors(&condition, &params()));
+    }
 }
 
 #[test]
@@ -505,14 +513,21 @@ fn test_extract_all_similarity_conditions_collects_every_side_in_order() {
 
 #[test]
 fn test_extract_all_similarity_conditions_reports_a_missing_parameter() {
-    let condition = and(
-        similarity_on("a", "v", 0.1),
-        similarity_on("b", "absent", 0.2),
-    );
-    assert_missing_parameter(Collection::extract_all_similarity_conditions(
-        &condition,
-        &params(),
-    ));
+    for condition in [
+        and(
+            similarity_on("a", "v", 0.1),
+            similarity_on("b", "absent", 0.2),
+        ),
+        and(
+            similarity_on("a", "absent", 0.1),
+            similarity_on("b", "v", 0.2),
+        ),
+    ] {
+        assert_missing_parameter(Collection::extract_all_similarity_conditions(
+            &condition,
+            &params(),
+        ));
+    }
 }
 
 #[test]
