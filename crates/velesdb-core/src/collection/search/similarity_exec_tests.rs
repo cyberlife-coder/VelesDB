@@ -463,4 +463,44 @@ mod tests {
             ids
         );
     }
+
+    /// Both sides of a top-level `OR` contribute their own hits: the point only
+    /// the similarity matches comes back next to the one only the metadata
+    /// matches, and the point neither matches does not (#2403).
+    #[test]
+    fn test_union_query_returns_the_similarity_side_and_the_metadata_side() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let collection =
+            Collection::create(PathBuf::from(temp_dir.path()), 4, DistanceMetric::Cosine).unwrap();
+        let point = |id: u64, vector: [f32; 4], category: &str| Point {
+            id,
+            vector: vector.to_vec(),
+            payload: Some(serde_json::json!({ "category": category })),
+            sparse_vectors: None,
+        };
+        collection
+            .upsert(vec![
+                point(1, [1.0, 0.0, 0.0, 0.0], "tech"),
+                point(2, [0.0, 1.0, 0.0, 0.0], "tech"),
+                point(3, [0.0, 0.0, 1.0, 0.0], "sports"),
+            ])
+            .unwrap();
+        // 1: near, so the similarity side only. 2: far and not sports, so
+        // neither. 3: far but sports, so the metadata side only.
+        let parsed = Parser::parse(
+            "SELECT * FROM test WHERE similarity(vector, $v) > 0.9 OR category = 'sports' LIMIT 10",
+        )
+        .unwrap();
+        let params = HashMap::from([("v".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]))]);
+
+        let mut ids: Vec<u64> = collection
+            .execute_query(&parsed, &params)
+            .unwrap()
+            .iter()
+            .map(|r| r.point.id)
+            .collect();
+        ids.sort_unstable();
+
+        assert_eq!(ids, [1, 3]);
+    }
 }
