@@ -152,8 +152,7 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         // Extracted for the reported score only — the pass/fail decision comes
         // from evaluating `condition` itself, below.
-        let (sim_field, sim_vec, _, _) =
-            self.extract_not_similarity_condition(condition, params)?;
+        let (sim_field, sim_vec, _, _) = Self::extract_not_similarity_condition(condition, params)?;
 
         let all_ids = match candidates {
             Some(ids) => {
@@ -344,14 +343,13 @@ impl Collection {
 
     /// Extract similarity condition from inside a NOT clause.
     pub(crate) fn extract_not_similarity_condition(
-        &self,
         condition: &crate::velesql::Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(String, Vec<f32>, crate::velesql::CompareOp, f64)> {
         match condition {
             crate::velesql::Condition::Not(inner) => {
                 // Extract from inside NOT
-                let conditions = self.extract_all_similarity_conditions(inner, params)?;
+                let conditions = Self::extract_all_similarity_conditions(inner, params)?;
                 conditions.into_iter().next().ok_or_else(|| {
                     crate::error::Error::Query(
                         "NOT clause does not contain a similarity condition".to_string(),
@@ -360,8 +358,8 @@ impl Collection {
             }
             crate::velesql::Condition::And(left, right) => {
                 // Try left, then right
-                self.extract_not_similarity_condition(left, params)
-                    .or_else(|_| self.extract_not_similarity_condition(right, params))
+                Self::extract_not_similarity_condition(left, params)
+                    .or_else(|_| Self::extract_not_similarity_condition(right, params))
             }
             _ => Err(crate::error::Error::Query(
                 "Expected NOT similarity() condition".to_string(),

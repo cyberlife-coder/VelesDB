@@ -49,9 +49,7 @@ impl Collection {
     ///
     /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
-    #[allow(clippy::only_used_in_recursion)]
     pub(crate) fn extract_vector_search(
-        &self,
         condition: &mut Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Option<Vec<f32>>> {
@@ -61,12 +59,12 @@ impl Collection {
                 Ok(Some(vec))
             }
             Condition::And(left, right) => {
-                if let Some(v) = self.extract_vector_search(left, params)? {
+                if let Some(v) = Self::extract_vector_search(left, params)? {
                     return Ok(Some(v));
                 }
-                self.extract_vector_search(right, params)
+                Self::extract_vector_search(right, params)
             }
-            Condition::Group(inner) => self.extract_vector_search(inner, params),
+            Condition::Group(inner) => Self::extract_vector_search(inner, params),
             _ => Ok(None),
         }
     }
@@ -76,9 +74,7 @@ impl Collection {
     /// [`multi_query_search`](Self::multi_query_search). Walks the same
     /// AND/Group recursion as [`extract_vector_search`](Self::extract_vector_search)
     /// and reuses [`resolve_vector`](Self::resolve_vector) for each `VectorExpr`.
-    #[allow(clippy::only_used_in_recursion)]
     pub(crate) fn extract_fused_vectors(
-        &self,
         condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Option<(Vec<Vec<f32>>, crate::velesql::FusionConfig)>> {
@@ -92,12 +88,12 @@ impl Collection {
                 Ok(Some((vectors, vfs.fusion.clone())))
             }
             Condition::And(left, right) => {
-                if let Some(v) = self.extract_fused_vectors(left, params)? {
+                if let Some(v) = Self::extract_fused_vectors(left, params)? {
                     return Ok(Some(v));
                 }
-                self.extract_fused_vectors(right, params)
+                Self::extract_fused_vectors(right, params)
             }
-            Condition::Group(inner) => self.extract_fused_vectors(inner, params),
+            Condition::Group(inner) => Self::extract_fused_vectors(inner, params),
             _ => Ok(None),
         }
     }
@@ -108,9 +104,7 @@ impl Collection {
     /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     #[allow(clippy::type_complexity)]
-    #[allow(clippy::only_used_in_recursion)]
     pub(crate) fn extract_all_similarity_conditions(
-        &self,
         condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<(String, Vec<f32>, crate::velesql::CompareOp, f64)>> {
@@ -121,12 +115,12 @@ impl Collection {
             }
             // AND/OR: collect from both sides (AND=cascade, OR=validation only)
             Condition::And(left, right) | Condition::Or(left, right) => {
-                let mut results = self.extract_all_similarity_conditions(left, params)?;
-                results.extend(self.extract_all_similarity_conditions(right, params)?);
+                let mut results = Self::extract_all_similarity_conditions(left, params)?;
+                results.extend(Self::extract_all_similarity_conditions(right, params)?);
                 Ok(results)
             }
             Condition::Group(inner) | Condition::Not(inner) => {
-                self.extract_all_similarity_conditions(inner, params)
+                Self::extract_all_similarity_conditions(inner, params)
             }
             _ => Ok(vec![]),
         }
