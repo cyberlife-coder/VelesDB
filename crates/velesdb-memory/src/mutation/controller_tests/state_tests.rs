@@ -89,6 +89,29 @@ fn symlinked_state_is_refused_without_touching_its_target() {
 
 #[cfg(unix)]
 #[test]
+fn a_symlinked_workspace_is_refused_by_the_controller() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let real = root.path().join("real");
+    fs::create_dir(&real).expect("real");
+    let link = root.path().join("link");
+    symlink(&real, &link).expect("symlink");
+
+    let error = ConvergenceController::open(&link, EPOCH, config())
+        .err()
+        .expect("linked workspace");
+    assert!(
+        error
+            .to_string()
+            .contains("controller workspace must be a real directory"),
+        "{error}"
+    );
+    assert_eq!(fs::read_dir(&real).expect("real").count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
 fn failed_persistence_does_not_advance_in_memory_state_or_touch_target() {
     use std::os::unix::fs::symlink;
 

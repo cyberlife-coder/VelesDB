@@ -4,7 +4,6 @@
 //! `online_migration` each keep one such file and used to carry their own
 //! copy of these five functions.
 
-use std::fs::File;
 use std::path::Path;
 
 use crate::MemoryError;
@@ -64,10 +63,14 @@ pub(crate) fn promote(_staging: &Path, _final_path: &Path) -> std::io::Result<()
 
 #[cfg(unix)]
 pub(crate) fn sync_directory(workspace: &Path) -> std::io::Result<()> {
-    File::open(workspace)?.sync_all()
+    std::fs::File::open(workspace)?.sync_all()
 }
 
 #[cfg(any(windows, not(any(unix, windows))))]
 pub(crate) fn sync_directory(_workspace: &Path) -> std::io::Result<()> {
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "atomic_file_tests.rs"]
+mod atomic_file_tests;
