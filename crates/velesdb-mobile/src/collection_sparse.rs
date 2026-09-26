@@ -4,7 +4,7 @@
 
 use velesdb_core::{Filter, FusionStrategy as CoreFusionStrategy, QueryOperationKind};
 
-use crate::collection::{and_scope, deny_if_scoped};
+use crate::collection::{and_scope, deny_if_scoped, to_mobile_results};
 use crate::types::{FusionStrategy, SearchResult, VelesError, VelesPoint, VelesSparseVector};
 use crate::VelesCollection;
 
@@ -47,14 +47,7 @@ impl VelesCollection {
             )
             .map_err(|e| VelesError::database(format!("Sparse search failed: {e}")))?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Performs hybrid dense+sparse search with RRF fusion.
@@ -101,14 +94,7 @@ impl VelesCollection {
             )
             .map_err(|e| VelesError::database(format!("Hybrid sparse search failed: {e}")))?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Performs multi-query search with result fusion.
@@ -145,20 +131,13 @@ impl VelesCollection {
             )
             .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Performs multi-query search returning IDs and scores only.
     ///
     /// Id-only twin of [`Self::multi_query_search`]: reuses the same fusion
-    /// path but strips payloads, avoiding payload materialization.
+    /// path but never has core build the payloads, which neither returns.
     pub fn multi_query_search_ids(
         &self,
         vectors: Vec<Vec<f32>>,
@@ -238,14 +217,7 @@ impl VelesCollection {
             )
             .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
 
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.point.id,
-                score: r.score,
-                payload: None,
-            })
-            .collect())
+        Ok(to_mobile_results(results))
     }
 
     /// Inserts or updates a point with an associated sparse vector.

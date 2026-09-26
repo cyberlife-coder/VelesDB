@@ -280,6 +280,65 @@ fn test_collection_upsert_and_search() {
     assert_eq!(results[0].id, 1);
 }
 
+/// `batch_search` answers each query with its own `top_k`, as id and score
+/// with no payload, the same hits a single `search` returns.
+#[test]
+fn test_collection_batch_search_cuts_each_query_to_its_top_k() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("batch".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("batch".to_string()).unwrap().unwrap();
+    col.upsert_batch(
+        [
+            (1, [1.0, 0.0, 0.0, 0.0]),
+            (2, [0.0, 1.0, 0.0, 0.0]),
+            (3, [1.0, 1.0, 0.0, 0.0]),
+        ]
+        .into_iter()
+        .map(|(id, vector)| VelesPoint {
+            id,
+            vector: vector.to_vec(),
+            payload: Some(r#"{"k":"v"}"#.to_string()),
+        })
+        .collect(),
+    )
+    .unwrap();
+
+    let results = col
+        .batch_search(vec![
+            IndividualSearchRequest {
+                vector: vec![1.0, 0.0, 0.0, 0.0],
+                top_k: 1,
+                filter: None,
+            },
+            IndividualSearchRequest {
+                vector: vec![0.0, 1.0, 0.0, 0.0],
+                top_k: 3,
+                filter: None,
+            },
+        ])
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].len(), 1);
+    assert_eq!(results[1].len(), 3);
+    for (hits, query) in results
+        .iter()
+        .zip([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+    {
+        let single = col.search(query.to_vec(), 3).unwrap();
+        for (hit, alone) in hits.iter().zip(&single) {
+            assert_eq!((hit.id, hit.score), (alone.id, alone.score));
+            assert_eq!(hit.payload, None);
+        }
+    }
+    assert_eq!(results[0][0].id, 1);
+    assert_eq!(results[1][0].id, 2);
+}
+
 #[test]
 fn test_collection_search_with_quality() {
     let tmp = TempDir::new().unwrap();
@@ -694,6 +753,83 @@ fn test_fusion_strategy_default() {
     assert!(matches!(strategy, FusionStrategy::Rrf { k: 60 }));
 }
 
+/// The four leaves of `collection_sparse.rs` (sparse, hybrid, multi-query,
+/// filtered multi-query) answer with the right hits, best first, as id and
+/// score with no payload: the mapping they share through `to_mobile_results`
+/// (#2394).
+#[test]
+fn test_sparse_leaves_return_their_hits_without_payload() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = VelesDatabase::open(path).unwrap();
+    db.create_collection("sparse".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("sparse".to_string()).unwrap().unwrap();
+    for (id, vector, index, weight, category) in [
+        (1, [1.0, 0.0, 0.0, 0.0], 0, 2.0, "a"),
+        (2, [0.0, 1.0, 0.0, 0.0], 1, 1.0, "b"),
+        (3, [0.0, 0.0, 1.0, 0.0], 0, 1.0, "a"),
+    ] {
+        col.upsert_with_sparse(
+            VelesPoint {
+                id,
+                vector: vector.to_vec(),
+                payload: Some(format!(r#"{{"category":"{category}"}}"#)),
+            },
+            VelesSparseVector {
+                indices: vec![index],
+                values: vec![weight],
+            },
+        )
+        .unwrap();
+    }
+    let query = || VelesSparseVector {
+        indices: vec![0],
+        values: vec![1.0],
+    };
+    let ids = |hits: &[SearchResult]| hits.iter().map(|h| h.id).collect::<Vec<_>>();
+    let assert_mapped = |hits: &[SearchResult]| {
+        assert!(hits.iter().all(|h| h.payload.is_none()), "{hits:?}");
+        assert!(
+            hits.windows(2).all(|w| w[0].score >= w[1].score),
+            "{hits:?}"
+        );
+    };
+
+    let sparse = col.sparse_search(query(), 3, None).unwrap();
+    assert_eq!(ids(&sparse), [1, 3]);
+    assert_mapped(&sparse);
+
+    let hybrid = col
+        .hybrid_sparse_search(vec![1.0, 0.0, 0.0, 0.0], query(), 3, None)
+        .unwrap();
+    // RRF (k = 60): point 1 ranks first in both lists, point 3 is in both
+    // (sparse 2nd, dense), point 2 only in the dense one, so the order is strict.
+    assert_eq!(ids(&hybrid), [1, 3, 2]);
+    assert_mapped(&hybrid);
+
+    // Both queries lean to point 1, then point 3; point 2 is orthogonal to
+    // both, so the fused order is strict: 1, 3, 2, and the filter drops 2.
+    let vectors = || vec![vec![1.0, 0.0, 0.2, 0.0], vec![1.0, 0.0, 0.6, 0.0]];
+    let unfiltered = col
+        .multi_query_search(vectors(), 3, FusionStrategy::Average)
+        .unwrap();
+    assert_eq!(ids(&unfiltered), [1, 3, 2]);
+    assert_mapped(&unfiltered);
+
+    let filtered = col
+        .multi_query_search_with_filter(
+            vectors(),
+            3,
+            FusionStrategy::Average,
+            r#"{"condition": {"type": "eq", "field": "category", "value": "a"}}"#.to_string(),
+        )
+        .unwrap();
+    assert_eq!(ids(&filtered), [1, 3]);
+    assert_mapped(&filtered);
+}
+
 // =========================================================================
 // Multi-Query Search Tests
 // =========================================================================
@@ -855,7 +991,7 @@ fn test_multi_query_search_ids_matches_core() {
         .multi_query_search(vectors, 5, FusionStrategy::Rrf { k: 60 })
         .unwrap();
 
-    // id-only twin returns the same IDs/scores as the payload-carrying path.
+    // id-only twin returns the same IDs/scores as the full fusion path.
     // Compare as sorted sets: equal scores may tie-break in either order.
     let mut id_pairs: Vec<(u64, u32)> = id_results
         .iter()
@@ -869,8 +1005,9 @@ fn test_multi_query_search_ids_matches_core() {
     full_pairs.sort_unstable();
     assert_eq!(id_pairs, full_pairs);
 
-    // Payloads are stripped from the id-only variant.
+    // Neither variant returns a payload.
     assert!(id_results.iter().all(|r| r.payload.is_none()));
+    assert!(full_results.iter().all(|r| r.payload.is_none()));
 }
 
 #[test]

@@ -259,7 +259,6 @@ impl Collection {
     }
 
     /// Compares two result indices across all ORDER BY columns.
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)] // Reason: internal comparator; the decorated keys ride alongside the raw inputs
     fn compare_by_order_columns(
         i: usize,
