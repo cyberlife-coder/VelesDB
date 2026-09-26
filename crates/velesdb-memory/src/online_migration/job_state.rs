@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::mutation::atomic_file::{
-    path_exists, promote, sync_directory, validate_regular_file, validate_workspace,
+    capture, path_exists, promote, sync_directory, validate_regular_file, validate_workspace,
 };
 use crate::mutation::catchup::CatchUpConfig;
 use crate::mutation::controller::{ControllerConfig, ConvergenceObservation};
@@ -319,8 +319,4 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), MemoryError> {
         .and_then(|()| file.flush())
         .and_then(|()| file.sync_all())
         .map_err(|err| capture(format!("cannot sync online migration job: {err}")))
-}
-
-fn capture(message: impl Into<String>) -> MemoryError {
-    MemoryError::MigrationCapture(message.into())
 }

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::MemoryError;
 
-fn capture(message: impl Into<String>) -> MemoryError {
+pub(crate) fn capture(message: impl Into<String>) -> MemoryError {
     MemoryError::MigrationCapture(message.into())
 }
 

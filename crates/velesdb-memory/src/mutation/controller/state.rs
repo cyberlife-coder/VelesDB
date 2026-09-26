@@ -7,7 +7,7 @@ use super::{
     RECOVER_CUTOVER, RESUME_CATCH_UP,
 };
 use crate::mutation::atomic_file::{
-    path_exists, promote, sync_directory, validate_regular_file, validate_workspace,
+    capture, path_exists, promote, sync_directory, validate_regular_file, validate_workspace,
 };
 use crate::MemoryError;
 
@@ -275,8 +275,4 @@ fn validate_epoch_id(epoch_id: &str) -> Result<(), MemoryError> {
         return Err(capture("epoch id must be 32 hexadecimal characters"));
     }
     Ok(())
-}
-
-fn capture(message: impl Into<String>) -> MemoryError {
-    MemoryError::MigrationCapture(message.into())
 }
