@@ -70,9 +70,10 @@ fn strategy_name_is_case_insensitive() {
 }
 
 /// A `NEAR_FUSED` query reaches the fused search through the extraction of its
-/// WHERE clause (#2403): both query vectors rank point 30 before point 20,
-/// where id order would put it after, and the far point 40 comes last. A query
-/// whose vectors were never extracted would not return this order.
+/// WHERE clause (#2403): the two query vectors rank the points differently
+/// (`$a` alone gives `[10, 30, 20, 40]`, `$b` alone `[30, 20, 10, 40]`), and
+/// only the fusion of both gives `[30, 10, 20, 40]`. A query whose vectors were
+/// never extracted, or only one of them, would not return this order.
 #[test]
 fn a_near_fused_query_returns_the_fused_hits_best_first() {
     let dir = TempDir::new().expect("test: temp dir");
@@ -93,7 +94,7 @@ fn a_near_fused_query_returns_the_fused_hits_best_first() {
     .expect("test: upsert");
     let params = HashMap::from([
         ("a".to_string(), serde_json::json!([1.0, 0.0])),
-        ("b".to_string(), serde_json::json!([1.0, 0.2])),
+        ("b".to_string(), serde_json::json!([0.5, 1.0])),
     ]);
 
     let results = col
@@ -104,5 +105,5 @@ fn a_near_fused_query_returns_the_fused_hits_best_first() {
         .expect("test: the fused query runs");
 
     let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
-    assert_eq!(ids, [10, 30, 20, 40]);
+    assert_eq!(ids, [30, 10, 20, 40]);
 }

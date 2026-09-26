@@ -50,7 +50,7 @@ impl Collection {
     /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     pub(crate) fn extract_vector_search(
-        condition: &mut Condition,
+        condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Option<Vec<f32>>> {
         match condition {

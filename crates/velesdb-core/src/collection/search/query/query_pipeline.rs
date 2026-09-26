@@ -315,8 +315,8 @@ impl Collection {
             sparse_vector_search = Self::extract_sparse_vector_search(cond).cloned();
             fused_search = Self::extract_fused_vectors(cond, params)?;
 
-            let mut extracted_cond = cond.clone();
-            vector_search = Self::extract_vector_search(&mut extracted_cond, params)?;
+            let extracted_cond = cond.clone();
+            vector_search = Self::extract_vector_search(&extracted_cond, params)?;
             similarity_conditions =
                 Self::extract_all_similarity_conditions(&extracted_cond, params)?;
             filter_condition = Some(extracted_cond);

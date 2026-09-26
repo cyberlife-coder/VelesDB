@@ -331,6 +331,17 @@ fn params() -> Params {
     ])
 }
 
+/// Asserts that an extractor refused the query for the parameter `$absent`.
+fn assert_missing_parameter<T: std::fmt::Debug>(result: crate::error::Result<T>) {
+    let error = result.expect_err("test: the parameter is missing");
+    assert!(
+        error
+            .to_string()
+            .contains("Missing query parameter: $absent"),
+        "{error}"
+    );
+}
+
 fn vector_search_on(param: &str) -> Condition {
     Condition::VectorSearch(VectorSearch {
         vector: VectorExpr::Parameter(param.to_string()),
@@ -375,8 +386,8 @@ fn not(inner: Condition) -> Condition {
 #[test]
 fn test_extract_vector_search_looks_through_and_and_group_but_not_or() {
     let params = params();
-    let extract = |mut condition: Condition| {
-        Collection::extract_vector_search(&mut condition, &params).expect("test: resolves")
+    let extract = |condition: Condition| {
+        Collection::extract_vector_search(&condition, &params).expect("test: resolves")
     };
 
     assert_eq!(extract(vector_search_on("v")), Some(V.to_vec()));
@@ -407,15 +418,8 @@ fn test_extract_vector_search_looks_through_and_and_group_but_not_or() {
 
 #[test]
 fn test_extract_vector_search_reports_a_missing_parameter() {
-    let mut condition = and(make_comparison("a", 1), vector_search_on("absent"));
-    let error = Collection::extract_vector_search(&mut condition, &params())
-        .expect_err("test: the parameter is missing");
-    assert!(
-        error
-            .to_string()
-            .contains("Missing query parameter: $absent"),
-        "{error}"
-    );
+    let condition = and(make_comparison("a", 1), vector_search_on("absent"));
+    assert_missing_parameter(Collection::extract_vector_search(&condition, &params()));
 }
 
 #[test]
@@ -451,14 +455,7 @@ fn test_extract_fused_vectors_looks_through_and_and_group_but_not_or() {
 #[test]
 fn test_extract_fused_vectors_reports_a_missing_parameter() {
     let condition = group(fused_on(&["v", "absent"]));
-    let error = Collection::extract_fused_vectors(&condition, &params())
-        .expect_err("test: the parameter is missing");
-    assert!(
-        error
-            .to_string()
-            .contains("Missing query parameter: $absent"),
-        "{error}"
-    );
+    assert_missing_parameter(Collection::extract_fused_vectors(&condition, &params()));
 }
 
 #[test]
@@ -512,14 +509,10 @@ fn test_extract_all_similarity_conditions_reports_a_missing_parameter() {
         similarity_on("a", "v", 0.1),
         similarity_on("b", "absent", 0.2),
     );
-    let error = Collection::extract_all_similarity_conditions(&condition, &params())
-        .expect_err("test: the parameter is missing");
-    assert!(
-        error
-            .to_string()
-            .contains("Missing query parameter: $absent"),
-        "{error}"
-    );
+    assert_missing_parameter(Collection::extract_all_similarity_conditions(
+        &condition,
+        &params(),
+    ));
 }
 
 #[test]
