@@ -461,6 +461,7 @@ fn test_extract_fused_vectors_reports_a_missing_parameter() {
     for condition in [
         group(fused_on(&["v", "absent"])),
         and(fused_on(&["absent"]), make_comparison("a", 1)),
+        and(make_comparison("a", 1), fused_on(&["absent"])),
     ] {
         assert_missing_parameter(Collection::extract_fused_vectors(&condition, &params()));
     }
