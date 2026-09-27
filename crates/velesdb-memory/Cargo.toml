@@ -154,7 +154,9 @@ optional = true
 [target.'cfg(unix)'.dependencies.libc]
 # O_NOFOLLOW for `mutation::atomic_file::open_regular_file`, so the symlink
 # check and the open of a state/journal file cannot be raced apart (#2404).
-version = "0.2"
+# Pinned to the same floor as velesdb-core's own libc dependency: two
+# different floors for one package fail cargo's minimal-versions build.
+version = "0.2.186"
 optional = true
 
 [features]
