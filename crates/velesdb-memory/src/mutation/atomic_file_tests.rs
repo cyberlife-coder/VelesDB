@@ -275,6 +275,45 @@ fn open_regular_file_refuses_a_socket_with_the_clean_message() {
     );
 }
 
+/// The round-5 `open_error` fallback must not relabel a genuine regular
+/// file that failed to open for an unrelated reason (permissions, here) as
+/// "must be a regular file" — that message is reserved for a file that
+/// really is the wrong kind. Skipped wherever permission bits aren't
+/// enforced (running as root, some container/CI filesystems): checked
+/// directly, by trying the same open the assertion depends on.
+#[cfg(unix)]
+#[test]
+fn open_regular_file_keeps_the_raw_message_for_a_permission_denied_regular_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("state");
+    fs::write(&path, b"regular").expect("a real file");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    if fs::File::open(&path).is_ok() {
+        eprintln!("test: skipped, permission bits are not enforced here");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("restore");
+        return;
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    let refused = open_regular_file(&path, "test", options).expect_err("permission denied");
+    let message = refused.to_string();
+    assert!(
+        message.contains("cannot open test file"),
+        "a permission error must keep the raw message, got: {message}"
+    );
+    assert!(
+        !message.contains("must be a regular file"),
+        "a real regular file must never be relabeled as the wrong kind, got: {message}"
+    );
+
+    // Restore permissions so the tempdir can clean itself up.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("restore permissions");
+}
+
 #[test]
 fn path_exists_tells_an_absent_path_from_a_present_one() {
     let root = tempfile::tempdir().expect("root");
