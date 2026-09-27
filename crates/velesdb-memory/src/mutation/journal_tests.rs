@@ -104,6 +104,23 @@ fn preexisting_broken_symlink_is_refused_without_touching_its_target() {
     assert!(!target.exists());
 }
 
+/// Finalization: dropping `prepare_journal`'s redundant pre-check (this PR)
+/// means a directory at the journal path now reaches `load_journal`'s
+/// `open_regular_file` directly, which opens it read-write and gets
+/// `EISDIR` — mapped in `open_error` to the same refusal a symlink gets,
+/// rather than leaking the raw OS error text.
+#[test]
+fn preexisting_directory_at_the_journal_path_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(dir.path().join(JOURNAL_FILE)).expect("directory");
+    let identity = epoch(dir.path(), "00112233445566778899aabbccddeeff");
+
+    let error = DirtyJournal::open(dir.path(), &identity, CAPACITY)
+        .err()
+        .expect("directory refusal");
+    assert!(error.to_string().contains("regular file"), "{error}");
+}
+
 #[test]
 fn torn_tail_is_truncated_to_the_complete_valid_prefix() {
     let dir = tempfile::tempdir().expect("tempdir");

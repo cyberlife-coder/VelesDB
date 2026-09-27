@@ -147,9 +147,21 @@ fn open_regular_file_refuses_a_symlink_and_says_so_under_each_stores_name() {
 /// of the path, so there is no second syscall left to land a swap between.
 /// A mutant that reverts this function to `validate_regular_file(path,
 /// entity)?; options.open(path)` still passes this specific test (the swap
-/// is already in place before either step runs); it is caught instead by
-/// `open_regular_file_never_returns_a_racing_swaps_victim`, below, which
-/// races an actual concurrent swap against repeated calls.
+/// is already in place before either step runs), and no other test in this
+/// file catches it either — two attempts at a concurrent swap-under-load
+/// test were tried and dropped: neither reliably won a kernel-level race
+/// that is only a couple of syscalls wide (measured kill rates from ~3% to
+/// ~55% across designs and runs, nowhere near a bound a CI gate could rely
+/// on). That mutant is refused by construction, not by a test: `stat` then
+/// `open` are two operations on the *path*, so anything can happen to the
+/// path between them; `open(O_NOFOLLOW)` then `fstat` on the file
+/// descriptor it returns are two operations on the *same already-opened
+/// file*, and nothing done to the path afterward can change which file
+/// that descriptor points to. Forcing and observing the first kind of race
+/// deterministically from a plain unit test — reliably enough to gate a
+/// merge on it — needs syscall-level interposition (`ptrace`, a seccomp
+/// user-space notifier, or an `LD_PRELOAD` shim), which is out of
+/// proportion for this fix.
 #[cfg(unix)]
 #[test]
 fn open_regular_file_refuses_a_symlink_present_at_call_time_with_no_check_step_of_its_own() {
@@ -177,63 +189,6 @@ fn open_regular_file_refuses_a_symlink_present_at_call_time_with_no_check_step_o
         "{refused}"
     );
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
-}
-
-/// The one property no single-threaded test can exercise: a real concurrent
-/// swap landing between a check and an open. A background thread toggles
-/// `path` between a regular file and a symlink to `victim` as fast as it
-/// can while the main thread calls `open_regular_file` in a tight loop —
-/// enough iterations that the old check-then-open shape (a `stat` and an
-/// `open`, two syscalls against the path) reliably wins that race at least
-/// once. `open_regular_file` must never return a handle whose content is
-/// the victim's: its only check is `fstat` on the file descriptor its own
-/// `open(O_NOFOLLOW)` already produced, not a second `stat` of the path, so
-/// there is no window between "checked" and "opened" for the swap to land
-/// in — refused or not, whatever it returns names the same object it
-/// checked.
-#[cfg(unix)]
-#[test]
-fn open_regular_file_never_returns_a_racing_swaps_victim() {
-    use std::io::Read as _;
-    use std::os::unix::fs::symlink;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    let root = tempfile::tempdir().expect("root");
-    let victim = root.path().join("victim");
-    fs::write(&victim, b"VICTIM").expect("victim");
-    let path = root.path().join("state");
-    fs::write(&path, b"REGULAR").expect("initial regular file");
-
-    let stop = Arc::new(AtomicBool::new(false));
-    let swapper = {
-        let path = path.clone();
-        let victim = victim.clone();
-        let stop = Arc::clone(&stop);
-        std::thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                let _ = fs::remove_file(&path);
-                let _ = symlink(&victim, &path);
-                let _ = fs::remove_file(&path);
-                let _ = fs::write(&path, b"REGULAR");
-            }
-        })
-    };
-
-    for _ in 0..20_000 {
-        let mut options = fs::OpenOptions::new();
-        options.read(true);
-        if let Ok(mut file) = open_regular_file(&path, "test", options) {
-            let mut content = Vec::new();
-            let _ = file.read_to_end(&mut content);
-            assert_ne!(
-                content, b"VICTIM",
-                "open_regular_file returned the victim's content under a racing swap"
-            );
-        }
-    }
-    stop.store(true, Ordering::Relaxed);
-    swapper.join().expect("swapper thread");
 }
 
 /// A planted FIFO must be refused promptly, not hang the caller. Opening a
