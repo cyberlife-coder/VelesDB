@@ -108,7 +108,13 @@ fn preexisting_broken_symlink_is_refused_without_touching_its_target() {
 /// means a directory at the journal path now reaches `load_journal`'s
 /// `open_regular_file` directly, which opens it read-write and gets
 /// `EISDIR` — mapped in `open_error` to the same refusal a symlink gets,
-/// rather than leaking the raw OS error text.
+/// rather than leaking the raw OS error text. Unix-only: opening a
+/// directory needs no special flag here, but on Windows `OpenOptions`
+/// needs `FILE_FLAG_BACKUP_SEMANTICS` to open one at all (std's own
+/// `lstat` sets it for the same reason) — `open_regular_file` does not,
+/// tracked as a documented gap in the "Windows" section of this PR rather
+/// than asserted here for a platform this suite cannot run on.
+#[cfg(unix)]
 #[test]
 fn preexisting_directory_at_the_journal_path_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
