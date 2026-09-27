@@ -7,6 +7,7 @@ use super::format::{
     RECORD_BODY_BYTES,
 };
 use super::{capture, FaultPoint};
+use crate::mutation::atomic_file::open_regular_file;
 use crate::MemoryError;
 
 pub(super) fn append_synced<F>(file: &mut File, record: &[u8], fault: F) -> Result<(), MemoryError>
@@ -74,8 +75,9 @@ where
 }
 
 fn open_record_stream(source: &Path) -> Result<File, MemoryError> {
-    let mut input =
-        File::open(source).map_err(|err| capture(format!("cannot read journal: {err}")))?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    let mut input = open_regular_file(source, "journal", options)?;
     let (_, header_bytes) = read_header(&mut input)?;
     input
         .seek(SeekFrom::Start(header_bytes))

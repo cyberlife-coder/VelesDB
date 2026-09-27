@@ -1,9 +1,10 @@
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::mutation::atomic_file::{
-    capture, path_exists, promote, sync_directory, validate_regular_file, validate_workspace,
+    capture, open_regular_file, path_exists, promote, sync_directory, validate_regular_file,
+    validate_workspace,
 };
 use crate::mutation::catchup::CatchUpConfig;
 use crate::mutation::controller::{ControllerConfig, ConvergenceObservation};
@@ -291,9 +292,9 @@ fn validate_terminal_state(record: &JobRecord) -> Result<(), MemoryError> {
 }
 
 fn read_limited(path: &Path) -> Result<Vec<u8>, MemoryError> {
-    validate_regular_file(path, "online migration job")?;
-    let mut file = File::open(path)
-        .map_err(|err| capture(format!("cannot open online migration job: {err}")))?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    let mut file = open_regular_file(path, "online migration job", options)?;
     let length = file
         .metadata()
         .map_err(|err| capture(format!("cannot size online migration job: {err}")))?

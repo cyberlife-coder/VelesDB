@@ -151,6 +151,12 @@ tower = { workspace = true, optional = true }
 version = "0.4.4"
 optional = true
 
+[target.'cfg(unix)'.dependencies.libc]
+# O_NOFOLLOW for `mutation::atomic_file::open_regular_file`, so the symlink
+# check and the open of a state/journal file cannot be raced apart (#2404).
+version = "0.2"
+optional = true
+
 [features]
 # The MCP server transport + binary, the native file-backed store, and both
 # HTTP-client roles (embedding + extraction) are on by default so `cargo
@@ -211,6 +217,7 @@ persistence = [
     "dep:fs2",
     "dep:tempfile",
     "dep:atomicwrites",
+    "dep:libc",
 ]
 # Real on-device semantic recall via a local Ollama or OpenAI-compatible
 # embeddings endpoint. On by default — see the `default` comment; nothing is

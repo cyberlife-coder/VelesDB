@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
 
+use super::atomic_file::open_regular_file;
 use super::{DirtyKey, MutationObserver};
 use crate::MemoryError;
 
@@ -115,8 +116,9 @@ impl DirtyJournal {
     ) -> Result<Vec<JournalRecord>, MemoryError> {
         let inner = self.inner.lock();
         ensure_healthy(&inner)?;
-        let mut file =
-            File::open(&self.path).map_err(|err| capture(format!("cannot read journal: {err}")))?;
+        let mut options = OpenOptions::new();
+        options.read(true);
+        let mut file = open_regular_file(&self.path, "journal", options)?;
         file.seek(SeekFrom::Start(inner.header_bytes))
             .map_err(|err| capture(format!("cannot seek journal: {err}")))?;
         read_records(&mut file, sequence, limit.min(MAX_READ_BATCH))
@@ -260,11 +262,9 @@ fn prepare_journal(workspace: &Path, identity: &EpochIdentity) -> Result<PathBuf
 }
 
 fn load_journal(path: &Path) -> Result<LoadedJournal, MemoryError> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|err| capture(format!("cannot open {}: {err}", path.display())))?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    let mut file = open_regular_file(path, "journal", options)?;
     let (header, header_bytes) = read_header(&mut file)?;
     let (last_sequence, valid_len) = scan_records(&mut file, &header, header_bytes)?;
     recover_torn_tail(&mut file, valid_len)?;

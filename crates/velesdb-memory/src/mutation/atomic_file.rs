@@ -1,9 +1,10 @@
 //! Shared atomic-replace primitives for small on-disk state/record files:
-//! reject a symlinked target, promote a staging file into place, and
-//! durability-barrier the containing directory. `mutation::controller` and
-//! `online_migration` each keep one such file and used to carry their own
-//! copy of these five functions.
+//! reject a symlinked target, open one race-free, promote a staging file
+//! into place, and durability-barrier the containing directory.
+//! `mutation::controller` and `online_migration` each keep one such file and
+//! used to carry their own copy of these functions.
 
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 use crate::MemoryError;
@@ -30,6 +31,55 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
         return Err(capture(format!("{entity} path must be a regular file")));
     }
     Ok(())
+}
+
+/// Opens `path` for `entity`, refusing it if it names a symlink or anything
+/// but a regular file. The refusal is decided from the file this call opens,
+/// not from a separate `stat` of the path beforehand: `validate_regular_file`
+/// followed by a plain `open` leaves a window where a link swapped in
+/// between the two is followed by the open (#2404).
+pub(crate) fn open_regular_file(
+    path: &Path,
+    entity: &str,
+    mut options: OpenOptions,
+) -> Result<File, MemoryError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Opens a reparse point itself rather than its target, so a symlink
+        // swapped in surfaces as a non-regular file in the check below
+        // instead of being read through.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(|err| open_error(&err, entity))?;
+    let is_file = file
+        .metadata()
+        .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?
+        .is_file();
+    if !is_file {
+        return Err(capture(format!("{entity} path must be a regular file")));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_error(err: &std::io::Error, entity: &str) -> MemoryError {
+    if err.raw_os_error() == Some(libc::ELOOP) {
+        capture(format!("{entity} path must be a regular file"))
+    } else {
+        capture(format!("cannot open {entity} file: {err}"))
+    }
+}
+
+#[cfg(not(unix))]
+fn open_error(err: &std::io::Error, entity: &str) -> MemoryError {
+    capture(format!("cannot open {entity} file: {err}"))
 }
 
 pub(crate) fn path_exists(path: &Path) -> Result<bool, MemoryError> {

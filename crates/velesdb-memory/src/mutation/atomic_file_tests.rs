@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use super::{path_exists, promote, validate_regular_file, validate_workspace};
+use super::{open_regular_file, path_exists, promote, validate_regular_file, validate_workspace};
 
 /// The two stores that share these primitives each name themselves in every
 /// message, so each check runs under both names.
@@ -92,6 +92,81 @@ fn a_symlink_is_refused_as_a_workspace_and_as_a_file() {
             "{file}"
         );
     }
+    assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+}
+
+#[test]
+fn open_regular_file_reads_and_writes_a_real_file() {
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("state");
+    fs::write(&path, b"first").expect("seed");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true);
+    let mut file = open_regular_file(&path, "test", options).expect("a regular file opens");
+    let mut read = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut read).expect("read");
+    assert_eq!(read, b"first");
+}
+
+#[cfg(unix)]
+#[test]
+fn open_regular_file_refuses_a_symlink_and_says_so_under_each_stores_name() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let victim = root.path().join("victim");
+    fs::write(&victim, b"untouched").expect("victim");
+    let link = root.path().join("link");
+    symlink(&victim, &link).expect("link");
+
+    for entity in ENTITIES {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        let refused = open_regular_file(&link, entity, options).expect_err("a symlink");
+        assert!(
+            refused
+                .to_string()
+                .contains(&format!("{entity} path must be a regular file")),
+            "{refused}"
+        );
+    }
+    assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+}
+
+/// #2404: `validate_regular_file` followed by a plain `open` left a window
+/// where a link swapped in between the two steps was followed by the open.
+/// `open_regular_file` has no such second step to race — whatever the path
+/// names at the single moment it opens is what gets checked. This proves
+/// that by performing the swap as late as it is possible to perform it (the
+/// instant before the call), which is the exact interleaving the old code
+/// was vulnerable to: a caller cannot land "between" a check and an open
+/// that no longer exist as two separate steps.
+#[cfg(unix)]
+#[test]
+fn open_regular_file_refuses_a_link_swapped_in_immediately_before_the_open() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let victim = root.path().join("victim");
+    fs::write(&victim, b"untouched").expect("victim");
+    let path = root.path().join("state");
+    fs::write(&path, b"regular").expect("a real file first");
+
+    // A prior `validate_regular_file(&path, ..)` check would have passed
+    // here. The swap happens now, right before the only step left.
+    fs::remove_file(&path).expect("remove the regular file");
+    symlink(&victim, &path).expect("swap in a link to the victim");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    let refused = open_regular_file(&path, "test", options).expect_err("swapped-in symlink");
+    assert!(
+        refused
+            .to_string()
+            .contains("test path must be a regular file"),
+        "{refused}"
+    );
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
 }
 
