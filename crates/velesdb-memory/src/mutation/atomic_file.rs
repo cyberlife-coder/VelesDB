@@ -93,22 +93,19 @@ pub(crate) fn open_regular_file(
 
 #[cfg(unix)]
 fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
-    // ELOOP: `O_NOFOLLOW` refused a symlink. EISDIR: opening a directory for
-    // write fails here rather than at a separate pre-check — dropping
-    // `prepare_journal`'s redundant `validate_regular_file` (this PR) means a
-    // directory at the journal path now surfaces through this open instead.
-    // Both name the same refusal a caller already handles.
-    if matches!(err.raw_os_error(), Some(libc::ELOOP | libc::EISDIR)) {
+    // ELOOP: `O_NOFOLLOW` refused a symlink, a fast path with no further
+    // lookup needed. Anything else that isn't a regular file (a directory
+    // via `EISDIR`, a socket, and so on) fails `open` itself with a
+    // platform- and file-type-specific errno that isn't worth enumerating
+    // one by one, so this falls back to a `symlink_metadata` lookup that
+    // only chooses which message reports the already-decided refusal —
+    // `open` already returned `Err`, so this decides nothing
+    // security-relevant, unlike the checks in `open_regular_file` that run
+    // on an already-open handle.
+    if err.raw_os_error() == Some(libc::ELOOP) {
         return capture(format!("{entity} path must be a regular file"));
     }
-    // Anything else that isn't a regular file (a socket, most often) fails
-    // `open` itself with a platform- and file-type-specific errno that isn't
-    // worth enumerating one by one. The refusal already happened — `open`
-    // returned `Err` — so this `symlink_metadata` only chooses which message
-    // reports it; it decides nothing security-relevant, unlike the checks
-    // above that run on an already-open handle.
-    let is_non_regular = std::fs::symlink_metadata(path)
-        .is_ok_and(|metadata| !metadata.is_file() && !metadata.file_type().is_symlink());
+    let is_non_regular = std::fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.is_file());
     if is_non_regular {
         capture(format!("{entity} path must be a regular file"))
     } else {
