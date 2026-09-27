@@ -226,6 +226,55 @@ fn open_regular_file_refuses_a_fifo_without_blocking() {
     );
 }
 
+/// #2407 (round 5): a hard link to a file outside the store is,
+/// structurally, an ordinary regular file, so `is_file` alone accepts it —
+/// but `fstat` also reports `nlink`, which a legitimate file this helper
+/// ever opens will not have above 1.
+#[cfg(unix)]
+#[test]
+fn open_regular_file_refuses_a_hard_link() {
+    let root = tempfile::tempdir().expect("root");
+    let victim = root.path().join("victim");
+    fs::write(&victim, b"untouched").expect("victim");
+    let path = root.path().join("state");
+    fs::hard_link(&victim, &path).expect("hard link");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    let refused = open_regular_file(&path, "test", options).expect_err("a hard link");
+    assert!(
+        refused
+            .to_string()
+            .contains("test path must be a regular file"),
+        "{refused}"
+    );
+    assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+}
+
+/// A Unix domain socket is refused the same way a FIFO is, and with the
+/// same clean message rather than a raw, platform-specific `open` errno —
+/// `open_error` falls back to a `symlink_metadata` lookup, purely to choose
+/// the message, once `open` has already failed and the refusal is decided.
+#[cfg(unix)]
+#[test]
+fn open_regular_file_refuses_a_socket_with_the_clean_message() {
+    use std::os::unix::net::UnixListener;
+
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("state");
+    let _listener = UnixListener::bind(&path).expect("bind a unix socket");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    let refused = open_regular_file(&path, "test", options).expect_err("a socket");
+    assert!(
+        refused
+            .to_string()
+            .contains("test path must be a regular file"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn path_exists_tells_an_absent_path_from_a_present_one() {
     let root = tempfile::tempdir().expect("root");

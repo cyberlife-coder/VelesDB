@@ -33,11 +33,14 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
     Ok(())
 }
 
-/// Opens `path` for `entity`, refusing it if it names a symlink or anything
-/// but a regular file. The refusal is decided from the file this call opens,
-/// not from a separate `stat` of the path beforehand: `validate_regular_file`
-/// followed by a plain `open` leaves a window where a link swapped in
-/// between the two is followed by the open (#2404).
+/// Opens `path` for `entity`, refusing it if it names a symlink, a hard
+/// link, or anything but a lone regular file. The refusal is decided from
+/// the file this call opens, not from a separate `stat` of the path
+/// beforehand: `validate_regular_file` followed by a plain `open` leaves a
+/// window where a link swapped in between the two is followed by the open
+/// (#2404). A hard link is, structurally, an ordinary regular file, so this
+/// does not close every such window on its own (see #2407) — only refuse
+/// one already in place at (or before) this call.
 pub(crate) fn open_regular_file(
     path: &Path,
     entity: &str,
@@ -65,12 +68,25 @@ pub(crate) fn open_regular_file(
     let file = options
         .open(path)
         .map_err(|err| open_error(&err, path, entity))?;
-    let is_file = file
+    let metadata = file
         .metadata()
-        .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?
-        .is_file();
-    if !is_file {
+        .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
+    if !metadata.is_file() {
         return Err(capture(format!("{entity} path must be a regular file")));
+    }
+    #[cfg(unix)]
+    {
+        // A hard link to a file outside the store is, structurally, an
+        // ordinary regular file: `is_file` above cannot tell it apart, and
+        // `O_NOFOLLOW` only ever guarded the symlink case (#2407). A
+        // legitimate file this helper creates or reopens is never hard
+        // linked, so `nlink != 1` here can only mean a link planted before
+        // or at this open — refuse it the same way, on the handle this call
+        // already produced, not a second lookup of the path.
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            return Err(capture(format!("{entity} path must be a regular file")));
+        }
     }
     Ok(file)
 }
@@ -83,6 +99,17 @@ fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
     // directory at the journal path now surfaces through this open instead.
     // Both name the same refusal a caller already handles.
     if matches!(err.raw_os_error(), Some(libc::ELOOP | libc::EISDIR)) {
+        return capture(format!("{entity} path must be a regular file"));
+    }
+    // Anything else that isn't a regular file (a socket, most often) fails
+    // `open` itself with a platform- and file-type-specific errno that isn't
+    // worth enumerating one by one. The refusal already happened — `open`
+    // returned `Err` — so this `symlink_metadata` only chooses which message
+    // reports it; it decides nothing security-relevant, unlike the checks
+    // above that run on an already-open handle.
+    let is_non_regular = std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| !metadata.is_file() && !metadata.file_type().is_symlink());
+    if is_non_regular {
         capture(format!("{entity} path must be a regular file"))
     } else {
         capture(format!(
