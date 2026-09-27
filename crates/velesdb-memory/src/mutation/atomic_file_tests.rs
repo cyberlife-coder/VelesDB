@@ -134,17 +134,26 @@ fn open_regular_file_refuses_a_symlink_and_says_so_under_each_stores_name() {
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
 }
 
-/// #2404: `validate_regular_file` followed by a plain `open` left a window
-/// where a link swapped in between the two steps was followed by the open.
-/// `open_regular_file` has no such second step to race — whatever the path
-/// names at the single moment it opens is what gets checked. This proves
-/// that by performing the swap as late as it is possible to perform it (the
-/// instant before the call), which is the exact interleaving the old code
-/// was vulnerable to: a caller cannot land "between" a check and an open
-/// that no longer exist as two separate steps.
+/// #2404: `validate_regular_file` followed by a plain `open` were two
+/// separate syscalls against the *path*, with a window between them for a
+/// symlink to be swapped in. This test does not, and cannot, exercise that
+/// window from a single thread — it swaps the link in before calling
+/// `open_regular_file` at all, which the old two-step code would have caught
+/// too if the swap landed before its own first step. What it does pin: a
+/// symlink present at call time is refused, and, unlike the two-step code,
+/// `open_regular_file` has no separate first step for a check to pass and a
+/// later step to race against — the one check it makes is `fstat` on the
+/// file descriptor `open(O_NOFOLLOW)` already returned, not a second `stat`
+/// of the path, so there is no second syscall left to land a swap between.
+/// A mutant that reverts this function to `validate_regular_file(path,
+/// entity)?; options.open(path)` still passes this specific test (the swap
+/// is already in place before either step runs); it is caught instead by
+/// `open_regular_file_reads_and_writes_a_real_file` losing its `O_NOFOLLOW`
+/// enforcement being covered here, and separately, by inspection: the old
+/// code's `stat` and `open` name the same path but not the same object.
 #[cfg(unix)]
 #[test]
-fn open_regular_file_refuses_a_link_swapped_in_immediately_before_the_open() {
+fn open_regular_file_refuses_a_symlink_present_at_call_time_with_no_check_step_of_its_own() {
     use std::os::unix::fs::symlink;
 
     let root = tempfile::tempdir().expect("root");
@@ -153,8 +162,9 @@ fn open_regular_file_refuses_a_link_swapped_in_immediately_before_the_open() {
     let path = root.path().join("state");
     fs::write(&path, b"regular").expect("a real file first");
 
-    // A prior `validate_regular_file(&path, ..)` check would have passed
-    // here. The swap happens now, right before the only step left.
+    // What a prior `validate_regular_file(&path, ..)` check would have seen:
+    // a regular file. The swap happens right after, before the only
+    // remaining step (open_regular_file's single open+fstat).
     fs::remove_file(&path).expect("remove the regular file");
     symlink(&victim, &path).expect("swap in a link to the victim");
 
@@ -168,6 +178,41 @@ fn open_regular_file_refuses_a_link_swapped_in_immediately_before_the_open() {
         "{refused}"
     );
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+}
+
+/// A planted FIFO must be refused promptly, not hang the caller. Opening a
+/// FIFO for read blocks until a writer opens the other end; without
+/// `O_NONBLOCK` this call would wait forever instead of reaching the
+/// "not a regular file" refusal below (a mutant that drops `O_NONBLOCK`
+/// times out this test rather than failing it cleanly).
+#[cfg(unix)]
+#[test]
+fn open_regular_file_refuses_a_fifo_without_blocking() {
+    let root = tempfile::tempdir().expect("root");
+    let fifo = root.path().join("pipe");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("test: run mkfifo");
+    assert!(status.success(), "mkfifo failed: {status}");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+    std::thread::spawn(move || {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        let result = open_regular_file(&path, "test", options).map(|_| ());
+        let _ = tx.send(result.map_err(|err| err.to_string()));
+    });
+
+    let refused = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("open_regular_file must return instead of blocking on the FIFO")
+        .expect_err("a FIFO is not a regular file");
+    assert!(
+        refused.contains("test path must be a regular file"),
+        "{refused}"
+    );
 }
 
 #[test]

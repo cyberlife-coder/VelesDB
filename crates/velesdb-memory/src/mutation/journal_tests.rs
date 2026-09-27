@@ -225,6 +225,33 @@ fn every_append_boundary_fails_closed_and_recovers_a_valid_prefix() {
     }
 }
 
+/// #2404 follow-up: compaction's own reopen of the journal, right after
+/// `promote` and the directory sync, used to be a plain `OpenOptions::open`
+/// — a second, separate step after the file was already checked, so a link
+/// swapped in between the two was followed. `swap_once_at` performs that
+/// exact swap at the exact point production code reaches it (no test could
+/// otherwise land a real race there deterministically), so this fails
+/// against the pre-fix code and passes once the reopen goes through
+/// `open_regular_file`.
+#[cfg(unix)]
+#[test]
+fn compaction_refuses_a_path_swapped_in_between_the_directory_sync_and_the_reopen() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let identity = epoch(dir.path(), "00112233445566778899aabbccddeeff");
+    let journal = DirtyJournal::open(dir.path(), &identity, CAPACITY).expect("open");
+    journal.before_mutation(DirtyKey::Fact(1)).expect("append");
+
+    let victim = dir.path().join("victim");
+    std::fs::write(&victim, b"untouched").expect("victim");
+    journal.swap_once_at(FaultPoint::AfterDirectorySync, victim.clone());
+
+    let error = journal
+        .compact_through(1)
+        .expect_err("swapped-in symlink must be refused");
+    assert!(error.to_string().contains("regular file"), "{error}");
+    assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
+}
+
 #[test]
 fn disk_cap_refuses_before_an_unjournalled_write() {
     let dir = tempfile::tempdir().expect("tempdir");

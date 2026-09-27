@@ -50,6 +50,13 @@ pub(crate) struct DirtyJournal {
     inner: Mutex<JournalInner>,
     #[cfg(test)]
     fault: std::sync::atomic::AtomicU8,
+    /// Test-only seam: at the given `FaultPoint`, swap the journal path for a
+    /// symlink to the given victim, once, then let the caller proceed as if
+    /// nothing happened — the way a real attacker's swap would land mid-flight,
+    /// without also short-circuiting the code path under test the way
+    /// `fail_once_at` does.
+    #[cfg(test)]
+    swap_at: Mutex<Option<(u8, PathBuf)>>,
 }
 
 impl DirtyJournal {
@@ -75,6 +82,8 @@ impl DirtyJournal {
             }),
             #[cfg(test)]
             fault: std::sync::atomic::AtomicU8::new(0),
+            #[cfg(test)]
+            swap_at: Mutex::new(None),
         })
     }
 
@@ -166,11 +175,9 @@ impl DirtyJournal {
         durability_barrier(&self.workspace)
             .map_err(|err| capture(format!("cannot sync journal directory: {err}")))?;
         self.maybe_fail(FaultPoint::AfterDirectorySync)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&self.path)
-            .map_err(|err| capture(format!("cannot reopen compacted journal: {err}")))?;
+        let mut reopen_options = OpenOptions::new();
+        reopen_options.read(true).write(true);
+        let file = open_regular_file(&self.path, "journal", reopen_options)?;
         inner.file = Some(file);
         inner.header = next_header;
         inner.header_bytes = header_bytes;
@@ -209,9 +216,28 @@ impl DirtyJournal {
         self.fault.store(point as u8, Ordering::SeqCst);
     }
 
+    /// Swaps the journal path for a symlink to `victim` the next time
+    /// execution reaches `point`, then lets the caller proceed normally —
+    /// unlike `fail_once_at`, which returns early instead of reaching the
+    /// code the swap is meant to land in front of.
+    #[cfg(test)]
+    pub(super) fn swap_once_at(&self, point: FaultPoint, victim: PathBuf) {
+        *self.swap_at.lock() = Some((point as u8, victim));
+    }
+
     #[cfg(test)]
     fn maybe_fail(&self, point: FaultPoint) -> Result<(), MemoryError> {
         use std::sync::atomic::Ordering;
+        let mut swap_at = self.swap_at.lock();
+        if swap_at.as_ref().is_some_and(|(at, _)| *at == point as u8) {
+            let (_, victim) = swap_at.take().expect("checked above");
+            std::fs::remove_file(&self.path)
+                .map_err(|err| capture(format!("test: cannot remove journal path: {err}")))?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&victim, &self.path)
+                .map_err(|err| capture(format!("test: cannot plant swap symlink: {err}")))?;
+        }
+        drop(swap_at);
         if self
             .fault
             .compare_exchange(point as u8, 0, Ordering::SeqCst, Ordering::SeqCst)
@@ -257,7 +283,11 @@ fn prepare_journal(workspace: &Path, identity: &EpochIdentity) -> Result<PathBuf
     if !path_entry_exists(&path)? {
         create_journal(workspace, identity)?;
     }
-    validate_regular_file(&path)?;
+    // No `validate_regular_file` here: `load_journal`, called right after
+    // this returns, opens the same path through `open_regular_file`, whose
+    // check reads the handle it just opened rather than a separate `stat` of
+    // the path — a second check here would only restate the same race this
+    // PR removes, one call site up.
     Ok(path)
 }
 

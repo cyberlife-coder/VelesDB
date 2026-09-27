@@ -46,7 +46,12 @@ pub(crate) fn open_regular_file(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+        // `O_NONBLOCK` alongside `O_NOFOLLOW`: opening a FIFO would otherwise
+        // block the caller until a peer opens the other end (#2404 follow-up
+        // finding), turning a planted FIFO into a hang instead of the
+        // rejection below. It has no effect on a regular file (POSIX
+        // open(2)), so a legitimate open is unaffected.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     #[cfg(windows)]
     {
@@ -57,7 +62,9 @@ pub(crate) fn open_regular_file(
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let file = options.open(path).map_err(|err| open_error(&err, entity))?;
+    let file = options
+        .open(path)
+        .map_err(|err| open_error(&err, path, entity))?;
     let is_file = file
         .metadata()
         .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?
@@ -69,17 +76,23 @@ pub(crate) fn open_regular_file(
 }
 
 #[cfg(unix)]
-fn open_error(err: &std::io::Error, entity: &str) -> MemoryError {
+fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
     if err.raw_os_error() == Some(libc::ELOOP) {
         capture(format!("{entity} path must be a regular file"))
     } else {
-        capture(format!("cannot open {entity} file: {err}"))
+        capture(format!(
+            "cannot open {entity} file {}: {err}",
+            path.display()
+        ))
     }
 }
 
 #[cfg(not(unix))]
-fn open_error(err: &std::io::Error, entity: &str) -> MemoryError {
-    capture(format!("cannot open {entity} file: {err}"))
+fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
+    capture(format!(
+        "cannot open {entity} file {}: {err}",
+        path.display()
+    ))
 }
 
 pub(crate) fn path_exists(path: &Path) -> Result<bool, MemoryError> {
