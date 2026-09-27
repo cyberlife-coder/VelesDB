@@ -54,8 +54,9 @@ pub(crate) struct DirtyJournal {
     /// symlink to the given victim, once, then let the caller proceed as if
     /// nothing happened — the way a real attacker's swap would land mid-flight,
     /// without also short-circuiting the code path under test the way
-    /// `fail_once_at` does.
-    #[cfg(test)]
+    /// `fail_once_at` does. Unix-only: the only test that uses it plants a
+    /// symlink, which windows has no equivalent seam for.
+    #[cfg(all(test, unix))]
     swap_at: Mutex<Option<(u8, PathBuf)>>,
 }
 
@@ -82,7 +83,7 @@ impl DirtyJournal {
             }),
             #[cfg(test)]
             fault: std::sync::atomic::AtomicU8::new(0),
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             swap_at: Mutex::new(None),
         })
     }
@@ -220,24 +221,34 @@ impl DirtyJournal {
     /// execution reaches `point`, then lets the caller proceed normally —
     /// unlike `fail_once_at`, which returns early instead of reaching the
     /// code the swap is meant to land in front of.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn swap_once_at(&self, point: FaultPoint, victim: PathBuf) {
         *self.swap_at.lock() = Some((point as u8, victim));
     }
 
-    #[cfg(test)]
-    fn maybe_fail(&self, point: FaultPoint) -> Result<(), MemoryError> {
-        use std::sync::atomic::Ordering;
+    #[cfg(all(test, unix))]
+    fn apply_pending_swap(&self, point: FaultPoint) -> Result<(), MemoryError> {
         let mut swap_at = self.swap_at.lock();
         if swap_at.as_ref().is_some_and(|(at, _)| *at == point as u8) {
             let (_, victim) = swap_at.take().expect("checked above");
             std::fs::remove_file(&self.path)
                 .map_err(|err| capture(format!("test: cannot remove journal path: {err}")))?;
-            #[cfg(unix)]
             std::os::unix::fs::symlink(&victim, &self.path)
                 .map_err(|err| capture(format!("test: cannot plant swap symlink: {err}")))?;
         }
-        drop(swap_at);
+        Ok(())
+    }
+
+    #[cfg(all(test, not(unix)))]
+    #[allow(clippy::unnecessary_wraps, clippy::unused_self)] // Mirrors the unix seam exactly.
+    fn apply_pending_swap(&self, _point: FaultPoint) -> Result<(), MemoryError> {
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn maybe_fail(&self, point: FaultPoint) -> Result<(), MemoryError> {
+        use std::sync::atomic::Ordering;
+        self.apply_pending_swap(point)?;
         if self
             .fault
             .compare_exchange(point as u8, 0, Ordering::SeqCst, Ordering::SeqCst)

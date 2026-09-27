@@ -77,7 +77,12 @@ pub(crate) fn open_regular_file(
 
 #[cfg(unix)]
 fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
-    if err.raw_os_error() == Some(libc::ELOOP) {
+    // ELOOP: `O_NOFOLLOW` refused a symlink. EISDIR: opening a directory for
+    // write fails here rather than at a separate pre-check — dropping
+    // `prepare_journal`'s redundant `validate_regular_file` (this PR) means a
+    // directory at the journal path now surfaces through this open instead.
+    // Both name the same refusal a caller already handles.
+    if matches!(err.raw_os_error(), Some(libc::ELOOP | libc::EISDIR)) {
         capture(format!("{entity} path must be a regular file"))
     } else {
         capture(format!(
