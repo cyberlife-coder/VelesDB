@@ -294,8 +294,10 @@ fn copy_regular_file(
     destination: &Path,
     expected_len: u64,
 ) -> Result<(), crate::MemoryError> {
-    let mut input = File::open(source)
-        .map_err(|err| query_error(format!("cannot open {}: {err}", source.display())))?;
+    let mut open_options = OpenOptions::new();
+    open_options.read(true);
+    let mut input =
+        crate::mutation::atomic_file::open_regular_file(source, "diagnostic source", open_options)?;
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)

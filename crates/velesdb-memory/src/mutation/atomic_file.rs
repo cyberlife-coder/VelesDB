@@ -80,11 +80,17 @@ pub(crate) fn open_regular_file(
         // ordinary regular file: `is_file` above cannot tell it apart, and
         // `O_NOFOLLOW` only ever guarded the symlink case (#2407). A
         // legitimate file this helper creates or reopens is never hard
-        // linked, so `nlink != 1` here can only mean a link planted before
+        // linked TO, so `nlink > 1` here can only mean a link planted before
         // or at this open — refuse it the same way, on the handle this call
-        // already produced, not a second lookup of the path.
+        // already produced, not a second lookup of the path. `nlink == 0` is
+        // not that: a reader can win the open() race against a concurrent,
+        // legitimate rename-replace of the same path (extraction job records
+        // are read while a worker is still saving state transitions into
+        // them), which unlinks the name this handle held without touching
+        // the content already read through it — refusing that would turn a
+        // routine concurrent read into a spurious failure.
         use std::os::unix::fs::MetadataExt;
-        if metadata.nlink() != 1 {
+        if metadata.nlink() > 1 {
             return Err(capture(format!("{entity} path must be a regular file")));
         }
     }

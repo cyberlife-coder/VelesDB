@@ -133,6 +133,41 @@ fn two_migrations_cannot_hold_the_lock() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let secret = outside.path().join("secret");
+    std::fs::write(&secret, b"do-not-read-or-write-me").expect("plant secret");
+
+    let lock = MigrationLock::acquire(workspace.path(), "run-A").expect("acquire");
+    std::fs::remove_file(workspace.path().join(super::LOCK_FILE)).expect("remove real lock file");
+    symlink(&secret, workspace.path().join(super::LOCK_FILE)).expect("plant symlink lock");
+
+    let refusal = lock
+        .release()
+        .expect_err("a symlinked lock record must be refused, not followed");
+    assert!(
+        refusal.contains(super::LOCK_FILE),
+        "the refusal must name the lock file it would not touch: {refusal}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&secret).expect("secret must be untouched"),
+        "do-not-read-or-write-me",
+        "release must never read through a symlinked lock into a file outside the workspace"
+    );
+    assert!(
+        std::fs::symlink_metadata(workspace.path().join(super::LOCK_FILE))
+            .expect("symlink must remain")
+            .file_type()
+            .is_symlink(),
+        "a refused release must not remove the symlink standing in for the lock"
+    );
+}
+
 #[test]
 fn the_lock_never_lives_in_the_source() {
     // Property (7). The diagnosis contract is that the source is not written

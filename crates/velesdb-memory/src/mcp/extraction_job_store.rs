@@ -1,6 +1,6 @@
 //! Atomic per-job snapshots for the durable extraction state machine.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::extraction_jobs::{JobError, JobRecord};
@@ -105,29 +105,24 @@ fn remove_if_temporary(entry: &std::fs::DirEntry) -> Result<bool, JobError> {
 }
 
 fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
-    let Some(metadata) = record_metadata(path)? else {
+    if !crate::mutation::atomic_file::path_exists(path).map_err(storage_error)? {
         return Ok(None);
-    };
-    validate_record_metadata(path, &metadata)?;
-    std::fs::read(path).map(Some).map_err(storage_error)
-}
-
-fn record_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, JobError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) => Ok(Some(metadata)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(storage_error(error)),
     }
-}
-
-fn validate_record_metadata(path: &Path, metadata: &std::fs::Metadata) -> Result<(), JobError> {
-    if !metadata.file_type().is_file() || metadata.len() > MAX_RECORD_BYTES {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    let mut file =
+        crate::mutation::atomic_file::open_regular_file(path, "extraction job record", options)
+            .map_err(storage_error)?;
+    let length = file.metadata().map_err(storage_error)?.len();
+    if length > MAX_RECORD_BYTES {
         return Err(JobError::Storage(format!(
             "invalid extraction job record {}",
             path.display()
         )));
     }
-    Ok(())
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(storage_error)?;
+    Ok(Some(bytes))
 }
 
 fn validate_filename(record: &JobRecord, request_id: &str, path: &Path) -> Result<(), JobError> {

@@ -1,5 +1,5 @@
 use super::STATE_FILE;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -75,14 +75,17 @@ impl MigrationLock {
     }
 
     fn owns_current_lock(&self) -> bool {
-        let is_live_regular_file = std::fs::symlink_metadata(&self.path)
-            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink());
-        if !is_live_regular_file {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        let Ok(mut file) =
+            crate::mutation::atomic_file::open_regular_file(&self.path, "migration lock", options)
+        else {
             return false;
-        }
-        std::fs::read_to_string(&self.path)
+        };
+        let mut body = String::new();
+        file.read_to_string(&mut body)
             .ok()
-            .and_then(|body| serde_json::from_str::<LockRecord>(&body).ok())
+            .and_then(|_| serde_json::from_str::<LockRecord>(&body).ok())
             .is_some_and(|record| {
                 record.format_version == LOCK_FORMAT_VERSION && record.token == self.token
             })

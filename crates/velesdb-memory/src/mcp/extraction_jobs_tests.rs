@@ -54,6 +54,36 @@ fn persisted_failure_text_respects_its_utf8_byte_limit() {
     assert!(truncated.is_char_boundary(truncated.len()));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().expect("create durable job store");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let secret = outside.path().join("secret");
+    std::fs::write(&secret, b"do-not-read-me").expect("plant secret");
+
+    let record = accepted_record();
+    let store = JobStore::open(directory.path()).expect("open job snapshots");
+    store.save(&record).expect("persist record");
+
+    let record_path = directory
+        .path()
+        .join("extraction-jobs")
+        .join(format!("{}.json", record.request_id));
+    std::fs::remove_file(&record_path).expect("remove real record");
+    symlink(&secret, &record_path).expect("plant symlink record");
+
+    let error = store
+        .load(&record.request_id)
+        .expect_err("a symlinked job record must be refused, not followed");
+    assert!(
+        error.to_string().contains("regular file"),
+        "the refusal must say the record is not a regular file: {error}"
+    );
+}
+
 fn persist_interrupted_job(
     directory: &Path,
     service: &MemoryService<DynEmbedder>,
