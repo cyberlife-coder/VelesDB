@@ -57,7 +57,7 @@ hyper-util = { version = "0.1.12", features = ["tokio", "server-auto"] }
 
 # OpenAPI/Swagger documentation
 utoipa = { version = "5.3.0", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
+utoipa-swagger-ui = { version = "10", features = ["axum"], optional = true }
 
 [features]
 default = ["velesdb-core/default", "persistence", "update-check", "prometheus"]
