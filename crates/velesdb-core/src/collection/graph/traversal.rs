@@ -252,6 +252,70 @@ enum BfsDirection {
     Reverse,
 }
 
+/// Mutable state of one BFS run, shared by the CSR and legacy expansion paths.
+struct BfsWalk<'a> {
+    config: &'a TraversalConfig,
+    source_id: u64,
+    results: Vec<TraversalResult>,
+    visited: FxHashSet<u64>,
+    queue: VecDeque<BfsState>,
+    /// Parent-pointer map: target_node -> (parent_node, edge_id).
+    /// O(visited_nodes) memory vs O(visited_nodes * avg_depth) for path cloning.
+    parent_map: FxHashMap<u64, (u64, u64)>,
+}
+
+impl<'a> BfsWalk<'a> {
+    /// Starts a walk at `source_id`, marked visited so cycles back to it
+    /// cause no duplicate work.
+    fn new(config: &'a TraversalConfig, source_id: u64) -> Self {
+        let mut visited = FxHashSet::default();
+        visited.insert(source_id);
+        let mut queue = VecDeque::new();
+        queue.push_back(BfsState {
+            node_id: source_id,
+            depth: 0,
+        });
+        Self {
+            config,
+            source_id,
+            results: Vec::new(),
+            visited,
+            queue,
+            parent_map: FxHashMap::default(),
+        }
+    }
+
+    fn limit_reached(&self) -> bool {
+        self.results.len() >= self.config.limit
+    }
+
+    /// Processes a single BFS candidate: checks depth, visited status, records
+    /// parent pointer, emits result if within depth range, and enqueues for
+    /// further expansion.
+    #[inline]
+    fn visit(&mut self, target: u64, edge_id: u64, parent: &BfsState) {
+        let new_depth = parent.depth + 1;
+        if new_depth > self.config.max_depth {
+            return;
+        }
+        if self.visited.insert(target) {
+            self.parent_map.insert(target, (parent.node_id, edge_id));
+
+            if new_depth >= self.config.min_depth {
+                let path = reconstruct_path(target, self.source_id, &self.parent_map);
+                self.results
+                    .push(TraversalResult::new(target, path, new_depth));
+            }
+            if new_depth < self.config.max_depth {
+                self.queue.push_back(BfsState {
+                    node_id: target,
+                    depth: new_depth,
+                });
+            }
+        }
+    }
+}
+
 /// Core BFS loop shared by forward and reverse traversal.
 ///
 /// Uses parent-pointer map instead of per-state path cloning.
@@ -268,24 +332,10 @@ fn bfs_traverse_directed(
     config: &TraversalConfig,
     direction: BfsDirection,
 ) -> Vec<TraversalResult> {
-    let mut results = Vec::new();
-    let mut visited = FxHashSet::default();
-    let mut queue = VecDeque::new();
-    // Parent-pointer map: target_node -> (parent_node, edge_id).
-    // O(visited_nodes) memory vs O(visited_nodes * avg_depth) for path cloning.
-    let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
+    let mut walk = BfsWalk::new(config, source_id);
 
     // Pre-build a FxHashSet<&str> once for the entire traversal, not per-node.
     let rel_filter: FxHashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
-
-    // CRITICAL FIX: Mark source node as visited before traversal
-    // to prevent cycles back to source causing duplicate work
-    visited.insert(source_id);
-
-    queue.push_back(BfsState {
-        node_id: source_id,
-        depth: 0,
-    });
 
     // Use CSR zero-copy path for forward traversal when snapshot exists.
     let use_csr = direction == BfsDirection::Forward && edge_store.has_csr_snapshot();
@@ -293,46 +343,25 @@ fn bfs_traverse_directed(
     // Start at the threshold so an already-expired deadline aborts on the
     // first pop; otherwise the clock is only read every N pops.
     let mut nodes_since_check = DEADLINE_CHECK_INTERVAL;
-    while let Some(state) = queue.pop_front() {
-        if results.len() >= config.limit {
+    while let Some(state) = walk.queue.pop_front() {
+        if walk.limit_reached() {
             break;
         }
         if deadline_reached(config.deadline, &mut nodes_since_check) {
             break;
         }
         if use_csr {
-            process_bfs_csr(
-                edge_store,
-                &state,
-                config,
-                source_id,
-                &rel_filter,
-                &mut results,
-                &mut visited,
-                &mut queue,
-                &mut parent_map,
-            );
+            process_bfs_csr(edge_store, &state, &rel_filter, &mut walk);
         } else {
             let edges = match direction {
                 BfsDirection::Forward => edge_store.get_outgoing(state.node_id),
                 BfsDirection::Reverse => edge_store.get_incoming(state.node_id),
             };
-            process_bfs_neighbors(
-                &edges,
-                &state,
-                config,
-                source_id,
-                &rel_filter,
-                direction,
-                &mut results,
-                &mut visited,
-                &mut queue,
-                &mut parent_map,
-            );
+            process_bfs_neighbors(&edges, &state, &rel_filter, direction, &mut walk);
         }
     }
 
-    results
+    walk.results
 }
 
 /// CSR zero-copy BFS expansion for forward traversal.
@@ -342,17 +371,11 @@ fn bfs_traverse_directed(
 /// Uses parent-pointer insertion instead of path cloning.
 /// Only emits results for newly-discovered nodes (no duplicates).
 #[inline]
-#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_csr(
     edge_store: &EdgeStore,
     state: &BfsState,
-    config: &TraversalConfig,
-    source_id: u64,
     rel_filter: &FxHashSet<&str>,
-    results: &mut Vec<TraversalResult>,
-    visited: &mut FxHashSet<u64>,
-    queue: &mut VecDeque<BfsState>,
-    parent_map: &mut FxHashMap<u64, (u64, u64)>,
+    walk: &mut BfsWalk<'_>,
 ) {
     let Some(snapshot) = edge_store.csr_snapshot() else {
         return;
@@ -361,7 +384,7 @@ fn process_bfs_csr(
     let edge_ids = snapshot.edge_ids(state.node_id);
 
     for (i, (&target, &eid)) in targets.iter().zip(edge_ids.iter()).enumerate() {
-        if results.len() >= config.limit {
+        if walk.limit_reached() {
             break;
         }
         if let Some(label) = snapshot.label_at(state.node_id, i) {
@@ -372,18 +395,7 @@ fn process_bfs_csr(
             // Edge with unresolvable label excluded when filter is active
             continue;
         }
-        process_bfs_candidate(
-            target,
-            eid,
-            state.node_id,
-            state.depth,
-            config,
-            source_id,
-            results,
-            visited,
-            queue,
-            parent_map,
-        );
+        walk.visit(target, eid, state);
     }
 }
 
@@ -392,21 +404,15 @@ fn process_bfs_csr(
 /// Uses parent-pointer insertion instead of path cloning.
 /// Only emits results for newly-discovered nodes (no duplicates).
 #[inline]
-#[allow(clippy::too_many_arguments)] // Reason: BFS helper passes parent_map alongside traversal state; private fn
 fn process_bfs_neighbors(
     edges: &[&super::GraphEdge],
     state: &BfsState,
-    config: &TraversalConfig,
-    source_id: u64,
     rel_filter: &FxHashSet<&str>,
     direction: BfsDirection,
-    results: &mut Vec<TraversalResult>,
-    visited: &mut FxHashSet<u64>,
-    queue: &mut VecDeque<BfsState>,
-    parent_map: &mut FxHashMap<u64, (u64, u64)>,
+    walk: &mut BfsWalk<'_>,
 ) {
     for edge in edges {
-        if results.len() >= config.limit {
+        if walk.limit_reached() {
             break;
         }
         if !rel_filter.is_empty() && !rel_filter.contains(edge.label()) {
@@ -416,56 +422,7 @@ fn process_bfs_neighbors(
             BfsDirection::Forward => edge.target(),
             BfsDirection::Reverse => edge.source(),
         };
-        process_bfs_candidate(
-            next_node,
-            edge.id(),
-            state.node_id,
-            state.depth,
-            config,
-            source_id,
-            results,
-            visited,
-            queue,
-            parent_map,
-        );
-    }
-}
-
-/// Processes a single BFS candidate: checks depth, visited status, records
-/// parent pointer, emits result if within depth range, and enqueues for
-/// further expansion.
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn process_bfs_candidate(
-    target: u64,
-    edge_id: u64,
-    parent_node: u64,
-    current_depth: u32,
-    config: &TraversalConfig,
-    source_id: u64,
-    results: &mut Vec<TraversalResult>,
-    visited: &mut FxHashSet<u64>,
-    queue: &mut VecDeque<BfsState>,
-    parent_map: &mut FxHashMap<u64, (u64, u64)>,
-) {
-    let new_depth = current_depth + 1;
-    if new_depth > config.max_depth {
-        return;
-    }
-    let is_new = visited.insert(target);
-    if is_new {
-        parent_map.insert(target, (parent_node, edge_id));
-
-        if new_depth >= config.min_depth {
-            let path = reconstruct_path(target, source_id, parent_map);
-            results.push(TraversalResult::new(target, path, new_depth));
-        }
-        if new_depth < config.max_depth {
-            queue.push_back(BfsState {
-                node_id: target,
-                depth: new_depth,
-            });
-        }
+        walk.visit(next_node, edge.id(), state);
     }
 }
 
