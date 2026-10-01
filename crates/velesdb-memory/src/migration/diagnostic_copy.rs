@@ -296,8 +296,16 @@ fn copy_regular_file(
 ) -> Result<(), crate::MemoryError> {
     let mut open_options = OpenOptions::new();
     open_options.read(true);
-    let mut input =
-        crate::mutation::atomic_file::open_regular_file(source, "diagnostic source", open_options)?;
+    // Read-only copy of a tree this process does not own: a hard-link based
+    // backup (`cp -al`, `rsync --link-dest`) routinely gives an ordinary
+    // file `nlink > 1`, so only the symlink-swap race (#2404) is refused
+    // here, not the hard-link case `open_regular_file` refuses for files
+    // this store itself mutates (#2407).
+    let mut input = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+        source,
+        "diagnostic source",
+        open_options,
+    )?;
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)

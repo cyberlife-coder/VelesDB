@@ -38,14 +38,59 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 /// the file this call opens, not from a separate `stat` of the path
 /// beforehand: `validate_regular_file` followed by a plain `open` leaves a
 /// window where a link swapped in between the two is followed by the open
-/// (#2404). A hard link is, structurally, an ordinary regular file, so this
-/// does not close every such window on its own (see #2407) — only refuse
-/// one already in place at (or before) this call.
+/// (#2404).
+///
+/// Refusing the hard-link case only makes sense for a file this store
+/// itself owns and mutates (a lock, a journal, a job record): a legitimate
+/// copy of it is never hard linked, so `nlink > 1` can only mean a link
+/// planted before or at this open (#2407). A path this helper only ever
+/// *reads* from someone else's tree has no such guarantee — a hard-link
+/// based backup (`cp -al`, `rsync --link-dest`) routinely produces
+/// `nlink > 1` on perfectly ordinary files — so a read-only caller over
+/// such a tree wants [`open_regular_file_allow_hard_links`] instead.
 pub(crate) fn open_regular_file(
     path: &Path,
     entity: &str,
-    mut options: OpenOptions,
+    options: OpenOptions,
 ) -> Result<File, MemoryError> {
+    let file = open_checked(path, entity, options)?;
+    #[cfg(unix)]
+    {
+        // A hard link to a file outside the store is, structurally, an
+        // ordinary regular file: the `is_file` check in `open_checked`
+        // cannot tell it apart, and `O_NOFOLLOW` only ever guarded the
+        // symlink case (#2407). `nlink == 0` is not that: a reader can win
+        // the open() race against a concurrent, legitimate rename-replace
+        // of the same path (extraction job records are read while a worker
+        // is still saving state transitions into them), which unlinks the
+        // name this handle held without touching the content already read
+        // through it — refusing that would turn a routine concurrent read
+        // into a spurious failure.
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file
+            .metadata()
+            .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
+        if metadata.nlink() > 1 {
+            return Err(capture(format!("{entity} path must be a regular file")));
+        }
+    }
+    Ok(file)
+}
+
+/// As [`open_regular_file`], but accepts a hard-linked target: for a path
+/// this helper only reads from a tree it does not own (a diagnostic source
+/// directory), a hard link planted by a backup tool is indistinguishable
+/// from an ordinary file, so there is nothing here to refuse it against.
+/// The symlink-swap protection (#2404) still applies in full.
+pub(crate) fn open_regular_file_allow_hard_links(
+    path: &Path,
+    entity: &str,
+    options: OpenOptions,
+) -> Result<File, MemoryError> {
+    open_checked(path, entity, options)
+}
+
+fn open_checked(path: &Path, entity: &str, mut options: OpenOptions) -> Result<File, MemoryError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -73,26 +118,6 @@ pub(crate) fn open_regular_file(
         .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
     if !metadata.is_file() {
         return Err(capture(format!("{entity} path must be a regular file")));
-    }
-    #[cfg(unix)]
-    {
-        // A hard link to a file outside the store is, structurally, an
-        // ordinary regular file: `is_file` above cannot tell it apart, and
-        // `O_NOFOLLOW` only ever guarded the symlink case (#2407). A
-        // legitimate file this helper creates or reopens is never hard
-        // linked TO, so `nlink > 1` here can only mean a link planted before
-        // or at this open — refuse it the same way, on the handle this call
-        // already produced, not a second lookup of the path. `nlink == 0` is
-        // not that: a reader can win the open() race against a concurrent,
-        // legitimate rename-replace of the same path (extraction job records
-        // are read while a worker is still saving state transitions into
-        // them), which unlinks the name this handle held without touching
-        // the content already read through it — refusing that would turn a
-        // routine concurrent read into a spurious failure.
-        use std::os::unix::fs::MetadataExt;
-        if metadata.nlink() > 1 {
-            return Err(capture(format!("{entity} path must be a regular file")));
-        }
     }
     Ok(file)
 }

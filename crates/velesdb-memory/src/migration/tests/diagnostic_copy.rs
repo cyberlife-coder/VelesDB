@@ -235,6 +235,27 @@ fn root_and_nested_symlinks_are_refused_without_following_them() {
     copy.finish(Ok(())).expect("cleanup");
 }
 
+/// A hard-link based backup (`cp -al`, `rsync --link-dest`) routinely
+/// produces `nlink > 1` on an ordinary file. The diagnostic copy only
+/// reads the source, so it must accept that shape rather than refuse it as
+/// if it were a link planted to redirect a write (#2409) — only a symlink
+/// swap, proven above, is refused.
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_source_file_is_copied_not_refused() {
+    let source = tempfile::tempdir().expect("source");
+    let original = source.path().join("payload.bin");
+    std::fs::write(&original, b"payload").expect("seed");
+    let alias = source.path().join("payload-alias.bin");
+    std::fs::hard_link(&original, &alias).expect("plant in-tree hard link");
+    let staging = tempfile::tempdir().expect("staging");
+
+    let copy =
+        super::super::diagnostic_copy::DiagnosticCopy::capture(source.path(), staging.path())
+            .expect("a hard-linked source file must be copied, not refused");
+    copy.finish(Ok(())).expect("cleanup");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_special_file_is_refused_and_unrelated_scratch_is_never_swept() {

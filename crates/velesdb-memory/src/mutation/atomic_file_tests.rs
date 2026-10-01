@@ -5,7 +5,10 @@
 
 use std::fs;
 
-use super::{open_regular_file, path_exists, promote, validate_regular_file, validate_workspace};
+use super::{
+    open_regular_file, open_regular_file_allow_hard_links, path_exists, promote,
+    validate_regular_file, validate_workspace,
+};
 
 /// The two stores that share these primitives each name themselves in every
 /// message, so each check runs under both names.
@@ -249,6 +252,43 @@ fn open_regular_file_refuses_a_hard_link() {
         "{refused}"
     );
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+}
+
+/// `open_regular_file_allow_hard_links` is for a caller that only reads
+/// someone else's tree (a diagnostic source): it accepts the exact shape
+/// the test above refuses, because a hard-link based backup routinely
+/// produces it on ordinary files. The symlink-swap protection (#2404) is
+/// shared code and still applies in full.
+#[cfg(unix)]
+#[test]
+fn open_regular_file_allow_hard_links_accepts_a_hard_link_but_still_refuses_a_symlink() {
+    let root = tempfile::tempdir().expect("root");
+    let victim = root.path().join("victim");
+    fs::write(&victim, b"content").expect("victim");
+    let aliased = root.path().join("aliased");
+    fs::hard_link(&victim, &aliased).expect("hard link");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    open_regular_file_allow_hard_links(&aliased, "test", options)
+        .expect("a hard link must be accepted by the hard-link-tolerant open");
+
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("secret");
+    fs::write(&secret, b"do-not-read-me").expect("secret");
+    let linked = root.path().join("state");
+    std::os::unix::fs::symlink(&secret, &linked).expect("symlink");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    let refused = open_regular_file_allow_hard_links(&linked, "test", options)
+        .expect_err("a symlink must still be refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("test path must be a regular file"),
+        "{refused}"
+    );
 }
 
 /// A Unix domain socket is refused the same way a FIFO is, and with the

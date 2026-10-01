@@ -168,6 +168,38 @@ fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
     );
 }
 
+/// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
+/// cannot tell it apart (#2407). `open_regular_file`'s `nlink > 1` check
+/// refuses it on the handle `owns_current_lock` already produced, isolated
+/// from the symlink case above by keeping every other variable (path,
+/// content, token) identical.
+#[cfg(unix)]
+#[test]
+fn a_lock_file_hard_linked_from_outside_is_refused_not_followed() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+
+    let lock = MigrationLock::acquire(workspace.path(), "run-A").expect("acquire");
+    let lock_path = workspace.path().join(super::LOCK_FILE);
+    let content = std::fs::read(&lock_path).expect("read real lock content");
+    std::fs::remove_file(&lock_path).expect("remove real lock file");
+    let alias = workspace.path().join("lock-alias");
+    std::fs::write(&alias, &content).expect("plant alias");
+    std::fs::hard_link(&alias, &lock_path).expect("plant hard link lock");
+
+    let refusal = lock
+        .release()
+        .expect_err("a hard-linked lock record must be refused, not followed");
+    assert!(
+        refusal.contains(super::LOCK_FILE),
+        "the refusal must name the lock file it would not touch: {refusal}"
+    );
+    assert_eq!(
+        std::fs::read(&alias).expect("alias must be untouched"),
+        content,
+        "a refused release must never remove or alter the aliased file through the hard link"
+    );
+}
+
 #[test]
 fn the_lock_never_lives_in_the_source() {
     // Property (7). The diagnosis contract is that the source is not written

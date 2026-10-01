@@ -82,6 +82,49 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
         error.to_string().contains("regular file"),
         "the refusal must say the record is not a regular file: {error}"
     );
+    assert_eq!(
+        std::fs::read(&secret).expect("secret must be untouched"),
+        b"do-not-read-me",
+        "a refused load must never read through the symlink into a file outside the store"
+    );
+}
+
+/// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
+/// cannot tell it apart (#2407). `open_regular_file`'s `nlink > 1` check
+/// refuses it on the handle this load already produced, isolated from the
+/// symlink case above by keeping every other variable (path, content,
+/// request id) identical.
+#[cfg(unix)]
+#[test]
+fn a_job_record_hard_linked_from_outside_is_refused_not_followed() {
+    let directory = tempfile::tempdir().expect("create durable job store");
+
+    let record = accepted_record();
+    let store = JobStore::open(directory.path()).expect("open job snapshots");
+    store.save(&record).expect("persist record");
+
+    let record_path = directory
+        .path()
+        .join("extraction-jobs")
+        .join(format!("{}.json", record.request_id));
+    let content = std::fs::read(&record_path).expect("read real record");
+    std::fs::remove_file(&record_path).expect("remove real record");
+    let alias = directory.path().join("record-alias.json");
+    std::fs::write(&alias, &content).expect("plant alias");
+    std::fs::hard_link(&alias, &record_path).expect("plant hard link record");
+
+    let error = store
+        .load(&record.request_id)
+        .expect_err("a hard-linked job record must be refused, not followed");
+    assert!(
+        error.to_string().contains("regular file"),
+        "the refusal must say the record is not a regular file: {error}"
+    );
+    assert_eq!(
+        std::fs::read(&alias).expect("alias must be untouched"),
+        content,
+        "a refused load must never alter the aliased record through the hard link"
+    );
 }
 
 fn persist_interrupted_job(
