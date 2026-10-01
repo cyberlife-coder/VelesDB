@@ -163,16 +163,10 @@ pub enum MemoryError {
     #[error("rerank error: {0}")]
     Rerank(#[from] RerankError),
 
-    /// An internal invariant on a small on-disk state/record file was
-    /// violated: a path that should be a lone regular file turned out not
-    /// to be, or could not be inspected. Despite the variant's name (kept to
-    /// avoid renaming it across the many call sites predating this doc),
-    /// this is raised by `mutation::atomic_file`'s shared guards for any
-    /// caller that keeps such a file — the online-migration observer, the
-    /// mutation journal and controller state, and MCP's extraction job
-    /// store alike — not only migration code.
+    /// The online-migration observer could not durably classify a mutation.
+    /// The source write has not run when this error is returned.
     #[cfg(feature = "persistence")]
-    #[error("internal storage guard error: {0}")]
+    #[error("migration capture error: {0}")]
     MigrationCapture(String),
 
     /// The storage backend in use does not support the requested operation.

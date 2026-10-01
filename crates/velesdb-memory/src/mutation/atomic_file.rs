@@ -53,7 +53,11 @@ pub(crate) fn open_regular_file(
     entity: &str,
     options: OpenOptions,
 ) -> Result<File, MemoryError> {
-    let file = open_checked(path, entity, options)?;
+    let (file, metadata) = open_checked(path, entity, options)?;
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+    }
     #[cfg(unix)]
     {
         // A hard link to a file outside the store is, structurally, an
@@ -67,9 +71,6 @@ pub(crate) fn open_regular_file(
         // through it — refusing that would turn a routine concurrent read
         // into a spurious failure.
         use std::os::unix::fs::MetadataExt;
-        let metadata = file
-            .metadata()
-            .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
         if metadata.nlink() > 1 {
             return Err(capture(format!("{entity} path must be a regular file")));
         }
@@ -87,10 +88,19 @@ pub(crate) fn open_regular_file_allow_hard_links(
     entity: &str,
     options: OpenOptions,
 ) -> Result<File, MemoryError> {
-    open_checked(path, entity, options)
+    let (file, _metadata) = open_checked(path, entity, options)?;
+    Ok(file)
 }
 
-fn open_checked(path: &Path, entity: &str, mut options: OpenOptions) -> Result<File, MemoryError> {
+/// Opens `path` with the symlink-swap protection (#2404) and returns the
+/// already-fetched `Metadata` alongside the handle, so a caller that also
+/// needs to inspect it (the hard-link check above) does not `fstat` the
+/// same handle a second time.
+fn open_checked(
+    path: &Path,
+    entity: &str,
+    mut options: OpenOptions,
+) -> Result<(File, std::fs::Metadata), MemoryError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -119,7 +129,7 @@ fn open_checked(path: &Path, entity: &str, mut options: OpenOptions) -> Result<F
     if !metadata.is_file() {
         return Err(capture(format!("{entity} path must be a regular file")));
     }
-    Ok(file)
+    Ok((file, metadata))
 }
 
 #[cfg(unix)]

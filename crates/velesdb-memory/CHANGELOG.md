@@ -20,6 +20,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three more check-then-open races outside #2404/#2405's five sites are now
+  closed, and a diagnostic copy accepts a hard-linked source.**
+  `mcp::extraction_job_store`'s job-record reads, `migration::state::lock`'s
+  lock reads, and `migration::diagnostic_copy`'s source copies each still
+  decided a path was safe from a separate `symlink_metadata` call and then
+  reopened the same path by name afterward — the same check-then-open shape
+  #2404 closed elsewhere. All three now route through
+  `mutation::atomic_file`'s handle-based guards: a hard-linked lock file or
+  job record is refused the same way a hard-linked mutation-journal file
+  already was (#2407), while the diagnostic copy — read-only, over a tree
+  it does not own — accepts the `nlink > 1` a hard-link based backup
+  (`cp -al`, `rsync --link-dest`) routinely produces on an ordinary file,
+  refusing only an actual symlink swap (#2406, #2409).
+
 - **`BoundedSessionManager` dropped the inner session manager's event store.**
   It wraps `rmcp`'s `SessionManager` to cap concurrent MCP HTTP sessions but
   did not forward `event_store()`, so it reported the trait's default

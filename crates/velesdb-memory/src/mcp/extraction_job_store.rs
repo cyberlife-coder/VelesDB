@@ -110,9 +110,16 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
     }
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
+    // `open_regular_file`'s error carries `MigrationCapture`'s shared
+    // Display text, worded for its original migration callers — reworded
+    // here to this store's own "invalid extraction job record" phrasing
+    // (matching the oversized-record refusal below) rather than exposed to
+    // an MCP client verbatim.
     let mut file =
         crate::mutation::atomic_file::open_regular_file(path, "extraction job record", options)
-            .map_err(storage_error)?;
+            .map_err(|_| {
+                JobError::Storage(format!("invalid extraction job record {}", path.display()))
+            })?;
     let length = file.metadata().map_err(storage_error)?.len();
     if length > MAX_RECORD_BYTES {
         return Err(JobError::Storage(format!(

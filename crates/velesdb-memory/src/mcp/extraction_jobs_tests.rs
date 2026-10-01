@@ -79,8 +79,8 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
         .load(&record.request_id)
         .expect_err("a symlinked job record must be refused, not followed");
     assert!(
-        error.to_string().contains("regular file"),
-        "the refusal must say the record is not a regular file: {error}"
+        error.to_string().contains("invalid extraction job record"),
+        "the refusal must name the invalid record: {error}"
     );
     assert_eq!(
         std::fs::read(&secret).expect("secret must be untouched"),
@@ -117,8 +117,8 @@ fn a_job_record_hard_linked_from_outside_is_refused_not_followed() {
         .load(&record.request_id)
         .expect_err("a hard-linked job record must be refused, not followed");
     assert!(
-        error.to_string().contains("regular file"),
-        "the refusal must say the record is not a regular file: {error}"
+        error.to_string().contains("invalid extraction job record"),
+        "the refusal must name the invalid record: {error}"
     );
     assert_eq!(
         std::fs::read(&alias).expect("alias must be untouched"),

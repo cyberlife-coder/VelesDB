@@ -140,27 +140,36 @@ fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
 
     let workspace = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::tempdir().expect("outside tempdir");
-    let secret = outside.path().join("secret");
-    std::fs::write(&secret, b"do-not-read-or-write-me").expect("plant secret");
 
     let lock = MigrationLock::acquire(workspace.path(), "run-A").expect("acquire");
-    std::fs::remove_file(workspace.path().join(super::LOCK_FILE)).expect("remove real lock file");
-    symlink(&secret, workspace.path().join(super::LOCK_FILE)).expect("plant symlink lock");
+    let lock_path = workspace.path().join(super::LOCK_FILE);
+    // The secret holds the REAL lock record's own bytes (same format
+    // version, same token): a release that merely followed the symlink
+    // would find them valid and succeed. Planting unrelated bytes instead
+    // would make this test pass for the wrong reason — refused only
+    // because the content fails to parse, never exercising whether the
+    // symlink itself is followed (round-2 review finding).
+    let secret = outside.path().join("secret");
+    std::fs::copy(&lock_path, &secret).expect("copy real lock record as secret");
+    let original = std::fs::read(&secret).expect("read the planted secret");
+
+    std::fs::remove_file(&lock_path).expect("remove real lock file");
+    symlink(&secret, &lock_path).expect("plant symlink lock");
 
     let refusal = lock
         .release()
-        .expect_err("a symlinked lock record must be refused, not followed");
+        .expect_err("a symlinked lock record must be refused, not followed, even with a valid-looking record behind it");
     assert!(
         refusal.contains(super::LOCK_FILE),
         "the refusal must name the lock file it would not touch: {refusal}"
     );
     assert_eq!(
-        std::fs::read_to_string(&secret).expect("secret must be untouched"),
-        "do-not-read-or-write-me",
+        std::fs::read(&secret).expect("secret must be untouched"),
+        original,
         "release must never read through a symlinked lock into a file outside the workspace"
     );
     assert!(
-        std::fs::symlink_metadata(workspace.path().join(super::LOCK_FILE))
+        std::fs::symlink_metadata(&lock_path)
             .expect("symlink must remain")
             .file_type()
             .is_symlink(),
