@@ -89,11 +89,11 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
     );
 }
 
-/// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
-/// cannot tell it apart (#2407). `open_regular_file`'s `nlink > 1` check
-/// refuses it on the handle this load already produced, isolated from the
-/// symlink case above by keeping every other variable (path, content,
-/// request id) identical.
+/// A genuine I/O failure opening a job record (here, permission denied) must
+/// keep its own detail, not be relabeled with `NotARegularFile`'s "invalid
+/// extraction job record" wording — that wording is for a deliberate
+/// refusal (a symlink, a hard link), not an unrelated I/O error the same
+/// `open_regular_file` call can also raise.
 #[cfg(unix)]
 #[test]
 fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
@@ -138,6 +138,11 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
         .expect("restore permissions");
 }
 
+/// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
+/// cannot tell it apart (#2407). `open_regular_file`'s `nlink > 1` check
+/// refuses it on the handle this load already produced, isolated from the
+/// symlink case above by keeping every other variable (path, content,
+/// request id) identical.
 #[cfg(unix)]
 #[test]
 fn a_job_record_hard_linked_from_outside_is_refused_not_followed() {

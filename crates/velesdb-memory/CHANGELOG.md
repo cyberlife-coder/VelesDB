@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   observe idle-session eviction without waiting out the 300 s default. The
   public API otherwise grows only by the `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
   environment variable described under Fixed (#2289), and by
-  `MemoryError::NotARegularFile` described under Fixed (#2409).
+  `MemoryError::NotARegularFile` described below.
 
 - **`MemoryError::NotARegularFile { entity }`**: a path
   `mutation::atomic_file::open_regular_file`/`open_regular_file_allow_hard_links`
@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Three more check-then-open races outside #2404/#2405's five sites are now
-  closed, and a diagnostic copy accepts a hard-linked source.**
+  closed, and a diagnostic copy still accepts a hard-linked source.**
   `mcp::extraction_job_store`'s job-record reads, `migration::state::lock`'s
   lock reads, and `migration::diagnostic_copy`'s source copies each still
   decided a path was safe from a separate `symlink_metadata` call and then

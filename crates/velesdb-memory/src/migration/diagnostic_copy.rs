@@ -311,7 +311,8 @@ pub(super) fn copy_regular_file(
         source,
         "diagnostic source",
         open_options,
-    )?;
+    )
+    .map_err(|err| query_error(format!("{}: {err}", source.display())))?;
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
