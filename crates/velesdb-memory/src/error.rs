@@ -169,6 +169,22 @@ pub enum MemoryError {
     #[error("migration capture error: {0}")]
     MigrationCapture(String),
 
+    /// `mutation::atomic_file`'s shared guards decided a path cannot be
+    /// used: it names a symlink, a hard link, a directory, or another
+    /// non-regular type — a refusal, not a failure to inspect the path.
+    /// Kept distinct from [`Self::MigrationCapture`] so a caller that wants
+    /// its own wording for this one specific, expected outcome (MCP's
+    /// extraction job store, round-3 review of #2409) can match on it
+    /// without swallowing an unrelated I/O error (permission denied, too
+    /// many open files) the same call can also raise.
+    #[cfg(feature = "persistence")]
+    #[error("{entity} path must be a regular file")]
+    NotARegularFile {
+        /// The name the failing store gave itself (e.g. "extraction job
+        /// record"), reused verbatim from the call site.
+        entity: String,
+    },
+
     /// The storage backend in use does not support the requested operation.
     /// A static description, not prose: the set of refusable operations is
     /// closed and known at compile time, and adapters display it verbatim.
@@ -408,7 +424,9 @@ impl MemoryError {
             Self::WorkingContextCodec { .. } => ErrorCategory::Internal,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             #[cfg(feature = "persistence")]
-            Self::Memory(_) | Self::MigrationCapture(_) => ErrorCategory::Internal,
+            Self::Memory(_) | Self::MigrationCapture(_) | Self::NotARegularFile { .. } => {
+                ErrorCategory::Internal
+            }
             Self::Storage(_) | Self::Embed(_) | Self::Extract(_) | Self::Rerank(_) => {
                 ErrorCategory::Internal
             }

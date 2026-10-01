@@ -13,6 +13,18 @@ pub(crate) fn capture(message: impl Into<String>) -> MemoryError {
     MemoryError::MigrationCapture(message.into())
 }
 
+/// A deliberate refusal — the path opened or inspected is not usable as a
+/// lone regular file (a symlink, a hard link, a directory, a socket, ...) —
+/// kept distinct from [`capture`]'s generic internal-failure wording so a
+/// caller can match on it and apply its own phrasing without also
+/// swallowing an unrelated I/O failure (permission denied, too many open
+/// files) the same call can raise.
+fn not_a_regular_file(entity: &str) -> MemoryError {
+    MemoryError::NotARegularFile {
+        entity: entity.to_owned(),
+    }
+}
+
 pub(crate) fn validate_workspace(path: &Path, entity: &str) -> Result<(), MemoryError> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|err| capture(format!("cannot inspect {entity} workspace: {err}")))?;
@@ -72,7 +84,7 @@ pub(crate) fn open_regular_file(
         // into a spurious failure.
         use std::os::unix::fs::MetadataExt;
         if metadata.nlink() > 1 {
-            return Err(capture(format!("{entity} path must be a regular file")));
+            return Err(not_a_regular_file(entity));
         }
     }
     Ok(file)
@@ -127,7 +139,7 @@ fn open_checked(
         .metadata()
         .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
     if !metadata.is_file() {
-        return Err(capture(format!("{entity} path must be a regular file")));
+        return Err(not_a_regular_file(entity));
     }
     Ok((file, metadata))
 }
@@ -144,11 +156,11 @@ fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
     // security-relevant, unlike the checks in `open_regular_file` that run
     // on an already-open handle.
     if err.raw_os_error() == Some(libc::ELOOP) {
-        return capture(format!("{entity} path must be a regular file"));
+        return not_a_regular_file(entity);
     }
     let is_non_regular = std::fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.is_file());
     if is_non_regular {
-        capture(format!("{entity} path must be a regular file"))
+        not_a_regular_file(entity)
     } else {
         capture(format!(
             "cannot open {entity} file {}: {err}",

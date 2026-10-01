@@ -289,7 +289,13 @@ fn copy_entry(
     )))
 }
 
-fn copy_regular_file(
+// `pub(super)` (not private) so a test can call it directly on a symlinked
+// `source`, isolating its OWN symlink-swap refusal from `copy_entry`'s
+// earlier `symlink_metadata` check — a symlink walked by `copy_entry`
+// itself never reaches this function at all, so routing through
+// `DiagnosticCopy::capture` alone cannot tell which check is doing the
+// refusing (#2409 round-3 finding).
+pub(super) fn copy_regular_file(
     source: &Path,
     destination: &Path,
     expected_len: u64,

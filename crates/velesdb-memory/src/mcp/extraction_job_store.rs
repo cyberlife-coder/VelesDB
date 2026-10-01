@@ -110,15 +110,20 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
     }
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
-    // `open_regular_file`'s error carries `MigrationCapture`'s shared
-    // Display text, worded for its original migration callers — reworded
-    // here to this store's own "invalid extraction job record" phrasing
-    // (matching the oversized-record refusal below) rather than exposed to
-    // an MCP client verbatim.
+    // `open_regular_file`'s deliberate refusal (not a regular file — a
+    // symlink, a hard link, ...) gets this store's own "invalid extraction
+    // job record" phrasing (matching the oversized-record refusal below)
+    // instead of the shared guard's internal-sounding wording. An
+    // unrelated I/O failure opening or inspecting the path (permission
+    // denied, too many open files) is NOT this — it keeps its own detail
+    // through `storage_error` rather than being swallowed the same way.
     let mut file =
         crate::mutation::atomic_file::open_regular_file(path, "extraction job record", options)
-            .map_err(|_| {
-                JobError::Storage(format!("invalid extraction job record {}", path.display()))
+            .map_err(|err| match err {
+                crate::MemoryError::NotARegularFile { .. } => {
+                    JobError::Storage(format!("invalid extraction job record {}", path.display()))
+                }
+                other => storage_error(other),
             })?;
     let length = file.metadata().map_err(storage_error)?.len();
     if length > MAX_RECORD_BYTES {

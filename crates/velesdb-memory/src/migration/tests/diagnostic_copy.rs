@@ -256,6 +256,55 @@ fn a_hard_linked_source_file_is_copied_not_refused() {
     copy.finish(Ok(())).expect("cleanup");
 }
 
+/// `root_and_nested_symlinks_are_refused_without_following_them` above
+/// never reaches `copy_regular_file`'s own protection: `copy_entry`'s
+/// earlier `symlink_metadata` check catches a symlink present at walk time
+/// first, every time, so a test that only goes through `DiagnosticCopy::capture`
+/// cannot tell whether the refusal comes from that check or from
+/// `copy_regular_file`'s `open_regular_file_allow_hard_links` call — the one
+/// that actually matters for a symlink swapped in AFTER `copy_entry` looked
+/// (#2409 round-3 finding). Calling `copy_regular_file` directly, on a
+/// source that is a symlink from the start, isolates its own refusal
+/// (`copy_entry` is never involved at all).
+#[cfg(unix)]
+#[test]
+fn copy_regular_file_itself_refuses_a_symlink_past_copy_entrys_own_check() {
+    use std::os::unix::fs::symlink;
+
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("secret");
+    let content = b"do-not-read-me";
+    std::fs::write(&secret, content).expect("plant secret");
+    let staging = tempfile::tempdir().expect("staging");
+    let source = staging.path().join("source-link");
+    symlink(&secret, &source).expect("plant symlink");
+    let destination = staging.path().join("destination");
+
+    // The REAL length of the symlink's target, not a placeholder: a plain
+    // `open` that followed the symlink would read exactly this many bytes
+    // and satisfy the length check downstream, making the function return
+    // `Ok(())` outright rather than an unrelated length-mismatch error — the
+    // only way this test then correctly fails on that mutant is through
+    // `expect_err` below, not through a coincidental byte-count refusal.
+    let error = super::super::diagnostic_copy::copy_regular_file(
+        &source,
+        &destination,
+        content.len() as u64,
+    )
+    .expect_err(
+        "copy_regular_file must refuse a symlinked source on its own, not rely on copy_entry",
+    );
+    assert!(error.to_string().contains("regular file"), "{error}");
+    assert!(
+        !destination.exists(),
+        "a refused copy must not create the destination"
+    );
+    assert_eq!(
+        std::fs::read(&secret).expect("secret must be untouched"),
+        content
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_special_file_is_refused_and_unrelated_scratch_is_never_swept() {
