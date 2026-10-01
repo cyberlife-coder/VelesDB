@@ -268,7 +268,7 @@ fn a_hard_linked_source_file_is_copied_not_refused() {
 /// (`copy_entry` is never involved at all).
 #[cfg(unix)]
 #[test]
-fn copy_regular_file_itself_refuses_a_symlink_past_copy_entrys_own_check() {
+fn copy_regular_file_itself_refuses_a_symlink_past_copy_entry_own_check() {
     use std::os::unix::fs::symlink;
 
     let outside = tempfile::tempdir().expect("outside");
