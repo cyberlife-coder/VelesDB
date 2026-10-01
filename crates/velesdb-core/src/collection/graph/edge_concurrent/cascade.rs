@@ -58,7 +58,6 @@ impl ConcurrentEdgeStore {
     }
 
     /// Cleans up edges in all affected shards.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn cleanup_shard_edges(
         &self,
         guards: &mut [(usize, RwLockWriteGuard<'_, EdgeStore>)],
