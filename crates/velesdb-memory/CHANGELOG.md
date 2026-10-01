@@ -16,7 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an explicit eviction floor, so the HTTP transport's integration tests can
   observe idle-session eviction without waiting out the 300 s default. The
   public API otherwise grows only by the `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
-  environment variable described under Fixed (#2289).
+  environment variable described under Fixed (#2289), and by
+  `MemoryError::NotARegularFile` described under Fixed (#2409).
+
+- **`MemoryError::NotARegularFile { entity }`**: a path
+  `mutation::atomic_file::open_regular_file`/`open_regular_file_allow_hard_links`
+  opened turned out not to be a lone regular file (a symlink, a hard link, a
+  directory, ...). Split out of the shared `MigrationCapture` variant so a
+  caller (MCP's extraction job store) can give this one specific, expected
+  refusal its own wording without also relabeling an unrelated I/O failure
+  (permission denied, too many open files) the same call can raise (#2409).
 
 ### Fixed
 

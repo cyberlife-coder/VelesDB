@@ -96,6 +96,50 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
 /// request id) identical.
 #[cfg(unix)]
 #[test]
+fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("create durable job store");
+
+    let record = accepted_record();
+    let store = JobStore::open(directory.path()).expect("open job snapshots");
+    store.save(&record).expect("persist record");
+
+    let record_path = directory
+        .path()
+        .join("extraction-jobs")
+        .join(format!("{}.json", record.request_id));
+    std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod 000");
+
+    if std::fs::File::open(&record_path).is_ok() {
+        eprintln!("test: skipped, permission bits are not enforced here");
+        std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o644))
+            .expect("restore");
+        return;
+    }
+
+    let error = store
+        .load(&record.request_id)
+        .expect_err("a permission-denied record must surface as an error");
+    let message = error.to_string();
+    assert!(
+        message.contains("Permission denied") || message.contains("permission denied"),
+        "an I/O failure opening the record must keep its real detail, not the refusal's \
+         \"invalid extraction job record\" wording meant for a deliberately wrong file type: \
+         {message}"
+    );
+    assert!(
+        !message.contains("invalid extraction job record"),
+        "a genuine I/O failure must not be relabeled as the NotARegularFile refusal: {message}"
+    );
+
+    std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o644))
+        .expect("restore permissions");
+}
+
+#[cfg(unix)]
+#[test]
 fn a_job_record_hard_linked_from_outside_is_refused_not_followed() {
     let directory = tempfile::tempdir().expect("create durable job store");
 

@@ -169,14 +169,21 @@ pub enum MemoryError {
     #[error("migration capture error: {0}")]
     MigrationCapture(String),
 
-    /// `mutation::atomic_file`'s shared guards decided a path cannot be
-    /// used: it names a symlink, a hard link, a directory, or another
-    /// non-regular type — a refusal, not a failure to inspect the path.
-    /// Kept distinct from [`Self::MigrationCapture`] so a caller that wants
-    /// its own wording for this one specific, expected outcome (MCP's
-    /// extraction job store, round-3 review of #2409) can match on it
-    /// without swallowing an unrelated I/O error (permission denied, too
-    /// many open files) the same call can also raise.
+    /// `mutation::atomic_file::open_regular_file` and
+    /// `open_regular_file_allow_hard_links` decided an already-opened handle
+    /// is not usable: it names a symlink, a hard link, a directory, or
+    /// another non-regular type — a refusal, not a failure to inspect the
+    /// path. NOT raised by `validate_regular_file`/`validate_workspace`
+    /// (same module, a separate `stat`-based pre-check predating this PR,
+    /// still `MigrationCapture` for the identical refusal shape — #2409
+    /// round-4 noted the inconsistency; narrowing this doc rather than
+    /// widening those two to avoid a second broad, unmeasured sweep after
+    /// round 2's regression). Kept distinct from [`Self::MigrationCapture`]
+    /// so a caller that wants its own wording for this one specific,
+    /// expected outcome (MCP's extraction job store, round-3 review of
+    /// #2409) can match on it without swallowing an unrelated I/O error
+    /// (permission denied, too many open files) the same call can also
+    /// raise.
     #[cfg(feature = "persistence")]
     #[error("{entity} path must be a regular file")]
     NotARegularFile {
