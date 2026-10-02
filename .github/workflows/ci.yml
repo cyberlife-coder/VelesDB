@@ -1314,9 +1314,20 @@ jobs:
       # Installed on a step of its own, so the stable toolchain
       # rust-toolchain.toml pins stays the default for everything else here.
       # nightly: cargo-public-api reads rustdoc JSON, which is nightly-only.
+      #
+      # Dated, not floating `nightly`: a floating channel moved this gate
+      # under the repository with no code change at all (#2423) -- nightly
+      # std/alloc's internal module layout changed `Arc`'s canonical path
+      # (`alloc::sync::Arc` -> `alloc::rcs::arc::Arc`), which rustdoc JSON
+      # exposes even though it is not a real public-API break (the stable
+      # `std::sync::Arc` re-export downstream code actually names is
+      # unchanged). Bump this date deliberately, re-running
+      # `check-public-trait-api.py --write` under the new date locally, same
+      # as any other dependency bump -- not as a side effect of an unrelated
+      # PR failing this gate.
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # nightly
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-10-01
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
