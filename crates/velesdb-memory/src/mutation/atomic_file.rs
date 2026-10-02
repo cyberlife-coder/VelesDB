@@ -176,8 +176,11 @@ fn open_checked(
 #[cfg(unix)]
 fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
     // ELOOP: `O_NOFOLLOW` refused a symlink, a fast path with no further
-    // lookup needed. Anything else that isn't a regular file (a directory
-    // via `EISDIR`, a socket, and so on) fails `open` itself with a
+    // lookup needed. Not every non-regular type reaches this function at
+    // all: a FIFO or a directory opened read-only opens fine and is
+    // refused on the handle instead, inside `open_checked`'s `is_file`
+    // check. What does land here, besides ELOOP, is a socket or a
+    // directory opened for writing, each failing `open` itself with a
     // platform- and file-type-specific errno that isn't worth enumerating
     // one by one, so this falls back to a `symlink_metadata` lookup that
     // only chooses which message reports the already-decided refusal —

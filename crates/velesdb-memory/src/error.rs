@@ -175,8 +175,10 @@ pub enum MemoryError {
     /// type, how it is opened, and the platform, the refusal happens either
     /// at `open` itself (a unix symlink always fails with `ELOOP` and is
     /// never actually opened; a socket always fails to open its own way
-    /// too; a directory opened for writing — the shape the journal's own
-    /// reopens use — fails with `EISDIR`) or on the handle that did open
+    /// too; a directory opened for writing — the shape the journal's
+    /// `load_journal`/`publish_compaction` reopens use, though two of its
+    /// other reopens (`records_after`, `open_record_stream`) open
+    /// read-only instead — fails with `EISDIR`) or on the handle that did open
     /// successfully (a FIFO, which this crate's `O_NONBLOCK` flag keeps
     /// from blocking rather than from opening at all; a directory opened
     /// read-only, which needs no such help to open; a hard link, unix
