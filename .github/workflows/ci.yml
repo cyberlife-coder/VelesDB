@@ -1326,16 +1326,10 @@ jobs:
       # as any other dependency bump -- not as a side effect of an unrelated
       # PR failing this gate.
       #
-      # The channel date is NOT the build date: `nightly-2026-10-01` installs
-      # rustc 1.101.0-nightly (21b707e3f, actually built 2026-09-30), and
-      # THAT specific build panics inside `cargo-public-api` on
-      # x86_64-unknown-linux-gnu (confirmed: identical rustdoc JSON content
-      # to the next build, just a crash on this platform) -- verify a new
-      # pin with `rustup toolchain install nightly-<date>` and check which
-      # build it resolves to, not just the channel date, before relying on
-      # it in CI. `nightly-2026-10-02` resolves to rustc 1.101.0-nightly
-      # (c36f14571, built 2026-10-01), which runs cleanly on both Linux and
-      # macOS and produces byte-identical API output to the 09-30 build.
+      # This registers the toolchain under the NAME "nightly-2026-10-02",
+      # not plain "nightly" -- see the RUSTUP_TOOLCHAIN note on the check
+      # step below, which is the piece that actually makes this pin take
+      # effect.
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # nightly
         with:
           toolchain: nightly-2026-10-02
@@ -1349,10 +1343,26 @@ jobs:
       # unpinned `cargo install cargo-fuzz` re-resolved to a crate needing a
       # newer rustc and failed three scheduled runs before a single target
       # ran. A tool whose version floats moves the gate under the repository.
+      # Installed under the repository's own `rust-toolchain.toml` (stable);
+      # this install itself needs no nightly feature.
       - name: Install cargo-public-api
         run: cargo install cargo-public-api@0.52.0 --locked
 
+      # RUSTUP_TOOLCHAIN pins what cargo-public-api's rustdoc-json dependency
+      # actually uses to generate the JSON it reads: left unset, it resolves
+      # the toolchain literally NAMED "nightly" -- which exists when this
+      # job installs a floating `nightly` (the step above registers it under
+      # that exact name), but does NOT exist once that step instead installs
+      # a DATED channel like `nightly-2026-10-02` (a different registered
+      # name). Pinning the date alone, without this, fails instantly on a
+      # fresh runner with "toolchain 'nightly' is not installed" -- caught
+      # only because it still passed locally, where an unrelated nightly
+      # happened to already be installed under the plain name. `rustup
+      # toolchain link nightly ...` cannot fix this either: "nightly" is a
+      # reserved channel name rustup refuses to alias.
       - name: The public trait surface matches what is recorded
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-10-02
         run: python3 scripts/check-public-trait-api.py
 
   fuzz-compile:
