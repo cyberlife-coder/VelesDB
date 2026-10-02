@@ -171,11 +171,13 @@ pub enum MemoryError {
 
     /// A path backing an internal state/record file is not usable as a lone
     /// regular file: it names a symlink, a hard link, a directory, or
-    /// another non-regular type, so the open was refused (a symlink is
-    /// refused at `open` itself and never actually opened; a hard link or
-    /// other non-regular type is caught afterward, on the handle that did
-    /// open). A deliberate refusal, not a failure to inspect the path —
-    /// kept distinct from
+    /// another non-regular type, so the open was refused. Depending on the
+    /// type and the platform, the refusal happens either at `open` itself
+    /// (a unix symlink fails with `ELOOP` and is never actually opened; a
+    /// socket or a directory opened for write fails its own way) or on the
+    /// handle that did open successfully (a hard link, or a unix symlink
+    /// opened through Windows' reparse-point flag). A deliberate refusal,
+    /// not a failure to inspect the path — kept distinct from
     /// [`Self::MigrationCapture`] so a caller can match on this one specific,
     /// expected outcome without also catching an unrelated I/O failure
     /// (permission denied, too many open files) the same operation can

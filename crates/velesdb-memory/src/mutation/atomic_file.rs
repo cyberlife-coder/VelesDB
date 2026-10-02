@@ -54,22 +54,27 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 ///
 /// Refusing the hard-link case only makes sense for a file this store
 /// writes into through a handle it keeps reopening across its lifetime: the
-/// journal is the one remaining caller that does (a legitimate copy of it is
-/// never hard linked, so `nlink > 1` can only mean a link planted before or
-/// at this open, ready to intercept a future append through that same
-/// handle — #2407). Two other shapes have no such window, by different
-/// mechanisms: a file this store only ever replaces wholesale, by
-/// renaming a fresh temporary file over it and never reopening the old name
-/// to write into it (an extraction job record — #2409 round 7) — the rename
-/// severs any hard link planted before it; and a file created once via
-/// `create_new` and afterward only ever read or removed, never rewritten at
-/// all (a migration lock — #2409 round 8) — there is no later write for a
-/// planted hard link to intercept in the first place. Either way the
-/// content a later read sees is always the legitimate one regardless of
-/// `nlink`. Both cases want [`open_regular_file_allow_hard_links`] instead,
-/// same as a path this helper only ever *reads* from someone else's tree,
-/// where a hard-link based backup (`cp -al`, `rsync --link-dest`) routinely
-/// produces `nlink > 1` on perfectly ordinary files.
+/// journal is the one remaining caller that does. Appending through a
+/// handle reopened on a hard-linked path writes into whatever else that
+/// inode is aliased by, so `nlink > 1` is refused there deliberately —
+/// including for an otherwise-legitimate hard-link backup of the journal
+/// (`cp -al`), not only a planted attacker link; both are refused the same
+/// way on the journal's next reopen (#2407). Two other shapes have no such
+/// window, by different mechanisms: a file this store only ever replaces
+/// wholesale, by renaming a fresh temporary file over it and never
+/// reopening the old name to write into it (an extraction job record —
+/// #2409 round 7) — the rename severs any hard link planted before it; and
+/// a file created once via `create_new` and afterward only ever read or
+/// removed, never rewritten at all (a migration lock — #2409 round 8) —
+/// there is no later write for a planted hard link to intercept in the
+/// first place. Neither shape gains anything from refusing `nlink` here:
+/// whoever can plant a hard link in that directory could plant an ordinary
+/// file there just as easily, so `nlink` is not an integrity check for a
+/// path never reopened to write into. Both cases want
+/// [`open_regular_file_allow_hard_links`] instead, same as a path this
+/// helper only ever *reads* from someone else's tree, where a hard-link
+/// based backup (`cp -al`, `rsync --link-dest`) routinely produces
+/// `nlink > 1` on perfectly ordinary files.
 ///
 /// Two other callers (the online-migration controller state and job state)
 /// share the write-once-rename-replace shape too, but predate #2409 (added

@@ -138,6 +138,46 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
         .expect("restore permissions");
 }
 
+/// `read_record_bytes`'s `path_exists` check (ahead of the open) raises a
+/// genuine stat failure as `MemoryError::MigrationCapture`, worded for the
+/// online-migration observer, not this unrelated caller — it must still
+/// surface its own I/O detail, not that wording (#2409 round 12).
+#[cfg(unix)]
+#[test]
+fn a_record_directory_lookup_failure_keeps_its_io_detail_not_the_migration_capture_prefix() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("create durable job store");
+    let (store, record, record_path) = seed_saved_record(&directory);
+    let jobs_directory = directory.path().join("extraction-jobs");
+    std::fs::set_permissions(&jobs_directory, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod 000 on the job directory");
+
+    if std::fs::symlink_metadata(&record_path).is_ok() {
+        eprintln!("test: skipped, directory permission bits are not enforced here");
+        std::fs::set_permissions(&jobs_directory, std::fs::Permissions::from_mode(0o755))
+            .expect("restore");
+        return;
+    }
+
+    let error = store
+        .load(&record.request_id)
+        .expect_err("a directory lookup failure must surface as an error");
+    let message = error.to_string();
+    assert!(
+        message.contains("Permission denied") || message.contains("permission denied"),
+        "a stat failure on the record's directory must keep its real detail: {message}"
+    );
+    assert!(
+        !message.contains("migration capture error"),
+        "an unrelated I/O failure must not carry the online-migration observer's own wording: \
+         {message}"
+    );
+
+    std::fs::set_permissions(&jobs_directory, std::fs::Permissions::from_mode(0o755))
+        .expect("restore permissions");
+}
+
 /// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
 /// cannot tell it apart (#2407). Unlike a journal file this store reopens to
 /// write into across its lifetime, a job record is only ever replaced

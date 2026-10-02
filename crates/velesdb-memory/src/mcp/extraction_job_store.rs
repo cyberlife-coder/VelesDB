@@ -105,7 +105,17 @@ fn remove_if_temporary(entry: &std::fs::DirEntry) -> Result<bool, JobError> {
 }
 
 fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
-    if !crate::mutation::atomic_file::path_exists(path).map_err(storage_error)? {
+    // `path_exists`'s own failure is built by `capture`, which carries
+    // `MigrationCapture`'s "migration capture error:" framing — meant for
+    // the online-migration observer, not this unrelated caller. Unwrapped
+    // to its inner detail so a genuine stat failure (e.g. the containing
+    // directory losing search permission) reads the same as develop's
+    // equivalent message (#2409 round 12).
+    let exists = crate::mutation::atomic_file::path_exists(path).map_err(|err| match err {
+        crate::MemoryError::MigrationCapture(detail) => storage_error(detail),
+        other => storage_error(other),
+    })?;
+    if !exists {
         return Ok(None);
     }
     let mut options = std::fs::OpenOptions::new();
