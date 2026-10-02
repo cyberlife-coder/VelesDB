@@ -40,8 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Three more check-then-open races outside #2404/#2405's five sites are now
   closed, and a migration lock, a job-record read, or a diagnostic copy
   still accepts a hard-linked source.** `mcp::extraction_job_store`'s
-  job-record reads, `migration::state::lock`'s lock reads, and
-  `migration::diagnostic_copy`'s source copies each still decided a path was
+  job-record reads, `migration::state::lock`'s ownership check
+  (`owns_current_lock`; its public `holder` lookup still follows a symlink,
+  see #2424), and `migration::diagnostic_copy`'s source copies each still
+  decided a path was
   safe from a separate `symlink_metadata` call and then reopened the same
   path by name afterward — the same check-then-open shape #2404 closed
   elsewhere. All three now route through `mutation::atomic_file`'s

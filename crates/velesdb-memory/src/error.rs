@@ -174,11 +174,14 @@ pub enum MemoryError {
     /// another non-regular type, so the open was refused. Depending on the
     /// type and the platform, the refusal happens either at `open` itself
     /// (a unix symlink fails with `ELOOP` and is never actually opened; a
-    /// socket or a directory opened for write fails its own way) or on the
-    /// handle that did open successfully (a hard link always, on unix —
-    /// the only platform that checks `nlink`; a symlink too, on Windows,
-    /// which opens it through the reparse-point flag
-    /// instead of refusing it at `open`). A deliberate refusal, not a
+    /// socket fails to open its own way too, whether opened for reading or
+    /// writing) or on the handle that did open successfully (a FIFO or a
+    /// directory opened read-only — this crate's `O_NONBLOCK` guard lets
+    /// both open fine, caught only once inspected; a hard link, unix only —
+    /// the only platform that checks `nlink`, and only for the callers that
+    /// refuse one at all; a symlink too, on Windows, which opens it through
+    /// the reparse-point flag instead of refusing it at `open`). A deliberate
+    /// refusal, not a
     /// failure to inspect the path — kept distinct from
     /// [`Self::MigrationCapture`] so a caller can match on this one specific,
     /// expected outcome without also catching an unrelated I/O failure
