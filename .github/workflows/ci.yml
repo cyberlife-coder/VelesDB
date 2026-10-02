@@ -1325,9 +1325,20 @@ jobs:
       # `check-public-trait-api.py --write` under the new date locally, same
       # as any other dependency bump -- not as a side effect of an unrelated
       # PR failing this gate.
+      #
+      # The channel date is NOT the build date: `nightly-2026-10-01` installs
+      # rustc 1.101.0-nightly (21b707e3f, actually built 2026-09-30), and
+      # THAT specific build panics inside `cargo-public-api` on
+      # x86_64-unknown-linux-gnu (confirmed: identical rustdoc JSON content
+      # to the next build, just a crash on this platform) -- verify a new
+      # pin with `rustup toolchain install nightly-<date>` and check which
+      # build it resolves to, not just the channel date, before relying on
+      # it in CI. `nightly-2026-10-02` resolves to rustc 1.101.0-nightly
+      # (c36f14571, built 2026-10-01), which runs cleanly on both Linux and
+      # macOS and produces byte-identical API output to the 09-30 build.
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # nightly
         with:
-          toolchain: nightly-2026-10-01
+          toolchain: nightly-2026-10-02
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
