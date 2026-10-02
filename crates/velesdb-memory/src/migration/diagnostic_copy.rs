@@ -307,12 +307,21 @@ pub(super) fn copy_regular_file(
     // file `nlink > 1`, so only the symlink-swap race (#2404) is refused
     // here, not the hard-link case `open_regular_file` refuses for files
     // this store itself mutates (#2407).
+    // `NotARegularFile` carries no path of its own (atomic_file's guards are
+    // path-agnostic), so it's the one case that needs the source path added
+    // here; every other error (a genuine I/O failure) is built by `capture`
+    // with the path already in it — adding it again would duplicate it.
     let mut input = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
         source,
         "diagnostic source",
         open_options,
     )
-    .map_err(|err| query_error(format!("{}: {err}", source.display())))?;
+    .map_err(|err| match err {
+        crate::MemoryError::NotARegularFile { .. } => {
+            query_error(format!("{}: {err}", source.display()))
+        }
+        other => query_error(other.to_string()),
+    })?;
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)

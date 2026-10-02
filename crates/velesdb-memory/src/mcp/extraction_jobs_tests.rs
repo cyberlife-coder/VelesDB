@@ -140,9 +140,10 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
 
 /// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
 /// cannot tell it apart (#2407). `open_regular_file`'s `nlink > 1` check
-/// refuses it on the handle this load already produced, isolated from the
-/// symlink case above by keeping every other variable (path, content,
-/// request id) identical.
+/// refuses it on the handle this load already produced — unlike the
+/// symlink case above, this one aliases the record's own real bytes, so
+/// the refusal is attributable to the link shape alone, not to content
+/// that happens to fail parsing for an unrelated reason.
 #[cfg(unix)]
 #[test]
 fn a_job_record_hard_linked_from_outside_is_refused_not_followed() {
