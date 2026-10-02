@@ -44,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   safe from a separate `symlink_metadata` call and then reopened the same
   path by name afterward — the same check-then-open shape #2404 closed
   elsewhere. All three now route through `mutation::atomic_file`'s
-  handle-based guards, refusing only an actual symlink swap: a migration
+  handle-based guards, refusing a symlink swap or any other non-regular
+  type, but not a hard link: a migration
   lock and an extraction job record — each only ever replaced wholesale by
   rename or removed outright, never reopened to write into — and the
   diagnostic copy — read-only, over a tree it does not own — all accept the

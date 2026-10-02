@@ -304,9 +304,10 @@ pub(super) fn copy_regular_file(
     open_options.read(true);
     // Read-only copy of a tree this process does not own: a hard-link based
     // backup (`cp -al`, `rsync --link-dest`) routinely gives an ordinary
-    // file `nlink > 1`, so only the symlink-swap race (#2404) is refused
-    // here, not the hard-link case `open_regular_file` refuses for a file
-    // this store reopens to write into across its lifetime (the journal —
+    // file `nlink > 1`, so that case is accepted here — the symlink-swap
+    // race (#2404) and any other non-regular type are still refused, just
+    // not the hard-link case `open_regular_file` refuses for a file this
+    // store reopens to write into across its lifetime (the journal —
     // #2407).
     // `NotARegularFile` carries no path of its own (atomic_file's guards are
     // path-agnostic), so it's the one case that needs the source path added
@@ -315,7 +316,7 @@ pub(super) fn copy_regular_file(
     // `MigrationCapture`'s own `Display` prefixes "migration capture
     // error:", a wording meant for the online-migration observer, not for
     // this unrelated caller — unwrapped to its inner detail so a genuine
-    // I/O failure here reads the same as develop's equivalent message.
+    // I/O failure here keeps its own detail instead.
     let mut input = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
         source,
         "diagnostic source",

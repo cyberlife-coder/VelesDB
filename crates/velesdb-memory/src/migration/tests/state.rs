@@ -179,7 +179,8 @@ fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
 
 /// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
 /// cannot tell it apart (#2407). The lock record is created once via
-/// `create_new` and, from then on, only ever read (here) or removed (by
+/// `create_new` and, from then on, only ever read (here, and by `holder` —
+/// #2424 tracks that one still following a symlink) or removed (by
 /// `release`) — never reopened to write into. A hard link planted before
 /// that creation would make `create_new` itself fail, so by the time a
 /// legitimate record exists, a later alias to it (a hard-link based backup,

@@ -78,7 +78,8 @@ impl MigrationLock {
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
         // The lock record is created once via `create_new` (below) and, from
-        // then on, only ever read here or removed by `release` — never
+        // then on, only ever read (here, and by `holder` — #2424 tracks that
+        // one still following a symlink) or removed by `release` — never
         // reopened to write into. A hard link planted before that creation
         // makes `create_new` itself fail (`EEXIST`), so by the time a
         // legitimate record exists, a later alias to it (a hard-link based

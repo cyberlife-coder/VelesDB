@@ -32,8 +32,9 @@ fn accepted_record() -> JobRecord {
 
 /// Opens a fresh job store under `directory`, persists one accepted record,
 /// and returns its on-disk path — the shared setup for the symlink/hard-link/
-/// permission-denied tests below, which each go on to tamper with that exact
-/// path (some to prove a refusal, the hard-link one to prove acceptance).
+/// permission-denied tests below, which each go on to tamper with that record
+/// (most replace or chmod the exact path; one chmods its containing directory
+/// instead) to prove either a refusal or, for the hard-link case, acceptance.
 fn seed_saved_record(directory: &tempfile::TempDir) -> (JobStore, JobRecord, PathBuf) {
     let record = accepted_record();
     let store = JobStore::open(directory.path()).expect("open job snapshots");
@@ -132,6 +133,11 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
     assert!(
         !message.contains("invalid extraction job record"),
         "a genuine I/O failure must not be relabeled as the NotARegularFile refusal: {message}"
+    );
+    assert!(
+        !message.contains("migration capture error"),
+        "an unrelated I/O failure must not carry the online-migration observer's own wording \
+         (#2409 round 13): {message}"
     );
 
     std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o644))
