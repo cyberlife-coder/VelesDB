@@ -305,8 +305,9 @@ pub(super) fn copy_regular_file(
     // Read-only copy of a tree this process does not own: a hard-link based
     // backup (`cp -al`, `rsync --link-dest`) routinely gives an ordinary
     // file `nlink > 1`, so only the symlink-swap race (#2404) is refused
-    // here, not the hard-link case `open_regular_file` refuses for files
-    // this store itself mutates (#2407).
+    // here, not the hard-link case `open_regular_file` refuses for a file
+    // this store reopens to write into across its lifetime (the journal —
+    // #2407).
     // `NotARegularFile` carries no path of its own (atomic_file's guards are
     // path-agnostic), so it's the one case that needs the source path added
     // here; every other error (a genuine I/O failure) is built by `capture`

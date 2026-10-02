@@ -32,8 +32,8 @@ fn accepted_record() -> JobRecord {
 
 /// Opens a fresh job store under `directory`, persists one accepted record,
 /// and returns its on-disk path — the shared setup for the symlink/hard-link/
-/// permission-denied refusal tests below, which each go on to tamper with
-/// that exact path.
+/// permission-denied tests below, which each go on to tamper with that exact
+/// path (some to prove a refusal, the hard-link one to prove acceptance).
 fn seed_saved_record(directory: &tempfile::TempDir) -> (JobStore, JobRecord, PathBuf) {
     let record = accepted_record();
     let store = JobStore::open(directory.path()).expect("open job snapshots");
@@ -139,13 +139,13 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
 }
 
 /// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
-/// cannot tell it apart (#2407). Unlike a lock or journal file this store
-/// reopens to write into, a job record is only ever replaced wholesale by
-/// `save`'s rename — so a hard-link based backup of the store (`cp -al`,
-/// `rsync --link-dest`) leaves `nlink > 1` on an ordinary, untampered
-/// record, and refusing it would break this store's own startup scan
-/// (`pending`, which treats any refused record as fatal) after a legitimate
-/// backup restore (#2409 round 7). Proven by mutation: reverting
+/// cannot tell it apart (#2407). Unlike a journal file this store reopens to
+/// write into across its lifetime, a job record is only ever replaced
+/// wholesale by `save`'s rename — so a hard-link based backup of the store
+/// (`cp -al`, `rsync --link-dest`) leaves `nlink > 1` on an ordinary,
+/// untampered record, and refusing it would break this store's own startup
+/// scan (`pending`, which treats any refused record as fatal) after a
+/// legitimate backup restore (#2409 round 7). Proven by mutation: reverting
 /// `read_record_bytes` to `open_regular_file` makes this test fail with
 /// "invalid extraction job record".
 #[cfg(unix)]

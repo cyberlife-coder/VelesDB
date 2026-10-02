@@ -77,9 +77,20 @@ impl MigrationLock {
     fn owns_current_lock(&self) -> bool {
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
-        let Ok(mut file) =
-            crate::mutation::atomic_file::open_regular_file(&self.path, "migration lock", options)
-        else {
+        // The lock record is created once via `create_new` (below) and, from
+        // then on, only ever read here or removed by `release` — never
+        // reopened to write into. A hard link planted before that creation
+        // makes `create_new` itself fail (`EEXIST`), so by the time a
+        // legitimate record exists, a later alias to it (a hard-link based
+        // backup, `cp -al`) has nothing left to intercept: `nlink > 1` would
+        // only refuse an untampered record and break lock checks on a
+        // backed-up workspace (#2409 round 8). `_allow_hard_links` keeps the
+        // symlink-swap refusal (#2404) this call still needs.
+        let Ok(mut file) = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+            &self.path,
+            "migration lock",
+            options,
+        ) else {
             return false;
         };
         let mut body = String::new();

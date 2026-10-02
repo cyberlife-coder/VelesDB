@@ -180,8 +180,11 @@ pub enum MemoryError {
     #[cfg(feature = "persistence")]
     #[error("{entity} path must be a regular file")]
     NotARegularFile {
-        /// The name the failing store gave itself (e.g. "extraction job
-        /// record"), reused verbatim from the call site.
+        /// The name the failing store gave itself (e.g. "journal"), reused
+        /// verbatim from the call site. Some callers (the migration lock, the
+        /// extraction job store) catch this variant and build their own
+        /// wording instead of letting this `Display` text surface — the
+        /// journal propagates it unchanged.
         entity: String,
     },
 
