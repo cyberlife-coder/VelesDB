@@ -30,14 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows CI only type-checks this crate, no test runs there); also a hard
   link (unix only — the only platform that checks `nlink`) for the first
   three specifically (the migration lock, the extraction job record, and
-  the diagnostic copy accept a hard link instead, see Fixed below). The journal, controller state, and
-  online-migration job surface this variant's own wording unchanged; the
-  migration lock, the extraction job store, and the diagnostic copy each
-  catch it and build their own message. Split out of the shared
-  `MigrationCapture` variant so these callers can give this one specific,
-  expected refusal its own wording without also relabeling an unrelated I/O
-  failure (permission denied, too many open files) the same open can raise
-  (#2409).
+  the diagnostic copy accept a hard link instead, see Fixed below). The
+  journal, controller state, and online-migration job surface this
+  variant's own wording unchanged; the migration lock, the extraction job
+  store, and the diagnostic copy each catch it and build their own
+  message. Split out of the shared `MigrationCapture` variant so these
+  callers can give this one specific, expected refusal its own wording
+  without also relabeling an unrelated I/O failure (permission denied, too
+  many open files) the same open can raise (#2409).
 
 ### Fixed
 
@@ -48,13 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`owns_current_lock`; its public `holder` lookup still follows a symlink,
   see #2424), and `migration::diagnostic_copy`'s source copies each still
   decided a path was safe from a separate `symlink_metadata` call and then
-  reopened the same path by name afterward — the same check-then-open shape
-  #2404 closed elsewhere. All three now route through `mutation::atomic_file`'s
-  handle-based guards, refusing a symlink swap or any other non-regular
-  type, but not a hard link: a migration lock and an extraction job record
-  — each only ever replaced wholesale by rename or removed outright, never
-  reopened to write into — and the diagnostic copy — read-only, over a
-  tree it does not own — all accept the
+  reopened the same path by name afterward — the same check-then-open
+  shape #2404 closed elsewhere. All three now route through
+  `mutation::atomic_file`'s handle-based guards, refusing a symlink swap or
+  any other non-regular type, but not a hard link: a migration lock and an
+  extraction job record — each only ever replaced wholesale by rename or
+  removed outright, never reopened to write into — and the diagnostic
+  copy — read-only, over a tree it does not own — all accept the
   `nlink > 1` a hard-link based backup (`cp -al`, `rsync --link-dest`)
   routinely produces on an ordinary file (#2406, #2409).
 

@@ -140,8 +140,8 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
     // refusal below) instead of the shared guard's internal-sounding
     // wording. An unrelated I/O failure opening or inspecting the path
     // (permission denied, too many open files) is NOT this — it keeps its
-    // own detail through
-    // `storage_error` rather than being swallowed the same way.
+    // own detail through `storage_error` rather than being swallowed the
+    // same way.
     let (mut file, metadata) = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
         path,
         "extraction job record",

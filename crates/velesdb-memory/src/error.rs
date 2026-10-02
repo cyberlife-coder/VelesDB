@@ -169,32 +169,32 @@ pub enum MemoryError {
     #[error("migration capture error: {0}")]
     MigrationCapture(String),
 
-    /// A path backing an internal state/record file is not usable as a lone
-    /// regular file: it names a symlink, a hard link, a directory, or
-    /// another non-regular type, so the open was refused. Depending on the
-    /// type, how it is opened, and the platform, the refusal happens either
-    /// at `open` itself (a unix symlink fails with `ELOOP` on Linux and
-    /// macOS, though some other unix platforms use a different errno for
-    /// the same refusal; a socket always fails to open its own way too; on
-    /// unix, a directory the journal opens for writing fails with `EISDIR`)
-    /// or on the handle that did open successfully (a FIFO, which this
-    /// crate's `O_NONBLOCK` flag keeps from blocking rather than from
-    /// opening at all; on unix, a directory opened read-only, which needs
-    /// no such help to open; a hard link, unix only — the only platform
-    /// that checks `nlink`, and only for the callers that refuse one at
-    /// all; a symlink too, on Windows, which opens it through the
-    /// reparse-point flag instead of refusing it at `open`). On Windows, a
-    /// directory is not covered by either case above: `CreateFileW` cannot
-    /// open one at all without `FILE_FLAG_BACKUP_SEMANTICS`, which this
-    /// crate does not set, so a directory surfaces as a generic
-    /// [`Self::MigrationCapture`] open failure there instead of this variant
-    /// (unverified — Windows CI only type-checks this crate, no test runs
-    /// there). A deliberate refusal, not a failure to inspect the path —
-    /// kept distinct from [`Self::MigrationCapture`] so a caller can match
-    /// on this one specific, expected outcome without also catching an
-    /// unrelated I/O failure (permission denied, too many open files) the
-    /// same operation can
-    /// raise.
+    /// A path backing an internal state/record file, or a diagnostic-copy
+    /// source file, is not usable as a lone regular file: it names a
+    /// symlink, a hard link, a directory, or another non-regular type, so
+    /// the open was refused. Depending on the type, how it is opened, and
+    /// the platform, the refusal happens either at `open` itself (a unix
+    /// symlink fails with `ELOOP` on Linux and macOS, though some other
+    /// unix platforms use a different errno for the same refusal; a socket
+    /// always fails to open its own way too; on unix, a directory the
+    /// journal opens for writing fails with `EISDIR`) or on the handle that
+    /// did open successfully (a FIFO, which this crate's `O_NONBLOCK` flag
+    /// keeps from blocking rather than from opening at all; on unix, a
+    /// directory opened read-only, which needs no such help to open; a hard
+    /// link, unix only — the only platform that checks `nlink`, and only
+    /// for the callers that refuse one at all; a symlink too, on Windows,
+    /// which opens it through the reparse-point flag instead of refusing it
+    /// at `open`). On Windows, a directory is not covered by either case
+    /// above: `CreateFileW` cannot open one at all without
+    /// `FILE_FLAG_BACKUP_SEMANTICS`, which this crate does not set, so a
+    /// directory surfaces as a generic [`Self::MigrationCapture`] open
+    /// failure there instead of this variant (unverified — Windows CI only
+    /// type-checks this crate, no test runs there). A deliberate refusal,
+    /// not a failure to inspect the path — kept distinct from
+    /// [`Self::MigrationCapture`] so a caller can match on this one
+    /// specific, expected outcome without also catching an unrelated I/O
+    /// failure (permission denied, too many open files) the same operation
+    /// can raise.
     #[cfg(feature = "persistence")]
     #[error("{entity} path must be a regular file")]
     NotARegularFile {
