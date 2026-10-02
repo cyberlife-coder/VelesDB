@@ -120,25 +120,33 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
 /// refuses that static case too, since its own check already sees the
 /// symlink; it never exercises the WINDOW between a check and a later
 /// reopen by name, which only a continuously racing swap can reach.
-/// Proven by mutation against that exact pre-fix shape, run 10 times at
-/// `ITERATIONS = 20_000`: 4 of 10 runs saw 0 leaks (a false negative), the
-/// rest 1-5; the race window is real but narrow. Raised to `200_000`
-/// (round 24) made all 10 runs leak (1 to 14 reads of the secret's own
-/// marker), and the fixed code still passed cleanly 5 times in a row at
-/// this size.
+/// Round 23's own mutation proof ran against a bare `open` with no guard
+/// at all, not the real pre-fix shape. Round 24 reconstructed the real
+/// shape (from this branch's merge-base) and found the race, swapped via
+/// `remove` then `symlink`/`write`, unreliable even at `ITERATIONS =
+/// 200_000`: the path is briefly ABSENT between the two syscalls on each
+/// side of the swap, wasting most iterations. Round 25 swaps the path
+/// atomically instead — `rename` a staged symlink or a staged real file
+/// into place, so the path is always either one or the other, never
+/// absent — which needs far fewer iterations: at `ITERATIONS = 20_000`,
+/// 10 repeats against the real pre-fix shape all leaked (29 to 45 reads
+/// of the secret's own marker), and the fixed code still passed cleanly
+/// 5 times in a row at this size.
 #[cfg(unix)]
 #[test]
 fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
     use std::os::unix::fs::symlink;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    const ITERATIONS: usize = 200_000;
+    const ITERATIONS: usize = 20_000;
 
     let directory = tempfile::tempdir().expect("create durable job store");
     let outside = tempfile::tempdir().expect("outside tempdir");
 
     let (store, record, record_path) = seed_saved_record(&directory);
     let real_body = std::fs::read(&record_path).expect("read real record");
+    let staging_symlink = record_path.with_extension("staging-symlink");
+    let staging_real = record_path.with_extension("staging-real");
 
     let mut leaked = record.clone();
     leaked.request = Some(PersistedRequest {
@@ -158,10 +166,12 @@ fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
     std::thread::scope(|scope| {
         scope.spawn(|| {
             for _ in 0..ITERATIONS {
-                let _ = std::fs::remove_file(&record_path);
-                symlink(&secret_path, &record_path).expect("plant symlink");
-                let _ = std::fs::remove_file(&record_path);
-                std::fs::write(&record_path, &real_body).expect("restore real record");
+                symlink(&secret_path, &staging_symlink).expect("stage symlink");
+                std::fs::rename(&staging_symlink, &record_path)
+                    .expect("atomically swap in the symlink");
+                std::fs::write(&staging_real, &real_body).expect("stage real record");
+                std::fs::rename(&staging_real, &record_path)
+                    .expect("atomically swap in the real record");
             }
         });
 

@@ -21,22 +21,30 @@ use std::sync::atomic::AtomicUsize;
 /// match this lock's own, so `owns_current_lock` must return `false`
 /// for it regardless of race timing; a `true` result can then only be
 /// explained by having read through the symlink to the planted secret,
-/// whose token does match. Round 23 proved this against that exact
-/// pre-fix shape at `ITERATIONS = 20_000`, but round 24 found the
-/// proof unreliable at that size: 13 repeats gave `true`-counts of 1,
-/// 0, 1, 2, 0, 1, 0, 1, 0, 1, 0, 1, 2 — 5 of 13 a false negative. The
-/// window is real but narrow. Raised to `200_000`: 10 repeats against
-/// the same pre-fix shape all failed (1 to 9 `true` results each), and
-/// the fixed code passed cleanly 5 times in a row at this size.
+/// whose token does match. Round 23's own mutation proof ran against a
+/// bare `open` with no guard at all, not the real pre-fix shape. Round
+/// 24 reconstructed the real shape (from this branch's merge-base) and
+/// found the race, swapped via `remove` then `symlink`/`write`,
+/// unreliable even at `ITERATIONS = 200_000` — the path is briefly
+/// ABSENT between the two syscalls on each side of the swap, wasting
+/// most iterations. Round 25 swaps the path atomically instead —
+/// `rename` a staged symlink or a staged real file into place, so the
+/// path is always either one or the other, never absent — which needs
+/// far fewer iterations: at `ITERATIONS = 20_000`, 10 repeats against
+/// the real pre-fix shape all trusted the secret (14 to 25 `true`
+/// results), and the fixed code still passed cleanly 5 times in a row
+/// at this size.
 #[test]
 fn owns_current_lock_is_never_trusted_through_a_racing_symlink_swap() {
-    const ITERATIONS: usize = 200_000;
+    const ITERATIONS: usize = 20_000;
 
     let workspace = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::tempdir().expect("outside tempdir");
 
     let lock = MigrationLock::acquire(workspace.path(), "run-A").expect("acquire");
     let lock_path = workspace.path().join(LOCK_FILE);
+    let staging_symlink = workspace.path().join("staging-symlink");
+    let staging_mismatched = workspace.path().join("staging-mismatched");
 
     let mismatched = LockRecord {
         format_version: LOCK_FORMAT_VERSION,
@@ -68,10 +76,13 @@ fn owns_current_lock_is_never_trusted_through_a_racing_symlink_swap() {
     std::thread::scope(|scope| {
         scope.spawn(|| {
             for _ in 0..ITERATIONS {
-                let _ = std::fs::remove_file(&lock_path);
-                symlink(&secret_path, &lock_path).expect("plant symlink");
-                let _ = std::fs::remove_file(&lock_path);
-                std::fs::write(&lock_path, &mismatched_body).expect("restore mismatched");
+                symlink(&secret_path, &staging_symlink).expect("stage symlink");
+                std::fs::rename(&staging_symlink, &lock_path)
+                    .expect("atomically swap in the symlink");
+                std::fs::write(&staging_mismatched, &mismatched_body)
+                    .expect("stage mismatched record");
+                std::fs::rename(&staging_mismatched, &lock_path)
+                    .expect("atomically swap in the mismatched record");
             }
         });
 
