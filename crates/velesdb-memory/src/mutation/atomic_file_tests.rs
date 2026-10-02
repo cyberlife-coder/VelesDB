@@ -254,6 +254,55 @@ fn open_regular_file_refuses_a_hard_link() {
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
 }
 
+/// #2409 round 10: `nlink > 1` (not `!= 1`) is the refusal, specifically so
+/// a reader racing a legitimate rename-replace of the same path — which
+/// transiently drops the OLD inode's `nlink` to 0 on a handle a reader
+/// already has open — is never refused. `controller/state.rs` and
+/// `online_migration/job_state.rs` are exactly this shape (`write_synced` to
+/// a staging file, then `promote`), and this race had no direct test:
+/// round 7 moved the extraction-job-record call site this PR originally
+/// cited off `open_regular_file` entirely, so the two stress-tested
+/// extraction-recovery tests no longer exercise this guard at all. Proven
+/// by mutation: reverting to `nlink() != 1` makes this test fail (observed:
+/// thousands of spurious refusals over 20,000 iterations).
+#[cfg(unix)]
+#[test]
+fn open_regular_file_never_refuses_a_legitimate_rename_replace_race() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const ITERATIONS: usize = 20_000;
+
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("state");
+    let staging = root.path().join("state.tmp");
+    fs::write(&path, b"v0").expect("seed");
+
+    let spurious_refusals = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for i in 0..ITERATIONS {
+                fs::write(&staging, format!("v{i}").as_bytes()).expect("write staging");
+                promote(&staging, &path).expect("promote");
+            }
+        });
+
+        for _ in 0..ITERATIONS {
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            if open_regular_file(&path, "test", options).is_err() {
+                spurious_refusals.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+
+    assert_eq!(
+        spurious_refusals.load(Ordering::Relaxed),
+        0,
+        "a reader racing a legitimate rename-replace must never be refused as a hard link"
+    );
+}
+
 /// `open_regular_file_allow_hard_links` is for a caller that either only
 /// reads someone else's tree (a diagnostic source) or owns a file it never
 /// reopens to write into (a migration lock, an extraction job record): it

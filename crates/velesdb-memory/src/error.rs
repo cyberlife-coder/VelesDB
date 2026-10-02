@@ -184,8 +184,10 @@ pub enum MemoryError {
         /// verbatim from the call site. The journal, the online-migration
         /// controller state, and the online-migration job state all
         /// propagate this variant with `?`, so this `Display` text surfaces
-        /// unchanged; the migration lock and the extraction job store catch
-        /// it and build their own wording instead.
+        /// unchanged; the migration lock, the extraction job store, and the
+        /// diagnostic copy each catch it and build their own wording
+        /// instead (the diagnostic copy keeps this text but wraps it with
+        /// the source path).
         entity: String,
     },
 

@@ -22,11 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`MemoryError::NotARegularFile { entity }`**: a path backing one of this
   crate's own state files turned out not to be a lone regular file — a
   symlink or a directory for any of the journal, controller state,
-  online-migration job, migration lock, or extraction job record; also a
-  hard link for the first three specifically (the migration lock and the
-  extraction job record accept a hard link instead, see Fixed below). The
-  journal, controller state, and online-migration job surface this variant's
-  own wording unchanged; the migration lock and the extraction job store
+  online-migration job, migration lock, extraction job record, or
+  diagnostic copy; also a hard link for the first three specifically (the
+  migration lock, the extraction job record, and the diagnostic copy accept
+  a hard link instead, see Fixed below). The journal, controller state, and
+  online-migration job surface this variant's own wording unchanged; the
+  migration lock, the extraction job store, and the diagnostic copy each
   catch it and build their own message. Split out of the shared
   `MigrationCapture` variant so these callers can give this one specific,
   expected refusal its own wording without also relabeling an unrelated I/O

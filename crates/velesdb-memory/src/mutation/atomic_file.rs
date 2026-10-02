@@ -174,8 +174,8 @@ fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
     // one by one, so this falls back to a `symlink_metadata` lookup that
     // only chooses which message reports the already-decided refusal —
     // `open` already returned `Err`, so this decides nothing
-    // security-relevant, unlike the checks in `open_regular_file` that run
-    // on an already-open handle.
+    // security-relevant, unlike the checks in `open_checked` and
+    // `open_regular_file` that run on an already-open handle.
     if err.raw_os_error() == Some(libc::ELOOP) {
         return not_a_regular_file(entity);
     }
