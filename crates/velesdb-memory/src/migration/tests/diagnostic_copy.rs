@@ -374,11 +374,27 @@ fn copy_regular_file_itself_refuses_a_special_file_past_copy_entry_own_check() {
     assert!(status.success(), "mkfifo must succeed");
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).expect("chmod fifo");
 
-    let error = super::super::diagnostic_copy::copy_regular_file(&source, &destination, 0)
+    // Bounded on a background thread, not called inline: the real
+    // `copy_regular_file` never blocks on a FIFO (its guard opens
+    // `O_NONBLOCK`, proven by `atomic_file_tests`'s own FIFO test), but a
+    // mutant that bypasses that guard and opens the FIFO for read directly
+    // would block forever waiting for a writer — on the main thread, that
+    // hangs the whole test binary instead of failing it (#2409 round 24).
+    let (tx, rx) = std::sync::mpsc::channel();
+    let destination_copy = destination.clone();
+    std::thread::spawn(move || {
+        let result =
+            super::super::diagnostic_copy::copy_regular_file(&source, &destination_copy, 0);
+        let _ = tx.send(result.map_err(|err| err.to_string()));
+    });
+
+    let error = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("copy_regular_file must return instead of blocking on the FIFO")
         .expect_err(
             "copy_regular_file must refuse a FIFO source on its own, not rely on copy_entry",
         );
-    assert!(error.to_string().contains("regular file"), "{error}");
+    assert!(error.contains("regular file"), "{error}");
     assert!(
         !destination.exists(),
         "a refused copy must not create the destination"

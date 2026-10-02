@@ -207,8 +207,9 @@ pub enum MemoryError {
         /// instead (the diagnostic copy keeps this text but wraps it with
         /// the source path). The migration lock does neither: it treats
         /// this variant the same as any other open failure, including an
-        /// unrelated I/O error, collapsing both into one generic release
-        /// refusal.
+        /// unrelated I/O error, collapsing both into one generic refusal
+        /// from whichever caller asked — `release`'s own, or
+        /// `MigrationState::write`'s through `verify_workspace`.
         entity: String,
     },
 

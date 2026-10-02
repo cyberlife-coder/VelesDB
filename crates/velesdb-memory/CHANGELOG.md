@@ -36,11 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostic copy each specifically match this variant and build their
   own message instead. The migration lock does neither: it treats this
   variant the same as any other open failure, including an unrelated
-  I/O error, collapsing both into one generic release refusal. Split
-  out of the shared `MigrationCapture` variant so a caller that does
-  match on it can give this one specific, expected refusal its own
-  wording without also relabeling an unrelated I/O failure (permission
-  denied, too many open files) the same open can raise (#2409).
+  I/O error, collapsing both into one generic refusal from whichever
+  caller asked — `release`'s own, or `MigrationState::write`'s through
+  `verify_workspace`. Split out of the shared `MigrationCapture`
+  variant so a caller that does match on it can give this one
+  specific, expected refusal its own wording without also relabeling
+  an unrelated I/O failure (permission denied, too many open files)
+  the same open can raise (#2409).
 
 ### Fixed
 

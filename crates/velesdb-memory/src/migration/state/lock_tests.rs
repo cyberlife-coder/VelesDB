@@ -9,8 +9,8 @@ use std::sync::atomic::AtomicUsize;
 
 /// `migration::tests::state::a_lock_file_swapped_for_a_symlink_is_refused_not_followed`
 /// only swaps the symlink in BEFORE calling `release` — the pre-fix
-/// `symlink_metadata`-then-reopen-by-name shape refuses that static
-/// case too, since its own check already sees the symlink; it never
+/// `symlink_metadata`-then-reopen-by-name shape refuses that static case
+/// too, since its own check already sees the symlink; it never
 /// exercises the WINDOW between a check and a later reopen by name,
 /// which only a continuously racing swap can reach. `owns_current_lock`
 /// is private, so this lives here rather than in
@@ -20,14 +20,17 @@ use std::sync::atomic::AtomicUsize;
 /// The genuine on-disk record always carries a token that does NOT
 /// match this lock's own, so `owns_current_lock` must return `false`
 /// for it regardless of race timing; a `true` result can then only be
-/// explained by having read through the symlink to the planted
-/// secret, whose token does match. Proven by mutation: reverting
-/// `owns_current_lock` to a `symlink_metadata`-then-reopen-by-name
-/// shape makes this fail (observed: thousands of `true` results
-/// across 20,000 iterations; 0 on the fixed code).
+/// explained by having read through the symlink to the planted secret,
+/// whose token does match. Round 23 proved this against that exact
+/// pre-fix shape at `ITERATIONS = 20_000`, but round 24 found the
+/// proof unreliable at that size: 13 repeats gave `true`-counts of 1,
+/// 0, 1, 2, 0, 1, 0, 1, 0, 1, 0, 1, 2 — 5 of 13 a false negative. The
+/// window is real but narrow. Raised to `200_000`: 10 repeats against
+/// the same pre-fix shape all failed (1 to 9 `true` results each), and
+/// the fixed code passed cleanly 5 times in a row at this size.
 #[test]
 fn owns_current_lock_is_never_trusted_through_a_racing_symlink_swap() {
-    const ITERATIONS: usize = 20_000;
+    const ITERATIONS: usize = 200_000;
 
     let workspace = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::tempdir().expect("outside tempdir");

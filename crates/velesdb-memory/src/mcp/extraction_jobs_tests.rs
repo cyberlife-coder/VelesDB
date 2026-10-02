@@ -120,17 +120,19 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
 /// refuses that static case too, since its own check already sees the
 /// symlink; it never exercises the WINDOW between a check and a later
 /// reopen by name, which only a continuously racing swap can reach.
-/// Proven by mutation: reverting `read_record_bytes` to a
-/// `symlink_metadata`-then-reopen-by-name shape makes this fail (observed:
-/// thousands of successful reads of the secret's own marker across 20,000
-/// iterations; 0 on the fixed code).
+/// Proven by mutation against that exact pre-fix shape, run 10 times at
+/// `ITERATIONS = 20_000`: 4 of 10 runs saw 0 leaks (a false negative), the
+/// rest 1-5; the race window is real but narrow. Raised to `200_000`
+/// (round 24) made all 10 runs leak (1 to 14 reads of the secret's own
+/// marker), and the fixed code still passed cleanly 5 times in a row at
+/// this size.
 #[cfg(unix)]
 #[test]
 fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
     use std::os::unix::fs::symlink;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    const ITERATIONS: usize = 20_000;
+    const ITERATIONS: usize = 200_000;
 
     let directory = tempfile::tempdir().expect("create durable job store");
     let outside = tempfile::tempdir().expect("outside tempdir");
