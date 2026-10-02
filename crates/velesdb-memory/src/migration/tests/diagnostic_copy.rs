@@ -256,6 +256,46 @@ fn a_hard_linked_source_file_is_copied_not_refused() {
     copy.finish(Ok(())).expect("cleanup");
 }
 
+/// A genuine I/O failure (here, permission denied) opening the source must
+/// keep its own detail, not the internal "migration capture error:" prefix
+/// `MemoryError::MigrationCapture`'s `Display` carries for its usual caller,
+/// the online-migration observer — this copy is unrelated to that (#2409
+/// round 7).
+#[cfg(unix)]
+#[test]
+fn a_permission_denied_source_keeps_its_io_detail_not_the_migration_capture_prefix() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source = tempfile::tempdir().expect("source");
+    let original = source.path().join("payload.bin");
+    std::fs::write(&original, b"payload").expect("seed");
+    std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+    if std::fs::File::open(&original).is_ok() {
+        eprintln!("test: skipped, permission bits are not enforced here");
+        std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o644))
+            .expect("restore");
+        return;
+    }
+
+    let destination = source.path().join("copy.bin");
+    let error = super::super::diagnostic_copy::copy_regular_file(&original, &destination, 7)
+        .expect_err("a permission-denied source must surface as an error");
+    let message = error.to_string();
+    assert!(
+        message.contains("Permission denied") || message.contains("permission denied"),
+        "an I/O failure must keep its real detail: {message}"
+    );
+    assert!(
+        !message.contains("migration capture error"),
+        "an unrelated I/O failure must not carry the online-migration observer's own \
+         wording: {message}"
+    );
+
+    std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o644))
+        .expect("restore permissions");
+}
+
 /// `root_and_nested_symlinks_are_refused_without_following_them` above
 /// never reaches `copy_regular_file`'s own protection: `copy_entry`'s
 /// earlier `symlink_metadata` check catches a symlink present at walk time

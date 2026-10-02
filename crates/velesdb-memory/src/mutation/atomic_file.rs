@@ -53,13 +53,20 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 /// (#2404).
 ///
 /// Refusing the hard-link case only makes sense for a file this store
-/// itself owns and mutates (a lock, a journal, a job record): a legitimate
-/// copy of it is never hard linked, so `nlink > 1` can only mean a link
-/// planted before or at this open (#2407). A path this helper only ever
-/// *reads* from someone else's tree has no such guarantee — a hard-link
-/// based backup (`cp -al`, `rsync --link-dest`) routinely produces
-/// `nlink > 1` on perfectly ordinary files — so a read-only caller over
-/// such a tree wants [`open_regular_file_allow_hard_links`] instead.
+/// writes into through a handle it keeps reopening across its lifetime (a
+/// lock, a journal, a controller-state file): a legitimate copy of it is
+/// never hard linked, so `nlink > 1` can only mean a link planted before or
+/// at this open, ready to intercept a future write through that same name
+/// (#2407). A file this store only ever replaces wholesale — by renaming a
+/// fresh temporary file over it, never reopening the old name to write into
+/// it — has no such window: the rename severs any hard link planted before
+/// it, so the content a later read sees is always the legitimate one
+/// regardless of `nlink` (an extraction job record is exactly this shape —
+/// #2409 round 7). That case wants [`open_regular_file_allow_hard_links`]
+/// instead, same as a path this helper only ever *reads* from someone
+/// else's tree, where a hard-link based backup (`cp -al`,
+/// `rsync --link-dest`) routinely produces `nlink > 1` on perfectly
+/// ordinary files.
 pub(crate) fn open_regular_file(
     path: &Path,
     entity: &str,
@@ -76,12 +83,11 @@ pub(crate) fn open_regular_file(
         // ordinary regular file: the `is_file` check in `open_checked`
         // cannot tell it apart, and `O_NOFOLLOW` only ever guarded the
         // symlink case (#2407). `nlink == 0` is not that: a reader can win
-        // the open() race against a concurrent, legitimate rename-replace
-        // of the same path (extraction job records are read while a worker
-        // is still saving state transitions into them), which unlinks the
-        // name this handle held without touching the content already read
-        // through it — refusing that would turn a routine concurrent read
-        // into a spurious failure.
+        // the open() race against a concurrent, legitimate rename-replace of
+        // the same path by another writer, which unlinks the name this
+        // handle held without touching the content already read through it
+        // — refusing that would turn a routine concurrent read into a
+        // spurious failure.
         use std::os::unix::fs::MetadataExt;
         if metadata.nlink() > 1 {
             return Err(not_a_regular_file(entity));
@@ -90,11 +96,14 @@ pub(crate) fn open_regular_file(
     Ok(file)
 }
 
-/// As [`open_regular_file`], but accepts a hard-linked target: for a path
-/// this helper only reads from a tree it does not own (a diagnostic source
-/// directory), a hard link planted by a backup tool is indistinguishable
-/// from an ordinary file, so there is nothing here to refuse it against.
-/// The symlink-swap protection (#2404) still applies in full.
+/// As [`open_regular_file`], but accepts a hard-linked target. Fits two
+/// shapes: a path this helper only reads from a tree it does not own (a
+/// diagnostic source directory), and a path this store owns but only ever
+/// replaces wholesale by rename rather than reopening to write into (an
+/// extraction job record). Either way a hard link planted by a backup tool
+/// is indistinguishable from an ordinary file, so there is nothing here to
+/// refuse it against. The symlink-swap protection (#2404) still applies in
+/// full.
 pub(crate) fn open_regular_file_allow_hard_links(
     path: &Path,
     entity: &str,
@@ -135,9 +144,12 @@ fn open_checked(
     let file = options
         .open(path)
         .map_err(|err| open_error(&err, path, entity))?;
-    let metadata = file
-        .metadata()
-        .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
+    let metadata = file.metadata().map_err(|err| {
+        capture(format!(
+            "cannot inspect {entity} file {}: {err}",
+            path.display()
+        ))
+    })?;
     if !metadata.is_file() {
         return Err(not_a_regular_file(entity));
     }

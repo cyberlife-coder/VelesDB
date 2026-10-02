@@ -3,7 +3,7 @@
 use super::*;
 use crate::embedder::HashEmbedder;
 use crate::extract::{ExtractError, ExtractedFact, Extractor};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,21 @@ fn accepted_record() -> JobRecord {
             backend: Some("outline".to_owned()),
         },
     )
+}
+
+/// Opens a fresh job store under `directory`, persists one accepted record,
+/// and returns its on-disk path — the shared setup for the symlink/hard-link/
+/// permission-denied refusal tests below, which each go on to tamper with
+/// that exact path.
+fn seed_saved_record(directory: &tempfile::TempDir) -> (JobStore, JobRecord, PathBuf) {
+    let record = accepted_record();
+    let store = JobStore::open(directory.path()).expect("open job snapshots");
+    store.save(&record).expect("persist record");
+    let record_path = directory
+        .path()
+        .join("extraction-jobs")
+        .join(format!("{}.json", record.request_id));
+    (store, record, record_path)
 }
 
 #[test]
@@ -64,14 +79,7 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
     let secret = outside.path().join("secret");
     std::fs::write(&secret, b"do-not-read-me").expect("plant secret");
 
-    let record = accepted_record();
-    let store = JobStore::open(directory.path()).expect("open job snapshots");
-    store.save(&record).expect("persist record");
-
-    let record_path = directory
-        .path()
-        .join("extraction-jobs")
-        .join(format!("{}.json", record.request_id));
+    let (store, record, record_path) = seed_saved_record(&directory);
     std::fs::remove_file(&record_path).expect("remove real record");
     symlink(&secret, &record_path).expect("plant symlink record");
 
@@ -100,15 +108,7 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempfile::tempdir().expect("create durable job store");
-
-    let record = accepted_record();
-    let store = JobStore::open(directory.path()).expect("open job snapshots");
-    store.save(&record).expect("persist record");
-
-    let record_path = directory
-        .path()
-        .join("extraction-jobs")
-        .join(format!("{}.json", record.request_id));
+    let (store, record, record_path) = seed_saved_record(&directory);
     std::fs::set_permissions(&record_path, std::fs::Permissions::from_mode(0o000))
         .expect("chmod 000");
 
@@ -139,41 +139,39 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
 }
 
 /// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
-/// cannot tell it apart (#2407). `open_regular_file`'s `nlink > 1` check
-/// refuses it on the handle this load already produced — unlike the
-/// symlink case above, this one aliases the record's own real bytes, so
-/// the refusal is attributable to the link shape alone, not to content
-/// that happens to fail parsing for an unrelated reason.
+/// cannot tell it apart (#2407). Unlike a lock or journal file this store
+/// reopens to write into, a job record is only ever replaced wholesale by
+/// `save`'s rename — so a hard-link based backup of the store (`cp -al`,
+/// `rsync --link-dest`) leaves `nlink > 1` on an ordinary, untampered
+/// record, and refusing it would break this store's own startup scan
+/// (`pending`, which treats any refused record as fatal) after a legitimate
+/// backup restore (#2409 round 7). Proven by mutation: reverting
+/// `read_record_bytes` to `open_regular_file` makes this test fail with
+/// "invalid extraction job record".
 #[cfg(unix)]
 #[test]
-fn a_job_record_hard_linked_from_outside_is_refused_not_followed() {
+fn a_job_record_hard_linked_from_outside_is_loaded_not_refused() {
     let directory = tempfile::tempdir().expect("create durable job store");
-
-    let record = accepted_record();
-    let store = JobStore::open(directory.path()).expect("open job snapshots");
-    store.save(&record).expect("persist record");
-
-    let record_path = directory
-        .path()
-        .join("extraction-jobs")
-        .join(format!("{}.json", record.request_id));
+    let (store, record, record_path) = seed_saved_record(&directory);
     let content = std::fs::read(&record_path).expect("read real record");
     std::fs::remove_file(&record_path).expect("remove real record");
     let alias = directory.path().join("record-alias.json");
     std::fs::write(&alias, &content).expect("plant alias");
     std::fs::hard_link(&alias, &record_path).expect("plant hard link record");
 
-    let error = store
+    let loaded = store
         .load(&record.request_id)
-        .expect_err("a hard-linked job record must be refused, not followed");
-    assert!(
-        error.to_string().contains("invalid extraction job record"),
-        "the refusal must name the invalid record: {error}"
-    );
+        .expect("a hard-linked job record must be loaded, not refused")
+        .expect("record must be found");
+    assert_eq!(loaded.request_id, record.request_id);
+
+    let pending = store
+        .pending()
+        .expect("a startup scan must not fail on a hard-linked record");
     assert_eq!(
-        std::fs::read(&alias).expect("alias must be untouched"),
-        content,
-        "a refused load must never alter the aliased record through the hard link"
+        pending,
+        vec![record.request_id],
+        "the startup scan must still see the hard-linked record as pending"
     );
 }
 

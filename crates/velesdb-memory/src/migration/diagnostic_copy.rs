@@ -311,6 +311,10 @@ pub(super) fn copy_regular_file(
     // path-agnostic), so it's the one case that needs the source path added
     // here; every other error (a genuine I/O failure) is built by `capture`
     // with the path already in it — adding it again would duplicate it.
+    // `MigrationCapture`'s own `Display` prefixes "migration capture
+    // error:", a wording meant for the online-migration observer, not for
+    // this unrelated caller — unwrapped to its inner detail so a genuine
+    // I/O failure here reads the same as develop's equivalent message.
     let mut input = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
         source,
         "diagnostic source",
@@ -320,6 +324,7 @@ pub(super) fn copy_regular_file(
         crate::MemoryError::NotARegularFile { .. } => {
             query_error(format!("{}: {err}", source.display()))
         }
+        crate::MemoryError::MigrationCapture(detail) => query_error(detail),
         other => query_error(other.to_string()),
     })?;
     let mut output = OpenOptions::new()
