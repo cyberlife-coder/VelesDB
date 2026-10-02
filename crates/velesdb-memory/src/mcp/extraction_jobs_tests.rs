@@ -80,10 +80,29 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
 
     let directory = tempfile::tempdir().expect("create durable job store");
     let outside = tempfile::tempdir().expect("outside tempdir");
-    let secret = outside.path().join("secret");
-    std::fs::write(&secret, b"do-not-read-me").expect("plant secret");
 
     let (store, record, record_path) = seed_saved_record(&directory);
+    // The secret holds a VALID job record under the same request_id: a
+    // load that merely followed the symlink would parse it fine and
+    // return it as the real one. Planting unparsable bytes instead would
+    // make this test pass for the wrong reason — refused only because the
+    // content fails to decode, never exercising whether the symlink
+    // itself is followed (the migration lock's own
+    // `a_lock_file_swapped_for_a_symlink_is_refused_not_followed` makes
+    // the same point).
+    let mut leaked = record.clone();
+    leaked.request = Some(PersistedRequest {
+        text: "LEAKED-SECRET".to_owned(),
+        metadata: None,
+        backend: None,
+    });
+    let secret = outside.path().join("secret.json");
+    std::fs::write(
+        &secret,
+        serde_json::to_vec(&leaked).expect("serialize secret"),
+    )
+    .expect("plant secret");
+
     std::fs::remove_file(&record_path).expect("remove real record");
     symlink(&secret, &record_path).expect("plant symlink record");
 
@@ -94,10 +113,73 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
         error.to_string().contains("invalid extraction job record"),
         "the refusal must name the invalid record: {error}"
     );
+}
+
+/// #2409 round 23: the test above only swaps the symlink in BEFORE calling
+/// `load` — the pre-fix `symlink_metadata`-then-reopen-by-name shape
+/// refuses that static case too, since its own check already sees the
+/// symlink; it never exercises the WINDOW between a check and a later
+/// reopen by name, which only a continuously racing swap can reach.
+/// Proven by mutation: reverting `read_record_bytes` to a
+/// `symlink_metadata`-then-reopen-by-name shape makes this fail (observed:
+/// thousands of successful reads of the secret's own marker across 20,000
+/// iterations; 0 on the fixed code).
+#[cfg(unix)]
+#[test]
+fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
+    use std::os::unix::fs::symlink;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const ITERATIONS: usize = 20_000;
+
+    let directory = tempfile::tempdir().expect("create durable job store");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+
+    let (store, record, record_path) = seed_saved_record(&directory);
+    let real_body = std::fs::read(&record_path).expect("read real record");
+
+    let mut leaked = record.clone();
+    leaked.request = Some(PersistedRequest {
+        text: "LEAKED-SECRET".to_owned(),
+        metadata: None,
+        backend: None,
+    });
+    let secret_path = outside.path().join("secret.json");
+    std::fs::write(
+        &secret_path,
+        serde_json::to_vec(&leaked).expect("serialize secret"),
+    )
+    .expect("plant secret");
+
+    let leaked_count = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for _ in 0..ITERATIONS {
+                let _ = std::fs::remove_file(&record_path);
+                symlink(&secret_path, &record_path).expect("plant symlink");
+                let _ = std::fs::remove_file(&record_path);
+                std::fs::write(&record_path, &real_body).expect("restore real record");
+            }
+        });
+
+        for _ in 0..ITERATIONS {
+            if let Ok(Some(loaded)) = store.load(&record.request_id) {
+                if loaded
+                    .request
+                    .as_ref()
+                    .is_some_and(|request| request.text == "LEAKED-SECRET")
+                {
+                    leaked_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    });
+
     assert_eq!(
-        std::fs::read(&secret).expect("secret must be untouched"),
-        b"do-not-read-me",
-        "a refused load must never modify a file outside the store through the symlink"
+        leaked_count.load(Ordering::Relaxed),
+        0,
+        "a racing symlink swap must never be read through to the caller"
     );
 }
 

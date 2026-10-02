@@ -202,10 +202,13 @@ pub enum MemoryError {
         /// verbatim from the call site. The journal, the online-migration
         /// controller state, and the online-migration job state all
         /// propagate this variant with `?`, so this `Display` text surfaces
-        /// unchanged; the migration lock, the extraction job store, and the
-        /// diagnostic copy each catch it and build their own wording
+        /// unchanged; the extraction job store and the diagnostic copy each
+        /// specifically match this variant and build their own wording
         /// instead (the diagnostic copy keeps this text but wraps it with
-        /// the source path).
+        /// the source path). The migration lock does neither: it treats
+        /// this variant the same as any other open failure, including an
+        /// unrelated I/O error, collapsing both into one generic release
+        /// refusal.
         entity: String,
     },
 
