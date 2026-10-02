@@ -172,15 +172,18 @@ pub enum MemoryError {
     /// A path backing an internal state/record file is not usable as a lone
     /// regular file: it names a symlink, a hard link, a directory, or
     /// another non-regular type, so the open was refused. Depending on the
-    /// type and the platform, the refusal happens either at `open` itself
-    /// (a unix symlink fails with `ELOOP` and is never actually opened; a
-    /// socket fails to open its own way too, whether opened for reading or
-    /// writing) or on the handle that did open successfully (a FIFO or a
-    /// directory opened read-only — this crate's `O_NONBLOCK` guard lets
-    /// both open fine, caught only once inspected; a hard link, unix only —
-    /// the only platform that checks `nlink`, and only for the callers that
-    /// refuse one at all; a symlink too, on Windows, which opens it through
-    /// the reparse-point flag instead of refusing it at `open`). A deliberate
+    /// type, how it is opened, and the platform, the refusal happens either
+    /// at `open` itself (a unix symlink always fails with `ELOOP` and is
+    /// never actually opened; a socket always fails to open its own way
+    /// too; a directory opened for writing — the shape the journal's own
+    /// reopens use — fails with `EISDIR`) or on the handle that did open
+    /// successfully (a FIFO, which this crate's `O_NONBLOCK` flag keeps
+    /// from blocking rather than from opening at all; a directory opened
+    /// read-only, which needs no such help to open; a hard link, unix
+    /// only — the only platform that checks `nlink`, and only for the
+    /// callers that refuse one at all; a symlink too, on Windows, which
+    /// opens it through the reparse-point flag instead of refusing it at
+    /// `open`). A deliberate
     /// refusal, not a
     /// failure to inspect the path — kept distinct from
     /// [`Self::MigrationCapture`] so a caller can match on this one specific,

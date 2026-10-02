@@ -317,7 +317,7 @@ pub(super) fn copy_regular_file(
     // error:", a wording meant for the online-migration observer, not for
     // this unrelated caller — unwrapped to its inner detail so a genuine
     // I/O failure here keeps its own detail instead.
-    let mut input = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+    let (mut input, _metadata) = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
         source,
         "diagnostic source",
         open_options,

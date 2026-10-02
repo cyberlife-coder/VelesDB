@@ -241,8 +241,9 @@ fn root_and_nested_symlinks_are_refused_without_following_them() {
 /// if it were a link planted to redirect a write (#2409) — a symlink swap
 /// or any other non-regular type is still refused, just not a hard link
 /// (see `copy_regular_file_itself_refuses_a_symlink_past_copy_entry_own_check`
-/// and `a_special_file_is_refused_and_unrelated_scratch_is_never_swept`
-/// below).
+/// and `copy_regular_file_itself_refuses_a_special_file_past_copy_entry_own_check`
+/// below, both of which isolate `copy_regular_file`'s own refusal rather
+/// than `copy_entry`'s earlier walk-time check).
 #[cfg(unix)]
 #[test]
 fn a_hard_linked_source_file_is_copied_not_refused() {
@@ -345,6 +346,42 @@ fn copy_regular_file_itself_refuses_a_symlink_past_copy_entry_own_check() {
     assert_eq!(
         std::fs::read(&secret).expect("secret must be untouched"),
         content
+    );
+}
+
+/// Same gap as the symlink isolation test just above, for a non-symlink
+/// special type: `a_special_file_is_refused_and_unrelated_scratch_is_never_swept`
+/// below only proves `copy_entry`'s own `symlink_metadata` pre-check refuses
+/// a socket present at walk time — it goes through `DiagnosticCopy::capture`,
+/// so `copy_regular_file` is never reached at all for that case, and cannot
+/// tell whether ITS OWN `open_regular_file_allow_hard_links` call would also
+/// refuse one. Proven by mutation: narrowing `copy_regular_file` to refuse
+/// only a symlink (not any other non-regular type) leaves this test failing
+/// while `a_special_file_is_refused_and_unrelated_scratch_is_never_swept`
+/// keeps passing (#2409 round-16 finding).
+#[cfg(unix)]
+#[test]
+fn copy_regular_file_itself_refuses_a_special_file_past_copy_entry_own_check() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let staging = tempfile::tempdir().expect("staging");
+    let source = staging.path().join("source-fifo");
+    let destination = staging.path().join("destination");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&source)
+        .status()
+        .expect("run mkfifo");
+    assert!(status.success(), "mkfifo must succeed");
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).expect("chmod fifo");
+
+    let error = super::super::diagnostic_copy::copy_regular_file(&source, &destination, 0)
+        .expect_err(
+            "copy_regular_file must refuse a FIFO source on its own, not rely on copy_entry",
+        );
+    assert!(error.to_string().contains("regular file"), "{error}");
+    assert!(
+        !destination.exists(),
+        "a refused copy must not create the destination"
     );
 }
 

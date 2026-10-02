@@ -118,14 +118,16 @@ pub(crate) fn open_regular_file(
 /// lock (created once, then only read or removed). Either way a hard link
 /// planted by a backup tool is indistinguishable from an ordinary file, so
 /// there is nothing here to refuse it against. The symlink-swap protection
-/// (#2404) still applies in full.
+/// (#2404) still applies in full. Returns the already-fetched `Metadata`
+/// alongside the handle, same reason as [`open_checked`]: a caller that
+/// also needs to inspect the file (its length, say) does not `fstat` the
+/// same handle a second time (#2409 round 16).
 pub(crate) fn open_regular_file_allow_hard_links(
     path: &Path,
     entity: &str,
     options: OpenOptions,
-) -> Result<File, MemoryError> {
-    let (file, _metadata) = open_checked(path, entity, options)?;
-    Ok(file)
+) -> Result<(File, std::fs::Metadata), MemoryError> {
+    open_checked(path, entity, options)
 }
 
 /// Opens `path` with the symlink-swap protection (#2404) and returns the

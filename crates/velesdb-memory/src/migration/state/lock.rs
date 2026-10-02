@@ -87,11 +87,13 @@ impl MigrationLock {
         // only refuse an untampered record and break lock checks on a
         // backed-up workspace (#2409 round 8). `_allow_hard_links` keeps the
         // symlink-swap refusal (#2404) this call still needs.
-        let Ok(mut file) = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
-            &self.path,
-            "migration lock",
-            options,
-        ) else {
+        let Ok((mut file, _metadata)) =
+            crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+                &self.path,
+                "migration lock",
+                options,
+            )
+        else {
             return false;
         };
         let mut body = String::new();

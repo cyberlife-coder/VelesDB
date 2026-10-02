@@ -138,7 +138,7 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
     // I/O failure opening or inspecting the path (permission denied, too
     // many open files) is NOT this — it keeps its own detail through
     // `storage_error` rather than being swallowed the same way.
-    let mut file = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+    let (mut file, metadata) = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
         path,
         "extraction job record",
         options,
@@ -150,7 +150,7 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
         crate::MemoryError::MigrationCapture(detail) => storage_error(detail),
         other => storage_error(other),
     })?;
-    let length = file.metadata().map_err(storage_error)?.len();
+    let length = metadata.len();
     if length > MAX_RECORD_BYTES {
         return Err(JobError::Storage(format!(
             "invalid extraction job record {}",
