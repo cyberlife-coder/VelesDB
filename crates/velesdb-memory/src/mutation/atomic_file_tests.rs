@@ -231,8 +231,11 @@ fn open_regular_file_refuses_a_fifo_without_blocking() {
 
 /// #2407 (round 5): a hard link to a file outside the store is,
 /// structurally, an ordinary regular file, so `is_file` alone accepts it —
-/// but `fstat` also reports `nlink`, which a legitimate file this helper
-/// ever opens will not have above 1.
+/// but `fstat` also reports `nlink`, which this check refuses above 1 for
+/// every current caller of `open_regular_file` (the journal, and —
+/// deliberately, per #2426 — the online-migration controller state and job
+/// state too, even though a hard-link based backup of either can trigger
+/// this exact refusal on an untampered file).
 #[cfg(unix)]
 #[test]
 fn open_regular_file_refuses_a_hard_link() {
@@ -306,9 +309,10 @@ fn open_regular_file_never_refuses_a_legitimate_rename_replace_race() {
 /// `open_regular_file_allow_hard_links` is for a caller that either only
 /// reads someone else's tree (a diagnostic source) or owns a file it never
 /// reopens to write into (a migration lock, an extraction job record): it
-/// accepts the exact shape the test above refuses, because a hard-link
-/// based backup routinely produces it on ordinary files. The symlink-swap
-/// protection (#2404) is shared code and still applies in full.
+/// accepts the exact shape `open_regular_file_refuses_a_hard_link` above
+/// refuses, because a hard-link based backup routinely produces it on
+/// ordinary files. The symlink-swap protection (#2404) is shared code and
+/// still applies in full.
 #[cfg(unix)]
 #[test]
 fn open_regular_file_allow_hard_links_accepts_a_hard_link_but_still_refuses_a_symlink() {

@@ -57,8 +57,8 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 /// journal is the one remaining caller that does (a legitimate copy of it is
 /// never hard linked, so `nlink > 1` can only mean a link planted before or
 /// at this open, ready to intercept a future append through that same
-/// handle — #2407). Two other shapes have no such window either, though by
-/// different mechanisms: a file this store only ever replaces wholesale, by
+/// handle — #2407). Two other shapes have no such window, by different
+/// mechanisms: a file this store only ever replaces wholesale, by
 /// renaming a fresh temporary file over it and never reopening the old name
 /// to write into it (an extraction job record — #2409 round 7) — the rename
 /// severs any hard link planted before it; and a file created once via

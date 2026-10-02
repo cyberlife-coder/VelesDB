@@ -169,10 +169,13 @@ pub enum MemoryError {
     #[error("migration capture error: {0}")]
     MigrationCapture(String),
 
-    /// A path backing an internal state/record file was opened, but is not
-    /// usable as a lone regular file: it names a symlink, a hard link, a
-    /// directory, or another non-regular type. A deliberate refusal, not a
-    /// failure to inspect the path — kept distinct from
+    /// A path backing an internal state/record file is not usable as a lone
+    /// regular file: it names a symlink, a hard link, a directory, or
+    /// another non-regular type, so the open was refused (a symlink is
+    /// refused at `open` itself and never actually opened; a hard link or
+    /// other non-regular type is caught afterward, on the handle that did
+    /// open). A deliberate refusal, not a failure to inspect the path —
+    /// kept distinct from
     /// [`Self::MigrationCapture`] so a caller can match on this one specific,
     /// expected outcome without also catching an unrelated I/O failure
     /// (permission denied, too many open files) the same operation can
