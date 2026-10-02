@@ -128,10 +128,18 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
 /// side of the swap, wasting most iterations. Round 25 swaps the path
 /// atomically instead — `rename` a staged symlink or a staged real file
 /// into place, so the path is always either one or the other, never
-/// absent — which needs far fewer iterations: at `ITERATIONS = 20_000`,
-/// 10 repeats against the real pre-fix shape all leaked (29 to 45 reads
-/// of the secret's own marker), and the fixed code still passed cleanly
-/// 5 times in a row at this size.
+/// absent, and brought `ITERATIONS` down to `20_000`. Round 26 found
+/// that fix still unreliable under the DEFAULT parallel test harness
+/// (`cargo test`, as opposed to `--test-threads=1`): other tests
+/// contending for CPU change how far the reader and the writer get
+/// relative to each other, and a fixed `0..ITERATIONS` reader loop can
+/// finish long before the writer and under-sample the race. The reader
+/// below now runs for as long as the writer thread is alive instead,
+/// which is reliable under both: isolated (`--test-threads=1`), 10
+/// repeats against the real pre-fix shape all leaked 26 to 47 reads of
+/// the secret's own marker in about 5s each; under the default
+/// parallel harness, 5 repeats of the FULL suite all leaked 2 to 3
+/// thousand. The fixed code passes cleanly under both conditions.
 #[cfg(unix)]
 #[test]
 fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
@@ -164,7 +172,7 @@ fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
     let leaked_count = AtomicUsize::new(0);
 
     std::thread::scope(|scope| {
-        scope.spawn(|| {
+        let writer = scope.spawn(|| {
             for _ in 0..ITERATIONS {
                 symlink(&secret_path, &staging_symlink).expect("stage symlink");
                 std::fs::rename(&staging_symlink, &record_path)
@@ -175,7 +183,13 @@ fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
             }
         });
 
-        for _ in 0..ITERATIONS {
+        // Read for as long as the writer is still swapping, not a matching
+        // fixed count: under the default parallel test harness (as opposed
+        // to `--test-threads=1`), other tests contend for CPU and the two
+        // threads here no longer make comparable progress per iteration,
+        // so a fixed `0..ITERATIONS` reader loop can finish long before the
+        // writer and under-sample the race (#2409 round 26).
+        while !writer.is_finished() {
             if let Ok(Some(loaded)) = store.load(&record.request_id) {
                 if loaded
                     .request
@@ -186,6 +200,7 @@ fn a_job_record_is_never_read_through_a_racing_symlink_swap() {
                 }
             }
         }
+        writer.join().expect("writer must not panic");
     });
 
     assert_eq!(
