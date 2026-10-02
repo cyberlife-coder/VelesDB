@@ -238,8 +238,9 @@ fn root_and_nested_symlinks_are_refused_without_following_them() {
 /// A hard-link based backup (`cp -al`, `rsync --link-dest`) routinely
 /// produces `nlink > 1` on an ordinary file. The diagnostic copy only
 /// reads the source, so it must accept that shape rather than refuse it as
-/// if it were a link planted to redirect a write (#2409) — only a symlink
-/// swap, proven above, is refused.
+/// if it were a link planted to redirect a write (#2409) — a symlink swap
+/// or any other non-regular type, proven above, is still refused, just not
+/// a hard link.
 #[cfg(unix)]
 #[test]
 fn a_hard_linked_source_file_is_copied_not_refused() {

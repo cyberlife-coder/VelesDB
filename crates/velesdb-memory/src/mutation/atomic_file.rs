@@ -46,7 +46,8 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 }
 
 /// Opens `path` for `entity`, refusing it if it names a symlink, a hard
-/// link, or anything but a lone regular file. The refusal is decided from
+/// link (unix only — the only platform that checks `nlink`), or anything
+/// but a lone regular file. The refusal is decided from
 /// the file this call opens, not from a separate `stat` of the path
 /// beforehand: `validate_regular_file` followed by a plain `open` leaves a
 /// window where a link swapped in between the two is followed by the open

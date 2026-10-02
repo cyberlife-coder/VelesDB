@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crate's own state files turned out not to be a lone regular file — a
   symlink or a directory for any of the journal, controller state,
   online-migration job, migration lock, extraction job record, or
-  diagnostic copy; also a hard link for the first three specifically (the
+  diagnostic copy; also a hard link (unix only — the only platform that
+  checks `nlink`) for the first three specifically (the
   migration lock, the extraction job record, and the diagnostic copy accept
   a hard link instead, see Fixed below). The journal, controller state, and
   online-migration job surface this variant's own wording unchanged; the

@@ -175,8 +175,9 @@ pub enum MemoryError {
     /// type and the platform, the refusal happens either at `open` itself
     /// (a unix symlink fails with `ELOOP` and is never actually opened; a
     /// socket or a directory opened for write fails its own way) or on the
-    /// handle that did open successfully (a hard link always; a symlink
-    /// too, on Windows, which opens it through the reparse-point flag
+    /// handle that did open successfully (a hard link always, on unix —
+    /// the only platform that checks `nlink`; a symlink too, on Windows,
+    /// which opens it through the reparse-point flag
     /// instead of refusing it at `open`). A deliberate refusal, not a
     /// failure to inspect the path — kept distinct from
     /// [`Self::MigrationCapture`] so a caller can match on this one specific,
