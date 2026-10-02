@@ -132,9 +132,10 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
     // daemon startup after a legitimate backup restore (#2409 round 7).
     // `open_regular_file_allow_hard_links` therefore still refuses a symlink
     // swap (#2404) or any other non-regular type (a directory, a FIFO, ...),
-    // just not a hard link, which gets this store's own "invalid extraction
-    // job record" phrasing (matching the oversized-record refusal below)
-    // instead of the shared guard's internal-sounding wording. An unrelated
+    // just not a hard link; such a refusal gets this store's own "invalid
+    // extraction job record" phrasing (matching the oversized-record
+    // refusal below) instead of the shared guard's internal-sounding
+    // wording. An unrelated
     // I/O failure opening or inspecting the path (permission denied, too
     // many open files) is NOT this — it keeps its own detail through
     // `storage_error` rather than being swallowed the same way.

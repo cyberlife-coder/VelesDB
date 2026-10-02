@@ -267,8 +267,8 @@ fn open_regular_file_refuses_a_hard_link() {
 /// cited off `open_regular_file` entirely, so the two stress-tested
 /// extraction-recovery tests no longer exercise this guard at all. Proven
 /// by mutation: reverting to `nlink() != 1` makes this test fail (observed
-/// on macOS: ~1,650-1,750 spurious refusals over 20,000 iterations, across
-/// 5 runs).
+/// on macOS: roughly 1,700 of 20,000 iterations, about 8-9%, varying by
+/// run and machine load).
 #[cfg(unix)]
 #[test]
 fn open_regular_file_never_refuses_a_legitimate_rename_replace_race() {
