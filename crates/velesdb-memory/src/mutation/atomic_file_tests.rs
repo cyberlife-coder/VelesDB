@@ -254,11 +254,12 @@ fn open_regular_file_refuses_a_hard_link() {
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
 }
 
-/// `open_regular_file_allow_hard_links` is for a caller that only reads
-/// someone else's tree (a diagnostic source): it accepts the exact shape
-/// the test above refuses, because a hard-link based backup routinely
-/// produces it on ordinary files. The symlink-swap protection (#2404) is
-/// shared code and still applies in full.
+/// `open_regular_file_allow_hard_links` is for a caller that either only
+/// reads someone else's tree (a diagnostic source) or owns a file it never
+/// reopens to write into (a migration lock, an extraction job record): it
+/// accepts the exact shape the test above refuses, because a hard-link
+/// based backup routinely produces it on ordinary files. The symlink-swap
+/// protection (#2404) is shared code and still applies in full.
 #[cfg(unix)]
 #[test]
 fn open_regular_file_allow_hard_links_accepts_a_hard_link_but_still_refuses_a_symlink() {

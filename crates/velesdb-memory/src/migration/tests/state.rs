@@ -166,7 +166,7 @@ fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
     assert_eq!(
         std::fs::read(&secret).expect("secret must be untouched"),
         original,
-        "release must never read through a symlinked lock into a file outside the workspace"
+        "release must never modify a file outside the workspace through a symlinked lock"
     );
     assert!(
         std::fs::symlink_metadata(&lock_path)
@@ -189,7 +189,7 @@ fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
 /// `open_regular_file` makes this test fail.
 #[cfg(unix)]
 #[test]
-fn a_lock_file_hard_linked_from_outside_is_loaded_not_refused() {
+fn a_lock_file_hard_linked_from_outside_is_released_not_refused() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let outside = tempfile::tempdir().expect("outside tempdir");
 

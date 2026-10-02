@@ -57,16 +57,19 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 /// journal is the one remaining caller that does (a legitimate copy of it is
 /// never hard linked, so `nlink > 1` can only mean a link planted before or
 /// at this open, ready to intercept a future append through that same
-/// handle — #2407). A file this store only ever replaces wholesale — by
-/// renaming a fresh temporary file over it, never reopening the old name to
-/// write into it — has no such window: the rename severs any hard link
-/// planted before it, so the content a later read sees is always the
-/// legitimate one regardless of `nlink` (a migration lock and an extraction
-/// job record are exactly this shape — #2409 rounds 7-8). That case wants
-/// [`open_regular_file_allow_hard_links`] instead, same as a path this
-/// helper only ever *reads* from someone else's tree, where a hard-link
-/// based backup (`cp -al`, `rsync --link-dest`) routinely produces
-/// `nlink > 1` on perfectly ordinary files.
+/// handle — #2407). Two other shapes have no such window either, though by
+/// different mechanisms: a file this store only ever replaces wholesale, by
+/// renaming a fresh temporary file over it and never reopening the old name
+/// to write into it (an extraction job record — #2409 round 7) — the rename
+/// severs any hard link planted before it; and a file created once via
+/// `create_new` and afterward only ever read or removed, never rewritten at
+/// all (a migration lock — #2409 round 8) — there is no later write for a
+/// planted hard link to intercept in the first place. Either way the
+/// content a later read sees is always the legitimate one regardless of
+/// `nlink`. Both cases want [`open_regular_file_allow_hard_links`] instead,
+/// same as a path this helper only ever *reads* from someone else's tree,
+/// where a hard-link based backup (`cp -al`, `rsync --link-dest`) routinely
+/// produces `nlink > 1` on perfectly ordinary files.
 ///
 /// Two other callers (the online-migration controller state and job state)
 /// share the write-once-rename-replace shape too, but predate #2409 (added
@@ -102,14 +105,14 @@ pub(crate) fn open_regular_file(
     Ok(file)
 }
 
-/// As [`open_regular_file`], but accepts a hard-linked target. Fits two
-/// shapes: a path this helper only reads from a tree it does not own (a
-/// diagnostic source directory), and a path this store owns but only ever
-/// replaces wholesale by rename or removes outright, never reopening to
-/// write into it (a migration lock, an extraction job record). Either way a
-/// hard link planted by a backup tool is indistinguishable from an ordinary
-/// file, so there is nothing here to refuse it against. The symlink-swap
-/// protection (#2404) still applies in full.
+/// As [`open_regular_file`], but accepts a hard-linked target. Fits a path
+/// this helper only reads from a tree it does not own (a diagnostic source
+/// directory), and a path this store owns but never reopens to write into:
+/// an extraction job record (replaced wholesale by rename) or a migration
+/// lock (created once, then only read or removed). Either way a hard link
+/// planted by a backup tool is indistinguishable from an ordinary file, so
+/// there is nothing here to refuse it against. The symlink-swap protection
+/// (#2404) still applies in full.
 pub(crate) fn open_regular_file_allow_hard_links(
     path: &Path,
     entity: &str,

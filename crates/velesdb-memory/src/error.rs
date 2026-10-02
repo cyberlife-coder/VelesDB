@@ -181,10 +181,11 @@ pub enum MemoryError {
     #[error("{entity} path must be a regular file")]
     NotARegularFile {
         /// The name the failing store gave itself (e.g. "journal"), reused
-        /// verbatim from the call site. Some callers (the migration lock, the
-        /// extraction job store) catch this variant and build their own
-        /// wording instead of letting this `Display` text surface — the
-        /// journal propagates it unchanged.
+        /// verbatim from the call site. The journal, the online-migration
+        /// controller state, and the online-migration job state all
+        /// propagate this variant with `?`, so this `Display` text surfaces
+        /// unchanged; the migration lock and the extraction job store catch
+        /// it and build their own wording instead.
         entity: String,
     },
 

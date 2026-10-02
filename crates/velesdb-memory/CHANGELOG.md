@@ -19,14 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment variable described under Fixed (#2289), and by
   `MemoryError::NotARegularFile` described below.
 
-- **`MemoryError::NotARegularFile { entity }`**: a path backing a journal,
-  controller-state, online-migration-job, migration-lock, or
-  extraction-job-record file turned out not to be a lone regular file (a
-  symlink, a hard link, a directory, ...).
-  Split out of the shared `MigrationCapture` variant so a caller (MCP's
-  extraction job store) can give this one specific, expected refusal its own
-  wording without also relabeling an unrelated I/O failure (permission
-  denied, too many open files) the same open can raise (#2409).
+- **`MemoryError::NotARegularFile { entity }`**: a path backing one of this
+  crate's own state files turned out not to be a lone regular file — a
+  symlink or a directory for any of the journal, controller state,
+  online-migration job, migration lock, or extraction job record; also a
+  hard link for the first three specifically (the migration lock and the
+  extraction job record accept a hard link instead, see Fixed below). The
+  journal, controller state, and online-migration job surface this variant's
+  own wording unchanged; the migration lock and the extraction job store
+  catch it and build their own message. Split out of the shared
+  `MigrationCapture` variant so these callers can give this one specific,
+  expected refusal its own wording without also relabeling an unrelated I/O
+  failure (permission denied, too many open files) the same open can raise
+  (#2409).
 
 ### Fixed
 

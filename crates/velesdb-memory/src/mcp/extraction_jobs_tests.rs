@@ -93,15 +93,15 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
     assert_eq!(
         std::fs::read(&secret).expect("secret must be untouched"),
         b"do-not-read-me",
-        "a refused load must never read through the symlink into a file outside the store"
+        "a refused load must never modify a file outside the store through the symlink"
     );
 }
 
 /// A genuine I/O failure opening a job record (here, permission denied) must
 /// keep its own detail, not be relabeled with `NotARegularFile`'s "invalid
 /// extraction job record" wording — that wording is for a deliberate
-/// refusal (a symlink, a hard link), not an unrelated I/O error the same
-/// `open_regular_file` call can also raise.
+/// refusal (a symlink swap), not an unrelated I/O error the same
+/// `open_regular_file_allow_hard_links` call can also raise.
 #[cfg(unix)]
 #[test]
 fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
@@ -152,10 +152,11 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
 #[test]
 fn a_job_record_hard_linked_from_outside_is_loaded_not_refused() {
     let directory = tempfile::tempdir().expect("create durable job store");
+    let outside = tempfile::tempdir().expect("outside tempdir");
     let (store, record, record_path) = seed_saved_record(&directory);
     let content = std::fs::read(&record_path).expect("read real record");
     std::fs::remove_file(&record_path).expect("remove real record");
-    let alias = directory.path().join("record-alias.json");
+    let alias = outside.path().join("record-alias.json");
     std::fs::write(&alias, &content).expect("plant alias");
     std::fs::hard_link(&alias, &record_path).expect("plant hard link record");
 
