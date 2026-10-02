@@ -3,7 +3,9 @@
 use super::*;
 use crate::embedder::HashEmbedder;
 use crate::extract::{ExtractError, ExtractedFact, Extractor};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -35,6 +37,7 @@ fn accepted_record() -> JobRecord {
 /// permission-denied tests below, which each go on to tamper with that record
 /// (most replace or chmod the exact path; one chmods its containing directory
 /// instead) to prove either a refusal or, for the hard-link case, acceptance.
+#[cfg(unix)]
 fn seed_saved_record(directory: &tempfile::TempDir) -> (JobStore, JobRecord, PathBuf) {
     let record = accepted_record();
     let store = JobStore::open(directory.path()).expect("open job snapshots");

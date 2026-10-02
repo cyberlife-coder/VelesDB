@@ -5,10 +5,9 @@
 
 use std::fs;
 
-use super::{
-    open_regular_file, open_regular_file_allow_hard_links, path_exists, promote,
-    validate_regular_file, validate_workspace,
-};
+#[cfg(unix)]
+use super::open_regular_file_allow_hard_links;
+use super::{open_regular_file, path_exists, promote, validate_regular_file, validate_workspace};
 
 /// The two stores that share these primitives each name themselves in every
 /// message, so each check runs under both names.

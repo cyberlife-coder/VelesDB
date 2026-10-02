@@ -20,17 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MemoryError::NotARegularFile` described below.
 
 - **`MemoryError::NotARegularFile { entity }`**: a path backing one of this
-  crate's own state files turned out not to be a lone regular file — a
-  symlink for any of the journal, controller state, online-migration job,
-  migration lock, extraction job record, or diagnostic copy; also a
-  directory for all of those on unix (on Windows, `CreateFileW` cannot open
-  a directory at all without `FILE_FLAG_BACKUP_SEMANTICS`, which this crate
-  does not set, so a directory surfaces as a generic open failure there
-  instead — unverified, this crate has no Windows CI); also a hard link
-  (unix only — the only platform that
-  checks `nlink`) for the first three specifically (the
-  migration lock, the extraction job record, and the diagnostic copy accept
-  a hard link instead, see Fixed below). The journal, controller state, and
+  crate's own state files, or a diagnostic-copy source file, turned out not
+  to be a lone regular file — a symlink for any of the journal, controller
+  state, online-migration job, migration lock, extraction job record, or
+  diagnostic copy; also a directory for all of those on unix (on Windows,
+  `CreateFileW` cannot open a directory at all without
+  `FILE_FLAG_BACKUP_SEMANTICS`, which this crate does not set, so a
+  directory surfaces as a generic open failure there instead — unverified,
+  Windows CI only type-checks this crate, no test runs there); also a hard
+  link (unix only — the only platform that checks `nlink`) for the first
+  three specifically (the migration lock, the extraction job record, and
+  the diagnostic copy accept a hard link instead, see Fixed below). The journal, controller state, and
   online-migration job surface this variant's own wording unchanged; the
   migration lock, the extraction job store, and the diagnostic copy each
   catch it and build their own message. Split out of the shared
@@ -47,15 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   job-record reads, `migration::state::lock`'s ownership check
   (`owns_current_lock`; its public `holder` lookup still follows a symlink,
   see #2424), and `migration::diagnostic_copy`'s source copies each still
-  decided a path was
-  safe from a separate `symlink_metadata` call and then reopened the same
-  path by name afterward — the same check-then-open shape #2404 closed
-  elsewhere. All three now route through `mutation::atomic_file`'s
+  decided a path was safe from a separate `symlink_metadata` call and then
+  reopened the same path by name afterward — the same check-then-open shape
+  #2404 closed elsewhere. All three now route through `mutation::atomic_file`'s
   handle-based guards, refusing a symlink swap or any other non-regular
-  type, but not a hard link: a migration
-  lock and an extraction job record — each only ever replaced wholesale by
-  rename or removed outright, never reopened to write into — and the
-  diagnostic copy — read-only, over a tree it does not own — all accept the
+  type, but not a hard link: a migration lock and an extraction job record
+  — each only ever replaced wholesale by rename or removed outright, never
+  reopened to write into — and the diagnostic copy — read-only, over a
+  tree it does not own — all accept the
   `nlink > 1` a hard-link based backup (`cp -al`, `rsync --link-dest`)
   routinely produces on an ordinary file (#2406, #2409).
 

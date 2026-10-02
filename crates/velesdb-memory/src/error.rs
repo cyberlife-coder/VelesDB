@@ -187,13 +187,13 @@ pub enum MemoryError {
     /// directory is not covered by either case above: `CreateFileW` cannot
     /// open one at all without `FILE_FLAG_BACKUP_SEMANTICS`, which this
     /// crate does not set, so a directory surfaces as a generic
-    /// [`Self::MigrationCapture`] open failure there instead of this
-    /// variant (unverified — this crate has no Windows CI). A deliberate
-    /// refusal, not a
-    /// failure to inspect the path — kept distinct from
-    /// [`Self::MigrationCapture`] so a caller can match on this one specific,
-    /// expected outcome without also catching an unrelated I/O failure
-    /// (permission denied, too many open files) the same operation can
+    /// [`Self::MigrationCapture`] open failure there instead of this variant
+    /// (unverified — Windows CI only type-checks this crate, no test runs
+    /// there). A deliberate refusal, not a failure to inspect the path —
+    /// kept distinct from [`Self::MigrationCapture`] so a caller can match
+    /// on this one specific, expected outcome without also catching an
+    /// unrelated I/O failure (permission denied, too many open files) the
+    /// same operation can
     /// raise.
     #[cfg(feature = "persistence")]
     #[error("{entity} path must be a regular file")]
