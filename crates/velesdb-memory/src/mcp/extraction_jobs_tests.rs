@@ -135,11 +135,14 @@ fn a_job_record_swapped_for_a_symlink_is_refused_not_followed() {
 /// relative to each other, and a fixed `0..ITERATIONS` reader loop can
 /// finish long before the writer and under-sample the race. The reader
 /// below now runs for as long as the writer thread is alive instead,
-/// which is reliable under both: isolated (`--test-threads=1`), 10
-/// repeats against the real pre-fix shape all leaked 26 to 47 reads of
-/// the secret's own marker in about 5s each; under the default
-/// parallel harness, 5 repeats of the FULL suite all leaked 2 to 3
-/// thousand. The fixed code passes cleanly under both conditions.
+/// which is reliable under both. The OLD fixed-count reader (`for _ in
+/// 0..ITERATIONS`) only leaked 26 to 47 reads of the secret's own
+/// marker per run against the real pre-fix shape, isolated — the
+/// under-sampling this round fixes. The reader below, run against the
+/// same pre-fix shape: isolated (`--test-threads=1`), 5 repeats leaked
+/// 1,822 to 2,063 times each; under the default parallel harness, 3
+/// repeats of the FULL suite leaked 2,190 to 2,449 times each. The
+/// fixed code passes cleanly under both conditions (round 27).
 #[cfg(unix)]
 #[test]
 fn a_job_record_is_never_read_through_a_racing_symlink_swap() {

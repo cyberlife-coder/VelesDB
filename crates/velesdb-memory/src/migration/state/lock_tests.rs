@@ -37,11 +37,14 @@ use std::sync::atomic::AtomicUsize;
 /// other, and a fixed `0..ITERATIONS` reader loop can finish long
 /// before the writer and under-sample the race. The reader below now
 /// runs for as long as the writer thread is alive instead, which is
-/// reliable under both: isolated (`--test-threads=1`), 10 repeats
-/// against the real pre-fix shape all trusted the secret 19 to 39
-/// times in about 5s each; under the default parallel harness, 5
-/// repeats of the FULL suite all trusted it 2 to 3 thousand times.
-/// The fixed code passes cleanly under both conditions.
+/// reliable under both. The OLD fixed-count reader (`for _ in
+/// 0..ITERATIONS`) only trusted the secret 19 to 39 times per run
+/// against the real pre-fix shape, isolated — the under-sampling this
+/// round fixes. The reader below, run against the same pre-fix shape:
+/// isolated (`--test-threads=1`), 5 repeats trusted it 1,855 to 1,965
+/// times each; under the default parallel harness, 3 repeats of the
+/// FULL suite trusted it 2,282 to 2,474 times each. The fixed code
+/// passes cleanly under both conditions (round 27).
 #[test]
 fn owns_current_lock_is_never_trusted_through_a_racing_symlink_swap() {
     const ITERATIONS: usize = 20_000;
