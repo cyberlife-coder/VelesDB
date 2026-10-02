@@ -173,16 +173,23 @@ pub enum MemoryError {
     /// regular file: it names a symlink, a hard link, a directory, or
     /// another non-regular type, so the open was refused. Depending on the
     /// type, how it is opened, and the platform, the refusal happens either
-    /// at `open` itself (a unix symlink always fails with `ELOOP` and is
-    /// never actually opened; a socket always fails to open its own way
-    /// too; a directory the journal opens for writing fails with `EISDIR`)
+    /// at `open` itself (a unix symlink fails with `ELOOP` on Linux and
+    /// macOS, though some other unix platforms use a different errno for
+    /// the same refusal; a socket always fails to open its own way too; on
+    /// unix, a directory the journal opens for writing fails with `EISDIR`)
     /// or on the handle that did open successfully (a FIFO, which this
     /// crate's `O_NONBLOCK` flag keeps from blocking rather than from
-    /// opening at all; a directory opened read-only, which needs no such
-    /// help to open; a hard link, unix only — the only platform that
-    /// checks `nlink`, and only for the callers that refuse one at all; a
-    /// symlink too, on Windows, which opens it through the reparse-point
-    /// flag instead of refusing it at `open`). A deliberate refusal, not a
+    /// opening at all; on unix, a directory opened read-only, which needs
+    /// no such help to open; a hard link, unix only — the only platform
+    /// that checks `nlink`, and only for the callers that refuse one at
+    /// all; a symlink too, on Windows, which opens it through the
+    /// reparse-point flag instead of refusing it at `open`). On Windows, a
+    /// directory is not covered by either case above: `CreateFileW` cannot
+    /// open one at all without `FILE_FLAG_BACKUP_SEMANTICS`, which this
+    /// crate does not set, so a directory surfaces as a generic
+    /// [`Self::MigrationCapture`] open failure there instead of this
+    /// variant (unverified — this crate has no Windows CI). A deliberate
+    /// refusal, not a
     /// failure to inspect the path — kept distinct from
     /// [`Self::MigrationCapture`] so a caller can match on this one specific,
     /// expected outcome without also catching an unrelated I/O failure

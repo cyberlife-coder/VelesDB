@@ -21,9 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`MemoryError::NotARegularFile { entity }`**: a path backing one of this
   crate's own state files turned out not to be a lone regular file — a
-  symlink or a directory for any of the journal, controller state,
-  online-migration job, migration lock, extraction job record, or
-  diagnostic copy; also a hard link (unix only — the only platform that
+  symlink for any of the journal, controller state, online-migration job,
+  migration lock, extraction job record, or diagnostic copy; also a
+  directory for all of those on unix (on Windows, `CreateFileW` cannot open
+  a directory at all without `FILE_FLAG_BACKUP_SEMANTICS`, which this crate
+  does not set, so a directory surfaces as a generic open failure there
+  instead — unverified, this crate has no Windows CI); also a hard link
+  (unix only — the only platform that
   checks `nlink`) for the first three specifically (the
   migration lock, the extraction job record, and the diagnostic copy accept
   a hard link instead, see Fixed below). The journal, controller state, and
