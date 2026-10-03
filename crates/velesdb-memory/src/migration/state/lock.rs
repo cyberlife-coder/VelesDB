@@ -1,5 +1,5 @@
 use super::STATE_FILE;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -75,14 +75,31 @@ impl MigrationLock {
     }
 
     fn owns_current_lock(&self) -> bool {
-        let is_live_regular_file = std::fs::symlink_metadata(&self.path)
-            .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink());
-        if !is_live_regular_file {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        // The lock record is created once via `create_new` (below) and, from
+        // then on, only ever read (here, and by `holder` — #2424 tracks that
+        // one still following a symlink) or removed by `release` — never
+        // reopened to write into. A hard link planted before that creation
+        // makes `create_new` itself fail (`EEXIST`), so by the time a
+        // legitimate record exists, a later alias to it (a hard-link based
+        // backup, `cp -al`) has nothing left to intercept: `nlink > 1` would
+        // only refuse an untampered record and break lock checks on a
+        // backed-up workspace (#2409 round 8). `_allow_hard_links` keeps the
+        // symlink-swap refusal (#2404) this call still needs.
+        let Ok((mut file, _metadata)) =
+            crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+                &self.path,
+                "migration lock",
+                options,
+            )
+        else {
             return false;
-        }
-        std::fs::read_to_string(&self.path)
+        };
+        let mut body = String::new();
+        file.read_to_string(&mut body)
             .ok()
-            .and_then(|body| serde_json::from_str::<LockRecord>(&body).ok())
+            .and_then(|_| serde_json::from_str::<LockRecord>(&body).ok())
             .is_some_and(|record| {
                 record.format_version == LOCK_FORMAT_VERSION && record.token == self.token
             })
@@ -193,3 +210,7 @@ fn next_lock_token() -> String {
         std::process::id()
     )
 }
+
+#[cfg(all(test, unix))]
+#[path = "lock_tests.rs"]
+mod lock_tests;

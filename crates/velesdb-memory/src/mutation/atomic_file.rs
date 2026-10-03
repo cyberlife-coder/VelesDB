@@ -13,6 +13,18 @@ pub(crate) fn capture(message: impl Into<String>) -> MemoryError {
     MemoryError::MigrationCapture(message.into())
 }
 
+/// A deliberate refusal — the path opened or inspected is not usable as a
+/// lone regular file (a symlink, a hard link, a directory, a socket, ...) —
+/// kept distinct from [`capture`]'s generic internal-failure wording so a
+/// caller can match on it and apply its own phrasing without also
+/// swallowing an unrelated I/O failure (permission denied, too many open
+/// files) the same call can raise.
+fn not_a_regular_file(entity: &str) -> MemoryError {
+    MemoryError::NotARegularFile {
+        entity: entity.to_owned(),
+    }
+}
+
 pub(crate) fn validate_workspace(path: &Path, entity: &str) -> Result<(), MemoryError> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|err| capture(format!("cannot inspect {entity} workspace: {err}")))?;
@@ -34,18 +46,99 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 }
 
 /// Opens `path` for `entity`, refusing it if it names a symlink, a hard
-/// link, or anything but a lone regular file. The refusal is decided from
+/// link (unix only — the only platform that checks `nlink`), or anything
+/// but a lone regular file. The refusal is decided from
 /// the file this call opens, not from a separate `stat` of the path
 /// beforehand: `validate_regular_file` followed by a plain `open` leaves a
 /// window where a link swapped in between the two is followed by the open
-/// (#2404). A hard link is, structurally, an ordinary regular file, so this
-/// does not close every such window on its own (see #2407) — only refuse
-/// one already in place at (or before) this call.
+/// (#2404).
+///
+/// Refusing the hard-link case only makes sense for a file this store
+/// writes into through a handle it keeps reopening across its lifetime: the
+/// journal is the one remaining caller that does. Appending through a
+/// handle reopened on a hard-linked path writes into whatever else that
+/// inode is aliased by, so `nlink > 1` is refused there deliberately —
+/// including for an otherwise-legitimate hard-link backup of the journal
+/// (`cp -al`), not only a planted attacker link; both are refused the same
+/// way on the journal's next reopen (#2407). Two other shapes have no such
+/// window, by different mechanisms: a file this store only ever replaces
+/// wholesale, by renaming a fresh temporary file over it and never
+/// reopening the old name to write into it (an extraction job record —
+/// #2409 round 7) — the rename severs any hard link planted before it; and
+/// a file created once via `create_new` and afterward only ever read or
+/// removed, never rewritten at all (a migration lock — #2409 round 8) —
+/// there is no later write for a planted hard link to intercept in the
+/// first place. Neither shape gains anything from refusing `nlink` here:
+/// whoever can plant a hard link in that directory could plant an ordinary
+/// file there just as easily, so `nlink` is not an integrity check for a
+/// path never reopened to write into. Both cases want
+/// [`open_regular_file_allow_hard_links`] instead, same as a path this
+/// helper only ever *reads* from someone else's tree, where a hard-link
+/// based backup (`cp -al`, `rsync --link-dest`) routinely produces
+/// `nlink > 1` on perfectly ordinary files.
+///
+/// Two other callers (the online-migration controller state and job state)
+/// share the write-once-rename-replace shape too, but predate #2409 (added
+/// in #2405) and sit outside the three call sites #2406 names for this PR —
+/// left refusing a hard link for now rather than widening this PR's scope a
+/// further round; see #2426.
 pub(crate) fn open_regular_file(
     path: &Path,
     entity: &str,
-    mut options: OpenOptions,
+    options: OpenOptions,
 ) -> Result<File, MemoryError> {
+    let (file, metadata) = open_checked(path, entity, options)?;
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+    }
+    #[cfg(unix)]
+    {
+        // A hard link to a file outside the store is, structurally, an
+        // ordinary regular file: the `is_file` check in `open_checked`
+        // cannot tell it apart, and `O_NOFOLLOW` only ever guarded the
+        // symlink case (#2407). `nlink == 0` is not that: a reader can win
+        // the open() race against a concurrent, legitimate rename-replace of
+        // the same path by another writer, which unlinks the name this
+        // handle held without touching the content already read through it
+        // — refusing that would turn a routine concurrent read into a
+        // spurious failure.
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() > 1 {
+            return Err(not_a_regular_file(entity));
+        }
+    }
+    Ok(file)
+}
+
+/// As [`open_regular_file`], but accepts a hard-linked target. Fits a path
+/// this helper only reads from a tree it does not own (a diagnostic source
+/// directory), and a path this store owns but never reopens to write into:
+/// an extraction job record (replaced wholesale by rename) or a migration
+/// lock (created once, then only read or removed). Either way a hard link
+/// planted by a backup tool is indistinguishable from an ordinary file, so
+/// there is nothing here to refuse it against. The symlink-swap protection
+/// (#2404) still applies in full. Returns the already-fetched `Metadata`
+/// alongside the handle, same reason as [`open_checked`]: a caller that
+/// also needs to inspect the file (its length, say) does not `fstat` the
+/// same handle a second time (#2409 round 16).
+pub(crate) fn open_regular_file_allow_hard_links(
+    path: &Path,
+    entity: &str,
+    options: OpenOptions,
+) -> Result<(File, std::fs::Metadata), MemoryError> {
+    open_checked(path, entity, options)
+}
+
+/// Opens `path` with the symlink-swap protection (#2404) and returns the
+/// already-fetched `Metadata` alongside the handle, so a caller that also
+/// needs to inspect it (the hard-link check above) does not `fstat` the
+/// same handle a second time.
+fn open_checked(
+    path: &Path,
+    entity: &str,
+    mut options: OpenOptions,
+) -> Result<(File, std::fs::Metadata), MemoryError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -68,46 +161,38 @@ pub(crate) fn open_regular_file(
     let file = options
         .open(path)
         .map_err(|err| open_error(&err, path, entity))?;
-    let metadata = file
-        .metadata()
-        .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
+    let metadata = file.metadata().map_err(|err| {
+        capture(format!(
+            "cannot inspect {entity} file {}: {err}",
+            path.display()
+        ))
+    })?;
     if !metadata.is_file() {
-        return Err(capture(format!("{entity} path must be a regular file")));
+        return Err(not_a_regular_file(entity));
     }
-    #[cfg(unix)]
-    {
-        // A hard link to a file outside the store is, structurally, an
-        // ordinary regular file: `is_file` above cannot tell it apart, and
-        // `O_NOFOLLOW` only ever guarded the symlink case (#2407). A
-        // legitimate file this helper creates or reopens is never hard
-        // linked, so `nlink != 1` here can only mean a link planted before
-        // or at this open — refuse it the same way, on the handle this call
-        // already produced, not a second lookup of the path.
-        use std::os::unix::fs::MetadataExt;
-        if metadata.nlink() != 1 {
-            return Err(capture(format!("{entity} path must be a regular file")));
-        }
-    }
-    Ok(file)
+    Ok((file, metadata))
 }
 
 #[cfg(unix)]
 fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
     // ELOOP: `O_NOFOLLOW` refused a symlink, a fast path with no further
-    // lookup needed. Anything else that isn't a regular file (a directory
-    // via `EISDIR`, a socket, and so on) fails `open` itself with a
+    // lookup needed. Not every non-regular type reaches this function at
+    // all: a FIFO or a directory opened read-only opens fine and is
+    // refused on the handle instead, inside `open_checked`'s `is_file`
+    // check. What does land here, besides ELOOP, is a socket or a
+    // directory opened for writing, each failing `open` itself with a
     // platform- and file-type-specific errno that isn't worth enumerating
     // one by one, so this falls back to a `symlink_metadata` lookup that
     // only chooses which message reports the already-decided refusal —
     // `open` already returned `Err`, so this decides nothing
-    // security-relevant, unlike the checks in `open_regular_file` that run
-    // on an already-open handle.
+    // security-relevant, unlike the checks in `open_checked` and
+    // `open_regular_file` that run on an already-open handle.
     if err.raw_os_error() == Some(libc::ELOOP) {
-        return capture(format!("{entity} path must be a regular file"));
+        return not_a_regular_file(entity);
     }
     let is_non_regular = std::fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.is_file());
     if is_non_regular {
-        capture(format!("{entity} path must be a regular file"))
+        not_a_regular_file(entity)
     } else {
         capture(format!(
             "cannot open {entity} file {}: {err}",

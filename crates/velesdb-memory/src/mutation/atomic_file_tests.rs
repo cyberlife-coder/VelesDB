@@ -5,6 +5,8 @@
 
 use std::fs;
 
+#[cfg(unix)]
+use super::open_regular_file_allow_hard_links;
 use super::{open_regular_file, path_exists, promote, validate_regular_file, validate_workspace};
 
 /// The two stores that share these primitives each name themselves in every
@@ -228,8 +230,11 @@ fn open_regular_file_refuses_a_fifo_without_blocking() {
 
 /// #2407 (round 5): a hard link to a file outside the store is,
 /// structurally, an ordinary regular file, so `is_file` alone accepts it —
-/// but `fstat` also reports `nlink`, which a legitimate file this helper
-/// ever opens will not have above 1.
+/// but `fstat` also reports `nlink`, which this check refuses above 1 for
+/// every current caller of `open_regular_file` (the journal, and —
+/// deliberately, per #2426 — the online-migration controller state and job
+/// state too, even though a hard-link based backup of either can trigger
+/// this exact refusal on an untampered file).
 #[cfg(unix)]
 #[test]
 fn open_regular_file_refuses_a_hard_link() {
@@ -249,6 +254,95 @@ fn open_regular_file_refuses_a_hard_link() {
         "{refused}"
     );
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
+}
+
+/// #2409 round 10: `nlink > 1` (not `!= 1`) is the refusal, specifically so
+/// a reader racing a legitimate rename-replace of the same path — which
+/// transiently drops the OLD inode's `nlink` to 0 on a handle a reader
+/// already has open — is never refused. `controller/state.rs` and
+/// `online_migration/job_state.rs` are exactly this shape (`write_synced` to
+/// a staging file, then `promote`), and this race had no direct test:
+/// round 7 moved the extraction-job-record call site this PR originally
+/// cited off `open_regular_file` entirely, so the two stress-tested
+/// extraction-recovery tests no longer exercise this guard at all. Proven
+/// by mutation: reverting to `nlink() != 1` makes this test fail (observed
+/// on macOS: roughly 1,700 of 20,000 iterations, about 8-9%, varying by
+/// run and machine load).
+#[cfg(unix)]
+#[test]
+fn open_regular_file_never_refuses_a_legitimate_rename_replace_race() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const ITERATIONS: usize = 20_000;
+
+    let root = tempfile::tempdir().expect("root");
+    let path = root.path().join("state");
+    let staging = root.path().join("state.tmp");
+    fs::write(&path, b"v0").expect("seed");
+
+    let spurious_refusals = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for i in 0..ITERATIONS {
+                fs::write(&staging, format!("v{i}").as_bytes()).expect("write staging");
+                promote(&staging, &path).expect("promote");
+            }
+        });
+
+        for _ in 0..ITERATIONS {
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            if open_regular_file(&path, "test", options).is_err() {
+                spurious_refusals.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+
+    assert_eq!(
+        spurious_refusals.load(Ordering::Relaxed),
+        0,
+        "a reader racing a legitimate rename-replace must never be refused as a hard link"
+    );
+}
+
+/// `open_regular_file_allow_hard_links` is for a caller that either only
+/// reads someone else's tree (a diagnostic source) or owns a file it never
+/// reopens to write into (a migration lock, an extraction job record): it
+/// accepts the exact shape `open_regular_file_refuses_a_hard_link` above
+/// refuses, because a hard-link based backup routinely produces it on
+/// ordinary files. The symlink-swap protection (#2404) is shared code and
+/// still applies in full.
+#[cfg(unix)]
+#[test]
+fn open_regular_file_allow_hard_links_accepts_a_hard_link_but_still_refuses_a_symlink() {
+    let root = tempfile::tempdir().expect("root");
+    let victim = root.path().join("victim");
+    fs::write(&victim, b"content").expect("victim");
+    let aliased = root.path().join("aliased");
+    fs::hard_link(&victim, &aliased).expect("hard link");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    open_regular_file_allow_hard_links(&aliased, "test", options)
+        .expect("a hard link must be accepted by the hard-link-tolerant open");
+
+    let outside = tempfile::tempdir().expect("outside");
+    let secret = outside.path().join("secret");
+    fs::write(&secret, b"do-not-read-me").expect("secret");
+    let linked = root.path().join("state");
+    std::os::unix::fs::symlink(&secret, &linked).expect("symlink");
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    let refused = open_regular_file_allow_hard_links(&linked, "test", options)
+        .expect_err("a symlink must still be refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("test path must be a regular file"),
+        "{refused}"
+    );
 }
 
 /// A Unix domain socket is refused the same way a FIFO is, and with the

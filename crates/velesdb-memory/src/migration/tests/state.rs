@@ -133,6 +133,84 @@ fn two_migrations_cannot_hold_the_lock() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
+    use std::os::unix::fs::symlink;
+
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+
+    let lock = MigrationLock::acquire(workspace.path(), "run-A").expect("acquire");
+    let lock_path = workspace.path().join(super::LOCK_FILE);
+    // The secret holds the REAL lock record's own bytes (same format
+    // version, same token): a release that merely followed the symlink
+    // would find them valid and succeed. Planting unrelated bytes instead
+    // would make this test pass for the wrong reason — refused only
+    // because the content fails to parse, never exercising whether the
+    // symlink itself is followed (round-2 review finding).
+    let secret = outside.path().join("secret");
+    std::fs::copy(&lock_path, &secret).expect("copy real lock record as secret");
+    let original = std::fs::read(&secret).expect("read the planted secret");
+
+    std::fs::remove_file(&lock_path).expect("remove real lock file");
+    symlink(&secret, &lock_path).expect("plant symlink lock");
+
+    let refusal = lock
+        .release()
+        .expect_err("a symlinked lock record must be refused, not followed, even with a valid-looking record behind it");
+    assert!(
+        refusal.contains(super::LOCK_FILE),
+        "the refusal must name the lock file it would not touch: {refusal}"
+    );
+    assert_eq!(
+        std::fs::read(&secret).expect("secret must be untouched"),
+        original,
+        "release must never modify a file outside the workspace through a symlinked lock"
+    );
+    assert!(
+        std::fs::symlink_metadata(&lock_path)
+            .expect("symlink must remain")
+            .file_type()
+            .is_symlink(),
+        "a refused release must not remove the symlink standing in for the lock"
+    );
+}
+
+/// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
+/// cannot tell it apart (#2407). The lock record is created once via
+/// `create_new` and, from then on, only ever read (here, and by `holder` —
+/// #2424 tracks that one still following a symlink) or removed (by
+/// `release`) — never reopened to write into. A hard link planted before
+/// that creation would make `create_new` itself fail, so by the time a
+/// legitimate record exists, a later alias to it (a hard-link based backup,
+/// `cp -al`) has nothing left to intercept: refusing `nlink > 1` here would
+/// only break a lock check against an untampered record after such a backup
+/// (#2409 round 8). Proven by mutation: reverting `owns_current_lock` to
+/// `open_regular_file` makes this test fail.
+#[cfg(unix)]
+#[test]
+fn a_lock_file_hard_linked_from_outside_is_released_not_refused() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+
+    let lock = MigrationLock::acquire(workspace.path(), "run-A").expect("acquire");
+    let lock_path = workspace.path().join(super::LOCK_FILE);
+    let content = std::fs::read(&lock_path).expect("read real lock content");
+    std::fs::remove_file(&lock_path).expect("remove real lock file");
+    let alias = outside.path().join("lock-alias");
+    std::fs::write(&alias, &content).expect("plant alias");
+    std::fs::hard_link(&alias, &lock_path).expect("plant hard link lock");
+
+    lock.release()
+        .expect("a hard-linked lock record must be released, not refused");
+    assert_eq!(
+        std::fs::read(&alias).expect("alias must be untouched"),
+        content,
+        "a release must never alter the aliased file through the hard link, only unlink the lock's own name"
+    );
+}
+
 #[test]
 fn the_lock_never_lives_in_the_source() {
     // Property (7). The diagnosis contract is that the source is not written

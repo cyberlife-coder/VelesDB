@@ -289,13 +289,46 @@ fn copy_entry(
     )))
 }
 
-fn copy_regular_file(
+// `pub(super)` (not private) so a test can call it directly on a symlinked
+// `source`, isolating its OWN symlink-swap refusal from `copy_entry`'s
+// earlier `symlink_metadata` check — a symlink walked by `copy_entry`
+// itself never reaches this function at all, so routing through
+// `DiagnosticCopy::capture` alone cannot tell which check is doing the
+// refusing (#2409 round-3 finding).
+pub(super) fn copy_regular_file(
     source: &Path,
     destination: &Path,
     expected_len: u64,
 ) -> Result<(), crate::MemoryError> {
-    let mut input = File::open(source)
-        .map_err(|err| query_error(format!("cannot open {}: {err}", source.display())))?;
+    let mut open_options = OpenOptions::new();
+    open_options.read(true);
+    // Read-only copy of a tree this process does not own: a hard-link based
+    // backup (`cp -al`, `rsync --link-dest`) routinely gives an ordinary
+    // file `nlink > 1`, so that case is accepted here — the symlink-swap
+    // race (#2404) and any other non-regular type are still refused, just
+    // not the hard-link case `open_regular_file` refuses for a file this
+    // store reopens to write into across its lifetime (the journal —
+    // #2407).
+    // `NotARegularFile` carries no path of its own (atomic_file's guards are
+    // path-agnostic), so it's the one case that needs the source path added
+    // here; every other error (a genuine I/O failure) is built by `capture`
+    // with the path already in it — adding it again would duplicate it.
+    // `MigrationCapture`'s own `Display` prefixes "migration capture
+    // error:", a wording meant for the online-migration observer, not for
+    // this unrelated caller — unwrapped to its inner detail so a genuine
+    // I/O failure here keeps its own detail instead.
+    let (mut input, _metadata) = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+        source,
+        "diagnostic source",
+        open_options,
+    )
+    .map_err(|err| match err {
+        crate::MemoryError::NotARegularFile { .. } => {
+            query_error(format!("{}: {err}", source.display()))
+        }
+        crate::MemoryError::MigrationCapture(detail) => query_error(detail),
+        other => query_error(other.to_string()),
+    })?;
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)

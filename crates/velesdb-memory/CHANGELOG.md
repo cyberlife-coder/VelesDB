@@ -16,9 +16,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an explicit eviction floor, so the HTTP transport's integration tests can
   observe idle-session eviction without waiting out the 300 s default. The
   public API otherwise grows only by the `VELESDB_MEMORY_HTTP_EVICT_MIN_IDLE_SECS`
-  environment variable described under Fixed (#2289).
+  environment variable described under Fixed (#2289), and by
+  `MemoryError::NotARegularFile` described below.
+
+- **`MemoryError::NotARegularFile { entity }`**: a path backing one of this
+  crate's own state files, or a diagnostic-copy source file, turned out not
+  to be a lone regular file — a symlink for any of the journal, controller
+  state, online-migration job, migration lock, extraction job record, or
+  diagnostic copy; also a directory for all of those on unix (on Windows,
+  `CreateFileW` cannot open a directory at all without
+  `FILE_FLAG_BACKUP_SEMANTICS`, which this crate does not set, so a
+  directory surfaces as a generic open failure there instead — unverified,
+  Windows CI only type-checks this crate, no test runs there); also a hard
+  link (unix only — the only platform that checks `nlink`) for the first
+  three specifically (the migration lock, the extraction job record, and
+  the diagnostic copy accept a hard link instead, see Fixed below). The
+  journal, controller state, and online-migration job surface this
+  variant's own wording unchanged; the extraction job store and the
+  diagnostic copy each specifically match this variant and build their
+  own message instead. The migration lock does neither: it treats this
+  variant the same as any other open failure, including an unrelated
+  I/O error, collapsing both into one generic refusal from whichever
+  caller asked — `release`'s own, or `MigrationState::write`'s through
+  `verify_workspace`. Split out of the shared `MigrationCapture`
+  variant so a caller that does match on it can give this one
+  specific, expected refusal its own wording without also relabeling
+  an unrelated I/O failure (permission denied, too many open files)
+  the same open can raise (#2409).
 
 ### Fixed
+
+- **Three more check-then-open races outside #2404/#2405's five sites are now
+  closed, and a migration lock, a job-record read, or a diagnostic copy
+  still accepts a hard-linked source.** `mcp::extraction_job_store`'s
+  job-record reads, `migration::state::lock`'s ownership check
+  (`owns_current_lock`; its public `holder` lookup still follows a
+  symlink, see #2424), and `migration::diagnostic_copy`'s source copies
+  each still decided a path was safe from a separate `symlink_metadata`
+  call and then reopened the same path by name afterward — the same
+  check-then-open shape #2404 closed elsewhere. All three now route
+  through `mutation::atomic_file`'s handle-based guards, refusing a
+  symlink swap or any other non-regular type, but not a hard link: a
+  migration lock and an extraction job record — each only ever replaced
+  wholesale by rename or removed outright, never reopened to write into
+  — and the diagnostic copy — read-only, over a tree it does not own —
+  all accept the `nlink > 1` a hard-link based backup (`cp -al`, `rsync
+  --link-dest`) routinely produces on an ordinary file (#2406, #2409).
 
 - **`BoundedSessionManager` dropped the inner session manager's event store.**
   It wraps `rmcp`'s `SessionManager` to cap concurrent MCP HTTP sessions but
