@@ -441,6 +441,75 @@ fn test_bfs_traverse_csr_far_future_deadline_no_premature_abort() {
 }
 
 #[test]
+fn test_bfs_traverse_csr_path_matches_legacy_path() {
+    // GIVEN: the same store traversed once without a CSR snapshot (legacy
+    // process_bfs_neighbors path) and once after build_read_snapshot()
+    // (process_bfs_csr path, reached only via bfs_traverse's own
+    // has_csr_snapshot() dispatch -- not the standalone bfs_traverse_csr
+    // tested above, which bypasses bfs_traverse entirely).
+    let store = create_test_edge_store();
+    let mut snapshot_store = create_test_edge_store();
+    snapshot_store.build_read_snapshot();
+    assert!(snapshot_store.has_csr_snapshot());
+
+    let config = TraversalConfig::with_range(1, 3).with_limit(100);
+
+    // WHEN: both traverse from the same source with the same config.
+    let legacy = bfs_traverse(&store, 1, &config);
+    let csr = bfs_traverse(&snapshot_store, 1, &config);
+
+    // THEN: identical result sets (same targets, depths, and paths).
+    assert_eq!(legacy.len(), csr.len());
+    assert_eq!(csr.len(), 4, "4 reachable nodes within depth 1..3");
+    for expected in &legacy {
+        let found = csr
+            .iter()
+            .find(|r| r.target_id == expected.target_id)
+            .unwrap_or_else(|| panic!("CSR path missing target {}", expected.target_id));
+        assert_eq!(found.depth, expected.depth);
+        assert_eq!(found.path, expected.path);
+    }
+}
+
+#[test]
+fn test_bfs_traverse_csr_path_respects_limit() {
+    // GIVEN: a CSR snapshot and a limit lower than the full result set
+    // (mirrors test_bfs_limit, but through the CSR dispatch branch).
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+    let config = TraversalConfig::with_range(1, 3).with_limit(2);
+
+    // WHEN
+    let results = bfs_traverse(&store, 1, &config);
+
+    // THEN: process_bfs_csr's own limit_reached() check truncates exactly
+    // like the legacy path's -- removing it lets this traversal over-run.
+    assert_eq!(
+        results.len(),
+        2,
+        "limit=2 must truncate the CSR-path traversal to exactly 2"
+    );
+}
+
+#[test]
+fn test_bfs_traverse_csr_path_respects_rel_type_filter() {
+    // GIVEN: a CSR snapshot over a store with two edge labels (KNOWS, WROTE)
+    // and a filter naming only WROTE.
+    let mut store = create_test_edge_store();
+    store.build_read_snapshot();
+    let config = TraversalConfig::with_range(1, 1).with_rel_types(vec!["WROTE".to_owned()]);
+
+    // WHEN: BFS from node 2, which has one KNOWS edge (to 3) and one WROTE
+    // edge (to 5).
+    let results = bfs_traverse(&store, 2, &config);
+
+    // THEN: only the WROTE edge's target survives process_bfs_csr's label
+    // filter -- a no-op or inverted filter would let node 3 through too.
+    assert_eq!(results.len(), 1, "only the WROTE-labelled edge must match");
+    assert_eq!(results[0].target_id, 5);
+}
+
+#[test]
 fn test_parent_pointer_cyclic_graph_shortest_path() {
     // GIVEN: cycle 1->2->3->1
     let store = create_cyclic_edge_store();
