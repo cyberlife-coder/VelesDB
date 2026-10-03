@@ -42,7 +42,7 @@ pub fn velesdb_core::index::hnsw::native::NativeHnswBackend::transform_score(&se
 pub fn velesdb_core::index::hnsw::native::TraversalCodec::can_train() -> bool
 pub fn velesdb_core::index::hnsw::native::TraversalCodec::distance(&Self::Quantizer, &Self::Store, &Self::Prepared, velesdb_core::index::hnsw::native::NodeId) -> core::option::Option<Self::Dist>
 pub fn velesdb_core::index::hnsw::native::TraversalCodec::encode_push(&Self::Quantizer, &[f32], &mut Self::Store) -> velesdb_core::error::Result<()>
-pub fn velesdb_core::index::hnsw::native::TraversalCodec::new_store(&alloc::sync::Arc<Self::Quantizer>, usize, usize) -> Self::Store
+pub fn velesdb_core::index::hnsw::native::TraversalCodec::new_store(&alloc::rcs::arc::Arc<Self::Quantizer>, usize, usize) -> Self::Store
 pub fn velesdb_core::index::hnsw::native::TraversalCodec::prepare(&Self::Quantizer, &[f32], &[f32]) -> core::option::Option<Self::Prepared>
 pub fn velesdb_core::index::hnsw::native::TraversalCodec::supports_metric(velesdb_core::distance::DistanceMetric) -> bool
 pub fn velesdb_core::index::hnsw::native::TraversalCodec::train(&[alloc::vec::Vec<f32>]) -> velesdb_core::error::Result<Self::Quantizer>
