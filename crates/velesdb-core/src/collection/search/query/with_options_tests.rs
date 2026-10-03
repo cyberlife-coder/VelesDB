@@ -126,8 +126,22 @@ fn test_query_search_options_ef_search_overrides_mode() {
     assert!(matches!(opts.quality, Some(crate::SearchQuality::Accurate)));
     assert_eq!(opts.ef_search, Some(64));
     assert!(matches!(
-        opts.resolved_quality(),
+        opts.resolved_quality(crate::SearchQuality::Balanced),
         crate::SearchQuality::Custom(64)
+    ));
+}
+
+#[test]
+fn test_resolved_quality_falls_back_to_the_given_default() {
+    // Options naming no quality (rerank only) resolve to the collection's
+    // runtime quality, not a hard-coded Balanced (#2399).
+    let opts = QuerySearchOptions {
+        force_rerank: Some(true),
+        ..QuerySearchOptions::default()
+    };
+    assert!(matches!(
+        opts.resolved_quality(crate::SearchQuality::Accurate),
+        crate::SearchQuality::Accurate
     ));
 }
 

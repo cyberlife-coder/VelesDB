@@ -3,7 +3,6 @@
 use super::resolve;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::index::SearchQuality;
 use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
@@ -53,7 +52,7 @@ impl Collection {
         let index_results = self.storage.index.search_batch_parallel(
             queries,
             candidates_k,
-            SearchQuality::Balanced,
+            self.runtime_search_quality(),
         )?;
 
         let vector_storage = self.storage.vector_storage.read();
@@ -156,7 +155,7 @@ impl Collection {
         let index_results =
             self.storage
                 .index
-                .search_batch_parallel(queries, k, SearchQuality::Balanced)?;
+                .search_batch_parallel(queries, k, self.runtime_search_quality())?;
 
         // Pre-merge delta per query (requires &self)
         let merged: Vec<_> = index_results
@@ -283,7 +282,7 @@ impl Collection {
         let batch_results = self.storage.index.search_batch_parallel(
             vectors,
             overfetch_k,
-            crate::SearchQuality::Balanced,
+            self.runtime_search_quality(),
         )?;
 
         Ok(batch_results

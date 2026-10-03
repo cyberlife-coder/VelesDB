@@ -97,14 +97,16 @@ impl QuerySearchOptions {
 
     /// The quality a search with these options runs at: an explicit
     /// `ef_search`, which wins over `mode` as `docs/VELESQL_SPEC.md` documents
-    /// and REST resolves (#2274), else `mode`, else `Balanced`. The one
+    /// and REST resolves (#2274), else `mode`, else `default` — the
+    /// collection's runtime quality, so options that name no quality (e.g.
+    /// only `rerank`) keep the configured `[search]` default (#2399). The one
     /// resolution the plain and the filtered vector path share.
     #[must_use]
-    pub(crate) fn resolved_quality(&self) -> crate::SearchQuality {
+    pub(crate) fn resolved_quality(&self, default: crate::SearchQuality) -> crate::SearchQuality {
         self.ef_search
             .map(crate::collection::search::vector_filter::ef_to_quality)
             .or(self.quality)
-            .unwrap_or(crate::SearchQuality::Balanced)
+            .unwrap_or(default)
     }
 }
 

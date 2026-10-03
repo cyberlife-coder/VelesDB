@@ -42,7 +42,7 @@ impl Collection {
         let metric = config.metric;
         drop(config);
 
-        let quality = opts.resolved_quality();
+        let quality = opts.resolved_quality(self.runtime_search_quality());
 
         // Parity item E: gate Perfect-mode over-cap before any index dispatch
         // so a filtered `WITH (mode='perfect')` query cannot trigger an

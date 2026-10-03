@@ -12,11 +12,32 @@
 //! comparing two searches only means something once the fixture is shown to be
 //! hard enough that `ef_search` changes the answer at all.
 
+use std::collections::HashMap;
 use velesdb_core::{Database, DistanceMetric, Point, SearchMode, VelesConfig};
 
 const DIM: usize = 32;
 const POINTS: usize = 3_000;
+// The corpus for the tests whose paths overfetch candidates (rerank-only
+// `WITH`, batch, multi-query). At `POINTS` that candidate pool recovers the
+// exact top-k at `LOW_EF` as reliably as at `HIGH_EF`, so comparing the two
+// configured defaults proves nothing. Even at this size a single query is not
+// enough: the level RNG is seeded with a constant, but parallel insert
+// threads draw from it in a nondeterministic order, so each build is a
+// different graph and one query can land where `LOW_EF` is already exact on
+// one run and not on the next, with identical code and data (seen with
+// `--test-threads=1` too). Searches on one built graph are repeatable. Those
+// tests therefore run `QUERIES` vectors and need only one to disagree. For
+// the batch test a reverted fix runs the same `Balanced` under both configs,
+// so every query agrees on every run. For the rerank-only test a revert
+// answers at `Balanced`, which can equal the `LOW_EF` answer, so a
+// revert fails only where `Balanced` and `LOW_EF` differ on a query where
+// `LOW_EF` and `HIGH_EF` differ: measured to happen, not guaranteed by shape.
+const HARD_POINTS: usize = 60_000;
 const K: usize = 10;
+// `k` for `search_batch_with_filters` and `multi_query_search`; see
+// `batch_answers`.
+const WIDE_K: usize = 50;
+const MULTI_K: usize = 101;
 const LOW_EF: usize = 16; // the minimum `validate_search` accepts
 const HIGH_EF: usize = 4_096; // the maximum
 
@@ -35,12 +56,36 @@ fn vector(seed: u64) -> Vec<f32> {
 }
 
 fn seeded(dir: &tempfile::TempDir, config: VelesConfig) -> velesdb_core::VectorCollection {
+    seeded_n(dir, config, POINTS)
+}
+
+fn seeded_n(
+    dir: &tempfile::TempDir,
+    config: VelesConfig,
+    n: usize,
+) -> velesdb_core::VectorCollection {
+    seeded_with(dir, config, n, |_| None)
+}
+
+/// `HARD_POINTS` points, each carrying `cat = id % 2` for the filtered path.
+fn seeded_hard(dir: &tempfile::TempDir, config: VelesConfig) -> velesdb_core::VectorCollection {
+    seeded_with(dir, config, HARD_POINTS, |id| {
+        Some(serde_json::json!({ "cat": id % 2 }))
+    })
+}
+
+fn seeded_with(
+    dir: &tempfile::TempDir,
+    config: VelesConfig,
+    n: usize,
+    payload: impl Fn(u64) -> Option<serde_json::Value>,
+) -> velesdb_core::VectorCollection {
     let db = Database::open_with_config(dir.path(), config).expect("test: open");
     db.create_vector_collection("docs", DIM, DistanceMetric::Euclidean)
         .expect("test: create");
     let collection = db.get_vector_collection("docs").expect("test: collection");
-    let points: Vec<Point> = (0..POINTS as u64)
-        .map(|id| Point::new(id, vector(id), None))
+    let points: Vec<Point> = (0..n as u64)
+        .map(|id| Point::new(id, vector(id), payload(id)))
         .collect();
     collection.upsert(points).expect("test: upsert");
     collection
@@ -193,5 +238,177 @@ fn perfect_as_a_global_default_still_opens_and_resolves_to_accurate() {
         config.search.resolved_quality(),
         velesdb_core::SearchQuality::Balanced,
         "CONTROL: only `perfect` is downgraded; every other mode resolves to itself"
+    );
+}
+
+const QUERIES: u64 = 8;
+
+fn hard_queries() -> Vec<Vec<f32>> {
+    (0..QUERIES)
+        .map(|i| vector(HARD_POINTS as u64 + 1 + i))
+        .collect()
+}
+
+/// The ids a `NEAR` query returns, optionally through the `cat = 0` metadata
+/// filter the hard fixture carries. An empty `with_clause` omits `WITH`.
+fn with_query_ids(
+    collection: &velesdb_core::VectorCollection,
+    query: &[f32],
+    filtered: bool,
+    with_clause: &str,
+) -> Vec<u64> {
+    let filter = if filtered { "AND cat = 0 " } else { "" };
+    let with = if with_clause.is_empty() {
+        String::new()
+    } else {
+        format!(" WITH ({with_clause})")
+    };
+    let sql = format!("SELECT * FROM docs WHERE vector NEAR $v {filter}LIMIT {K}{with}");
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!(query));
+    ids(&collection
+        .execute_query_str(&sql, &params)
+        .expect("test: WITH query"))
+}
+
+/// `WITH ({option})` answers exactly like `WITH (ef_search = N, {option})`
+/// where `N` is the configured `[search]` ef; an empty `option` is a query
+/// with no `WITH` at all.
+///
+/// The control is per query: the equality is asserted wherever `LOW_EF` and
+/// `HIGH_EF` answer differently, and at least one query must, across all the
+/// `options` of a call. A single query can sit where even `LOW_EF`'s narrow
+/// beam finds the exact answer (see `HARD_POINTS`), which would make the
+/// control vacuous for that query.
+fn assert_follows_the_configured_ef(
+    collection: &velesdb_core::VectorCollection,
+    filtered: bool,
+    options: &[&str],
+) {
+    let with_ef = |ef: usize, option: &str| match option {
+        "" => format!("ef_search={ef}"),
+        _ => format!("ef_search={ef}, {option}"),
+    };
+    let mut control_held = false;
+    for (qi, query) in hard_queries().iter().enumerate() {
+        for option in options {
+            let run = |with: &str| with_query_ids(collection, query, filtered, with);
+            let configured = run(option);
+            let low = run(&with_ef(LOW_EF, option));
+            let high = run(&with_ef(HIGH_EF, option));
+            if low != high {
+                control_held = true;
+                assert_eq!(
+                    configured, low,
+                    "a query with `{option}` and no ef_search must follow the configured \
+                     ef_search, not a hard-coded Balanced (query {qi}, filtered: {filtered})"
+                );
+            }
+        }
+    }
+    assert!(
+        control_held,
+        "CONTROL: ef must change the answer for at least one of {QUERIES} queries \
+         (filtered: {filtered}, options: {options:?})"
+    );
+}
+
+/// A `NEAR` query naming no quality of its own reaches the configured
+/// `[search]` quality: with no `WITH` at all, and with a `WITH` that sets only
+/// `rerank` (#2399), the latter on the plain vector path (`vector.rs`'s
+/// `search_with_opts`) and on the metadata-filtered one (`vector_filter.rs`'s
+/// `search_with_filter_and_opts`; the fixture's `cat` field has no secondary
+/// index).
+///
+/// One test, one `HARD_POINTS` build: the cases read the same fixture, and a
+/// build per case would add about as much CI time each.
+#[test]
+fn a_configured_ef_search_reaches_a_near_query_naming_no_quality() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    let collection = seeded_hard(&dir, config_with_ef(LOW_EF));
+    assert_follows_the_configured_ef(&collection, false, &[""]);
+    assert_follows_the_configured_ef(&collection, false, &["rerank=true", "rerank=false"]);
+    assert_follows_the_configured_ef(&collection, true, &["rerank=true", "rerank=false"]);
+}
+
+/// One answer per query, for each batch / multi-query entry point.
+struct BatchAnswers {
+    parallel: Vec<Vec<u64>>,
+    with_filters: Vec<Vec<u64>>,
+    multi: Vec<Vec<u64>>,
+}
+
+/// Runs the three entry points, none of which takes a per-call quality.
+///
+/// `WIDE_K` and `MULTI_K` are not the `K` of the other tests: each entry point
+/// overfetches by a `k`-dependent factor, and at `K` the final top-k agrees
+/// for `LOW_EF` and `HIGH_EF` even where the wider candidate pools differ.
+/// `Collection::overfetch_factor` is tiered (x20 up to 10, x10 up to 50, x5 up
+/// to 100, x2 beyond), so a larger `k` does not always mean a wider window:
+/// 101 gives 202 where 50 gives 500, which is why `multi_query_search` uses
+/// `MULTI_K`. Both values were chosen by measurement, not derivation.
+fn batch_answers(
+    collection: &velesdb_core::VectorCollection,
+    queries: &[Vec<f32>],
+) -> BatchAnswers {
+    let per_query = |answer: &dyn Fn(&[f32]) -> Vec<u64>| -> Vec<Vec<u64>> {
+        queries.iter().map(|q| answer(q)).collect()
+    };
+    BatchAnswers {
+        parallel: per_query(&|q| {
+            let batch = collection.search_batch_parallel(&[q], K);
+            ids(&batch.expect("test: batch_parallel")[0])
+        }),
+        with_filters: per_query(&|q| {
+            let batch = collection.search_batch_with_filters(&[q], WIDE_K, &[None]);
+            ids(&batch.expect("test: batch_with_filters")[0])
+        }),
+        multi: per_query(&|q| {
+            let fusion = velesdb_core::fusion::FusionStrategy::Maximum;
+            ids(&collection
+                .multi_query_search(&[q], MULTI_K, fusion, None)
+                .expect("test: multi_query_search"))
+        }),
+    }
+}
+
+fn some_query_disagrees(low: &[Vec<u64>], high: &[Vec<u64>]) -> bool {
+    low.iter().zip(high).any(|(l, h)| l != h)
+}
+
+/// The configured `[search]` quality reaches the batch and multi-query entry
+/// points (`search_batch_parallel`, `search_batch_with_filters`,
+/// `multi_query_search`), which take no quality of their own.
+///
+/// One persisted index reopened under two configured defaults must not answer
+/// identically for every query: if the config never reached the call, both
+/// opens would run the same hard-coded `Balanced` and agree on all of them,
+/// whatever the build's randomness (see `HARD_POINTS`).
+#[test]
+fn a_configured_ef_search_reaches_the_batch_and_multi_query_entry_points() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    seeded_n(&dir, VelesConfig::default(), HARD_POINTS)
+        .flush_full()
+        .expect("test: persist the index both opens will read");
+    let queries = hard_queries();
+
+    let (db_low, low) = reopened(&dir, config_with_ef(LOW_EF));
+    let low_answers = batch_answers(&low, &queries);
+    drop(low);
+    drop(db_low);
+    let (_db_high, high) = reopened(&dir, config_with_ef(HIGH_EF));
+    let high_answers = batch_answers(&high, &queries);
+
+    assert!(
+        some_query_disagrees(&low_answers.parallel, &high_answers.parallel),
+        "search_batch_parallel must follow the configured ef_search, not a hard-coded Balanced"
+    );
+    assert!(
+        some_query_disagrees(&low_answers.with_filters, &high_answers.with_filters),
+        "search_batch_with_filters must follow the configured ef_search, not a hard-coded Balanced"
+    );
+    assert!(
+        some_query_disagrees(&low_answers.multi, &high_answers.multi),
+        "multi_query_search must follow the configured ef_search, not a hard-coded Balanced"
     );
 }

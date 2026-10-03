@@ -49,9 +49,12 @@ To point at a file anywhere else, pass it explicitly:
 > collection and ingest boundaries, `[hnsw]`'s `m` / `ef_construction`
 > are applied when a collection's index is created (see the precedence chain
 > under [Section \[hnsw\]](#section-hnsw)), and `[search]`'s `default_mode` /
-> `ef_search` set the quality of every search that does not name its own
-> (issue #2087 — `default_mode = "perfect"` is applied as `accurate`, with a
-> warning: an exhaustive scan cannot be a global default). Everything else
+> `ef_search` set the quality of a plain `search()`, of an unfiltered `NEAR`
+> query with no `WITH` clause, of a `NEAR` query whose `WITH` clause sets only
+> `rerank`, and of the batch and multi-query searches (issues #2087, #2399 —
+> `default_mode = "perfect"` is applied as `accurate`, with a warning: an
+> exhaustive scan cannot be a global default). No other search entry point is
+> guaranteed to follow it yet; #2430 tracks the audit. Everything else
 > below is parsed and validated but **not** wired: `search.max_results`,
 > `search.query_timeout_ms`, `[quantization]`, `hnsw.max_layers` and
 > `storage.storage_mode` — each still pending its own decision. Setting any of
