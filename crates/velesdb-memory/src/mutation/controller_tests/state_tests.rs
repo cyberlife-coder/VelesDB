@@ -93,6 +93,26 @@ fn symlinked_state_is_refused_without_touching_its_target() {
     assert_eq!(fs::read(&victim).expect("victim"), b"untouched");
 }
 
+/// `StateStore::save` writes a fresh staging file and renames it over the
+/// state, never reopening the final path to write, so a hard link there
+/// intercepts nothing. A hard-link backup (`cp -al`) leaves `nlink > 1` on an
+/// untampered record, which must load. Proven by mutation: reverting
+/// `read_state_bytes` to `open_regular_file` makes this fail (#2426).
+#[cfg(unix)]
+#[test]
+fn a_state_file_hard_linked_from_outside_is_loaded_not_refused() {
+    let root = tempfile::tempdir().expect("root");
+    let outside = tempfile::tempdir().expect("outside");
+    drop(open_controller(root.path()));
+    let path = root.path().join(STATE_FILE);
+    let alias = outside.path().join("state-alias.json");
+    fs::rename(&path, &alias).expect("move state out");
+    fs::hard_link(&alias, &path).expect("hard link state back");
+
+    ConvergenceController::open(root.path(), EPOCH, config())
+        .expect("a hard-linked controller state must load, not be refused");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlinked_staging_file_is_refused_at_open_and_left_in_place() {
