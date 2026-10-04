@@ -117,6 +117,27 @@ fn a_symlinked_job_file_is_refused_without_touching_its_target() {
     assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
 }
 
+/// `JobStore::save` writes a fresh staging file and renames it over the job
+/// record, never reopening the final path to write, so a hard link there
+/// intercepts nothing. A hard-link backup (`cp -al`) leaves `nlink > 1` on an
+/// untampered record, which must load. Proven by mutation: reverting
+/// `read_limited` to `open_regular_file` makes this fail (#2426).
+#[cfg(unix)]
+#[test]
+fn a_job_file_hard_linked_from_outside_is_loaded_not_refused() {
+    let root = tempfile::tempdir().expect("root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).expect("workspace");
+    let record = record(root.path());
+    let store = JobStore::create(&workspace, &record).expect("create job");
+    let path = workspace.join(JOB_FILE);
+    let alias = root.path().join("job-alias.json");
+    std::fs::rename(&path, &alias).expect("move record out");
+    std::fs::hard_link(&alias, &path).expect("hard link record back");
+
+    assert_eq!(store.load().expect("a hard-linked job must load"), record);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlinked_staging_file_is_refused_and_left_in_place() {

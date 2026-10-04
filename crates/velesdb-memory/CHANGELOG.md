@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A controller-state or online-migration-job record that a hard-link backup
+  left with `nlink > 1` now loads instead of being refused (#2426, 2026-10-04).**
+  `mutation::controller::state::read_state_bytes` and
+  `online_migration::job_state::read_limited` opened their record through
+  `open_regular_file`, which refuses a hard link. Both records are only ever
+  replaced by renaming a fresh staging file over them, never reopened to write,
+  so a hard link planted there intercepts nothing, while `cp -al` /
+  `rsync --link-dest` leave one on an untampered record and recovery from that
+  backup failed. Both now use `open_regular_file_allow_hard_links`; the
+  symlink-swap protection (#2404) is unchanged. A regression test per store
+  loads a hard-linked record, and each fails with the fix reverted.
+
 - **Three more check-then-open races outside #2404/#2405's five sites are now
   closed, and a migration lock, a job-record read, or a diagnostic copy
   still accepts a hard-linked source.** `mcp::extraction_job_store`'s
