@@ -230,11 +230,7 @@ fn open_regular_file_refuses_a_fifo_without_blocking() {
 
 /// #2407 (round 5): a hard link to a file outside the store is,
 /// structurally, an ordinary regular file, so `is_file` alone accepts it —
-/// but `fstat` also reports `nlink`, which this check refuses above 1 for
-/// every current caller of `open_regular_file` (the journal, and —
-/// deliberately, per #2426 — the online-migration controller state and job
-/// state too, even though a hard-link based backup of either can trigger
-/// this exact refusal on an untampered file).
+/// but `fstat` also reports `nlink`, which this check refuses above 1.
 #[cfg(unix)]
 #[test]
 fn open_regular_file_refuses_a_hard_link() {
