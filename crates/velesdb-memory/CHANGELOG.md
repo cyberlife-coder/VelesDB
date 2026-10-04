@@ -28,9 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FILE_FLAG_BACKUP_SEMANTICS`, which this crate does not set, so a
   directory surfaces as a generic open failure there instead — unverified,
   Windows CI only type-checks this crate, no test runs there); also a hard
-  link (unix only — the only platform that checks `nlink`) for the first
-  three specifically (the migration lock, the extraction job record, and
-  the diagnostic copy accept a hard link instead, see Fixed below). The
+  link (unix only — the only platform that checks `nlink`) for the journal
+  alone (the controller state, the online-migration job, the migration lock,
+  the extraction job record, and the diagnostic copy accept a hard link
+  instead, see Fixed below). The
   journal, controller state, and online-migration job surface this
   variant's own wording unchanged; the extraction job store and the
   diagnostic copy each specifically match this variant and build their
@@ -47,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A controller-state or online-migration-job record that a hard-link backup
-  left with `nlink > 1` now loads instead of being refused (#2426, 2026-10-04).**
+  left with `nlink > 1` now loads instead of being refused (#2426).**
   `mutation::controller::state::read_state_bytes` and
   `online_migration::job_state::read_limited` opened their record through
   `open_regular_file`, which refuses a hard link. Both records are only ever

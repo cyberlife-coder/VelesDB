@@ -294,12 +294,9 @@ fn validate_terminal_state(record: &JobRecord) -> Result<(), MemoryError> {
 fn read_limited(path: &Path) -> Result<Vec<u8>, MemoryError> {
     let mut options = OpenOptions::new();
     options.read(true);
-    let (mut file, _metadata) =
+    let (mut file, metadata) =
         open_regular_file_allow_hard_links(path, "online migration job", options)?;
-    let length = file
-        .metadata()
-        .map_err(|err| capture(format!("cannot size online migration job: {err}")))?
-        .len();
+    let length = metadata.len();
     if length > MAX_JOB_BYTES {
         return Err(capture("online migration job exceeds 64 KiB safety limit"));
     }
