@@ -117,3 +117,18 @@ fn owns_current_lock_is_never_trusted_through_a_racing_symlink_swap() {
         "a racing symlink swap must never be trusted as this lock's own record"
     );
 }
+
+/// #2424: `holder` and the "record remains" refusal of `acquire` must not
+/// surface the content of a file a symlinked `migration.lock` points at.
+#[test]
+fn a_symlinked_lock_record_is_never_read_for_its_holder() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let secret = outside.path().join("secret");
+    std::fs::write(&secret, "TOP-SECRET-CONTENT").expect("write secret");
+    symlink(&secret, workspace.path().join(LOCK_FILE)).expect("plant symlink");
+
+    assert_eq!(MigrationLock::holder(workspace.path()), None);
+    let err = MigrationLock::acquire(workspace.path(), "run-B").expect_err("record remains");
+    assert!(!err.contains("TOP-SECRET-CONTENT"), "leaked: {err}");
+}
