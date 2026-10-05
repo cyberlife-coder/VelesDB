@@ -179,14 +179,13 @@ fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
 
 /// A hard link is, structurally, an ordinary regular file: `O_NOFOLLOW`
 /// cannot tell it apart (#2407). The lock record is created once via
-/// `create_new` and, from then on, only ever read (here, and by `holder` —
-/// #2424 tracks that one still following a symlink) or removed (by
-/// `release`) — never reopened to write into. A hard link planted before
+/// `create_new` and, from then on, only ever read (here, and by `holder`)
+/// or removed (by `release`) — never reopened to write into. A hard link planted before
 /// that creation would make `create_new` itself fail, so by the time a
 /// legitimate record exists, a later alias to it (a hard-link based backup,
 /// `cp -al`) has nothing left to intercept: refusing `nlink > 1` here would
 /// only break a lock check against an untampered record after such a backup
-/// (#2409 round 8). Proven by mutation: reverting `owns_current_lock` to
+/// (#2409 round 8). Proven by mutation: reverting `read_lock_body` to
 /// `open_regular_file` makes this test fail.
 #[cfg(unix)]
 #[test]
