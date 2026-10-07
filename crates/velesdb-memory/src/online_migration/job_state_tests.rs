@@ -119,6 +119,28 @@ fn a_symlinked_job_file_is_refused_without_touching_its_target() {
 
 #[cfg(unix)]
 #[test]
+fn a_hard_linked_job_file_is_loaded_not_refused() {
+    let root = tempfile::tempdir().expect("root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).expect("workspace");
+    let outside = tempfile::tempdir().expect("outside");
+    let record = record(root.path());
+    JobStore::create(&workspace, &record).expect("create job");
+    let path = workspace.join(JOB_FILE);
+    let alias = outside.path().join("job-alias.json");
+    std::fs::rename(&path, &alias).expect("move the record out");
+    std::fs::hard_link(&alias, &path).expect("hard link it back, as a `cp -al` backup would");
+
+    let loaded = JobStore::open(&workspace)
+        .expect("a hard-linked job record must be loaded, not refused (#2426)")
+        .load()
+        .expect("load job");
+
+    assert_eq!(loaded, record);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_symlinked_staging_file_is_refused_and_left_in_place() {
     use std::os::unix::fs::symlink;
 

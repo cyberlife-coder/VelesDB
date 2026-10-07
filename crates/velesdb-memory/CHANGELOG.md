@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The controller-state and online-migration-job reads no longer refuse a
+  hard-linked record (#2426).** Both files are written once and replaced by
+  rename, so the `nlink > 1` refusal protected nothing, while a `cp -al` /
+  `rsync --link-dest` backup of a workspace mid-migration left it set on
+  untampered records and made recovery from that backup fail. A symlink
+  swap is still refused. Measured 2026-10-07: both new regression tests fail
+  with the old call and pass with the new one.
+
 - **Three more check-then-open races outside #2404/#2405's five sites are now
   closed, and a migration lock, a job-record read, or a diagnostic copy
   still accepts a hard-linked source.** `mcp::extraction_job_store`'s

@@ -77,11 +77,8 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 /// based backup (`cp -al`, `rsync --link-dest`) routinely produces
 /// `nlink > 1` on perfectly ordinary files.
 ///
-/// Two other callers (the online-migration controller state and job state)
-/// share the write-once-rename-replace shape too, but predate #2409 (added
-/// in #2405) and sit outside the three call sites #2406 names for this PR —
-/// left refusing a hard link for now rather than widening this PR's scope a
-/// further round; see #2426.
+/// The online-migration controller state and job state share that shape and
+/// read through [`open_regular_file_allow_hard_links`] as well (#2426).
 pub(crate) fn open_regular_file(
     path: &Path,
     entity: &str,
