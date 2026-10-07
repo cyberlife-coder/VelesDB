@@ -95,6 +95,21 @@ fn symlinked_state_is_refused_without_touching_its_target() {
 
 #[cfg(unix)]
 #[test]
+fn a_hard_linked_state_is_loaded_not_refused() {
+    let root = tempfile::tempdir().expect("root");
+    let outside = tempfile::tempdir().expect("outside");
+    drop(open_controller(root.path()));
+    let path = root.path().join(STATE_FILE);
+    let alias = outside.path().join("state-alias.json");
+    fs::rename(&path, &alias).expect("move the record out");
+    fs::hard_link(&alias, &path).expect("hard link it back, as a `cp -al` backup would");
+
+    ConvergenceController::open(root.path(), EPOCH, config())
+        .expect("a hard-linked controller state must be loaded, not refused (#2426)");
+}
+
+#[cfg(unix)]
+#[test]
 fn a_symlinked_staging_file_is_refused_at_open_and_left_in_place() {
     use std::os::unix::fs::symlink;
 
