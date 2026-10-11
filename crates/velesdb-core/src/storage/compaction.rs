@@ -392,7 +392,16 @@ fn atomic_replace(src: &Path, dst: &Path) -> io::Result<()> {
             Err(e) => {
                 // Failed: try to restore backup
                 if backup.exists() {
-                    let _ = std::fs::rename(&backup, dst);
+                    if let Err(restore_err) = std::fs::rename(&backup, dst) {
+                        // `dst` is now missing; the backup is the only copy, so
+                        // name where it is rather than dropping the failure.
+                        tracing::error!(
+                            backup = %backup.display(),
+                            dst = %dst.display(),
+                            error = %restore_err,
+                            "compaction: restoring the backup after a failed replace also failed"
+                        );
+                    }
                 }
                 Err(e)
             }
