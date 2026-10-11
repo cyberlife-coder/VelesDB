@@ -38,10 +38,9 @@ pub(super) struct RememberParams {
     /// `{"project": "veles", "author": "julien", "status": "open"}`).
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) metadata: Option<Metadata>,
-    /// Optional time-to-live in seconds. When set, the fact expires (and stops
-    /// being recalled) after this many seconds — a durable TTL that survives a
-    /// restart. Omit for a permanent memory. Falls back to the server's
-    /// `VELESDB_MEMORY_DEFAULT_TTL` when unset.
+    /// Optional TTL in seconds — the fact expires (and stops being recalled)
+    /// after it; durable across restarts. Omit for permanent. Falls back to
+    /// `VELESDB_MEMORY_DEFAULT_TTL`.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) ttl_seconds: Option<u64>,
 }
@@ -54,8 +53,7 @@ pub(super) struct RememberResult {
     pub(super) id: u64,
     /// Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/
     /// `feedback`, never `id` itself: a u64 above 2^53 loses precision
-    /// through a float-lossy JSON client (issue #1468). Additive: `id` is
-    /// unchanged, so 0.9.x callers are unaffected.
+    /// through a float-lossy JSON client (#1468). `id` is unchanged.
     pub(super) id_str: String,
 }
 
@@ -90,8 +88,7 @@ pub(super) struct RecollectionDto {
     pub(super) id: u64,
     /// Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/
     /// `feedback`, never `id` itself: a u64 above 2^53 loses precision
-    /// through a float-lossy JSON client (issue #1468). Additive: `id` is
-    /// unchanged and stays present for 0.9.x callers.
+    /// through a float-lossy JSON client (#1468). `id` is unchanged.
     pub(super) id_str: String,
     /// Similarity score (higher is closer).
     pub(super) score: f32,
@@ -119,11 +116,9 @@ impl From<Recollection> for RecollectionDto {
 /// Result of the `recall` tool.
 #[derive(Serialize, JsonSchema)]
 pub(super) struct RecallResult {
-    /// Recalled memories, best match first. The two tools returning this
-    /// shape rank differently: `recall` blends similarity with learned
-    /// confidence (see `feedback`), while `recall_where` with filters
-    /// orders by pure similarity. Each `score` is the raw similarity,
-    /// never a blended value.
+    /// Recalled memories, best match first. `recall` blends similarity with
+    /// learned confidence; `recall_where` orders by pure similarity. Each
+    /// `score` is raw similarity, never blended.
     pub(super) memories: Vec<RecollectionDto>,
 }
 
@@ -151,14 +146,11 @@ pub(super) struct RecallWhereParams {
         deserialize_with = "super::wire::lenient"
     )]
     pub(super) limit: Option<usize>,
-    /// Structured `ColumnStore` predicates (ranges/comparisons) combined with AND,
-    /// e.g. a date window `[{"field":"ts","op":"ge","value":20230101},
-    /// {"field":"ts","op":"le","value":20231231}]`. Each `op` is one of
-    /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`. **Type-strict, no coercion** (issue
-    /// #1473): `value` is compared to the stored metadata's JSON type
-    /// as-is — a numeric `20230101` never matches a fact stored with
-    /// `{"ts": "20230101"}` (a string). Store comparable values (dates,
-    /// counters) NUMERICALLY at `remember` time so these filters match them.
+    /// Structured `ColumnStore` predicates combined with AND, e.g. a date
+    /// window `[{"field":"ts","op":"ge","value":20230101}]`; `op` is one of
+    /// `eq`/`ne`/`lt`/`le`/`gt`/`ge`. **Type-strict, no coercion** (#1473):
+    /// a numeric `20230101` never matches `"20230101"` stored as a string —
+    /// store comparable values NUMERICALLY at `remember` time.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) filters: Vec<ColumnFilter>,
 }
@@ -170,9 +162,8 @@ pub(super) struct RecallFusedParams {
     /// Natural-language query to match semantically.
     pub(super) query: String,
     /// Maximum number of memories to return (default 10). `k` is canonical;
-    /// the deprecated `limit` spelling remains a wire alias for one version.
-    /// Multi-hop reasoning benefits from a larger budget (~32-64); simple and
-    /// temporal recall saturate early, where a larger budget only adds tokens.
+    /// `limit` remains a deprecated wire alias. Multi-hop reasoning benefits
+    /// from ~32-64; simple recall saturates early.
     #[serde(
         default,
         rename = "k",
@@ -193,19 +184,15 @@ pub(super) struct RecallFusedParams {
     /// similarity more.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) graph_boost: Option<f64>,
-    /// Depth of the oversampled vector candidate pool fusion re-ranks before
-    /// the `k` cutoff (default: `k` scaled up, floored at 64). That
-    /// default is already deep enough for a graph-reached fact to surface;
-    /// widen it to give a reranker more to work with, narrow it to confine
-    /// fusion to the strongest vector hits. Capped at 1000, the same ceiling
-    /// `k` carries — NOT the one `hops` carries, which is 10.
+    /// Depth of the oversampled candidate pool fusion re-ranks before the
+    /// `k` cutoff (default `k` scaled up, floored at 64 — already enough for
+    /// a graph-reached fact to surface). Widen to give a reranker more to
+    /// work with. Capped at 1000 (same ceiling as `k`, not `hops`' 10).
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) pool: Option<usize>,
     /// Name of the metadata field holding each fact's date as a `YYYYMMDD`
     /// integer (e.g. `"ts"`, `"occurred_at"`). When set, the result adds a
-    /// `dated_context` timeline (facts date-prefixed and ordered oldest-first)
-    /// plus a `now` anchor — the representation that lifts temporal reasoning.
-    /// Omit for plain results.
+    /// `dated_context` timeline plus a `now` anchor. Omit for plain results.
     pub(super) date_field: Option<String>,
 }
 
@@ -245,11 +232,9 @@ impl RecallFusedResult {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RelateParams {
-    /// Source memory id — the link points FROM here (as returned by
-    /// `remember`/`recall`). Accepts a JSON number or a decimal string:
-    /// always relay a previous response's `id_str` here — a plain JSON
-    /// number above 2^53 loses precision on a float-lossy client (issue
-    /// #1468).
+    /// Source memory id — the link points FROM here. Accepts a JSON number
+    /// or decimal string: relay a previous response's `id_str` — a plain
+    /// number above 2^53 loses precision on a float-lossy client (#1468).
     #[serde(deserialize_with = "deserialize_id")]
     pub(super) from: u64,
     /// Target memory id — the link points TO here (as returned by
@@ -477,26 +462,21 @@ pub(super) struct EntityProfileDto {
     /// Decimal-string twin of `id` (issue #1468).
     pub(super) id_str: String,
     /// Canonical (trimmed, lowercased) entity name. Always filled in — on a
-    /// MISS it echoes the *queried* name, canonicalized exactly as a hit's
-    /// would be, so a caller running several lookups can pair each response
-    /// with its question (issue #1654).
+    /// MISS it echoes the *queried* name canonicalized, so a caller can pair
+    /// each response with its question (#1654).
     pub(super) name: String,
     /// Attributes learned about this entity, reserved keys stripped.
     pub(super) attributes: Metadata,
     /// Typed edges leaving this entity.
     pub(super) relations: Vec<EntityRelationDto>,
-    /// Typed edges pointing AT this entity, each naming its SOURCE.
-    ///
-    /// Without these, a question is only answerable from one side: the graph
-    /// holds `camille --soeur de--> theo`, so asking what Theo's outgoing
-    /// edges say never finds Camille. The edge exists, it simply leaves the
-    /// other node. Nothing is inferred here — the converse of a kinship
-    /// label needs the gender, which the graph does not hold; this reports
-    /// only what is stored.
+    /// Typed edges pointing AT this entity, each naming its SOURCE — the
+    /// incoming side (e.g. `camille --soeur de--> theo` shows here on
+    /// Theo's profile). Nothing is inferred; this reports only what is
+    /// stored.
     pub(super) relations_in: Vec<EntityRelationDto>,
     /// Whether `relations` is a PARTIAL view — true when a response budget
-    /// cut the outgoing side. A list holding exactly the cap is otherwise
-    /// indistinguishable from a cut one (#1820).
+    /// cut the outgoing side; a list at exactly the cap is otherwise
+    /// indistinguishable (#1820).
     pub(super) relations_truncated: bool,
     /// Whether `relations_in` is a PARTIAL view — the incoming mirror of
     /// `relations_truncated`.
@@ -647,10 +627,9 @@ pub(super) struct EmbedderStatus {
     /// The vector width the embedder produces. Reported with the model so a
     /// mismatch diagnosis never needs a second call.
     pub(super) dimension: Option<usize>,
-    /// Whether recall is SEMANTIC. `false` means the `hash` embedder: recall
-    /// matches surface form, not meaning — the single most common "why is
-    /// recall bad?" answer, now readable by the agent instead of dying on a
-    /// swallowed stderr. `null` when no identity was declared.
+    /// Whether recall is SEMANTIC. `false` means the `hash` embedder:
+    /// surface-form matching, not meaning — the most common "why is recall
+    /// bad?" answer. `null` when no identity was declared.
     pub(super) semantic: Option<bool>,
 }
 
@@ -681,10 +660,9 @@ pub(super) struct ExtractionStatus {
     /// Enrichments refused by a FULL queue since startup — the facts were
     /// stored, only their wiring was skipped (#1846's counted-drop rule).
     pub(super) autograph_dropped: u64,
-    /// Enrichments that RAN and failed part-way through wiring since startup
-    /// — the fact is stored, its graph structure is partial (the writes
-    /// before the failure are in), and re-remembering the fact completes it.
-    /// Distinct from `autograph_dropped`, which never ran at all.
+    /// Enrichments that RAN and failed part-way since startup — the fact is
+    /// stored, its graph structure partial; re-remembering completes it.
+    /// Distinct from `autograph_dropped` (never ran).
     pub(super) autograph_failed: u64,
 }
 

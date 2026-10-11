@@ -131,23 +131,18 @@ pub(super) struct ExplainCompilationParams {
     // Ce n'etait pas une omission : trois tests et deux jeux de cles d'id
     // epinglaient la forme stricte comme voulue. Ce que personne n'avait
     // fait, c'est l'aller-retour.
-    /// The fragment whose decision to return. Looked up by matching
-    /// `ContextDecision::fragment_id`, UNLESS `fragment_index` is also
-    /// given (see there) — still required even then, since it is the only
-    /// disambiguator when `fragment_index` is absent. Accepts a JSON number
-    /// OR a decimal string, so a `fragment_id` received under
-    /// [`CompilePolicy::ids_as_strings`] can be relayed back unchanged.
+    /// The fragment whose decision to return, matched on
+    /// `ContextDecision::fragment_id` UNLESS `fragment_index` is also given.
+    /// Accepts a JSON number OR decimal string, so a `fragment_id` received
+    /// under `ids_as_strings` relays back unchanged.
     #[serde(deserialize_with = "crate::model::deserialize_id")]
     pub fragment_id: u64,
-    /// Optional, 0-based position of the fragment in `request.fragments`.
-    /// When given, TAKES PRIORITY over `fragment_id` for locating the
-    /// decision: `compile_context` records exactly one decision per input
-    /// fragment, in order, so `decisions[fragment_index]` is unambiguous
-    /// even when several fragments are byte-identical and therefore share
-    /// the same content-addressed `fragment_id` — a plain `fragment_id`
-    /// lookup always returns the FIRST such decision (the deduplication
-    /// survivor), never a dropped twin's. Absent (the default): behavior is
-    /// unchanged, the decision is found by `fragment_id` alone.
+    /// Optional 0-based position of the fragment in `request.fragments`;
+    /// when given, TAKES PRIORITY over `fragment_id`:
+    /// `decisions[fragment_index]` is unambiguous even when byte-identical
+    /// fragments share one content-addressed `fragment_id` (a plain lookup
+    /// returns the FIRST, the dedup survivor — never a dropped twin's).
+    /// Absent: lookup by `fragment_id` alone.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -199,12 +194,9 @@ pub(super) struct SaveWorkingContextParams {
 pub(super) struct SaveWorkingContextResult {
     /// Id of the stored system fact backing this working context.
     pub id: u64,
-    /// Decimal-string twin of `id`, with the same contract as
-    /// [`crate::mcp::dto::RememberResult::id_str`]. The id is content-addressed
-    /// (FNV-1a 64), so it is past 2^53 and a float-lossy JSON client rounds
-    /// `id` on arrival. This was the ONE tool handing back an id without its
-    /// twin while `forget`/`feedback` accept only the decimal string — the
-    /// caller had no way to build the form the schema demands.
+    /// Decimal-string twin of `id` (same contract as `remember`'s). The id
+    /// is content-addressed (FNV-1a 64), past 2^53 — relay THIS to
+    /// `forget`/`feedback`, never `id`.
     pub id_str: String,
 }
 
@@ -228,9 +220,8 @@ pub(super) struct ListWorkingContextsParams {
 /// Output of the `list_working_contexts` tool.
 #[derive(Debug, serde::Serialize, JsonSchema)]
 pub(super) struct ListWorkingContextsResult {
-    /// Every session saved under this project, most-recently-saved first
-    /// (`saved_at` is `0` on WASM, which has no clock; the order still holds
-    /// there). Empty (not an error) when the project never saved anything.
+    /// Every session saved under this project, most-recently-saved first.
+    /// Empty (not an error) when the project never saved anything.
     pub sessions: Vec<WorkingContextSession>,
 }
 
@@ -245,13 +236,11 @@ pub(super) struct CompileTranscriptParams {
     /// of `transcript` or `path` must be set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<String>,
-    /// Read the transcript from this absolute filesystem path instead of
-    /// inline `transcript` — the same `VELESDB_MEMORY_INGEST_ROOTS`
-    /// allowlist and security pipeline as a `compile_context` fragment's
-    /// `path` (V2b-1), except capped at
-    /// [`crate::limits::MAX_TRANSCRIPT_BYTES`] (8 MiB) instead of the
-    /// ordinary 1 MiB fragment ceiling — the transcript is segmented into
-    /// sub-1-MiB pieces immediately after this read.
+    /// Read the transcript from this absolute path instead of inline
+    /// `transcript` — same `VELESDB_MEMORY_INGEST_ROOTS` allowlist and
+    /// security pipeline as a fragment's `path` (V2b-1), except capped at
+    /// `MAX_TRANSCRIPT_BYTES` (8 MiB); the transcript is segmented into
+    /// sub-1-MiB pieces right after the read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// Hard token ceiling for the assembled content, same as
@@ -296,15 +285,11 @@ pub(super) struct SegmentInfo {
     pub role: Option<String>,
     /// `"body"`, `"code"`, or `"log"`.
     pub kind: SegmentKind,
-    /// Start byte offset (inclusive) in the original transcript. For a
-    /// `jsonl` transcript this is a slice of the raw JSON line's span, not
-    /// an offset into the decoded `content` — a JSONL line's decoded text
-    /// has no byte-exact mapping back into the raw (JSON-escaped) source
-    /// bytes, so when a single line's decoded content is re-split (over
-    /// [`crate::limits::MAX_FRAGMENT_BYTES`]) each child's range is a
-    /// proportional, non-overlapping share of the line's raw range rather
-    /// than a byte-precise one. Every segment's range is still distinct and
-    /// non-overlapping (see the struct docs of [`SegmentationReport::segments`]).
+    /// Start byte offset (inclusive) in the original transcript. For `jsonl`
+    /// this is a slice of the raw JSON line's span, not of decoded
+    /// `content` — when one line's decoded content is re-split, each child's
+    /// range is a proportional, non-overlapping share of the raw range, not
+    /// byte-exact. Ranges still never overlap.
     pub byte_start: usize,
     /// End byte offset (exclusive) in the original transcript. Same caveat
     /// as `byte_start`.
@@ -322,17 +307,9 @@ pub(super) struct SegmentationReport {
     /// even when the request asked for it.
     pub format_detected: SegmentFormat,
     /// Every segment, in transcript order, with byte ranges that partition
-    /// the transcript exactly — no gaps, no overlaps, even for a `jsonl`
-    /// line whose decoded `content` alone exceeds
-    /// [`crate::limits::MAX_FRAGMENT_BYTES`] (1 MiB) and gets re-split into
-    /// several segments (`compile_context` still gets sub-1-MiB fragments):
-    /// each child's range is a proportional, non-overlapping share of the
-    /// original JSON line's raw span rather than a byte-exact one, since a
-    /// JSONL line's decoded text has no byte-aligned mapping back into the
-    /// raw (JSON-escaped) source bytes (see `resplit_body` in
-    /// `context::segment`). An extreme edge case (one transcript line over
-    /// 1 MiB of decoded content), but even then every segment keeps a
-    /// distinct, non-overlapping range.
+    /// the transcript exactly — no gaps, no overlaps. Edge case: a `jsonl`
+    /// line whose decoded content exceeds 1 MiB is re-split, and each child
+    /// gets a proportional share of the raw line span, not a byte-exact one.
     pub segments: Vec<SegmentInfo>,
     /// How many segments [`SegmentationPolicy::min_segment_bytes`] merging
     /// eliminated.
@@ -456,7 +433,7 @@ impl McpServer {
 
     #[tool(
         name = "compile_context",
-        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministically, with no LLM call. Duplicates are dropped, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles instead of silently vanishing, and `memory_scope` pulls relevant stored memories into the result. Each fragment's own `metadata` is capped at 64 KiB serialized. A fragment may set `path` (an absolute filesystem path) instead of inline `content` to ingest a file by reference — `path` is exclusive and cannot be combined with `content` or `media`, while `content` and `media` MAY travel together (the content is then the image's caption, and the only text lexical relevance can read); a fragment carrying none of the three is refused. Path ingestion requires the server to be started with VELESDB_MEMORY_INGEST_ROOTS set to an allowlist of directories, and the resolved file must be plain UTF-8 text under 1 MiB. Returns the assembled content plus one auditable decision per fragment (rule id, reason, risk), the sources, the retrieval handles, token-savings insights, and `warnings` — a mechanical shortlist of externalized fragments relevant enough to the query that they are worth a second look. An empty `warnings` is NOT a clean bill of health: only `retrieve` decisions at or above a relevance floor ever qualify, so a `preserve` fragment the packer could only fit partially, and an abstracted one, are real losses that never appear there — `decisions` stays the exhaustive record, and `risk` is the cheap second signal. `policy.slim_response` (default false) empties `sections`/`decisions` from the response — keep it off when you need the audit trail, or re-compile without it later (compilation is deterministic). `policy.ids_as_strings` (default false) rewrites every id field of the response into a decimal string, for MCP clients without u64-safe JSON number parsing.",
+        description = "Compile context fragments into a token-budgeted, provenance-audited prompt context — deterministic, no LLM call. Duplicates drop, repeated log lines collapse, code/URLs/numbers/negative constraints survive verbatim, over-budget content becomes retrievable ctx://source/ handles; `memory_scope` pulls stored memories in. Fragment `metadata` ≤64 KiB. A fragment may set `path` (absolute file, UTF-8 ≤1 MiB; requires VELESDB_MEMORY_INGEST_ROOTS) INSTEAD of `content` — `content`+`media` may combine (content = the image's caption). Returns the assembled content, one auditable decision per fragment (rule id, reason, risk), sources, handles, token-savings, and `warnings` (externalized fragments worth a second look — empty is NOT a clean bill of health; `decisions` is the exhaustive record, `risk` the cheap second signal). `policy.slim_response` drops sections/decisions (keep off when the audit trail matters); `policy.ids_as_strings` stringifies id fields for u64-unsafe clients.",
         input_schema = wire_safe_input_schema::<CompileRequest>(&["id"]),
         output_schema = wire_safe_output_schema::<CompiledContext>()
     )]
@@ -494,7 +471,7 @@ impl McpServer {
     /// tells the two apart.
     #[tool(
         name = "compile_transcript",
-        description = "One-call shortcut over compile_context for a raw agent-session transcript: deterministically segments it into turns (plain marker-based — System:/User:/Human:/Assistant:/AI:/Tool:/### User/### Assistant — or JSONL, one line per turn) and, within each turn, into code/log/body sub-segments (fenced code blocks stay atomic; runs of 8+ log-like lines collapse the same way abstract.log_dedup would), then compiles the result exactly like compile_context. Exactly one of `transcript` (inline) or `path` (an absolute filesystem path, same VELESDB_MEMORY_INGEST_ROOTS allowlist as compile_context's `path` fragments but capped at 8 MiB) must be set. `segmentation.format` forces plain or jsonl instead of auto-detecting; a forced jsonl format that fails to parse is a hard error, never a silent fallback. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context's output) plus `segmentation` — the detected format and one audit entry (turn, role, kind, byte range, fragment_id) per segment, so a caller can see exactly how the transcript was cut before trusting the compiled result.",
+        description = "One-call shortcut over compile_context for a raw agent-session transcript: segments it into turns (markers System:/User:/Human:/Assistant:/AI:/Tool:, ### User/### Assistant, or JSONL one line per turn) then into code/log/body sub-segments, then compiles exactly like compile_context. Exactly one of `transcript` (inline) or `path` (absolute file under the VELESDB_MEMORY_INGEST_ROOTS allowlist, ≤8 MiB) must be set. `segmentation.format` forces plain/jsonl — a forced jsonl that fails to parse is a hard error. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context) plus `segmentation`: the detected format and a per-segment audit (turn, role, kind, byte range, fragment_id).",
         input_schema = wire_safe_input_schema::<CompileTranscriptParams>(&[]),
         output_schema = wire_safe_output_schema::<CompileTranscriptResult>()
     )]
@@ -565,7 +542,7 @@ impl McpServer {
 
     #[tool(
         name = "explain_compilation",
-        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached. Compilation is deterministic, so the request is re-compiled (with event/source recording off) and the fragment's exact decision (rule id, reason, relevance, risk, handle) is returned — no server-side state needed. Caveat: with a memory_scope the re-compile recalls from CURRENT memory, so decisions about pulled memories reflect the memory as it is now, not as it was; a `path` fragment is likewise re-read from disk, so the decision reflects the file's CURRENT content, not necessarily what the original compile_context call saw. Pass `fragment_index` (0-based position in request.fragments) instead of relying on `fragment_id` alone when fragments are byte-identical — a shared content-addressed id otherwise always resolves to the deduplication survivor's decision. `policy.ids_as_strings` on the request rewrites the response's id fields into decimal strings, like compile_context.",
+        description = "Explain why one fragment of a compile_context request was preserved, abstracted, externalized, dropped, or cached: the request is re-compiled deterministically (recording off) and the fragment's decision (rule id, reason, relevance, risk, handle) returned — no server state needed. Caveats: `memory_scope` recalls from CURRENT memory and a `path` fragment is re-read from CURRENT disk content — not necessarily what the original call saw. Prefer `fragment_index` (0-based) over `fragment_id` when fragments are byte-identical — a shared id resolves to the dedup survivor's decision. `policy.ids_as_strings` applies as in compile_context.",
         input_schema = wire_safe_input_schema::<ExplainCompilationParams>(&["id", "fragment_id"]),
         output_schema = wire_safe_output_schema::<ContextDecision>()
     )]
@@ -629,7 +606,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = wire_safe_output_schema::<SaveWorkingContextResult>(),
-        description = "Persist this session's distilled working state (goal, active constraints, verified facts, open hypotheses, decisions, exact evidence, pending actions) under a project + session id — so a LATER session (a fresh agent run, a new conversation, a resumed process) can pick up exactly where this one left off instead of re-deriving context from scratch. Call this near the end of a session, or whenever the working state changes meaningfully. Saving again under the same project+session replaces the previous state (idempotent upsert) — so an entirely empty `working` is REFUSED rather than allowed to wipe what a previous save stored; fill at least one field. Serialized size is capped at 1 MiB. Returns the stored fact's id. IF THIS CALL TIMES OUT, THE SAVE MAY NOT HAVE HAPPENED — a timeout is not a slow success, and over the HTTP transport it usually means the request never reached this tool at all. Do not assume it was written: call `list_working_contexts` and check that this session's `saved_at` actually advanced, then re-send the identical call if it did not. Re-sending is safe — the write is an upsert on project + session, so it replaces rather than duplicates.",
+        description = "Persist this session's distilled working state (goal, constraints, verified facts, hypotheses, decisions, evidence, pending actions) under a project + session id — so a LATER session resumes instead of re-deriving. Call near session end, or on meaningful change. Same project+session = idempotent upsert; an empty `working` is REFUSED (it would wipe a previous save). ≤1 MiB. Returns the fact's id. ON TIMEOUT, THE SAVE MAY NOT HAVE HAPPENED — check `list_working_contexts` for an advanced `saved_at`, then re-send if needed (upsert = safe).",
         input_schema = wire_safe_input_schema::<SaveWorkingContextParams>(&["fragment_id", "memory_id"])
     )]
     async fn save_working_context(
@@ -660,7 +637,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = wire_safe_output_schema::<LoadedWorkingContext>(),
-        description = "Resume a session: load back the working context previously saved by save_working_context under the same project + session id — the goal, constraints, verified facts, open hypotheses, decisions, exact evidence, and pending actions a PRIOR session left off with. Call this at the START of a new session before doing anything else, so work continues instead of restarting. `found: false` (with `working: null`) means nothing was ever saved under that exact project + session — not an error, but check `other_sessions`: if it lists a similarly-named session, `session` was likely a typo, not a genuinely fresh start. `other_sessions` is always filled in, on a hit too: if it lists a session that looks more like the one you meant, you may have just resumed the WRONG session. Use `list_working_contexts` to browse a project's sessions up front."
+        description = "Resume a session: load the working context saved by save_working_context under the same project + session id. Call at session START. `found: false` (`working: null`) = nothing saved under that exact id — check `other_sessions`: a similar name means a typo, not a fresh start. `other_sessions` is filled on a hit too — a likelier session listed means you may have resumed the WRONG one. `list_working_contexts` browses a project's sessions up front."
     )]
     async fn load_working_context(
         &self,
@@ -734,7 +711,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = wire_safe_output_schema::<SuggestedBudget>(),
-        description = "Suggest a starting token_budget for compile_context, for a named target model — looked up in a static, committed model-name to context-window table (dated \"as of\", NEVER a network call). Pass `reserve_tokens` (default 0) to reserve room for the response, mirroring compile_context's own `policy.response_reserve_tokens`. `window`/`suggested_budget` come back null when the model is not in the table — an honest \"unknown\", never a guess; extend the table in a new release instead of relying on this for an unlisted model."
+        description = "Suggest a starting token_budget for compile_context for a named model — looked up in a static, committed model→context-window table (never a network call). `reserve_tokens` reserves room for the response, mirroring `policy.response_reserve_tokens`. `window`/`suggested_budget` come back null for an unlisted model — an honest \"unknown\", never a guess."
     )]
     async fn suggest_budget(
         &self,

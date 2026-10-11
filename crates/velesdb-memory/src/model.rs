@@ -78,11 +78,9 @@ where
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct Link {
-    /// Id of the memory being linked to. Accepts a JSON number or a decimal
-    /// string — ids can exceed 2^53, where float-lossy JSON clients (JS
-    /// `number`) round a plain integer, so a caller relaying an `id_str`
-    /// value straight from a previous response must be able to resubmit it
-    /// as-is (see issue #1468).
+    /// Id of the memory being linked to. Accepts a JSON number or decimal
+    /// string — ids can exceed 2^53, so a caller relaying `id_str` from a
+    /// previous response must be able to resubmit it as-is (#1468).
     #[serde(deserialize_with = "deserialize_id")]
     pub target: u64,
     /// Relationship label (e.g. `"decided_in"`, `"references"`, `"depends_on"`).
@@ -99,17 +97,13 @@ pub struct Recollection {
     pub score: f32,
     /// Stored fact content.
     pub content: String,
-    /// Caller-supplied structured metadata stored with the fact (the `ColumnStore`
-    /// facet), with reserved system keys (`content`, `_veles_*`) excluded —
-    /// EXCEPT [`crate::storage::AUTO_DATE_FIELD`] (`_veles_date`), the
-    /// `YYYYMMDD` date `remember` auto-stamps onto (almost) every fact, which
-    /// stays visible here on purpose so `recall_fused`'s `date_field` can read
-    /// it back with no caller effort. `None` only when the fact carries no
-    /// metadata at all AND no auto-date could be stamped (`wasm32-unknown-unknown`,
-    /// which has no clock). This is what makes dated recall work: store a date
-    /// (e.g. `occurred_at`, or just rely on the automatic `_veles_date`) and it
-    /// round-trips here, so a `recall_where`/`recall_fused` result can be
-    /// ordered into a chronological timeline.
+    /// Caller-supplied structured metadata stored with the fact (the
+    /// `ColumnStore` facet); reserved keys (`content`, `_veles_*`) excluded
+    /// EXCEPT `_veles_date`, the `YYYYMMDD` date `remember` auto-stamps,
+    /// kept visible so `recall_fused`'s `date_field` can read it back —
+    /// this is what makes dated recall work. `None` only when the fact
+    /// carries no metadata AND no auto-date could be stamped (wasm, no
+    /// clock).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
@@ -273,10 +267,8 @@ pub struct FusionOptions {
     /// Weight added to a graph-reached fact's normalised vector score.
     pub graph_boost: f64,
     /// Depth of the oversampled vector pool fusion re-ranks. `None` uses the
-    /// proven default (`k` scaled up, floored at 64 — see
-    /// `crate::fusion::pool_size`). Widen this to give
-    /// [`MemoryService::recall_fused_reranked`](crate::service::MemoryService::recall_fused_reranked)'s
-    /// reranker more candidates to work with.
+    /// proven default (`k` scaled up, floored at 64). Widen to give the
+    /// `recall_fused_reranked` reranker more candidates.
     pub pool: Option<usize>,
 }
 
@@ -389,11 +381,9 @@ pub struct BoundedMemoryEdges {
 pub struct UnrelateOutcome {
     /// Whether at least one matching edge existed and was removed.
     pub found: bool,
-    /// How many matching edges were removed.
-    ///
-    /// `relate` is idempotent per (from, relation, to), so anything it wrote
-    /// removes as 0 or 1. Higher counts mean parallel edges predating that
-    /// guarantee, or a direct graph write that bypassed `relate`.
+    /// How many matching edges were removed. `relate` is idempotent per
+    /// (from, relation, to), so this is 0 or 1 — higher counts mean edges
+    /// predating that guarantee or writes that bypassed `relate`.
     pub removed: usize,
 }
 
@@ -447,10 +437,8 @@ pub struct EntityProfile {
     /// far end the edge comes FROM — its source.
     pub relations_in: Vec<EntityRelation>,
     /// Whether `relations` is a PARTIAL view: true when the resolution cap
-    /// ([`crate::limits::MAX_ENTITY_RELATIONS`]) or the raw scan window
-    /// ([`crate::limits::MAX_ENTITY_SCAN_EDGES`]) cut the outgoing side. A
-    /// list holding exactly the cap is otherwise indistinguishable from a
-    /// cut one (#1820).
+    /// or the raw scan window cut the outgoing side — a list at exactly the
+    /// cap is otherwise indistinguishable from a cut one (#1820).
     pub relations_truncated: bool,
     /// Whether `relations_in` is a PARTIAL view — the incoming mirror of
     /// [`Self::relations_truncated`].
@@ -468,18 +456,11 @@ pub struct Explanation {
     /// Typed edges connecting the nodes.
     pub edges: Vec<MemoryEdge>,
     /// Whether a width budget cut this walk before it exhausted the
-    /// reachable graph (#1820). A subgraph sitting exactly at a cap
-    /// ([`crate::limits::MAX_WHY_NODES`], [`crate::limits::MAX_WHY_EDGES`],
-    /// [`crate::limits::MAX_WHY_NODE_DEGREE`]) is otherwise
-    /// indistinguishable from a complete one — counts at a ceiling were the
-    /// only signal, and they are ambiguous by construction.
-    ///
-    /// True when a node's degree exceeded the per-node budget, or when the
-    /// node/edge budget stopped the walk while unexpanded work remained.
-    /// The latter is conservative: expanding the rest is exactly what the
-    /// budget forbids, so whether it held anything unseen is unknowable —
-    /// and a rare cautious `true` is harmless where a false "complete" is
-    /// the defect this field exists to close.
+    /// reachable graph (#1820) — a subgraph at exactly a cap is otherwise
+    /// indistinguishable from a complete one. True when a node's degree
+    /// exceeded its budget, or the node/edge budget stopped the walk with
+    /// work remaining (conservative: a rare cautious `true` beats a false
+    /// "complete").
     pub truncated: bool,
 }
 

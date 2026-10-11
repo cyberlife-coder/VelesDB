@@ -20,7 +20,7 @@ impl McpServer {
     #[tool(
         name = "recall_fused",
         output_schema = crate::schema::wire_safe_output_schema::<RecallFusedResult>(),
-        description = "Fused vector + graph recall: like `recall`, but also walks the graph from the top vector hit and folds any connected fact into the ranking — the tri-engine ranking (vector similarity + ColumnStore filter + graph reach) measured on multi-hop and temporal benchmarks. Reach for this when an answer needs a fact the query doesn't mention directly but a stored `relate`/extracted link connects (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune the graph reach and `pool` the depth of the vector candidate pool fusion re-ranks; omit them for the proven defaults. Optionally narrow with an exact-match `filter`. Set `date_field` (the metadata key holding a YYYYMMDD date) to also get a `dated_context` timeline and a `now` anchor for temporal questions. Most relevant first."
+        description = "Fused vector + graph recall: like `recall`, plus walks the graph from the top hit and folds connected facts into the ranking — for answers needing a fact the query doesn't name (multi-hop reasoning, temporal chains). `hops`/`graph_boost` tune graph reach, `pool` the vector candidate depth; omit for the proven defaults. Optional exact-match `filter`; set `date_field` (a YYYYMMDD metadata key) for a `dated_context` timeline and `now` anchor. Most relevant first."
     )]
     pub(super) async fn recall_fused(
         &self,
@@ -89,7 +89,7 @@ impl McpServer {
     #[tool(
         name = "remember_extracted",
         output_schema = crate::schema::wire_safe_output_schema::<RememberExtractedResult>(),
-        description = "Accept a passage for durable background extraction and return before model generation. Set `extractor` per call (`outline`, `ollama`, or `openai`), or omit it to use VELESDB_MEMORY_EXTRACTOR. Supply `idempotency_key` when retrying across a client timeout: the same key and payload reuse one job, while a changed payload is rejected. The receipt returns `request_id`, its initial `state` (`accepted`, or the persisted state of a reused request), and `reused`. Poll `extraction_status(request_id)` until `committed` or `failed`; accepted/running jobs survive process restart."
+        description = "Accept a passage for durable background extraction; returns before model generation. `extractor` per call (`outline`/`ollama`/`openai`), else VELESDB_MEMORY_EXTRACTOR. `idempotency_key` makes a retry reuse one job; same key with a changed payload is rejected. The receipt returns `request_id`, initial `state` (`accepted`, or the reused request's persisted state) and `reused`. Poll `extraction_status(request_id)` until `committed`/`failed`; accepted/running jobs survive restart."
     )]
     pub(super) async fn remember_extracted(
         &self,
@@ -172,7 +172,7 @@ impl McpServer {
         name = "list_memories",
         output_schema = crate::schema::wire_safe_output_schema::<ListMemoriesResult>(),
         input_schema = id_wire_input_schema::<ListMemoriesParams>(&["cursor"]),
-        description = "AUDIT the store: walk every stored fact, page by page — the question `recall` structurally cannot answer, because recall ranks by resemblance to a query and what resembles nothing you thought to ask stays invisible. Use it when the user asks what the memory contains ('what do you know about me / this project?'), to review or clean up before sharing a store, or to back up its contents. Returns `memories` (ids ascending — two audits of the same store see the same order; each entry carries `id`, `id_str`, `content`, `metadata`) and `next_cursor`: pass it back as `cursor` for the next page, `null` means the walk is complete. `filter` keeps only facts whose metadata equals every given key (e.g. {\"project\": \"acme\"}); a filtered page may come back sparse — KEEP following `next_cursor`, the walk stays exhaustive. Metadata follows recall's visibility rule (business keys plus the auto-stamped `_veles_date`; internal graph scaffolding excluded) unless `include_internal` is set, which lists everything verbatim. Ids exceed 2^53 — always relay them as strings (`id_str`, and `next_cursor` is already a string)."
+        description = "AUDIT the store: page through every stored fact — what `recall` cannot answer (it only ranks by resemblance). Use for 'what do you know about me/this project?', cleanup before sharing, or backup. Returns `memories` (ids ascending; each entry carries `id`, `id_str`, `content`, `metadata`) and `next_cursor`: pass it as `cursor` for the next page, null = done. `filter` keeps facts matching every key; a sparse page is not the end — KEEP following `next_cursor`. `include_internal` also lists internal scaffolding verbatim. Ids exceed 2^53 — relay as strings."
     )]
     pub(super) async fn list_memories(
         &self,

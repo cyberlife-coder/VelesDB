@@ -143,12 +143,11 @@ pub struct SegmentationPolicy {
     /// Segments under this many bytes merge into an adjacent segment of the
     /// same turn and kind (see the module docs' step 4). Default `256`.
     pub min_segment_bytes: usize,
-    /// When `true` (the default) and [`SegmentationPolicy::format`]
-    /// determines the FIRST turn's role is `"system"` (case-insensitive),
-    /// every segment of that turn is marked `metadata.cache = true` — the
-    /// same signal `compile_context`'s `cache.stable_prefix` rule reads, so
-    /// a system prompt turn becomes the compiled output's stable,
-    /// cache-friendly prefix without the caller hand-annotating it.
+    /// When `true` (default) and the FIRST turn's role is `"system"`
+    /// (case-insensitive), every segment of that turn is marked
+    /// `metadata.cache = true` — the signal `cache.stable_prefix` reads, so
+    /// a system-prompt turn becomes the output's stable prefix without
+    /// hand-annotation.
     pub cache_system_turn: bool,
 }
 

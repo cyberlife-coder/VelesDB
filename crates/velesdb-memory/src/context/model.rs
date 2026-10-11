@@ -51,41 +51,29 @@ pub enum FidelityRisk {
     High,
 }
 
-/// Inline media payload attached to a [`ContextFragment`] (US-009, PR1:
-/// screenshots/images only). `ContextFragment::content` stays the
-/// text/caption — often empty for a bare screenshot — while the pixels live
-/// here, base64-encoded so the JSON wire never needs a binary frame.
-///
-/// The fragment packs atomically (see `pieces` in the compiler)
-/// and its token cost comes from [`super::estimator::ImageTokenEstimator`].
-/// A media fragment that cannot fit the budget is externalized behind a
-/// `ctx://source` handle exactly like text (US-009, PR2: the memory bridge
-/// persists the bytes behind it — see
-/// [`crate::MemoryService::retrieve_context_source`]); the memoryless core
-/// compiler mints the same handle either way, since it never knows whether
-/// a resolver is attached. See the crate README's "media fragments"
-/// section.
+/// Inline media payload of a [`ContextFragment`] (US-009: screenshots/images).
+/// `content` stays the text/caption; the pixels live here, base64 — no binary
+/// frame on the JSON wire. The fragment packs atomically; its token cost comes
+/// from [`super::estimator::ImageTokenEstimator`]. A media fragment that cannot
+/// fit is externalized behind a `ctx://source` handle like text (the memory
+/// bridge persists the bytes; the memoryless core mints the same handle). See
+/// the crate README's "media fragments" section.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MediaRef {
-    /// Declared MIME type (e.g. `"image/png"`, `"image/jpeg"`). Only PNG and
-    /// JPEG headers are sniffed for dimensions; any other value (or an
-    /// unreadable header) falls back to a deterministic, safe over-count
-    /// (see [`super::estimator::ImageTokenEstimator`]) — never rejected for
-    /// an unrecognized mime alone.
+    /// Declared MIME type (e.g. `"image/png"`, `"image/jpeg"`). Only PNG/JPEG
+    /// headers are sniffed for dimensions; anything else falls back to a
+    /// deterministic over-count — never rejected for the mime alone.
     pub mime: String,
-    /// The raw media bytes, base64-encoded (standard alphabet, padded).
-    /// Capped at [`crate::limits::MAX_MEDIA_BYTES`] and validated for
-    /// well-formedness at compile time — a request carrying an oversized or
-    /// malformed payload is rejected before any other work.
+    /// Raw media bytes, base64 (standard alphabet, padded). Capped at
+    /// [`crate::limits::MAX_MEDIA_BYTES`] and validated at compile time —
+    /// oversized or malformed is rejected before any other work.
     pub bytes_b64: String,
 }
 
-/// The resolved original behind a `ctx://source/<hash>` handle (US-002:
-/// text sources; US-009 PR2 extends this with the fragment's inline media,
-/// when it carried one). `media` is `#[serde(default)]`: every source
-/// stored before PR2, and every text-only fragment since, round-trips with
-/// `media: None` — the exact pre-PR2 shape for a caller reading only
-/// `.content`.
+/// The resolved original behind a `ctx://source/<hash>` handle (US-009 PR2
+/// adds the fragment's inline media when it carried one). `media` is
+/// `#[serde(default)]`: pre-PR2 and text-only sources round-trip as
+/// `media: None` — the exact old shape.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ContextSource {
     /// The original fragment content, byte for byte (a media fragment's
@@ -100,41 +88,33 @@ pub struct ContextSource {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct ContextFragment {
-    /// Caller-side identifier. When absent, the compiler derives a stable
-    /// content-addressed id (see [`super::fragment_id`]). Accepts a JSON
-    /// number or a decimal string on input (see
-    /// `wire::deserialize_optional_id`) — a caller that got a
-    /// `fragment_id` back as a string (e.g. under
-    /// [`CompilePolicy::ids_as_strings`]) can resubmit it unchanged.
+    /// Caller-side identifier; when absent, the compiler derives a stable
+    /// content-addressed id ([`super::fragment_id`]). Accepts a JSON number
+    /// or decimal string (`wire::deserialize_optional_id`) — a `fragment_id`
+    /// received as a string can be resubmitted unchanged.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "super::wire::deserialize_optional_id"
     )]
     pub id: Option<u64>,
-    /// The fragment text. `#[serde(default)]` (V2b-1): a `path` fragment
-    /// carries no `content` on the wire — the adapter resolves `path` into
-    /// `content` in a pre-pass before the pure compiler core ever sees the
-    /// request, so this stays the only field the core reads.
+    /// The fragment text. `#[serde(default)]`: a `path` fragment carries no
+    /// `content` on the wire — the adapter resolves `path` into `content`
+    /// before the compiler core sees the request.
     #[serde(default)]
     pub content: String,
-    /// Read this file's content from disk in place of an inline `content`
-    /// (V2b-1 path ingestion). `path` is EXCLUSIVE — it is resolved into
-    /// `content` before the compiler core runs, so a fragment carrying
-    /// `path` together with `content` or `media` is rejected. `content` and
-    /// `media` together are fine, and are the intended shape for an image
-    /// and its caption. A fragment carrying none of the three is rejected
-    /// as well. Requires the server to be started
-    /// with `VELESDB_MEMORY_INGEST_ROOTS` set (a colon/semicolon-separated
-    /// allowlist of directories, platform `PATH`-list syntax); otherwise
-    /// every `path` fragment fails with an explicit "ingestion disabled"
-    /// error. The path must be absolute and resolve (after following
-    /// symlinks) to a plain file under one of the configured roots, no
-    /// larger than [`crate::limits::MAX_INGEST_FILE_BYTES`] and valid UTF-8.
-    /// The **pure compiler core never reads this field** — resolution is an
-    /// adapter-side I/O pre-pass (see the crate's `context::ingest`
-    /// module); a `path` fragment that reaches [`super::ContextCompiler`]
-    /// unresolved is rejected with
+    /// Read this file's content from disk instead of inline `content` (V2b-1
+    /// path ingestion). `path` is EXCLUSIVE — it resolves into `content`
+    /// before the compiler core runs, so `path` + `content`/`media` is
+    /// rejected; `content` + `media` is the intended image+caption shape. A
+    /// fragment with none of the three is rejected too. Requires
+    /// `VELESDB_MEMORY_INGEST_ROOTS` set (a path-list allowlist of
+    /// directories), else every `path` fragment fails with "ingestion
+    /// disabled". Must be absolute and resolve (after symlinks) to a UTF-8
+    /// file under a configured root, ≤
+    /// [`crate::limits::MAX_INGEST_FILE_BYTES`]. The **pure compiler core
+    /// never reads this field** — resolution is an adapter-side I/O
+    /// pre-pass; an unresolved `path` reaching it is rejected with
     /// [`crate::error::MemoryError::IngestDisabled`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -157,9 +137,9 @@ pub struct ContextFragment {
     pub media: Option<MediaRef>,
 }
 
-/// Which memories the compiler may pull in alongside the caller's fragments.
-/// Consumed by the memory bridge (US-002); carried in the request shape from
-/// the start so the wire contract does not change when it lands.
+/// Which memories the compiler may pull in alongside the caller's fragments
+/// (consumed by the memory bridge, US-002); in the request shape from the
+/// start so the wire contract does not change.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct MemoryScope {
@@ -182,10 +162,9 @@ pub struct MemoryScope {
     )]
     pub hops: Option<usize>,
     /// Fusion weight added to graph-reached memories (default 0.15). Raise
-    /// it (e.g. `0.5`–`0.8`) when pulling from curated fact chains built
-    /// with `relate`: evidence that shares **no vocabulary** with the query
-    /// can then out-rank lexically-noisy near-misses — the tri-engine's
-    /// answer to the purely lexical relevance of caller fragments.
+    /// it (e.g. `0.5`–`0.8`) when pulling curated fact chains built with
+    /// `relate`: evidence sharing **no vocabulary** with the query can then
+    /// out-rank lexical near-misses.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -195,50 +174,37 @@ pub struct MemoryScope {
 }
 
 /// Usage-driven importance weights of the memory-bridge blend (US-002 of
-/// EPIC-P-071): how much a pulled memory's learned RL confidence and its
+/// EPIC-P-071): how much a pulled memory's learned RL confidence and
 /// batch-relative recency tilt the fused similarity ranking.
 ///
-/// The blend only ever applies to the pool the fused vector+graph similarity
-/// already selected — confidence is *not* relevance, so a heavily reinforced
-/// but off-topic fact can never enter the pool through these weights. Per
-/// pulled memory the ranking key becomes
+/// The blend applies only to the pool fused similarity already selected —
+/// confidence is *not* relevance. Per memory the ranking key is
 /// `fused_norm + confidence_weight·(confidence − 0.5)·2 + recency_weight·recency_norm`,
-/// clock-free and deterministic (recency is min-max normalised **within the
-/// pulled batch**, never against wall time).
+/// clock-free and deterministic (recency min-max normalised **within the
+/// batch**).
 ///
-/// Both weights at `0.0` disable the blend entirely: the output is
-/// byte-identical to the 0.8.0 behaviour (pinned by a golden test). The
-/// defaults are **active** on purpose — upgrading from 0.8.0 with the
-/// default policy, RL-reinforced memories rank higher out of the box; zero
-/// the weights to restore the exact 0.8.0 ordering.
+/// Both weights at `0.0` disable the blend = byte-identical 0.8.0 ordering
+/// (golden-pinned); the defaults are **active** on purpose.
 ///
-/// Recommended range for both weights: `[0.0, 1.0]` (at `1.0` a term can
-/// fully offset the similarity gap within the pool). Values outside that
-/// range are **accepted verbatim, never clamped** — a negative weight
-/// deliberately inverts its term (e.g. demote reinforced facts), a weight
-/// above `1.0` lets the term dominate similarity. Only the recorded
-/// decision `relevance` is clamped into `[0, 1]`; the ranking itself uses
-/// the raw blended score.
+/// Recommended `[0.0, 1.0]`; values outside are **accepted verbatim, never
+/// clamped** — negative inverts its term, above `1.0` lets it dominate.
+/// Only the recorded decision `relevance` is clamped.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ImportanceWeights {
-    /// Weight of the learned RL confidence (`_veles_rl_*`, fed by
-    /// [`feedback`](crate::MemoryService::feedback)). A memory with no
-    /// feedback history counts as the neutral `0.5`, contributing exactly
-    /// `0`. Default `0.2`.
+    /// Weight of the learned RL confidence (fed by `feedback`). A memory
+    /// with no feedback history counts as neutral `0.5`, contributing `0`.
+    /// Default `0.2`.
     pub confidence: f64,
     /// Weight of the batch-relative recency term. Inert unless
     /// [`Self::recency_field`] is also set. Default `0.1`.
     pub recency: f64,
     /// Caller metadata key holding each memory's **numeric** timestamp-like
-    /// value. `None` (the default) disables the recency term completely —
-    /// there is no standard key to guess. The scale must be monotone and
-    /// homogeneous across the batch (e.g. `YYYYMMDD` integers as in
-    /// [`crate::format_dated_context`], or an epoch); it is documented, not
-    /// verified at run time. Values are min-max normalised over the pulled
-    /// memories that carry the key; a memory without the key contributes `0`
-    /// (never penalised), and a degenerate batch (`max == min`) contributes
-    /// `0` for all.
+    /// value; `None` disables the recency term. Must be monotone and
+    /// homogeneous across the batch (e.g. `YYYYMMDD` integers or an epoch)
+    /// — documented, not verified. Min-max normalised over memories carrying
+    /// the key; one without it contributes `0`, and a degenerate batch
+    /// (`max == min`) contributes `0` for all.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recency_field: Option<String>,
 }
@@ -270,12 +236,10 @@ pub struct CompilePolicy {
     /// skipped during classification; their fragments fall through to the
     /// next matching rule.
     pub disabled_rules: Vec<String>,
-    /// How oversized fragments are split before packing. Only
+    /// How oversized fragments split before packing. Only
     /// [`ChunkPolicy::max_chunk_bytes`] and [`ChunkPolicy::boundary`] apply
-    /// here — the compiler forces `overlap_bytes` to `0`, since it emits
-    /// pieces by concatenation and an overlap prefix would duplicate content
-    /// reported as verbatim. `overlap_bytes` is honoured only by the
-    /// standalone [`crate::context::chunk::chunk_text`] API.
+    /// here — the compiler forces `overlap_bytes` to `0` (concatenated
+    /// pieces; an overlap prefix would duplicate verbatim content).
     pub chunk: ChunkPolicy,
     /// Memory bridge only: record a compilation event (metadata and hashes,
     /// **never fragment content**) so savings stay aggregatable. Default
@@ -291,49 +255,39 @@ pub struct CompilePolicy {
     /// TTL applied to compilation events (`None` keeps them).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_ttl_seconds: Option<u64>,
-    /// Caller-supplied pricing table so the insights also report the
-    /// estimated cost avoided for [`super::model::CompileRequest::target_model`] — the
-    /// **wire channel** for cost accounting (MCP and the bindings cannot
-    /// reach the Rust-only [`super::ContextCompiler::with_pricing`] builder).
-    /// Takes precedence over a builder-injected table. `None` (default)
-    /// reports tokens only.
+    /// Caller-supplied pricing table so insights report the estimated cost
+    /// avoided for `target_model` — the wire channel for cost accounting
+    /// (bindings cannot reach the Rust-only `with_pricing` builder). Takes
+    /// precedence over a builder-injected table. `None` reports tokens only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing: Option<super::insights::PricingTable>,
     /// Memory bridge only: usage-driven importance blend over the pulled
     /// memories (RL confidence + batch-relative recency). The struct-level
     /// `#[serde(default)]` keeps 0.8.0 requests wire-compatible.
     pub importance: ImportanceWeights,
-    /// Opt-in, deterministic: before `abstract.log_dedup` groups a `kind =
-    /// "log"` fragment's repeated lines, mask each line's volatile prefix
-    /// (ISO/syslog timestamps, bracketed hex/pid counters) with **fixed**
-    /// patterns — never a caller-supplied regex, so the collapse stays
-    /// reproducible — so lines identical modulo timestamp collapse into one
-    /// annotated line instead of surviving as distinct entries. The emitted
-    /// line is still the first occurrence's exact bytes; only the grouping
-    /// key changes. Default `false`: masking is opt-in because it changes
-    /// what "duplicate" means for logs, so callers who rely on the previous
-    /// byte-exact grouping keep it unless they ask. See the crate README's
-    /// "Normalizing timestamped logs" section for the exact patterns.
+    /// Opt-in: before `abstract.log_dedup` groups a `kind = "log"`
+    /// fragment's repeated lines, mask each line's volatile prefix
+    /// (ISO/syslog timestamps, hex/pid counters) with **fixed** patterns —
+    /// never caller-supplied regex — so lines identical modulo timestamp
+    /// collapse into one annotated line (the first occurrence's exact bytes;
+    /// only the grouping key changes). Default `false`: opt-in because it
+    /// changes what "duplicate" means. See the README's "Normalizing
+    /// timestamped logs".
     pub normalize_log_timestamps: bool,
-    /// Wire-compat opt-in for the MCP context tools (`compile_context`,
-    /// `explain_compilation`): when `true`, every [`super::wire::ID_KEYS`]
-    /// field of the RESPONSE (`fragment_id`, `content_hash`, `memory_id`,
-    /// `fragment_ids`) is rewritten into its decimal-string form, through
-    /// the exact same tree walk the Node and WASM bindings already apply on
-    /// every response ([`super::wire::stringify_id_fields`]). A raw MCP
-    /// client — one that talks JSON-RPC directly, without either binding —
-    /// parses ids as JS `number`s (IEEE-754 doubles), which silently lose
-    /// precision above 2^53; string ids round-trip exactly. Default
-    /// `false`: existing MCP clients keep today's byte-identical numeric
-    /// response unless they opt in.
+    /// Wire-compat opt-in for the MCP context tools: when `true`, every
+    /// [`super::wire::ID_KEYS`] response field (`fragment_id`,
+    /// `content_hash`, `memory_id`, `fragment_ids`) is rewritten to decimal
+    /// strings — the same walk the Node/WASM bindings apply
+    /// ([`super::wire::stringify_id_fields`]). A raw MCP client parses ids
+    /// as JS `number`s, which lose precision above 2^53; strings round-trip
+    /// exactly. Default `false`: byte-identical numeric response unless
+    /// opted in.
     pub ids_as_strings: bool,
-    /// Quick win (V2a-2): when `true`, `sections` and `decisions` are
-    /// emptied out of the response after compilation — `content`,
-    /// `insights`, `risk`, `warnings`, `sources`, and `retrieval_handles`
-    /// are unaffected. The full audit trail (`sections`/`decisions`) is
-    /// still recoverable: re-compile the same request without
-    /// `slim_response` (compilation is deterministic, so nothing is lost,
-    /// only not sent this time). Default `false`.
+    /// When `true`, `sections` and `decisions` are emptied out of the
+    /// response (`content`, `insights`, `risk`, `warnings`, `sources`,
+    /// `retrieval_handles` unaffected). The full audit trail stays
+    /// recoverable by re-compiling without it — compilation is
+    /// deterministic. Default `false`.
     pub slim_response: bool,
 }
 
@@ -432,13 +386,10 @@ pub struct CompiledSection {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct SourceReference {
-    /// The fragment this source refers to. Accepts a JSON number OR a
-    /// decimal string on input: a `fragment_id` is an FNV-1a 64 content hash
-    /// (see [`ContextDecision::content_hash`]), so it is almost always above
-    /// 2^53 — a float-lossy JSON client that reads one back from a compiled
-    /// context and resubmits it inside a working context would otherwise
-    /// corrupt it silently. Same accepted-forms rule as issue #1468's ids;
-    /// the serialized (output) shape is unchanged.
+    /// The fragment this source refers to. Accepts a JSON number OR decimal
+    /// string: a `fragment_id` is an FNV-1a 64 hash, almost always above
+    /// 2^53 — a float-lossy client resubmitting one inside a working context
+    /// would corrupt it silently. Same accepted-forms rule as #1468's ids.
     #[serde(deserialize_with = "crate::model::deserialize_id")]
     pub fragment_id: u64,
     /// Recoverable address of the original content (`ctx://source/<id>`).
@@ -483,9 +434,9 @@ pub struct RetrievalHandle {
 pub struct ContextDecision {
     /// The fragment this decision is about (caller id, or content-derived).
     pub fragment_id: u64,
-    /// Content hash of the *original* fragment text (FNV-1a 64, the crate's
-    /// [`stable id`](super::fragment_id)) — lets an auditor prove which exact
-    /// bytes the decision covered even when the caller supplied its own id.
+    /// Content hash of the *original* fragment text (FNV-1a 64,
+    /// [`super::fragment_id`]) — proves which exact bytes the decision
+    /// covered even when the caller supplied its own id.
     pub content_hash: u64,
     /// What was done.
     pub action: ContextAction,
@@ -507,18 +458,14 @@ pub struct ContextDecision {
 
 /// A mechanical heads-up over one decision, surfaced in
 /// [`CompiledContext::warnings`] so a caller can check "was anything
-/// relevant cut?" without scanning every entry of `decisions` by hand
-/// (V2a-2 quick win). Only [`ContextAction::Retrieve`] decisions at or
-/// above the relevance threshold qualify.
+/// relevant cut?" without scanning `decisions` (V2a-2). Only
+/// [`ContextAction::Retrieve`] decisions at or above the relevance
+/// threshold qualify.
 ///
-/// **An empty list is not a clean bill of health** (#1703 DC-4). Several
-/// real losses never warn: a [`ContextAction::Preserve`] the packer could
-/// only fit partially, an [`ContextAction::Abstract`], and two of
-/// `dup_verdict`'s [`ContextAction::Drop`] shapes — a media duplicate whose
-/// caption diverges from its twin's, and a duplicate whose twin was itself
-/// not fully emitted. Both say so in their own reason strings. `decisions`
-/// remains the exhaustive record; this list is a low-noise shortcut over it,
-/// not a substitute for it.
+/// **An empty list is not a clean bill of health** (#1703 DC-4): a
+/// partially-packed `Preserve`, an `Abstract`, and two `Drop` shapes never
+/// warn (their reason strings say so). `decisions` remains the exhaustive
+/// record.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct ContextWarning {
@@ -553,11 +500,9 @@ pub struct CompiledContext {
     pub insights: CompilationInsights,
     /// Overall fidelity risk (the max over all decisions).
     pub risk: FidelityRisk,
-    /// Mechanical, low-noise heads-up over `decisions` (V2a-2 quick win):
-    /// every externalized fragment relevant enough to the query that a
-    /// caller should double-check it was not needed. `#[serde(default)]` so
-    /// a pre-0.10.0 caller reading an older stored/replayed response still
-    /// deserializes (defaults to empty).
+    /// Low-noise heads-up over `decisions`: every externalized fragment
+    /// relevant enough that a caller should double-check it was not needed.
+    /// `#[serde(default)]` so a pre-0.10.0 caller still deserializes.
     #[serde(default)]
     pub warnings: Vec<ContextWarning>,
 }
@@ -586,8 +531,8 @@ pub struct ContextDecisionRef {
 }
 
 /// The distilled working state of an agent session — small enough to carry
-/// across sessions, structured enough to resume from. Persisted and reloaded
-/// by the memory bridge (US-002) under `type = working_context` metadata.
+/// across sessions, structured enough to resume from. Persisted under
+/// `type = working_context` metadata.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WorkingContext {
     /// What the session is trying to achieve.
@@ -614,13 +559,12 @@ pub struct WorkingContext {
 }
 
 impl WorkingContext {
-    /// Whether this working state records nothing at all: no goal (or a blank
-    /// one, which says no more than an absent one) and every list empty.
+    /// Whether this working state records nothing: no goal (or blank) and
+    /// every list empty.
     ///
     /// Saving is an idempotent upsert, so an empty state would *replace* —
-    /// that is, destroy — whatever a previous save stored under the same
-    /// project and session. [`crate::MemoryService::save_working_context`]
-    /// refuses one for exactly that reason (issue #1654).
+    /// destroy — a previous save; `save_working_context` refuses one
+    /// (issue #1654).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.goal.as_ref().is_none_or(|goal| goal.trim().is_empty())
@@ -633,20 +577,15 @@ impl WorkingContext {
     }
 }
 
-/// What a working-context lookup returns, on every surface: the MCP
+/// What a working-context lookup returns on every surface: the MCP
 /// `load_working_context` tool AND the Node/Python/WASM bindings.
 ///
-/// An envelope (not a bare `Option<WorkingContext>`): the MCP spec requires
-/// the output schema's root to be an object, so a nullable root is rejected
-/// by rmcp.
-///
-/// It lives here — in the shared model — rather than in the `mcp` module
-/// because the `mcp` module is a Cargo feature the bindings do not enable:
-/// a type declared there is unreachable from them, and each binding would
-/// have to re-declare the envelope AND re-derive its two policy rules ("list
-/// on a hit too", "never re-emit the requested session"). Four copies of a
-/// rule is four chances for it to diverge in silence. Built once, by
-/// [`MemoryService::resume_working_context`](crate::MemoryService::resume_working_context).
+/// An envelope, not a bare `Option<WorkingContext>` — the MCP spec requires
+/// an object root. It lives in the shared model rather than `mcp`, because
+/// `mcp` is a Cargo feature the bindings do not enable: each would
+/// re-declare the envelope and re-derive its two policy rules ("list on a
+/// hit too", "never re-emit the requested session") — four copies is four
+/// ways to diverge. Built by `resume_working_context`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub struct LoadedWorkingContext {
@@ -657,12 +596,11 @@ pub struct LoadedWorkingContext {
     /// The previously saved working context, or `null` when nothing was ever
     /// saved under that project + session (a fresh start, not an error).
     pub working: Option<WorkingContext>,
-    /// The OTHER sessions saved under this SAME project (never the requested
-    /// one) — helps recover from a typo in `session` instead of silently
-    /// starting fresh (e.g. `"task-1234"` saved, `"task-1235"` requested by
-    /// mistake). Populated on a hit as well as on a miss: a typo that lands
-    /// on another real session is the case the caller can least detect on its
-    /// own. Empty only when the project has no other session.
+    /// The OTHER sessions under this project (never the requested one) —
+    /// recovers from a typo in `session` instead of silently starting
+    /// fresh. Populated on a hit too: a typo landing on another real
+    /// session is the case the caller can least detect. Empty only when the
+    /// project has no other session.
     #[serde(default)]
     pub other_sessions: Vec<String>,
 }
@@ -674,28 +612,24 @@ pub struct WorkingContextSession {
     /// The session id, as passed to `save_working_context`.
     pub session: String,
     /// Unix seconds this session was last saved — updated on every
-    /// `save_working_context` call under this project + session, not just
-    /// the first (a resave never duplicates the entry). `0` on
-    /// `wasm32-unknown-unknown`, which has no clock; the listing's
-    /// most-recently-saved-first order does not depend on it (it is carried
-    /// by the index's write order), so the ORDER holds there while the
+    /// `save_working_context`, not just the first (a resave never
+    /// duplicates). `0` on wasm (no clock); the most-recent-first order is
+    /// carried by the index's write order, so it holds there while the
     /// VALUE does not.
     pub saved_at: u64,
 }
 
-/// The per-project index [`save_working_context`](crate::MemoryService::save_working_context)
-/// maintains so [`list_working_contexts`](crate::MemoryService::list_working_contexts)
-/// never has to scan the whole store: one system fact per project, appended
-/// (or refreshed) on every save. The REJECTED alternative was an approximate
-/// `query_filtered` scan over working-context facts (capped at
-/// `MAX_RECALL_LIMIT`, imprecise) — this index is exact and O(1) to read.
+/// The per-project index `save_working_context` maintains so
+/// `list_working_contexts` never scans the whole store: one system fact
+/// per project, refreshed on every save. The rejected alternative was an
+/// approximate `query_filtered` scan (capped, imprecise) — this index is
+/// exact and O(1) to read.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WorkingContextIndex {
-    /// The sessions saved under this project, at most
-    /// [`crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT`] of them: past the
-    /// cap the oldest-saved leave the listing (their facts stay loadable by
-    /// exact id), and a session whose fact was forgotten is shed on the next
-    /// save.
+    /// Sessions saved under this project, at most
+    /// [`crate::limits::MAX_WORKING_SESSIONS_PER_PROJECT`]: past the cap the
+    /// oldest leave the listing (facts stay loadable by id); a forgotten
+    /// session is shed on the next save.
     #[serde(default)]
     pub sessions: Vec<WorkingContextSession>,
 }
