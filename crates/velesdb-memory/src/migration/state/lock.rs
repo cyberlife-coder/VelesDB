@@ -15,6 +15,8 @@ pub const LOCK_FILE: &str = "migration.lock";
 pub(in crate::migration) const LOCK_GUARD_FILE: &str = "migration.lock.guard";
 
 const LOCK_FORMAT_VERSION: u32 = 1;
+/// A genuine record is a few hundred bytes; anything past this is not one.
+const MAX_LOCK_RECORD_BYTES: u64 = 4096;
 static LOCK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Exclusive possession of a migration workspace.
@@ -53,14 +55,12 @@ impl MigrationLock {
     /// Who holds the lock in `workspace`, as recorded, or `None` when free.
     #[must_use]
     pub fn holder(workspace: &Path) -> Option<String> {
-        std::fs::read_to_string(workspace.join(LOCK_FILE))
-            .ok()
-            .map(|body| {
-                serde_json::from_str::<LockRecord>(&body).map_or_else(
-                    |_| body.trim().to_owned(),
-                    |record| format!("held_by={}", record.held_by),
-                )
-            })
+        read_lock_body(&workspace.join(LOCK_FILE)).map(|body| {
+            serde_json::from_str::<LockRecord>(&body).map_or_else(
+                |_| body.trim().to_owned(),
+                |record| format!("held_by={}", record.held_by),
+            )
+        })
     }
 
     pub(super) fn verify_workspace(&self, workspace: &Path) -> Result<(), String> {
@@ -75,31 +75,8 @@ impl MigrationLock {
     }
 
     fn owns_current_lock(&self) -> bool {
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true);
-        // The lock record is created once via `create_new` (below) and, from
-        // then on, only ever read (here, and by `holder` — #2424 tracks that
-        // one still following a symlink) or removed by `release` — never
-        // reopened to write into. A hard link planted before that creation
-        // makes `create_new` itself fail (`EEXIST`), so by the time a
-        // legitimate record exists, a later alias to it (a hard-link based
-        // backup, `cp -al`) has nothing left to intercept: `nlink > 1` would
-        // only refuse an untampered record and break lock checks on a
-        // backed-up workspace (#2409 round 8). `_allow_hard_links` keeps the
-        // symlink-swap refusal (#2404) this call still needs.
-        let Ok((mut file, _metadata)) =
-            crate::mutation::atomic_file::open_regular_file_allow_hard_links(
-                &self.path,
-                "migration lock",
-                options,
-            )
-        else {
-            return false;
-        };
-        let mut body = String::new();
-        file.read_to_string(&mut body)
-            .ok()
-            .and_then(|_| serde_json::from_str::<LockRecord>(&body).ok())
+        read_lock_body(&self.path)
+            .and_then(|body| serde_json::from_str::<LockRecord>(&body).ok())
             .is_some_and(|record| {
                 record.format_version == LOCK_FORMAT_VERSION && record.token == self.token
             })
@@ -126,6 +103,30 @@ impl MigrationLock {
             format!("removed {LOCK_FILE} but cannot unlock {LOCK_GUARD_FILE}: {err}")
         })
     }
+}
+
+/// Read the lock record through a handle that refuses a symlink (#2404, #2424).
+///
+/// The record is created once via `create_new` and afterwards only read or
+/// removed, never reopened to write. A hard link planted before creation makes
+/// `create_new` fail (`EEXIST`), so a later alias (a hard-link backup, `cp -al`)
+/// has nothing to intercept and `nlink > 1` would only refuse an untampered
+/// record (#2409 round 8); hence `_allow_hard_links`. The read is bounded so a
+/// swapped-in huge file cannot exhaust memory.
+fn read_lock_body(path: &Path) -> Option<String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    let (file, _metadata) = crate::mutation::atomic_file::open_regular_file_allow_hard_links(
+        path,
+        "migration lock",
+        options,
+    )
+    .ok()?;
+    let mut body = String::new();
+    file.take(MAX_LOCK_RECORD_BYTES)
+        .read_to_string(&mut body)
+        .ok()?;
+    Some(body)
 }
 
 fn open_and_lock_guard(workspace: &Path) -> Result<std::fs::File, String> {
