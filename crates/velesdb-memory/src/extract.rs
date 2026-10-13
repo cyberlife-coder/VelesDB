@@ -1119,6 +1119,38 @@ impl Extractor for OllamaExtractor {
 pub struct OpenAiExtractor {
     client: crate::http_client::HttpJsonClient,
     model: String,
+    chat_template_kwargs: Option<serde_json::Value>,
+}
+
+/// JSON object merged into the chat body as `chat_template_kwargs` when set —
+/// e.g. `{"enable_thinking": false}` for a thinking model behind a
+/// llama.cpp-compatible server, where thinking tokens would otherwise eat
+/// the generation budget and truncate the JSON the role parses.
+const CHAT_TEMPLATE_KWARGS_VAR: &str = "VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS";
+
+fn chat_template_kwargs_from_env() -> Option<serde_json::Value> {
+    let raw = std::env::var(CHAT_TEMPLATE_KWARGS_VAR)
+        .ok()?
+        .trim()
+        .to_owned();
+    if raw.is_empty() {
+        return None;
+    }
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(object) if object.is_object() => Some(object),
+        Ok(_) => {
+            eprintln!(
+                "[velesdb-memory] {CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object; ignoring it"
+            );
+            None
+        }
+        Err(err) => {
+            eprintln!(
+                "[velesdb-memory] {CHAT_TEMPLATE_KWARGS_VAR} is not valid JSON ({err}); ignoring it"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(feature = "extractor-http")]
@@ -1146,12 +1178,18 @@ impl OpenAiExtractor {
                 agent,
             ),
             model: model.into(),
+            chat_template_kwargs: chat_template_kwargs_from_env(),
         }
     }
 
     /// POST one prompt and return the assistant's reply.
     fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
-        let body = crate::openai::chat_body(&self.model, prompt, MAX_GENERATION_TOKENS);
+        let body = crate::openai::chat_body(
+            &self.model,
+            prompt,
+            MAX_GENERATION_TOKENS,
+            self.chat_template_kwargs.as_ref(),
+        );
         let payload = self
             .client
             .post_json(crate::openai::CHAT_COMPLETIONS_PATH, &body)
