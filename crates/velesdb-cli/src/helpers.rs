@@ -57,8 +57,10 @@ pub fn open_database(path: &Path) -> Result<Database> {
 /// [`velesdb_core::config::VelesConfig`] (search/HNSW/storage/limits/
 /// quantization/WAL batching) from `config_path` first.
 ///
-/// - `config_path: None` — behaves exactly like [`Database::open`] (core
-///   defaults), unchanged from before this flag existed.
+/// - `config_path: None` — reads `./velesdb.toml` when it exists (as
+///   `velesdb-server` does), otherwise behaves exactly like
+///   [`Database::open`] (core defaults). A present-but-invalid
+///   `./velesdb.toml` is an error, not a silent fallback.
 /// - `config_path: Some(file)` — the TOML file **must** exist and pass
 ///   [`velesdb_core::config::VelesConfig::load_from_path_engine_only`]
 ///   validation. A missing file or an invalid engine value is a fail-fast,
@@ -83,19 +85,33 @@ pub fn open_database(path: &Path) -> Result<Database> {
 /// fails to parse/validate, or if opening the database itself fails (e.g.
 /// a stale lock file, a corrupt collection on disk).
 pub fn open_database_with_config(path: &Path, config_path: Option<&Path>) -> Result<Database> {
-    match config_path {
-        None => Ok(Database::open(path)?),
-        Some(cfg) => {
-            if !cfg.exists() {
-                anyhow::bail!("config file not found: {}", cfg.display());
-            }
-            let config = velesdb_core::config::VelesConfig::load_from_path_engine_only(cfg)
-                .map_err(|e| {
-                    anyhow::anyhow!("failed to load VelesDB config from {}: {e}", cfg.display())
-                })?;
-            Ok(Database::open_with_config(path, config)?)
+    open_database_with_default_file(path, config_path, Path::new(DEFAULT_CONFIG_FILE))
+}
+
+/// File read from the working directory when no `--config` is given, the
+/// same fallback `velesdb-server` applies.
+const DEFAULT_CONFIG_FILE: &str = "velesdb.toml";
+
+/// [`open_database_with_config`] with the implicit config location made
+/// explicit, so tests do not depend on the process working directory.
+fn open_database_with_default_file(
+    path: &Path,
+    config_path: Option<&Path>,
+    default_file: &Path,
+) -> Result<Database> {
+    let cfg = match config_path {
+        Some(cfg) if !cfg.exists() => {
+            anyhow::bail!("config file not found: {}", cfg.display());
         }
-    }
+        Some(cfg) => cfg,
+        None if default_file.exists() => default_file,
+        None => return Ok(Database::open(path)?),
+    };
+    let config =
+        velesdb_core::config::VelesConfig::load_from_path_engine_only(cfg).map_err(|e| {
+            anyhow::anyhow!("failed to load VelesDB config from {}: {e}", cfg.display())
+        })?;
+    Ok(Database::open_with_config(path, config)?)
 }
 
 // ---------------------------------------------------------------------------

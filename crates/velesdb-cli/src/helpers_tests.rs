@@ -19,6 +19,34 @@ fn test_no_config_path_opens_with_core_defaults() {
 }
 
 #[test]
+fn test_no_config_path_reads_the_default_file_when_present() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let toml_dir = tempfile::tempdir().expect("test: config dir");
+    let default_file = toml_dir.path().join("velesdb.toml");
+    std::fs::write(&default_file, "[limits]\nmax_collections = 3\n").expect("test: write config");
+
+    let db = open_database_with_default_file(dir.path(), None, &default_file)
+        .expect("test: open with default file");
+
+    assert_eq!(db.config().limits.max_collections, 3);
+}
+
+#[test]
+fn test_explicit_config_path_wins_over_the_default_file() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let toml_dir = tempfile::tempdir().expect("test: config dir");
+    let default_file = toml_dir.path().join("velesdb.toml");
+    let explicit = toml_dir.path().join("explicit.toml");
+    std::fs::write(&default_file, "[limits]\nmax_collections = 3\n").expect("test: write config");
+    std::fs::write(&explicit, "[limits]\nmax_collections = 5\n").expect("test: write config");
+
+    let db = open_database_with_default_file(dir.path(), Some(&explicit), &default_file)
+        .expect("test: open with explicit config");
+
+    assert_eq!(db.config().limits.max_collections, 5);
+}
+
+#[test]
 fn test_custom_toml_limit_is_actually_enforced_not_just_parsed() {
     let dir = tempfile::tempdir().expect("test: temp dir");
     let toml_dir = tempfile::tempdir().expect("test: config dir");
