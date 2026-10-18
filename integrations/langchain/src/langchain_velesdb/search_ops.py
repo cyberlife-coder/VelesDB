@@ -137,11 +137,17 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         ef_search: Optional[int] = None,
         filter: Optional[dict] = None,
     ) -> List[dict]:
-        """Run plain dense search, optionally with ef_search or filter."""
+        """Run plain dense search, optionally with ef_search or filter.
+
+        Raises:
+            ValueError: If both ``ef_search`` and ``filter`` are given — the
+                binding's ``search_with_ef`` takes no filter (#2302).
+        """
         if ef_search is not None:
             if filter is not None:
-                return collection.search_with_ef(
-                    query_embedding, top_k=k, ef_search=ef_search, filter=filter,
+                raise ValueError(
+                    "ef_search cannot be combined with filter: the VelesDB "
+                    "binding has no filtered search with an ef_search override"
                 )
             return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
         if filter is not None:

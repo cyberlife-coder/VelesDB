@@ -54,9 +54,9 @@ class _FakeCollection:
     def search(self, vector, top_k=10):
         return [{"id": 1, "score": 0.95, "payload": {"text": "doc"}}]
 
-    def search_with_ef(self, vector, top_k=10, ef_search=64, filter=None):
+    def search_with_ef(self, vector, top_k=10, ef_search=64):
         self.search_with_ef_calls.append(
-            {"vector": vector, "top_k": top_k, "ef_search": ef_search, "filter": filter}
+            {"vector": vector, "top_k": top_k, "ef_search": ef_search}
         )
         return [{"id": 1, "score": 0.95, "payload": {"text": "doc-ef"}}]
 
@@ -153,6 +153,17 @@ def test_similarity_search_with_ef_uses_core_search_variant(vectorstore_module):
 
     assert len(docs) == 1
     assert store._collection.search_with_ef_calls[0]["ef_search"] == 96
+
+
+def test_similarity_search_with_ef_and_filter_is_refused(vectorstore_module):
+    module = vectorstore_module
+    store = module.VelesDBVectorStore(embedding=_FakeEmbeddings(), path="/tmp/velesdb_test", collection_name="ef")
+    store.add_texts(["hello"])
+
+    with pytest.raises(ValueError, match="ef_search cannot be combined with filter"):
+        store.similarity_search_with_ef("query", k=2, ef_search=96, filter={"a": 1})
+
+    assert store._collection.search_with_ef_calls == []
 
 
 def test_similarity_search_ids_returns_core_shape(vectorstore_module):
