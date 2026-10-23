@@ -413,3 +413,41 @@ fn a_configured_ef_search_reaches_the_batch_and_multi_query_entry_points() {
         "multi_query_search must follow the configured ef_search, not a hard-coded Balanced"
     );
 }
+
+/// `hybrid_search` (vector + BM25 RRF) draws its vector candidates at the
+/// configured `[search]` quality (#2430), not at a hard-coded `Balanced`.
+///
+/// Every point carries the same `content`, so the text stream cannot separate
+/// them and the answer is decided by the vector candidates. One persisted index
+/// reopened under two configured defaults must disagree on at least one query.
+#[test]
+fn a_configured_ef_search_reaches_hybrid_search() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    seeded_with(&dir, VelesConfig::default(), HARD_POINTS, |_| {
+        Some(serde_json::json!({ "content": "common" }))
+    })
+    .flush_full()
+    .expect("test: persist the index both opens will read");
+    let queries = hard_queries();
+    let answers = |collection: &velesdb_core::VectorCollection| -> Vec<Vec<u64>> {
+        queries
+            .iter()
+            .map(|q| {
+                ids(&collection
+                    .hybrid_search(q, "common", WIDE_K, Some(0.99))
+                    .expect("test: hybrid_search"))
+            })
+            .collect()
+    };
+
+    let (db_low, low) = reopened(&dir, config_with_ef(LOW_EF));
+    let low_answers = answers(&low);
+    drop(low);
+    drop(db_low);
+    let (_db_high, high) = reopened(&dir, config_with_ef(HIGH_EF));
+
+    assert!(
+        some_query_disagrees(&low_answers, &answers(&high)),
+        "hybrid_search must follow the configured ef_search, not a hard-coded Balanced"
+    );
+}

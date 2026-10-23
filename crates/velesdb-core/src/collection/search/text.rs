@@ -41,6 +41,12 @@ fn validated_hybrid_params(
     Ok((metric, weight, text_weight, rrf_constant))
 }
 
+/// Fused RRF scores per id, and each id's `(vector, bm25)` component scores.
+type HybridScored = (
+    rustc_hash::FxHashMap<u64, f32>,
+    rustc_hash::FxHashMap<u64, (f32, f32)>,
+);
+
 /// Fetches vector + BM25 candidates and fuses them with weighted RRF.
 ///
 /// Returns `(fused_scores, component_map)`. Both branches use `overfetch_k`
@@ -56,24 +62,26 @@ fn compute_hybrid_scored(
     weight: f32,
     text_weight: f32,
     rrf_constant: f32,
-) -> (
-    rustc_hash::FxHashMap<u64, f32>,
-    rustc_hash::FxHashMap<u64, (f32, f32)>,
-) {
-    use crate::index::VectorIndex;
-    let raw = collection.storage.index.search(vector_query, overfetch_k);
+) -> Result<HybridScored> {
+    // `search_with_quality`, not `search`: the latter pins `Balanced` and so
+    // ignores the configured `[search]` quality (#2430).
+    let raw = collection.storage.index.search_with_quality(
+        vector_query,
+        overfetch_k,
+        collection.runtime_search_quality(),
+    )?;
     let vec_res = collection.merge_delta(raw, vector_query, overfetch_k, metric);
     let text_res = collection
         .storage
         .text_index
         .search(text_query, overfetch_k);
-    Collection::compute_rrf_scores_with_components(
+    Ok(Collection::compute_rrf_scores_with_components(
         &vec_res,
         &text_res,
         weight,
         text_weight,
         rrf_constant,
-    )
+    ))
 }
 
 /// Attaches RRF component scores to a `SearchResult` from the component map.
@@ -237,7 +245,7 @@ impl Collection {
             weight,
             text_weight,
             rrf_constant,
-        );
+        )?;
 
         let scored_ids = Self::top_k_from_scores(fused_scores, k);
         Ok(self.resolve_scored_ids_with_components(
@@ -401,7 +409,7 @@ impl Collection {
             weight,
             text_weight,
             rrf_constant,
-        );
+        )?;
 
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
         crate::fusion::sort_fused_results(&mut scored_ids);
