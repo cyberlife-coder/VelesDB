@@ -89,6 +89,13 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
             sparse_vector: Optional sparse vector dict for hybrid search.
             sparse_index_name: Optional name of the sparse index to query.
             search_quality: Optional quality preset string.
+
+        Raises:
+            ValueError: If ``search_quality`` is combined with ``filter``, or
+                ``ef_search`` with ``filter`` — the binding has no filtered
+                variant of ``search_with_quality`` / ``search_with_ef``
+                (#2302). ``ef_search`` alongside ``search_quality`` is
+                accepted and ``ef_search`` takes precedence.
         """
         dimension = len(query_embedding)
         collection = self._get_collection(dimension)
@@ -102,14 +109,23 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         if ids_only:
             return self._run_ids_search(collection, query_embedding, k, filter)
 
-        if search_quality is not None and filter is None and ef_search is None:
+        if search_quality is not None and filter is not None:
+            # The binding's search_with_quality takes no filter, SearchOptions
+            # carries no quality, and the core read gate (run_dense) drops the
+            # quality profile when a filter is present. Honouring both is not
+            # possible from here: refuse rather than silently ignore one (#2302).
+            raise ValueError(
+                "search_quality cannot be combined with filter: the VelesDB "
+                "binding has no filtered search with a quality preset"
+            )
+
+        if search_quality is not None and ef_search is None:
             return collection.search_with_quality(
                 query_embedding, quality=search_quality, top_k=k,
             )
 
-        # When filter or ef_search are provided alongside search_quality,
-        # filter/ef_search take priority (search_with_quality does not
-        # support combined filter+quality in the core engine yet).
+        # ef_search given alongside search_quality: the explicit ef_search wins
+        # (same precedence as the core read gate); quality is not applied.
         return self._run_dense_search(collection, query_embedding, k,
                                       ef_search=ef_search, filter=filter)
 
@@ -137,11 +153,17 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         ef_search: Optional[int] = None,
         filter: Optional[dict] = None,
     ) -> List[dict]:
-        """Run plain dense search, optionally with ef_search or filter."""
+        """Run plain dense search, optionally with ef_search or filter.
+
+        Raises:
+            ValueError: If both ``ef_search`` and ``filter`` are given — the
+                binding's ``search_with_ef`` takes no filter (#2302).
+        """
         if ef_search is not None:
             if filter is not None:
-                return collection.search_with_ef(
-                    query_embedding, top_k=k, ef_search=ef_search, filter=filter,
+                raise ValueError(
+                    "ef_search cannot be combined with filter: the VelesDB "
+                    "binding has no filtered search with an ef_search override"
                 )
             return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
         if filter is not None:
@@ -339,7 +361,26 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         filter: Optional[dict] = None,
         **kwargs: Any,
     ) -> List[Document]:
-        """Search using the core HNSW ef_search tuning parameter."""
+        """Search using the core HNSW ef_search tuning parameter.
+
+        Args:
+            query: Query string to search for.
+            k: Number of results to return. Defaults to 4.
+            ef_search: HNSW ``ef_search`` override. Defaults to 64.
+            filter: Not supported together with ``ef_search``; see Raises.
+            **kwargs: Additional arguments.
+
+        Returns:
+            List of Documents.
+
+        Raises:
+            ValueError: If ``filter`` is given. The VelesDB binding's
+                ``search_with_ef`` has no filter argument and ``ef_search``
+                always has a value here, so any call with a ``filter`` is
+                refused (known limitation, part of #2302). Use
+                :meth:`similarity_search_with_filter` for a filtered search
+                without an ``ef_search`` override.
+        """
         validate_text(query)
         validate_k(k)
         query_embedding = self._embedding.embed_query(query)

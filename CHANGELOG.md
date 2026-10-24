@@ -192,6 +192,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **langchain: `ef_search` combined with `filter` (and a `search_quality`
+  preset combined with `filter`) now raise a clear `ValueError` instead of a
+  `TypeError` from inside the integration (part of #2302).** The binding's
+  `search_with_ef` and `search_with_quality` take no filter, so
+  `VelesDBVectorStore` passing `filter=` to them failed with
+  `TypeError: ... unexpected keyword argument 'filter'`. The refusal names the
+  unsupported combination. `similarity_search_with_ef` defaults `ef_search` to
+  64, so *any* call that passes a `filter` to it raises `ValueError` (it
+  already failed, with the `TypeError`); use `similarity_search_with_filter`
+  for a filtered search without an `ef_search` override. A misleading comment claimed the quality preset yielded to a
+  filter; the combination is now refused too, where the preset used to be
+  dropped without notice (no public method reached it, the guard protects
+  internal callers). **Known limitation, #2302 stays open:** a filtered
+  search that honours `ef_search` needs a new core public API
+  (`search_with_filter_and_ef`), `run_dense` in
+  `crates/velesdb-core/src/database/gated_search.rs` to stop ignoring `ef` when
+  a filter is present, the PyO3 binding, its `.pyi` stub and a parity test;
+  none of it is in this change. The new tests run against the real `velesdb`
+  binding, and the fake collection now mirrors the real `search_with_ef`
+  signature.
 - **core: a search that sets only `rerank` ran at `Balanced`, not the configured
   `[search]` default (#2399, 2026-10-02).** `QuerySearchOptions::resolved_quality`
   ended in a hard-coded `Balanced`, so `WITH (rerank = true)` skipped the
