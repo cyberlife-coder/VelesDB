@@ -301,3 +301,40 @@ fn an_origin_without_the_prefix_reaches_the_same_path() {
         "got: {captured}"
     );
 }
+
+// --- chat_template_kwargs on the wire ----------------------------------------
+
+/// The JSON body of a captured request: everything after the blank line that
+/// ends the headers.
+fn request_body_json(captured: &str) -> serde_json::Value {
+    let (_, body) = captured
+        .split_once("\r\n\r\n")
+        .expect("a request has a header block");
+    serde_json::from_str(body).expect("the chat body is JSON")
+}
+
+#[test]
+fn chat_template_kwargs_set_on_the_extractor_reach_the_chat_body() {
+    // Byte-level, like everything here: the builder storing the value proves
+    // nothing about what the server receives.
+    let (addr, server) = capture_one_request(CHAT_RESPONSE);
+    let extractor = OpenAiExtractor::new(format!("http://{addr}"), "qwen3", Auth::None)
+        .with_chat_template_kwargs(serde_json::json!({ "enable_thinking": false }));
+    let _ = extractor.extract("peu importe le texte");
+    let body = request_body_json(&server.join().expect("stub thread"));
+
+    assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+    assert_eq!(body["model"], "qwen3", "the rest of the body is untouched");
+}
+
+#[test]
+fn no_chat_template_kwargs_field_is_sent_when_none_was_set() {
+    // The negative half: a server that rejects unknown fields must keep
+    // working for everyone who never asked for this.
+    let (addr, server) = capture_one_request(CHAT_RESPONSE);
+    let extractor = OpenAiExtractor::new(format!("http://{addr}"), "qwen3", Auth::None);
+    let _ = extractor.extract("peu importe le texte");
+    let body = request_body_json(&server.join().expect("stub thread"));
+
+    assert!(body.get("chat_template_kwargs").is_none(), "got: {body}");
+}

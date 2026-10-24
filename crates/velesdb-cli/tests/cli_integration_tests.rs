@@ -649,6 +649,72 @@ fn test_config_custom_toml_limit_is_enforced_end_to_end() {
 }
 
 #[test]
+fn test_invalid_velesdb_toml_in_cwd_fails_and_config_flag_overrides_it() {
+    // No `--config`: the CLI reads `./velesdb.toml` like velesdb-server does
+    // (#2400), so a broken one must fail every command that opens a database
+    // until it is fixed, or until `--config` points elsewhere.
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+    fs::write(
+        temp_dir.path().join("velesdb.toml"),
+        "[limits]\nmax_collections = 0\n",
+    )
+    .unwrap();
+    let ok_path = temp_dir.path().join("ok.toml");
+    fs::write(&ok_path, "[limits]\nmax_collections = 4\n").unwrap();
+
+    velesdb_cmd()
+        .current_dir(temp_dir.path())
+        .arg("info")
+        .arg(&db_path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("limits.max_collections"))
+        .stderr(predicate::str::contains("working directory"))
+        .stderr(predicate::str::contains("--config <file>"));
+
+    velesdb_cmd()
+        .current_dir(temp_dir.path())
+        .arg("--config")
+        .arg(&ok_path)
+        .arg("info")
+        .arg(&db_path)
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_velesdb_toml_in_cwd_limit_is_enforced_without_config_flag() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+    // A velesdb-server style file: `[server]` is ignored, `[limits]` applies.
+    fs::write(
+        temp_dir.path().join("velesdb.toml"),
+        "[server]\nport = 443\n\n[limits]\nmax_collections = 1\n",
+    )
+    .unwrap();
+
+    for (name, expect_ok) in [("first", true), ("second", false)] {
+        let assert = velesdb_cmd()
+            .current_dir(temp_dir.path())
+            .args(["collection", "create"])
+            .arg(&db_path)
+            .arg(name)
+            .args(["--dimension", "4"])
+            .assert();
+        if expect_ok {
+            assert.success();
+        } else {
+            assert
+                .failure()
+                .stderr(predicate::str::contains("max_collections"));
+        }
+    }
+}
+
+#[test]
 fn test_config_flag_works_after_subcommand_too() {
     // `global = true` in clap means `--config` is accepted both before and
     // after the subcommand — verify the latter position also works.

@@ -7,8 +7,8 @@ use super::{
     RECOVER_CUTOVER, RESUME_CATCH_UP,
 };
 use crate::mutation::atomic_file::{
-    capture, open_regular_file, path_exists, promote, sync_directory, validate_regular_file,
-    validate_workspace,
+    capture, open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
+    validate_regular_file, validate_workspace,
 };
 use crate::MemoryError;
 
@@ -111,11 +111,8 @@ impl StateStore {
 fn read_state_bytes(path: &Path) -> Result<Vec<u8>, MemoryError> {
     let mut options = OpenOptions::new();
     options.read(true);
-    let mut file = open_regular_file(path, "controller", options)?;
-    let length = file
-        .metadata()
-        .map_err(|err| capture(format!("cannot size controller state: {err}")))?
-        .len();
+    let (mut file, metadata) = open_regular_file_allow_hard_links(path, "controller", options)?;
+    let length = metadata.len();
     if length > MAX_STATE_BYTES {
         return Err(capture("controller state exceeds 64 KiB safety limit"));
     }

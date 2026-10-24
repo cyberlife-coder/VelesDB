@@ -10,8 +10,8 @@ use velesdb_core::SearchQuality;
 pub struct SessionSettings {
     /// The search mode `\set` this session, if any. A session that set neither
     /// this nor `ef_search` adds no quality, so the configured default applies
-    /// wherever the engine honours one (the `[search]` of the `--config` file,
-    /// #2400; see #2430), and it must not override that default (#2303).
+    /// wherever the engine honours one (the `[search]` of the `--config` file or
+    /// of `./velesdb.toml`, #2400; see #2430), and it must not override that default (#2303).
     mode: Option<SearchQuality>,
     /// Override ef_search (None = use mode default).
     ef_search: Option<usize>,

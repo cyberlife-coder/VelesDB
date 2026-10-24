@@ -19,6 +19,109 @@ fn test_no_config_path_opens_with_core_defaults() {
 }
 
 #[test]
+fn test_no_config_path_reads_the_default_file_when_present() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let toml_dir = tempfile::tempdir().expect("test: config dir");
+    let default_file = toml_dir.path().join("velesdb.toml");
+    std::fs::write(&default_file, "[limits]\nmax_collections = 3\n").expect("test: write config");
+
+    let db = open_database_with_default_file(dir.path(), None, &default_file)
+        .expect("test: open with default file");
+
+    assert_eq!(db.config().limits.max_collections, 3);
+}
+
+#[test]
+fn test_explicit_config_path_wins_over_the_default_file() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let toml_dir = tempfile::tempdir().expect("test: config dir");
+    let default_file = toml_dir.path().join("velesdb.toml");
+    let explicit = toml_dir.path().join("explicit.toml");
+    std::fs::write(&default_file, "[limits]\nmax_collections = 3\n").expect("test: write config");
+    std::fs::write(&explicit, "[limits]\nmax_collections = 5\n").expect("test: write config");
+
+    let db = open_database_with_default_file(dir.path(), Some(&explicit), &default_file)
+        .expect("test: open with explicit config");
+
+    assert_eq!(db.config().limits.max_collections, 5);
+}
+
+#[test]
+fn test_invalid_default_file_is_an_error_naming_the_key_and_its_implicit_origin() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let toml_dir = tempfile::tempdir().expect("test: config dir");
+    let default_file = toml_dir.path().join("velesdb.toml");
+    // max_collections = 0 is out of range (validate_limits requires >= 1).
+    std::fs::write(&default_file, "[limits]\nmax_collections = 0\n").expect("test: write config");
+
+    let err = match open_database_with_default_file(dir.path(), None, &default_file) {
+        Err(e) => e,
+        Ok(_) => panic!("test: an invalid default file must fail, not fall back to defaults"),
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("limits.max_collections"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("working directory") && msg.contains("--config <file>"),
+        "an implicit file must say where it came from and how to override it: {msg}"
+    );
+}
+
+#[test]
+fn test_invalid_explicit_config_does_not_claim_an_implicit_origin() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let toml_dir = tempfile::tempdir().expect("test: config dir");
+    let default_file = toml_dir.path().join("velesdb.toml");
+    let explicit = toml_dir.path().join("explicit.toml");
+    std::fs::write(&default_file, "[limits]\nmax_collections = 3\n").expect("test: write config");
+    std::fs::write(&explicit, "[limits]\nmax_collections = 0\n").expect("test: write config");
+
+    let err = match open_database_with_default_file(dir.path(), Some(&explicit), &default_file) {
+        Err(e) => e,
+        Ok(_) => panic!("test: an invalid explicit config must fail fast"),
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("limits.max_collections"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        !msg.contains("working directory"),
+        "an explicit path was named by the caller, no origin hint: {msg}"
+    );
+}
+
+#[test]
+fn test_server_style_default_file_is_tolerated_and_its_limit_enforced() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let toml_dir = tempfile::tempdir().expect("test: config dir");
+    let default_file = toml_dir.path().join("velesdb.toml");
+    // A velesdb-server file: its transport tables must be ignored (port 443
+    // would trip VelesConfig's own `server.port >= 1024` rule) while the
+    // engine section is honoured.
+    std::fs::write(
+        &default_file,
+        "[server]\nhost = \"0.0.0.0\"\nport = 443\n\n[auth]\napi_keys = [\"k\"]\n\n[limits]\nmax_collections = 1\n",
+    )
+    .expect("test: write config");
+
+    let db = open_database_with_default_file(dir.path(), None, &default_file)
+        .expect("test: a server-style default file must not block the open");
+    assert_eq!(db.config().limits.max_collections, 1);
+    db.create_vector_collection("first", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: first collection is within the cap");
+    let err = db
+        .create_vector_collection("second", 4, velesdb_core::DistanceMetric::Cosine)
+        .expect_err("test: the configured cap must be enforced");
+    assert!(
+        err.to_string().contains("max_collections"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn test_custom_toml_limit_is_actually_enforced_not_just_parsed() {
     let dir = tempfile::tempdir().expect("test: temp dir");
     let toml_dir = tempfile::tempdir().expect("test: config dir");

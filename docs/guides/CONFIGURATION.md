@@ -36,14 +36,17 @@ VelesDB supports 3 levels of configuration:
 at `./velesdb.toml` in the current working directory. There is **no**
 `~/.config/velesdb/`, `%APPDATA%\velesdb\`, or `/etc/velesdb/` search — if
 you previously read that here, it described a search path that was never
-implemented. If no `./velesdb.toml` is found, core defaults are used.
+implemented. If no `./velesdb.toml` is found, core defaults are used. This
+holds for `velesdb-server` and for the `velesdb` CLI alike: without
+`--config`/`VELESDB_CONFIG`, the CLI reads `./velesdb.toml` too, for the REPL
+and for every one-shot command that opens a database.
 
 To point at a file anywhere else, pass it explicitly:
 
-| Binary | Flag | Env var |
-|--------|------|---------|
-| `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` |
-| `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` |
+| Binary | Flag | Env var | Without either |
+|--------|------|---------|----------------|
+| `velesdb-server` | `--config <path>` | `VELESDB_CONFIG` | `./velesdb.toml` if present, else core defaults |
+| `velesdb` (CLI) | `--config <path>` (global — REPL and every one-shot command) | `VELESDB_CONFIG` | `./velesdb.toml` if present, else core defaults (a present but invalid file fails the command; the error says it was read implicitly and to pass `--config <file>` to use another) |
 
 > **What the engine actually applies.** `[limits]` is enforced at the
 > collection and ingest boundaries, `[hnsw]`'s `m` / `ef_construction`
@@ -53,10 +56,13 @@ To point at a file anywhere else, pass it explicitly:
 > `SELECT * FROM c WHERE vector NEAR $v LIMIT n` (with no `WITH` clause, or
 > with a `WITH` clause that sets only `rerank`), and of the core functions
 > `search_batch_parallel`, `search_batch_with_filters`, `multi_query_search`
-> and `multi_query_search_ids` (issues #2087, #2399 — `default_mode = "perfect"` is
-> applied as `accurate`, with a warning: an exhaustive scan cannot be a global
-> default). No other query shape or search entry point is guaranteed to follow
-> it yet; #2430 tracks the audit. Everything else
+> and `multi_query_search_ids`, of the hybrid (vector + BM25) functions
+> `hybrid_search` and `hybrid_search_with_filter` and the `NEAR` + `MATCH`
+> queries that reach them, `USING FUSION` ones included, and of
+> `GraphCollection::search_by_embedding` (issues #2087, #2399, #2430 —
+> `default_mode = "perfect"` is applied as `accurate`, with a warning: an
+> exhaustive scan cannot be a global default). No other query shape or search
+> entry point is guaranteed to follow it yet; #2430 tracks the audit. Everything else
 > below is parsed and validated but **not** wired: `search.max_results`,
 > `search.query_timeout_ms`, `[quantization]`, `hnsw.max_layers` and
 > `storage.storage_mode` — each still pending its own decision. Setting any of
@@ -100,9 +106,10 @@ value from the file, and `velesdb-server`'s own `VELESDB_PORT`/
 **Semantics are fail-fast**: an explicit `--config`/`VELESDB_CONFIG` path
 that is missing, malformed, or fails validation aborts startup (server) or
 the command (CLI) with the typed `ConfigError` — it never silently falls
-back to defaults. Omitting the flag entirely is unaffected: both binaries
-behave exactly as before this option was wired (core defaults, or
-`./velesdb.toml` if present).
+back to defaults. Omitting the flag entirely falls back to `./velesdb.toml`
+if present, else core defaults, in both binaries; a `./velesdb.toml` that is
+present but invalid fails the same way (for the CLI, every command that opens
+a database) until it is fixed or `--config` points elsewhere.
 
 ```bash
 # Server: engine + transport settings from one file

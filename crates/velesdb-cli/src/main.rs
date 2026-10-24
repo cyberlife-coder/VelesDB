@@ -72,7 +72,8 @@ struct Cli {
     /// Path to a VelesDB TOML config file (search/HNSW/storage/limits/WAL
     /// batching). Applies to every command that opens a database, including
     /// the REPL. An invalid or missing path fails fast — never silently
-    /// falls back to defaults.
+    /// falls back to defaults. Without it, `./velesdb.toml` is read when it
+    /// exists (an invalid one is an error), else the core defaults apply.
     #[arg(long = "config", global = true, env = "VELESDB_CONFIG")]
     config: Option<PathBuf>,
 

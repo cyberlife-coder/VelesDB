@@ -149,11 +149,12 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use futures::Stream;
+use parking_lot::{Mutex, MutexGuard};
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
 use rmcp::transport::streamable_http_server::session::{
     EventStore, RestoreOutcome, ServerSseMessage, SessionId, SessionManager,
@@ -393,11 +394,11 @@ impl<SM> BoundedSessionManager<SM> {
     }
 
     /// The live-session map. Every critical section on it is a few map or
-    /// atomic operations that cannot leave it half-updated, so a poisoned
-    /// mutex (a panic elsewhere while it was held) is recovered, not
-    /// propagated.
+    /// atomic operations that cannot leave it half-updated; `parking_lot`
+    /// does not poison, so a panic elsewhere while it was held leaves the
+    /// map usable.
     fn live(&self) -> MutexGuard<'_, HashMap<SessionId, Arc<SessionCounters>>> {
-        self.live.lock().unwrap_or_else(PoisonError::into_inner)
+        self.live.lock()
     }
 
     fn is_full(&self) -> bool {

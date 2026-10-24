@@ -276,8 +276,8 @@ fn test_session_ef_search_reaches_the_search() {
 
 /// A session that never ran `\set` adds no quality to a query, not even an
 /// empty `WITH` (the `max_results` `LIMIT` cap aside), so the search runs at
-/// the database's configured default (the `[search]` of the `--config` file,
-/// #2400), as the configuration priority order says; before #2303 it injected
+/// the database's configured default (the `[search]` of the `--config` file or
+/// of `./velesdb.toml`, #2400), as the configuration priority order says; before #2303 it injected
 /// `mode = 'balanced'` over it. `\show` printing that default is
 /// `repl_config_cmds_tests`'s.
 #[test]

@@ -212,6 +212,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **core (Windows): a failed backup restore in the compaction replace is
+  logged, not dropped.** When `atomic_replace` could neither move the
+  compacted file over `vectors.dat` nor put the backup back, `vectors.dat` was
+  missing and the backup was its only copy, and the restore error was
+  discarded with no trace. It is now logged at error level with both paths,
+  and the `.bak` file is left in place for the next open to recover. The swap
+  itself is unchanged.
 - **CI: `Python Integrations` failed on every PR once nltk 3.10.4 shipped
   (2026-10-21) (#2463).** That release refuses to read NLTK data from, or download it
   into, a directory another account can write to, and the runner's copy of
@@ -235,10 +242,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   four functions, whichever surface it comes through. No other query shape or
   entry point is guaranteed to follow `[search]` yet; #2430 tracks the audit
   and `docs/guides/CONFIGURATION.md` states what is covered.
+- **core: `hybrid_search`, `hybrid_search_with_filter`, the score-level
+  hybrid fusion streams and `GraphCollection::search_by_embedding` take their
+  vector candidates at the configured `[search]` quality (#2430, 2026-10-24).**
+  They called `index.search`, which pins `Balanced`. With a non-default
+  `[search]` their results change. The other paths tabulated in #2430
+  (graph-anchored `NEAR` prefilter, the secondary-index bitmap branch) still
+  ignore it. Each of the four has a test that reopens one persisted index under
+  two configured `ef_search` values.
 - **The CLI REPL leaves the `[search]` of its `--config`/`VELESDB_CONFIG`
-  file in force until a `\set mode` or `\set ef_search` (`./velesdb.toml` is
-  not read without it,
-  #2400), and `.bench` runs at the quality it prints (#2303).** A session that
+  file in force until a `\set mode` or `\set ef_search`, and `.bench` runs at the quality it prints (#2303).** A session that
   never ran `\set` used to inject `mode = 'balanced'`, against the
   priority order `docs/guides/CONFIGURATION.md` states. An untouched session now adds no quality (the `max_results` `LIMIT` cap aside), and `\show`
   prints the configured default, marked
@@ -1087,6 +1100,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+- **The `velesdb` CLI reads `./velesdb.toml` when neither `--config` nor
+  `VELESDB_CONFIG` is given, as `velesdb-server` does (#2400).** It used to open
+  every database with the core defaults in that case, although
+  `docs/guides/CONFIGURATION.md` documents the fallback for both binaries. It
+  loads the same engine-only sections as `--config`: `[search]`, `[hnsw]`,
+  `[storage]`, `[limits]`, `[quantization]` and `[wal_batch]`, while `[server]`,
+  `[auth]`, `[tls]` and `[cors]` stay `velesdb-server`'s own and are ignored. A
+  `velesdb.toml` that is present but invalid now fails every command that opens
+  a database, the REPL included, until it is fixed or `--config <file>` points
+  elsewhere; the error says the file was read implicitly from the working
+  directory and how to override it. A directory with no `velesdb.toml`, and an
+  explicit `--config`, behave as before.
 - **BREAKING (Rust API, `openapi` feature) — velesdb-core's `utoipa` dependency
   moves 5.3.0 → 6.0.0, and velesdb-server's `utoipa`/`utoipa-swagger-ui` move
   5.3.0 → 6.0.0 and 9 → 10 with it (#2429).** `utoipa-swagger-ui` 9.0.2

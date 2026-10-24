@@ -818,6 +818,16 @@ and `openai`, unused by `outline`), `VELESDB_MEMORY_EXTRACTOR_API_TOKEN`
 default backend, a call that omits `extractor` returns a clear "not configured"
 error.
 
+For the `openai` backend, `VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS`
+(optional) is a JSON object sent as `chat_template_kwargs` in every chat
+request, e.g. `{"enable_thinking": false}`. llama.cpp-compatible servers read it
+as per-request chat-template arguments; use it to switch off the thinking of a
+reasoning model whose thinking tokens would otherwise use up the generation
+budget and truncate the JSON the extractor parses. Unset or blank, the field is
+not sent. A value that is not valid JSON, or not a JSON object, stops the daemon
+at startup with an error naming the variable; the `ollama` backend does not read
+it. The value is kept out of logs and `Debug` output.
+
 `VELESDB_MEMORY_EXTRACTOR` is the per-daemon **default**, not a session-wide
 lock. Each `remember_extracted` call may pass `extractor: "outline"`,
 `"ollama"`, or `"openai"`. The offline `outline` backend is always available;

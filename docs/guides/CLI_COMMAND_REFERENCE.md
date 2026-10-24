@@ -34,7 +34,7 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 
 | Option | Environment variable | Effect |
 |---|---|---|
-| `--config <FILE>` | `VELESDB_CONFIG` | Path to a VelesDB TOML config file (search/HNSW/storage/limits/WAL batching). Applies to every command that opens a database, including the REPL. An invalid or missing path fails fast — it never silently falls back to defaults. |
+| `--config <FILE>` | `VELESDB_CONFIG` | Path to a VelesDB TOML config file (search/HNSW/storage/limits/WAL batching). Applies to every command that opens a database, including the REPL. An invalid or missing path fails fast — it never silently falls back to defaults. Without it, `./velesdb.toml` is read when it exists (same engine sections and fallback as `velesdb-server`; an invalid one fails every command that opens a database until it is fixed or `--config` points elsewhere), else the core defaults apply. |
 
 ```bash
 velesdb --config ./velesdb.toml collection list ./data
@@ -542,6 +542,7 @@ Errors actually emitted by the CLI, with their cause and remedy.
 | `Empty file` | The import file contains no records. | Verify the file is not empty and uses a supported format. |
 | `Unsupported file format: X. Use .csv, .jsonl, or .bin (VRB1)` | `data import` received an unsupported extension. | Convert or rename the file. |
 | `config file not found` | `--config` / `VELESDB_CONFIG` points at a missing file. | Fix the path — the CLI fails fast instead of falling back to defaults. |
+| `failed to load VelesDB config from velesdb.toml (read implicitly …)` | No `--config`, and the `./velesdb.toml` of the working directory is invalid. | Fix that file, or pass `--config <file>` to use another one. |
 
 Numeric `VELES-*` codes are listed in
 [ERROR_CODES.md](../reference/ERROR_CODES.md).
