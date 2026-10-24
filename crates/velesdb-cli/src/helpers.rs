@@ -25,8 +25,9 @@ use velesdb_core::{Database, Point, VectorCollection};
 // lookup on top of it.
 
 /// Process-wide `--config` path, set once at startup by `main::cli_main`.
-/// `None` means the flag was not passed — every command opens the database
-/// with core defaults, exactly like before this flag existed.
+/// `None` means neither the flag nor `VELESDB_CONFIG` was given — every
+/// command then falls back to `./velesdb.toml` when it exists, as
+/// `velesdb-server` does, and to the core defaults otherwise.
 static CONFIG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// Records the `--config`/`VELESDB_CONFIG` path parsed from the CLI.
@@ -57,8 +58,12 @@ pub fn open_database(path: &Path) -> Result<Database> {
 /// [`velesdb_core::config::VelesConfig`] (search/HNSW/storage/limits/
 /// quantization/WAL batching) from `config_path` first.
 ///
-/// - `config_path: None` — behaves exactly like [`Database::open`] (core
-///   defaults), unchanged from before this flag existed.
+/// - `config_path: None` — reads `./velesdb.toml` when it exists (as
+///   `velesdb-server` does), otherwise behaves exactly like
+///   [`Database::open`] (core defaults). A present-but-invalid
+///   `./velesdb.toml` is an error that says the file was read implicitly
+///   and how to override it, not a silent fallback. Only the engine
+///   sections are read from it, as with `Some(file)` below.
 /// - `config_path: Some(file)` — the TOML file **must** exist and pass
 ///   [`velesdb_core::config::VelesConfig::load_from_path_engine_only`]
 ///   validation. A missing file or an invalid engine value is a fail-fast,
@@ -83,19 +88,75 @@ pub fn open_database(path: &Path) -> Result<Database> {
 /// fails to parse/validate, or if opening the database itself fails (e.g.
 /// a stale lock file, a corrupt collection on disk).
 pub fn open_database_with_config(path: &Path, config_path: Option<&Path>) -> Result<Database> {
-    match config_path {
-        None => Ok(Database::open(path)?),
-        Some(cfg) => {
-            if !cfg.exists() {
-                anyhow::bail!("config file not found: {}", cfg.display());
-            }
-            let config = velesdb_core::config::VelesConfig::load_from_path_engine_only(cfg)
-                .map_err(|e| {
-                    anyhow::anyhow!("failed to load VelesDB config from {}: {e}", cfg.display())
-                })?;
-            Ok(Database::open_with_config(path, config)?)
+    open_database_with_default_file(path, config_path, Path::new(DEFAULT_CONFIG_FILE))
+}
+
+/// File read from the working directory when no `--config` is given, the
+/// same fallback `velesdb-server` applies.
+const DEFAULT_CONFIG_FILE: &str = "velesdb.toml";
+
+/// Where the engine configuration of a command comes from.
+#[derive(Debug, PartialEq, Eq)]
+enum ConfigSource<'a> {
+    /// `--config`/`VELESDB_CONFIG`: named by the caller, so a failure needs
+    /// no hint about where the file came from.
+    Explicit(&'a Path),
+    /// The default file, picked up from the working directory because
+    /// nothing was passed. The user never named it, so an error about it
+    /// must say where it came from.
+    Implicit(&'a Path),
+    /// No file anywhere: core defaults.
+    CoreDefaults,
+}
+
+impl<'a> ConfigSource<'a> {
+    /// Decides the source once, so the file system is consulted a single
+    /// time per command.
+    fn resolve(config_path: Option<&'a Path>, default_file: &'a Path) -> Result<Self> {
+        match config_path {
+            Some(cfg) if cfg.exists() => Ok(Self::Explicit(cfg)),
+            Some(cfg) => anyhow::bail!("config file not found: {}", cfg.display()),
+            None if default_file.exists() => Ok(Self::Implicit(default_file)),
+            None => Ok(Self::CoreDefaults),
         }
     }
+
+    /// Loads the engine sections of the file, or the core defaults when
+    /// there is none.
+    fn load(&self) -> Result<Option<velesdb_core::config::VelesConfig>> {
+        let (file, origin) = match *self {
+            Self::Explicit(file) => (file, String::new()),
+            Self::Implicit(file) => (
+                file,
+                " (read implicitly from the working directory because no --config or \
+                 VELESDB_CONFIG was given; pass `--config <file>` to use another file)"
+                    .to_owned(),
+            ),
+            Self::CoreDefaults => return Ok(None),
+        };
+        velesdb_core::config::VelesConfig::load_from_path_engine_only(file)
+            .map(Some)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to load VelesDB config from {}{origin}: {e}",
+                    file.display()
+                )
+            })
+    }
+}
+
+/// [`open_database_with_config`] with the implicit config location made
+/// explicit, so tests do not depend on the process working directory.
+fn open_database_with_default_file(
+    path: &Path,
+    config_path: Option<&Path>,
+    default_file: &Path,
+) -> Result<Database> {
+    let source = ConfigSource::resolve(config_path, default_file)?;
+    Ok(match source.load()? {
+        Some(config) => Database::open_with_config(path, config)?,
+        None => Database::open(path)?,
+    })
 }
 
 // ---------------------------------------------------------------------------

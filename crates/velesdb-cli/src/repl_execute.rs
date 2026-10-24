@@ -79,9 +79,9 @@ pub fn apply_session_settings(
 /// it), else its `mode` when set. No query the REPL rewrites carries both, so
 /// none depends on which of the two wins. A session that set neither adds no
 /// quality, so the configured default applies wherever the engine honours it
-/// (the `[search]` of the `--config`/`VELESDB_CONFIG` file; `./velesdb.toml`
-/// is not read without it, #2400; see #2430), as the configuration priority
-/// order says (#2303).
+/// (the `[search]` of the `--config`/`VELESDB_CONFIG` file, else of
+/// `./velesdb.toml` when it exists, #2400; see #2430), as the configuration
+/// priority order says (#2303).
 fn inject_session_with_options(
     select: &mut velesdb_core::velesql::SelectStatement,
     session: &SessionSettings,

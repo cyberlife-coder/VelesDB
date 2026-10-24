@@ -76,12 +76,6 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 /// helper only ever *reads* from someone else's tree, where a hard-link
 /// based backup (`cp -al`, `rsync --link-dest`) routinely produces
 /// `nlink > 1` on perfectly ordinary files.
-///
-/// Two other callers (the online-migration controller state and job state)
-/// share the write-once-rename-replace shape too, but predate #2409 (added
-/// in #2405) and sit outside the three call sites #2406 names for this PR —
-/// left refusing a hard link for now rather than widening this PR's scope a
-/// further round; see #2426.
 pub(crate) fn open_regular_file(
     path: &Path,
     entity: &str,
@@ -114,8 +108,9 @@ pub(crate) fn open_regular_file(
 /// As [`open_regular_file`], but accepts a hard-linked target. Fits a path
 /// this helper only reads from a tree it does not own (a diagnostic source
 /// directory), and a path this store owns but never reopens to write into:
-/// an extraction job record (replaced wholesale by rename) or a migration
-/// lock (created once, then only read or removed). Either way a hard link
+/// an extraction job record, the controller state or an online-migration job
+/// record (each replaced wholesale by rename) or a migration lock (created
+/// once, then only read or removed). Either way a hard link
 /// planted by a backup tool is indistinguishable from an ordinary file, so
 /// there is nothing here to refuse it against. The symlink-swap protection
 /// (#2404) still applies in full. Returns the already-fetched `Metadata`
