@@ -225,7 +225,68 @@ pub(crate) fn build_openai_extractor(
     use velesdb_memory::OpenAiExtractor;
 
     let (url, model, auth) = extractor_endpoint()?.require("VELESDB_MEMORY_EXTRACTOR")?;
-    Ok(Arc::new(OpenAiExtractor::new(url, model, auth)))
+    let extractor = OpenAiExtractor::new(url, model, auth);
+    Ok(Arc::new(match chat_template_kwargs()? {
+        Some(kwargs) => extractor.with_chat_template_kwargs(kwargs),
+        None => extractor,
+    }))
+}
+
+/// The variable holding the extractor's per-request chat-template arguments:
+/// a JSON object, sent as `chat_template_kwargs` in the `OpenAI` chat body
+/// (e.g. `{"enable_thinking": false}`). Read here, with the role's other
+/// `VELESDB_MEMORY_EXTRACTOR_*` variables, because the library takes values
+/// from its callers rather than from the environment.
+#[cfg(feature = "extractor-http")]
+const CHAT_TEMPLATE_KWARGS_VAR: &str = "VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS";
+
+/// [`parse_chat_template_kwargs`] over the process environment.
+///
+/// # Errors
+/// The variable is set, non-blank and not a JSON object.
+#[cfg(feature = "extractor-http")]
+fn chat_template_kwargs() -> Result<Option<serde_json::Value>, String> {
+    parse_chat_template_kwargs(env_opt(CHAT_TEMPLATE_KWARGS_VAR).as_deref())
+}
+
+/// Validate the raw value of [`CHAT_TEMPLATE_KWARGS_VAR`]. Unset or blank is
+/// "not configured"; anything else must be a JSON object, or startup stops —
+/// the rule `VELESDB_MEMORY_DEFAULT_TTL` and `VELESDB_MEMORY_INGEST_ROOTS`
+/// follow, because a setting dropped with a warning is how a thinking model
+/// keeps truncating its answers while the operator believes it was switched off.
+///
+/// The error carries the parser's own position message and, for a value that
+/// parses but is not an object, only its kind — never the raw text, which may
+/// hold a secret the chat template reads.
+///
+/// # Errors
+/// `raw` is non-blank and not a JSON object.
+#[cfg(feature = "extractor-http")]
+fn parse_chat_template_kwargs(raw: Option<&str>) -> Result<Option<serde_json::Value>, String> {
+    use serde_json::Value;
+
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    match serde_json::from_str::<Value>(raw) {
+        Ok(object @ Value::Object(_)) => Ok(Some(object)),
+        Ok(other) => {
+            let kind = match other {
+                Value::Null => "null",
+                Value::Bool(_) => "a boolean",
+                Value::Number(_) => "a number",
+                Value::String(_) => "a string",
+                Value::Array(_) => "an array",
+                Value::Object(_) => "an object",
+            };
+            Err(format!(
+                "{CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object: found {kind}"
+            ))
+        }
+        Err(err) => Err(format!(
+            "{CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object: {err}"
+        )),
+    }
 }
 
 /// Select the embedding backend from `VELESDB_MEMORY_EMBEDDER`: `hash`
@@ -374,3 +435,7 @@ pub(crate) fn build_openai_embedder() -> Result<ConfiguredEmbedder, Box<dyn std:
         model,
     })
 }
+
+#[cfg(all(test, feature = "extractor-http"))]
+#[path = "daemon_backends_tests.rs"]
+mod tests;

@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OpenAiExtractor::with_chat_template_kwargs`** and the
+  **`VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS`** daemon variable: a JSON
+  object sent as `chat_template_kwargs` in every chat request of the
+  `openai` extraction backend, e.g. `{"enable_thinking": false}` to stop a
+  thinking model behind a llama.cpp-compatible server from spending the
+  generation budget on thinking and truncating the JSON the extractor parses.
+  Absent by default, so the request body is unchanged for everyone who does
+  not set it. The library never reads the environment for it: the daemon reads
+  the variable alongside the other `VELESDB_MEMORY_EXTRACTOR_*` ones and
+  refuses to start when it is not a JSON object, naming the variable and
+  never echoing the value. The value is redacted from
+  `OpenAiExtractor`'s `Debug` output, as `Auth`'s credential is.
+
 - **`http::router_with_session_policy`** (`#[doc(hidden)]`, like its
   `router_with_limits*` siblings): `router_with_limits_and_keep_alive` plus
   an explicit eviction floor, so the HTTP transport's integration tests can

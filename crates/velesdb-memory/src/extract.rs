@@ -18,6 +18,11 @@
 mod wire;
 #[cfg(feature = "extractor-http")]
 use wire::{extraction_schema, fact_list_schema, generate_body};
+#[cfg(feature = "extractor-http")]
+#[path = "extract_openai.rs"]
+mod openai_extractor;
+#[cfg(feature = "extractor-http")]
+pub use openai_extractor::OpenAiExtractor;
 
 /// One extracted, graph-ready fact: a self-contained sentence plus the salient
 /// topics it concerns. The topics become shared graph hubs, so two facts about
@@ -1106,118 +1111,6 @@ impl Extractor for OllamaExtractor {
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
         extraction_from_reply(&self.generate(&build_graph_prompt(text), &extraction_schema())?)
-    }
-}
-
-/// Extracts through any **OpenAI-compatible** `/v1/chat/completions` endpoint.
-///
-/// A sibling of [`OllamaExtractor`], not a layer over it — the same shape the
-/// embedding role takes. The prompt stays here, on the role side: it is what
-/// this crate wants said, not something the protocol knows about.
-#[cfg(feature = "extractor-http")]
-#[derive(Debug)]
-pub struct OpenAiExtractor {
-    client: crate::http_client::HttpJsonClient,
-    model: String,
-    chat_template_kwargs: Option<serde_json::Value>,
-}
-
-/// JSON object merged into the chat body as `chat_template_kwargs` when set —
-/// e.g. `{"enable_thinking": false}` for a thinking model behind a
-/// llama.cpp-compatible server, where thinking tokens would otherwise eat
-/// the generation budget and truncate the JSON the role parses.
-const CHAT_TEMPLATE_KWARGS_VAR: &str = "VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS";
-
-fn chat_template_kwargs_from_env() -> Option<serde_json::Value> {
-    let raw = std::env::var(CHAT_TEMPLATE_KWARGS_VAR)
-        .ok()?
-        .trim()
-        .to_owned();
-    if raw.is_empty() {
-        return None;
-    }
-    match serde_json::from_str::<serde_json::Value>(&raw) {
-        Ok(object) if object.is_object() => Some(object),
-        Ok(_) => {
-            eprintln!(
-                "[velesdb-memory] {CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object; ignoring it"
-            );
-            None
-        }
-        Err(err) => {
-            eprintln!(
-                "[velesdb-memory] {CHAT_TEMPLATE_KWARGS_VAR} is not valid JSON ({err}); ignoring it"
-            );
-            None
-        }
-    }
-}
-
-#[cfg(feature = "extractor-http")]
-impl OpenAiExtractor {
-    /// Build an extractor targeting `model` on the server at `base_url`
-    /// (origin and port, no path).
-    ///
-    /// Bounded on the same four axes as [`OllamaExtractor::new`], with the
-    /// same generous `REQUEST_TIMEOUT_SECS`: generation is slow wherever it
-    /// runs, and the ceiling belongs to the role, not to the transport.
-    #[must_use]
-    pub fn new(
-        base_url: impl Into<String>,
-        model: impl Into<String>,
-        auth: crate::http_client::Auth,
-    ) -> Self {
-        let agent =
-            crate::http_client::bounded_agent(crate::http_client::AgentBudget::local_daemon(
-                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
-            ));
-        Self {
-            client: crate::http_client::HttpJsonClient::new(
-                crate::openai::base_url(&base_url.into()),
-                auth,
-                agent,
-            ),
-            model: model.into(),
-            chat_template_kwargs: chat_template_kwargs_from_env(),
-        }
-    }
-
-    /// POST one prompt and return the assistant's reply.
-    fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
-        let body = crate::openai::chat_body(
-            &self.model,
-            prompt,
-            MAX_GENERATION_TOKENS,
-            self.chat_template_kwargs.as_ref(),
-        );
-        let payload = self
-            .client
-            .post_json(crate::openai::CHAT_COMPLETIONS_PATH, &body)
-            .map_err(|failure| {
-                ExtractError::Backend(crate::http_retry::actionable_openai_failure(
-                    "chat/completions",
-                    &failure.url,
-                    &self.model,
-                    failure.attempts,
-                    &failure.cause,
-                    Some(
-                        "use the offline deterministic reader with \
-                         VELESDB_MEMORY_EXTRACTOR=outline",
-                    ),
-                ))
-            })?;
-        crate::openai::parse_chat_response(&payload).map_err(ExtractError::Backend)
-    }
-}
-
-#[cfg(feature = "extractor-http")]
-impl Extractor for OpenAiExtractor {
-    fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        facts_from_reply(&self.generate(&build_prompt(text))?)
-    }
-
-    fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
-        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
     }
 }
 
