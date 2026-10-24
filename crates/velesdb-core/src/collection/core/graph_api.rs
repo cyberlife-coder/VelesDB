@@ -10,7 +10,6 @@ use crate::collection::graph::{
 };
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::index::VectorIndex;
 use crate::point::{Point, SearchResult};
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 
@@ -905,7 +904,11 @@ impl Collection {
         // via create_graph_collection_with_embeddings). For graph-without-embeddings
         // the HNSW has dimension 0 and the guard above already rejected the call.
         let metric = self.storage.config.read().metric;
-        let ids = self.storage.index.search(query, k);
+        // Not `VectorIndex::search`: it pins `Balanced` and so ignores `[search]` (#2430).
+        let ids =
+            self.storage
+                .index
+                .search_with_quality(query, k, self.runtime_search_quality())?;
         let ids = self.merge_delta(ids, query, k, metric);
 
         // Acquire each lock once: collect vector data, then collect payload data.

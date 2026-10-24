@@ -262,6 +262,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   four functions, whichever surface it comes through. No other query shape or
   entry point is guaranteed to follow `[search]` yet; #2430 tracks the audit
   and `docs/guides/CONFIGURATION.md` states what is covered.
+- **core: `hybrid_search`, `hybrid_search_with_filter`, the score-level
+  hybrid fusion streams and `GraphCollection::search_by_embedding` take their
+  vector candidates at the configured `[search]` quality (#2430, 2026-10-24).**
+  They called `index.search`, which pins `Balanced`. With a non-default
+  `[search]` their results change. The other paths tabulated in #2430
+  (graph-anchored `NEAR` prefilter, the secondary-index bitmap branch) still
+  ignore it. Each of the four has a test that reopens one persisted index under
+  two configured `ef_search` values.
 - **The CLI REPL leaves the `[search]` of its `--config`/`VELESDB_CONFIG`
   file in force until a `\set mode` or `\set ef_search`, and `.bench` runs at the quality it prints (#2303).** A session that
   never ran `\set` used to inject `mode = 'balanced'`, against the

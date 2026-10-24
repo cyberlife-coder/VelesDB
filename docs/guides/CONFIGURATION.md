@@ -56,10 +56,13 @@ To point at a file anywhere else, pass it explicitly:
 > `SELECT * FROM c WHERE vector NEAR $v LIMIT n` (with no `WITH` clause, or
 > with a `WITH` clause that sets only `rerank`), and of the core functions
 > `search_batch_parallel`, `search_batch_with_filters`, `multi_query_search`
-> and `multi_query_search_ids` (issues #2087, #2399 — `default_mode = "perfect"` is
-> applied as `accurate`, with a warning: an exhaustive scan cannot be a global
-> default). No other query shape or search entry point is guaranteed to follow
-> it yet; #2430 tracks the audit. Everything else
+> and `multi_query_search_ids`, of the hybrid (vector + BM25) functions
+> `hybrid_search` and `hybrid_search_with_filter` and the `NEAR` + `MATCH`
+> queries that reach them, `USING FUSION` ones included, and of
+> `GraphCollection::search_by_embedding` (issues #2087, #2399, #2430 —
+> `default_mode = "perfect"` is applied as `accurate`, with a warning: an
+> exhaustive scan cannot be a global default). No other query shape or search
+> entry point is guaranteed to follow it yet; #2430 tracks the audit. Everything else
 > below is parsed and validated but **not** wired: `search.max_results`,
 > `search.query_timeout_ms`, `[quantization]`, `hnsw.max_layers` and
 > `storage.storage_mode` — each still pending its own decision. Setting any of

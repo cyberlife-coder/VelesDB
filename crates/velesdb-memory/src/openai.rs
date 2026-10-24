@@ -60,15 +60,27 @@ pub(crate) fn embeddings_body(model: &str, input: &str) -> String {
 /// that answers differently to the same text turns one stored fact into two
 /// on a re-run. `max_tokens` caps runaway generation the same way the Ollama
 /// backend's `num_predict` does — see `extract::MAX_GENERATION_TOKENS` (#1846).
+///
+/// `chat_template_kwargs` is passed through verbatim when set (llama.cpp's
+/// per-request chat-template knobs, e.g. `{"enable_thinking": false}`);
+/// servers that do not know the field ignore it.
 #[cfg(feature = "extractor-http")]
-pub(crate) fn chat_body(model: &str, prompt: &str, max_tokens: u32) -> String {
-    json!({
+pub(crate) fn chat_body(
+    model: &str,
+    prompt: &str,
+    max_tokens: u32,
+    chat_template_kwargs: Option<&Value>,
+) -> String {
+    let mut body = json!({
         "model": model,
         "messages": [{ "role": "user", "content": prompt }],
         "temperature": 0,
         "max_tokens": max_tokens,
-    })
-    .to_string()
+    });
+    if let Some(kwargs) = chat_template_kwargs {
+        body["chat_template_kwargs"] = kwargs.clone();
+    }
+    body.to_string()
 }
 
 /// The vector out of an embeddings response: `{"data":[{"embedding":[...]}]}`.
