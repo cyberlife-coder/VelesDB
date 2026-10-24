@@ -29,6 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open PR with an unchanged lockfile.
   Lockfile only, `cargo update -p rustls --precise 0.23.45`, which also
   moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
+- **Rust lockfiles: `rustls` 0.23.46, `rustls-webpki` 0.103.16, `tokio`
+  1.53.3, `webpki-roots` / `webpki-root-certs` 1.0.11.** Advisories published
+  after the last audit turned `Security Audit` red on `develop` and every open
+  PR: RUSTSEC-2026-0346/-0347/-0348/-0349 (rustls), -0382 (rustls-webpki,
+  distrusted intermediates), -0381/-0383 (bundled emSign roots) and -0386
+  (tokio `AsyncFd`, unsound). The root lockfile and the Tauri demo's carry the
+  patched releases; each package's version and checksum was edited in place
+  and checked with `cargo metadata --locked`, because `cargo update` under the
+  pinned 1.90 toolchain also re-resolves unrelated `windows-sys` edges. Two
+  `unmaintained` advisories have no release to move to and are ignored in
+  `deny.toml` with their reason: RUSTSEC-2024-0449 (`unsafe-libyaml`, through
+  `serde_yaml` in velesdb-migrate) and RUSTSEC-2026-0374 (`basic-toml`, a
+  build-time dependency of uniffi's askama templates in velesdb-mobile).
 
 ### Added
 - **`velesdb_core::fusion::sort_fused_results` (#2297).** Orders fused
