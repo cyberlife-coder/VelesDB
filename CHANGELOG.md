@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lockfile only, `cargo update -p rustls --precise 0.23.45`, which also
   moves `aws-lc-rs`, `aws-lc-sys` and `rustls-webpki` as rustls requires.
 - **Rust lockfiles: `rustls` 0.23.46, `rustls-webpki` 0.103.16, `tokio`
-  1.53.3, `webpki-roots` / `webpki-root-certs` 1.0.11.** Advisories published
+  1.53.3, `webpki-roots` / `webpki-root-certs` 1.0.11 (#2463).** Advisories published
   after the last audit turned `Security Audit` red on `develop` and every open
   PR: RUSTSEC-2026-0346/-0347/-0348/-0349 (rustls), -0382 (rustls-webpki,
   distrusted intermediates), -0381/-0383 (bundled emSign roots) and -0386
@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build-time dependency of uniffi's askama templates in velesdb-mobile).
 - **npm lockfiles: `vite` 8.3.5, `source-map-js` 1.2.2 (TypeScript SDK, Tauri
   demo, React WASM example), `proxy-addr` 2.0.8, `body-parser` 2.4 and `zod` 4
-  (Express RAG example).** The `npm advisories` gate refused four lockfiles
+  (Express RAG example) (#2463).** The `npm advisories` gate refused four lockfiles
   on high and critical advisories (GHSA-9jrq-w75r-8gcw and others in vite,
   GHSA-68fv-2mgg-jv7q, GHSA-jqcg-44mw-7w3h, GHSA-27r3-jxmh-p828,
   GHSA-mrhx-c7xc-m3w5). zod has no fixed 3.x, so the example moves to zod 4,
@@ -213,7 +213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **CI: `Python Integrations` failed on every PR once nltk 3.10.4 shipped
-  (2026-10-21).** That release refuses to read NLTK data from, or download it
+  (2026-10-21) (#2463).** That release refuses to read NLTK data from, or download it
   into, a directory another account can write to, and the runner's copy of
   llama-index-core's bundled cache (`llama_index/core/_static/nltk_cache`)
   fails the check, so `test_delete_removes_all_chunks_of_document` died on
