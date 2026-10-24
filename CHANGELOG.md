@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `deny.toml` with their reason: RUSTSEC-2024-0449 (`unsafe-libyaml`, through
   `serde_yaml` in velesdb-migrate) and RUSTSEC-2026-0374 (`basic-toml`, a
   build-time dependency of uniffi's askama templates in velesdb-mobile).
+- **npm lockfiles: `vite` 8.3.5, `source-map-js` 1.2.2 (TypeScript SDK, Tauri
+  demo, React WASM example), `proxy-addr` 2.0.8, `body-parser` 2.4 and `zod` 4
+  (Express RAG example).** The `npm advisories` gate refused four lockfiles
+  on high and critical advisories (GHSA-9jrq-w75r-8gcw and others in vite,
+  GHSA-68fv-2mgg-jv7q, GHSA-jqcg-44mw-7w3h, GHSA-27r3-jxmh-p828,
+  GHSA-mrhx-c7xc-m3w5). zod has no fixed 3.x, so the example moves to zod 4,
+  whose `z.record` takes the key schema explicitly.
 
 ### Added
 - **`velesdb_core::fusion::sort_fused_results` (#2297).** Orders fused
