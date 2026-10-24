@@ -82,7 +82,7 @@ jobs:
       # here, so rustup never installs it mid-step. cargo-public-api 0.52
       # reads the JSON of every nightly since 2025-08-02; a nightly that
       # changes the format breaks this job until the tool is bumped.
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # nightly
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # nightly
         with:
           toolchain: nightly
 
