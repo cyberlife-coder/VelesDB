@@ -413,3 +413,177 @@ fn a_configured_ef_search_reaches_the_batch_and_multi_query_entry_points() {
         "multi_query_search must follow the configured ef_search, not a hard-coded Balanced"
     );
 }
+
+/// The answers to `hard_queries()` from one persisted index reopened under
+/// `LOW_EF`, then `HIGH_EF`: `(low, high)`. `open` reopens the collection under
+/// a config, `answer` runs the entry point under test on one query.
+///
+/// Same index on purpose (see `a_per_query_ef_is_independent_of_the_configured_default`):
+/// two builds can differ by construction. If the configured ef never reached
+/// the call, both opens would run the same hard-coded `Balanced` and agree on
+/// every query.
+fn answers_under_both_efs<C>(
+    open: impl Fn(VelesConfig) -> (Database, C),
+    answer: impl Fn(&C, &[f32]) -> Vec<u64>,
+) -> (Vec<Vec<u64>>, Vec<Vec<u64>>) {
+    let queries = hard_queries();
+    let run = |collection: &C| -> Vec<Vec<u64>> {
+        queries.iter().map(|q| answer(collection, q)).collect()
+    };
+    let (db_low, low) = open(config_with_ef(LOW_EF));
+    let low_answers = run(&low);
+    drop(low);
+    drop(db_low);
+    let (_db_high, high) = open(config_with_ef(HIGH_EF));
+    (low_answers, run(&high))
+}
+
+/// A `HARD_POINTS` vector collection whose points all carry `content =
+/// "common"` (so the BM25 stream cannot separate them and the vector
+/// candidates decide the answer) and `cat = id % 2`, persisted for reopening.
+fn seeded_common_content(dir: &tempfile::TempDir) {
+    seeded_with(dir, VelesConfig::default(), HARD_POINTS, |id| {
+        Some(serde_json::json!({ "content": "common", "cat": id % 2 }))
+    })
+    .flush_full()
+    .expect("test: persist the index both opens will read");
+}
+
+/// `hybrid_search` (vector + BM25 RRF) draws its vector candidates at the
+/// configured `[search]` quality (#2430), not at a hard-coded `Balanced`.
+///
+/// Every point carries the same `content`, so the text stream cannot separate
+/// them and the answer is decided by the vector candidates. One persisted index
+/// reopened under two configured defaults must disagree on at least one query.
+#[test]
+fn a_configured_ef_search_reaches_hybrid_search() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    seeded_common_content(&dir);
+
+    let (low, high) = answers_under_both_efs(
+        |config| reopened(&dir, config),
+        |collection, q| {
+            ids(&collection
+                .hybrid_search(q, "common", WIDE_K, Some(0.99))
+                .expect("test: hybrid_search"))
+        },
+    );
+
+    assert!(
+        some_query_disagrees(&low, &high),
+        "hybrid_search must follow the configured ef_search, not a hard-coded Balanced"
+    );
+}
+
+/// `hybrid_search_with_filter` (the metadata-filtered variant, with its own
+/// candidate fetch in `text.rs`) follows the configured `[search]` quality too.
+#[test]
+fn a_configured_ef_search_reaches_hybrid_search_with_filter() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    seeded_common_content(&dir);
+    let even = velesdb_core::Filter::new(velesdb_core::Condition::eq("cat", 0));
+
+    let (low, high) = answers_under_both_efs(
+        |config| reopened(&dir, config),
+        |collection, q| {
+            ids(&collection
+                .hybrid_search_with_filter(q, "common", WIDE_K, Some(0.99), &even)
+                .expect("test: hybrid_search_with_filter"))
+        },
+    );
+
+    assert!(
+        some_query_disagrees(&low, &high),
+        "hybrid_search_with_filter must follow the configured ef_search, not a hard-coded Balanced"
+    );
+}
+
+/// The score-level fusion strategies (`maximum`, `average`, `rsf`) draw their
+/// vector stream from `hybrid_score_streams`, a third candidate fetch. It is
+/// private and reached through a `NEAR` + `MATCH` query carrying `USING FUSION`.
+///
+/// The `MATCH` term is absent from the corpus on purpose, unlike the
+/// `"common"` of the other hybrid tests: here a shared term makes the BM25
+/// scores tie and the fused order follows them (measured: the same ids on every
+/// query whatever the ef, so the test could not fail). With no text hit the
+/// vector stream alone decides the answer.
+#[test]
+fn a_configured_ef_search_reaches_score_level_hybrid_fusion() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    seeded_common_content(&dir);
+
+    let (low, high) = answers_under_both_efs(
+        |config| reopened(&dir, config),
+        |collection, q| {
+            let sql = format!(
+                "SELECT * FROM docs WHERE vector NEAR $v AND content MATCH 'absent' \
+                 LIMIT {K} USING FUSION(strategy = 'maximum')"
+            );
+            let params = HashMap::from([("v".to_string(), serde_json::json!(q))]);
+            ids(&collection
+                .execute_query_str(&sql, &params)
+                .expect("test: fused hybrid query"))
+        },
+    );
+
+    assert!(
+        low.iter().all(|answer| !answer.is_empty()),
+        "CONTROL: the fused query must return the vector candidates, or the comparison is vacuous"
+    );
+    assert!(
+        some_query_disagrees(&low, &high),
+        "score-level hybrid fusion must follow the configured ef_search, not a hard-coded Balanced"
+    );
+}
+
+/// `GraphCollection::search_by_embedding` (and its alias `search`) takes the
+/// configured `[search]` quality: the graph collection receives it from the
+/// database at open, like a vector collection does.
+///
+/// Seeded with `POINTS`, not `HARD_POINTS`: a graph collection has no batch
+/// upsert, and one node at a time costs several milliseconds each. At `POINTS`
+/// and `K` the two configured defaults already answer differently (see
+/// `a_configured_ef_search_reaches_an_unqualified_search`), and eight queries
+/// make it unlikely that they all agree on a given build.
+#[test]
+fn a_configured_ef_search_reaches_a_graph_collection_embedding_search() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    {
+        let db =
+            Database::open_with_config(dir.path(), VelesConfig::default()).expect("test: open");
+        db.create_graph_collection_with_embeddings(
+            "docs",
+            velesdb_core::GraphSchema::schemaless(),
+            DIM,
+            DistanceMetric::Euclidean,
+        )
+        .expect("test: create graph");
+        let graph = db.get_graph_collection("docs").expect("test: graph");
+        for id in 0..POINTS as u64 {
+            graph
+                .upsert_node(id, &serde_json::json!({}), Some(vector(id)))
+                .expect("test: upsert node");
+        }
+        graph
+            .flush_full()
+            .expect("test: persist the index both opens will read");
+    }
+
+    let (low, high) = answers_under_both_efs(
+        |config| {
+            let db = Database::open_with_config(dir.path(), config).expect("test: reopen");
+            let graph = db.get_graph_collection("docs").expect("test: graph");
+            (db, graph)
+        },
+        |graph, q| {
+            ids(&graph
+                .search_by_embedding(q, K)
+                .expect("test: search_by_embedding"))
+        },
+    );
+
+    assert!(
+        some_query_disagrees(&low, &high),
+        "search_by_embedding must follow the configured ef_search, not a hard-coded Balanced"
+    );
+}

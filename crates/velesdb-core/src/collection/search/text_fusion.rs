@@ -164,13 +164,17 @@ impl Collection {
         text_query: &str,
         candidate_k: usize,
     ) -> Result<(ScoreStream, ScoreStream)> {
-        use crate::index::VectorIndex;
         let metric = {
             let config = self.storage.config.read();
             crate::validation::validate_dimension_match(config.dimension, vector_query.len())?;
             config.metric
         };
-        let raw = self.storage.index.search(vector_query, candidate_k);
+        // Not `search`, which pins `Balanced` and ignores `[search]` (#2430).
+        let raw = self.storage.index.search_with_quality(
+            vector_query,
+            candidate_k,
+            self.runtime_search_quality(),
+        )?;
         let vec_res = self.merge_delta(raw, vector_query, candidate_k, metric);
         let vector_stream: Vec<(u64, f32)> = vec_res.iter().map(|sr| (sr.id, sr.score)).collect();
         let text_stream = self.storage.text_index.search(text_query, candidate_k);
