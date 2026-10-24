@@ -145,6 +145,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **HTTP session limiter: the live-session map uses `parking_lot::Mutex`.**
+  It was the crate's one `std::sync::Mutex`. `parking_lot`
+  does not poison, so the poison-recovery shim is gone; behavior is unchanged.
+
 - **Dependency floors the crate can actually be built with (#1987).** Each was
   measured on this crate's own resolve — the workspace cut down to it, as the
   `minimal-versions` job does — and not on a resolve of every workspace member.
