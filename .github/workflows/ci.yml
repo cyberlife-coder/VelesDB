@@ -1493,9 +1493,37 @@ jobs:
           pip install -e "integrations/langchain[dev]"
           python -m pytest integrations/langchain/tests/ -v --tb=short
 
+      # llama-index-core's sentence splitter reads NLTK `stopwords` and
+      # `punkt_tab`, by default from the cache it ships inside site-packages
+      # (`llama_index/core/_static/nltk_cache`). nltk 3.10.4 (2026-10-21)
+      # refuses to read from, or download into, a data directory another
+      # account can write to, and on the runner that cache fails the check:
+      # test_quickstart_e2e then died on "Resource 'stopwords' not found ...
+      # Refused, writable by other accounts" on every PR, with no change in
+      # the repository. NLTK_DATA, which llama-index-core prefers over its
+      # bundled cache, points at a 0700 directory instead, and the data is
+      # downloaded into it here -- the remedy NLTK's own message gives --
+      # so a failure names NLTK instead of a test.
+      - name: Provision NLTK data in a private directory
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/nltk_data"
+          echo "NLTK_DATA=$RUNNER_TEMP/nltk_data" >> "$GITHUB_ENV"
+
       - name: Install & Test LlamaIndex integration
         run: |
           pip install -e "integrations/llamaindex[dev]"
+          python - <<'PY'
+          import os
+          import nltk
+
+          data_dir = os.environ["NLTK_DATA"]
+          for package, resource in (("stopwords", "corpora/stopwords"),
+                                    ("punkt_tab", "tokenizers/punkt_tab")):
+              if not nltk.download(package, download_dir=data_dir, quiet=True,
+                                   raise_on_error=True):
+                  raise SystemExit(f"nltk could not provision {package} into {data_dir}")
+              nltk.data.find(resource, paths=[data_dir])
+          PY
           python -m pytest integrations/llamaindex/tests/ -v --tb=short
 
       - name: Install & Test Haystack integration
