@@ -207,9 +207,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry point is guaranteed to follow `[search]` yet; #2430 tracks the audit
   and `docs/guides/CONFIGURATION.md` states what is covered.
 - **The CLI REPL leaves the `[search]` of its `--config`/`VELESDB_CONFIG`
-  file in force until a `\set mode` or `\set ef_search` (`./velesdb.toml` is
-  not read without it,
-  #2400), and `.bench` runs at the quality it prints (#2303).** A session that
+  file in force until a `\set mode` or `\set ef_search`, and `.bench` runs at the quality it prints (#2303).** A session that
   never ran `\set` used to inject `mode = 'balanced'`, against the
   priority order `docs/guides/CONFIGURATION.md` states. An untouched session now adds no quality (the `max_results` `LIMIT` cap aside), and `\show`
   prints the configured default, marked
@@ -1058,6 +1056,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+- **The `velesdb` CLI reads `./velesdb.toml` when neither `--config` nor
+  `VELESDB_CONFIG` is given, as `velesdb-server` does (#2400).** It used to open
+  every database with the core defaults in that case, although
+  `docs/guides/CONFIGURATION.md` documents the fallback for both binaries. It
+  loads the same engine-only sections as `--config`: `[search]`, `[hnsw]`,
+  `[storage]`, `[limits]`, `[quantization]` and `[wal_batch]`, while `[server]`,
+  `[auth]`, `[tls]` and `[cors]` stay `velesdb-server`'s own and are ignored. A
+  `velesdb.toml` that is present but invalid now fails every command that opens
+  a database, the REPL included, until it is fixed or `--config <file>` points
+  elsewhere; the error says the file was read implicitly from the working
+  directory and how to override it. A directory with no `velesdb.toml`, and an
+  explicit `--config`, behave as before.
 - **BREAKING (Rust API, `openapi` feature) — velesdb-core's `utoipa` dependency
   moves 5.3.0 → 6.0.0, and velesdb-server's `utoipa`/`utoipa-swagger-ui` move
   5.3.0 → 6.0.0 and 9 → 10 with it (#2429).** `utoipa-swagger-ui` 9.0.2
