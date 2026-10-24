@@ -212,6 +212,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: `Python Integrations` failed on every PR once nltk 3.10.4 shipped
+  (2026-10-21).** That release refuses to read NLTK data from, or download it
+  into, a directory another account can write to, and the runner's copy of
+  llama-index-core's bundled cache (`llama_index/core/_static/nltk_cache`)
+  fails the check, so `test_delete_removes_all_chunks_of_document` died on
+  "Resource 'stopwords' not found". The job now points `NLTK_DATA` at a
+  0700 directory under `$RUNNER_TEMP` and downloads `stopwords` and
+  `punkt_tab` into it before the LlamaIndex suite, which llama-index-core
+  then reads instead of its bundled cache. No test was skipped or changed.
 - **core: a search that sets only `rerank` ran at `Balanced`, not the configured
   `[search]` default (#2399, 2026-10-02).** `QuerySearchOptions::resolved_quality`
   ended in a hard-coded `Balanced`, so `WITH (rerank = true)` skipped the
