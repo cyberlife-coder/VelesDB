@@ -27,7 +27,7 @@ clap_complete = "4.6"
 rustyline = { version = "18.0", features = ["derive"] }
 
 # Table formatting
-comfy-table = "7.1"
+comfy-table = "8.0"
 
 # Colors
 colored = "3.1"

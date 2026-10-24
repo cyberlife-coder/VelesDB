@@ -60,7 +60,7 @@ pub fn print_table(rows: &[HashMap<String, serde_json::Value>]) {
 
     let mut table = Table::new();
     table
-        .load_preset(UTF8_FULL)
+        .load_style(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic);
 
     // Header
