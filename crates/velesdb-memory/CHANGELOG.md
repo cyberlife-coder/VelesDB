@@ -145,6 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **MCP tool and field descriptions condensed (#2442).** The descriptions
+  served in `tools/list` are shorter: the compact JSON drops from 142,211 to
+  122,740 bytes (about 14%). No tool name, schema, type, default, `required`
+  flag or wire format changes; only the prose an agent reads does. The
+  `recall_where` description now says that `ne` also matches facts lacking
+  the field.
+
 - **Dependency floors the crate can actually be built with (#1987).** Each was
   measured on this crate's own resolve — the workspace cut down to it, as the
   `minimal-versions` job does — and not on a resolve of every workspace member.

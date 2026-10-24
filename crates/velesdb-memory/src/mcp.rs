@@ -357,7 +357,7 @@ impl McpServer {
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
         output_schema = crate::schema::wire_safe_output_schema::<RecallResult>(),
-        description = "Vector recall constrained by ColumnStore metadata predicates: each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed — for time-windowed or numeric-scoped recall (e.g. `ts` in a date range). Comparisons are type-strict, no runtime coercion: a numeric filter never matches a string-stored value — store comparable values like dates numerically at `remember` time (20230601, not \"20230601\"). Most similar first. Returns caller memories only: internal scaffolding (entity hubs, compiler artefacts, working contexts) never comes back, even under `ne`.",
+        description = "Vector recall constrained by ColumnStore metadata predicates: each filter is {field, op (eq/ne/lt/le/gt/ge), value}, ANDed — for time-windowed or numeric-scoped recall (e.g. `ts` in a date range). Comparisons are type-strict, no runtime coercion: a numeric filter never matches a string-stored value — store comparable values like dates numerically at `remember` time (20230601, not \"20230601\"). Most similar first. Returns caller memories only: internal scaffolding (entity hubs, compiler artefacts, working contexts) never comes back, even under `ne` (which otherwise matches facts lacking the field).",
         // No id-named parameter here (hence the empty `keys`) — this goes
         // through the shared helper purely for its `$ref` inlining, so
         // `filters[]` advertises `ColumnFilter`'s own fields instead of a
