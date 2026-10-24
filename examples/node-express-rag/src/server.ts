@@ -9,7 +9,7 @@ const VELESDB_URL = process.env.VELESDB_URL ?? "http://localhost:8080";
 const ingestSchema = z.object({
   id: z.string().min(1).max(256).optional(),
   text: z.string().min(1),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const searchSchema = z.object({
