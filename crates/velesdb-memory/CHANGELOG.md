@@ -50,8 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed, and a migration lock, a job-record read, or a diagnostic copy
   still accepts a hard-linked source.** `mcp::extraction_job_store`'s
   job-record reads, `migration::state::lock`'s ownership check
-  (`owns_current_lock`; its public `holder` lookup still follows a
-  symlink, see #2424), and `migration::diagnostic_copy`'s source copies
+  (`owns_current_lock`; its public `holder` lookup followed, see the
+  #2424 entry below), and `migration::diagnostic_copy`'s source copies
   each still decided a path was safe from a separate `symlink_metadata`
   call and then reopened the same path by name afterward — the same
   check-then-open shape #2404 closed elsewhere. All three now route
@@ -62,6 +62,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — and the diagnostic copy — read-only, over a tree it does not own —
   all accept the `nlink > 1` a hard-link based backup (`cp -al`, `rsync
   --link-dest`) routinely produces on an ordinary file (#2406, #2409).
+
+- **`MigrationLock::holder`, and the "record remains" refusal of
+  `MigrationLock::acquire` that quotes it, no longer read through a symlinked
+  `migration.lock` nor echo a foreign file's content (#2424).** `holder` still
+  reopened the record by name with `std::fs::read_to_string`, so a symlink
+  planted there surfaced its target's content in `acquire`'s error. It now
+  reads through the same symlink-refusing, size-bounded handle as
+  `owns_current_lock` (`None` for a symlink). That handle accepts a hard link
+  (hard-link backups), so `holder` now echoes a record only when it is a lock
+  record or a single short legacy `held_by=` line, and otherwise reports an
+  unrecognised record without its content. A record past the 4 KiB read bound
+  is refused whole instead of being parsed truncated, and `acquire` refuses up
+  front a holder name whose record would exceed that bound ("holder name too
+  long"), so no record that could never be read back, hence never released,
+  is ever written.
 
 - **`BoundedSessionManager` dropped the inner session manager's event store.**
   It wraps `rmcp`'s `SessionManager` to cap concurrent MCP HTTP sessions but

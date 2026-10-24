@@ -17,6 +17,12 @@ pub(in crate::migration) const LOCK_GUARD_FILE: &str = "migration.lock.guard";
 const LOCK_FORMAT_VERSION: u32 = 1;
 /// A genuine record is a few hundred bytes; anything past this is not one.
 const MAX_LOCK_RECORD_BYTES: u64 = 4096;
+/// Prefix of the legacy single-line record `holder` still echoes back.
+const LEGACY_HOLDER_PREFIX: &str = "held_by=";
+/// Longest legacy holder line `holder` echoes back verbatim.
+const MAX_LEGACY_HOLDER_BYTES: usize = 256;
+/// What `holder` reports for a record it will not echo.
+const UNRECOGNISED_HOLDER: &str = "unrecognised lock record, content not shown";
 static LOCK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Exclusive possession of a migration workspace.
@@ -53,12 +59,18 @@ impl MigrationLock {
     }
 
     /// Who holds the lock in `workspace`, as recorded, or `None` when free.
+    ///
+    /// Also `None` when the record cannot be read through the bounded,
+    /// symlink-refusing handle. A record that reads but is neither a lock
+    /// record nor a single short legacy `held_by=` line is reported as
+    /// unrecognised, its content withheld: `migration.lock` may be a hard
+    /// link to any readable file, and this string lands in error messages.
     #[must_use]
     pub fn holder(workspace: &Path) -> Option<String> {
         read_lock_body(&workspace.join(LOCK_FILE)).map(|body| {
             serde_json::from_str::<LockRecord>(&body).map_or_else(
-                |_| body.trim().to_owned(),
-                |record| format!("held_by={}", record.held_by),
+                |_| legacy_holder_line(&body).unwrap_or_else(|| UNRECOGNISED_HOLDER.to_owned()),
+                |record| format!("{LEGACY_HOLDER_PREFIX}{}", record.held_by),
             )
         })
     }
@@ -112,7 +124,8 @@ impl MigrationLock {
 /// `create_new` fail (`EEXIST`), so a later alias (a hard-link backup, `cp -al`)
 /// has nothing to intercept and `nlink > 1` would only refuse an untampered
 /// record (#2409 round 8); hence `_allow_hard_links`. The read is bounded so a
-/// swapped-in huge file cannot exhaust memory.
+/// swapped-in huge file cannot exhaust memory, and a body past the bound is
+/// refused whole rather than parsed truncated (possibly mid UTF-8 character).
 fn read_lock_body(path: &Path) -> Option<String> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -123,10 +136,19 @@ fn read_lock_body(path: &Path) -> Option<String> {
     )
     .ok()?;
     let mut body = String::new();
-    file.take(MAX_LOCK_RECORD_BYTES)
+    file.take(MAX_LOCK_RECORD_BYTES + 1)
         .read_to_string(&mut body)
         .ok()?;
-    Some(body)
+    (body.len() as u64 <= MAX_LOCK_RECORD_BYTES).then_some(body)
+}
+
+/// The body as a legacy `held_by=<name>` record: one line, short, no control
+/// characters. Anything else is not echoed back (#2424).
+fn legacy_holder_line(body: &str) -> Option<String> {
+    let line = body.trim();
+    let name = line.strip_prefix(LEGACY_HOLDER_PREFIX)?;
+    let printable = !name.is_empty() && !line.chars().any(char::is_control);
+    (printable && line.len() <= MAX_LEGACY_HOLDER_BYTES).then(|| line.to_owned())
 }
 
 fn open_and_lock_guard(workspace: &Path) -> Result<std::fs::File, String> {
@@ -188,6 +210,14 @@ fn create_lock_record(path: &Path, holder: &str) -> Result<String, String> {
     };
     let body = serde_json::to_vec_pretty(&record)
         .map_err(|err| format!("cannot serialise {LOCK_FILE}: {err}"))?;
+    // `read_lock_body` refuses a record past this bound, so one written
+    // anyway could never be released: refuse it before anything exists.
+    if body.len() as u64 > MAX_LOCK_RECORD_BYTES {
+        return Err(format!(
+            "refusing {LOCK_FILE}: holder name too long ({} byte record, limit {MAX_LOCK_RECORD_BYTES})",
+            body.len()
+        ));
+    }
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

@@ -132,3 +132,40 @@ fn a_symlinked_lock_record_is_never_read_for_its_holder() {
     let err = MigrationLock::acquire(workspace.path(), "run-B").expect_err("record remains");
     assert!(!err.contains("TOP-SECRET-CONTENT"), "leaked: {err}");
 }
+
+/// A holder name whose record would exceed what `read_lock_body` reads back
+/// is refused up front: a record written anyway would never parse again, so
+/// `release` could never remove it and the workspace would stay locked.
+#[test]
+fn an_oversized_holder_is_refused_before_any_record_exists() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let err = MigrationLock::acquire(workspace.path(), &"h".repeat(5000))
+        .expect_err("an oversized holder must be refused");
+    assert!(err.contains("holder name too long"), "{err}");
+    assert!(!workspace.path().join(LOCK_FILE).exists());
+
+    // Positive control: the refusal left the workspace usable.
+    let lock = MigrationLock::acquire(workspace.path(), "run-B").expect("still acquirable");
+    lock.release().expect("release");
+}
+
+/// The record is read through `_allow_hard_links` (hard-link backups), so a
+/// `migration.lock` hard-linked to some other readable file opens fine. Its
+/// content must still never surface through `holder` or `acquire`'s
+/// "record remains" refusal: only a single legacy `held_by=` line is echoed.
+#[test]
+fn a_hard_linked_foreign_file_is_never_echoed_as_its_holder() {
+    for foreign in ["TOP-SECRET-CONTENT\n", "held_by=x\nTOP-SECRET-CONTENT\n"] {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let secret = outside.path().join("secret");
+        std::fs::write(&secret, foreign).expect("write secret");
+        std::fs::hard_link(&secret, workspace.path().join(LOCK_FILE)).expect("plant hard link");
+
+        let holder = MigrationLock::holder(workspace.path()).expect("the record exists");
+        assert!(!holder.contains("TOP-SECRET-CONTENT"), "leaked: {holder}");
+        let err = MigrationLock::acquire(workspace.path(), "run-B").expect_err("record remains");
+        assert!(err.contains("record remains"), "{err}");
+        assert!(!err.contains("TOP-SECRET-CONTENT"), "leaked: {err}");
+    }
+}
