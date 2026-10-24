@@ -399,7 +399,8 @@ fn atomic_replace(src: &Path, dst: &Path) -> io::Result<()> {
                             backup = %backup.display(),
                             dst = %dst.display(),
                             error = %restore_err,
-                            "compaction: restoring the backup after a failed replace also failed"
+                            "compaction: restoring the backup after a failed replace also failed; \
+                             the .bak file is kept and recovered at the next open"
                         );
                     }
                 }
