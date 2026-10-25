@@ -96,6 +96,10 @@ workspace = true
 
 [dependencies.pest]
 version = "2.9.1"
+## Without `std`: that feature links `stacker`/`psm`, which Miri cannot run.
+## `persistence` turns it back on; see the note on that feature.
+default-features = false
+features = ["memchr"]
 
 [dependencies.pest_derive]
 version = "2.7"
@@ -103,7 +107,8 @@ version = "2.7"
 [features]
 ## Feature flags
 ##
-## - `persistence` (default): Enables mmap storage, WAL, rayon parallelism, and tokio async.
+## - `persistence` (default): Enables mmap storage, WAL, rayon parallelism, and tokio async,
+##   and pest's native-stack check on VelesQL parsing (see the note on its line below).
 ##   Disable for WASM builds: `velesdb-core = { default-features = false }`
 ## - `gpu`: Enables wgpu-based GPU acceleration for distance calculations.
 ## - `update-check`: Enables HTTP client for automatic version checking.
@@ -147,7 +152,17 @@ internal-bench = []
 ## to catch API drift).
 bench-sift1m = ["dep:flate2", "dep:tar", "dep:ureq", "dep:sha2"]
 openapi = ["dep:utoipa"]
-persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:fs2"]
+## `pest/std` is pest's native-stack check (pest 2.9.3+): on every rule entry
+## it reads the stack pointer through `stacker`/`psm` and fails the parse with
+## "stack limit reached" rather than overflowing. It is the second layer behind
+## the #896 nesting bound in `velesql/parser/prescan.rs`, and it belongs here
+## because it needs what this feature already assumes, a native OS target:
+## `psm` reads the stack pointer in assembly, which Miri cannot execute (the
+## `Miri UB Detection` job builds `--no-default-features`), and on
+## `wasm32-unknown-unknown` stacker finds no stack limit, so the check never
+## fired there. `pest_stack_guard_refuses_nesting_the_prescan_never_sees`
+## (`velesql/parser/robustness_tests.rs`) aborts if this line is dropped.
+persistence = ["dep:memmap2", "dep:rayon", "dep:tokio", "dep:fs2", "pest/std"]
 update-check = [
     "dep:reqwest",
     "dep:tokio",

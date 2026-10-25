@@ -212,6 +212,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: `Miri UB Detection` (`quality-deep.yml`) was red on `develop` since
+  #2468; VelesQL parsing keeps pest's stack check in every native build.**
+  #2468 moved pest to 2.9.4, whose default `std` feature now links `stacker`
+  and `psm` to check the remaining native stack on every rule entry. `psm`
+  reads the stack pointer in assembly, which Miri cannot execute, so
+  `cargo miri test --no-default-features -p velesdb-core -- velesql::parser::`
+  aborted at the first test that reached pest (`can't call foreign function
+  rust_psm_stack_pointer`). The job runs weekly or by hand, never on a pull
+  request, so the bump merged green. velesdb-core now takes pest without
+  `std`, and its default `persistence` feature turns `pest/std` back on:
+  every consumer that builds `persistence` (server, CLI, Python, Node,
+  mobile, migrate, Tauri plugin, velesdb-memory's default) links exactly what
+  it linked before, while a `--no-default-features` build (Miri,
+  `velesdb-wasm`, velesdb-memory without `persistence`) no longer links
+  `stacker`/`psm`. On `wasm32-unknown-unknown` stacker finds no stack limit,
+  so the check never fired there. The #896 pre-scan stays the first guard in
+  every build. A new test, `pest_stack_guard_refuses_nesting_the_prescan_never_sees`,
+  drives the generated parser past the pre-scan on a 256 KiB thread and
+  aborts if a default build loses `pest/std`. No test was skipped: the 128
+  parser tests run under Miri again.
 - **langchain: `ef_search` combined with `filter` (and a `search_quality`
   preset combined with `filter`) now raise a clear `ValueError` instead of a
   `TypeError` from inside the integration (part of #2302).** The binding's

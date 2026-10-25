@@ -238,3 +238,43 @@ fn parse_accepts_small_not_nesting() {
         other => panic!("expected top-level And, got {other:?}"),
     }
 }
+
+/// The second layer behind the #896 pre-scan: pest's own native-stack check.
+///
+/// pest (2.9.3+) reads the remaining stack on every rule entry, through
+/// `stacker`, and fails the parse with "stack limit reached" instead of
+/// overflowing. velesdb-core turns that check on with `persistence`
+/// (`pest/std`): Miri cannot run `stacker`'s assembly, and the Miri job
+/// builds `--no-default-features`. This test calls the generated parser
+/// directly, past the pre-scan, on a 256 KiB thread: if a default build ever
+/// loses `pest/std`, the thread overflows its stack and the test binary
+/// aborts.
+#[cfg(feature = "persistence")]
+#[test]
+fn pest_stack_guard_refuses_nesting_the_prescan_never_sees() {
+    use super::{Rule, VelesQLParser};
+    use pest::Parser as _;
+
+    let parse = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let query = format!(
+                "SELECT * FROM t WHERE {}a = 1{}",
+                "(".repeat(5000),
+                ")".repeat(5000)
+            );
+            VelesQLParser::parse(Rule::query, &query)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .expect("spawn the parser thread");
+
+    let err = parse
+        .join()
+        .expect("the parser thread must return, not overflow")
+        .expect_err("5000 nested parens on a 256 KiB stack must be refused");
+    assert!(
+        err.contains("stack limit reached"),
+        "unexpected parser error: {err}"
+    );
+}
