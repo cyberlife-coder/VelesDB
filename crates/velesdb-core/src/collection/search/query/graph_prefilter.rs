@@ -164,7 +164,9 @@ impl Collection {
         let index_results = self.storage.index.search_with_quality_and_bitmap(
             vector,
             candidates_k,
-            crate::SearchQuality::default(),
+            // Not `SearchQuality::default()`, which pins `Balanced` and ignores
+            // the configured `[search]` quality (#2430).
+            self.runtime_search_quality(),
             &bitmap,
         )?;
         let index_results = self.merge_delta(index_results, vector, candidates_k, metric);
