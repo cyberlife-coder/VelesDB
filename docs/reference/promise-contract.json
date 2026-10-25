@@ -385,7 +385,7 @@
       "id": "readme_rest_endpoint_count",
       "file": "README.md",
       "must_contain": "54 REST endpoints",
-      "validation_command": "test \"$(grep -cE '^  /' docs/openapi.yaml)\" -eq 54",
+      "validation_command": "test \"$(grep -cE '^  \"?/' docs/openapi.yaml)\" -eq 54",
       "executable": true,
       "source": "docs/openapi.yaml on this branch: 54 paths / 61 operations, including the relations + TTL endpoints and GET /metrics. Corroborated by crates/velesdb-server/src/routes.rs (54 .route() registrations). Endpoint count convention = OpenAPI paths.",
       "last_updated": "2026-07-10",

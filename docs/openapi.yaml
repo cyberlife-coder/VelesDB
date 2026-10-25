@@ -24,33 +24,33 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/QueryRequest'
+              $ref: "#/components/schemas/QueryRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Aggregation results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AggregationResponse'
-        '400':
+                $ref: "#/components/schemas/AggregationResponse"
+        "400":
           description: Query syntax error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/QueryErrorResponse'
-        '404':
+                $ref: "#/components/schemas/QueryErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VelesqlErrorResponse'
-        '422':
+                $ref: "#/components/schemas/VelesqlErrorResponse"
+        "422":
           description: Aggregation validation/execution error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VelesqlErrorResponse'
+                $ref: "#/components/schemas/VelesqlErrorResponse"
   /collections:
     get:
       tags:
@@ -58,7 +58,7 @@ paths:
       summary: List all collections.
       operationId: list_collections
       responses:
-        '200':
+        "200":
           description: List of collections
           content:
             application/json:
@@ -73,24 +73,24 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateCollectionRequest'
+              $ref: "#/components/schemas/CreateCollectionRequest"
         required: true
       responses:
-        '201':
+        "201":
           description: Collection created
           content:
             application/json:
               schema:
                 type: object
-        '400':
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}":
     get:
       tags:
       - collections
@@ -104,18 +104,18 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Collection details
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CollectionResponse'
-        '404':
+                $ref: "#/components/schemas/CollectionResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
     delete:
       tags:
       - collections
@@ -129,19 +129,19 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Collection deleted
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/analyze:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/analyze":
     post:
       tags:
       - collections
@@ -155,34 +155,30 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Collection analyzed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CollectionStatsResponse'
-        '404':
+                $ref: "#/components/schemas/CollectionStatsResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Analysis failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/compact:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/compact":
     post:
       tags:
       - collections
-      summary: |-
-        Compacts the vector storage of a collection, rewriting active vectors
-        into a contiguous layout and reclaiming disk space from deleted entries.
-      description: |-
-        This is a blocking operation that may involve significant I/O for
-        large, fragmented collections.
+      summary: "Compacts the vector storage of a collection, rewriting active vectors\ninto a contiguous layout and reclaiming disk space from deleted entries."
+      description: "This is a blocking operation that may involve significant I/O for\nlarge, fragmented collections."
       operationId: compact_collection
       parameters:
       - name: name
@@ -192,25 +188,25 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Storage compacted
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Compaction failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/config:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/config":
     get:
       tags:
       - collections
@@ -224,19 +220,19 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Collection configuration
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CollectionConfigResponse'
-        '404':
+                $ref: "#/components/schemas/CollectionConfigResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/diagnostics:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/diagnostics":
     get:
       tags:
       - collections
@@ -250,19 +246,19 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Collection diagnostics
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CollectionDiagnosticsResponse'
-        '404':
+                $ref: "#/components/schemas/CollectionDiagnosticsResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/empty:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/empty":
     get:
       tags:
       - collections
@@ -276,19 +272,19 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Empty status
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/flush:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/flush":
     post:
       tags:
       - collections
@@ -302,25 +298,25 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Flushed successfully
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Flush failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/edges:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/edges":
     get:
       tags:
       - graph
@@ -340,33 +336,33 @@ paths:
         schema:
           type:
           - string
-          - 'null'
+          - "null"
         example: KNOWS
       responses:
-        '200':
+        "200":
           description: Edges retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EdgesResponse'
-        '400':
+                $ref: "#/components/schemas/EdgesResponse"
+        "400":
           description: Missing required 'label' query parameter
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       tags:
       - graph
@@ -382,32 +378,32 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AddEdgeRequest'
+              $ref: "#/components/schemas/AddEdgeRequest"
         required: true
       responses:
-        '201':
+        "201":
           description: Edge added successfully
-        '400':
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found, or source/target node has no stored payload (VELES-022 NodeNotFound)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/edges/batch:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/edges/batch":
     post:
       tags:
       - graph
@@ -423,36 +419,36 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AddEdgesBatchRequest'
+              $ref: "#/components/schemas/AddEdgesBatchRequest"
         required: true
       responses:
-        '201':
+        "201":
           description: Edges added successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AddEdgesBatchResponse'
-        '400':
+                $ref: "#/components/schemas/AddEdgesBatchResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found, or a source/target node has no stored payload (VELES-022 NodeNotFound) — the whole batch is rejected
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/edges/count:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/edges/count":
     get:
       tags:
       - graph
@@ -466,19 +462,19 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Edge count retrieved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EdgeCountResponse'
-        '404':
+                $ref: "#/components/schemas/EdgeCountResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/edges/{edge_id}:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/edges/{edge_id}":
     delete:
       tags:
       - graph
@@ -499,21 +495,21 @@ paths:
           type: string
           pattern: ^[0-9]+$
       responses:
-        '204':
+        "204":
           description: Edge removed successfully
-        '404':
+        "404":
           description: Edge or collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/nodes:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/nodes":
     get:
       tags:
       - graph
@@ -527,19 +523,19 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Node list retrieved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NodeListResponse'
-        '404':
+                $ref: "#/components/schemas/NodeListResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/nodes/{node_id}/degree:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/nodes/{node_id}/degree":
     get:
       tags:
       - graph
@@ -560,25 +556,25 @@ paths:
           type: string
           pattern: ^[0-9]+$
       responses:
-        '200':
+        "200":
           description: Degree retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DegreeResponse'
-        '404':
+                $ref: "#/components/schemas/DegreeResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/nodes/{node_id}/edges:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/nodes/{node_id}/edges":
     get:
       tags:
       - graph
@@ -600,7 +596,7 @@ paths:
           pattern: ^[0-9]+$
       - name: direction
         in: query
-        description: 'Filter by direction: "in", "out", or "both".'
+        description: "Filter by direction: \"in\", \"out\", or \"both\"."
         required: false
         schema:
           type: string
@@ -612,22 +608,22 @@ paths:
         schema:
           type:
           - string
-          - 'null'
+          - "null"
         example: KNOWS
       responses:
-        '200':
+        "200":
           description: Node edges retrieved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EdgesResponse'
-        '404':
+                $ref: "#/components/schemas/EdgesResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/nodes/{node_id}/payload:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/nodes/{node_id}/payload":
     get:
       tags:
       - graph
@@ -648,24 +644,24 @@ paths:
           type: string
           pattern: ^[0-9]+$
       responses:
-        '200':
+        "200":
           description: Payload retrieved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NodePayloadResponse'
-        '404':
+                $ref: "#/components/schemas/NodePayloadResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
     put:
       tags:
       - graph
@@ -689,26 +685,26 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpsertNodePayloadRequest'
+              $ref: "#/components/schemas/UpsertNodePayloadRequest"
         required: true
       responses:
-        '204':
+        "204":
           description: Payload stored successfully
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/search:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/search":
     post:
       tags:
       - graph
@@ -724,36 +720,36 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GraphSearchRequest'
+              $ref: "#/components/schemas/GraphSearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Graph search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GraphSearchResponse'
-        '400':
+                $ref: "#/components/schemas/GraphSearchResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/traverse:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/traverse":
     post:
       tags:
       - graph
@@ -769,36 +765,36 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TraverseRequest'
+              $ref: "#/components/schemas/TraverseRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Traversal completed successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TraverseResponse'
-        '400':
+                $ref: "#/components/schemas/TraverseResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/graph/traverse/parallel:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/graph/traverse/parallel":
     post:
       tags:
       - graph
@@ -814,40 +810,35 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ParallelTraverseRequest'
+              $ref: "#/components/schemas/ParallelTraverseRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Parallel traversal completed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TraverseResponse'
-        '400':
+                $ref: "#/components/schemas/TraverseResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/graph/traverse/stream:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/graph/traverse/stream":
     get:
       tags:
       - graph
       summary: Stream graph traversal results via SSE.
-      description: |-
-        The traversal runs to completion first, then its events are sent:
-        - `node`: each node reached
-        - `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event
-        - `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last
-        - `error`: sent alone instead, when the traversal cannot run
+      description: "The traversal runs to completion first, then its events are sent:\n- `node`: each node reached\n- `stats`: `nodes_visited` and `elapsed_ms`, after every 100th `node` event\n- `done`: `total_nodes`, `max_depth_reached` and `elapsed_ms`, last\n- `error`: sent alone instead, when the traversal cannot run"
       operationId: stream_traverse
       parameters:
       - name: name
@@ -863,10 +854,10 @@ paths:
         schema:
           type: string
           pattern: ^[0-9]+$
-        example: '123'
+        example: "123"
       - name: algorithm
         in: query
-        description: 'Traversal algorithm: "bfs" or "dfs".'
+        description: "Traversal algorithm: \"bfs\" or \"dfs\"."
         required: false
         schema:
           type: string
@@ -895,23 +886,17 @@ paths:
         schema:
           type:
           - string
-          - 'null'
+          - "null"
         example: KNOWS,FOLLOWS
       responses:
-        '200':
+        "200":
           description: SSE stream of traversal events (node, stats, done, error)
-  /collections/{name}/index/rebuild:
+  "/collections/{name}/index/rebuild":
     post:
       tags:
       - collections
-      summary: |-
-        Rebuilds the HNSW index of a vector collection, reclaiming memory
-        occupied by tombstoned entries and producing a fresh graph from
-        the current vector storage.
-      description: |-
-        This is a blocking operation: for large collections it may take
-        several seconds. The response includes the number of entries that
-        were compacted during the rebuild.
+      summary: "Rebuilds the HNSW index of a vector collection, reclaiming memory\noccupied by tombstoned entries and producing a fresh graph from\nthe current vector storage."
+      description: "This is a blocking operation: for large collections it may take\nseveral seconds. The response includes the number of entries that\nwere compacted during the rebuild."
       operationId: rebuild_index
       parameters:
       - name: name
@@ -921,25 +906,25 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Index rebuilt
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Rebuild failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/indexes:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/indexes":
     get:
       tags:
       - indexes
@@ -953,18 +938,18 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: List of indexes
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ListIndexesResponse'
-        '404':
+                $ref: "#/components/schemas/ListIndexesResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       tags:
       - indexes
@@ -981,30 +966,30 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateIndexRequest'
+              $ref: "#/components/schemas/CreateIndexRequest"
         required: true
       responses:
-        '201':
+        "201":
           description: Index created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/IndexResponse'
-        '400':
+                $ref: "#/components/schemas/IndexResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/indexes/{label}/{property}:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/indexes/{label}/{property}":
     delete:
       tags:
       - indexes
@@ -1030,30 +1015,24 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Index deleted
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Index or collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/locality/reorder:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/locality/reorder":
     post:
       tags:
       - collections
-      summary: |-
-        Reorders the HNSW adjacency lists and vector storage for cache
-        locality so nodes traversed together during search sit close in
-        memory (issue #377). No-op for collections with fewer than 1 000
-        vectors. Recall is preserved — only the physical layout changes.
-      description: |-
-        This is a blocking operation that may involve significant I/O for
-        large collections.
+      summary: "Reorders the HNSW adjacency lists and vector storage for cache\nlocality so nodes traversed together during search sit close in\nmemory (issue #377). No-op for collections with fewer than 1 000\nvectors. Recall is preserved — only the physical layout changes."
+      description: "This is a blocking operation that may involve significant I/O for\nlarge collections."
       operationId: reorder_for_locality
       parameters:
       - name: name
@@ -1063,57 +1042,30 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Locality reordered
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Reorder failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/match:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/match":
     post:
       tags:
       - graph
       summary: Execute a MATCH query on a collection.
-      description: |-
-        # Endpoint
-
-        `POST /collections/{name}/match`
-
-        # Example Request
-
-        ```json
-        {
-          "query": "MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name",
-          "params": {
-            "v": [0.1, 0.2, 0.3]
-          }
-        }
-        ```
-
-        # Errors
-
-        When the query fails with a core error, the JSON body carries its
-        `VELES-XXX` code, and the status follows its variant:
-        - `404 NOT_FOUND` (`VELES-002`) — collection not found
-        - `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,
-          invalid threshold, or an unbound query parameter
-        - otherwise: `404 NOT_FOUND` for a missing point, edge or node;
-          `409 CONFLICT` for a collection or edge that already exists;
-          `400 BAD_REQUEST` for other invalid input; `503 SERVICE_UNAVAILABLE`
-          for a locked database or a guard rail; `500 INTERNAL_SERVER_ERROR` for
-          anything else
+      description: "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nWhen the query fails with a core error, the JSON body carries its\n`VELES-XXX` code, and the status follows its variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- otherwise: `404 NOT_FOUND` for a missing point, edge or node;\n  `409 CONFLICT` for a collection or edge that already exists;\n  `400 BAD_REQUEST` for other invalid input; `503 SERVICE_UNAVAILABLE`\n  for a locked database or a guard rail; `500 INTERNAL_SERVER_ERROR` for\n  anything else"
       operationId: match_query
       parameters:
       - name: name
@@ -1126,42 +1078,42 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MatchQueryRequest'
+              $ref: "#/components/schemas/MatchQueryRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Match query results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MatchQueryResponse'
-        '400':
+                $ref: "#/components/schemas/MatchQueryResponse"
+        "400":
           description: Parse error or invalid query
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
           description: A guard rail stopped the query
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/points:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/points":
     post:
       tags:
       - points
@@ -1178,53 +1130,35 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpsertPointsRequest'
+              $ref: "#/components/schemas/UpsertPointsRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Points upserted
           content:
             application/json:
               schema:
                 type: object
-        '400':
+        "400":
           description: Invalid request or batch too large
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/points/delete:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/points/delete":
     post:
       tags:
       - points
       summary: Deletes multiple points by ID in a single request.
-      description: |-
-        Accepts a JSON body with a list of point IDs. All IDs are passed to
-        the underlying `Collection::delete(&[u64])` in one call, which is
-        more efficient than individual deletions.
-
-        Returns the number of points that were requested for deletion.
-        Points that do not exist are silently skipped (idempotent delete).
-
-        # Empty payload semantics
-
-        `{ "ids": [] }` is treated as a successful no-op: the response is
-        `200 OK` with `deleted_count = 0`. This matches Kubernetes-style
-        idempotent batch APIs and lets callers send empty batches without
-        special-casing on the client side.
-
-        # Limits
-
-        Batches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with
-        `400 BAD_REQUEST`.
+      description: "Accepts a JSON body with a list of point IDs. All IDs are passed to\nthe underlying `Collection::delete(&[u64])` in one call, which is\nmore efficient than individual deletions.\n\nReturns the number of points that were requested for deletion.\nPoints that do not exist are silently skipped (idempotent delete).\n\n# Empty payload semantics\n\n`{ \"ids\": [] }` is treated as a successful no-op: the response is\n`200 OK` with `deleted_count = 0`. This matches Kubernetes-style\nidempotent batch APIs and lets callers send empty batches without\nspecial-casing on the client side.\n\n# Limits\n\nBatches larger than `MAX_BULK_DELETE_SIZE` (10000) are rejected with\n`400 BAD_REQUEST`."
       operationId: bulk_delete_points
       parameters:
       - name: name
@@ -1237,46 +1171,41 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BulkDeleteRequest'
+              $ref: "#/components/schemas/BulkDeleteRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Points deleted
           content:
             application/json:
               schema:
                 type: object
-        '400':
+        "400":
           description: Batch too large
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Delete failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/points/raw:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/points/raw":
     post:
       tags:
       - points
       summary: Bulk upsert points via the binary wire format.
-      description: |-
-        Accepts an `application/octet-stream` body in the VRB1 raw-bulk format
-        (a 16-byte header — magic, count, dim, id_width — followed by tightly-packed
-        `u64` ids and `f32` vectors). The vectors are forwarded to
-        `Collection::upsert_bulk_from_raw` (zero per-point `Point` allocation).
-        Payloads are not supported on this path.
+      description: "Accepts an `application/octet-stream` body in the VRB1 raw-bulk format\n(a 16-byte header — magic, count, dim, id_width — followed by tightly-packed\n`u64` ids and `f32` vectors). The vectors are forwarded to\n`Collection::upsert_bulk_from_raw` (zero per-point `Point` allocation).\nPayloads are not supported on this path."
       operationId: upsert_points_raw
       parameters:
       - name: name
@@ -1286,32 +1215,32 @@ paths:
         schema:
           type: string
       requestBody:
-        description: 'VRB1 binary bulk format: header + packed u64 ids + packed f32 vectors'
+        description: "VRB1 binary bulk format: header + packed u64 ids + packed f32 vectors"
         content:
           application/octet-stream:
             schema:
               type: string
         required: true
       responses:
-        '200':
+        "200":
           description: Points upserted
           content:
             application/json:
               schema:
                 type: object
-        '400':
+        "400":
           description: Malformed body or dimension mismatch
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/points/scroll:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/points/scroll":
     post:
       tags:
       - points
@@ -1328,44 +1257,35 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ScrollRequest'
+              $ref: "#/components/schemas/ScrollRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Scroll batch
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ScrollResponse'
-        '400':
+                $ref: "#/components/schemas/ScrollResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/points/stream:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/points/stream":
     post:
       tags:
       - points
       summary: Stream upsert points using NDJSON.
-      description: |-
-        Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,
-        whose `id` is an unsigned 64-bit integer: a line that is not blank and does
-        not parse as one, a string `id` included, is counted in the response's
-        `malformed` field.
-        Points are accumulated into micro-batches and flushed via `upsert_bulk`.
-
-        The response body includes a `network_errors` field: a non-zero value means
-        the HTTP body stream was truncated (e.g., client disconnect or proxy error),
-        and the server may have received fewer points than the client sent (M-7).
+      description: "Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,\nwhose `id` is an unsigned 64-bit integer: a line that is not blank and does\nnot parse as one, a string `id` included, is counted in the response's\n`malformed` field.\nPoints are accumulated into micro-batches and flushed via `upsert_bulk`.\n\nThe response body includes a `network_errors` field: a non-zero value means\nthe HTTP body stream was truncated (e.g., client disconnect or proxy error),\nand the server may have received fewer points than the client sent (M-7)."
       operationId: stream_upsert_points
       parameters:
       - name: name
@@ -1382,19 +1302,19 @@ paths:
               type: string
         required: true
       responses:
-        '200':
+        "200":
           description: Stream processed
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/points/{id}:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/points/{id}":
     get:
       tags:
       - points
@@ -1415,18 +1335,18 @@ paths:
           type: string
           pattern: ^[0-9]+$
       responses:
-        '200':
+        "200":
           description: Point found
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Point or collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
     delete:
       tags:
       - points
@@ -1447,19 +1367,19 @@ paths:
           type: string
           pattern: ^[0-9]+$
       responses:
-        '200':
+        "200":
           description: Point deleted
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Point or collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/points/{id}/relations:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/points/{id}/relations":
     get:
       tags:
       - graph
@@ -1480,34 +1400,30 @@ paths:
           type: string
           pattern: ^[0-9]+$
       responses:
-        '200':
+        "200":
           description: Outgoing relations
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RelationsResponse'
-        '404':
+                $ref: "#/components/schemas/RelationsResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/points/{id}/ttl:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/points/{id}/ttl":
     patch:
       tags:
       - points
       summary: Set (or refresh) the durable TTL of a point.
-      description: |-
-        Persists `_veles_expires_at` in the point's payload so the expiry
-        survives a restart. A `ttl_seconds` of `0` expires the point immediately.
-        Expired points are excluded from all read surfaces (search/get/scroll/query);
-        refreshing an expired point returns 404; storage is reclaimed lazily.
+      description: "Persists `_veles_expires_at` in the point's payload so the expiry\nsurvives a restart. A `ttl_seconds` of `0` expires the point immediately.\nExpired points are excluded from all read surfaces (search/get/scroll/query);\nrefreshing an expired point returns 404; storage is reclaimed lazily."
       operationId: set_point_ttl
       parameters:
       - name: name
@@ -1527,39 +1443,37 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SetTtlRequest'
+              $ref: "#/components/schemas/SetTtlRequest"
         required: true
       responses:
-        '204':
+        "204":
           description: TTL set successfully
-        '400':
+        "400":
           description: Non-object payload
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection or point not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/relations:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/relations":
     post:
       tags:
       - graph
       summary: Create a relation edge between two points in a collection.
-      description: |-
-        Works on vector, graph, and metadata collections alike.
-        The edge ID is auto-assigned; the response body carries the allocated value.
+      description: "Works on vector, graph, and metadata collections alike.\nThe edge ID is auto-assigned; the response body carries the allocated value."
       operationId: relate_points
       parameters:
       - name: name
@@ -1572,36 +1486,36 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RelateRequest'
+              $ref: "#/components/schemas/RelateRequest"
         required: true
       responses:
-        '201':
+        "201":
           description: Relation created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RelateResponse'
-        '400':
+                $ref: "#/components/schemas/RelateResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found, or source/target point has no stored payload (VELES-022 NodeNotFound)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/relations/{edge_id}:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/relations/{edge_id}":
     delete:
       tags:
       - graph
@@ -1622,21 +1536,21 @@ paths:
           type: string
           pattern: ^[0-9]+$
       responses:
-        '204':
+        "204":
           description: Relation removed
-        '404':
+        "404":
           description: Collection or edge not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/sanity:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/sanity":
     get:
       tags:
       - collections
@@ -1650,28 +1564,24 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Collection sanity status
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/search:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/search":
     post:
       tags:
       - search
       summary: Search for similar vectors.
-      description: |-
-        Auto-detects search mode:
-        - **Dense**: `vector` only (existing behavior)
-        - **Sparse**: `sparse_vector` only
-        - **Hybrid**: both `vector` and `sparse_vector` (fused via RRF/RSF)
+      description: "Auto-detects search mode:\n- **Dense**: `vector` only (existing behavior)\n- **Sparse**: `sparse_vector` only\n- **Hybrid**: both `vector` and `sparse_vector` (fused via RRF/RSF)"
       operationId: search
       parameters:
       - name: name
@@ -1684,34 +1594,34 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SearchRequest'
+              $ref: "#/components/schemas/SearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchResponse'
-        '400':
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
           description: A field of the wrong type, such as a negative or non-integer ef_search
           content:
             text/plain:
               schema:
                 type: string
-  /collections/{name}/search/batch:
+  "/collections/{name}/search/batch":
     post:
       tags:
       - search
@@ -1728,34 +1638,34 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BatchSearchRequest'
+              $ref: "#/components/schemas/BatchSearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Batch search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BatchSearchResponse'
-        '400':
+                $ref: "#/components/schemas/BatchSearchResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
           description: A field of the wrong type in an entry, such as a negative ef_search
           content:
             text/plain:
               schema:
                 type: string
-  /collections/{name}/search/hybrid:
+  "/collections/{name}/search/hybrid":
     post:
       tags:
       - search
@@ -1772,39 +1682,35 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/HybridSearchRequest'
+              $ref: "#/components/schemas/HybridSearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Hybrid search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchResponse'
-        '400':
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/search/ids:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/search/ids":
     post:
       tags:
       - search
       summary: Lightweight search returning only IDs and scores (no payload hydration).
-      description: |-
-        Accepts the same request body as the standard `/search` endpoint, for a
-        dense, sparse or hybrid search. `mode` is checked on every shape but
-        applied only to a dense search with neither a `filter` nor `ef_search`:
-        `ef_search` wins over it, and a filtered search applies neither (#457).
+      description: "Accepts the same request body as the standard `/search` endpoint, for a\ndense, sparse or hybrid search. `mode` is checked on every shape but\napplied only to a dense search with neither a `filter` nor `ef_search`:\n`ef_search` wins over it, and a filtered search applies neither (#457)."
       operationId: search_ids
       parameters:
       - name: name
@@ -1817,34 +1723,34 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SearchRequest'
+              $ref: "#/components/schemas/SearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: IDs-only search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchIdsResponse'
-        '400':
+                $ref: "#/components/schemas/SearchIdsResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
           description: A field of the wrong type, such as a negative or non-integer ef_search
           content:
             text/plain:
               schema:
                 type: string
-  /collections/{name}/search/multi:
+  "/collections/{name}/search/multi":
     post:
       tags:
       - search
@@ -1861,38 +1767,35 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MultiQuerySearchRequest'
+              $ref: "#/components/schemas/MultiQuerySearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Multi-query search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchResponse'
-        '404':
+                $ref: "#/components/schemas/SearchResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "500":
           description: Internal server error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/search/multi/ids:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/search/multi/ids":
     post:
       tags:
       - search
       summary: Multi-query fusion search returning only ids and scores (no payloads).
-      description: |-
-        Faster than `/search/multi` when payloads are not needed: the core
-        `multi_query_search_ids` kernel skips payload hydration. Metadata filters
-        are not supported here — use `/search/multi` for filtered fusion.
+      description: "Faster than `/search/multi` when payloads are not needed: the core\n`multi_query_search_ids` kernel skips payload hydration. Metadata filters\nare not supported here — use `/search/multi` for filtered fusion."
       operationId: multi_query_search_ids
       parameters:
       - name: name
@@ -1905,30 +1808,30 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MultiQuerySearchRequest'
+              $ref: "#/components/schemas/MultiQuerySearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Multi-query ids-only results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchIdsResponse'
-        '400':
+                $ref: "#/components/schemas/SearchIdsResponse"
+        "400":
           description: Invalid request
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/search/text:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/search/text":
     post:
       tags:
       - search
@@ -1945,24 +1848,24 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TextSearchRequest'
+              $ref: "#/components/schemas/TextSearchRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Text search results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SearchResponse'
-        '404':
+                $ref: "#/components/schemas/SearchResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/stats:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/stats":
     get:
       tags:
       - collections
@@ -1976,38 +1879,30 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Collection statistics
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CollectionStatsResponse'
-        '404':
+                $ref: "#/components/schemas/CollectionStatsResponse"
+        "404":
           description: No statistics available
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Failed to read stats
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/stream/enable:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/stream/enable":
     post:
       tags:
       - points
       summary: Enable streaming ingestion on a collection.
-      description: |-
-        Spawns the background drain task so subsequent calls to
-        `/collections/{name}/stream/insert` accept points instead of returning a
-        `409 Conflict` "streaming not configured" error. Omitted body fields fall
-        back to the engine defaults. Calling this again replaces the existing
-        ingester (the old drain task is aborted).
-
-        Returns `200 OK` on success and `404 Not Found` when the collection does
-        not exist.
+      description: "Spawns the background drain task so subsequent calls to\n`/collections/{name}/stream/insert` accept points instead of returning a\n`409 Conflict` \"streaming not configured\" error. Omitted body fields fall\nback to the engine defaults. Calling this again replaces the existing\ningester (the old drain task is aborted).\n\nReturns `200 OK` on success and `404 Not Found` when the collection does\nnot exist."
       operationId: enable_streaming
       parameters:
       - name: name
@@ -2020,35 +1915,29 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EnableStreamingRequest'
+              $ref: "#/components/schemas/EnableStreamingRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Streaming enabled
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-  /collections/{name}/stream/insert:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+  "/collections/{name}/stream/insert":
     post:
       tags:
       - points
       summary: Stream-insert a single point via the bounded ingestion channel.
-      description: |-
-        Returns 202 Accepted on success, 429 Too Many Requests when the buffer is
-        full (with `Retry-After: 1` header per RFC 7231), 503 Service Unavailable
-        when the drain task has exited, and 404 when the collection is not found.
-
-        This handler is `async` to satisfy Axum's handler contract; it does not
-        perform any async I/O internally (the channel send is non-blocking).
+      description: "Returns 202 Accepted on success, 429 Too Many Requests when the buffer is\nfull (with `Retry-After: 1` header per RFC 7231), 503 Service Unavailable\nwhen the drain task has exited, and 404 when the collection is not found.\n\nThis handler is `async` to satisfy Axum's handler contract; it does not\nperform any async I/O internally (the channel send is non-blocking)."
       operationId: stream_insert
       parameters:
       - name: name
@@ -2061,50 +1950,43 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/StreamInsertRequest'
+              $ref: "#/components/schemas/StreamInsertRequest"
         required: true
       responses:
-        '202':
+        "202":
           description: Point accepted into streaming buffer
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
           description: Streaming not configured
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
-        '429':
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
+        "429":
           description: Streaming buffer full — retry after 1 second
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
           description: Streaming drain task has exited — collection must be reconfigured
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /collections/{name}/vacuum:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/collections/{name}/vacuum":
     post:
       tags:
       - collections
-      summary: |-
-        Vacuums the HNSW index of a vector collection, removing tombstoned
-        entries and rebuilding the graph from current vectors.
-      description: |-
-        Semantically equivalent to `POST /collections/{name}/index/rebuild`
-        but exposed under a more intuitive maintenance-oriented name.
-
-        This is a blocking operation: for large collections it may take
-        several seconds.
+      summary: "Vacuums the HNSW index of a vector collection, removing tombstoned\nentries and rebuilding the graph from current vectors."
+      description: "Semantically equivalent to `POST /collections/{name}/index/rebuild`\nbut exposed under a more intuitive maintenance-oriented name.\n\nThis is a blocking operation: for large collections it may take\nseveral seconds."
       operationId: vacuum_collection
       parameters:
       - name: name
@@ -2114,24 +1996,24 @@ paths:
         schema:
           type: string
       responses:
-        '200':
+        "200":
           description: Index vacuumed
           content:
             application/json:
               schema:
                 type: object
-        '404':
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
           description: Vacuum failed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: "#/components/schemas/ErrorResponse"
   /guardrails:
     get:
       tags:
@@ -2139,12 +2021,12 @@ paths:
       summary: Get current guard-rails configuration.
       operationId: get_guardrails
       responses:
-        '200':
+        "200":
           description: Current guard-rails config
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GuardRailsConfigResponse'
+                $ref: "#/components/schemas/GuardRailsConfigResponse"
     put:
       tags:
       - guardrails
@@ -2154,17 +2036,17 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/GuardRailsConfigRequest'
+              $ref: "#/components/schemas/GuardRailsConfigRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Updated guard-rails config
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GuardRailsConfigResponse'
-        '422':
-          $ref: '#/components/responses/MalformedBody'
+                $ref: "#/components/schemas/GuardRailsConfigResponse"
+        "422":
+          $ref: "#/components/responses/MalformedBody"
   /health:
     get:
       tags:
@@ -2172,7 +2054,7 @@ paths:
       summary: Liveness probe — always returns 200 OK.
       operationId: health_check
       responses:
-        '200':
+        "200":
           description: Server is alive
           content:
             application/json:
@@ -2186,95 +2068,88 @@ paths:
       description: Returns metrics in Prometheus exposition format, including plan cache stats.
       operationId: prometheus_metrics
       responses:
-        '200':
+        "200":
           description: Prometheus metrics
           content:
             text/plain: {}
-        '500':
+        "500":
           description: Internal server error
   /query:
     post:
       tags:
       - query
       summary: Execute a VelesQL query.
-      description: |-
-        BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)
-        and routes them to execute_aggregate for proper handling.
-
-        DDL statements (CREATE/DROP COLLECTION) are intercepted before collection
-        resolution and dispatched directly through `Database::execute_query`.
+      description: "BUG-1 FIX: Automatically detects aggregation queries (GROUP BY, COUNT, SUM, etc.)\nand routes them to execute_aggregate for proper handling.\n\nDDL statements (CREATE/DROP COLLECTION) are intercepted before collection\nresolution and dispatched directly through `Database::execute_query`."
       operationId: query
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/QueryRequest'
+              $ref: "#/components/schemas/QueryRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Query results
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/QueryResponse'
-        '400':
+                $ref: "#/components/schemas/QueryResponse"
+        "400":
           description: Query syntax error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/QueryErrorResponse'
-        '404':
+                $ref: "#/components/schemas/QueryErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VelesqlErrorResponse'
-        '422':
+                $ref: "#/components/schemas/VelesqlErrorResponse"
+        "422":
           description: Query validation/execution error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VelesqlErrorResponse'
+                $ref: "#/components/schemas/VelesqlErrorResponse"
   /query/explain:
     post:
       tags:
       - query
       summary: Explain a VelesQL query, optionally executing it with instrumentation.
-      description: |-
-        When `analyze` is false (default), returns the estimated plan only.
-        When `analyze` is true, executes the query and returns actual statistics.
+      description: "When `analyze` is false (default), returns the estimated plan only.\nWhen `analyze` is true, executes the query and returns actual statistics."
       operationId: explain
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExplainRequest'
+              $ref: "#/components/schemas/ExplainRequest"
         required: true
       responses:
-        '200':
+        "200":
           description: Query plan
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ExplainResponse'
-        '400':
+                $ref: "#/components/schemas/ExplainResponse"
+        "400":
           description: Query syntax error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/QueryErrorResponse'
-        '404':
+                $ref: "#/components/schemas/QueryErrorResponse"
+        "404":
           description: Collection not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VelesqlErrorResponse'
-        '422':
+                $ref: "#/components/schemas/VelesqlErrorResponse"
+        "422":
           description: Query validation/execution error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VelesqlErrorResponse'
+                $ref: "#/components/schemas/VelesqlErrorResponse"
   /ready:
     get:
       tags:
@@ -2282,13 +2157,13 @@ paths:
       summary: Readiness probe — returns 200 when the database is fully loaded, 503 otherwise.
       operationId: readiness_check
       responses:
-        '200':
+        "200":
           description: Server is ready to accept requests
           content:
             application/json:
               schema:
                 type: object
-        '503':
+        "503":
           description: Server is not yet ready
           content:
             application/json:
@@ -2298,17 +2173,7 @@ components:
   schemas:
     ActualStatsResponse:
       type: object
-      description: |-
-        Actual execution statistics for EXPLAIN ANALYZE responses.
-
-        `actual_rows`, `actual_time_ms`, and `loops` are measured. The graph
-        traversal counters `nodes_visited` / `edges_traversed` are **strategy-
-        dependent approximations** (a lower bound, not an exact figure):
-        `VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and
-        `Parallel` double-counts a node touched by both legs. The
-        `traversal_counters_approximate` flag exposes this honesty contract in a
-        machine-readable form (backlog #26), mirroring the `estimated` flag of
-        `NodeStatsResponse`.
+      description: "Actual execution statistics for EXPLAIN ANALYZE responses.\n\n`actual_rows`, `actual_time_ms`, and `loops` are measured. The graph\ntraversal counters `nodes_visited` / `edges_traversed` are **strategy-\ndependent approximations** (a lower bound, not an exact figure):\n`VectorFirst` undercounts via its `limit(1)` existence-BFS frontier and\n`Parallel` double-counts a node touched by both legs. The\n`traversal_counters_approximate` flag exposes this honesty contract in a\nmachine-readable form (backlog #26), mirroring the `estimated` flag of\n`NodeStatsResponse`."
       required:
       - actual_rows
       - actual_time_ms
@@ -2329,19 +2194,13 @@ components:
         edges_traversed:
           type: integer
           format: int64
-          description: |-
-            Approximate number of edges traversed during MATCH graph traversal.
-            See `traversal_counters_approximate`; 0 for non-graph queries.
+          description: "Approximate number of edges traversed during MATCH graph traversal.\nSee `traversal_counters_approximate`; 0 for non-graph queries."
           minimum: 0
         executed_filter_strategy:
           type:
           - string
-          - 'null'
-          description: |-
-            Filter strategy the executor actually ran, recorded at the dispatch
-            site (see `FilterStrategy::as_str`). Present for single SELECTs that
-            went through the filtered vector-search dispatch; absent for MATCH,
-            compound queries, and arms where pre/post-filter does not apply.
+          - "null"
+          description: "Filter strategy the executor actually ran, recorded at the dispatch\nsite (see `FilterStrategy::as_str`). Present for single SELECTs that\nwent through the filtered vector-search dispatch; absent for MATCH,\ncompound queries, and arms where pre/post-filter does not apply."
         loops:
           type: integer
           format: int64
@@ -2350,16 +2209,11 @@ components:
         nodes_visited:
           type: integer
           format: int64
-          description: |-
-            Approximate number of nodes visited during MATCH graph traversal.
-            See `traversal_counters_approximate`; 0 for non-graph queries.
+          description: "Approximate number of nodes visited during MATCH graph traversal.\nSee `traversal_counters_approximate`; 0 for non-graph queries."
           minimum: 0
         traversal_counters_approximate:
           type: boolean
-          description: |-
-            When `true`, `nodes_visited` and `edges_traversed` are strategy-dependent
-            approximations (a lower bound), not exact measured counts. Always `false`
-            for non-graph queries, where both counters are 0.
+          description: "When `true`, `nodes_visited` and `edges_traversed` are strategy-dependent\napproximations (a lower bound), not exact measured counts. Always `false`\nfor non-graph queries, where both counters are 0."
     AddEdgeRequest:
       type: object
       description: Request to add an edge to the graph.
@@ -2407,7 +2261,7 @@ components:
         edges:
           type: array
           items:
-            $ref: '#/components/schemas/AddEdgeRequest'
+            $ref: "#/components/schemas/AddEdgeRequest"
           description: Edges to insert.
     AddEdgesBatchResponse:
       type: object
@@ -2417,10 +2271,7 @@ components:
       properties:
         added:
           type: integer
-          description: |-
-            Number of edges actually inserted. May be less than the number submitted:
-            edges whose ID already exists (in the request or the graph) are silently
-            skipped. Compare against the request length to detect skipped duplicates.
+          description: "Number of edges actually inserted. May be less than the number submitted:\nedges whose ID already exists (in the request or the graph) are silently\nskipped. Compare against the request length to detect skipped duplicates."
           minimum: 0
     AggregationResponse:
       type: object
@@ -2431,7 +2282,7 @@ components:
       - meta
       properties:
         meta:
-          $ref: '#/components/schemas/QueryResponseMeta'
+          $ref: "#/components/schemas/QueryResponseMeta"
           description: Query response metadata.
         result:
           description: Aggregation results.
@@ -2448,7 +2299,7 @@ components:
         searches:
           type: array
           items:
-            $ref: '#/components/schemas/SearchRequest'
+            $ref: "#/components/schemas/SearchRequest"
           description: List of search requests.
     BatchSearchResponse:
       type: object
@@ -2460,7 +2311,7 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/SearchResponse'
+            $ref: "#/components/schemas/SearchResponse"
           description: Results for each search query.
         timing_ms:
           type: number
@@ -2494,13 +2345,9 @@ components:
       - metadata_only
       properties:
         async_index_builder:
-          description: |-
-            Async index builder configuration (Issue `#488`) — `None` when
-            the feature is disabled for this collection.
+          description: "Async index builder configuration (Issue `#488`) — `None` when\nthe feature is disabled for this collection."
         deferred_indexing:
-          description: |-
-            Deferred indexing configuration (`US-366`) — `None` when the
-            feature is disabled for this collection.
+          description: "Deferred indexing configuration (`US-366`) — `None` when the\nfeature is disabled for this collection."
         dimension:
           type: integer
           description: Vector dimension (0 for metadata-only collections).
@@ -2508,16 +2355,13 @@ components:
         embedding_dimension:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Embedding dimension for graph node vectors.
           minimum: 0
         graph_schema:
           description: Graph schema (if this is a graph collection).
         hnsw_params:
-          description: |-
-            Persisted HNSW parameters (M, `ef_construction`, etc.) when
-            customised at create time. `None` means the defaults inferred
-            from the collection dimension are in use.
+          description: "Persisted HNSW parameters (M, `ef_construction`, etc.) when\ncustomised at create time. `None` means the defaults inferred\nfrom the collection dimension are in use."
         metadata_only:
           type: boolean
           description: Whether this is a metadata-only collection.
@@ -2534,19 +2378,14 @@ components:
         pq_rescore_oversampling:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int32
-          description: |-
-            PQ rescore oversampling factor. See `CollectionConfig` for
-            the semantics of `None`, `Some(0)`, and `Some(n > 0)`.
+          description: "PQ rescore oversampling factor. See `CollectionConfig` for\nthe semantics of `None`, `Some(0)`, and `Some(n > 0)`."
           minimum: 0
         schema_version:
           type: integer
           format: int32
-          description: |-
-            On-disk schema version. Increments when the persisted
-            `config.json` format changes in a way older `VelesDB` versions
-            cannot safely read.
+          description: "On-disk schema version. Increments when the persisted\n`config.json` format changes in a way older `VelesDB` versions\ncannot safely read."
           minimum: 0
         storage_mode:
           type: string
@@ -2569,11 +2408,11 @@ components:
           description: Whether the collection contains at least one vector/point.
         index_health:
           type: string
-          description: 'Primary search-index health: `healthy`, `empty`, or `needs_rebuild`.'
+          description: "Primary search-index health: `healthy`, `empty`, or `needs_rebuild`."
         index_health_detail:
           type:
           - string
-          - 'null'
+          - "null"
           description: Detail message when `index_health` is `needs_rebuild`.
         point_count:
           type: integer
@@ -2643,7 +2482,7 @@ components:
         last_analyzed_epoch_ms:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
           description: Timestamp of last ANALYZE (epoch milliseconds), or null if never analyzed.
           minimum: 0
@@ -2693,23 +2532,23 @@ components:
         histogram_buckets:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Number of histogram buckets, or null if no histogram.
           minimum: 0
         histogram_stale:
           type:
           - boolean
-          - 'null'
+          - "null"
           description: Whether the histogram is stale, or null if no histogram.
         max_value:
           type:
           - string
-          - 'null'
+          - "null"
           description: Maximum value (serialized string), if available.
         min_value:
           type:
           - string
-          - 'null'
+          - "null"
           description: Minimum value (serialized string), if available.
         name:
           type: string
@@ -2726,77 +2565,48 @@ components:
       - name
       properties:
         async_index_builder:
-          description: |-
-            Async index builder configuration (Issue `#488` — Bulk Insert V2).
-
-            When present, enables the `AsyncIndexBuilder` for deferred HNSW
-            insertion during bulk import. Accepted as a free-form JSON object
-            matching
-            `velesdb_core::collection::streaming::AsyncIndexBuilderConfig`.
+          description: "Async index builder configuration (Issue `#488` — Bulk Insert V2).\n\nWhen present, enables the `AsyncIndexBuilder` for deferred HNSW\ninsertion during bulk import. Accepted as a free-form JSON object\nmatching\n`velesdb_core::collection::streaming::AsyncIndexBuilderConfig`."
         collection_type:
           type: string
-          description: 'Collection type: "vector" (default) or "`metadata_only`".'
+          description: "Collection type: \"vector\" (default) or \"`metadata_only`\"."
           example: vector
         deferred_indexing:
-          description: |-
-            Deferred indexing configuration (`US-366`).
-
-            When present, inserts are buffered in memory and batch-merged
-            into the HNSW index when the buffer reaches `merge_threshold`.
-            Accepted as a free-form JSON object matching
-            `velesdb_core::collection::streaming::DeferredIndexerConfig`.
+          description: "Deferred indexing configuration (`US-366`).\n\nWhen present, inserts are buffered in memory and batch-merged\ninto the HNSW index when the buffer reaches `merge_threshold`.\nAccepted as a free-form JSON object matching\n`velesdb_core::collection::streaming::DeferredIndexerConfig`."
         dimension:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Vector dimension (required for vector collections, ignored for `metadata_only`).
           example: 768
           minimum: 0
         graph_schema:
-          description: |-
-            Graph schema (only for `collection_type = "graph"`).
-
-            Accepted as a free-form JSON object matching
-            `velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is
-            used when the field is absent.
+          description: "Graph schema (only for `collection_type = \"graph\"`).\n\nAccepted as a free-form JSON object matching\n`velesdb_core::GraphSchema`. `GraphSchema::schemaless()` is\nused when the field is absent."
         hnsw_alpha:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
-          description: |-
-            VAMANA alpha for neighbor diversification (default derived from dimension).
-
-            Values > 1.0 bias `select_neighbors` toward diversity over proximity,
-            producing a more navigable graph with better recall. The engine
-            default is 1.2 (VAMANA paper recommendation). Set to 1.0 for strict
-            nearest-neighbor selection.
+          description: "VAMANA alpha for neighbor diversification (default derived from dimension).\n\nValues > 1.0 bias `select_neighbors` toward diversity over proximity,\nproducing a more navigable graph with better recall. The engine\ndefault is 1.2 (VAMANA paper recommendation). Set to 1.0 for strict\nnearest-neighbor selection."
           example: 1.2
         hnsw_ef_construction:
           type:
           - integer
-          - 'null'
+          - "null"
           description: HNSW `ef_construction` parameter (candidate list size during build).
           example: 400
           minimum: 0
         hnsw_m:
           type:
           - integer
-          - 'null'
+          - "null"
           description: HNSW M parameter (number of bi-directional links per node).
           example: 32
           minimum: 0
         hnsw_max_elements:
           type:
           - integer
-          - 'null'
-          description: |-
-            Initial HNSW capacity (grows automatically if exceeded).
-
-            Pre-sizing matters for bulk imports: the engine avoids repeated
-            realloc-and-copy cycles when the final population is known upfront.
-            Use this when migrating a large existing corpus into a fresh
-            collection.
+          - "null"
+          description: "Initial HNSW capacity (grows automatically if exceeded).\n\nPre-sizing matters for bulk imports: the engine avoids repeated\nrealloc-and-copy cycles when the final population is known upfront.\nUse this when migrating a large existing corpus into a fresh\ncollection."
           example: 1000000
           minimum: 0
         metric:
@@ -2810,15 +2620,9 @@ components:
         pq_rescore_oversampling:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int32
-          description: |-
-            PQ rescore oversampling factor (default 4).
-
-            The search pipeline fetches `max(k * factor, k + 32)` candidates
-            from HNSW and rescores them with full-precision ADC. Only
-            meaningful for quantised storage modes (SQ8, PQ). `Some(0)` is
-            treated as "disabled".
+          description: "PQ rescore oversampling factor (default 4).\n\nThe search pipeline fetches `max(k * factor, k + 32)` candidates\nfrom HNSW and rescores them with full-precision ADC. Only\nmeaningful for quantised storage modes (SQ8, PQ). `Some(0)` is\ntreated as \"disabled\"."
           example: 4
           minimum: 0
         storage_mode:
@@ -2834,7 +2638,7 @@ components:
       properties:
         index_type:
           type: string
-          description: 'Index type: "hash" (equality O(1)) or "range" (range queries O(log n)).'
+          description: "Index type: \"hash\" (equality O(1)) or \"range\" (range queries O(log n))."
           example: hash
         label:
           type: string
@@ -2907,32 +2711,28 @@ components:
         edges:
           type: array
           items:
-            $ref: '#/components/schemas/EdgeResponse'
+            $ref: "#/components/schemas/EdgeResponse"
           description: List of edges.
     EnableStreamingRequest:
       type: object
-      description: |-
-        Request body for the enable-streaming endpoint.
-
-        All fields are optional; omitted fields fall back to the engine defaults
-        (`buffer_size = 10000`, `batch_size = 128`, `flush_interval_ms = 50`).
+      description: "Request body for the enable-streaming endpoint.\n\nAll fields are optional; omitted fields fall back to the engine defaults\n(`buffer_size = 10000`, `batch_size = 128`, `flush_interval_ms = 50`)."
       properties:
         batch_size:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Number of points that trigger an immediate micro-batch flush.
           minimum: 0
         buffer_size:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Capacity of the bounded ingestion channel (backpressure threshold).
           minimum: 0
         flush_interval_ms:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
           description: Maximum time (ms) before a partial batch is flushed.
           minimum: 0
@@ -2945,7 +2745,7 @@ components:
         code:
           type:
           - string
-          - 'null'
+          - "null"
           description: Structured error code (e.g., `"VELES-004"` for dimension mismatch).
         error:
           type: string
@@ -2964,7 +2764,7 @@ components:
         index_name:
           type:
           - string
-          - 'null'
+          - "null"
           description: Index name if used.
         selectivity:
           type: number
@@ -3009,14 +2809,14 @@ components:
         limit:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
           description: LIMIT value if present.
           minimum: 0
         offset:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
           description: OFFSET value if present.
           minimum: 0
@@ -3052,51 +2852,51 @@ components:
       properties:
         actual_stats:
           oneOf:
-          - $ref: '#/components/schemas/ActualStatsResponse'
-            description: 'Actual execution statistics (only when `analyze: true`).'
-          - type: 'null'
+          - $ref: "#/components/schemas/ActualStatsResponse"
+            description: "Actual execution statistics (only when `analyze: true`)."
+          - type: "null"
         actual_time_ms:
           type:
           - number
-          - 'null'
+          - "null"
           format: double
-          description: 'Actual execution time in milliseconds (only when `analyze: true`).'
+          description: "Actual execution time in milliseconds (only when `analyze: true`)."
         cache_hit:
           type:
           - boolean
-          - 'null'
+          - "null"
           description: Whether this plan was served from the compiled plan cache.
         collection:
           type: string
           description: Target collection name.
         estimated_cost:
-          $ref: '#/components/schemas/ExplainCost'
+          $ref: "#/components/schemas/ExplainCost"
           description: Estimated cost metrics.
         estimated_cost_ms:
           type:
           - number
-          - 'null'
+          - "null"
           format: double
           description: Estimated cost in milliseconds (for side-by-side comparison with actual).
         features:
-          $ref: '#/components/schemas/ExplainFeatures'
+          $ref: "#/components/schemas/ExplainFeatures"
           description: Query features detected.
         node_stats:
           type:
           - array
-          - 'null'
+          - "null"
           items:
-            $ref: '#/components/schemas/NodeStatsResponse'
-          description: 'Per-node execution statistics (only when `analyze: true`).'
+            $ref: "#/components/schemas/NodeStatsResponse"
+          description: "Per-node execution statistics (only when `analyze: true`)."
         plan:
           type: array
           items:
-            $ref: '#/components/schemas/ExplainStep'
+            $ref: "#/components/schemas/ExplainStep"
           description: Query plan steps.
         plan_reuse_count:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
           description: How many times this cached plan has been reused.
           minimum: 0
@@ -3120,13 +2920,13 @@ components:
         estimated_rows:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Estimated rows processed/produced.
           minimum: 0
         estimation_method:
           type:
           - string
-          - 'null'
+          - "null"
           description: How the row estimate was produced (e.g. "histogram", "cardinality", "heuristic").
         operation:
           type: string
@@ -3144,51 +2944,43 @@ components:
         avg_w:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
-          description: |-
-            Weighted fusion: weight applied to the average score component
-            (only for strategy = "weighted", default 0.5).
+          description: "Weighted fusion: weight applied to the average score component\n(only for strategy = \"weighted\", default 0.5)."
         dense_w:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
           description: Dense weight (only for strategy = "rsf", default 0.5).
         hit_w:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
-          description: |-
-            Weighted fusion: weight applied to the hit-ratio component
-            (only for strategy = "weighted", default 0.2).
+          description: "Weighted fusion: weight applied to the hit-ratio component\n(only for strategy = \"weighted\", default 0.2)."
         k:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int32
           description: RRF k parameter (only for strategy = "rrf", default 60).
           minimum: 0
         max_w:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
-          description: |-
-            Weighted fusion: weight applied to the maximum score component
-            (only for strategy = "weighted", default 0.3).
+          description: "Weighted fusion: weight applied to the maximum score component\n(only for strategy = \"weighted\", default 0.3)."
         sparse_w:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
           description: Sparse weight (only for strategy = "rsf", default 0.5).
         strategy:
           type: string
-          description: |-
-            Fusion strategy: "rrf", "rsf" (alias "`relative_score`"),
-            "average" (alias "avg"), "maximum" (alias "max"), or "weighted".
+          description: "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\"."
           example: rrf
     GraphSearchRequest:
       type: object
@@ -3215,7 +3007,7 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/GraphSearchResultItem'
+            $ref: "#/components/schemas/GraphSearchResultItem"
           description: Search results with node ID and similarity score.
     GraphSearchResultItem:
       type: object
@@ -3240,30 +3032,30 @@ components:
         circuit_failure_threshold:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int32
-          description: 'Circuit breaker: failure threshold before tripping.'
+          description: "Circuit breaker: failure threshold before tripping."
           example: 5
           minimum: 0
         circuit_recovery_seconds:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
-          description: 'Circuit breaker: recovery time in seconds.'
+          description: "Circuit breaker: recovery time in seconds."
           example: 30
           minimum: 0
         max_cardinality:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Maximum intermediate cardinality.
           example: 100000
           minimum: 0
         max_depth:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int32
           description: Maximum graph traversal depth.
           example: 10
@@ -3271,22 +3063,22 @@ components:
         memory_limit_bytes:
           type:
           - integer
-          - 'null'
+          - "null"
           description: Memory limit per query in bytes.
           example: 104857600
           minimum: 0
         rate_limit_qps:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int32
-          description: 'Rate limit: max queries per second per client.'
+          description: "Rate limit: max queries per second per client."
           example: 100
           minimum: 0
         timeout_ms:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
           description: Query timeout in milliseconds (0 = no timeout).
           example: 30000
@@ -3306,12 +3098,12 @@ components:
         circuit_failure_threshold:
           type: integer
           format: int32
-          description: 'Circuit breaker: failure threshold.'
+          description: "Circuit breaker: failure threshold."
           minimum: 0
         circuit_recovery_seconds:
           type: integer
           format: int64
-          description: 'Circuit breaker: recovery time in seconds.'
+          description: "Circuit breaker: recovery time in seconds."
           minimum: 0
         max_cardinality:
           type: integer
@@ -3329,7 +3121,7 @@ components:
         rate_limit_qps:
           type: integer
           format: int32
-          description: 'Rate limit: max queries per second per client.'
+          description: "Rate limit: max queries per second per client."
           minimum: 0
         timeout_ms:
           type: integer
@@ -3453,7 +3245,7 @@ components:
         indexes:
           type: array
           items:
-            $ref: '#/components/schemas/IndexResponse'
+            $ref: "#/components/schemas/IndexResponse"
           description: List of indexes.
         total:
           type: integer
@@ -3486,13 +3278,13 @@ components:
         threshold:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
           description: Similarity threshold (0.0 to 1.0, default 0.0).
         vector:
           type:
           - array
-          - 'null'
+          - "null"
           items:
             type: number
             format: float
@@ -3511,12 +3303,12 @@ components:
           description: Number of results.
           minimum: 0
         meta:
-          $ref: '#/components/schemas/MatchQueryMeta'
+          $ref: "#/components/schemas/MatchQueryMeta"
           description: Response metadata.
         results:
           type: array
           items:
-            $ref: '#/components/schemas/MatchQueryResultItem'
+            $ref: "#/components/schemas/MatchQueryResultItem"
           description: Query results.
         took_ms:
           type: integer
@@ -3553,7 +3345,7 @@ components:
         score:
           type:
           - number
-          - 'null'
+          - "null"
           format: float
           description: Similarity score (if similarity() was used).
     MultiQuerySearchRequest:
@@ -3565,12 +3357,12 @@ components:
         avg_weight:
           type: number
           format: float
-          description: 'Weighted fusion: weight for average score component.'
+          description: "Weighted fusion: weight for average score component."
           example: 0.5
         dense_weight:
           type: number
           format: float
-          description: 'Relative score fusion: weight for the dense (vector) branch.'
+          description: "Relative score fusion: weight for the dense (vector) branch."
           example: 0.5
         filter:
           type: object
@@ -3583,12 +3375,12 @@ components:
         hit_weight:
           type: number
           format: float
-          description: 'Weighted fusion: weight for hit count component.'
+          description: "Weighted fusion: weight for hit count component."
           example: 0.2
         max_weight:
           type: number
           format: float
-          description: 'Weighted fusion: weight for max score component.'
+          description: "Weighted fusion: weight for max score component."
           example: 0.3
         rrf_k:
           type: integer
@@ -3599,11 +3391,11 @@ components:
         sparse_weight:
           type: number
           format: float
-          description: 'Relative score fusion: weight for the sparse branch.'
+          description: "Relative score fusion: weight for the sparse branch."
           example: 0.5
         strategy:
           type: string
-          description: 'Fusion strategy: "average", "maximum", "rrf", "weighted", "`relative_score`".'
+          description: "Fusion strategy: \"average\", \"maximum\", \"rrf\", \"weighted\", \"`relative_score`\"."
           example: rrf
         top_k:
           type: integer
@@ -3652,14 +3444,7 @@ components:
           description: Stored payload (null if none).
     NodeStatsResponse:
       type: object
-      description: |-
-        Per-plan-node **estimated** execution statistics for EXPLAIN ANALYZE responses.
-
-        All values are synthetic heuristics derived from the plan-global
-        `actual_time_ms` — they are **not** individually measured per node.
-        Field names keep the `actual_` prefix for API stability; check the
-        `estimated` flag to distinguish heuristic values from future
-        instrumented measurements (#467).
+      description: "Per-plan-node **estimated** execution statistics for EXPLAIN ANALYZE responses.\n\nAll values are synthetic heuristics derived from the plan-global\n`actual_time_ms` — they are **not** individually measured per node.\nField names keep the `actual_` prefix for API stability; check the\n`estimated` flag to distinguish heuristic values from future\ninstrumented measurements (#467)."
       required:
       - node_label
       - actual_time_ms
@@ -3681,17 +3466,10 @@ components:
         actual_time_ms:
           type: number
           format: double
-          description: |-
-            Estimated wall-clock time for this node in milliseconds.
-            Derived from total execution time using normalized weight fractions,
-            not real per-node instrumentation. Will be replaced by measured
-            timing (#467).
+          description: "Estimated wall-clock time for this node in milliseconds.\nDerived from total execution time using normalized weight fractions,\nnot real per-node instrumentation. Will be replaced by measured\ntiming (#467)."
         estimated:
           type: boolean
-          description: |-
-            When `true`, time and row counts are heuristic estimates, not real
-            per-node measurements. Will become `false` once instrumented timing
-            lands (#467).
+          description: "When `true`, time and row counts are heuristic estimates, not real\nper-node measurements. Will become `false` once instrumented timing\nlands (#467)."
         loops:
           type: integer
           format: int64
@@ -3749,16 +3527,16 @@ components:
           description: Optional payload.
         sparse_vector:
           oneOf:
-          - $ref: '#/components/schemas/SparseVectorInput'
+          - $ref: "#/components/schemas/SparseVectorInput"
             description: Single sparse vector (convenience, stored under default name `""`).
-          - type: 'null'
+          - type: "null"
         sparse_vectors:
           type:
           - object
-          - 'null'
+          - "null"
           description: Named sparse vectors map.
           additionalProperties:
-            $ref: '#/components/schemas/SparseVectorInput'
+            $ref: "#/components/schemas/SparseVectorInput"
           propertyNames:
             type: string
         vector:
@@ -3769,7 +3547,7 @@ components:
           description: Vector data.
     QueryErrorDetail:
       type: object
-      description: '`VelesQL` query error detail.'
+      description: "`VelesQL` query error detail."
       required:
       - type
       - message
@@ -3791,12 +3569,12 @@ components:
           description: Error type.
     QueryErrorResponse:
       type: object
-      description: '`VelesQL` query error response.'
+      description: "`VelesQL` query error response."
       required:
       - error
       properties:
         error:
-          $ref: '#/components/schemas/QueryErrorDetail'
+          $ref: "#/components/schemas/QueryErrorDetail"
           description: Error details.
     QueryRequest:
       type: object
@@ -3807,7 +3585,7 @@ components:
         collection:
           type:
           - string
-          - 'null'
+          - "null"
           description: Optional collection name (required for top-level MATCH queries via `/query`).
         params:
           type: object
@@ -3820,22 +3598,7 @@ components:
           description: The `VelesQL` query string.
     QueryResponse:
       type: object
-      description: |-
-        Response from `VelesQL` query execution.
-
-        Results are projected rows: the shape depends on the SELECT clause.
-        - `SELECT *` → `{id, field1, field2, ...}` (no vector)
-        - `SELECT col1, col2` → `{col1, col2}`
-        - `SELECT similarity() AS score, title` → `{score, title}`
-
-        ## MATCH-query extra fields
-
-        When the query contains a `MATCH` clause, each row may carry additional
-        graph-specific fields:
-        - `_edge_bindings` — map of alias → edge (id, source, target, label, properties)
-          for every named relationship in the pattern.
-        - `_edge_paths` — array of edge-ID arrays, one per matched path variable.
-          Only present when the `MATCH` clause binds a path variable (`p = (…)-[…]->(…)`).
+      description: "Response from `VelesQL` query execution.\n\nResults are projected rows: the shape depends on the SELECT clause.\n- `SELECT *` → `{id, field1, field2, ...}` (no vector)\n- `SELECT col1, col2` → `{col1, col2}`\n- `SELECT similarity() AS score, title` → `{score, title}`\n\n## MATCH-query extra fields\n\nWhen the query contains a `MATCH` clause, each row may carry additional\ngraph-specific fields:\n- `_edge_bindings` — map of alias → edge (id, source, target, label, properties)\n  for every named relationship in the pattern.\n- `_edge_paths` — array of edge-ID arrays, one per matched path variable.\n  Only present when the `MATCH` clause binds a path variable (`p = (…)-[…]->(…)`)."
       required:
       - results
       - timing_ms
@@ -3844,16 +3607,12 @@ components:
       - meta
       properties:
         meta:
-          $ref: '#/components/schemas/QueryResponseMeta'
+          $ref: "#/components/schemas/QueryResponseMeta"
           description: Query response metadata.
         results:
           type: array
           items: {}
-          description: |-
-            Projected result rows. Shape depends on SELECT clause.
-
-            MATCH queries may include `_edge_bindings` and `_edge_paths` fields
-            in each row — see the struct documentation for details.
+          description: "Projected result rows. Shape depends on SELECT clause.\n\nMATCH queries may include `_edge_bindings` and `_edge_paths` fields\nin each row — see the struct documentation for details."
         rows_returned:
           type: integer
           description: Number of rows returned.
@@ -3880,7 +3639,7 @@ components:
           minimum: 0
         velesql_contract_version:
           type: string
-          description: '`VelesQL` contract version used by this response.'
+          description: "`VelesQL` contract version used by this response."
     RelateRequest:
       type: object
       description: Request body for `POST /collections/{name}/relations`.
@@ -3957,7 +3716,7 @@ components:
         edges:
           type: array
           items:
-            $ref: '#/components/schemas/RelationEdge'
+            $ref: "#/components/schemas/RelationEdge"
           description: Outgoing relation edges.
     ScrollPoint:
       type: object
@@ -3993,7 +3752,7 @@ components:
             minimum: 0
           - type: string
             pattern: ^[0-9]+$
-          - type: 'null'
+          - type: "null"
           description: Resume after this point ID (exclusive). Omit or send null to start from the beginning. Accepts a JSON integer or a precision-safe string.
         filter:
           description: Optional filter expression.
@@ -4006,12 +3765,12 @@ components:
         next_cursor:
           type:
           - string
-          - 'null'
+          - "null"
           description: Cursor for the next batch. Null when iteration is complete.
         points:
           type: array
           items:
-            $ref: '#/components/schemas/ScrollPoint'
+            $ref: "#/components/schemas/ScrollPoint"
           description: Points in this batch (ascending ID order).
     SearchIdsResponse:
       type: object
@@ -4022,7 +3781,7 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/IdScoreResult'
+            $ref: "#/components/schemas/IdScoreResult"
           description: Search results with IDs and scores only.
     SearchRequest:
       type: object
@@ -4031,14 +3790,8 @@ components:
         ef_search:
           type:
           - integer
-          - 'null'
-          description: |-
-            HNSW `ef_search` parameter, in `[16, 4096]`: an integer outside the
-            range is refused with a `400` naming it (#2274), and a value that is
-            not a non-negative integer fails the body's JSON parsing with a `422`,
-            as any mistyped field does. It wins over `mode` for a dense search with
-            no `filter`; a filtered search applies neither, and a batch entry's is
-            checked but not applied.
+          - "null"
+          description: "HNSW `ef_search` parameter, in `[16, 4096]`: an integer outside the\nrange is refused with a `400` naming it (#2274), and a value that is\nnot a non-negative integer fails the body's JSON parsing with a `422`,\nas any mistyped field does. It wins over `mode` for a dense search with\nno `filter`; a filtered search applies neither, and a batch entry's is\nchecked but not applied."
           example: 128
           maximum: 4096
           minimum: 16
@@ -4052,44 +3805,38 @@ components:
               value: tech
         fusion:
           oneOf:
-          - $ref: '#/components/schemas/FusionRequest'
+          - $ref: "#/components/schemas/FusionRequest"
             description: Fusion configuration for hybrid search.
-          - type: 'null'
+          - type: "null"
         mode:
           type:
           - string
-          - 'null'
-          description: |-
-            Search quality preset, in any letter case: `fast`, `balanced`,
-            `accurate`, `perfect`, `autotune` (aliases `auto_tune` and `auto`),
-            `custom:<ef>` or `adaptive:<min_ef>:<max_ef>` (`min_ef` at most
-            `max_ef`). Any other value is refused with a `400` naming these forms
-            (#2267). It applies only to a dense search with neither a `filter` nor
-            `ef_search`, and a batch entry's is checked but not applied.
+          - "null"
+          description: "Search quality preset, in any letter case: `fast`, `balanced`,\n`accurate`, `perfect`, `autotune` (aliases `auto_tune` and `auto`),\n`custom:<ef>` or `adaptive:<min_ef>:<max_ef>` (`min_ef` at most\n`max_ef`). Any other value is refused with a `400` naming these forms\n(#2267). It applies only to a dense search with neither a `filter` nor\n`ef_search`, and a batch entry's is checked but not applied."
           example: balanced
         sparse_index:
           type:
           - string
-          - 'null'
+          - "null"
           description: Which named sparse index to search.
         sparse_vector:
           oneOf:
-          - $ref: '#/components/schemas/SparseVectorInput'
+          - $ref: "#/components/schemas/SparseVectorInput"
             description: Single sparse query vector.
-          - type: 'null'
+          - type: "null"
         sparse_vectors:
           type:
           - object
-          - 'null'
+          - "null"
           description: Named sparse query vectors map.
           additionalProperties:
-            $ref: '#/components/schemas/SparseVectorInput'
+            $ref: "#/components/schemas/SparseVectorInput"
           propertyNames:
             type: string
         timeout_ms:
           type:
           - integer
-          - 'null'
+          - "null"
           format: int64
           description: Query timeout in milliseconds.
           example: 30000
@@ -4113,7 +3860,7 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/SearchResultResponse'
+            $ref: "#/components/schemas/SearchResultResponse"
           description: Search results.
     SearchResultResponse:
       type: object
@@ -4140,9 +3887,7 @@ components:
         ttl_seconds:
           type: integer
           format: int64
-          description: |-
-            Number of seconds from now until this point expires.
-            A value of `0` expires the point immediately.
+          description: "Number of seconds from now until this point expires.\nA value of `0` expires the point immediately."
           minimum: 0
     SparseVectorInput:
       oneOf:
@@ -4172,14 +3917,10 @@ components:
           format: float
         propertyNames:
           type: string
-      description: |-
-        Input format for sparse vectors, supporting two JSON representations:
-
-        - **Parallel arrays**: `{"indices": [42, 1337], "values": [0.5, 1.2]}`
-        - **Dict format** (Qdrant-compatible): `{"42": 0.5, "1337": 1.2}`
+      description: "Input format for sparse vectors, supporting two JSON representations:\n\n- **Parallel arrays**: `{\"indices\": [42, 1337], \"values\": [0.5, 1.2]}`\n- **Dict format** (Qdrant-compatible): `{\"42\": 0.5, \"1337\": 1.2}`"
     StreamDoneEvent:
       type: object
-      description: 'SSE event: Traversal completed.'
+      description: "SSE event: Traversal completed."
       required:
       - total_nodes
       - max_depth_reached
@@ -4224,7 +3965,7 @@ components:
           description: Dense vector data.
     StreamNodeEvent:
       type: object
-      description: 'SSE event: A node reached during traversal.'
+      description: "SSE event: A node reached during traversal."
       required:
       - id
       - depth
@@ -4250,7 +3991,7 @@ components:
           description: Point IDs. Each accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
     StreamStatsEvent:
       type: object
-      description: 'SSE event: Periodic statistics update.'
+      description: "SSE event: Periodic statistics update."
       required:
       - nodes_visited
       - elapsed_ms
@@ -4359,7 +4100,7 @@ components:
           description: Point ID. Accepts a JSON integer (native form) or a string; use a string for u64 values above 2^53-1 to avoid JavaScript precision loss.
         strategy:
           type: string
-          description: 'Traversal strategy: "bfs" or "dfs".'
+          description: "Traversal strategy: \"bfs\" or \"dfs\"."
     TraverseResponse:
       type: object
       description: Response from graph traversal.
@@ -4374,10 +4115,10 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/TraversalResultItem'
+            $ref: "#/components/schemas/TraversalResultItem"
           description: List of traversal results.
         stats:
-          $ref: '#/components/schemas/TraversalStats'
+          $ref: "#/components/schemas/TraversalStats"
           description: Traversal statistics.
     UpsertNodePayloadRequest:
       type: object
@@ -4396,7 +4137,7 @@ components:
         points:
           type: array
           items:
-            $ref: '#/components/schemas/PointRequest'
+            $ref: "#/components/schemas/PointRequest"
           description: Points to upsert.
     VelesqlErrorDetail:
       type: object
@@ -4424,11 +4165,11 @@ components:
       - error
       properties:
         error:
-          $ref: '#/components/schemas/VelesqlErrorDetail'
+          $ref: "#/components/schemas/VelesqlErrorDetail"
           description: Error details.
   responses:
     MalformedBody:
-      description: 'A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema.'
+      description: "A body the server cannot deserialise: a field of the wrong type, or JSON that does not match the request schema."
       content:
         text/plain:
           schema:

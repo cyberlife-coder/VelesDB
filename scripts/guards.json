@@ -1586,6 +1586,20 @@
         "issue": null,
         "summary": "Trait methods only. An inherent method's signature is not recorded here: changing one breaks CALLERS, who adapt, and cargo-semver-checks covers that surface far better than it covers traits. The whole public API was measured at 54718 items and 5.26 MB, a diff nobody reads and everybody regenerates, against 83 lines here. The snapshot is keyed on the path, so a trait re-exported under two paths is recorded twice, which is correct: breaking either path breaks someone. It records SIGNATURES, not semantics -- a method that keeps its shape and changes its contract passes. cargo-public-api needs a nightly rustdoc build, so this runs in its own job rather than inside `lint`."
       }
+    },
+    {
+      "script": "scripts/miri-step.sh",
+      "purpose": "Each Miri step of the weekly deep-quality job tested at least one test of the module it names.",
+      "workflow": ".github/workflows/quality-deep.yml",
+      "job": "miri",
+      "required": false,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_miri_step",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Asserts that one test whose name starts with the given regex passed, not how many: a filter that narrows from the whole module to one test of it stays green. The job runs only on schedule or dispatch and is not in CI Success, so a red step is seen on the next weekly run, not on a pull request. scripts.tests.test_miri_step pins each verdict with a stub cargo (nothing passed, wrong module, ignored only, cargo failing) and that no `cargo miri test` in the workflow bypasses the script."
+      }
     }
   ],
   "unwired": [

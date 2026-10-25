@@ -22,10 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > major (#2174, #2087). `utoipa` moves to 6.0.0 behind velesdb-core's `openapi`
 > feature (#2429): a downstream crate enabling that feature with its own
 > `utoipa 5` dependency no longer compiles. The on-disk format stays readable
-> both ways: `.vectors` v2 opens under 6.0.0.
+> both ways: `.vectors` v2 opens under 6.0.0. velesdb-migrate's public
+> `Error::Yaml` variant changes its payload from `serde_yaml::Error` to `String`
+> (RUSTSEC-2024-0449, under `### Changed`).
 
 ### Security
 
+- **`unsafe-libyaml` / `serde_yaml` removed from the dependency tree
+  (RUSTSEC-2024-0449, unmaintained).** `serde_yaml` is archived and every fork
+  (`serde_yaml_ng`, `serde_yml`) still sits on `unsafe-libyaml`, so there was
+  no release to move to. `velesdb-migrate` (its migration config loader) and
+  `velesdb-server` (one OpenAPI snapshot test) now use `serde-saphyr`, a
+  safe-Rust YAML parser, and the advisory's `deny.toml` ignore is deleted:
+  `cargo deny check advisories` passes without it. Lockfile edited in place
+  (`serde-saphyr`, `granit-parser` and three small dependencies added,
+  `serde_yaml` and `unsafe-libyaml` dropped) and checked with
+  `cargo metadata --locked`. See `### Changed` for the API and parsing notes.
 - **`rustls` 0.23.43 → 0.23.45 (RUSTSEC-2026-0285: TLS 1.3 handshake
   messages incorrectly accepted across encryption level boundaries).** The
   advisory is dated 2026-09-14 (#2317's audit at 07:19 UTC that day still
@@ -268,6 +280,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: two steps of the weekly Miri job were green without testing the unsafe
+  code they name.** `Miri - vector bytes storage` ran 0 tests in every binary:
+  `storage` is compiled only with `persistence`, the job builds
+  `--no-default-features`, and libtest exits 0 on a filter that matches nothing.
+  Its filter was also wrong with the feature on (`storage::vector_bytes::` does
+  not match the tests' module, `storage::vector_bytes_tests::`). It now builds
+  `--features persistence` and runs the 13 `vector_bytes_tests` under Miri, which
+  never executes pest's `std` path (measured: no test there parses VelesQL), so
+  psm's assembly stays out of reach. `Miri - distance module` matched a single
+  test (`distance::` skips `distance_tests`, at the crate root); it now runs the
+  31 scalar distance tests, skipping `geo_distance_tests` (no unsafe code,
+  bit-exact trigonometry that Miri perturbs on purpose). Every Miri step now runs
+  through `scripts/miri-step.sh`, which fails unless a test of the module the
+  step names passed, so a filter that matches nothing cannot go green again;
+  `scripts/tests/test_miri_step.py` pins its verdicts and that the workflow does
+  not bypass it. All four steps also take `--lib`, which stops building and
+  walking the integration-test binaries, none of which matches.
+
 - **A caller-supplied `k` could abort the process through the sparse top-k
   search.** The three strategies of `sparse_index::search` reserved
   `BinaryHeap::with_capacity(k + 1)` before scoring anything, so a `k` such as
@@ -398,6 +428,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (graph-anchored `NEAR` prefilter, the secondary-index bitmap branch) still
   ignore it. Each of the four has a test that reopens one persisted index under
   two configured `ef_search` values.
+- **core: a graph-anchored `NEAR` over a large anchor set takes its candidates
+  at the configured `[search]` quality (#2430).** Above 10 000 anchors the
+  `NEAR` + `MATCH` prefilter hands the anchors to the index as a bitmap, and
+  that branch passed `SearchQuality::default()`, so it ignored `default_mode`
+  and `ef_search`. It now uses the collection's runtime quality, as `search()`,
+  the batch entry points and the hybrid functions do. A default `[search]`
+  still resolves to `Balanced`, so only a non-default one changes results. The
+  branch is tested directly on a 4 000-point corpus with a sparse anchor set,
+  not through a 10 000-node graph.
 - **The CLI REPL leaves the `[search]` of its `--config`/`VELESDB_CONFIG`
   file in force until a `\set mode` or `\set ef_search`, and `.bench` runs at the quality it prints (#2303).** A session that
   never ran `\set` used to inject `mode = 'balanced'`, against the
@@ -1248,6 +1287,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
+
+- **BREAKING (Rust API, velesdb-migrate) — `Error::Yaml` now carries a `String`
+  (RUSTSEC-2024-0449).** The variant was `Yaml(serde_yaml::Error)`; it is
+  `Yaml(String)`, the parser's one-line message with its line and column, like
+  the crate's other message variants (`Config`, `Checkpoint`, ...). A third-party
+  parser type no longer appears in the public API, so the next parser swap is
+  not another breaking change. Under plain SemVer (workspace crates follow it)
+  this is a major bump, and the next release is already one (note above). The
+  `From<serde_yaml::Error>` conversion is gone with it. Migrating:
+  `Error::Yaml(e)` now binds a `String` (`e.to_string()` and `{e}` still work);
+  code that downcast the payload or called `e.location()` reads the line and
+  column from the message instead.
+  The CLI prints the same `YAML error: ...` prefix.
+- **velesdb-migrate YAML parsing: same files, same values, a few edges moved
+  (RUSTSEC-2024-0449).** The loader runs `serde-saphyr` with `strict_booleans`,
+  which keeps YAML 1.2 semantics: only `true`/`false` are booleans, so
+  `yes`/`no`/`on`/`off` stay strings exactly as before. Every shipped example
+  and every YAML block of `docs/guides/MIGRATE_SOURCES.md` parses to the same
+  values as before (checked against the old parser over those files and ~130
+  scalar-spelling probes, and now pinned by tests). The differences are at the
+  margins, none of them in a documented config:
+  - a source field holding an unquoted `1_000` or `010` (an `api_key`, say) is
+    read as a number and refused for a string field; quote it. (Under the old
+    parser the same field was refused for `12345`.)
+  - an unquoted `~`, `null` or empty value for a required string such as
+    `destination.collection` is refused instead of becoming the string `"~"`.
+  - accepted where it was refused: `options: null`, a quoted `"5"` for a number
+    or `"true"` for a boolean, `1_000` for a number, a UTF-8 BOM, and `<<` merge
+    keys.
+  - error messages are worded by the new parser.
+- **`velesdb-migrate` grows by about 1 MiB; its binary-size ceiling moves from
+  9 to 9.9 MiB (RUSTSEC-2024-0449).** 8.62 MiB at 6.0.0, 9.63 MiB on the
+  Binary Size Gate with the safe-Rust parser. The weight is the parser, not the
+  integration: serde-saphyr and its parser and error-rendering crates are about
+  690 KiB of the 903 KiB the code section gains. `scripts/check_binary_size.py`
+  records the measurement; `velesdb-server` and `velesdb` do not depend on the
+  parser outside tests and keep their ceilings.
+- **`docs/openapi.yaml` regenerated by `serde-saphyr` (RUSTSEC-2024-0449).** The
+  serializer quotes differently (`"200"` for `'200'`, `"/collections/{name}"`
+  for the bare path), so the file changes line by line while its content does
+  not: parsed, it is identical to the previous file and to `docs/openapi.json`.
+  `readme_rest_endpoint_count` in `docs/reference/promise-contract.json` counts
+  path keys with the quote now optional (`^  "?/`).
 - **The `velesdb` CLI reads `./velesdb.toml` when neither `--config` nor
   `VELESDB_CONFIG` is given, as `velesdb-server` does (#2400).** It used to open
   every database with the core defaults in that case, although

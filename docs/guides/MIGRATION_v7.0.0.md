@@ -96,6 +96,17 @@ out-of-range `mmap_cache_mb` (0, or above 1 TiB) used to be refused and is now
 ignored with the rest. Deserializing a `VelesConfig` directly with serde, outside
 the loaders, ignores these keys without a warning.
 
+### `velesdb-migrate`: `Error::Yaml` carries a `String`
+
+The YAML config loader moved from the archived `serde_yaml` (RUSTSEC-2024-0449)
+to `serde-saphyr`, and the parser's error type no longer leaks into the public
+enum: `Error::Yaml(serde_yaml::Error)` is now `Error::Yaml(String)`, the parser's
+one-line message with line and column. A caller that matches `Error::Yaml(e)`
+and inspects `e` as a `serde_yaml::Error` has to read the message instead.
+`MigrationConfig::from_file` keeps its signature, and every documented config
+file parses to the same value (YAML 1.2 booleans: `yes`/`no` stay strings). The
+`velesdb-migrate` binary grows by about 1 MiB.
+
 ### Dependency floors
 
 The published crates now declare the lowest dependency versions they can
