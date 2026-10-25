@@ -85,6 +85,10 @@ class SemverReleaseTypeTests(unittest.TestCase):
         calls = _calls_for("6.0.1", _index("6.0.0", "6.0.1", yanked=("6.0.1",)))
         self.assertNotIn("--release-type", _core_call(calls))
 
+    def test_a_checkout_behind_crates_io_keeps_the_declaration(self) -> None:
+        calls = _calls_for("5.2.0", _index("5.2.0", "6.0.0"))
+        self.assertIn("--release-type minor", _core_call(calls))
+
     def test_an_unreadable_index_keeps_the_declaration(self) -> None:
         calls = _calls_for("7.0.0", index_fails=True)
         self.assertIn("--release-type minor", _core_call(calls))
