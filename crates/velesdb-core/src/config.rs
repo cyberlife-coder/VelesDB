@@ -253,57 +253,28 @@ pub mod server {
 
     /// Storage configuration section.
     ///
-    /// Issue #2087's per-knob verdict split this section in two:
+    /// **Reserved.** `storage_mode` is parsed and validated but not applied,
+    /// pending its own decision (distinct from `quantization::StorageMode`;
+    /// whether the engine has a memory-only mode to select is not
+    /// established). [`crate::config::VelesConfig::validate`] warns when it
+    /// is set away from its default.
     ///
-    /// - **`data_dir`, `mmap_cache_mb`, `vector_alignment` are deprecated.**
-    ///   No engine counterpart exists to wire them to — not merely unwired,
-    ///   *absent* — and `data_dir` also conflicts irreducibly with the path
-    ///   passed to `Database::open`. Parsed and validated only so existing
-    ///   TOML files keep loading; removal targets the next major, the same
-    ///   warn-not-reject cycle `[wal_batch]` (#2078) is already running —
-    ///   though unlike `[wal_batch]`, which has no validation at all,
-    ///   `mmap_cache_mb` keeps its pre-existing hard range check (`0` and
-    ///   values over the cap still fail load), left as is on purpose rather
-    ///   than loosened as a second change bundled into this one.
-    ///   [`crate::config::VelesConfig::validate`] warns when any of the
-    ///   three is set away from its default.
-    /// - **`storage_mode` is still reserved**, pending its own decision
-    ///   (distinct from `quantization::StorageMode`; whether the engine has
-    ///   a memory-only mode to select is not established). Also reported by
-    ///   the same validation when set away from its default.
+    /// `data_dir`, `mmap_cache_mb` and `vector_alignment` were removed in
+    /// 7.0.0 (#2087): none of them had an engine counterpart, and
+    /// `data_dir` conflicted irreducibly with the path passed to
+    /// `Database::open`. A file that still sets one loads, and the loader
+    /// names it in a warning.
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(default)]
     pub struct StorageConfig {
-        /// Data directory path.
-        #[deprecated(
-            since = "6.1.0",
-            note = "no engine counterpart: parsed only so existing TOML files keep loading; removal targets the next major (#2087)"
-        )]
-        pub data_dir: String,
         /// Storage mode: `"mmap"` or `"memory"`.
         pub storage_mode: String,
-        /// Mmap cache size in megabytes.
-        #[deprecated(
-            since = "6.1.0",
-            note = "no engine counterpart: parsed only so existing TOML files keep loading; removal targets the next major (#2087)"
-        )]
-        pub mmap_cache_mb: usize,
-        /// Vector alignment in bytes.
-        #[deprecated(
-            since = "6.1.0",
-            note = "no engine counterpart: parsed only so existing TOML files keep loading; removal targets the next major (#2087)"
-        )]
-        pub vector_alignment: usize,
     }
 
-    #[allow(deprecated, reason = "the deprecated fields still need their defaults")]
     impl Default for StorageConfig {
         fn default() -> Self {
             Self {
-                data_dir: "./velesdb_data".to_string(),
                 storage_mode: "mmap".to_string(),
-                mmap_cache_mb: 1024,
-                vector_alignment: 64,
             }
         }
     }
@@ -397,69 +368,6 @@ impl Default for LimitsConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// WAL batch commit configuration
-// ---------------------------------------------------------------------------
-
-/// Default commit delay in microseconds for WAL group commit.
-const fn default_commit_delay_us() -> u64 {
-    100
-}
-
-/// Default maximum entries per WAL batch.
-const fn default_max_batch_size() -> usize {
-    128
-}
-
-/// Configuration for WAL group commit batching.
-///
-/// **Deprecated — parsed and ignored.** Setting `enabled = true` changes
-/// nothing: no group commit occurs, and every write keeps its own durability
-/// barrier (the batch APIs already amortize to one barrier per call).
-/// [`VelesConfig::validate`] logs a warning when the flag is set so a config
-/// cannot promise behavior the engine does not deliver.
-///
-/// Issue #2078 resolved to retire this rather than wire it: the `WalBatcher`
-/// it configured acknowledged a write before its bytes were durable, so it was
-/// a write coalescer and not a group-commit protocol, and its `commit_delay_us`
-/// was read by nothing — not even the batcher. The module is deleted. This
-/// struct and the `[wal_batch]` table stay only so existing TOML files keep
-/// loading; both go at the next major, which is the Rust API break.
-///
-/// When wired, group commit would batch multiple concurrent writes into a
-/// single `sync_all()` call, amortizing the fsync cost across the batch.
-///
-/// # Example (TOML)
-///
-/// ```toml
-/// [wal_batch]
-/// enabled = true
-/// commit_delay_us = 200
-/// max_batch_size = 256
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalBatchConfig {
-    /// Whether group commit is enabled. Default: `false`.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Maximum delay in microseconds before flushing a batch. Default: `100`.
-    #[serde(default = "default_commit_delay_us")]
-    pub commit_delay_us: u64,
-    /// Maximum number of entries per batch. Default: `128`.
-    #[serde(default = "default_max_batch_size")]
-    pub max_batch_size: usize,
-}
-
-impl Default for WalBatchConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            commit_delay_us: 100,
-            max_batch_size: 128,
-        }
-    }
-}
-
 /// Main `VelesDB` configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -478,8 +386,6 @@ pub struct VelesConfig {
     pub logging: LoggingConfig,
     /// Quantization configuration.
     pub quantization: QuantizationConfig,
-    /// WAL group commit batching configuration.
-    pub wal_batch: WalBatchConfig,
 }
 
 impl VelesConfig {
@@ -518,12 +424,16 @@ impl VelesConfig {
     /// another cannot claim its variables (none do today; the ordering keeps
     /// that true for whatever is added next).
     ///
+    /// The tables a release removed are not listed: they are no field of this
+    /// struct. [`Self::env_key_to_config_path`] still splits at them, from
+    /// `config_removed`, so their variables are named by the removal warning
+    /// instead of flattening into a key nothing reports.
+    ///
     /// Wider than [`Self::ENGINE_SECTIONS`] on purpose: `server` and
     /// `logging` are fields here too, and a variable naming one must resolve
     /// to that field rather than fall through as an unprefixed key.
     const ENV_SECTIONS: &'static [&'static str] = &[
         "quantization",
-        "wal_batch",
         "logging",
         "storage",
         "limits",
@@ -553,7 +463,11 @@ impl VelesConfig {
     /// engine variable reached its field.
     pub(crate) fn env_key_to_config_path(key: &UncasedStr) -> Uncased<'_> {
         let lowered = key.as_str().to_ascii_lowercase();
-        for section in Self::ENV_SECTIONS {
+        let sections = Self::ENV_SECTIONS
+            .iter()
+            .copied()
+            .chain(crate::config_removed::removed_sections());
+        for section in sections {
             if let Some(field) = lowered
                 .strip_prefix(section)
                 .and_then(|rest| rest.strip_prefix('_'))
@@ -599,29 +513,31 @@ impl VelesConfig {
     /// otherwise have that table parsed into *this* struct too and
     /// rejected by [`Self::validate`]'s rules for a value it was never
     /// meant to apply to. See [`Self::load_from_path_engine_only`].
-    const ENGINE_SECTIONS: &'static [&'static str] = &[
-        "search",
-        "hnsw",
-        "storage",
-        "limits",
-        "quantization",
-        "wal_batch",
-    ];
+    const ENGINE_SECTIONS: &'static [&'static str] =
+        &["search", "hnsw", "storage", "limits", "quantization"];
 
-    /// Drops every top-level TOML table not in [`Self::ENGINE_SECTIONS`].
+    /// Drops every top-level TOML table not in [`Self::ENGINE_SECTIONS`],
+    /// except a table a release removed: that one is kept so the loader can
+    /// name it in its removal warning, and extraction then ignores it like
+    /// any key no field claims.
     fn filter_to_engine_sections(raw: &str) -> Result<String, ConfigError> {
         let mut doc: toml::Value =
             toml::from_str(raw).map_err(|e| ConfigError::ParseError(e.to_string()))?;
         if let Some(table) = doc.as_table_mut() {
-            table.retain(|k, _| Self::ENGINE_SECTIONS.contains(&k));
+            table.retain(|k, _| {
+                Self::ENGINE_SECTIONS.contains(&k)
+                    || crate::config_removed::removed_sections().any(|removed| removed == k)
+            });
         }
         toml::to_string(&doc).map_err(|e| ConfigError::ParseError(e.to_string()))
     }
 
     /// Loads configuration from a specific file path, considering **only**
     /// the engine sections (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/
-    /// `[quantization]`/`[wal_batch]`) and silently dropping any other
-    /// top-level table before parsing — notably `[server]` and `[logging]`.
+    /// `[quantization]`) and silently dropping any other top-level table
+    /// before parsing — notably `[server]` and `[logging]`. A table a release
+    /// removed is the one exception: it is not applied either, but it is
+    /// named in a warning rather than dropped without a word.
     ///
     /// Use this instead of [`Self::load_from_path`] when the TOML file is
     /// **shared** with a hosting shell that owns its own `[server]`/
@@ -664,10 +580,14 @@ impl VelesConfig {
     /// Shared tail of `load_from_path`, `from_toml`, and
     /// `load_from_path_engine_only`, which differ only in how `figment` is
     /// assembled.
+    ///
+    /// The removal warning is raised here, from the merged sources, because
+    /// the extracted struct no longer has anywhere to hold a removed key.
     fn finish(figment: &Figment) -> Result<Self, ConfigError> {
         let config: Self = figment
             .extract()
             .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        crate::config_removed::warn_removed_keys(figment);
         config.validate()?;
         Ok(config)
     }

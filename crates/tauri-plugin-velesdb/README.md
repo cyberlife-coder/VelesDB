@@ -167,7 +167,7 @@ fn main() {
 ```
 
 Only the engine sections of the file are read (`[search]`, `[hnsw]`,
-`[storage]`, `[limits]`, `[quantization]`, `[wal_batch]`); a `[server]` table
+`[storage]`, `[limits]`, `[quantization]`); a `[server]` table
 belonging to another VelesDB component in a shared file is ignored, not
 rejected. Field reference: [configuration guide](../../docs/guides/CONFIGURATION.md).
 

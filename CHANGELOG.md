@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `custom:`/`adaptive:` mode — now fail instead of running at the default
 > quality or an uncapped traversal, and a collection's own `execute_aggregate` refuses a
 > query the validator rejects. It also removes a public module, the aarch64-only
-> `velesdb_core::simd_neon` (#1965, under `### Removed`). It also bumps `utoipa`
+> `velesdb_core::simd_neon` (#1965, under `### Removed`), and the never-applied
+> `WalBatchConfig` / `[wal_batch]` and three `StorageConfig` fields promised for
+> 7.0.0 (#2174, #2087, under `### Removed`). It also bumps `utoipa`
 > to 6.0.0 behind velesdb-core's `openapi` feature (#2429, under `### Changed`):
 > a downstream crate enabling that feature with its own `utoipa 5` dependency no
 > longer compiles. The declared SemVer policy (`docs/FAQ.md`)
@@ -187,6 +189,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load call alone reports the cost as gone when it has only moved.
 
 ### Removed
+- **BREAKING (Rust API, Python bindings, config) — `WalBatchConfig`, the
+  `VelesConfig::wal_batch` field and the `[wal_batch]` table (#2174), and
+  `StorageConfig::{data_dir, mmap_cache_mb, vector_alignment}` with their
+  `[storage]` keys (#2087).** Both removals were promised for 7.0.0 and tracked
+  by `scripts/check-deferred-removals.py`. All four were parsed and never
+  applied: the group commit `[wal_batch]` configured was deleted as unwired
+  (#2078), and the three `[storage]` fields had no engine counterpart at all.
+  Removed with them: `wal_batch` from the engine-only section filter and from
+  the `VELESDB_*` mapping, the two warnings that announced them as inert or
+  deprecated, the `mmap_cache_mb` range check, and the Python mirror —
+  `StorageOptions` keeps `storage_mode` only.
+
+  **An existing config file keeps loading.** Every loader —
+  `VelesConfig::{load, load_from_path, from_toml}` and the engine-only ones
+  behind `velesdb-server --config`, the CLI, the Tauri plugin, mobile's
+  `openWithConfig{,Toml}` and Python's `VelesConfigOptions.from_toml{,_path}`
+  — ignores a removed key whatever its value, and logs one warning per load,
+  "these config entries were removed in 7.0.0 and are ignored", whose
+  `removed` field names each removed key it found with its issue (for
+  example `wal_batch (#2174), storage.mmap_cache_mb (#2087)`). The
+  `VELESDB_WAL_BATCH_*` and
+  `VELESDB_STORAGE_{DATA_DIR,MMAP_CACHE_MB,VECTOR_ALIGNMENT}` variables get
+  the same treatment. One file 6.x refused now loads: an `mmap_cache_mb` of `0`
+  or above 1 TiB failed its range check, and is now ignored like any other
+  value. Strictness is unchanged for every other key — the loaders never denied
+  unknown keys, and still do not. Deserializing a `VelesConfig` with serde
+  directly, outside the loaders, drops the removed keys without a warning.
+
+  **Migration.** Delete `[wal_batch]` and the three `[storage]` lines from
+  `velesdb.toml` and unset the matching variables; none of them changed
+  behaviour. Rust code naming `WalBatchConfig`, `config.wal_batch` or one of
+  the three fields no longer compiles: drop the line (a struct literal ending
+  in `..VelesConfig::default()` needs nothing else). Python code passing
+  `data_dir=`, `mmap_cache_mb=` or `vector_alignment=` to `StorageOptions` gets
+  a `TypeError`: drop the keyword. The data directory was only ever the path
+  given to `Database::open`, or `velesdb-server`'s `[server] data_dir` /
+  `--data-dir`.
+
+  The two entries leave `DEFERRED_REMOVALS`, which is now empty. Its refusal
+  vectors in `scripts/guards.json` supply their own list through a new
+  `--registry` flag, so the guard is still seen refusing without a fake promise
+  in the real list.
 - **BREAKING (Rust API, aarch64 only) — `velesdb_core::simd_neon` (#1965).**
   A public module nothing called: a standalone duplicate of the NEON kernels
   `simd_native` dispatches to at runtime. Two guides said mobile computed its

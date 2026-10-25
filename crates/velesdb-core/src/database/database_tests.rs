@@ -1352,16 +1352,11 @@ fn test_database_open_default_config_matches_veles_config_default() {
         default.limits.max_collections
     );
     assert_eq!(stored.limits.max_dimensions, default.limits.max_dimensions);
-    assert_eq!(stored.wal_batch.enabled, default.wal_batch.enabled);
-    assert_eq!(
-        stored.wal_batch.max_batch_size,
-        default.wal_batch.max_batch_size
-    );
 }
 
 #[test]
 fn test_database_open_with_config_preserves_custom_fields() {
-    use crate::config::{LimitsConfig, VelesConfig, WalBatchConfig};
+    use crate::config::{LimitsConfig, VelesConfig};
 
     let dir = tempdir().unwrap();
 
@@ -1373,11 +1368,6 @@ fn test_database_open_with_config_preserves_custom_fields() {
             max_payload_size: 524_288,
             max_perfect_mode_vectors: 250_000,
         },
-        wal_batch: WalBatchConfig {
-            enabled: true,
-            commit_delay_us: 250,
-            max_batch_size: 256,
-        },
         ..VelesConfig::default()
     };
 
@@ -1387,9 +1377,6 @@ fn test_database_open_with_config_preserves_custom_fields() {
     assert_eq!(stored.limits.max_dimensions, 2048);
     assert_eq!(stored.limits.max_collections, 500);
     assert_eq!(stored.limits.max_payload_size, 524_288);
-    assert!(stored.wal_batch.enabled);
-    assert_eq!(stored.wal_batch.commit_delay_us, 250);
-    assert_eq!(stored.wal_batch.max_batch_size, 256);
 }
 
 #[test]

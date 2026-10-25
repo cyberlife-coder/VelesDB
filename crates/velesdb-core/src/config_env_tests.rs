@@ -43,7 +43,10 @@ fn test_multi_word_field_is_not_split_at_every_underscore() {
         path_of("SEARCH_QUERY_TIMEOUT_MS"),
         "search.query_timeout_ms"
     );
-    assert_eq!(path_of("STORAGE_MMAP_CACHE_MB"), "storage.mmap_cache_mb");
+    assert_eq!(
+        path_of("QUANTIZATION_RERANK_MULTIPLIER"),
+        "quantization.rerank_multiplier"
+    );
 }
 
 #[test]
@@ -66,7 +69,7 @@ fn test_every_section_of_the_struct_is_addressable() {
     for (section, field) in [
         ("search", "max_results"),
         ("hnsw", "max_layers"),
-        ("storage", "vector_alignment"),
+        ("storage", "storage_mode"),
         ("limits", "max_payload_size"),
         ("server", "max_body_size"),
         ("logging", "level"),
@@ -78,9 +81,12 @@ fn test_every_section_of_the_struct_is_addressable() {
 }
 
 #[test]
-fn test_wal_batch_section_keeps_its_own_underscore() {
-    // The one section whose *name* contains an underscore: the split must
-    // happen after `wal_batch`, not inside it.
+fn test_a_removed_section_is_still_split_at_its_own_boundary() {
+    // `[wal_batch]` left the struct in 7.0.0 (#2174), but a 6.x deployment can
+    // still export its variables. Splitting after `wal_batch` keeps them on the
+    // removed path, where the loader names them in its removal warning; split
+    // nowhere, they would flatten into `wal_batch_enabled`, a key nothing
+    // reports. It is also the one section whose *name* contains an underscore.
     assert_eq!(
         path_of("WAL_BATCH_MAX_BATCH_SIZE"),
         "wal_batch.max_batch_size"

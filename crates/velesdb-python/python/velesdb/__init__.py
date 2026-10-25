@@ -930,7 +930,8 @@ __all__ = [
     # Engine config sections (issue #1549). Each maps 1:1 to a `[section]`
     # of the core `VelesConfig` TOML; attach them to `VelesConfigOptions`
     # or load a whole file via `VelesConfigOptions.from_toml_path`.
-    # `wal_batch` is intentionally absent (velesdb-premium Enterprise —
+    # There is no `wal_batch` section (the core removed it in 7.0.0;
+    # concurrent WAL writing is velesdb-premium Enterprise —
     # docs/guides/WRITE_CONCURRENCY.md); `server`/`logging` configure
     # hosting shells, not the embedded engine.
     "SearchConfigOptions",
