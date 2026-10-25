@@ -112,6 +112,9 @@ jobs:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
 
       # Parser VelesQL - parsing user input
+      # `--no-default-features` is load-bearing here: velesdb-core's
+      # `persistence` enables `pest/std`, which links stacker/psm, and Miri
+      # cannot run psm's stack-pointer assembly (red from #2468 until #2475).
       - name: Miri - VelesQL parser
         run: |
           cargo miri test --no-default-features \
