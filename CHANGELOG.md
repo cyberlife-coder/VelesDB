@@ -222,6 +222,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`scripts/bump_version.py` now rewrites the `` `<crate> vX.Y.Z` `` footer of
+  the seven workspace-versioned crate READMEs.** `check-version-sync.py` pins
+  those footers, but the bump left them alone, so the release commit that
+  raised the version failed the guard and the footers had to be edited by
+  hand. A parity test (`scripts/tests/test_bump_version.py`) now fails when the
+  guard reads a workspace footer the bumper does not write; `velesdb-memory`'s
+  footer stays out, as it versions on its own train.
+
 - **CI: `Miri UB Detection` (`quality-deep.yml`) was red on `develop` since
   #2468; VelesQL parsing keeps pest's stack check in every native build.**
   #2468 moved pest to 2.9.4, whose default `std` feature now links `stacker`

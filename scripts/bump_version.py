@@ -58,6 +58,15 @@ TARGETS: "list[tuple[str, str]]" = [
     ("crates/velesdb-python/README.md", "applies_to_stamp"),
     ("crates/velesdb-server/README.md", "applies_to_stamp"),
     ("crates/velesdb-wasm/README.md", "applies_to_stamp"),
+    # The `` `<crate> vX.Y.Z` `` half of the same footer, which the guard pins
+    # too and `applies_to_stamp` does not touch.
+    ("crates/tauri-plugin-velesdb/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-cli/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-migrate/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-mobile/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-python/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-server/README.md", "crate_footer_stamp"),
+    ("crates/velesdb-wasm/README.md", "crate_footer_stamp"),
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     ("sdks/typescript/package-lock.json", "npm_lock"),
@@ -235,6 +244,15 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
             text,
             r"(Applies to:\s*velesdb-core\s+)" + VERSION_RE,
             r"\g<1>" + ver,
+        )
+    elif fmt == "crate_footer_stamp":
+        # `` `<crate> vX.Y.Z` `` where <crate> is the README's directory, as the
+        # guard reads it: another crate's stamp pasted into this file is left
+        # for the guard to flag rather than silently rewritten.
+        text, n = _sub_all(
+            text,
+            r"(`" + re.escape(path.parent.name) + r" v)" + VERSION_RE + r"(`)",
+            r"\g<1>" + ver + r"\g<2>",
         )
     elif fmt == "doc_last_updated_version":
         text, n = _bump_last_updated(text, ver, date)
