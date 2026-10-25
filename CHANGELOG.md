@@ -7,20 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> **Note for the next release**: this train contains **breaking** behaviour
-> changes (#2267, #2274 and #2275, the `BREAKING (REST, VelesQL, bindings)`
-> entries under `### Changed`): a search `mode` VelesQL or REST cannot parse,
-> and an `ef_search` outside `[16, 4096]` — given as the option or as a
-> `custom:`/`adaptive:` mode — now fail instead of running at the default
-> quality or an uncapped traversal, and a collection's own `execute_aggregate` refuses a
-> query the validator rejects. It also removes a public module, the aarch64-only
-> `velesdb_core::simd_neon` (#1965, under `### Removed`), and the never-applied
-> `WalBatchConfig` / `[wal_batch]` and three `StorageConfig` fields promised for
-> 7.0.0 (#2174, #2087, under `### Removed`). It also bumps `utoipa`
-> to 6.0.0 behind velesdb-core's `openapi` feature (#2429, under `### Changed`):
-> a downstream crate enabling that feature with its own `utoipa 5` dependency no
-> longer compiles. The declared SemVer policy (`docs/FAQ.md`)
-> makes a breaking change a major bump: tag the next release accordingly.
+## [7.0.0] - 2026-10-25
+
+> **MAJOR release.** The breaking changes are listed in
+> [`docs/guides/MIGRATION_v7.0.0.md`](docs/guides/MIGRATION_v7.0.0.md):
+> a search `mode` VelesQL or REST cannot parse, and an `ef_search` outside
+> `[16, 4096]` (as the option or inside a `custom:`/`adaptive:` mode), now fail
+> instead of running at the default quality or an uncapped traversal (#2267,
+> #2274, #2275); a collection's own `execute_aggregate` refuses a query the
+> validator rejects; the TypeScript SDK's WASM backend refuses arguments it
+> cannot apply (#2095). Removed: the aarch64-only `velesdb_core::simd_neon`
+> (#1965) and the never-applied `WalBatchConfig` / `[wal_batch]` and
+> `StorageConfig::{data_dir, mmap_cache_mb, vector_alignment}` promised for this
+> major (#2174, #2087). `utoipa` moves to 6.0.0 behind velesdb-core's `openapi`
+> feature (#2429): a downstream crate enabling that feature with its own
+> `utoipa 5` dependency no longer compiles. The on-disk format stays readable
+> both ways: `.vectors` v2 opens under 6.0.0.
 
 ### Security
 
@@ -265,6 +267,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the directory is ignored.
 
 ### Fixed
+
+- **`scripts/bump_version.py` also rewrites the version claims
+  `check-doc-freshness.py` compares to the manifest.** The `workspace X.Y.Z`
+  document stamps, the "current product version" prose and the published-packages
+  line were left at the previous release, so the commit raising the version
+  failed the guard and eleven files had to be edited by hand. Historical
+  references ("since 6.0.0", "fixed in 6.0.0") are recognised as the guard
+  recognises them and are not rewritten. `test_changelog_release_notes` no
+  longer reads the empty `[Unreleased]` of a freshly cut release as a parser
+  failure.
 
 - **`scripts/bump_version.py` now rewrites the `` `<crate> vX.Y.Z` `` footer of
   the seven workspace-versioned crate READMEs.** `check-version-sync.py` pins

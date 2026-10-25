@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 6.0.0 — Last updated: 2026-09-07*
+*Version 7.0.0 — Last updated: 2026-09-07*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -143,7 +143,7 @@ default_mode = "balanced"
 ```toml
 # =============================================================================
 # VelesDB Configuration File
-# Version: 6.0.0
+# Version: 7.0.0
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -954,4 +954,4 @@ impl VelesConfig {
 
 ---
 
-*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0*
+*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 7.0.0*
