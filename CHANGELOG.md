@@ -268,6 +268,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two regular expressions that backtracked on adversarial input (CodeQL
+  `js/polynomial-redos`, `py/redos`).** The TypeScript SDK's WASM `query()`
+  shape check ended in three adjacent `\s*`, so a few thousand spaces after a
+  near-miss statement cost seconds of event-loop time; each optional tail now
+  starts on a token (`limit`, `;`) and the check is linear. The loom-command
+  pattern in `test_ci_toolchain_pin.py` let an unquoted value overlap a quoted
+  one, doubling the work per repetition; the unquoted alternative can no longer
+  start on a quote. Both have a regression test that failed before the fix.
+
+- **CI: the `Semver Checks` gate refused any release commit that bumps the major.**
+  `ci.yml` passed `--release-type minor` to velesdb-core so that `develop`, which
+  holds the published version between releases, is not asked for the bump the
+  release commit performs. The flag stayed on the release commit, where it kept
+  asserting a minor bump over a real major one, so the 7.0.0 cut failed on the
+  removals its own migration guide lists. When the workspace version is ahead of
+  the newest non-yanked crates.io release the step drops the flag and
+  cargo-semver-checks reads the two versions as they are; with the index
+  unreadable it keeps the declaration. The step's script is run under `bash`
+  with stubbed `cargo` and `curl` by `test_ci_semver_release_type.py`.
+
 - **`scripts/bump_version.py` also rewrites the version claims
   `check-doc-freshness.py` compares to the manifest.** The `workspace X.Y.Z`
   document stamps, the "current product version" prose and the published-packages

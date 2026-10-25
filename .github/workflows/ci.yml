@@ -906,9 +906,28 @@ jobs:
       # velesdb-memory needs no flag: a 0.x baseline is already read as a minor
       # update, so its Minor lints are disarmed by the tool itself. Same
       # enforcement, reached differently.
+      #
+      # The declaration holds only while `develop` carries the published
+      # version. The release commit raises it, and a flag hardcoded to `minor`
+      # then keeps asserting a minor bump over a real major one: 7.0.0 was
+      # refused for the removals its own migration guide lists. When the
+      # workspace version is ahead of the newest non-yanked crates.io release,
+      # the flag is dropped and cargo-semver-checks reads the two versions as
+      # they are; when the index cannot be read it stays, the safe default.
       - name: Check public API against the last published release
         run: |
-          cargo semver-checks check-release -p velesdb-core --release-type minor
+          workspace="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "velesdb-core") | .version')"
+          published="$(curl -fsS --retry 3 https://index.crates.io/ve/le/velesdb-core \
+            | jq -rs '.[] | select(.yanked | not) | .vers' | sort -V | tail -n 1)" || published=""
+          release_type="--release-type minor"
+          if [ -n "$published" ] && [ "$workspace" != "$published" ] \
+            && [ "$(printf '%s\n%s\n' "$published" "$workspace" | sort -V | tail -n 1)" = "$workspace" ]; then
+            release_type=""
+          fi
+          echo "velesdb-core: workspace ${workspace}, published ${published:-unknown}, release type '${release_type:-from the versions}'"
+          # shellcheck disable=SC2086 # empty or two words, deliberately unquoted
+          cargo semver-checks check-release -p velesdb-core $release_type
           cargo semver-checks check-release -p velesdb-memory
 
   # ===========================================================================
