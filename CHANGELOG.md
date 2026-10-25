@@ -222,6 +222,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: the `Semver Checks` gate refused any release commit that bumps the major.**
+  `ci.yml` passed `--release-type minor` to velesdb-core so that `develop`, which
+  holds the published version between releases, is not asked for the bump the
+  release commit performs. The flag stayed on the release commit, where it kept
+  asserting a minor bump over a real major one, so the 7.0.0 cut failed on the
+  removals its own migration guide lists. When the workspace version is ahead of
+  the newest non-yanked crates.io release the step drops the flag and
+  cargo-semver-checks reads the two versions as they are; with the index
+  unreadable it keeps the declaration. The step's script is run under `bash`
+  with stubbed `cargo` and `curl` by `test_ci_semver_release_type.py`.
+
 - **`scripts/bump_version.py` now rewrites the `` `<crate> vX.Y.Z` `` footer of
   the seven workspace-versioned crate READMEs.** `check-version-sync.py` pins
   those footers, but the bump left them alone, so the release commit that
