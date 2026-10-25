@@ -144,9 +144,11 @@ fully permissive policy; any other list restricts to those origins exactly.
 
 ## 5. Startup update check
 
-On startup the server performs a non-blocking version check against
-`https://velesdb.com/api/check`. It sends only the version, OS, architecture,
-and a non-reversible SHA-256 instance hash — no personal data.
+On startup, and then every 24 hours while it runs, the server sends a
+non-blocking check to `https://velesdb.com/api/check` with its version, OS,
+architecture, edition, a SHA-256 of a random per-install id, and whether it runs
+under CI. [Update check and telemetry](CONFIGURATION.md#update-check-and-telemetry)
+lists exactly what is sent, what is stored, and every way to opt out.
 
 Disable it in air-gapped or privacy-sensitive deployments:
 

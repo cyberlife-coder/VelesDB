@@ -1,13 +1,24 @@
 //! Update Check Logic (US-003)
 //!
-//! Performs non-blocking update check at startup.
+//! Sends the start-up update check and, for long-running processes, a
+//! daily heartbeat. Everything is best effort: a failure is logged at trace
+//! level and never reaches the caller.
 
-use super::{config::UpdateCheckConfig, instance_id::compute_instance_hash};
+use super::{ci::is_ci, config::UpdateCheckConfig, instance_id::install_hash};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Telemetry payload - Minimal, no PII
+/// Delay between two heartbeats of a long-running process.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Entry reported by the deprecated entry points, which cannot say which
+/// binary they run in.
+const LEGACY_ENTRY: &str = "library";
+
+/// Telemetry payload. What it contains is listed in
+/// `docs/guides/CONFIGURATION.md`; adding a field is a privacy decision.
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateCheckPayload {
     /// VelesDB version (e.g., "0.5.4")
@@ -19,25 +30,80 @@ pub struct UpdateCheckPayload {
     /// Architecture (e.g., "x86_64", "aarch64")
     pub arch: String,
 
-    /// SHA256 hash of instance ID (stable per install)
+    /// SHA256 hex of a random per-install id (stable per install)
     pub instance_hash: String,
 
     /// Edition: "core" or "premium"
     pub edition: String,
+
+    /// Binary that sent the check, as the caller declared it ("server", "cli")
+    pub entry: String,
+
+    /// True when a CI system's environment variables are present
+    pub ci: bool,
 }
 
 impl UpdateCheckPayload {
     /// Create a new payload with current system info.
     #[must_use]
-    pub fn new(instance_hash: String, edition: &str) -> Self {
+    pub fn new(instance_hash: String, edition: &str, entry: &str, ci: bool) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             instance_hash,
             edition: edition.to_string(),
+            entry: entry.to_string(),
+            ci,
         }
     }
+}
+
+/// Who is asking: which binary, which edition, and where it keeps its data.
+#[derive(Debug, Clone)]
+pub struct UpdateCheckContext {
+    entry: String,
+    edition: String,
+    data_dir: Option<PathBuf>,
+}
+
+impl UpdateCheckContext {
+    /// `entry` names the calling binary (`"server"`, `"cli"`); `edition` is
+    /// `"core"` or `"premium"`.
+    #[must_use]
+    pub fn new(entry: impl Into<String>, edition: impl Into<String>) -> Self {
+        Self {
+            entry: entry.into(),
+            edition: edition.into(),
+            data_dir: None,
+        }
+    }
+
+    /// Data directory, used only as a fallback place for the install id when
+    /// the per-user configuration directory is not writable.
+    #[must_use]
+    pub fn with_data_dir(mut self, data_dir: impl Into<PathBuf>) -> Self {
+        self.data_dir = Some(data_dir.into());
+        self
+    }
+
+    fn payload(&self) -> UpdateCheckPayload {
+        UpdateCheckPayload::new(
+            install_hash(self.data_dir.as_deref()),
+            &self.edition,
+            &self.entry,
+            is_ci(|key| std::env::var(key).ok()),
+        )
+    }
+}
+
+/// What happens after the first check.
+#[derive(Debug, Clone, Copy)]
+enum Cadence {
+    /// Check once, then stop.
+    Once,
+    /// Check again after every interval, for as long as the process lives.
+    Every(Duration),
 }
 
 /// Response from update check server
@@ -53,24 +119,32 @@ pub struct UpdateCheckResponse {
     pub message: Option<String>,
 }
 
-/// Perform the startup update check (async, non-blocking).
-///
-/// This should be called early in startup, spawned as a background task.
-/// It will not block startup - timeout is 2 seconds max.
-pub async fn check_for_updates(config: &UpdateCheckConfig, data_dir: &Path, edition: &str) {
-    if !config.is_enabled() {
-        tracing::debug!("Update check disabled by user preference");
+/// Runs `ping` once, then again after every interval when `cadence` asks
+/// for it. Nothing runs, and `build` is not called, when `enabled` is false:
+/// an opted-out install writes no id and sends nothing.
+async fn run<B, P, Fut>(enabled: bool, cadence: Cadence, build: B, mut ping: P)
+where
+    B: FnOnce() -> UpdateCheckPayload,
+    P: FnMut(UpdateCheckPayload) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if !enabled {
         return;
     }
+    let payload = build();
+    ping(payload.clone()).await;
+    let Cadence::Every(interval) = cadence else {
+        return;
+    };
+    loop {
+        tokio::time::sleep(interval).await;
+        ping(payload.clone()).await;
+    }
+}
 
-    tracing::info!("Checking for updates... (disable with VELESDB_NO_UPDATE_CHECK=1)");
-
-    let instance_hash = compute_instance_hash(data_dir);
-    let payload = UpdateCheckPayload::new(instance_hash, edition);
-
-    // Log payload at debug level for transparency
-    tracing::debug!(?payload, "Update check payload");
-
+/// Sends one payload, bounded by the configured timeout. Failures are
+/// logged at trace level and otherwise ignored.
+async fn ping_server(config: &UpdateCheckConfig, payload: UpdateCheckPayload) {
     let timeout = Duration::from_millis(config.timeout_ms);
 
     match tokio::time::timeout(timeout, send_update_check(&config.endpoint, &payload)).await {
@@ -82,6 +156,44 @@ pub async fn check_for_updates(config: &UpdateCheckConfig, data_dir: &Path, edit
             tracing::trace!("Update check skipped (timeout)");
         }
     }
+}
+
+async fn drive(config: &UpdateCheckConfig, context: &UpdateCheckContext, cadence: Cadence) {
+    let enabled = config.is_enabled();
+    if enabled {
+        tracing::info!("Checking for updates... (disable with VELESDB_NO_UPDATE_CHECK=1)");
+    } else {
+        tracing::debug!("Update check disabled by user preference");
+    }
+    run(
+        enabled,
+        cadence,
+        || context.payload(),
+        |payload| {
+            tracing::debug!(?payload, "Update check payload");
+            ping_server(config, payload)
+        },
+    )
+    .await;
+}
+
+/// Perform the startup update check (async, non-blocking).
+///
+/// This should be called early in startup, spawned as a background task.
+/// It will not block startup - timeout is 2 seconds max.
+pub async fn check_for_updates_with(config: &UpdateCheckConfig, context: &UpdateCheckContext) {
+    drive(config, context, Cadence::Once).await;
+}
+
+/// Deprecated form of [`check_for_updates_with`]: it cannot say which binary
+/// it runs in, so the check is reported with the entry `"library"`.
+#[deprecated(
+    since = "6.1.0",
+    note = "use `check_for_updates_with`, which reports the calling binary"
+)]
+pub async fn check_for_updates(config: &UpdateCheckConfig, data_dir: &Path, edition: &str) {
+    let context = UpdateCheckContext::new(LEGACY_ENTRY, edition).with_data_dir(data_dir);
+    check_for_updates_with(config, &context).await;
 }
 
 async fn send_update_check(
@@ -117,30 +229,48 @@ fn handle_response(current_version: &str, response: &UpdateCheckResponse) {
     }
 }
 
-/// Synchronous wrapper for non-async contexts.
-///
-/// Spawns the update check in a background thread so it doesn't block.
-pub fn spawn_update_check(
-    config: UpdateCheckConfig,
-    data_dir: std::path::PathBuf,
-    edition: String,
-) {
+/// Runs the check on a detached background thread with its own runtime, so
+/// it neither blocks the caller nor keeps the process alive at exit.
+fn spawn(config: UpdateCheckConfig, context: UpdateCheckContext, cadence: Cadence) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build();
 
         match rt {
-            Ok(runtime) => {
-                runtime.block_on(async {
-                    check_for_updates(&config, &data_dir, &edition).await;
-                });
-            }
+            Ok(runtime) => runtime.block_on(drive(&config, &context, cadence)),
             Err(e) => {
                 tracing::trace!("Update check skipped (runtime error: {})", e);
             }
         }
     });
+}
+
+/// Sends the update check once from a background thread.
+///
+/// For short-lived processes such as the CLI.
+pub fn spawn_update_check_with(config: UpdateCheckConfig, context: UpdateCheckContext) {
+    spawn(config, context, Cadence::Once);
+}
+
+/// Sends the update check from a background thread, then once every 24 hours
+/// for as long as the process runs.
+///
+/// For long-running processes such as the server. The thread is detached: it
+/// ends with the process and never delays shutdown.
+pub fn spawn_update_heartbeat(config: UpdateCheckConfig, context: UpdateCheckContext) {
+    spawn(config, context, Cadence::Every(HEARTBEAT_INTERVAL));
+}
+
+/// Deprecated form of [`spawn_update_check_with`]: it cannot say which
+/// binary it runs in, so the check is reported with the entry `"library"`.
+#[deprecated(
+    since = "6.1.0",
+    note = "use `spawn_update_check_with`, which reports the calling binary"
+)]
+pub fn spawn_update_check(config: UpdateCheckConfig, data_dir: PathBuf, edition: String) {
+    let context = UpdateCheckContext::new(LEGACY_ENTRY, edition).with_data_dir(data_dir);
+    spawn_update_check_with(config, context);
 }
 
 #[cfg(test)]

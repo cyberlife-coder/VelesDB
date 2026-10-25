@@ -44,7 +44,7 @@ Two more environment variables affect the binary:
 
 | Variable | Effect |
 |---|---|
-| `VELESDB_NO_UPDATE_CHECK=1` | Disables the non-blocking background update check (built with the default `update-check` feature). Can also be disabled with `[update_check] enabled = false` in the config file. |
+| `VELESDB_NO_UPDATE_CHECK=1` | Disables the non-blocking background update check (built with the default `update-check` feature); [what it sends](CONFIGURATION.md#update-check-and-telemetry). Can also be disabled with `[update_check] enabled = false` in the config file. |
 | `VELESDB_LICENSE_PUBLIC_KEY` | Base64 Ed25519 public key used by `license show` and `license activate`. Unset means a development fallback key is used, with a warning. |
 
 ---

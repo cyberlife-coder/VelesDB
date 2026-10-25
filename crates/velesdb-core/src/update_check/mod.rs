@@ -1,14 +1,19 @@
 //! Update Check Module
 //!
-//! Provides automatic update checking at startup to help users stay secure.
-//! This is similar to VS Code, Firefox, and most modern software.
+//! Checks for a newer version at start-up and, for a long-running server,
+//! once a day after that. The check also tells the project how many installs
+//! exist and for how long each one stays in use.
 //!
 //! # Privacy
 //!
-//! - No personal information is collected
-//! - Instance hash is SHA256, not reversible
-//! - IP addresses are not logged server-side
-//! - Easily disabled via environment variable
+//! - The payload is a fixed set of fields: version, OS, architecture,
+//!   edition, the calling binary, a CI flag, and the SHA-256 of a random
+//!   per-install id. Nothing is derived from the machine, the user, or the
+//!   data directory.
+//! - The id is generated once and stored in the per-user configuration
+//!   directory; an install that opted out never creates it.
+//! - The full description, including what the receiving server stores, is
+//!   `docs/guides/CONFIGURATION.md`.
 //!
 //! # Disabling
 //!
@@ -23,6 +28,7 @@
 //! ```
 #![allow(clippy::doc_markdown)] // Docs intentionally reference product/arch identifiers.
 
+mod ci;
 mod config;
 mod instance_id;
 
@@ -30,10 +36,15 @@ mod instance_id;
 mod check;
 
 pub use config::UpdateCheckConfig;
+#[allow(deprecated)] // Reason: re-exports the deprecated hash helper until the next major
 pub use instance_id::compute_instance_hash;
 
 #[cfg(feature = "update-check")]
-pub use check::{check_for_updates, spawn_update_check};
+#[allow(deprecated)] // Reason: re-exports the deprecated entry points until the next major
+pub use check::{
+    check_for_updates, check_for_updates_with, spawn_update_check, spawn_update_check_with,
+    spawn_update_heartbeat, UpdateCheckContext,
+};
 
 #[cfg(test)]
 mod tests;

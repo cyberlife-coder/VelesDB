@@ -3,6 +3,7 @@
 //! Provides configuration options for the update check feature.
 
 use serde::Deserialize;
+use std::path::Path;
 
 /// Configuration for update check feature.
 ///
@@ -49,6 +50,35 @@ impl Default for UpdateCheckConfig {
 }
 
 impl UpdateCheckConfig {
+    /// Reads the `[update_check]` table of the configuration file.
+    ///
+    /// `path` is the file passed with `--config`/`VELESDB_CONFIG`; without it
+    /// `./velesdb.toml` is read when it exists. A missing, unreadable or
+    /// malformed file, or a missing table, gives the defaults: the update
+    /// check never fails start-up, and the engine's own loader is the one
+    /// that reports a bad file.
+    #[must_use]
+    pub fn from_config_file(path: Option<&Path>) -> Self {
+        let default_path = Path::new("velesdb.toml");
+        let path = path.unwrap_or(default_path);
+        std::fs::read_to_string(path)
+            .map(|document| Self::from_toml_str(&document))
+            .unwrap_or_default()
+    }
+
+    /// Parses the `[update_check]` table out of a TOML document.
+    fn from_toml_str(document: &str) -> Self {
+        #[derive(Deserialize)]
+        struct Document {
+            update_check: Option<UpdateCheckConfig>,
+        }
+
+        toml::from_str::<Document>(document)
+            .ok()
+            .and_then(|parsed| parsed.update_check)
+            .unwrap_or_default()
+    }
+
     /// Check if update check is enabled.
     ///
     /// Environment variables take precedence over configuration file:

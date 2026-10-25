@@ -168,8 +168,6 @@ update-check = [
     "dep:tokio",
     "dep:sha2",
     "dep:hex",
-    "dep:hostname",
-    "dep:whoami",
 ]
 loom = ["dep:loom"]
 ## Test-only fault injection seams. Exposes RAII guards in
@@ -428,14 +426,6 @@ optional = true
 
 [dependencies.hex]
 version = "0.4.3"
-optional = true
-
-[dependencies.hostname]
-version = "0.4"
-optional = true
-
-[dependencies.whoami]
-version = "2.1"
 optional = true
 
 [dependencies.reqwest]

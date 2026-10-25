@@ -86,16 +86,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn cli_main() -> anyhow::Result<()> {
-    // Non-blocking update check (background thread, 2s timeout).
+    let cli = Cli::parse();
+    // Non-blocking update check (background thread, 2s timeout), sent once.
+    // No data directory is known this early, so the install id lives in the
+    // per-user config directory or, failing that, for this process only.
     // Disable: VELESDB_NO_UPDATE_CHECK=1 or [update_check] enabled=false in config.
     #[cfg(feature = "update-check")]
-    velesdb_core::spawn_update_check(
-        velesdb_core::UpdateCheckConfig::default(),
-        std::path::PathBuf::from("."),
-        "core".to_string(),
+    velesdb_core::spawn_update_check_with(
+        velesdb_core::UpdateCheckConfig::from_config_file(cli.config.as_deref()),
+        velesdb_core::UpdateCheckContext::new("cli", "core"),
     );
 
-    let cli = Cli::parse();
     // Recorded once here; every command that opens a database (REPL and
     // one-shot alike) reads it back via `helpers::open_database`.
     helpers::set_config_path(cli.config);

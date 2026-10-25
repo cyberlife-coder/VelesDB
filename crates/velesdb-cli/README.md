@@ -123,7 +123,7 @@ Type `.collections`, then `.quit` to leave.
 | Variable | Default | Effect |
 |---|---|---|
 | `VELESDB_CONFIG` | (none) | Path to a VelesDB TOML config file (search/HNSW/storage/limits/WAL batching), applied to every command that opens a database, including the REPL. Equivalent to the global `--config <FILE>` flag. An invalid or missing path fails fast — it never silently falls back to defaults. |
-| `VELESDB_NO_UPDATE_CHECK` | unset | Set to `1` to disable the non-blocking background update check (present with the default `update-check` feature). Also disabled by `[update_check] enabled = false` in the config file. |
+| `VELESDB_NO_UPDATE_CHECK` | unset | Set to `1` to disable the non-blocking background update check, sent once per invocation (present with the default `update-check` feature). It sends the version, OS, architecture, edition, a hash of a random per-install id and whether it runs under CI — see [what is sent](../../docs/guides/CONFIGURATION.md#update-check-and-telemetry). Also disabled by `VELESDB_UPDATE_CHECK=0` or `[update_check] enabled = false` in the config file. |
 | `VELESDB_LICENSE_PUBLIC_KEY` | (dev fallback key) | Base64 Ed25519 public key used by `license show` and `license activate`. When unset, a development fallback key is used and a warning is printed. |
 
 Cargo features: `default = ["velesdb-core/default", "update-check"]`, plus

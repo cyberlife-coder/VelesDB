@@ -199,8 +199,13 @@ pub mod velesql;
 pub mod wire;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
-pub use update_check::{check_for_updates, spawn_update_check};
+#[allow(deprecated)] // Reason: re-exports the deprecated entry points until the next major
+pub use update_check::{
+    check_for_updates, check_for_updates_with, spawn_update_check, spawn_update_check_with,
+    spawn_update_heartbeat, UpdateCheckContext,
+};
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
+#[allow(deprecated)] // Reason: re-exports the deprecated hash helper until the next major
 pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 
 #[cfg(feature = "persistence")]
