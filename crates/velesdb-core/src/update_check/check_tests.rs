@@ -92,25 +92,39 @@ const CADENCES: [Cadence; 2] = [Cadence::Once, Cadence::Every(Duration::from_mil
 /// heartbeat alike.
 #[test]
 fn test_every_opt_out_builds_nothing_and_sends_nothing() {
-    let cases: [(&str, UpdateCheckConfig, &[(&str, &str)]); 4] = [
-        ("config enabled = false", disabled(), &[]),
-        (
-            "VELESDB_NO_UPDATE_CHECK=1",
-            UpdateCheckConfig::default(),
-            &[("VELESDB_NO_UPDATE_CHECK", "1")],
-        ),
-        (
-            "VELESDB_UPDATE_CHECK=0",
-            UpdateCheckConfig::default(),
-            &[("VELESDB_UPDATE_CHECK", "0")],
-        ),
-        (
-            "VELESDB_UPDATE_CHECK=off over a config that is on",
-            UpdateCheckConfig::default(),
-            &[("VELESDB_UPDATE_CHECK", "off")],
-        ),
+    struct OptOut {
+        label: &'static str,
+        config: UpdateCheckConfig,
+        vars: &'static [(&'static str, &'static str)],
+    }
+    let cases = [
+        OptOut {
+            label: "config enabled = false",
+            config: disabled(),
+            vars: &[],
+        },
+        OptOut {
+            label: "VELESDB_NO_UPDATE_CHECK=1",
+            config: UpdateCheckConfig::default(),
+            vars: &[("VELESDB_NO_UPDATE_CHECK", "1")],
+        },
+        OptOut {
+            label: "VELESDB_UPDATE_CHECK=0",
+            config: UpdateCheckConfig::default(),
+            vars: &[("VELESDB_UPDATE_CHECK", "0")],
+        },
+        OptOut {
+            label: "VELESDB_UPDATE_CHECK=off over a config that is on",
+            config: UpdateCheckConfig::default(),
+            vars: &[("VELESDB_UPDATE_CHECK", "off")],
+        },
     ];
-    for (label, config, vars) in cases {
+    for OptOut {
+        label,
+        config,
+        vars,
+    } in cases
+    {
         for cadence in CADENCES {
             let built = AtomicUsize::new(0);
             let sent = AtomicUsize::new(0);
