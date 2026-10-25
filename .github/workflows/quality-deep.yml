@@ -102,12 +102,22 @@ jobs:
           shared-key: "velesdb-miri"
           save-if: true
 
-      # Distance module - code SIMD scalaire (pas les intrinsics)
+      # Every step goes through scripts/miri-step.sh: libtest exits 0 on a
+      # filter that matches nothing, so each step also asserts that a test of
+      # the module it names passed (AGENTS.md method 17). `--lib` keeps the
+      # integration-test binaries, which never match, out of the run.
+
+      # Distance module - code SIMD scalaire (pas les intrinsics). The scalar
+      # tests live in `distance_tests`, at the crate root, which `distance::`
+      # does not match. `geo_distance_tests` also ends in `distance_tests::`
+      # but holds no unsafe code and asserts bit-exact trigonometry, which
+      # Miri deliberately perturbs, so it is skipped.
       - name: Miri - distance module
         run: |
-          cargo miri test --no-default-features \
-            -p velesdb-core -- \
-            distance:: --test-threads=1
+          scripts/miri-step.sh 'distance_tests::' \
+            --no-default-features -p velesdb-core --lib -- \
+            distance:: distance_tests:: --skip geo_distance_tests \
+            --test-threads=1
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
 
@@ -117,26 +127,31 @@ jobs:
       # cannot run psm's stack-pointer assembly (red from #2468 until #2475).
       - name: Miri - VelesQL parser
         run: |
-          cargo miri test --no-default-features \
-            -p velesdb-core -- \
+          scripts/miri-step.sh 'velesql::parser::' \
+            --no-default-features -p velesdb-core --lib -- \
             velesql::parser:: --test-threads=1
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
 
-      # Storage vector_bytes - raw pointer manipulation
+      # Storage vector_bytes - raw pointer manipulation. `storage` is compiled
+      # only with `persistence`, so this step cannot use
+      # `--no-default-features` (it ran 0 tests that way). It still never
+      # reaches pest's `std` path: no test here parses VelesQL, and the
+      # parser step above is what keeps psm's assembly off Miri. The tests sit
+      # in `vector_bytes_tests`, not `vector_bytes::`.
       - name: Miri - vector bytes storage
         run: |
-          cargo miri test --no-default-features \
-            -p velesdb-core -- \
-            storage::vector_bytes:: --test-threads=1
+          scripts/miri-step.sh 'storage::vector_bytes_tests::' \
+            --features persistence -p velesdb-core --lib -- \
+            storage::vector_bytes_tests:: --test-threads=1
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
 
       # ContiguousVectors / AllocGuard - manual allocation, raw pointers, resize
       - name: Miri - contiguous vectors & alloc guard
         run: |
-          cargo miri test --no-default-features \
-            -p velesdb-core --lib -- \
+          scripts/miri-step.sh 'perf_optimizations' \
+            --no-default-features -p velesdb-core --lib -- \
             perf_optimizations alloc_guard contiguous_resize --test-threads=1
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
