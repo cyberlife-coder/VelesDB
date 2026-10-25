@@ -67,20 +67,6 @@ ignore = [
     # ── velesdb-cli transitive ────────────────────────────────────────
     { id = "RUSTSEC-2024-0384", reason = "instant: velesdb-cli transitive (clap/indicatif chain), unmaintained" },
 
-    # ── serde_yaml / unsafe-libyaml (velesdb-migrate) ─────────────────
-    # `unmaintained`, not a vulnerability: the repository was archived and
-    # 0.2.11 is the last release, so there is nothing to bump to. It enters
-    # through serde_yaml 0.9 only: velesdb-migrate parses the operator's own
-    # migration config file with it (config.rs), and velesdb-server uses it
-    # in one dev-only test. No network input reaches it. Every serde_yaml
-    # fork (serde_yaml_ng, serde_yml) still sits on unsafe-libyaml; leaving
-    # it means moving to a safe-Rust parser (serde-saphyr), which changes
-    # velesdb-migrate's public `Error::Yaml(serde_yaml::Error)` variant and
-    # is therefore a semver-reviewed change of its own, not a lockfile fix.
-    #
-    # Last reviewed: 2026-10-24
-    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml: serde_yaml transitive (velesdb-migrate config file, server dev test), archived upstream, no release to move to; serde-saphyr migration is a public-API change tracked separately" },
-
     # ── uniffi / askama build-time transitive (velesdb-mobile) ────────
     # basic-toml is read by askama_derive's `config` feature, a proc-macro
     # that uniffi_bindgen's templates need at COMPILE time; nothing parses

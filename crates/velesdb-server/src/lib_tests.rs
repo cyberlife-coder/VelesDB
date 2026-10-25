@@ -207,7 +207,15 @@ fn generate_openapi_spec_files() {
     let json = openapi
         .to_pretty_json()
         .expect("Failed to serialize OpenAPI JSON");
-    let yaml = serde_yaml::to_string(&openapi).expect("Failed to serialize OpenAPI YAML");
+    let yaml = serde_saphyr::to_string_with_options(
+        &openapi,
+        serde_saphyr::ser_options! {
+            prefer_block_scalars: false,
+            yaml_12: true,
+            no_lang_directive: true,
+        },
+    )
+    .expect("Failed to serialize OpenAPI YAML");
 
     // docs/ relative to workspace root
     let docs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

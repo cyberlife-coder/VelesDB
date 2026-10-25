@@ -59,7 +59,14 @@ MIB = 1024 * 1024
 BINARIES = [
     ("velesdb-server", 14.25 * MIB),  # measured 13.68 MiB at 6.0.0 and at 5.2.0
     ("velesdb", 11.5 * MIB),  # measured 11.04 MiB at 6.0.0, 10.99 at 5.2.0
-    ("velesdb-migrate", 9 * MIB),  # measured 8.62 MiB, already inside its ceiling
+    # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
+    # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.
+    # The +1.0 MiB is the parser itself, not the integration: stripped build of
+    # velesdb-migrate alone, same toolchain, 4.55 -> 5.48 MiB; in the unstripped
+    # `.text`, serde_saphyr 348 KiB, granit_parser 239 KiB, annotate_snippets
+    # 106 KiB of +903 KiB (encoding_rs, which `deserialize` pulls in, is linked
+    # out). Ceiling = measured + ~3 %, as for the others.
+    ("velesdb-migrate", 9.9 * MIB),
 ]
 
 

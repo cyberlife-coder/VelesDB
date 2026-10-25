@@ -104,7 +104,7 @@ destination:
 options:
   batch_size: 500
 "#;
-    let config: MigrationConfig = serde_yaml::from_str(yaml).unwrap();
+    let config = MigrationConfig::parse_yaml(yaml).unwrap();
     assert_eq!(config.destination.dimension, 768);
     assert_eq!(config.options.batch_size, 500);
 }

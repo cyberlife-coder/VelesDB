@@ -48,7 +48,7 @@ Tuning checklist:
 
 **`velesdb-migrate` does not expand environment variables in YAML.**
 `MigrationConfig::from_file` reads the file and hands it straight to
-`serde_yaml`, with no interpolation step. A config containing
+`serde-saphyr`, with no interpolation step. A config containing
 
 ```yaml
 source:
