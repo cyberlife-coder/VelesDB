@@ -158,6 +158,85 @@ def _bump_last_updated(text: str, ver: str, date: "datetime.date") -> "tuple[str
     return text, c
 
 
+#: The guard's OWN claim name -> the rewrite rule that repairs it. The
+#: detection is the guard's regex, never a marker string of our own:
+#: hand-written markers drifted twice while writing this. `velesdb-core = "`
+#: misses the table form `velesdb-core = { version = "…" }`, which the
+#: guard matches and which survived every bump in docs/GPU_ACCELERATION.md.
+#:
+#: Every claim the guard compares EXACTLY to the workspace version must be
+#: here (pinned by `GuardedClaimParityTests`): measured on 7.0.0, the three
+#: below were missing and eleven `6.0.0` stamps survived the bump, one of them
+#: in a `workspace 6.0.0` line the guard reads and nobody had automated.
+#: `velesdb-memory` claims move on their own cadence and are absent on purpose.
+RULE_FOR_CLAIM = {
+    "applies-to-core": "applies_to_stamp",
+    "cargo-pin-core": "cargo_dep_pin",
+    "workspace-version-stamp": "workspace_stamp",
+    "published-packages-core": "published_packages_core",
+    "prose-core-version": "prose_core_version",
+}
+
+#: Formats that rewrite a claim by delegating the detection to the guard.
+GUARD_CLAIM_FORMATS = {
+    "workspace_stamp": "workspace-version-stamp",
+    "published_packages_core": "published-packages-core",
+    "prose_core_version": "prose-core-version",
+}
+
+_GUARD = None
+
+
+def load_guard():
+    """`check-doc-freshness.py` as a module, loaded once.
+
+    Loaded rather than reimplemented: a second copy of the claim patterns, or
+    of the notion of a "historical" reference, is a second thing that can
+    drift from the gate this script exists to satisfy.
+    """
+    global _GUARD
+    if _GUARD is None:
+        import importlib.util
+
+        guard_path = REPO_ROOT / "scripts" / "check-doc-freshness.py"
+        spec = importlib.util.spec_from_file_location("check_doc_freshness", guard_path)
+        if spec is None or spec.loader is None:  # pragma: no cover - defensive
+            raise RuntimeError(f"cannot load {guard_path}")
+        _GUARD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_GUARD)
+    return _GUARD
+
+
+def claim_matches(text: str, claim) -> "list[re.Match[str]]":
+    """The matches of `claim` the guard treats as a CURRENT version claim.
+
+    A reference the guard accepts as historical (`since VelesDB 6.0.0`,
+    `fixed in velesdb-core 5.2.1`) says what it says on purpose; rewriting it
+    would falsify the page. The decision is the guard's own
+    (`is_historical_version_reference`), applied to the same match.
+    """
+    guard = load_guard()
+    return [
+        m
+        for m in claim.pattern.finditer(text)
+        if not (claim.allow_historical and guard.is_historical_version_reference(text, m))
+    ]
+
+
+def _bump_guarded_claim(text: str, claim_name: str, ver: str) -> "tuple[str, int]":
+    """Move the captured version of every current-version match to `ver`."""
+    claim = next(c for c in load_guard().VERSION_CLAIMS if c.name == claim_name)
+    out, pos, n = [], 0, 0
+    for m in claim_matches(text, claim):
+        start, end = m.span(1)
+        out.append(text[pos:start])
+        out.append(ver)
+        pos = end
+        n += 1
+    out.append(text[pos:])
+    return "".join(out), n
+
+
 def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
     """Apply the format-specific rewrite. Returns number of replacements."""
     text = text0 = path.read_text(encoding="utf-8")
@@ -254,6 +333,16 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
             r"(`" + re.escape(path.parent.name) + r" v)" + VERSION_RE + r"(`)",
             r"\g<1>" + ver + r"\g<2>",
         )
+    elif fmt in GUARD_CLAIM_FORMATS:
+        text, n = _bump_guarded_claim(text, GUARD_CLAIM_FORMATS[fmt], ver)
+        if fmt == "workspace_stamp" and n:
+            # `applies to v6.x (workspace 6.0.0)`: the major marker is the same
+            # claim in another spelling, and the guard does not read it.
+            text, _ = _sub_all(
+                text,
+                r"(?i)(applies to v)\d+(\.x\s*\(workspace\s+" + re.escape(ver) + r"\))",
+                r"\g<1>" + ver.split(".")[0] + r"\g<2>",
+            )
     elif fmt == "doc_last_updated_version":
         text, n = _bump_last_updated(text, ver, date)
     else:
@@ -302,14 +391,7 @@ def swept_stamp_targets() -> "list[tuple[str, str]]":
     The guard module is loaded rather than reimplemented for the same reason: a
     second copy of the sweep is a second thing that can drift.
     """
-    import importlib.util
-
-    guard_path = REPO_ROOT / "scripts" / "check-doc-freshness.py"
-    spec = importlib.util.spec_from_file_location("check_doc_freshness", guard_path)
-    if spec is None or spec.loader is None:  # pragma: no cover - defensive
-        raise RuntimeError(f"cannot load {guard_path}")
-    guard = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(guard)
+    guard = load_guard()
 
     # Keyed by (file, RULE), never by file alone: one document can carry two
     # different claims, and skipping it wholesale because TARGETS already names
@@ -317,15 +399,6 @@ def swept_stamp_targets() -> "list[tuple[str, str]]":
     # exactly what kept docs/getting-started.md and SERVER_REST_TOUR.md red,
     # both already listed under `doc_health_snippet`.
     enumerated = set(TARGETS)
-    #: The guard's OWN claim name -> the rewrite rule that repairs it. The
-    #: detection is the guard's regex, never a marker string of our own:
-    #: hand-written markers drifted twice while writing this. `velesdb-core = "`
-    #: misses the table form `velesdb-core = { version = "…" }`, which the
-    #: guard matches and which survived every bump in docs/GPU_ACCELERATION.md.
-    RULE_FOR_CLAIM = {
-        "applies-to-core": "applies_to_stamp",
-        "cargo-pin-core": "cargo_dep_pin",
-    }
     swept = []
     for path in guard.scanned_doc_files(REPO_ROOT):
         rel = path.relative_to(REPO_ROOT).as_posix()
@@ -334,7 +407,9 @@ def swept_stamp_targets() -> "list[tuple[str, str]]":
             rule = RULE_FOR_CLAIM.get(claim.name)
             if rule is None:
                 continue  # velesdb-memory claims move on their own cadence.
-            if claim.pattern.search(text) and (rel, rule) not in enumerated:
+            # Only a file with a CURRENT claim is a target: one holding nothing
+            # but historical references would come back as a MISS.
+            if claim_matches(text, claim) and (rel, rule) not in enumerated:
                 swept.append((rel, rule))
     return sorted(swept)
 
