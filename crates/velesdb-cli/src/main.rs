@@ -92,15 +92,33 @@ fn cli_main() -> anyhow::Result<()> {
     // per-user config directory or, failing that, for this process only.
     // Disable: VELESDB_NO_UPDATE_CHECK=1 or [update_check] enabled=false in config.
     #[cfg(feature = "update-check")]
-    velesdb_core::spawn_update_check_with(
-        velesdb_core::UpdateCheckConfig::from_config_file(cli.config.as_deref()),
-        velesdb_core::UpdateCheckContext::new("cli", "core"),
-    );
+    {
+        let (check_config, check_context) = update_check_plan(cli.config.as_deref());
+        velesdb_core::spawn_update_check_with(check_config, check_context);
+    }
 
     // Recorded once here; every command that opens a database (REPL and
     // one-shot alike) reads it back via `helpers::open_database`.
     helpers::set_config_path(cli.config);
     dispatch(cli.command)
+}
+
+/// What the CLI's update check runs with: the `[update_check]` section of the
+/// config file given with `--config` / `VELESDB_CONFIG` (else `./velesdb.toml`),
+/// and a context naming the binary `cli`. No data directory is known this
+/// early, so the install id lives in the per-user config directory or, failing
+/// that, for this process only.
+#[cfg(feature = "update-check")]
+fn update_check_plan(
+    config_path: Option<&std::path::Path>,
+) -> (
+    velesdb_core::UpdateCheckConfig,
+    velesdb_core::UpdateCheckContext,
+) {
+    (
+        velesdb_core::UpdateCheckConfig::from_config_file(config_path),
+        velesdb_core::UpdateCheckContext::new("cli", "core"),
+    )
 }
 
 /// Dispatches a parsed CLI command to its handler.

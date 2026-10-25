@@ -147,16 +147,64 @@ fn test_toml_partial_table_keeps_other_defaults() {
 }
 
 #[test]
-fn test_toml_without_table_or_malformed_gives_defaults() {
+fn test_toml_without_table_or_unparsable_document_gives_defaults() {
     for document in [
         "",
         "[search]\ndefault_mode = \"fast\"\n",
         "this is = = not toml",
-        "[update_check]\nenabled = \"maybe\"\n",
     ] {
         let config = UpdateCheckConfig::from_toml_str(document);
         assert!(config.enabled, "document {document:?}");
         assert_eq!(config.timeout_ms, 2000, "document {document:?}");
+    }
+}
+
+/// A table that exists but cannot be read must never switch the check on:
+/// a wrong type next to `enabled = false` used to replace the whole table by
+/// the defaults, so the opt-out was silently ignored.
+#[test]
+fn test_unreadable_update_check_table_fails_closed() {
+    for document in [
+        "[update_check]\nenabled = \"maybe\"\n",
+        "[update_check]\nenabled = false\ntimeout_ms = \"fast\"\n",
+        "[update_check]\ntimeout_ms = \"fast\"\n",
+        "[update_check]\nendpoint = 3\n",
+        "update_check = 3\n",
+    ] {
+        let config = UpdateCheckConfig::from_toml_str(document);
+        assert!(!config.enabled, "document {document:?}");
+    }
+}
+
+#[test]
+fn test_is_enabled_with_reads_only_the_lookup() {
+    let on = UpdateCheckConfig::default();
+    let off = UpdateCheckConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let env = |pairs: &'static [(&'static str, &'static str)]| {
+        move |key: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| (*v).to_string())
+        }
+    };
+    assert!(on.is_enabled_with(env(&[])));
+    assert!(!off.is_enabled_with(env(&[])));
+    assert!(!on.is_enabled_with(env(&[("VELESDB_NO_UPDATE_CHECK", "1")])));
+    assert!(!on.is_enabled_with(env(&[("VELESDB_UPDATE_CHECK", "0")])));
+    assert!(off.is_enabled_with(env(&[("VELESDB_UPDATE_CHECK", "1")])));
+}
+
+#[test]
+fn test_falsy_words_are_shared_and_case_insensitive() {
+    for word in ["0", "false", "FALSE", "No", "off", "OFF"] {
+        assert!(is_falsy(word), "{word}");
+    }
+    for word in ["1", "true", "yes", "on", "anything", ""] {
+        assert!(!is_falsy(word), "{word:?}");
     }
 }
 

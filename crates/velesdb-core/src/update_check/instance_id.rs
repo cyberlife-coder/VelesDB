@@ -6,8 +6,9 @@
 
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::io::{ErrorKind, Write};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Versioned prefix hashed in front of the id, so a future scheme cannot
 /// collide with this one.
@@ -88,28 +89,52 @@ fn read_id(path: &Path) -> Option<String> {
     is_valid_id(id).then(|| id.to_string())
 }
 
+/// How many times, and how far apart, an id file that exists but does not
+/// read as an id is looked at again before it is called corrupt. Files this
+/// module creates are complete the moment they appear; the wait is for a
+/// writer that is not this module.
+const REREAD_ATTEMPTS: u32 = 3;
+const REREAD_DELAY: Duration = Duration::from_millis(5);
+
 /// The id stored in `dir`, generated and written there when absent or
 /// unreadable as an id. `None` when `dir` cannot hold it.
+///
+/// The id is written to a private temporary file and hard-linked into place:
+/// the link fails if the file already exists, so of several first starts
+/// racing for one directory exactly one wins and the others read its id, and
+/// no reader ever sees a half-written file. A file that is still not an id
+/// after a short wait is corrupt and is replaced, atomically, by rename.
+/// Needs a filesystem that supports hard links; elsewhere the directory
+/// counts as unusable and the next candidate is tried.
 pub(super) fn load_or_create(dir: &Path) -> Option<String> {
     let path = dir.join(FILE_NAME);
     if let Some(id) = read_id(&path) {
         return Some(id);
     }
     std::fs::create_dir_all(dir).ok()?;
-    // A file that exists but holds no id is replaced; `create_new` below then
-    // makes two processes racing to the first run agree on one winner.
-    let _ = std::fs::remove_file(&path);
     let id = new_id();
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(mut file) => {
-            writeln!(file, "{id}").ok()?;
-            Some(id)
+    let temporary = dir.join(format!(".{FILE_NAME}.{id}.tmp"));
+    std::fs::write(&temporary, format!("{id}\n")).ok()?;
+    let stored = publish(&temporary, &path, &id);
+    let _ = std::fs::remove_file(&temporary);
+    stored
+}
+
+/// Puts the complete file `temporary` at `path` without replacing an id that
+/// is already there; returns the id `path` ends up holding.
+fn publish(temporary: &Path, path: &Path, id: &str) -> Option<String> {
+    match std::fs::hard_link(temporary, path) {
+        Ok(()) => Some(id.to_string()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+            for _ in 0..REREAD_ATTEMPTS {
+                if let Some(existing) = read_id(path) {
+                    return Some(existing);
+                }
+                std::thread::sleep(REREAD_DELAY);
+            }
+            std::fs::rename(temporary, path).ok()?;
+            Some(id.to_string())
         }
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => read_id(&path),
         Err(_) => None,
     }
 }
@@ -119,6 +144,14 @@ pub(super) fn load_or_create(dir: &Path) -> Option<String> {
 pub(super) fn resolve_install_id(dirs: &[PathBuf]) -> String {
     dirs.iter()
         .find_map(|dir| load_or_create(dir))
+        .unwrap_or_else(new_id)
+}
+
+/// The stored id when a directory holds one, else a fresh id; nothing is
+/// ever written.
+pub(super) fn peek_install_id(dirs: &[PathBuf]) -> String {
+    dirs.iter()
+        .find_map(|dir| read_id(&dir.join(FILE_NAME)))
         .unwrap_or_else(new_id)
 }
 
@@ -140,16 +173,23 @@ pub(super) fn install_hash(data_dir: Option<&Path>) -> String {
 /// Compute the hash identifying this installation.
 ///
 /// Deprecated: the hash no longer depends on the machine or on `data_dir`.
-/// It is derived from a random id persisted once per user, and `data_dir`
-/// is only a fallback location for that id. The update check computes it
-/// itself, so there is nothing left for a caller to do with this function.
+/// It is derived from a random id the update check stores once per user, and
+/// `data_dir` is only a fallback place to look for it. This function reads
+/// that id and **never creates it** — an install that opted out of the
+/// update check must not gain a file by calling it — so with no stored id it
+/// returns the hash of a fresh id that is not kept.
 #[deprecated(
     since = "6.1.0",
-    note = "the update check derives its install hash itself; this value is no longer machine- or data-dir-bound"
+    note = "the update check derives its install hash itself; this reads the stored id, never creates one, and is no longer machine- or data-dir-bound"
 )]
 #[must_use]
 pub fn compute_instance_hash(data_dir: &Path) -> String {
-    install_hash(Some(data_dir))
+    let dirs = candidate_dirs(
+        Platform::CURRENT,
+        |key| std::env::var_os(key),
+        Some(data_dir),
+    );
+    hash_install_id(&peek_install_id(&dirs))
 }
 
 #[cfg(test)]

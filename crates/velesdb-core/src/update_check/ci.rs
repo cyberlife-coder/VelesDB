@@ -4,7 +4,10 @@
 //! each run looks like a new install. The update check reports whether it
 //! runs under CI so the server can keep those out of its install counts.
 
-/// Variables whose mere presence (non-empty) identifies a CI system.
+use super::config::is_falsy;
+
+/// Variables whose presence, with a value that is not a falsy word, identifies
+/// a CI system.
 const CI_MARKERS: &[&str] = &[
     "GITHUB_ACTIONS",
     "GITLAB_CI",
@@ -25,17 +28,16 @@ const CI_MARKERS: &[&str] = &[
 /// `lookup` reads one environment variable, so tests pass a table instead of
 /// mutating the process environment.
 pub(super) fn is_ci(lookup: impl Fn(&str) -> Option<String>) -> bool {
-    let ci_flag = lookup("CI").is_some_and(|v| is_set_and_true(&v));
-    ci_flag
-        || CI_MARKERS
-            .iter()
-            .any(|name| lookup(name).is_some_and(|v| !v.is_empty()))
+    std::iter::once("CI")
+        .chain(CI_MARKERS.iter().copied())
+        .any(|name| lookup(name).is_some_and(|value| is_switched_on(&value)))
 }
 
-/// `CI=true`, `CI=1` and the like; `CI=false`, `CI=0` and an empty value are
-/// the way a shell turns the flag off.
-fn is_set_and_true(value: &str) -> bool {
-    !matches!(value.to_ascii_lowercase().as_str(), "" | "0" | "false")
+/// `CI=true`, `CI=1` and a non-empty `JENKINS_URL` count; an empty value and
+/// the usual falsy words (`0`, `false`, `no`, `off`) are how a shell turns a
+/// flag off, and `TRAVIS=false` is not a Travis run.
+fn is_switched_on(value: &str) -> bool {
+    !value.is_empty() && !is_falsy(value)
 }
 
 #[cfg(test)]

@@ -1225,7 +1225,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `endpoint` and `timeout_ms` were documented but neither binary loaded the
   section, so the config-file opt-out never worked; only the environment
   variables did. Both binaries now read it from `--config`/`VELESDB_CONFIG`,
-  else `./velesdb.toml`, through `UpdateCheckConfig::from_config_file`.
+  else `./velesdb.toml`, through `UpdateCheckConfig::from_config_file`. A
+  `[update_check]` table that exists but cannot be read (a wrong type under any
+  key) switches the check off and logs a warning, rather than falling back to
+  the defaults and ignoring an `enabled = false` next to it.
 - **The `velesdb` CLI reads `./velesdb.toml` when neither `--config` nor
   `VELESDB_CONFIG` is given, as `velesdb-server` does (#2400).** It used to open
   every database with the core defaults in that case, although
@@ -1539,7 +1542,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `spawn_update_heartbeat` (start-up check, then every 24 hours), each taking an
   `UpdateCheckContext::new(entry, edition)`. The deprecated pair keeps working
   and reports the entry `"library"`; `compute_instance_hash` now returns the
-  hash of the persisted install id, with `data_dir` as a fallback location only.
+  hash of the stored install id (`data_dir` is only a fallback place to look
+  for it) and never creates the id file, so calling it cannot write on behalf of
+  an install that opted out.
 
 - **`StorageConfig::{data_dir, mmap_cache_mb, vector_alignment}` carry
   `#[deprecated]`.** They were deprecated in prose only (#2220): a Rust caller

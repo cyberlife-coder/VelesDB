@@ -31,6 +31,13 @@ fn test_ci_detection_table() {
         (&[("GITHUB_ACTIONS", "")], false),
         (&[("HOME", "/home/dev"), ("TERM", "xterm")], false),
         (&[("CI", "false"), ("GITHUB_ACTIONS", "true")], true),
+        (&[("CI", "no")], false),
+        (&[("CI", "off")], false),
+        (&[("CI", "OFF")], false),
+        (&[("TRAVIS", "false")], false),
+        (&[("APPVEYOR", "False")], false),
+        (&[("GITLAB_CI", "0")], false),
+        (&[("CI", "no"), ("TRAVIS", "false")], false),
     ];
     for (pairs, expected) in cases {
         assert_eq!(is_ci(env(pairs)), *expected, "environment {pairs:?}");

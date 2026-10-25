@@ -69,32 +69,75 @@ fn test_payload_carries_exactly_the_documented_fields() {
     assert_eq!(value["ci"], serde_json::Value::Bool(false));
 }
 
+fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+    move |key| {
+        pairs
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| (*v).to_string())
+    }
+}
+
+fn disabled() -> UpdateCheckConfig {
+    UpdateCheckConfig {
+        enabled: false,
+        ..UpdateCheckConfig::default()
+    }
+}
+
+const CADENCES: [Cadence; 2] = [Cadence::Once, Cadence::Every(Duration::from_millis(1))];
+
+/// Every way of opting out reaches `drive`: it builds no payload (so no id
+/// file is written) and sends nothing, for the start-up check and for the
+/// heartbeat alike.
 #[test]
-fn test_disabled_run_builds_nothing_and_sends_nothing() {
-    for cadence in [Cadence::Once, Cadence::Every(Duration::from_millis(1))] {
-        let built = AtomicUsize::new(0);
-        let sent = AtomicUsize::new(0);
-        block_on(run(
-            false,
-            cadence,
-            || {
-                built.fetch_add(1, Ordering::SeqCst);
-                payload()
-            },
-            |_| async {
-                sent.fetch_add(1, Ordering::SeqCst);
-            },
-        ));
-        assert_eq!(
-            built.load(Ordering::SeqCst),
-            0,
-            "no id file is touched: {cadence:?}"
-        );
-        assert_eq!(
-            sent.load(Ordering::SeqCst),
-            0,
-            "nothing is sent: {cadence:?}"
-        );
+fn test_every_opt_out_builds_nothing_and_sends_nothing() {
+    let cases: [(&str, UpdateCheckConfig, &[(&str, &str)]); 4] = [
+        ("config enabled = false", disabled(), &[]),
+        (
+            "VELESDB_NO_UPDATE_CHECK=1",
+            UpdateCheckConfig::default(),
+            &[("VELESDB_NO_UPDATE_CHECK", "1")],
+        ),
+        (
+            "VELESDB_UPDATE_CHECK=0",
+            UpdateCheckConfig::default(),
+            &[("VELESDB_UPDATE_CHECK", "0")],
+        ),
+        (
+            "VELESDB_UPDATE_CHECK=off over a config that is on",
+            UpdateCheckConfig::default(),
+            &[("VELESDB_UPDATE_CHECK", "off")],
+        ),
+    ];
+    for (label, config, vars) in cases {
+        for cadence in CADENCES {
+            let built = AtomicUsize::new(0);
+            let sent = AtomicUsize::new(0);
+            block_on(drive(
+                &config,
+                env(vars),
+                cadence,
+                || {
+                    built.fetch_add(1, Ordering::SeqCst);
+                    payload()
+                },
+                |_| {
+                    sent.fetch_add(1, Ordering::SeqCst);
+                    async {}
+                },
+            ));
+            assert_eq!(
+                built.load(Ordering::SeqCst),
+                0,
+                "{label}, {cadence:?}: payload built"
+            );
+            assert_eq!(
+                sent.load(Ordering::SeqCst),
+                0,
+                "{label}, {cadence:?}: ping sent"
+            );
+        }
     }
 }
 
@@ -102,8 +145,9 @@ fn test_disabled_run_builds_nothing_and_sends_nothing() {
 fn test_one_shot_run_pings_once_and_returns() {
     let built = AtomicUsize::new(0);
     let sent = AtomicUsize::new(0);
-    block_on(run(
-        true,
+    block_on(drive(
+        &UpdateCheckConfig::default(),
+        env(&[]),
         Cadence::Once,
         || {
             built.fetch_add(1, Ordering::SeqCst);
@@ -120,6 +164,22 @@ fn test_one_shot_run_pings_once_and_returns() {
 }
 
 #[test]
+fn test_enabling_variable_overrides_a_disabled_config() {
+    let sent = AtomicUsize::new(0);
+    block_on(drive(
+        &disabled(),
+        env(&[("VELESDB_UPDATE_CHECK", "1")]),
+        Cadence::Once,
+        payload,
+        |_| {
+            sent.fetch_add(1, Ordering::SeqCst);
+            async {}
+        },
+    ));
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn test_heartbeat_repeats_with_one_payload_and_sleeps_between_pings() {
     const PINGS: u32 = 3;
     let interval = Duration::from_millis(40);
@@ -129,8 +189,10 @@ fn test_heartbeat_repeats_with_one_payload_and_sleeps_between_pings() {
 
     let started = Instant::now();
     block_on(async {
-        let heartbeat = run(
-            true,
+        let config = UpdateCheckConfig::default();
+        let heartbeat = drive(
+            &config,
+            env(&[]),
             Cadence::Every(interval),
             || {
                 built.fetch_add(1, Ordering::SeqCst);

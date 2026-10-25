@@ -220,3 +220,25 @@ fn test_query_execute_collection_flag() {
         Some("g".to_string())
     );
 }
+
+#[cfg(feature = "update-check")]
+#[test]
+fn test_update_check_plan_reads_the_config_file_and_names_the_cli() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("velesdb.toml");
+    std::fs::write(&path, "[update_check]\nenabled = false\n").expect("write config");
+
+    let (config, context) = update_check_plan(Some(&path));
+
+    assert!(
+        !config.enabled,
+        "the file's enabled = false must reach the check"
+    );
+    assert_eq!(context.entry(), "cli");
+    assert_eq!(context.edition(), "core");
+    assert_eq!(
+        context.data_dir(),
+        None,
+        "no data directory is known at start-up"
+    );
+}

@@ -87,6 +87,24 @@ impl UpdateCheckContext {
         self
     }
 
+    /// The binary the check is reported for.
+    #[must_use]
+    pub fn entry(&self) -> &str {
+        &self.entry
+    }
+
+    /// The edition the check is reported for.
+    #[must_use]
+    pub fn edition(&self) -> &str {
+        &self.edition
+    }
+
+    /// The fallback directory for the install id, when one was given.
+    #[must_use]
+    pub fn data_dir(&self) -> Option<&Path> {
+        self.data_dir.as_deref()
+    }
+
     fn payload(&self) -> UpdateCheckPayload {
         UpdateCheckPayload::new(
             install_hash(self.data_dir.as_deref()),
@@ -119,18 +137,29 @@ pub struct UpdateCheckResponse {
     pub message: Option<String>,
 }
 
-/// Runs `ping` once, then again after every interval when `cadence` asks
-/// for it. Nothing runs, and `build` is not called, when `enabled` is false:
-/// an opted-out install writes no id and sends nothing.
-async fn run<B, P, Fut>(enabled: bool, cadence: Cadence, build: B, mut ping: P)
-where
+/// Sends the check through `ping`, then again after every interval when
+/// `cadence` asks for it.
+///
+/// This is where the opt-out is decided: when `config` reads as disabled
+/// through `env`, nothing runs and `build` is not called, so an opted-out
+/// install writes no id and sends nothing. `build` produces the payload once
+/// for the whole run; `ping` sends one copy of it.
+async fn drive<B, P, Fut>(
+    config: &UpdateCheckConfig,
+    env: impl Fn(&str) -> Option<String>,
+    cadence: Cadence,
+    build: B,
+    mut ping: P,
+) where
     B: FnOnce() -> UpdateCheckPayload,
     P: FnMut(UpdateCheckPayload) -> Fut,
     Fut: Future<Output = ()>,
 {
-    if !enabled {
+    if !config.is_enabled_with(env) {
+        tracing::debug!("Update check disabled by user preference");
         return;
     }
+    tracing::info!("Checking for updates... (disable with VELESDB_NO_UPDATE_CHECK=1)");
     let payload = build();
     ping(payload.clone()).await;
     let Cadence::Every(interval) = cadence else {
@@ -145,6 +174,7 @@ where
 /// Sends one payload, bounded by the configured timeout. Failures are
 /// logged at trace level and otherwise ignored.
 async fn ping_server(config: &UpdateCheckConfig, payload: UpdateCheckPayload) {
+    tracing::debug!(?payload, "Update check payload");
     let timeout = Duration::from_millis(config.timeout_ms);
 
     match tokio::time::timeout(timeout, send_update_check(&config.endpoint, &payload)).await {
@@ -158,21 +188,14 @@ async fn ping_server(config: &UpdateCheckConfig, payload: UpdateCheckPayload) {
     }
 }
 
-async fn drive(config: &UpdateCheckConfig, context: &UpdateCheckContext, cadence: Cadence) {
-    let enabled = config.is_enabled();
-    if enabled {
-        tracing::info!("Checking for updates... (disable with VELESDB_NO_UPDATE_CHECK=1)");
-    } else {
-        tracing::debug!("Update check disabled by user preference");
-    }
-    run(
-        enabled,
+/// [`drive`] against the real environment and the real server.
+async fn run(config: &UpdateCheckConfig, context: &UpdateCheckContext, cadence: Cadence) {
+    drive(
+        config,
+        |key| std::env::var(key).ok(),
         cadence,
         || context.payload(),
-        |payload| {
-            tracing::debug!(?payload, "Update check payload");
-            ping_server(config, payload)
-        },
+        |payload| ping_server(config, payload),
     )
     .await;
 }
@@ -182,7 +205,7 @@ async fn drive(config: &UpdateCheckConfig, context: &UpdateCheckContext, cadence
 /// This should be called early in startup, spawned as a background task.
 /// It will not block startup - timeout is 2 seconds max.
 pub async fn check_for_updates_with(config: &UpdateCheckConfig, context: &UpdateCheckContext) {
-    drive(config, context, Cadence::Once).await;
+    run(config, context, Cadence::Once).await;
 }
 
 /// Deprecated form of [`check_for_updates_with`]: it cannot say which binary
@@ -238,7 +261,7 @@ fn spawn(config: UpdateCheckConfig, context: UpdateCheckContext, cadence: Cadenc
             .build();
 
         match rt {
-            Ok(runtime) => runtime.block_on(drive(&config, &context, cadence)),
+            Ok(runtime) => runtime.block_on(run(&config, &context, cadence)),
             Err(e) => {
                 tracing::trace!("Update check skipped (runtime error: {})", e);
             }

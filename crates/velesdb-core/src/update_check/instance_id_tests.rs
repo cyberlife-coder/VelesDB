@@ -192,3 +192,80 @@ fn test_hash_is_64_lowercase_hex_and_versioned() {
         "b0a080e4c1d9a83f8cb2f15086b993de06aee26f0ce3ea3c018870161e025c4d"
     );
 }
+
+/// Two processes starting for the first time must end with one id. The old
+/// implementation created the file, then wrote it: a racer saw the winner's
+/// empty file as corrupt, deleted it, and the two ended with different ids.
+#[test]
+fn test_concurrent_first_starts_agree_on_one_id() {
+    use std::sync::{Arc, Barrier};
+    const ROUNDS: usize = 300;
+    const THREADS: usize = 4;
+    let tmp = TempDir::new().expect("tempdir");
+    for round in 0..ROUNDS {
+        let dir = Arc::new(tmp.path().join(format!("round-{round}")));
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let (dir, barrier) = (Arc::clone(&dir), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    load_or_create(&dir)
+                })
+            })
+            .collect();
+        let ids: Vec<Option<String>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread"))
+            .collect();
+        assert!(ids.iter().all(Option::is_some), "round {round}: {ids:?}");
+        assert!(
+            ids.iter().all(|id| *id == ids[0]),
+            "round {round}: processes disagree: {ids:?}"
+        );
+    }
+}
+
+#[test]
+fn test_no_temporary_file_is_left_behind() {
+    let tmp = TempDir::new().expect("tempdir");
+    let id = load_or_create(tmp.path()).expect("id");
+    let names: Vec<_> = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(names, [std::ffi::OsString::from(FILE_NAME)], "{id}");
+}
+
+#[test]
+fn test_peek_never_writes() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dirs = vec![tmp.path().join("cfg")];
+    let first = peek_install_id(&dirs);
+    let second = peek_install_id(&dirs);
+    assert!(is_id(&first) && is_id(&second));
+    assert_ne!(first, second, "nothing stored, so each peek is a fresh id");
+    assert!(!dirs[0].exists(), "peeking must not create the directory");
+
+    let stored = resolve_install_id(&dirs);
+    assert_eq!(
+        peek_install_id(&dirs),
+        stored,
+        "peek reads what resolve stored"
+    );
+}
+
+#[test]
+#[allow(deprecated)] // Reason: pins the deprecated public helper until its removal
+fn test_deprecated_hash_helper_never_creates_the_id_file() {
+    let tmp = TempDir::new().expect("tempdir");
+    let hash = compute_instance_hash(tmp.path());
+    assert_eq!(hash.len(), 64);
+    assert!(
+        std::fs::read_dir(tmp.path())
+            .expect("read_dir")
+            .next()
+            .is_none(),
+        "the helper must not write into the data directory"
+    );
+}

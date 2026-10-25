@@ -67,16 +67,29 @@ impl UpdateCheckConfig {
     }
 
     /// Parses the `[update_check]` table out of a TOML document.
+    ///
+    /// A document without the table, or one that is not TOML at all, gives
+    /// the defaults. A table that exists but cannot be read (a wrong type
+    /// under any key) switches the check **off**: the one thing the section
+    /// exists to express is an opt-out, and silently replacing the table by
+    /// the defaults would turn `enabled = false` into `true`.
     fn from_toml_str(document: &str) -> Self {
-        #[derive(Deserialize)]
-        struct Document {
-            update_check: Option<UpdateCheckConfig>,
-        }
-
-        toml::from_str::<Document>(document)
-            .ok()
-            .and_then(|parsed| parsed.update_check)
-            .unwrap_or_default()
+        let Ok(toml::Value::Table(mut root)) = toml::from_str::<toml::Value>(document) else {
+            return Self::default();
+        };
+        let Some(table) = root.remove("update_check") else {
+            return Self::default();
+        };
+        table.try_into().unwrap_or_else(|error| {
+            tracing::warn!(
+                %error,
+                "[update_check] cannot be read, so the update check is disabled until it is fixed"
+            );
+            Self {
+                enabled: false,
+                ..Self::default()
+            }
+        })
     }
 
     /// Check if update check is enabled.
@@ -87,15 +100,20 @@ impl UpdateCheckConfig {
     /// - `VELESDB_UPDATE_CHECK=1` or `true` → enabled
     #[must_use]
     pub fn is_enabled(&self) -> bool {
-        // Check negative form: VELESDB_NO_UPDATE_CHECK
-        if let Ok(val) = std::env::var("VELESDB_NO_UPDATE_CHECK") {
-            if is_truthy(&val) {
-                return false;
-            }
+        self.is_enabled_with(|key| std::env::var(key).ok())
+    }
+
+    /// [`is_enabled`](Self::is_enabled) reading the environment through
+    /// `lookup`, so a test passes a table instead of mutating the process
+    /// environment.
+    pub(super) fn is_enabled_with(&self, lookup: impl Fn(&str) -> Option<String>) -> bool {
+        // Negative form: VELESDB_NO_UPDATE_CHECK
+        if lookup("VELESDB_NO_UPDATE_CHECK").is_some_and(|val| is_truthy(&val)) {
+            return false;
         }
 
-        // Check positive form: VELESDB_UPDATE_CHECK
-        if let Ok(val) = std::env::var("VELESDB_UPDATE_CHECK") {
+        // Positive form: VELESDB_UPDATE_CHECK
+        if let Some(val) = lookup("VELESDB_UPDATE_CHECK") {
             return is_truthy(&val);
         }
 
@@ -103,9 +121,16 @@ impl UpdateCheckConfig {
     }
 }
 
+/// `true` for the words that switch a boolean environment flag off: `0`,
+/// `false`, `no`, `off`, in any case. The one list both the opt-out
+/// variables and the CI detection read.
+pub(super) fn is_falsy(val: &str) -> bool {
+    matches!(val.to_lowercase().as_str(), "0" | "false" | "no" | "off")
+}
+
 /// Returns `true` if the value is a truthy string (not "0", "false", "no", "off").
 fn is_truthy(val: &str) -> bool {
-    !matches!(val.to_lowercase().as_str(), "0" | "false" | "no" | "off")
+    !is_falsy(val)
 }
 
 #[cfg(test)]

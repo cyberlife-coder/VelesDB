@@ -524,6 +524,25 @@ pub fn parse_api_keys_env() -> Option<Vec<String>> {
 // Tests
 // ============================================================================
 
+/// What the server's update check runs with: the `[update_check]` section of
+/// the config file the server was started with (`--config` /
+/// `VELESDB_CONFIG`, else `./velesdb.toml`), and a context that names the
+/// binary `server` and lets the install id fall back to `data_dir`.
+#[cfg(feature = "update-check")]
+#[must_use]
+pub fn update_check_plan(
+    config_path: Option<&Path>,
+    data_dir: &str,
+) -> (
+    velesdb_core::UpdateCheckConfig,
+    velesdb_core::UpdateCheckContext,
+) {
+    (
+        velesdb_core::UpdateCheckConfig::from_config_file(config_path),
+        velesdb_core::UpdateCheckContext::new("server", "core").with_data_dir(data_dir),
+    )
+}
+
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;

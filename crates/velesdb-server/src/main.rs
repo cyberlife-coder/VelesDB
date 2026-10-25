@@ -452,10 +452,11 @@ async fn main() -> anyhow::Result<()> {
     // every 24h while the server runs so an install's lifetime is measurable.
     // Disable: VELESDB_NO_UPDATE_CHECK=1 or [update_check] enabled=false in config.
     #[cfg(feature = "update-check")]
-    velesdb_core::spawn_update_heartbeat(
-        velesdb_core::UpdateCheckConfig::from_config_file(config_path.as_deref()),
-        velesdb_core::UpdateCheckContext::new("server", "core").with_data_dir(&cfg.data_dir),
-    );
+    {
+        let (check_config, check_context) =
+            velesdb_server::config::update_check_plan(config_path.as_deref(), &cfg.data_dir);
+        velesdb_core::spawn_update_heartbeat(check_config, check_context);
+    }
 
     let state = init_app_state(&cfg.data_dir, core_config)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());

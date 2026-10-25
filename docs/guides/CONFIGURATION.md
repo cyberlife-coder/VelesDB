@@ -719,12 +719,14 @@ Nothing else is read or sent: no hostname, user name, machine identifier, data-d
 
 **The install id.** The first check generates a random 128-bit id and stores it in a file named `install-id`, in `velesdb/` under your per-user configuration directory (`$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows). If that directory is not writable, the server falls back to its data directory; if nothing is writable, the id lives for that process only. Only the SHA-256 of the id leaves your machine. Delete the file and the next run is a new install. The id is unrelated to the machine, the user, or the data directory, so it cannot be recomputed from any of them. An install that has opted out never creates the file.
 
-**What the server stores** (the Cloudflare Worker behind `velesdb.com/api/check`):
+**What the server stores** (the Cloudflare Worker behind `velesdb.com/api/check`, which keeps its data in a Cloudflare D1 database in the EU):
 
-- One row per install id: first and last seen, number of check-ins, and the latest `version`, `os`, `arch`, `entry`, `edition` and `ci`.
-- A country code, derived by the Cloudflare edge from the connection.
-- The IP address is **not** stored. For abuse counting only (a cap on how many new installs one address can register per day), the worker keeps an HMAC of the IP and the UTC day, keyed with a secret that never leaves the server. The day is part of the input, so the hashes of two days cannot be linked, and they are deleted after two days. The raw IP address appears in exactly one place: the e-mail the worker sends the maintainers when one address registers an abnormal number of installs in a day. It is not kept in the database.
-- Rows are deleted after 400 days without a check-in.
+- `instances`: one row per install id, with first and last seen, the number of check-ins, and the latest `version`, `os`, `arch`, `entry`, `edition` and `ci`, plus a country code that the Cloudflare edge derives from the connection. A row is deleted 400 days after its last check-in.
+- `daily_active`: one `(day, install id)` row for every day an install checked in, kept for 400 days. This is what the active-install and lifetime figures are computed from.
+- An abuse counter, which links an IP address to installs for the day. The raw IP address is not stored. The worker stores `ip_pseudonyms` rows made of the day, an HMAC of the IP address (the /64 prefix for IPv6), and an HMAC of the install id (`instance_token`). Both HMACs are keyed with a secret held by the worker plus a random per-day key kept in `day_keys`. A cap on new installs per address and per day, and the abuse alert below, are computed from these rows.
+- `alerts`: when 100 distinct installs reach the worker from one IP address within one UTC day, one row `(day, HMAC of the IP)` is kept for 30 days and an e-mail is sent to the maintainers. That e-mail contains the raw IP address and the count, which is the only place the raw address is written down. Apart from it, the raw IP address exists in memory while a request is handled.
+
+**Retention of the abuse counter.** A daily job deletes the `ip_pseudonyms` rows and the `day_keys` of previous days from the live database. Cloudflare D1 Time Travel keeps point-in-time backups of the database for 30 days, so for that long someone with access to the Cloudflare account could recover the pseudonyms and the day keys. These are pseudonyms, not anonymous data: with the secret and a day's key, an IPv4 address can be brute-forced from its HMAC.
 
 **What this measures, and what it does not.** It counts installs of the server and the CLI and how long each stays in use, with CI runs separated. It does not see library users, opted-out installs, installs without network access, or installs behind a blocked `velesdb.com`.
 
@@ -737,7 +739,7 @@ Nothing else is read or sent: no hostname, user name, machine identifier, data-d
 
 Blocking `velesdb.com` at the network level also works: the check fails silently, though the id file is still written locally.
 
-The environment variables win over the configuration file.
+The environment variables win over the configuration file. A `[update_check]` table that cannot be read (for example `timeout_ms = "fast"`) disables the check and logs a warning, so a typo next to `enabled = false` never turns it back on.
 
 ### Section [premium]
 

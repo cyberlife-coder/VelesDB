@@ -541,3 +541,25 @@ fn test_server_config_default_includes_cors() {
     let cfg = ServerConfig::default();
     assert!(cfg.cors.is_permissive());
 }
+
+// ====================================================================
+// Update check wiring: which file, which binary, which fallback directory
+// ====================================================================
+
+#[cfg(feature = "update-check")]
+#[test]
+fn test_update_check_plan_reads_the_config_file_the_server_started_with() {
+    let dir = tempfile::tempdir().expect("test: tempdir");
+    let path = dir.path().join("velesdb.toml");
+    std::fs::write(&path, "[update_check]\nenabled = false\n").expect("test: write config");
+
+    let (config, context) = update_check_plan(Some(&path), "/srv/velesdb");
+
+    assert!(
+        !config.enabled,
+        "the file's enabled = false must reach the check"
+    );
+    assert_eq!(context.entry(), "server");
+    assert_eq!(context.edition(), "core");
+    assert_eq!(context.data_dir(), Some(Path::new("/srv/velesdb")));
+}
