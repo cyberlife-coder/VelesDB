@@ -224,7 +224,6 @@ field is range-checked against a hard ceiling:
 | `limits.max_payload_size` | rejected | 1 GiB (1,073,741,824) |
 | `search.query_timeout_ms` | disabled | 24 h (86,400,000 ms) |
 | `hnsw.max_layers` | auto | 64 |
-| `storage.mmap_cache_mb` | rejected | 1 TiB (1,048,576 MiB) |
 | `server.workers` | auto (CPU count) | 4,096 |
 
 An out-of-range value fails the loader/open with `ConfigError::InvalidValue`
