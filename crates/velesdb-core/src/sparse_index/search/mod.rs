@@ -125,7 +125,7 @@ pub fn sparse_search_filtered(
     };
 
     // First pass: 4x oversampling
-    let candidates = sparse_search(index, query, k.saturating_mul(4).max(k + 10));
+    let candidates = sparse_search(index, query, k.saturating_mul(4).max(k.saturating_add(10)));
     let mut filtered: Vec<ScoredDoc> = candidates
         .into_iter()
         .filter(|doc| filter(doc.doc_id))
@@ -137,7 +137,7 @@ pub fn sparse_search_filtered(
     }
 
     // Second pass: 8x oversampling
-    let candidates = sparse_search(index, query, k.saturating_mul(8).max(k + 20));
+    let candidates = sparse_search(index, query, k.saturating_mul(8).max(k.saturating_add(20)));
     filtered = candidates
         .into_iter()
         .filter(|doc| filter(doc.doc_id))

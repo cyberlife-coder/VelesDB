@@ -268,6 +268,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A caller-supplied `k` could abort the process through the sparse top-k
+  search.** The three strategies of `sparse_index::search` reserved
+  `BinaryHeap::with_capacity(k + 1)` before scoring anything, so a `k` such as
+  `1 << 40` asked the allocator for 17 TB and aborted the whole process
+  (`memory allocation of 17592186044432 bytes failed`, not a per-request
+  error), and `usize::MAX` overflowed the `+ 1`. The same overflow sat in the
+  filtered path's `k + 10` / `k + 20` oversampling floor. The reservation is
+  now capped at 4096 entries (the heap grows with the results, which are
+  bounded by the scored documents) and the floors saturate. `text.rs` had
+  received the same fix for its fused path; this module had been missed. The
+  server's point-upsert and batch-filter parsing no longer reserve a `Vec` sized
+  from the request's own length either, which CodeQL reported as an
+  uncontrolled allocation; they collect from the iterator instead.
+
 - **Two regular expressions that backtracked on adversarial input (CodeQL
   `js/polynomial-redos`, `py/redos`).** The TypeScript SDK's WASM `query()`
   shape check ended in three adjacent `\s*`, so a few thousand spaces after a

@@ -15,6 +15,20 @@ use super::scoring::{
 };
 use super::MAX_DENSE_ACCUMULATOR;
 
+/// Most heap entries reserved up front, whatever `k` the caller sent.
+const MAX_HEAP_PREALLOCATION: usize = 4096;
+
+/// An empty top-`k` heap that reserves `min(k + 1, MAX_HEAP_PREALLOCATION)`.
+///
+/// `k` is the caller's top-k and reaches this module unclamped. Reserving
+/// `k + 1` entries made a huge `k` abort the whole process on allocation
+/// failure and `usize::MAX` overflow the `+ 1`. The heap never holds more than
+/// the scored documents, so the reservation is only an optimisation: past the
+/// cap it grows as results arrive.
+fn top_k_heap(k: usize) -> BinaryHeap<Reverse<ScoredDoc>> {
+    BinaryHeap::with_capacity(k.saturating_add(1).min(MAX_HEAP_PREALLOCATION))
+}
+
 /// `MaxScore` DAAT search over the inverted index.
 pub(crate) fn maxscore_search(
     index: &SparseInvertedIndex,
@@ -29,7 +43,7 @@ pub(crate) fn maxscore_search(
         upper_bound,
     } = prepared;
 
-    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+    let mut heap = top_k_heap(k);
     let mut threshold: f32 = 0.0;
     let mut split = find_split(&upper_bound, threshold);
     let mut cursors: Vec<usize> = vec![0; term_data.len()];
@@ -133,7 +147,7 @@ fn linear_scan_dense(
         }
     }
 
-    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+    let mut heap = top_k_heap(k);
     for &doc_id in &touched {
         #[allow(clippy::cast_possible_truncation)]
         let score = scores[doc_id as usize];
@@ -154,7 +168,7 @@ fn linear_scan_hashmap(k: usize, term_postings: &[(f32, Vec<PostingEntry>)]) -> 
         }
     }
 
-    let mut heap: BinaryHeap<Reverse<ScoredDoc>> = BinaryHeap::with_capacity(k + 1);
+    let mut heap = top_k_heap(k);
     for (&doc_id, &score) in &scores {
         topk_push(&mut heap, k, doc_id, score);
     }

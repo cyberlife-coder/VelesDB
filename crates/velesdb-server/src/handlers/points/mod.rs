@@ -179,14 +179,15 @@ pub(super) fn upsert_result_to_response(
 
 /// Convert an `UpsertPointsRequest` into a `Vec<Point>`, merging sparse inputs.
 fn build_points_from_request(req: UpsertPointsRequest) -> Result<Vec<Point>, String> {
-    let mut points: Vec<Point> = Vec::with_capacity(req.points.len());
-    for p in req.points {
-        let sparse = convert_sparse_inputs(p.sparse_vector, p.sparse_vectors)?;
-        let mut point = Point::new(p.id, p.vector, p.payload);
-        point.sparse_vectors = sparse;
-        points.push(point);
-    }
-    Ok(points)
+    req.points
+        .into_iter()
+        .map(|p| {
+            let sparse = convert_sparse_inputs(p.sparse_vector, p.sparse_vectors)?;
+            let mut point = Point::new(p.id, p.vector, p.payload);
+            point.sparse_vectors = sparse;
+            Ok(point)
+        })
+        .collect()
 }
 
 /// Get a point by ID.
