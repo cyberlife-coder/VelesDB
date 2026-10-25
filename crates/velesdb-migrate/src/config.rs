@@ -422,8 +422,23 @@ impl MigrationConfig {
     /// Returns an error if the file cannot be read or parsed.
     pub fn from_file(path: &std::path::Path) -> crate::error::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config: Self = serde_yaml::from_str(&content)?;
-        Ok(config)
+        Self::parse_yaml(&content)
+    }
+
+    /// Parse a configuration from YAML text.
+    ///
+    /// `strict_booleans` keeps YAML 1.2 semantics: only `true`/`false` are
+    /// booleans, so a bare `yes`, `no`, `on` or `off` stays a string (a source
+    /// named `on` is a name, not a flag), exactly as under the previous parser.
+    /// The parser's own error type stays out of this crate's public API: its
+    /// one-line message, with line and column, is all a caller gets.
+    pub(crate) fn parse_yaml(content: &str) -> crate::error::Result<Self> {
+        let options = serde_saphyr::options! {
+            strict_booleans: true,
+            with_snippet: false,
+        };
+        serde_saphyr::from_str_with_options(content, options)
+            .map_err(|e| crate::error::Error::Yaml(e.to_string()))
     }
 
     /// Validate the configuration.
@@ -459,3 +474,7 @@ impl MigrationConfig {
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_yaml_tests.rs"]
+mod yaml_tests;

@@ -45,9 +45,9 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// YAML parsing error.
+    /// YAML parsing error: the parser's message, including the offending line.
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(String),
 
     /// IO error.
     #[error("IO error: {0}")]
