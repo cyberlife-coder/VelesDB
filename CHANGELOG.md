@@ -147,7 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crate declares its own `rust-version`. What a workflow may install is
   `test_ci_toolchain_pin.py`'s rule alone.
 
-- **Every third-party action a workflow runs is pinned by full commit SHA.**
+- **Every third-party action a workflow runs is pinned by full commit SHA (#2474).**
   `scripts/tests/test_workflow_actions_pinned.py` fails `CI Success` on a
   `uses:` that names a tag, a branch or a short SHA, in `ci.yml`, the Docker
   publish workflow, `gate-contracts.yml` and the release workflows alike.
