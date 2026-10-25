@@ -346,6 +346,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (graph-anchored `NEAR` prefilter, the secondary-index bitmap branch) still
   ignore it. Each of the four has a test that reopens one persisted index under
   two configured `ef_search` values.
+- **core: a graph-anchored `NEAR` over a large anchor set takes its candidates
+  at the configured `[search]` quality (#2430).** Above 10 000 anchors the
+  `NEAR` + `MATCH` prefilter hands the anchors to the index as a bitmap, and
+  that branch passed `SearchQuality::default()`, so it ignored `default_mode`
+  and `ef_search`. It now uses the collection's runtime quality, as `search()`,
+  the batch entry points and the hybrid functions do. A default `[search]`
+  still resolves to `Balanced`, so only a non-default one changes results. The
+  branch is tested directly on a 4 000-point corpus with a sparse anchor set,
+  not through a 10 000-node graph.
 - **The CLI REPL leaves the `[search]` of its `--config`/`VELESDB_CONFIG`
   file in force until a `\set mode` or `\set ef_search`, and `.bench` runs at the quality it prints (#2303).** A session that
   never ran `\set` used to inject `mode = 'balanced'`, against the
