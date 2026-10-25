@@ -222,6 +222,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two regular expressions that backtracked on adversarial input (CodeQL
+  `js/polynomial-redos`, `py/redos`).** The TypeScript SDK's WASM `query()`
+  shape check ended in three adjacent `\s*`, so a few thousand spaces after a
+  near-miss statement cost seconds of event-loop time; each optional tail now
+  starts on a token (`limit`, `;`) and the check is linear. The loom-command
+  pattern in `test_ci_toolchain_pin.py` let an unquoted value overlap a quoted
+  one, doubling the work per repetition; the unquoted alternative can no longer
+  start on a quote. Both have a regression test that failed before the fix.
+
 - **`scripts/bump_version.py` now rewrites the `` `<crate> vX.Y.Z` `` footer of
   the seven workspace-versioned crate READMEs.** `check-version-sync.py` pins
   those footers, but the bump left them alone, so the release commit that

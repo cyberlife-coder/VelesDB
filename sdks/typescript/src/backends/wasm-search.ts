@@ -647,8 +647,11 @@ export async function wasmMultiQuerySearch(
  * operations, FUSION, …) must be rejected loudly instead of silently
  * dropping clauses and returning unfiltered neighbours.
  */
+// No two quantifiers over whitespace are adjacent: each optional tail starts on
+// a token (`limit`, `;`), so the engine has one way to split a run of spaces
+// and a near-miss fails in linear time.
 const PURE_NEAR_QUERY =
-  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)\s*(?:limit\s+(\d+))?\s*;?\s*$/i;
+  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?(?:\s*;)?\s*$/i;
 
 interface PureNearQuery {
   /** Collection named in the FROM clause. */

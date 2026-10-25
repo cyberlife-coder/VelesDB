@@ -100,6 +100,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 import tomllib
 import unittest
 from dataclasses import dataclass, field
@@ -1471,7 +1472,7 @@ CD_FORMS = {
 }
 # A documented loom command: a line that starts, past a comment marker or a
 # `Run with:` label, with optional VAR=value words and then `cargo test`.
-DOC_COMMAND_RE = re.compile(r"^\s*(?://[!/]?\s*|##\s+Run with:\s*`)?((?:[A-Z_]+=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*cargo test\b.*)$")
+DOC_COMMAND_RE = re.compile(r"^\s*(?://[!/]?\s*|##\s+Run with:\s*`)?((?:[A-Z_]+=(?:\"[^\"]*\"|'[^']*'|[^\s\"']\S*)\s+)*cargo test\b.*)$")
 # The guards' Python dependencies now come from one file rather than from a
 # pin repeated in each job's `pip install`. Matching the file is what keeps the
 # assertion below honest: a job that installs nothing still fails.
@@ -2130,6 +2131,26 @@ class RealWorkflowTests(unittest.TestCase):
     def test_no_tracked_file_says_loom_runs_on_nightly(self) -> None:
         claims = loom_nightly_claims()
         self.assertEqual([], claims, "\n".join(claims))
+
+
+class DocCommandPatternTests(unittest.TestCase):
+    """`DOC_COMMAND_RE` reads every tracked doc line, so it must stay linear."""
+
+    def test_a_line_that_nearly_matches_is_rejected_in_linear_time(self) -> None:
+        # An unquoted value (`\S+`) overlapped the quoted alternatives on `""`,
+        # so each repetition doubled the ways to match: 22 of them took over a
+        # second and a doc line with 40 would not return.
+        line = "A=" + '"" A=' * 26 + "x"
+        started = time.perf_counter()
+        self.assertIsNone(DOC_COMMAND_RE.match(line))
+        self.assertLess(time.perf_counter() - started, 0.25)
+
+    def test_still_reads_a_documented_loom_command(self) -> None:
+        match = DOC_COMMAND_RE.match(
+            '//! RUSTFLAGS="--cfg loom" LOOM_MAX_PREEMPTIONS=3 cargo test --lib loom'
+        )
+        self.assertIsNotNone(match)
+        self.assertIn("cargo test --lib loom", match.group(1))
 
 
 if __name__ == "__main__":
