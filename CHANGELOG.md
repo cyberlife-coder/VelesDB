@@ -222,6 +222,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two regular expressions that backtracked on adversarial input (CodeQL
+  `js/polynomial-redos`, `py/redos`).** The TypeScript SDK's WASM `query()`
+  shape check ended in three adjacent `\s*`, so a few thousand spaces after a
+  near-miss statement cost seconds of event-loop time; each optional tail now
+  starts on a token (`limit`, `;`) and the check is linear. The loom-command
+  pattern in `test_ci_toolchain_pin.py` let an unquoted value overlap a quoted
+  one, doubling the work per repetition; the unquoted alternative can no longer
+  start on a quote. Both have a regression test that failed before the fix.
+
 - **CI: the `Semver Checks` gate refused any release commit that bumps the major.**
   `ci.yml` passed `--release-type minor` to velesdb-core so that `develop`, which
   holds the published version between releases, is not asked for the bump the

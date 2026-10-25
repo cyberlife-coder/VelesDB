@@ -658,6 +658,36 @@ describe('wasmQuery — VelesQL faithfulness guard', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['trailing semicolon', 'SELECT * FROM docs WHERE vector NEAR $q;'],
+    ['LIMIT', 'SELECT * FROM docs WHERE vector NEAR $q LIMIT 5'],
+    ['LIMIT and semicolon, padded', '  select * from docs where vector near $q   limit 5  ;  '],
+  ])('still executes a pure NEAR query with %s', async (_label, sql) => {
+    const query = vi.fn(() => []);
+    const ctx = buildCtx('docs', buildStore({ query }));
+
+    await wasmQuery(ctx, 'docs', sql, { q: [0.1, 0.2] });
+
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a long run of whitespace that never completes the NEAR shape in linear time', async () => {
+    // The shape check ended in three adjacent `\s*`: on a near-miss the
+    // engine tried every way to split the run between them, so a few thousand
+    // spaces cost seconds (polynomial backtracking on caller-supplied text).
+    const ctx = buildCtx('docs', buildStore());
+    const sql = `SELECT * FROM docs WHERE vector NEAR $q${' '.repeat(2000)}x`;
+
+    const started = performance.now();
+    const err: unknown = await wasmQuery(ctx, 'docs', sql, { q: [0.1, 0.2] }).catch(
+      (e: unknown) => e
+    );
+    const elapsedMs = performance.now() - started;
+
+    expect((err as VelesDBError).code).toBe('NOT_SUPPORTED');
+    expect(elapsedMs).toBeLessThan(250);
+  });
+
   it('rejects a query whose FROM targets a different collection', async () => {
     const query = vi.fn(() => []);
     const store = buildStore({ query });
