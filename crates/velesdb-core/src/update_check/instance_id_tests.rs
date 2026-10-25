@@ -165,7 +165,7 @@ fn test_read_only_dir_degrades_to_ephemeral_id() {
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("chmod");
     // Root ignores the mode bits; the case is then not a read-only directory.
     let writable = std::fs::write(dir.join("probe"), b"").is_ok();
-    let id = resolve_install_id(&[dir.clone()]);
+    let id = resolve_install_id(std::slice::from_ref(&dir));
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("restore");
     assert!(is_id(&id));
     if !writable {

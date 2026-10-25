@@ -1,5 +1,5 @@
 use super::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -121,10 +121,10 @@ fn test_one_shot_run_pings_once_and_returns() {
 
 #[test]
 fn test_heartbeat_repeats_with_one_payload_and_sleeps_between_pings() {
-    const PINGS: usize = 3;
+    const PINGS: u32 = 3;
     let interval = Duration::from_millis(40);
     let built = AtomicUsize::new(0);
-    let sent = AtomicUsize::new(0);
+    let sent = AtomicU32::new(0);
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
     let started = Instant::now();
@@ -160,7 +160,7 @@ fn test_heartbeat_repeats_with_one_payload_and_sleeps_between_pings() {
 
     assert_eq!(built.load(Ordering::SeqCst), 1, "the payload is built once");
     assert!(
-        started.elapsed() >= interval * (PINGS as u32 - 1),
+        started.elapsed() >= interval * (PINGS - 1),
         "{PINGS} pings need at least {} sleeps, took {:?}",
         PINGS - 1,
         started.elapsed()
