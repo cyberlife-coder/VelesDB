@@ -164,7 +164,7 @@ impl Collection {
         let index_results = self.storage.index.search_with_quality_and_bitmap(
             vector,
             candidates_k,
-            crate::SearchQuality::default(),
+            self.runtime_search_quality(),
             &bitmap,
         )?;
         let index_results = self.merge_delta(index_results, vector, candidates_k, metric);
@@ -253,3 +253,7 @@ impl Collection {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+#[path = "graph_prefilter_tests.rs"]
+mod tests;
