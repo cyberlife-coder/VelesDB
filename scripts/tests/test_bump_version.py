@@ -73,6 +73,11 @@ class CrateFooterStampRewriteTests(unittest.TestCase):
         self.assertIn("Last updated: 2026-09-02", out)
         self.assertIn("Applies to: velesdb-core 6.0.0", out)
 
+    def test_a_footer_already_at_the_target_version_is_a_no_op(self) -> None:
+        text = self.FOOTER.replace("v6.0.0", "v7.0.0")
+        _, out = self._bump(text)
+        self.assertEqual(out, text)
+
     def test_leaves_another_crates_stamp_alone(self) -> None:
         text = self.FOOTER.replace("velesdb-server", "velesdb-cli")
         n, out = self._bump(text)
