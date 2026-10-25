@@ -51,11 +51,10 @@ Two items, in priority order. Each has a register in the repository as its sourc
 
 ### P2 — Pay down the core wiring debt
 
-[`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md) registers subsystems that exist in `velesdb-core` but are not wired to the runtime; each entry names its target outcome. Three remain open:
+[`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md) registers subsystems that exist in `velesdb-core` but are not wired to the runtime; each entry names its target outcome. Two remain open (entry 1, `WalBatchConfig`, is closed: removed from the schema for 7.0.0, #2174):
 
 | Entry | State | Target outcome |
 |---|---|---|
-| 1 — `WalBatchConfig` / `WalBatcher` | code exists, **zero call sites**, now `pub(crate)` (off the public surface); TOML parsed and ignored | execute the declared premium transfer — or drop the dormant `enabled` field in the 5.0.0 break |
 | 3 — `deferred_indexing` / `async_index_builder` | runtime-wired; no TOML/create-time surface | the "Streaming Ingestion Configuration" RFC |
 | 4 — `SearchConfig` global defaults | hard-coded local defaults shadow the runtime config | consolidate the fallback chain through one helper |
 

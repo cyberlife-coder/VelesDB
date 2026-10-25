@@ -10,9 +10,9 @@
 # typed core error attached — the plugin never silently falls back to defaults.
 #
 # Only the ENGINE sections below are read: [search], [hnsw], [storage],
-# [limits], [quantization], [wal_batch]. A [server] table belonging to another
-# VelesDB component in a shared file is ignored, not rejected — which is what
-# lets a desktop app and a velesdb-server deployment share one config file.
+# [limits], [quantization]. A [server] table belonging to another VelesDB
+# component in a shared file is ignored, not rejected — which is what lets a
+# desktop app and a velesdb-server deployment share one config file.
 #
 # VELESDB_* environment variables still layer on top of the file.
 #
@@ -54,12 +54,6 @@ max_layers = 0
 # but not yet applied by the engine (core issue #2087).
 storage_mode = "mmap"
 
-# mmap_cache_mb and vector_alignment are deprecated (core issue #2087): no
-# engine counterpart exists to wire them to. Parsed only for backward
-# compatibility with existing config files; tuning them has no effect.
-mmap_cache_mb = 1024
-vector_alignment = 64
-
 [limits]
 # Guard rails. The frontend can also read and adjust the per-query limits at
 # runtime through the `get_guardrails` / `update_guardrails` IPC commands.
@@ -77,11 +71,3 @@ rerank_enabled = true
 rerank_multiplier = 2
 auto_quantization = true
 auto_quantization_threshold = 10000
-
-[wal_batch]
-# RESERVED — parsed but not yet wired (issue #2078): enabling it changes
-# nothing today, and the engine logs a warning if you do. Batch writes
-# already pay one durability barrier per call.
-enabled = false
-commit_delay_us = 100
-max_batch_size = 128

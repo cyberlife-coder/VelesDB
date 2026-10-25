@@ -40,23 +40,18 @@ Every entry below names its target outcome explicitly.
 
 ## 1. `WalBatchConfig` — payload WAL group commit
 
-**Outcome**: **Transferred to velesdb-premium** (concurrent WAL writer feature).
+**Outcome**: **Removed from the schema** (7.0.0, #2174). Closed.
 
-**What exists**:
-- `crates/velesdb-core/src/config.rs` defines `WalBatchConfig` with
-  `enabled: bool`, `commit_delay_us: u64`, `max_batch_size: usize`.
-- `crates/velesdb-core/src/storage/wal_batcher.rs` defines a `WalBatcher`
-  struct with `submit` / `flush` methods that amortize fsync cost by
-  buffering writes and performing a single syscall at batch boundary.
+Its group-commit front was never wired: the batcher it configured
+acknowledged a write before its bytes were durable, so it was a write
+coalescer rather than a group-commit protocol, and it was deleted under
+#2078. The config struct, its `VelesConfig` field and its TOML table were
+kept only so 6.x files kept loading, then removed in 7.0.0. A file that
+still carries the table loads; the loader names it in a warning and applies
+nothing from it.
 
-**What is missing**:
-- No call site uses `WalBatcher`. It is a dormant utility (re-verified
-  2026-06-12: still zero call sites outside `wal_batcher.rs`).
-- 2026-08-09: demoted from `pub` to `pub(crate)` — a dormant concurrency
-  primitive must not be part of the public API surface going into 5.0.0.
-  The code and its tests are kept intact pending the declared premium
-  transfer; re-promoting is a one-line change if the transfer lands the
-  wiring instead.
+Concurrent writing to one collection stays a velesdb-premium feature. The
+analysis that put it there still holds, and is kept as it was written:
 
 **Why wiring is non-trivial**:
 - `LogPayloadStorage` uses a `RwLock<BufWriter<File>>` with offset tracking
@@ -91,25 +86,10 @@ Multi-writer contention only manifests when multiple clients write to
 the **same** collection concurrently — a workload pattern typically
 associated with multi-tenant SaaS and high-ingestion pipelines.
 
-**Current behavior**:
-- `VelesConfig::wal_batch` is parsed from TOML, stored on `Database`,
-  and ignored by the runtime.
-- `WalBatchConfig::default()` sets `enabled = false` so no user workflow
-  is silently affected.
-- The Python binding **does not expose** `WalBatchOptions` in the
-  `VelesConfigOptions` dataclass. Exposing a no-op toggle would mislead
-  users into believing the flag affects throughput.
-
 **Cross-reference**: the full enterprise plan lives in an internal planning
 document (`WAVE3_B2_W2_WAL_REDESIGN`, not in this repository) and in the
 velesdb-premium backlog. The customer-facing framing is in
 `docs/guides/WRITE_CONCURRENCY.md`.
-
-**Future action in Community**: none. The `WalBatchConfig` struct remains
-visible (TOML parsing continues to accept it for forward compatibility),
-but the Python API does not surface it. A future breaking release may
-remove the `enabled` field entirely if it remains unused after the
-Enterprise tier ships.
 
 ---
 
@@ -448,7 +428,7 @@ avoid implying a guarantee that does not exist. Community-scope.
 
 | Config | Wired? | Outcome | Effort | Target |
 |---|---|---|---|---|
-| `WalBatchConfig` | No | Transferred to velesdb-premium | 13-17 commits, 3-5 days | Enterprise tier |
+| `WalBatchConfig` | Removed | Removed from the schema in 7.0.0 (#2174) | done | — |
 | `AutoReindexConfig` | Yes | Wired — persisted in schema v2 (W2) + restored on open | done | Community |
 | `deferred_indexing` / `async_index_builder` | REST + Python (apply_advanced_config); no TOML/create-time | RFC pending | Unscoped | Community (future sprint) |
 | `SearchConfig` global defaults | Partial | Consolidation cleanup | 1-2 commits | Community (future sprint) |
@@ -467,7 +447,7 @@ avoid implying a guarantee that does not exist. Community-scope.
 
 ---
 
-*Last updated: 2026-08-09 · Applies to: velesdb-core 6.0.0 (this stamp tracks
-the document revision; this revision adds entry 7, lock-order enforcement debt.
-The rest of the inventory was last re-verified against the code on 2026-06-14,
-as stated at the top of this page)*
+*Last updated: 2026-10-25 · Applies to: velesdb-core 6.0.0 (this stamp tracks
+the document revision; this revision closes entry 1, removed from the schema
+for 7.0.0. The rest of the inventory was last re-verified against the code on
+2026-06-14, as stated at the top of this page)*

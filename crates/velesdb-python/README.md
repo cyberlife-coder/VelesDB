@@ -144,9 +144,13 @@ cfg = VelesConfigOptions.from_toml_path("./velesdb.toml")
 db = Database("./tenant1", config=cfg)
 ```
 
-`wal_batch` is intentionally not exposed — the concurrent WAL writer is a
-VelesDB Enterprise feature (see
-[WRITE_CONCURRENCY.md](../../docs/guides/WRITE_CONCURRENCY.md)).
+There is no `wal_batch` section: the engine removed that never-wired table in
+7.0.0, and the concurrent WAL writer is a VelesDB Enterprise feature (see
+[WRITE_CONCURRENCY.md](../../docs/guides/WRITE_CONCURRENCY.md)). A
+`velesdb.toml` written for 6.x that still sets `[wal_batch]` or
+`[storage]`'s `data_dir` / `mmap_cache_mb` / `vector_alignment` keeps loading:
+those keys are ignored, and the engine logs a warning naming them.
+`StorageOptions` no longer accepts them (`TypeError`).
 
 ## Examples
 
@@ -179,7 +183,7 @@ so your IDE and mypy/pyright are the reference. Task-oriented guides:
 - **No embedding generation.** VelesDB stores and searches vectors; you bring the model (or use the optional adapters).
 - **Embedded only.** There is no Python client class for a remote server — use HTTP against `velesdb-server`.
 - **One process per database directory.** A second process opening the same path fails with `DatabaseLockedError` (`[VELES-031]`).
-- **`wal_batch` / concurrent WAL writing is not exposed** — Enterprise feature.
+- **Concurrent WAL writing is not exposed** — Enterprise feature.
 - **No GPU in the published wheels.** The `gpu` Cargo feature exists but is not enabled by `[tool.maturin]`; it requires building from source.
 - **`Collection.search(...)` is deprecated** since v1.15 (emits `DeprecationWarning`); use `search_request(SearchOptions(...))`.
 - **`Collection.get_graph_store()` returns a standalone in-memory graph** that is not connected to the collection; use `Database.create_graph_collection()` for persistence.

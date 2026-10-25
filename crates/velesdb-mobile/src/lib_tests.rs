@@ -1586,7 +1586,7 @@ fn test_open_without_observer_reads_unchanged() {
 // Before these constructors existed, `VelesDatabase` could only be opened
 // through `open` / `open_with_observer`, which always run the core engine on
 // default `VelesConfig` values — a TOML engine config (`[search]`/`[hnsw]`/
-// `[storage]`/`[limits]`/`[quantization]`/`[wal_batch]`) had no way in.
+// `[storage]`/`[limits]`/`[quantization]`) had no way in.
 // These tests prove the config is *enforced* by the engine (not merely
 // parsed), that invalid input fails fast with a typed error, and that the
 // pre-existing constructors keep their default behaviour.

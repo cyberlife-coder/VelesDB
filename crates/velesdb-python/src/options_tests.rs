@@ -59,22 +59,12 @@ fn hnsw_config_options_to_core_propagates_non_defaults() {
 }
 
 #[test]
-#[allow(
-    deprecated,
-    reason = "compares the Python options with the deprecated core fields they map to"
-)]
 fn storage_options_to_core_propagates_non_defaults() {
     let opts = StorageOptions {
-        data_dir: Some("./custom".to_string()),
         storage_mode: Some("memory".to_string()),
-        mmap_cache_mb: Some(256),
-        vector_alignment: Some(32),
     };
     let core = opts.to_core();
-    assert_eq!(core.data_dir, "./custom");
     assert_eq!(core.storage_mode, "memory");
-    assert_eq!(core.mmap_cache_mb, 256);
-    assert_eq!(core.vector_alignment, 32);
 }
 
 #[test]
@@ -135,10 +125,6 @@ fn quantization_options_pq_fields_without_pq_mode_fail() {
 // -- Whole-config assembly + validation ------------------------------
 
 #[test]
-#[allow(
-    deprecated,
-    reason = "reads the deprecated core field this option maps to"
-)]
 fn veles_config_options_to_core_applies_every_section() {
     let opts = VelesConfigOptions {
         limits: Some(LimitsOptions {
@@ -154,8 +140,7 @@ fn veles_config_options_to_core_applies_every_section() {
             ..HnswConfigOptions::default()
         }),
         storage: Some(StorageOptions {
-            mmap_cache_mb: Some(256),
-            ..StorageOptions::default()
+            storage_mode: Some("memory".to_string()),
         }),
         quantization: Some(QuantizationOptions {
             mode: Some("sq8".to_string()),
@@ -166,7 +151,7 @@ fn veles_config_options_to_core_applies_every_section() {
     assert_eq!(core.limits.max_collections, 5);
     assert_eq!(core.search.max_results, 42);
     assert_eq!(core.hnsw.m, Some(32));
-    assert_eq!(core.storage.mmap_cache_mb, 256);
+    assert_eq!(core.storage.storage_mode, "memory");
     assert!(matches!(core.quantization.mode, QuantizationType::SQ8));
 }
 

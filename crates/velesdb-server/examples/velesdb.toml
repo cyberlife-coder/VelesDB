@@ -14,7 +14,7 @@
 # Every section below is optional; declare only what you override. The four
 # sections in this file ([server], [auth], [tls], [cors]) belong to the HTTP
 # shell. The engine sections ([search], [hnsw], [storage], [limits],
-# [quantization], [wal_batch]) can live in the same file and are documented in
+# [quantization]) can live in the same file and are documented in
 # docs/guides/CONFIGURATION.md.
 
 [server]

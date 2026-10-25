@@ -8,8 +8,12 @@ mirroring `VelesConfig::from_toml_engine_only` /
 `load_from_path_engine_only` from PR #1565).
 
 Scope guards:
-- `wal_batch` stays NOT exposed (velesdb-premium Enterprise feature —
-  see docs/guides/WRITE_CONCURRENCY.md).
+- `wal_batch` is NOT exposed: the core removed that never-wired table in
+  7.0.0 (#2174); concurrent WAL writing is a velesdb-premium Enterprise
+  feature (see docs/guides/WRITE_CONCURRENCY.md).
+- `StorageOptions` no longer takes `data_dir` / `mmap_cache_mb` /
+  `vector_alignment`, removed from the core in 7.0.0 (#2087); a TOML that
+  still sets them loads and they are ignored.
 - `server` / `logging` are out of scope for the embedded surface; a TOML
   shared with a hosting shell must still load (engine-only filtering).
 
@@ -17,7 +21,7 @@ Test categories:
 - Nominal (>= 60%): section construction + TOML happy paths + round-trip
   through `Database(path, config=...)`
 - Edge (~20%): defaults pass-through, engine-only section filtering
-- Negative (>= 20%): invalid TOML, invalid values, wal_batch guardrails
+- Negative (>= 20%): invalid TOML, invalid values, removed-key guardrails
 """
 
 from __future__ import annotations
@@ -95,20 +99,21 @@ def test_hnsw_config_options_explicit_fields():
 
 def test_storage_options_default_is_all_none():
     opts = StorageOptions()
-    assert opts.data_dir is None
     assert opts.storage_mode is None
-    assert opts.mmap_cache_mb is None
-    assert opts.vector_alignment is None
 
 
 def test_storage_options_explicit_fields():
-    opts = StorageOptions(
-        data_dir="./data", storage_mode="memory", mmap_cache_mb=256, vector_alignment=32
-    )
-    assert opts.data_dir == "./data"
+    opts = StorageOptions(storage_mode="memory")
     assert opts.storage_mode == "memory"
-    assert opts.mmap_cache_mb == 256
-    assert opts.vector_alignment == 32
+
+
+@pytest.mark.parametrize("removed", ["data_dir", "mmap_cache_mb", "vector_alignment"])
+def test_storage_options_rejects_the_fields_removed_in_7(removed):
+    # Removed with the core fields they mirrored (#2087): none had an engine
+    # counterpart, so accepting them would advertise settings that land nowhere.
+    with pytest.raises(TypeError):
+        StorageOptions(**{removed: 1})
+    assert not hasattr(StorageOptions(), removed)
 
 
 def test_quantization_options_default_is_all_none():
@@ -149,13 +154,13 @@ def test_veles_config_options_accepts_all_engine_sections():
         limits=LimitsOptions(max_collections=10),
         search=SearchConfigOptions(max_results=100),
         hnsw=HnswConfigOptions(m=16),
-        storage=StorageOptions(mmap_cache_mb=128),
+        storage=StorageOptions(storage_mode="memory"),
         quantization=QuantizationOptions(mode="sq8"),
     )
     assert cfg.limits.max_collections == 10
     assert cfg.search.max_results == 100
     assert cfg.hnsw.m == 16
-    assert cfg.storage.mmap_cache_mb == 128
+    assert cfg.storage.storage_mode == "memory"
     assert cfg.quantization.mode == "sq8"
 
 
@@ -228,7 +233,7 @@ def test_database_open_with_valid_full_config_works(tmp_db_path):
         limits=LimitsOptions(max_collections=3),
         search=SearchConfigOptions(default_mode="fast", max_results=50),
         hnsw=HnswConfigOptions(m=16, ef_construction=200),
-        storage=StorageOptions(storage_mode="mmap", mmap_cache_mb=64),
+        storage=StorageOptions(storage_mode="mmap"),
         quantization=QuantizationOptions(mode="none"),
     )
     db = Database(str(tmp_db_path), config=cfg)
@@ -253,10 +258,7 @@ ef_construction = 400
 max_layers = 8
 
 [storage]
-data_dir = "./custom_data"
 storage_mode = "memory"
-mmap_cache_mb = 256
-vector_alignment = 32
 
 [limits]
 max_collections = 5
@@ -279,10 +281,7 @@ def test_from_toml_happy_path_populates_every_section():
     assert cfg.hnsw.m == 32
     assert cfg.hnsw.ef_construction == 400
     assert cfg.hnsw.max_layers == 8
-    assert cfg.storage.data_dir == "./custom_data"
     assert cfg.storage.storage_mode == "memory"
-    assert cfg.storage.mmap_cache_mb == 256
-    assert cfg.storage.vector_alignment == 32
     assert cfg.limits.max_collections == 5
     assert cfg.limits.max_dimensions == 512
     assert cfg.quantization.rerank_enabled is False
@@ -363,7 +362,7 @@ def test_from_toml_path_missing_file_raises_file_not_found():
 
 
 # ---------------------------------------------------------------------------
-# wal_batch stays unexposed (velesdb-premium Enterprise feature)
+# Keys removed in 7.0.0: never exposed, and a 6.x file still loads
 # ---------------------------------------------------------------------------
 
 
@@ -377,8 +376,24 @@ def test_veles_config_options_has_no_wal_batch_attribute():
 
 
 def test_from_toml_does_not_surface_wal_batch_section():
-    """[wal_batch] in a TOML is valid engine input for the server/CLI, but
-    the embedded Python surface does not expose it (Enterprise-only —
-    docs/guides/WRITE_CONCURRENCY.md)."""
+    """The core removed [wal_batch] in 7.0.0 (#2174). A file that still
+    carries it loads (the core loader warns and applies nothing), and the
+    embedded Python surface has nowhere to put it."""
     cfg = VelesConfigOptions.from_toml("[wal_batch]\nenabled = true\n")
     assert not hasattr(cfg, "wal_batch")
+
+
+def test_from_toml_loads_a_6x_file_carrying_the_removed_storage_keys():
+    """`mmap_cache_mb = 0` is the value 6.x refused at load; removed in 7.0.0
+    (#2087), the key is ignored whatever it says, next to the keys that
+    still exist."""
+    cfg = VelesConfigOptions.from_toml(
+        "[storage]\n"
+        'storage_mode = "memory"\n'
+        'data_dir = "./custom_data"\n'
+        "mmap_cache_mb = 0\n"
+        "vector_alignment = 32\n"
+    )
+    assert cfg.storage.storage_mode == "memory"
+    for removed in ("data_dir", "mmap_cache_mb", "vector_alignment"):
+        assert not hasattr(cfg.storage, removed)

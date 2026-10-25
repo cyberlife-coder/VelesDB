@@ -38,7 +38,7 @@ fn main() {
     // error is preserved in `Error::ConfigLoad`.
     //
     // Only the engine sections are read: [search], [hnsw], [storage],
-    // [limits], [quantization], [wal_batch]. A [server] table belonging to
+    // [limits], [quantization]. A [server] table belonging to
     // another VelesDB component in a shared file is ignored, not rejected.
     //
     // A relative path here has exactly the working-directory problem this file

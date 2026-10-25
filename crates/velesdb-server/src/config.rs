@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 /// value actually being configured. This function therefore uses
 /// [`velesdb_core::config::VelesConfig::load_from_path_engine_only`],
 /// which parses **only** the engine sections (`[search]`/`[hnsw]`/
-/// `[storage]`/`[limits]`/`[quantization]`/`[wal_batch]`) and silently
+/// `[storage]`/`[limits]`/`[quantization]`) and silently
 /// drops every other top-level table before validating — so
 /// `[server]`/`[auth]`/`[tls]`/`[cors]` stay exclusively owned by
 /// [`ServerConfig::load`].

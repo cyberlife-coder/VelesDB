@@ -108,10 +108,6 @@ default_mode = "fast"
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "these tests pin the deprecated fields' parsing and range check until removal"
-    )]
     fn test_config_from_toml_full() {
         // Arrange
         let toml = r#"
@@ -126,9 +122,7 @@ m = 48
 ef_construction = 600
 
 [storage]
-data_dir = "/var/lib/velesdb"
 storage_mode = "mmap"
-mmap_cache_mb = 2048
 
 [limits]
 max_dimensions = 2048
@@ -153,8 +147,7 @@ format = "json"
         assert_eq!(config.search.max_results, 500);
         assert_eq!(config.hnsw.m, Some(48));
         assert_eq!(config.hnsw.ef_construction, Some(600));
-        assert_eq!(config.storage.data_dir, "/var/lib/velesdb");
-        assert_eq!(config.storage.mmap_cache_mb, 2048);
+        assert_eq!(config.storage.storage_mode, "mmap");
         assert_eq!(config.limits.max_dimensions, 2048);
         assert_eq!(config.server.host, "0.0.0.0");
         assert_eq!(config.server.port, 9090);
@@ -364,41 +357,6 @@ max_collections = 0
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "these tests pin the deprecated fields' parsing and range check until removal"
-    )]
-    fn test_config_validate_mmap_cache_zero_rejected() {
-        // A zero-byte mmap cache is meaningless and must be rejected.
-        let mut config = VelesConfig::default();
-        config.storage.mmap_cache_mb = 0;
-
-        let result = config.validate();
-        assert!(result.is_err(), "mmap_cache_mb = 0 must be rejected");
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("storage.mmap_cache_mb"));
-    }
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "these tests pin the deprecated fields' parsing and range check until removal"
-    )]
-    fn test_config_validate_mmap_cache_too_large_rejected() {
-        let mut config = VelesConfig::default();
-        config.storage.mmap_cache_mb = usize::MAX;
-
-        let result = config.validate();
-        assert!(result.is_err(), "absurd mmap_cache_mb must be rejected");
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("storage.mmap_cache_mb"));
-    }
-
-    #[test]
     fn test_config_validate_workers_zero_is_auto() {
         // `0` workers means "auto" (derive from CPU count) and must validate.
         let mut config = VelesConfig::default();
@@ -598,117 +556,164 @@ max_collections = 0
     }
 
     // ========================================================================
-    // WalBatchConfig tests
+    // Keys removed in 7.0.0 (#2174, #2087): a 6.x file must keep loading
     // ========================================================================
 
-    #[test]
-    fn test_wal_batch_config_default() {
-        let config = WalBatchConfig::default();
-        assert!(!config.enabled);
-        assert_eq!(config.commit_delay_us, 100);
-        assert_eq!(config.max_batch_size, 128);
-    }
+    /// Every key 7.0.0 removed, in one 6.x-shaped file. `mmap_cache_mb = 0` is
+    /// the value 6.x refused at load; once the key is gone there is nothing
+    /// left to range-check it against.
+    const FILE_WITH_REMOVED_KEYS: &str = r#"
+[hnsw]
+m = 24
 
-    #[test]
-    fn test_wal_batch_config_json_roundtrip() {
-        let config = WalBatchConfig {
-            enabled: true,
-            commit_delay_us: 200,
-            max_batch_size: 256,
-        };
-        let json = serde_json::to_string(&config).expect("serialize");
-        let parsed: WalBatchConfig = serde_json::from_str(&json).expect("deserialize");
-        assert!(parsed.enabled);
-        assert_eq!(parsed.commit_delay_us, 200);
-        assert_eq!(parsed.max_batch_size, 256);
-    }
+[storage]
+storage_mode = "mmap"
+data_dir = "/var/lib/velesdb"
+mmap_cache_mb = 0
+vector_alignment = 32
 
-    #[test]
-    fn test_wal_batch_config_serde_defaults() {
-        // Empty JSON object should fill defaults
-        let json = r"{}";
-        let config: WalBatchConfig = serde_json::from_str(json).expect("deserialize");
-        assert!(!config.enabled);
-        assert_eq!(config.commit_delay_us, 100);
-        assert_eq!(config.max_batch_size, 128);
-    }
-
-    #[test]
-    fn test_wal_batch_config_partial_override() {
-        let json = r#"{"enabled": true}"#;
-        let config: WalBatchConfig = serde_json::from_str(json).expect("deserialize");
-        assert!(config.enabled);
-        assert_eq!(config.commit_delay_us, 100);
-        assert_eq!(config.max_batch_size, 128);
-    }
-
-    #[test]
-    fn test_veles_config_includes_wal_batch() {
-        let config = VelesConfig::default();
-        assert!(!config.wal_batch.enabled);
-        assert_eq!(config.wal_batch.max_batch_size, 128);
-    }
-
-    #[test]
-    fn test_veles_config_toml_with_wal_batch() {
-        let toml = r"
 [wal_batch]
 enabled = true
-commit_delay_us = 500
+commit_delay_us = 250
 max_batch_size = 64
-";
-        let config = VelesConfig::from_toml(toml).expect("parse");
-        assert!(config.wal_batch.enabled);
-        assert_eq!(config.wal_batch.commit_delay_us, 500);
-        assert_eq!(config.wal_batch.max_batch_size, 64);
-    }
-
-    #[test]
-    fn test_veles_config_toml_roundtrip_with_wal_batch() {
-        let mut config = VelesConfig::default();
-        config.wal_batch.enabled = true;
-        config.wal_batch.max_batch_size = 64;
-
-        let toml_str = config.to_toml().expect("serialize");
-        let parsed = VelesConfig::from_toml(&toml_str).expect("parse");
-
-        assert!(parsed.wal_batch.enabled);
-        assert_eq!(parsed.wal_batch.max_batch_size, 64);
-    }
-
-    // ========================================================================
-    // Deprecated [storage] fields (issue #2087) — same accept-and-warn
-    // treatment as [wal_batch] above: a TOML file setting them must still
-    // load, and the deprecation must be reported end to end from the parsed
-    // config, not only from a struct built by field assignment.
-    // ========================================================================
-
-    #[test]
-    #[allow(
-        deprecated,
-        reason = "these tests pin the deprecated fields' parsing and range check until removal"
-    )]
-    fn test_veles_config_toml_with_deprecated_storage_fields_still_loads() {
-        let toml = r#"
-[storage]
-data_dir = "/var/lib/velesdb"
-mmap_cache_mb = 2048
-vector_alignment = 32
 "#;
-        let config = VelesConfig::from_toml(toml).expect("parse");
 
-        assert_eq!(config.storage.data_dir, "/var/lib/velesdb");
-        assert_eq!(config.storage.mmap_cache_mb, 2048);
-        assert_eq!(config.storage.vector_alignment, 32);
+    #[test]
+    fn test_a_file_with_removed_keys_still_loads_through_both_parsers() {
+        for (loader, result) in [
+            ("from_toml", VelesConfig::from_toml(FILE_WITH_REMOVED_KEYS)),
+            (
+                "from_toml_engine_only",
+                VelesConfig::from_toml_engine_only(FILE_WITH_REMOVED_KEYS),
+            ),
+        ] {
+            let config = result.unwrap_or_else(|e| panic!("{loader} refused a 6.x file: {e}"));
+            // The keys that still exist are applied next to the removed ones.
+            assert_eq!(config.hnsw.m, Some(24), "for {loader}");
+            assert_eq!(config.storage.storage_mode, "mmap", "for {loader}");
+        }
+    }
+
+    #[test]
+    fn test_a_file_with_removed_keys_still_loads_from_disk_through_both_loaders() {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let path = dir.path().join("velesdb.toml");
+        std::fs::write(&path, FILE_WITH_REMOVED_KEYS).expect("test: write toml");
+
+        for (loader, result) in [
+            ("load_from_path", VelesConfig::load_from_path(&path)),
+            (
+                "load_from_path_engine_only",
+                VelesConfig::load_from_path_engine_only(&path),
+            ),
+        ] {
+            let config = result.unwrap_or_else(|e| panic!("{loader} refused a 6.x file: {e}"));
+            assert_eq!(config.hnsw.m, Some(24), "for {loader}");
+        }
+    }
+
+    #[test]
+    fn test_serialized_config_no_longer_writes_the_removed_keys() {
+        // `to_toml` is how a config gets written back out; a removed key it
+        // still emitted would be a key the next load warns about.
+        let toml = VelesConfig::default().to_toml().expect("serialize");
+        for removed in ["wal_batch", "data_dir", "mmap_cache_mb", "vector_alignment"] {
+            assert!(
+                !toml.contains(removed),
+                "{removed} is still serialized:\n{toml}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_removed_key_is_found_whichever_source_sets_it() {
+        // The environment reaches the same paths a file does —
+        // `VELESDB_WAL_BATCH_ENABLED` maps to `wal_batch.enabled`
+        // (config_env_tests) — so a value at a removed path is named whichever
+        // provider put it there.
+        use figment::{providers::Serialized, Figment};
+        let figment = Figment::new()
+            .merge(Serialized::defaults(VelesConfig::default()))
+            .merge(Serialized::defaults(serde_json::json!({
+                "wal_batch": { "enabled": true },
+                "storage": { "vector_alignment": 32 },
+            })));
         assert_eq!(
-            config.deprecated_storage_entries(),
-            vec![
-                "storage.data_dir",
-                "storage.mmap_cache_mb",
-                "storage.vector_alignment",
-            ]
+            crate::config_removed::removed_keys_set(&figment),
+            vec!["wal_batch", "storage.vector_alignment"]
         );
-        // storage_mode was left at its default, so it stays out of both reports.
-        assert!(config.inert_engine_entries().is_empty());
+    }
+
+    #[test]
+    fn test_the_defaults_set_no_removed_key() {
+        // Every loader merges the defaults first; a removed key surviving in
+        // them would make every load warn.
+        use figment::{providers::Serialized, Figment};
+        let figment = Figment::from(Serialized::defaults(VelesConfig::default()));
+        assert!(crate::config_removed::removed_keys_set(&figment).is_empty());
+    }
+
+    #[cfg(feature = "persistence")]
+    mod removed_key_warning {
+        use crate::config::VelesConfig;
+        use crate::test_fixtures::fixtures::capture_warns;
+
+        const REMOVED: [&str; 4] = [
+            "wal_batch",
+            "storage.data_dir",
+            "storage.mmap_cache_mb",
+            "storage.vector_alignment",
+        ];
+
+        fn removal_warnings(warns: &[String]) -> Vec<&String> {
+            warns.iter().filter(|w| w.contains("7.0.0")).collect()
+        }
+
+        #[test]
+        fn test_each_parser_warns_once_naming_every_removed_key() {
+            type Parser = fn(&str) -> Result<VelesConfig, crate::config::ConfigError>;
+            let parsers: [(&str, Parser); 2] = [
+                ("from_toml", VelesConfig::from_toml),
+                ("from_toml_engine_only", VelesConfig::from_toml_engine_only),
+            ];
+            for (loader, parse) in parsers {
+                let (result, warns) = capture_warns(|| parse(super::FILE_WITH_REMOVED_KEYS));
+                result.unwrap_or_else(|e| panic!("{loader} refused a 6.x file: {e}"));
+                let removal = removal_warnings(&warns);
+                assert_eq!(
+                    removal.len(),
+                    1,
+                    "{loader}: expected exactly one removal warning, got {warns:?}"
+                );
+                for key in REMOVED {
+                    assert!(
+                        removal[0].contains(key),
+                        "{loader}: the removal warning does not name {key}: {}",
+                        removal[0]
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn test_a_disabled_wal_batch_table_is_still_named() {
+            // 6.x warned only on `enabled = true`; the table itself is what
+            // is gone now, whatever it says.
+            let (result, warns) =
+                capture_warns(|| VelesConfig::from_toml("[wal_batch]\nenabled = false\n"));
+            result.expect("a 6.x [wal_batch] table loads");
+            let removal = removal_warnings(&warns);
+            assert_eq!(removal.len(), 1, "got {warns:?}");
+            assert!(removal[0].contains("wal_batch"), "got {warns:?}");
+        }
+
+        #[test]
+        fn test_a_file_without_removed_keys_warns_about_nothing() {
+            let (result, warns) = capture_warns(|| {
+                VelesConfig::from_toml("[hnsw]\nm = 24\n\n[storage]\nstorage_mode = \"mmap\"\n")
+            });
+            result.expect("a current file loads");
+            assert!(warns.is_empty(), "nothing to warn about, got {warns:?}");
+        }
     }
 }

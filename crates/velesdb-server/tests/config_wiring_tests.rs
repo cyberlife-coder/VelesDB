@@ -4,7 +4,7 @@
 //! Before this fix, `main::init_app_state` always called `Database::open`,
 //! so the `--config` flag only ever reached the server-transport settings
 //! (`[server]`/`[auth]`/`[tls]`/`[cors]`) and the core engine
-//! (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/`[wal_batch]`) silently ran
+//! (`[search]`/`[hnsw]`/`[storage]`/`[limits]`) silently ran
 //! on defaults no matter what the TOML said.
 //!
 //! These tests exercise `config::load_core_config` +

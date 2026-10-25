@@ -211,7 +211,7 @@ missing, unparsable or invalid file raises `Error::ConfigLoad`, never a silent
 fallback to defaults.
 
 Only the engine sections are read (`[search]`, `[hnsw]`, `[storage]`,
-`[limits]`, `[quantization]`, `[wal_batch]`); any other top-level table — for
+`[limits]`, `[quantization]`); any other top-level table — for
 instance a `[server]` section owned by `velesdb-server` in a shared config file
 — is ignored rather than rejected. `VELESDB_*` environment variables still
 layer on top of the filtered file. Field-by-field reference: the
