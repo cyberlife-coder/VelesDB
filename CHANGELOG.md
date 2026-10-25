@@ -222,6 +222,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: two steps of the weekly Miri job were green without testing the unsafe
+  code they name.** `Miri - vector bytes storage` ran 0 tests in every binary:
+  `storage` is compiled only with `persistence`, the job builds
+  `--no-default-features`, and libtest exits 0 on a filter that matches nothing.
+  Its filter was also wrong with the feature on (`storage::vector_bytes::` does
+  not match the tests' module, `storage::vector_bytes_tests::`). It now builds
+  `--features persistence` and runs the 13 `vector_bytes_tests` under Miri, which
+  never executes pest's `std` path (measured: no test there parses VelesQL), so
+  psm's assembly stays out of reach. `Miri - distance module` matched a single
+  test (`distance::` skips `distance_tests`, at the crate root); it now runs the
+  31 scalar distance tests, skipping `geo_distance_tests` (no unsafe code,
+  bit-exact trigonometry that Miri perturbs on purpose). Every Miri step now runs
+  through `scripts/miri-step.sh`, which fails unless a test of the module the
+  step names passed, so a filter that matches nothing cannot go green again;
+  `scripts/tests/test_miri_step.py` pins its verdicts and that the workflow does
+  not bypass it. All four steps also take `--lib`, which stops building and
+  walking the integration-test binaries, none of which matches.
+
 - **Two regular expressions that backtracked on adversarial input (CodeQL
   `js/polynomial-redos`, `py/redos`).** The TypeScript SDK's WASM `query()`
   shape check ended in three adjacent `\s*`, so a few thousand spaces after a
