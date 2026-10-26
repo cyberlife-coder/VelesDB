@@ -159,7 +159,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -697,7 +697,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -874,13 +874,13 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-semver-checks"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Install cargo-semver-checks (prebuilt)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           # 0.46.0 is the last release whose own `rust_version` is 1.90, this
           # workspace's MSRV — 0.47.0 already requires 1.91. That matters for a
@@ -954,7 +954,7 @@ jobs:
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Install hygiene tools (prebuilt)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: typos@1.42.3,taplo-cli@0.10.0,cargo-machete@0.9.2
 
@@ -998,7 +998,7 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci-memory-feature-matrix"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1044,7 +1044,7 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci-internal-bench"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1075,11 +1075,11 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci-drop-tightening"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1100,7 +1100,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -1109,7 +1109,7 @@ jobs:
           rustup toolchain install --no-self-update --profile minimal
           rustup target add wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci-wasm"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1134,7 +1134,7 @@ jobs:
       # to empty binaries under the native test job and are invisible to the
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: wasm-pack
 
@@ -1157,7 +1157,7 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci-openapi"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1209,7 +1209,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -1333,11 +1333,11 @@ jobs:
       # Installed on a step of its own, so the stable toolchain
       # rust-toolchain.toml pins stays the default for everything else here.
       # nightly: cargo-public-api reads rustdoc JSON, which is nightly-only.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # nightly
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # nightly
         with:
           toolchain: nightly
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-public-trait-api"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1362,7 +1362,7 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: fuzz
           shared-key: "velesdb-fuzz-compile"
@@ -1408,7 +1408,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1459,7 +1459,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -1579,7 +1579,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -1622,7 +1622,7 @@ jobs:
         with:
           node-version: '20'
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -1796,7 +1796,7 @@ jobs:
         with:
           node-version: '20'
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: needs.node-windows-changed.outputs.relevant == 'true'
         with:
           python-version: '3.12'
@@ -1805,7 +1805,7 @@ jobs:
         if: needs.node-windows-changed.outputs.relevant == 'true'
         run: rustup toolchain install --no-self-update --profile minimal
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: needs.node-windows-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci-node-windows"
@@ -1848,7 +1848,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci"
 
@@ -1856,7 +1856,7 @@ jobs:
       # `cargo install` from source — faster and avoids the compile/network
       # flakes that lost the runner mid-job on earlier release runs.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-llvm-cov
 
@@ -1893,7 +1893,7 @@ jobs:
           CODACY_PROJECT_NAME: VelesDB
 
       - name: Upload lcov for SonarCloud
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lcov-report
           path: lcov.info
@@ -1918,7 +1918,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: sdks/typescript/package-lock.json
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci"
 
@@ -1970,7 +1970,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci"
 
@@ -1989,7 +1989,7 @@ jobs:
             --baseline benchmarks/baseline.json \
             --threshold 15
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perf-smoke-results
           path: target/criterion/
@@ -2015,7 +2015,7 @@ jobs:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-ci"
 
@@ -2026,7 +2026,7 @@ jobs:
             --bench filter_benchmark \
             -- --noplot
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmark-results
           path: target/criterion/
@@ -2046,7 +2046,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download coverage report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: lcov-report
         continue-on-error: true
@@ -2198,11 +2198,11 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         if: needs.perf-path-changed.outputs.relevant == 'true'
         run: rustup toolchain install --no-self-update --profile minimal
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: needs.perf-path-changed.outputs.relevant == 'true'
         with:
           python-version: "3.11"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: needs.perf-path-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-perf-gate"
@@ -2285,7 +2285,7 @@ jobs:
 
       - name: Upload perf report
         if: needs.perf-path-changed.outputs.relevant == 'true' && always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perf-report-${{ github.sha }}
           path: perf-report.json
