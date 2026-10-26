@@ -1,5 +1,6 @@
 use super::{Capability, CollectionInventory, SourceProvenance, TtlSummary};
 use crate::migration::enumeration::{enumerate_by_cursor, scroll_page, AGENT_COLLECTIONS};
+use crate::migration::precondition;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -259,10 +260,9 @@ fn edges_of(
         "_episodic_memory" => memory.episodic().relations(id)?,
         "_procedural_memory" => memory.procedural().relations(id)?,
         other => {
-            return Err(velesdb_core::Error::Query(format!(
+            return Err(precondition(format!(
                 "`{other}` is not one of the agent collections"
-            ))
-            .into())
+            )))
         }
     };
     Ok(u64::try_from(edges.len()).unwrap_or(u64::MAX))

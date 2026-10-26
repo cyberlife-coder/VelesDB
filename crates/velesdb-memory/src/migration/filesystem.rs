@@ -1,4 +1,4 @@
-use super::query_error;
+use super::{environment, precondition};
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs::File;
@@ -69,7 +69,7 @@ pub fn bytes_on_disk(root: &Path) -> Result<u64, crate::MemoryError> {
                 EntryKind::File { len } => len,
             };
             total.checked_add(len).ok_or_else(|| {
-                query_error(format!(
+                environment(format!(
                     "the byte count under {} exceeds u64",
                     root.display()
                 ))
@@ -79,9 +79,9 @@ pub fn bytes_on_disk(root: &Path) -> Result<u64, crate::MemoryError> {
 
 fn tree_entries(root: &Path) -> Result<Vec<TreeEntry>, crate::MemoryError> {
     let metadata = std::fs::symlink_metadata(root)
-        .map_err(|err| query_error(format!("cannot inspect source {}: {err}", root.display())))?;
+        .map_err(|err| environment(format!("cannot inspect source {}: {err}", root.display())))?;
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "migration source {} must be a real directory, not a symlink or special file",
             root.display()
         )));
@@ -99,9 +99,9 @@ fn collect_entries(
     entries: &mut Vec<TreeEntry>,
 ) -> Result<(), crate::MemoryError> {
     let read = std::fs::read_dir(directory)
-        .map_err(|err| query_error(format!("cannot read {}: {err}", directory.display())))?;
+        .map_err(|err| environment(format!("cannot read {}: {err}", directory.display())))?;
     for entry in read {
-        let entry = entry.map_err(|err| query_error(format!("cannot read an entry: {err}")))?;
+        let entry = entry.map_err(|err| environment(format!("cannot read an entry: {err}")))?;
         collect_entry(root, &entry.path(), entries)?;
     }
     Ok(())
@@ -113,13 +113,13 @@ fn collect_entry(
     entries: &mut Vec<TreeEntry>,
 ) -> Result<(), crate::MemoryError> {
     let metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| query_error(format!("cannot inspect {}: {err}", path.display())))?;
+        .map_err(|err| environment(format!("cannot inspect {}: {err}", path.display())))?;
     let relative_path = path
         .strip_prefix(root)
-        .map_err(|err| query_error(format!("cannot relativize {}: {err}", path.display())))?
+        .map_err(|err| environment(format!("cannot relativize {}: {err}", path.display())))?
         .to_path_buf();
     if metadata.file_type().is_symlink() {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "migration source contains symlink {}; refusing to follow data outside the tree",
             path.display()
         )));
@@ -140,7 +140,7 @@ fn collect_entry(
         });
         return Ok(());
     }
-    Err(query_error(format!(
+    Err(precondition(format!(
         "migration source contains special file {}; only directories and regular files are supported",
         path.display()
     )))
@@ -176,7 +176,7 @@ fn hash_file(
     if bytes_read == expected_len {
         return Ok(());
     }
-    Err(query_error(format!(
+    Err(precondition(format!(
         "source changed while fingerprinting {}: expected {expected_len} bytes, read {bytes_read}",
         path.display()
     )))
@@ -184,14 +184,14 @@ fn hash_file(
 
 fn open_expected_file(path: &Path, expected_len: u64) -> Result<File, crate::MemoryError> {
     let file = File::open(path)
-        .map_err(|err| query_error(format!("cannot open {}: {err}", path.display())))?;
+        .map_err(|err| environment(format!("cannot open {}: {err}", path.display())))?;
     let before = file
         .metadata()
-        .map_err(|err| query_error(format!("cannot inspect {}: {err}", path.display())))?;
+        .map_err(|err| environment(format!("cannot inspect {}: {err}", path.display())))?;
     if before.is_file() && before.len() == expected_len {
         return Ok(file);
     }
-    Err(query_error(format!(
+    Err(precondition(format!(
         "source changed while fingerprinting {}",
         path.display()
     )))
@@ -204,14 +204,14 @@ fn hash_reader(path: &Path, file: File, hash: &mut Sha256) -> Result<u64, crate:
     loop {
         let read = reader
             .read(&mut buffer)
-            .map_err(|err| query_error(format!("cannot read {}: {err}", path.display())))?;
+            .map_err(|err| environment(format!("cannot read {}: {err}", path.display())))?;
         if read == 0 {
             break;
         }
         hash.update(&buffer[..read]);
         bytes_read = bytes_read
             .checked_add(u64::try_from(read).unwrap_or(u64::MAX))
-            .ok_or_else(|| query_error(format!("file {} exceeds u64", path.display())))?;
+            .ok_or_else(|| environment(format!("file {} exceeds u64", path.display())))?;
     }
     Ok(bytes_read)
 }

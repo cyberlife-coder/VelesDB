@@ -78,6 +78,8 @@ fn a_mutation_during_capture_is_refused_and_scratch_is_removed() {
     .err()
     .expect("a moving source must be refused");
     assert!(error.to_string().contains("source changed"), "{error}");
+    // A store written to during the diagnosis is for the operator to quiesce.
+    assert_eq!(error.category(), crate::ErrorCategory::InvalidInput, "{error}");
     assert!(
         mutated,
         "positive control: the hook must have changed the file"
@@ -159,6 +161,8 @@ fn insufficient_space_is_refused_before_creating_scratch() {
     .err()
     .expect("insufficient space must refuse");
     assert!(error.to_string().contains("insufficient"), "{error}");
+    // A full staging disk is the machine's fault, whoever started the run.
+    assert_eq!(error.category(), crate::ErrorCategory::Internal, "{error}");
     assert_eq!(
         std::fs::read_dir(staging.path())
             .expect("read staging")
@@ -217,6 +221,8 @@ fn root_and_nested_symlinks_are_refused_without_following_them() {
             .err()
             .expect("nested symlink must be refused");
     assert!(error.to_string().contains("symlink"), "{error}");
+    // A symlinked source is an input the operator picked, not a server fault.
+    assert_eq!(error.category(), crate::ErrorCategory::InvalidInput, "{error}");
     assert_eq!(std::fs::read(&secret).expect("outside intact"), b"outside");
 
     std::fs::remove_file(source.path().join("nested-link")).expect("remove nested link");
@@ -228,6 +234,7 @@ fn root_and_nested_symlinks_are_refused_without_following_them() {
         .err()
         .expect("root symlink must be refused");
     assert!(error.to_string().contains("symlink"), "{error}");
+    assert_eq!(error.category(), crate::ErrorCategory::InvalidInput, "{error}");
 
     let copy =
         super::super::diagnostic_copy::DiagnosticCopy::capture(source.path(), staging.path())

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{
     activate_destination, advance, archive_source, entry_state, journal_workspace, late_activation,
-    outcome, query_error, rename_durably, require_journalled_fingerprint, unrecognised_disk,
+    outcome, precondition, rename_durably, require_journalled_fingerprint, unrecognised_disk,
     MigrationLock, MigrationState, Phase, Slots, SwitchOutcome, SwitchState,
 };
 
@@ -37,7 +37,7 @@ fn run_live_action(
     allow_completed: bool,
 ) -> Result<SwitchOutcome, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-live-switch").map_err(query_error)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-live-switch").map_err(precondition)?;
     let result = live_action_locked(
         store,
         destination,
@@ -137,7 +137,7 @@ fn require_phase(
     if actual == expected {
         return Ok(());
     }
-    Err(query_error(format!(
+    Err(precondition(format!(
         "cannot {operation} live switch from journal phase {actual:?}; expected {expected:?}"
     )))
 }

@@ -29,7 +29,7 @@
 //! runs strictly inside [`Phase::Prepared`], and leaving that phase is the
 //! validation-and-switch work of a later PR.
 
-use super::query_error;
+use super::{environment, integrity, precondition};
 use std::path::Path;
 
 use velesdb_core::agent::AgentMemory;
@@ -158,7 +158,7 @@ fn rebuild_inner(
     stop_after_batches: Option<u64>,
 ) -> Result<RebuildOutcome, crate::MemoryError> {
     if state.phase != Phase::Prepared {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "the rebuild runs strictly inside {:?}, and this journal stands at \
              {:?}; a pass that ran after validation would invalidate what was \
              validated",
@@ -201,7 +201,7 @@ fn rebuild_collection(
     run: &mut Run,
 ) -> Result<(), crate::MemoryError> {
     let current = *state.progress.get(step.collection).ok_or_else(|| {
-        query_error(format!(
+        integrity(format!(
             "the journal carries no progress entry for '{}'; refusing to \
              invent one mid-pass",
             step.collection
@@ -248,7 +248,7 @@ fn walk_facts(
         run.collisions += outcome.collisions.len() as u64;
         run.batches += 1;
         if run.stop_after_batches == Some(run.batches) {
-            return Err(query_error(format!(
+            return Err(environment(format!(
                 "rebuild interrupted by the injected stop after {} batches; the \
                  destination holds this batch and the journal does not — the \
                  exact window a crash leaves, and what a resume replays",
@@ -275,13 +275,13 @@ fn vector_for(policy: &VectorPolicy<'_>, fact: &RawFact) -> Result<Vec<f32>, cra
         VectorPolicy::Reembed(embedder) => {
             let payload: serde_json::Value =
                 serde_json::from_str(&fact.payload).map_err(|err| {
-                    query_error(format!(
+                    integrity(format!(
                         "fact {} carries unreadable payload: {err}",
                         fact.id
                     ))
                 })?;
             let Some(content) = payload.get("content").and_then(serde_json::Value::as_str) else {
-                return Err(query_error(format!(
+                return Err(integrity(format!(
                     "fact {} carries no `content` text, so `reembed` cannot \
                      produce its vector; skipping it would silently drop the \
                      fact and re-using its old vector would mix models, so the \
@@ -291,7 +291,7 @@ fn vector_for(policy: &VectorPolicy<'_>, fact: &RawFact) -> Result<Vec<f32>, cra
             };
             embedder
                 .embed(content)
-                .map_err(|err| query_error(format!("embedding fact {} failed: {err}", fact.id)))
+                .map_err(|err| environment(format!("embedding fact {} failed: {err}", fact.id)))
         }
     }
 }
@@ -319,7 +319,7 @@ fn edge_pass(
         // walks. Distinguishing that transient from real loss mechanically is
         // the validation pass's job (C3); until then the pass stops, says
         // both readings, and stays resumable.
-        query_error(format!(
+        integrity(format!(
             "after reinsertion the destination's edges do not match the export \
              for '{}': {difference}. Either an edge was lost, or an endpoint's \
              absolute expiry passed between the export and the re-read. The \
@@ -340,5 +340,5 @@ fn journal_progress(
     state.progress.insert(collection.to_owned(), progress);
     state
         .write(journal.workspace, journal.lock)
-        .map_err(query_error)
+        .map_err(environment)
 }

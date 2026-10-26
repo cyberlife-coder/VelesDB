@@ -1,3 +1,4 @@
+use crate::migration::{integrity, not_found, precondition};
 use serde_json::Value;
 
 /// Collections `AgentMemory` opens, all at the same dimension — so any one of
@@ -94,8 +95,8 @@ pub fn enumerate_page(
     offset: usize,
 ) -> Result<Vec<RawFact>, crate::MemoryError> {
     let sql = format!("SELECT * FROM {collection} ORDER BY id LIMIT {page} OFFSET {offset}");
-    let query = velesdb_core::velesql::Parser::parse(&sql)
-        .map_err(|e| velesdb_core::Error::Query(e.to_string()))?;
+    let query =
+        velesdb_core::velesql::Parser::parse(&sql).map_err(|e| precondition(e.to_string()))?;
     let hits = db.execute_query(&query, &std::collections::HashMap::new())?;
     Ok(hits
         .into_iter()
@@ -139,18 +140,17 @@ pub fn scroll_page(
     cursor: Option<u64>,
     batch: usize,
 ) -> Result<(Vec<RawFact>, Option<u64>), crate::MemoryError> {
-    let any = db.get_any_collection(collection).ok_or_else(|| {
-        velesdb_core::Error::Query(format!("collection `{collection}` not found"))
-    })?;
+    let any = db
+        .get_any_collection(collection)
+        .ok_or_else(|| not_found(format!("collection `{collection}` not found")))?;
     let scrolled = match &any {
         velesdb_core::AnyCollection::Vector(c) => c.scroll_batch(cursor, batch, None),
         velesdb_core::AnyCollection::Graph(c) => c.scroll_batch(cursor, batch, None),
         velesdb_core::AnyCollection::Metadata(c) => c.scroll_batch(cursor, batch, None),
         _ => {
-            return Err(velesdb_core::Error::Query(format!(
+            return Err(precondition(format!(
                 "collection `{collection}` is of a kind that does not scroll"
-            ))
-            .into())
+            )))
         }
     }?;
     let facts = scrolled
@@ -251,9 +251,9 @@ pub fn reinsert(
     fact: &RawFact,
     vector: &[f32],
 ) -> Result<Reinsertion, crate::MemoryError> {
-    let any = db.get_any_collection(collection).ok_or_else(|| {
-        velesdb_core::Error::Query(format!("collection `{collection}` not found"))
-    })?;
+    let any = db
+        .get_any_collection(collection)
+        .ok_or_else(|| not_found(format!("collection `{collection}` not found")))?;
     if let Some(Some(existing)) = any.get(&[fact.id]).into_iter().next() {
         return Ok(Reinsertion::Collision {
             existing: existing
@@ -262,9 +262,8 @@ pub fn reinsert(
                 .map_or_else(|| Value::Null.to_string(), std::string::ToString::to_string),
         });
     }
-    let payload: Value = serde_json::from_str(&fact.payload).map_err(|e| {
-        velesdb_core::Error::Query(format!("fact {} carries unreadable payload: {e}", fact.id))
-    })?;
+    let payload: Value = serde_json::from_str(&fact.payload)
+        .map_err(|e| integrity(format!("fact {} carries unreadable payload: {e}", fact.id)))?;
     any.upsert(vec![velesdb_core::Point::new(
         fact.id,
         vector.to_vec(),
@@ -305,9 +304,9 @@ pub fn reinsert_batch(
     collection: &str,
     batch: &[(RawFact, Vec<f32>)],
 ) -> Result<BatchReinsertion, crate::MemoryError> {
-    let any = db.get_any_collection(collection).ok_or_else(|| {
-        velesdb_core::Error::Query(format!("collection `{collection}` not found"))
-    })?;
+    let any = db
+        .get_any_collection(collection)
+        .ok_or_else(|| not_found(format!("collection `{collection}` not found")))?;
     let ids: Vec<u64> = batch.iter().map(|(fact, _)| fact.id).collect();
     let occupied: std::collections::HashSet<u64> = any
         .get(&ids)
@@ -321,9 +320,8 @@ pub fn reinsert_batch(
         if occupied.contains(&fact.id) {
             continue;
         }
-        let payload: Value = serde_json::from_str(&fact.payload).map_err(|e| {
-            velesdb_core::Error::Query(format!("fact {} carries unreadable payload: {e}", fact.id))
-        })?;
+        let payload: Value = serde_json::from_str(&fact.payload)
+            .map_err(|e| integrity(format!("fact {} carries unreadable payload: {e}", fact.id)))?;
         points.push(velesdb_core::Point::new(
             fact.id,
             vector.clone(),

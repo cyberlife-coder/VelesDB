@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
-    execute::journal_workspace, fingerprint, query_error, CollectionProgress, MigrationLock,
-    MigrationState, Phase, AGENT_COLLECTIONS, STATE_FORMAT_VERSION,
+    environment, execute::journal_workspace, fingerprint, integrity, precondition,
+    CollectionProgress, MigrationLock, MigrationState, Phase, AGENT_COLLECTIONS,
+    STATE_FORMAT_VERSION,
 };
 
 pub(crate) fn prepare_live_switch(
@@ -16,10 +17,10 @@ pub(crate) fn prepare_live_switch(
     verify_target_provenance(destination, target_model, target_dimension)?;
     let source = source
         .canonicalize()
-        .map_err(|err| query_error(format!("cannot resolve live source: {err}")))?;
+        .map_err(|err| environment(format!("cannot resolve live source: {err}")))?;
     let source_fingerprint = fingerprint(&source)?;
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-live-prepare").map_err(query_error)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-live-prepare").map_err(precondition)?;
     let result = prepare_locked(
         &workspace,
         &lock,
@@ -42,7 +43,7 @@ fn prepare_locked(
     target_dimension: usize,
     target_witness: &str,
 ) -> Result<(), crate::MemoryError> {
-    if let Some(existing) = MigrationState::read(workspace).map_err(query_error)? {
+    if let Some(existing) = MigrationState::read(workspace).map_err(integrity)? {
         existing
             .may_resume(
                 &source_path,
@@ -50,9 +51,9 @@ fn prepare_locked(
                 target_model,
                 target_dimension,
             )
-            .map_err(query_error)?;
+            .map_err(precondition)?;
         if existing.embedder_witness.as_deref() != Some(target_witness) {
-            return Err(query_error(
+            return Err(precondition(
                 "live switch target embedder witness changed; start a fresh migration",
             ));
         }
@@ -65,9 +66,9 @@ fn prepare_locked(
         target_dimension,
         target_witness,
     );
-    state.write(workspace, lock).map_err(query_error)?;
+    state.write(workspace, lock).map_err(environment)?;
     state.phase = Phase::DestinationValidated;
-    state.write(workspace, lock).map_err(query_error)
+    state.write(workspace, lock).map_err(environment)
 }
 
 fn new_state(
@@ -97,7 +98,7 @@ fn require_validated(phase: Phase) -> Result<(), crate::MemoryError> {
     if phase == Phase::DestinationValidated {
         return Ok(());
     }
-    Err(query_error(format!(
+    Err(precondition(format!(
         "live switch preparation found journal phase {phase:?}; recovery must finish first"
     )))
 }
@@ -107,7 +108,7 @@ fn verify_target_provenance(
     target_model: &str,
     target_dimension: usize,
 ) -> Result<(), crate::MemoryError> {
-    let recorded = crate::embedding_provenance::read(destination).map_err(query_error)?;
+    let recorded = crate::embedding_provenance::read(destination).map_err(integrity)?;
     crate::embedding_provenance::check(recorded.as_ref(), target_model, target_dimension)
-        .map_err(query_error)
+        .map_err(precondition)
 }

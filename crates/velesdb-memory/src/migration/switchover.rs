@@ -29,7 +29,7 @@
 //! two re-runs an idempotent commit instead of leaving a freed archive that
 //! the journal still believes in.
 
-use super::query_error;
+use super::{environment, integrity, not_found, precondition};
 use std::path::{Path, PathBuf};
 
 use super::execute::journal_workspace;
@@ -81,7 +81,7 @@ fn run_switch(
     allow_completed: bool,
 ) -> Result<SwitchOutcome, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-switch").map_err(query_error)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-switch").map_err(precondition)?;
     let result = switch_locked(
         store,
         destination,
@@ -106,7 +106,7 @@ fn switch_locked(
     loop {
         match state.phase {
             Phase::Prepared => {
-                return Err(query_error(
+                return Err(precondition(
                     "the destination has not been validated; validate it first \
                      — the switch moves stores and must not be the step that \
                      discovers a bad rebuild",
@@ -142,15 +142,15 @@ fn entry_state(
     allow_completed: bool,
 ) -> Result<MigrationState, crate::MemoryError> {
     let state = MigrationState::read(workspace)
-        .map_err(query_error)?
+        .map_err(integrity)?
         .ok_or_else(|| {
-            query_error(format!(
+            not_found(format!(
                 "no migration journal at {}; there is nothing to switch",
                 workspace.display()
             ))
         })?;
     if state.phase == Phase::Committed && !allow_completed {
-        return Err(query_error(
+        return Err(precondition(
             "this migration is complete; there is nothing left to switch, and \
              replaying a step would act on a store that is already the new one",
         ));
@@ -174,7 +174,7 @@ impl Slots {
     ) -> Result<Self, crate::MemoryError> {
         let source = canonical_slot(store)?;
         if source != state.source_path {
-            return Err(query_error(format!(
+            return Err(precondition(format!(
                 "this journal describes a migration of '{}', and the request \
                  names '{}'; a switch cannot be transferred between stores",
                 state.source_path.display(),
@@ -185,7 +185,7 @@ impl Slots {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| {
-                query_error(format!(
+                precondition(format!(
                     "the source {} has no usable directory name to derive the \
                      archive slot from",
                     source.display()
@@ -249,7 +249,7 @@ fn archive_source(slots: &Slots, state: &MigrationState) -> Result<(), crate::Me
             archive: true,
             ..
         } => {
-            return Err(query_error(format!(
+            return Err(precondition(format!(
                 "the archive slot {} is already occupied; renaming the source \
                  over it would destroy whatever it holds — move it aside \
                  deliberately, or remove it if it is yours to remove",
@@ -353,7 +353,7 @@ fn step_commit(
         // anything else means writes landed here that exist nowhere else.
         require_journalled_fingerprint(&slots.archive, state, "archive")?;
         std::fs::remove_dir_all(&slots.archive).map_err(|err| {
-            query_error(format!(
+            environment(format!(
                 "the activated store is verified but the archive {} could not \
                  be freed: {err}; nothing is lost — re-run the switch",
                 slots.archive.display()
@@ -377,7 +377,7 @@ fn require_journalled_fingerprint(
     if observed == state.source_fingerprint {
         return Ok(());
     }
-    Err(query_error(format!(
+    Err(integrity(format!(
         "the {role} at {} no longer fingerprints as the store this journal \
          describes — something wrote to it after the journal was written. \
          Nothing was moved or deleted; a store that changed hands must be \
@@ -390,14 +390,14 @@ fn require_journalled_fingerprint(
 /// — the one validation wrote on the destination and the old source never had.
 fn require_target_stamp(slots: &Slots, state: &MigrationState) -> Result<(), crate::MemoryError> {
     let stamped = crate::embedding_provenance::read(&slots.source)
-        .map_err(query_error)?
+        .map_err(integrity)?
         .filter(|stamp| {
             stamp.model == state.target_model && stamp.dimension == state.target_dimension
         });
     if stamped.is_some() {
         return Ok(());
     }
-    Err(query_error(format!(
+    Err(integrity(format!(
         "what occupies {} does not carry the target's provenance stamp \
          ('{}', {} dimensions), so it cannot be assumed to be the activated \
          destination; the archive and the destination are left untouched — \
@@ -416,12 +416,12 @@ fn advance(
     lock: &MigrationLock,
 ) -> Result<(), crate::MemoryError> {
     state.phase = phase;
-    state.write(workspace, lock).map_err(query_error)
+    state.write(workspace, lock).map_err(environment)
 }
 
 fn unrecognised_disk(observed: SwitchState, at: Phase) -> crate::MemoryError {
     let recovery = observed.recovery();
-    query_error(format!(
+    integrity(format!(
         "the journal stands at {at:?} but the disk does not match any step of \
          this migration (source: {}, archive: {}, destination: {}). The \
          recovery table says: {recovery:?}",
@@ -434,16 +434,16 @@ fn unrecognised_disk(observed: SwitchState, at: Phase) -> crate::MemoryError {
 fn canonical_slot(path: &Path) -> Result<PathBuf, crate::MemoryError> {
     let name = path
         .file_name()
-        .ok_or_else(|| query_error(format!("{} has no final path component", path.display())))?;
+        .ok_or_else(|| precondition(format!("{} has no final path component", path.display())))?;
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty());
     let base = match parent {
         Some(parent) => parent
             .canonicalize()
-            .map_err(|err| query_error(format!("cannot resolve {}: {err}", parent.display())))?,
+            .map_err(|err| environment(format!("cannot resolve {}: {err}", parent.display())))?,
         None => std::env::current_dir()
-            .map_err(|err| query_error(format!("cannot resolve the working directory: {err}")))?,
+            .map_err(|err| environment(format!("cannot resolve the working directory: {err}")))?,
     };
     Ok(base.join(name))
 }
@@ -452,7 +452,7 @@ fn canonical_slot(path: &Path) -> Result<PathBuf, crate::MemoryError> {
 /// survives a power cut, not just a process crash.
 fn rename_durably(from: &Path, to: &Path) -> Result<(), crate::MemoryError> {
     std::fs::rename(from, to).map_err(|err| {
-        query_error(format!(
+        environment(format!(
             "cannot rename {} to {}: {err}",
             from.display(),
             to.display()
@@ -460,13 +460,13 @@ fn rename_durably(from: &Path, to: &Path) -> Result<(), crate::MemoryError> {
     })?;
     if let Some(parent) = to.parent() {
         let directory = std::fs::File::open(parent).map_err(|err| {
-            query_error(format!(
+            environment(format!(
                 "cannot open {} to sync it: {err}",
                 parent.display()
             ))
         })?;
         directory.sync_all().map_err(|err| {
-            query_error(format!(
+            environment(format!(
                 "the rename of {} is visible but not yet durable: {err}; do \
                  not power off before re-running",
                 to.display()

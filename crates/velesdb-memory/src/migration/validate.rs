@@ -37,7 +37,7 @@
 //! checked against — after the comparison passes and before the phase
 //! advances.
 
-use super::query_error;
+use super::{environment, integrity, not_found, precondition};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -82,7 +82,7 @@ pub fn validate_destination(
     batch: usize,
 ) -> Result<ValidationOutcome, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-validate").map_err(query_error)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-validate").map_err(precondition)?;
     let result = validate_locked(store, destination, target, batch, &workspace, &lock);
     super::execute::reconcile(result, lock.release())
 }
@@ -105,11 +105,11 @@ fn validate_locked(
             state.target_dimension,
         ),
     )
-    .map_err(query_error)?;
+    .map_err(environment)?;
 
     if state.phase == Phase::Prepared {
         state.phase = Phase::DestinationValidated;
-        state.write(workspace, lock).map_err(query_error)?;
+        state.write(workspace, lock).map_err(environment)?;
     }
     Ok(outcome)
 }
@@ -143,9 +143,9 @@ fn journalled_state(
     workspace: &Path,
 ) -> Result<MigrationState, crate::MemoryError> {
     let state = MigrationState::read(workspace)
-        .map_err(query_error)?
+        .map_err(integrity)?
         .ok_or_else(|| {
-            query_error(format!(
+            not_found(format!(
                 "no migration journal at {}; there is nothing to validate — run \
                  the rebuild first",
                 workspace.display()
@@ -161,7 +161,7 @@ fn journalled_state(
             target.dimension,
         )
         .map_err(|reason| {
-            query_error(format!(
+            precondition(format!(
                 "the comparison would be against a store the destination was \
                  not built from: {reason}"
             ))
@@ -173,7 +173,7 @@ fn journalled_state(
 /// switch not yet begun.
 fn require_validatable(state: &MigrationState) -> Result<(), crate::MemoryError> {
     if state.phase != Phase::Prepared && state.phase != Phase::DestinationValidated {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "the journal stands at {:?}; validation runs before the switch, \
              not after it",
             state.phase
@@ -181,7 +181,7 @@ fn require_validatable(state: &MigrationState) -> Result<(), crate::MemoryError>
     }
     for (name, progress) in &state.progress {
         if *progress != CollectionProgress::Complete {
-            return Err(query_error(format!(
+            return Err(precondition(format!(
                 "collection '{name}' stands at {progress:?}; an unfinished \
                  rebuild cannot be validated — resume it first"
             )));
@@ -227,7 +227,7 @@ impl StoreView {
         for fact in enumerate_by_cursor(&self.db, collection, batch)? {
             let payload: serde_json::Value =
                 serde_json::from_str(&fact.payload).map_err(|err| {
-                    query_error(format!(
+                    integrity(format!(
                         "fact {} in '{collection}' carries unreadable payload: {err}",
                         fact.id
                     ))
@@ -314,7 +314,7 @@ impl Comparison<'_> {
     ) -> Result<(), crate::MemoryError> {
         match found {
             Some(found) if found == payload => Ok(()),
-            Some(_) => Err(query_error(format!(
+            Some(_) => Err(integrity(format!(
                 "fact {id} in '{}' differs between source and destination; a \
                  payload that changed in transit is loss, and no expiry \
                  explains a fact both stores still hold",
@@ -330,7 +330,7 @@ impl Comparison<'_> {
             self.outcome.explained_by_expiry += 1;
             return Ok(());
         }
-        Err(query_error(format!(
+        Err(integrity(format!(
             "fact {id} in '{}' exists only on the {} side and is still live \
              there; this is loss, not a clock window",
             self.collection,
@@ -387,7 +387,7 @@ impl Comparison<'_> {
         id: u64,
     ) -> Result<(), crate::MemoryError> {
         let Some(edge) = edges.iter().find(|edge| edge.id() == id) else {
-            return Err(query_error(format!(
+            return Err(integrity(format!(
                 "edge {id} in '{}' diverges and its tuple is not in the export \
                  that reported it; the comparison itself is inconsistent",
                 self.collection
@@ -400,7 +400,7 @@ impl Comparison<'_> {
             self.outcome.explained_by_expiry += 1;
             return Ok(());
         }
-        Err(query_error(format!(
+        Err(integrity(format!(
             "edge {id} ({} -{}-> {}) in '{}' diverges between source and \
              destination and both endpoints are still live; this is loss, not \
              a clock window",

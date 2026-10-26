@@ -169,6 +169,14 @@ pub enum MemoryError {
     #[error("migration capture error: {0}")]
     MigrationCapture(String),
 
+    /// A migration step could not proceed. The class a client sees depends on
+    /// the cause (see [`crate::migration::MigrationError`]): an operator
+    /// mistake is invalid input, a missing store is not found, a failing disk
+    /// or contradictory data is internal.
+    #[cfg(feature = "persistence")]
+    #[error("migration error: {0}")]
+    Migration(#[from] crate::migration::MigrationError),
+
     /// A path backing an internal state/record file, or a diagnostic-copy
     /// source file, is not usable as a lone regular file: it names a
     /// symlink, a hard link, a directory, or another non-regular type, so
@@ -455,6 +463,8 @@ impl MemoryError {
             Self::Memory(_) | Self::MigrationCapture(_) | Self::NotARegularFile { .. } => {
                 ErrorCategory::Internal
             }
+            #[cfg(feature = "persistence")]
+            Self::Migration(cause) => cause.category(),
             Self::Storage(_) | Self::Embed(_) | Self::Extract(_) | Self::Rerank(_) => {
                 ErrorCategory::Internal
             }

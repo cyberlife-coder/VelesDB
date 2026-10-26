@@ -1,5 +1,6 @@
 use super::diagnostic_copy::DiagnosticCopy;
 use super::strategy::{assess, resolve, Resolution, Strategy};
+use crate::migration::{environment, precondition};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -321,30 +322,28 @@ impl TargetContract {
 
 fn canonical_source(source: &Path) -> Result<PathBuf, crate::MemoryError> {
     let metadata = std::fs::symlink_metadata(source).map_err(|err| {
-        velesdb_core::Error::Query(format!(
+        environment(format!(
             "cannot inspect migration source {}: {err}",
             source.display()
         ))
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(velesdb_core::Error::Query(format!(
+        return Err(precondition(format!(
             "migration source {} is a symlink; diagnose the canonical store directory directly",
             source.display()
-        ))
-        .into());
+        )));
     }
     let canonical = std::fs::canonicalize(source).map_err(|err| {
-        velesdb_core::Error::Query(format!(
+        environment(format!(
             "cannot canonicalize migration source {}: {err}",
             source.display()
         ))
     })?;
     if !canonical.is_absolute() {
-        return Err(velesdb_core::Error::Query(format!(
+        return Err(environment(format!(
             "canonical migration source is not absolute: {}",
             canonical.display()
-        ))
-        .into());
+        )));
     }
     Ok(canonical)
 }

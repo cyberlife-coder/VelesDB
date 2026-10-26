@@ -222,7 +222,7 @@ fn worker_error(message: impl std::fmt::Display) -> crate::MemoryError {
 }
 
 fn unavailable(message: impl Into<String>) -> crate::MemoryError {
-    velesdb_core::Error::Query(message.into()).into()
+    crate::migration::precondition(message)
 }
 
 impl<E: Embedder> MemoryService<E, NativeStore> {

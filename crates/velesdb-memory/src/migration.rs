@@ -50,6 +50,7 @@ mod diagnosis;
 mod diagnostic_copy;
 mod edges;
 mod enumeration;
+mod error;
 mod execute;
 mod filesystem;
 mod live;
@@ -75,6 +76,7 @@ pub use enumeration::{
     enumerate_by_cursor, enumerate_collection, enumerate_page, reinsert, reinsert_batch,
     scroll_page, BatchReinsertion, RawFact, Reinsertion, AGENT_COLLECTIONS,
 };
+pub use error::MigrationError;
 pub(crate) use execute::journal_workspace;
 pub(crate) use execute::target_embedder_witness;
 pub use execute::{execute, ExecuteOutcome};
@@ -131,11 +133,26 @@ where
     crate::service::recover_startup(source, target_factory)
 }
 
-/// The one conversion every migration module needs: a message become the
-/// engine's query error, become this crate's. Defined once — six private
-/// copies of it had already drifted into two signatures.
-pub(crate) fn query_error(message: impl Into<String>) -> crate::MemoryError {
-    velesdb_core::Error::Query(message.into()).into()
+/// The four ways a migration step fails, as the [`crate::MemoryError`] each
+/// module returns. Defined once: six private copies of the old single
+/// conversion had already drifted into two signatures.
+pub(crate) fn not_found(message: impl Into<String>) -> crate::MemoryError {
+    MigrationError::NotFound(message.into()).into()
+}
+
+/// See [`MigrationError::Precondition`].
+pub(crate) fn precondition(message: impl Into<String>) -> crate::MemoryError {
+    MigrationError::Precondition(message.into()).into()
+}
+
+/// See [`MigrationError::Environment`].
+pub(crate) fn environment(message: impl Into<String>) -> crate::MemoryError {
+    MigrationError::Environment(message.into()).into()
+}
+
+/// See [`MigrationError::Integrity`].
+pub(crate) fn integrity(message: impl Into<String>) -> crate::MemoryError {
+    MigrationError::Integrity(message.into()).into()
 }
 
 #[cfg(test)]

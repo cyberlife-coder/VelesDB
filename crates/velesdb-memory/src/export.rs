@@ -49,10 +49,10 @@ pub fn export_jsonl<W: Write>(
     // store at a typo'd path would corrupt the very question it answers
     // ("what is in my store?" — nothing, now).
     if !store_dir.is_dir() {
-        return Err(MemoryError::Storage(velesdb_core::Error::Query(format!(
+        return Err(crate::migration::not_found(format!(
             "no store directory at {} — nothing to export",
             store_dir.display()
-        ))));
+        )));
     }
     let db = velesdb_core::Database::open(store_dir)?;
     let mut written = 0_u64;
@@ -80,9 +80,7 @@ fn write_page<W: Write>(
     for fact in facts {
         if let Some(line) = jsonl_line(fact, include_internal) {
             writeln!(out, "{line}").map_err(|err| {
-                MemoryError::Storage(velesdb_core::Error::Query(format!(
-                    "export write failed: {err}"
-                )))
+                crate::migration::environment(format!("export write failed: {err}"))
             })?;
             written += 1;
         }

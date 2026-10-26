@@ -1,5 +1,5 @@
 use super::filesystem::{bytes_on_disk, fingerprint};
-use super::query_error;
+use super::{environment, integrity, precondition};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -97,7 +97,7 @@ impl DiagnosticCopy {
         if current == self.source_fingerprint {
             Ok(())
         } else {
-            Err(query_error(format!(
+            Err(precondition(format!(
                 "source changed during diagnosis: captured fingerprint '{}' but found '{}'; no report is valid, retry once the store is quiescent",
                 self.source_fingerprint, current
             )))
@@ -129,13 +129,13 @@ fn prepare_capture(
     let source_bytes = bytes_on_disk(source)?;
     let staging_required = staging_requirement(source_bytes)?;
     let staging_available = available_space(scratch_parent).map_err(|err| {
-        query_error(format!(
+        environment(format!(
             "cannot establish free space for diagnostic staging at {}: {err}",
             scratch_parent.display()
         ))
     })?;
     if staging_available < staging_required {
-        return Err(query_error(format!(
+        return Err(environment(format!(
             "insufficient diagnostic staging space at {}: {staging_available} bytes available, {staging_required} required before copying a {source_bytes}-byte store",
             scratch_parent.display()
         )));
@@ -155,7 +155,7 @@ fn populate_verified_store(
     after_file_copy: &mut dyn FnMut(&Path) -> Result<(), crate::MemoryError>,
 ) -> Result<(), crate::MemoryError> {
     create_private_directory(store_path).map_err(|err| {
-        query_error(format!(
+        environment(format!(
             "cannot create diagnostic store {}: {err}",
             store_path.display()
         ))
@@ -189,11 +189,11 @@ pub(super) fn staging_requirement(source_bytes: u64) -> Result<u64, crate::Memor
     let percentage = source_bytes
         .checked_mul(STAGING_PERCENT_HEADROOM)
         .and_then(|value| value.checked_div(100))
-        .ok_or_else(|| query_error("diagnostic staging size overflow".to_owned()))?;
+        .ok_or_else(|| environment("diagnostic staging size overflow".to_owned()))?;
     source_bytes
         .checked_add(percentage)
         .and_then(|value| value.checked_add(FIXED_STAGING_HEADROOM))
-        .ok_or_else(|| query_error("diagnostic staging size overflow".to_owned()))
+        .ok_or_else(|| environment("diagnostic staging size overflow".to_owned()))
 }
 
 fn reject_unsafe_scratch_parent(
@@ -201,27 +201,27 @@ fn reject_unsafe_scratch_parent(
     scratch_parent: &Path,
 ) -> Result<(), crate::MemoryError> {
     let metadata = std::fs::symlink_metadata(scratch_parent).map_err(|err| {
-        query_error(format!(
+        environment(format!(
             "cannot inspect diagnostic staging parent {}: {err}",
             scratch_parent.display()
         ))
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "diagnostic staging parent {} must be a real directory, not a symlink or special file",
             scratch_parent.display()
         )));
     }
     let source = std::fs::canonicalize(source)
-        .map_err(|err| query_error(format!("cannot resolve source {}: {err}", source.display())))?;
+        .map_err(|err| environment(format!("cannot resolve source {}: {err}", source.display())))?;
     let scratch_parent = std::fs::canonicalize(scratch_parent).map_err(|err| {
-        query_error(format!(
+        environment(format!(
             "cannot resolve diagnostic staging parent {}: {err}",
             scratch_parent.display()
         ))
     })?;
     if scratch_parent.starts_with(&source) {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "diagnostic staging parent {} is inside source {}; copying there would mutate the tree being verified",
             scratch_parent.display(),
             source.display()
@@ -243,10 +243,10 @@ fn copy_directory(
 
 fn read_sorted_entries(source: &Path) -> Result<Vec<std::fs::DirEntry>, crate::MemoryError> {
     let mut entries = std::fs::read_dir(source)
-        .map_err(|err| query_error(format!("cannot read {}: {err}", source.display())))?
+        .map_err(|err| environment(format!("cannot read {}: {err}", source.display())))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| {
-            query_error(format!(
+            environment(format!(
                 "cannot read an entry in {}: {err}",
                 source.display()
             ))
@@ -263,16 +263,16 @@ fn copy_entry(
     let from = entry.path();
     let to = destination.join(entry.file_name());
     let metadata = std::fs::symlink_metadata(&from)
-        .map_err(|err| query_error(format!("cannot inspect {}: {err}", from.display())))?;
+        .map_err(|err| environment(format!("cannot inspect {}: {err}", from.display())))?;
     if metadata.file_type().is_symlink() {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "migration source contains symlink {}; refusing to follow data outside the tree",
             from.display()
         )));
     }
     if metadata.is_dir() {
         create_private_directory(&to).map_err(|err| {
-            query_error(format!(
+            environment(format!(
                 "cannot create diagnostic directory {}: {err}",
                 to.display()
             ))
@@ -283,7 +283,7 @@ fn copy_entry(
         copy_regular_file(&from, &to, metadata.len())?;
         return after_file_copy(&from);
     }
-    Err(query_error(format!(
+    Err(precondition(format!(
         "migration source contains special file {}; only directories and regular files are supported",
         from.display()
     )))
@@ -324,31 +324,31 @@ pub(super) fn copy_regular_file(
     )
     .map_err(|err| match err {
         crate::MemoryError::NotARegularFile { .. } => {
-            query_error(format!("{}: {err}", source.display()))
+            precondition(format!("{}: {err}", source.display()))
         }
-        crate::MemoryError::MigrationCapture(detail) => query_error(detail),
-        other => query_error(other.to_string()),
+        crate::MemoryError::MigrationCapture(detail) => environment(detail),
+        other => environment(other.to_string()),
     })?;
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)
-        .map_err(|err| query_error(format!("cannot create {}: {err}", destination.display())))?;
+        .map_err(|err| environment(format!("cannot create {}: {err}", destination.display())))?;
     let copied = std::io::copy(&mut input, &mut output).map_err(|err| {
-        query_error(format!(
+        environment(format!(
             "cannot copy {} to {}: {err}",
             source.display(),
             destination.display()
         ))
     })?;
     output.flush().map_err(|err| {
-        query_error(format!(
+        environment(format!(
             "cannot flush diagnostic copy {}: {err}",
             destination.display()
         ))
     })?;
     if copied != expected_len {
-        return Err(query_error(format!(
+        return Err(precondition(format!(
             "source changed while copying {}: expected {expected_len} bytes, copied {copied}",
             source.display()
         )));
@@ -394,7 +394,7 @@ impl ScratchDirectory {
                         });
                     if let Err(err) = marker_result {
                         let _ = std::fs::remove_dir_all(&path);
-                        return Err(query_error(format!(
+                        return Err(environment(format!(
                             "cannot mark owned diagnostic scratch {}: {err}",
                             path.display()
                         )));
@@ -407,14 +407,14 @@ impl ScratchDirectory {
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(err) => {
-                    return Err(query_error(format!(
+                    return Err(environment(format!(
                         "cannot create diagnostic scratch under {}: {err}",
                         parent.display()
                     )))
                 }
             }
         }
-        Err(query_error(format!(
+        Err(environment(format!(
             "cannot allocate a unique diagnostic scratch under {} after {CREATE_ATTEMPTS} attempts",
             parent.display()
         )))
@@ -427,13 +427,13 @@ impl ScratchDirectory {
     fn cleanup(mut self) -> Result<(), crate::MemoryError> {
         self.cleanup_attempted = true;
         if !self.is_owned() {
-            return Err(query_error(format!(
+            return Err(integrity(format!(
                 "refusing to remove diagnostic scratch {} because its ownership marker is missing or changed; inspect and remove that exact directory manually",
                 self.path.display()
             )));
         }
         std::fs::remove_dir_all(&self.path).map_err(|err| {
-            query_error(format!(
+            environment(format!(
                 "cannot fully remove diagnostic scratch {}: {err}; inspect that exact path because cleanup may be partial",
                 self.path.display()
             ))
@@ -466,7 +466,7 @@ fn scratch_token() -> String {
 }
 
 fn source_changed(expected: &str, source_after: &str, copied: &str) -> crate::MemoryError {
-    query_error(format!(
+    precondition(format!(
         "source changed while the diagnostic copy was captured: expected '{expected}', source ended as '{source_after}', copy is '{copied}'; no report is valid, retry once the store is quiescent"
     ))
 }
@@ -475,7 +475,7 @@ fn combined_error(
     primary: &crate::MemoryError,
     cleanup: &crate::MemoryError,
 ) -> crate::MemoryError {
-    query_error(format!(
+    environment(format!(
         "{primary}; additionally, scratch cleanup failed: {cleanup}"
     ))
 }
