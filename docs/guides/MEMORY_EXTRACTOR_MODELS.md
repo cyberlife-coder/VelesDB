@@ -97,6 +97,15 @@ Two things to keep straight before acting on it:
   footprint but changes the numerics, and therefore possibly the output. Enable
   it if you need the memory, but do not compare a run that used it with one that
   did not.
+- **Thinking models behind the `openai` backend — switch the thinking off.** A
+  reasoning model spends the generation budget on thinking tokens and can
+  truncate the JSON the extractor parses. Send
+  `VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'`
+  (a JSON object, sent as `chat_template_kwargs` in every chat request) to a
+  llama.cpp-compatible server. State it next to `num_ctx` whenever you compare
+  models, since it changes what the model produces. The `ollama` backend does
+  not read it; see [MCP server setup](MCP_SERVER_SETUP.md) for the exact
+  behaviour.
 
 ## Running this in your own language
 
