@@ -230,11 +230,12 @@ fn test_concurrent_first_starts_agree_on_one_id() {
 fn test_no_temporary_file_is_left_behind() {
     let tmp = TempDir::new().expect("tempdir");
     let id = load_or_create(tmp.path()).expect("id");
-    let names: Vec<_> = std::fs::read_dir(tmp.path())
+    let temporaries: Vec<_> = std::fs::read_dir(tmp.path())
         .expect("read_dir")
-        .map(|e| e.expect("entry").file_name())
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".tmp"))
         .collect();
-    assert_eq!(names, [std::ffi::OsString::from(FILE_NAME)], "{id}");
+    assert!(temporaries.is_empty(), "{id}: {temporaries:?}");
 }
 
 #[test]
@@ -341,81 +342,84 @@ fn test_concurrent_starts_over_a_corrupt_file_agree_on_one_id() {
             ids[0],
             "round {round}: the file holds the id everyone returned"
         );
-        let leftovers: Vec<_> = std::fs::read_dir(dir.as_ref())
+        let mut leftovers: Vec<_> = std::fs::read_dir(dir.as_ref())
             .expect("read_dir")
-            .map(|e| e.expect("entry").file_name())
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(
-            leftovers,
-            [std::ffi::OsString::from(FILE_NAME)],
-            "round {round}"
-        );
+        leftovers.sort();
+        assert_eq!(leftovers, [LOCK_NAME, FILE_NAME], "round {round}");
     }
 }
 
-/// A lock left by a process that died mid-replacement must not leave the
-/// directory unusable forever: after the patience runs out it is taken over.
+/// A file that merely looks like a lock must never turn into a loop: the
+/// old generation scheme unlinked every number up to the highest one it
+/// found, so `.install-id.lock.1000000` cost seconds and a larger one
+/// minutes.
 #[test]
-fn test_stale_lock_is_taken_over_after_the_patience() {
+fn test_stray_lock_like_files_cost_nothing() {
     let tmp = TempDir::new().expect("tempdir");
-    let path = tmp.path().join(FILE_NAME);
-    std::fs::write(&path, "").expect("corrupt id file");
-    std::fs::write(lock_path(tmp.path(), 1), "").expect("stale lock");
-    let temporary = tmp.path().join("temporary");
-    std::fs::write(&temporary, "0123456789abcdef0123456789abcdef\n").expect("temporary");
+    std::fs::write(tmp.path().join(FILE_NAME), "").expect("corrupt id file");
+    for name in [
+        ".install-id.lock.1000000",
+        ".install-id.lock.4000000000",
+        ".install-id.lock.4294967295",
+        ".install-id.lock.not-a-number",
+    ] {
+        std::fs::write(tmp.path().join(name), "").expect("stray file");
+    }
 
-    let id = replace_corrupt(
-        &temporary,
-        &path,
-        "0123456789abcdef0123456789abcdef",
-        Duration::from_millis(20),
+    let started = std::time::Instant::now();
+    let id = load_or_create(tmp.path());
+
+    assert!(id.is_some());
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "took {:?}",
+        started.elapsed()
     );
-
-    assert_eq!(id.as_deref(), Some("0123456789abcdef0123456789abcdef"));
-    assert_eq!(read_id(&path), id);
-    assert!(newest_lock(tmp.path()).is_none(), "every lock released");
 }
 
-/// Racers that all give up on the same leftover lock must still take it over
-/// one at a time: two holders would each rename their own id into place.
+/// A lock another process holds for longer than the wait must not hang the
+/// start: it gives up on this directory and the caller falls through to the
+/// next candidate, or to an id of its own.
 #[test]
-fn test_racing_takeovers_of_a_stale_lock_agree_on_one_id() {
-    use std::sync::{Arc, Barrier};
-    const ROUNDS: usize = 200;
-    const THREADS: usize = 4;
+fn test_a_held_lock_is_waited_for_then_given_up_on() {
     let tmp = TempDir::new().expect("tempdir");
-    for round in 0..ROUNDS {
-        let dir = tmp.path().join(format!("round-{round}"));
-        std::fs::create_dir(&dir).expect("mkdir");
-        std::fs::write(dir.join(FILE_NAME), "").expect("corrupt id file");
-        std::fs::write(lock_path(&dir, 1), "").expect("leftover lock");
-        let dir = Arc::new(dir);
-        let barrier = Arc::new(Barrier::new(THREADS));
-        let handles: Vec<_> = (0..THREADS)
-            .map(|n| {
-                let (dir, barrier) = (Arc::clone(&dir), Arc::clone(&barrier));
-                std::thread::spawn(move || {
-                    let id = format!("{n:032x}");
-                    let temporary = dir.join(format!("temporary-{n}"));
-                    std::fs::write(&temporary, format!("{id}\n")).expect("temporary");
-                    barrier.wait();
-                    replace_corrupt(
-                        &temporary,
-                        &dir.join(FILE_NAME),
-                        &id,
-                        Duration::from_millis(20),
-                    )
-                })
-            })
-            .collect();
-        let ids: Vec<Option<String>> = handles
-            .into_iter()
-            .map(|h| h.join().expect("thread"))
-            .collect();
-        assert!(ids.iter().all(Option::is_some), "round {round}: {ids:?}");
-        assert!(
-            ids.iter().all(|id| *id == ids[0]),
-            "round {round}: processes disagree: {ids:?}"
-        );
-    }
+    let holder = lock_exclusive(&tmp.path().join(LOCK_NAME), Duration::from_secs(1))
+        .expect("the test takes the lock first");
+
+    let started = std::time::Instant::now();
+    let id = load_or_create_within(tmp.path(), Duration::from_millis(100));
+
+    assert_eq!(
+        id, None,
+        "no id is written while someone else holds the lock"
+    );
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!tmp.path().join(FILE_NAME).exists());
+    drop(holder);
+    assert!(
+        load_or_create(tmp.path()).is_some(),
+        "free again once released"
+    );
+}
+
+/// A lock file left behind by a process that died is just a file: the
+/// kernel dropped its lock with the process.
+#[test]
+fn test_a_leftover_lock_file_is_harmless() {
+    let tmp = TempDir::new().expect("tempdir");
+    std::fs::write(tmp.path().join(LOCK_NAME), "").expect("leftover lock file");
+    std::fs::write(tmp.path().join(FILE_NAME), "damaged").expect("corrupt id file");
+
+    let started = std::time::Instant::now();
+    let id = load_or_create(tmp.path()).expect("an id");
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(read_id(&tmp.path().join(FILE_NAME)), Some(id));
 }

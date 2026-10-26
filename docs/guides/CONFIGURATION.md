@@ -684,7 +684,7 @@ See [Update check and telemetry](#update-check-and-telemetry) for exactly what i
 
 Nothing else is read or sent: no hostname, user name, machine identifier, data-directory path, collection name, query, or data. The request necessarily carries the sender's IP address, as every HTTP request does. To see the payload, run `velesdb-server` with debug logging for `velesdb_core` and look for the `Update check payload` line; `velesdb-cli` prints no log output, so point `endpoint` at a local listener to inspect what it sends.
 
-**The install id.** The first check generates a random 128-bit id and stores it in a file named `install-id`, in `velesdb/` under your per-user configuration directory (`$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows). If that directory is not writable, the server falls back to its data directory; if nothing is writable, the id lives for that process only. Only the SHA-256 of the id leaves your machine. Delete the file and the next run is a new install. The id is unrelated to the machine, the user, or the data directory, so it cannot be recomputed from any of them. An install that has opted out never creates the file.
+**The install id.** The first check generates a random 128-bit id and stores it in a file named `install-id`, in `velesdb/` under your per-user configuration directory (`$XDG_CONFIG_HOME` or `~/.config` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows). If that directory is not writable, the server falls back to its data directory; if nothing is writable, the id lives for that process only. Only the SHA-256 of the id leaves your machine. An empty `.install-id.lock` file sits next to it; it is only used to keep two processes that start together from each writing an id. Delete the id file and the next run is a new install. The id is unrelated to the machine, the user, or the data directory, so it cannot be recomputed from any of them. An install that has opted out never creates the file.
 
 **What the server stores** (the Cloudflare Worker behind `velesdb.com/api/check`, which keeps its data in a Cloudflare D1 database in the EU):
 
@@ -707,7 +707,10 @@ Nothing else is read or sent: no hostname, user name, machine identifier, data-d
 
 Blocking `velesdb.com` at the network level also works: the check fails silently, though the id file is still written locally.
 
-The environment variables win over the configuration file. A config file that exists but cannot be read, an `[update_check]` table that cannot be understood (a wrong type such as `timeout_ms = "fast"`), and a `--config` / `VELESDB_CONFIG` path that does not exist all disable the check, so a typo next to `enabled = false` never turns it back on; only a missing implicit `./velesdb.toml` gives the defaults. `velesdb-server` refuses to start on a file that is not valid TOML (for example `enabled = no`) and logs a warning for an unreadable `[update_check]` table; `velesdb-cli` has no log output and simply sends nothing, and its own config loader then reports the invalid file.
+The environment variables win over the configuration file. A config file that exists but cannot be read, an `[update_check]` table that cannot be understood (a wrong type such as `timeout_ms = "fast"`), and a `--config` / `VELESDB_CONFIG` path that does not exist all disable the check, so a typo next to `enabled = false` never turns it back on; only a missing implicit `./velesdb.toml` gives the defaults. What you see depends on the binary and the problem:
+
+- a file that is not valid TOML (for example `enabled = no`): `velesdb-server` refuses to start, and every `velesdb-cli` command that opens a database fails with the parse error;
+- an `[update_check]` table that cannot be understood in an otherwise valid file: `velesdb-server` logs a warning and sends nothing; `velesdb-cli` gives no signal at all, it simply sends nothing.
 
 ### Section [premium]
 

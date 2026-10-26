@@ -6,7 +6,7 @@
 
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -89,169 +89,81 @@ fn read_id(path: &Path) -> Option<String> {
     is_valid_id(id).then(|| id.to_string())
 }
 
-/// How many times, and how far apart, an id file that exists but does not
-/// read as an id is looked at again before it is called corrupt. Files this
-/// module creates are complete the moment they appear; the wait is for a
-/// writer that is not this module.
-const REREAD_ATTEMPTS: u32 = 3;
-const REREAD_DELAY: Duration = Duration::from_millis(5);
+/// How long a start waits for another process that is writing the id file,
+/// and how often it looks.
+const LOCK_WAIT: Duration = Duration::from_secs(2);
+const LOCK_POLL: Duration = Duration::from_millis(5);
 
-/// How long a racer waits for the holder of the lock before concluding the
-/// holder died while replacing a corrupt id file, and taking the lock over.
-const LOCK_PATIENCE: Duration = Duration::from_secs(30);
-
-/// Prefix of the lock files taken while a corrupt id file is replaced; the
-/// generation number follows (`.install-id.lock.1`).
-const LOCK_PREFIX: &str = ".install-id.lock.";
+/// The file locked while the id file is written. It stays on disk, empty:
+/// deleting a lock file other processes may be waiting on lets two of them
+/// hold "the" lock at once.
+const LOCK_NAME: &str = ".install-id.lock";
 
 /// The id stored in `dir`, generated and written there when absent or
 /// unreadable as an id. `None` when `dir` cannot hold it.
 ///
-/// The id is written to a private temporary file, flushed to disk, and
-/// hard-linked into place: the link fails if the file already exists, so of
-/// several first starts racing for one directory exactly one wins and the
-/// others read its id, and no reader ever sees a half-written file. A file
-/// that is still not an id after a short wait is corrupt; replacing it is
-/// done under a lock so that racers still agree on one id (see
-/// [`replace_corrupt`]). Needs a filesystem that supports hard links;
-/// elsewhere the directory counts as unusable and the next candidate is
-/// tried.
+/// A start that finds the file readable returns at once. Otherwise it takes
+/// an exclusive advisory lock on `.install-id.lock`, reads the file again,
+/// and only if it is still missing or damaged writes a complete, synced
+/// temporary file and renames it into place. The kernel drops the lock when
+/// its holder exits or dies, so there is nothing to time out, take over or
+/// clean up, and concurrent first starts all return the one id that ended up
+/// in the file. When the lock cannot be had (another process holds it for
+/// longer than [`LOCK_WAIT`], or the filesystem does not support locking)
+/// the directory counts as unusable and the next candidate is tried: at
+/// worst that start reports an id of its own for one run.
 pub(super) fn load_or_create(dir: &Path) -> Option<String> {
+    load_or_create_within(dir, LOCK_WAIT)
+}
+
+fn load_or_create_within(dir: &Path, wait: Duration) -> Option<String> {
     let path = dir.join(FILE_NAME);
     if let Some(id) = read_id(&path) {
         return Some(id);
     }
     std::fs::create_dir_all(dir).ok()?;
+    let _lock = lock_exclusive(&dir.join(LOCK_NAME), wait)?;
+    read_id(&path).or_else(|| write_new(dir, &path))
+}
+
+/// Opens `path` and takes an exclusive advisory lock on it, polling for at
+/// most `wait`. The lock lasts as long as the returned file is open.
+fn lock_exclusive(path: &Path, wait: Duration) -> Option<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .ok()?;
+    let started = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if started.elapsed() < wait => {
+                std::thread::sleep(LOCK_POLL);
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Writes a fresh id to a temporary file, flushes it to disk, and renames it
+/// over `path`, so a reader sees the old file or the complete new one.
+fn write_new(dir: &Path, path: &Path) -> Option<String> {
     let id = new_id();
     let temporary = dir.join(format!(".{FILE_NAME}.{id}.tmp"));
     write_synced(&temporary, &format!("{id}\n")).ok()?;
-    let stored = publish(&temporary, &path, &id);
-    let _ = std::fs::remove_file(&temporary);
-    stored
+    if std::fs::rename(&temporary, path).is_err() {
+        let _ = std::fs::remove_file(&temporary);
+        return None;
+    }
+    Some(id)
 }
 
 fn write_synced(path: &Path, content: &str) -> std::io::Result<()> {
     let mut file = std::fs::File::create(path)?;
     file.write_all(content.as_bytes())?;
     file.sync_all()
-}
-
-/// Puts the complete file `temporary` at `path` without replacing an id that
-/// is already there; returns the id `path` ends up holding.
-fn publish(temporary: &Path, path: &Path, id: &str) -> Option<String> {
-    match std::fs::hard_link(temporary, path) {
-        Ok(()) => Some(id.to_string()),
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-            for _ in 0..REREAD_ATTEMPTS {
-                if let Some(existing) = read_id(path) {
-                    return Some(existing);
-                }
-                std::thread::sleep(REREAD_DELAY);
-            }
-            replace_corrupt(temporary, path, id, LOCK_PATIENCE)
-        }
-        Err(_) => None,
-    }
-}
-
-/// Replaces an id file that stayed unreadable, under a lock: the holder
-/// re-checks the file, and only if it is still corrupt renames its complete
-/// temporary file over it. Everyone else waits for the holder and returns
-/// what the file then holds, so a crash that left a damaged file cannot make
-/// concurrent starts disagree.
-///
-/// Locks are numbered files created with `create_new`, and nothing is ever
-/// removed in order to take one over: a racer whose wait on generation `n`
-/// outlasts `patience` (its holder died) creates generation `n + 1`, and of
-/// several racers doing so exactly one succeeds. What is guaranteed is one
-/// holder per generation; two holders can coexist only if the holder of `n`
-/// is not dead but stalled for longer than `patience`.
-fn replace_corrupt(temporary: &Path, path: &Path, id: &str, patience: Duration) -> Option<String> {
-    let dir = path.parent()?;
-    for _ in 0..MAX_LOCK_ROUNDS {
-        if let Some(existing) = read_id(path) {
-            return Some(existing);
-        }
-        match newest_lock(dir) {
-            None => {
-                if try_lock(dir, 1) {
-                    return replace_as_holder(dir, temporary, path, id);
-                }
-            }
-            Some(generation) => {
-                if wait_for_holder(path, &lock_path(dir, generation), patience).is_some() {
-                    return read_id(path);
-                }
-                if lock_path(dir, generation).exists() && try_lock(dir, generation + 1) {
-                    return replace_as_holder(dir, temporary, path, id);
-                }
-            }
-        }
-    }
-    read_id(path)
-}
-
-/// How many times [`replace_corrupt`] looks at the lock and the file again
-/// before giving up.
-const MAX_LOCK_ROUNDS: u32 = 8;
-
-fn lock_path(dir: &Path, generation: u32) -> PathBuf {
-    dir.join(format!("{LOCK_PREFIX}{generation}"))
-}
-
-/// The highest lock generation present in `dir`.
-fn newest_lock(dir: &Path) -> Option<u32> {
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| {
-            let name = entry.ok()?.file_name();
-            name.to_str()?
-                .strip_prefix(LOCK_PREFIX)?
-                .parse::<u32>()
-                .ok()
-        })
-        .max()
-}
-
-/// Creates lock `generation`; `true` when this caller created it.
-fn try_lock(dir: &Path, generation: u32) -> bool {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(lock_path(dir, generation))
-        .is_ok()
-}
-
-/// The holder's work: re-check the file, rename the complete temporary file
-/// over it if it is still corrupt, then release every lock generation.
-fn replace_as_holder(dir: &Path, temporary: &Path, path: &Path, id: &str) -> Option<String> {
-    let stored = read_id(path).or_else(|| {
-        std::fs::rename(temporary, path).ok()?;
-        Some(id.to_string())
-    });
-    release_locks(dir);
-    stored
-}
-
-fn release_locks(dir: &Path) {
-    if let Some(newest) = newest_lock(dir) {
-        for generation in 1..=newest {
-            let _ = std::fs::remove_file(lock_path(dir, generation));
-        }
-    }
-}
-
-/// Waits until the lock holder has stored an id, the lock disappears, or
-/// `patience` runs out. `Some` when an id was stored.
-fn wait_for_holder(path: &Path, lock: &Path, patience: Duration) -> Option<String> {
-    let started = std::time::Instant::now();
-    while started.elapsed() < patience && lock.exists() {
-        if let Some(existing) = read_id(path) {
-            return Some(existing);
-        }
-        std::thread::sleep(REREAD_DELAY);
-    }
-    read_id(path)
 }
 
 /// The id of the first directory that can hold one, else a fresh id that
