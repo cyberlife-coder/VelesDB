@@ -24,7 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **server** now repeats the check every 24 hours while it runs; the CLI still
   checks once. `docs/guides/CONFIGURATION.md` lists every field sent, what the
   receiving worker stores, and every opt-out. Hashes change once, at upgrade:
-  an existing install is counted as new.
+  an existing install is counted as new. Two processes starting together agree
+  on one id: the file is written under an exclusive advisory lock on
+  `.install-id.lock` (`File::try_lock`, which the kernel releases when its holder
+  dies), and a start that cannot get the lock or whose filesystem has no locking
+  falls through to the next location, or to an id of its own for that run.
 
 - **`[update_check]` in `velesdb.toml` is now read.** `enabled = false`,
   `endpoint` and `timeout_ms` were documented but neither binary loaded the
