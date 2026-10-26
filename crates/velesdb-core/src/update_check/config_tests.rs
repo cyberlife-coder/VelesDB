@@ -147,16 +147,35 @@ fn test_toml_partial_table_keeps_other_defaults() {
 }
 
 #[test]
-fn test_toml_without_table_or_unparsable_document_gives_defaults() {
-    for document in [
-        "",
-        "[search]\ndefault_mode = \"fast\"\n",
-        "this is = = not toml",
-    ] {
+fn test_toml_without_the_table_gives_defaults() {
+    for document in ["", "[search]\ndefault_mode = \"fast\"\n"] {
         let config = UpdateCheckConfig::from_toml_str(document);
         assert!(config.enabled, "document {document:?}");
         assert_eq!(config.timeout_ms, 2000, "document {document:?}");
     }
+}
+
+/// A file that cannot be parsed may well have held `enabled = false`: the
+/// CLI spawns the check before anything else reads the file, so guessing
+/// "on" here would send what the user asked not to send.
+#[test]
+fn test_unparsable_document_fails_closed() {
+    for document in [
+        "this is = = not toml",
+        "[update_check]\nenabled = no\n",
+        "[update_check]\nenabled = False\n",
+        "[update_check]\nenabled = false\n[update_check]\nenabled = true\n",
+    ] {
+        let config = UpdateCheckConfig::from_toml_str(document);
+        assert!(!config.enabled, "document {document:?}");
+    }
+}
+
+#[test]
+fn test_unreadable_config_file_fails_closed() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    // A directory where a file is expected: it exists and cannot be read.
+    assert!(!UpdateCheckConfig::from_config_file(Some(dir.path())).enabled);
 }
 
 /// A table that exists but cannot be read must never switch the check on:

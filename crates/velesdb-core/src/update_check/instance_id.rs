@@ -6,7 +6,7 @@
 
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -96,16 +96,25 @@ fn read_id(path: &Path) -> Option<String> {
 const REREAD_ATTEMPTS: u32 = 3;
 const REREAD_DELAY: Duration = Duration::from_millis(5);
 
+/// How long a racer waits for the holder of the lock before concluding the
+/// holder died while replacing a corrupt id file, and taking the lock over.
+const LOCK_PATIENCE: Duration = Duration::from_secs(30);
+
+/// Name of the lock file taken while a corrupt id file is replaced.
+const LOCK_NAME: &str = ".install-id.lock";
+
 /// The id stored in `dir`, generated and written there when absent or
 /// unreadable as an id. `None` when `dir` cannot hold it.
 ///
-/// The id is written to a private temporary file and hard-linked into place:
-/// the link fails if the file already exists, so of several first starts
-/// racing for one directory exactly one wins and the others read its id, and
-/// no reader ever sees a half-written file. A file that is still not an id
-/// after a short wait is corrupt and is replaced, atomically, by rename.
-/// Needs a filesystem that supports hard links; elsewhere the directory
-/// counts as unusable and the next candidate is tried.
+/// The id is written to a private temporary file, flushed to disk, and
+/// hard-linked into place: the link fails if the file already exists, so of
+/// several first starts racing for one directory exactly one wins and the
+/// others read its id, and no reader ever sees a half-written file. A file
+/// that is still not an id after a short wait is corrupt; replacing it is
+/// done under a lock so that racers still agree on one id (see
+/// [`replace_corrupt`]). Needs a filesystem that supports hard links;
+/// elsewhere the directory counts as unusable and the next candidate is
+/// tried.
 pub(super) fn load_or_create(dir: &Path) -> Option<String> {
     let path = dir.join(FILE_NAME);
     if let Some(id) = read_id(&path) {
@@ -114,10 +123,16 @@ pub(super) fn load_or_create(dir: &Path) -> Option<String> {
     std::fs::create_dir_all(dir).ok()?;
     let id = new_id();
     let temporary = dir.join(format!(".{FILE_NAME}.{id}.tmp"));
-    std::fs::write(&temporary, format!("{id}\n")).ok()?;
+    write_synced(&temporary, &format!("{id}\n")).ok()?;
     let stored = publish(&temporary, &path, &id);
     let _ = std::fs::remove_file(&temporary);
     stored
+}
+
+fn write_synced(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
 }
 
 /// Puts the complete file `temporary` at `path` without replacing an id that
@@ -132,11 +147,57 @@ fn publish(temporary: &Path, path: &Path, id: &str) -> Option<String> {
                 }
                 std::thread::sleep(REREAD_DELAY);
             }
-            std::fs::rename(temporary, path).ok()?;
-            Some(id.to_string())
+            replace_corrupt(temporary, path, id, LOCK_PATIENCE)
         }
         Err(_) => None,
     }
+}
+
+/// Replaces an id file that stayed unreadable, under a lock: the holder
+/// re-checks the file, and only if it is still corrupt renames its complete
+/// temporary file over it. Everyone else waits for the holder and returns
+/// what the file then holds, so a crash that left a damaged file cannot make
+/// concurrent starts disagree. The lock is taken with `create_new`, so one
+/// racer holds it; one that outlasts `patience` is taken over.
+fn replace_corrupt(temporary: &Path, path: &Path, id: &str, patience: Duration) -> Option<String> {
+    let lock = path.with_file_name(LOCK_NAME);
+    for _ in 0..2 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+        {
+            Ok(_) => {
+                let stored = read_id(path).or_else(|| {
+                    std::fs::rename(temporary, path).ok()?;
+                    Some(id.to_string())
+                });
+                let _ = std::fs::remove_file(&lock);
+                return stored;
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                if let Some(existing) = wait_for_holder(path, &lock, patience) {
+                    return Some(existing);
+                }
+                let _ = std::fs::remove_file(&lock); // stale: its holder is gone
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// Waits until the lock holder has stored an id, the lock disappears, or
+/// `patience` runs out.
+fn wait_for_holder(path: &Path, lock: &Path, patience: Duration) -> Option<String> {
+    let started = std::time::Instant::now();
+    while started.elapsed() < patience && lock.exists() {
+        if let Some(existing) = read_id(path) {
+            return Some(existing);
+        }
+        std::thread::sleep(REREAD_DELAY);
+    }
+    read_id(path)
 }
 
 /// The id of the first directory that can hold one, else a fresh id that
@@ -177,18 +238,25 @@ pub(super) fn install_hash(data_dir: Option<&Path>) -> String {
 /// `data_dir` is only a fallback place to look for it. This function reads
 /// that id and **never creates it** — an install that opted out of the
 /// update check must not gain a file by calling it — so with no stored id it
-/// returns the hash of a fresh id that is not kept.
+/// returns the hash of a fresh random id that is not kept, so two calls
+/// then return two different values.
 #[deprecated(
     since = "6.1.0",
-    note = "the update check derives its install hash itself; this reads the stored id, never creates one, and is no longer machine- or data-dir-bound"
+    note = "the update check derives its install hash itself; this reads the stored id, never creates one (a fresh random hash on every call when none is stored), and is no longer machine- or data-dir-bound"
 )]
 #[must_use]
 pub fn compute_instance_hash(data_dir: &Path) -> String {
-    let dirs = candidate_dirs(
-        Platform::CURRENT,
-        |key| std::env::var_os(key),
-        Some(data_dir),
-    );
+    stored_install_hash(Platform::CURRENT, |key| std::env::var_os(key), data_dir)
+}
+
+/// [`compute_instance_hash`] with the platform and the environment given, so
+/// a test can point every candidate directory at a temporary one.
+fn stored_install_hash(
+    platform: Platform,
+    lookup: impl Fn(&str) -> Option<OsString>,
+    data_dir: &Path,
+) -> String {
+    let dirs = candidate_dirs(platform, lookup, Some(data_dir));
     hash_install_id(&peek_install_id(&dirs))
 }
 

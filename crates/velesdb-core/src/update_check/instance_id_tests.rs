@@ -255,17 +255,123 @@ fn test_peek_never_writes() {
     );
 }
 
+/// The deprecated helper looks in the per-user config directory first, so
+/// that is the directory to watch: every candidate is pointed into a
+/// temporary directory, and none of it may be created.
 #[test]
-#[allow(deprecated)] // Reason: pins the deprecated public helper until its removal
 fn test_deprecated_hash_helper_never_creates_the_id_file() {
     let tmp = TempDir::new().expect("tempdir");
-    let hash = compute_instance_hash(tmp.path());
-    assert_eq!(hash.len(), 64);
+    let home = tmp.path().to_string_lossy().into_owned();
+    let lookup = |key: &str| match key {
+        "HOME" | "XDG_CONFIG_HOME" | "APPDATA" => Some(OsString::from(&home)),
+        _ => None,
+    };
+    let data_dir = tmp.path().join("data");
+
+    let first = stored_install_hash(Platform::CURRENT, lookup, &data_dir);
+    let second = stored_install_hash(Platform::CURRENT, lookup, &data_dir);
+
+    assert_eq!(first.len(), 64);
+    assert_ne!(
+        first, second,
+        "no stored id: each call hashes a fresh random id"
+    );
     assert!(
         std::fs::read_dir(tmp.path())
             .expect("read_dir")
             .next()
             .is_none(),
-        "the helper must not write into the data directory"
+        "neither the config directory nor the data directory may be created"
     );
+}
+
+#[test]
+fn test_deprecated_hash_helper_reads_a_stored_id() {
+    let tmp = TempDir::new().expect("tempdir");
+    let home = tmp.path().to_string_lossy().into_owned();
+    let lookup = |key: &str| match key {
+        "HOME" | "XDG_CONFIG_HOME" | "APPDATA" => Some(OsString::from(&home)),
+        _ => None,
+    };
+    let data_dir = tmp.path().join("data");
+    let dirs = candidate_dirs(Platform::CURRENT, lookup, Some(&data_dir));
+    let stored = resolve_install_id(&dirs);
+
+    assert_eq!(
+        stored_install_hash(Platform::CURRENT, lookup, &data_dir),
+        hash_install_id(&stored)
+    );
+}
+
+/// The same race, started from a damaged file instead of a missing one (an
+/// empty `install-id` is what a crash used to leave): every racer sees the
+/// corruption, and they must still end with one id.
+#[test]
+fn test_concurrent_starts_over_a_corrupt_file_agree_on_one_id() {
+    use std::sync::{Arc, Barrier};
+    const ROUNDS: usize = 100;
+    const THREADS: usize = 4;
+    let tmp = TempDir::new().expect("tempdir");
+    for round in 0..ROUNDS {
+        let dir = tmp.path().join(format!("round-{round}"));
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::write(dir.join(FILE_NAME), "").expect("write corrupt file");
+        let dir = Arc::new(dir);
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let (dir, barrier) = (Arc::clone(&dir), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    load_or_create(&dir)
+                })
+            })
+            .collect();
+        let ids: Vec<Option<String>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread"))
+            .collect();
+        assert!(ids.iter().all(Option::is_some), "round {round}: {ids:?}");
+        assert!(
+            ids.iter().all(|id| *id == ids[0]),
+            "round {round}: processes disagree: {ids:?}"
+        );
+        assert_eq!(
+            read_id(&dir.join(FILE_NAME)),
+            ids[0],
+            "round {round}: the file holds the id everyone returned"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.as_ref())
+            .expect("read_dir")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            leftovers,
+            [std::ffi::OsString::from(FILE_NAME)],
+            "round {round}"
+        );
+    }
+}
+
+/// A lock left by a process that died mid-replacement must not leave the
+/// directory unusable forever: after the patience runs out it is taken over.
+#[test]
+fn test_stale_lock_is_taken_over_after_the_patience() {
+    let tmp = TempDir::new().expect("tempdir");
+    let path = tmp.path().join(FILE_NAME);
+    std::fs::write(&path, "").expect("corrupt id file");
+    std::fs::write(tmp.path().join(LOCK_NAME), "").expect("stale lock");
+    let temporary = tmp.path().join("temporary");
+    std::fs::write(&temporary, "0123456789abcdef0123456789abcdef\n").expect("temporary");
+
+    let id = replace_corrupt(
+        &temporary,
+        &path,
+        "0123456789abcdef0123456789abcdef",
+        Duration::from_millis(20),
+    );
+
+    assert_eq!(id.as_deref(), Some("0123456789abcdef0123456789abcdef"));
+    assert_eq!(read_id(&path), id);
+    assert!(!tmp.path().join(LOCK_NAME).exists(), "lock released");
 }

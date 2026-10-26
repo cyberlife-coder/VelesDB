@@ -53,43 +53,50 @@ impl UpdateCheckConfig {
     /// Reads the `[update_check]` table of the configuration file.
     ///
     /// `path` is the file passed with `--config`/`VELESDB_CONFIG`; without it
-    /// `./velesdb.toml` is read when it exists. A missing, unreadable or
-    /// malformed file, or a missing table, gives the defaults: the update
-    /// check never fails start-up, and the engine's own loader is the one
-    /// that reports a bad file.
+    /// `./velesdb.toml` is read when it exists. Only a file that is **missing**
+    /// (or a document without the table) gives the defaults. A file that
+    /// exists but cannot be read or parsed switches the check off and logs a
+    /// warning: the section exists to express an opt-out, the CLI spawns the
+    /// check before any other code reads the file, and a file that does not
+    /// parse may well have held `enabled = false`.
     #[must_use]
     pub fn from_config_file(path: Option<&Path>) -> Self {
         let default_path = Path::new("velesdb.toml");
         let path = path.unwrap_or(default_path);
-        std::fs::read_to_string(path)
-            .map(|document| Self::from_toml_str(&document))
-            .unwrap_or_default()
+        match std::fs::read_to_string(path) {
+            Ok(document) => Self::from_toml_str(&document),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(error) => Self::fail_closed(&error),
+        }
     }
 
-    /// Parses the `[update_check]` table out of a TOML document.
-    ///
-    /// A document without the table, or one that is not TOML at all, gives
-    /// the defaults. A table that exists but cannot be read (a wrong type
-    /// under any key) switches the check **off**: the one thing the section
-    /// exists to express is an opt-out, and silently replacing the table by
-    /// the defaults would turn `enabled = false` into `true`.
+    /// Parses the `[update_check]` table out of a TOML document: the defaults
+    /// when the table is absent, the check switched off when the document or
+    /// the table cannot be read.
     fn from_toml_str(document: &str) -> Self {
-        let Ok(toml::Value::Table(mut root)) = toml::from_str::<toml::Value>(document) else {
-            return Self::default();
+        let root = match toml::from_str::<toml::Table>(document) {
+            Ok(root) => root,
+            Err(error) => return Self::fail_closed(&error),
         };
-        let Some(table) = root.remove("update_check") else {
-            return Self::default();
-        };
-        table.try_into().unwrap_or_else(|error| {
-            tracing::warn!(
-                %error,
-                "[update_check] cannot be read, so the update check is disabled until it is fixed"
-            );
-            Self {
-                enabled: false,
-                ..Self::default()
-            }
-        })
+        match root.get("update_check") {
+            None => Self::default(),
+            Some(table) => table
+                .clone()
+                .try_into()
+                .unwrap_or_else(|error| Self::fail_closed(&error)),
+        }
+    }
+
+    /// The check switched off, with the reason in the log.
+    fn fail_closed(error: &dyn std::fmt::Display) -> Self {
+        tracing::warn!(
+            %error,
+            "the configuration file's [update_check] cannot be read, so the update check is disabled until it is fixed"
+        );
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
     }
 
     /// Check if update check is enabled.

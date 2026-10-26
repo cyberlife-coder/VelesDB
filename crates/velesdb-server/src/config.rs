@@ -521,7 +521,7 @@ pub fn parse_api_keys_env() -> Option<Vec<String>> {
 }
 
 // ============================================================================
-// Tests
+// Update check
 // ============================================================================
 
 /// What the server's update check runs with: the `[update_check]` section of
@@ -542,6 +542,10 @@ pub fn update_check_plan(
         velesdb_core::UpdateCheckContext::new("server", "core").with_data_dir(data_dir),
     )
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 #[path = "config_tests.rs"]

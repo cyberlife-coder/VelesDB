@@ -1238,9 +1238,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   section, so the config-file opt-out never worked; only the environment
   variables did. Both binaries now read it from `--config`/`VELESDB_CONFIG`,
   else `./velesdb.toml`, through `UpdateCheckConfig::from_config_file`. A
-  `[update_check]` table that exists but cannot be read (a wrong type under any
-  key) switches the check off and logs a warning, rather than falling back to
-  the defaults and ignoring an `enabled = false` next to it.
+  config file that exists but cannot be read or parsed (invalid TOML, a duplicate
+  table, a wrong type under any key) switches the check off, and the server logs
+  a warning, rather than falling back to the defaults and ignoring an
+  `enabled = false` that may be in it; only a missing file gives the defaults.
 
 - **BREAKING (Rust API, velesdb-migrate) — `Error::Yaml` now carries a `String`
   (RUSTSEC-2024-0449).** The variant was `Yaml(serde_yaml::Error)`; it is
@@ -1599,7 +1600,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and reports the entry `"library"`; `compute_instance_hash` now returns the
   hash of the stored install id (`data_dir` is only a fallback place to look
   for it) and never creates the id file, so calling it cannot write on behalf of
-  an install that opted out.
+  an install that opted out. With no stored id it returns the hash of a fresh
+  random id on every call, so two calls then differ.
 
 - **`StorageConfig::{data_dir, mmap_cache_mb, vector_alignment}` carry
   `#[deprecated]`.** They were deprecated in prose only (#2220): a Rust caller
