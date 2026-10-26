@@ -29,7 +29,7 @@ thiserror = { workspace = true }
 # session limiter's live-session map (src/http/session_limit.rs) — no
 # poisoning, unlike `std::sync::Mutex`, per the workspace's lock policy
 # (AGENTS.md).
-parking_lot = "0.12.3"
+parking_lot = "0.13.0"
 serde = { workspace = true }
 # The optional `velesdb-memory.toml` config file (see `src/config.rs`).
 # Native-only by `cfg` rather than by feature: a config file is not an opt-in

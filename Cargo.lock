@@ -1158,7 +1158,7 @@ dependencies = [
  "bitflags 2.11.0",
  "crossterm_winapi",
  "document-features",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rustix 1.1.4",
  "winapi",
 ]
@@ -1351,9 +1351,9 @@ dependencies = [
  "cfg-if",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "lock_api",
+ "lock_api 0.4.14",
  "once_cell",
- "parking_lot_core",
+ "parking_lot_core 0.9.12",
 ]
 
 [[package]]
@@ -2252,7 +2252,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hashbrown 0.16.1",
  "nonzero_ext",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "quanta",
  "rand 0.9.3",
@@ -3009,9 +3009,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libloading"
@@ -3080,6 +3080,15 @@ name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
+name = "lock_api"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
 dependencies = [
  "scopeguard",
 ]
@@ -3786,8 +3795,18 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
+dependencies = [
+ "lock_api 0.5.0",
+ "parking_lot_core 0.10.0",
 ]
 
 [[package]]
@@ -3799,6 +3818,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
+dependencies = [
+ "libc",
+ "redox_syscall 0.9.2",
  "smallvec",
  "windows-link",
 ]
@@ -5374,7 +5405,7 @@ dependencies = [
  "futures-util",
  "log",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serial_test_derive",
 ]
 
@@ -5569,7 +5600,7 @@ version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
- "lock_api",
+ "lock_api 0.4.14",
 ]
 
 [[package]]
@@ -5578,7 +5609,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
 dependencies = [
- "lock_api",
+ "lock_api 0.4.14",
 ]
 
 [[package]]
@@ -5641,7 +5672,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a18596f8c785a729f2819c0f6a7eae6ebeebdfffbfe4214ae6b087f690e31901"
 dependencies = [
  "new_debug_unreachable",
- "parking_lot",
+ "parking_lot 0.12.5",
  "phf_shared",
  "precomputed-hash",
 ]
@@ -5921,7 +5952,7 @@ name = "tauri-plugin-velesdb"
 version = "7.0.0"
 dependencies = [
  "dirs",
- "parking_lot",
+ "parking_lot 0.13.0",
  "serde",
  "serde_json",
  "tauri",
@@ -6177,7 +6208,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -6658,7 +6689,7 @@ dependencies = [
  "serde",
  "tempfile",
  "textwrap",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.1.8+spec-1.1.0",
  "uniffi_internal_macros",
  "uniffi_meta",
  "uniffi_pipeline",
@@ -6704,7 +6735,7 @@ dependencies = [
  "quote",
  "serde",
  "syn 2.0.117",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.1.8+spec-1.1.0",
  "uniffi_meta",
 ]
 
@@ -6927,7 +6958,7 @@ dependencies = [
  "libc",
  "loom",
  "memmap2",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pest",
  "pest_derive",
  "pollster",
@@ -6970,7 +7001,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pulldown-cmark",
  "rcgen",
  "reqwest",
@@ -7028,7 +7059,7 @@ dependencies = [
 name = "velesdb-mobile"
 version = "7.0.0"
 dependencies = [
- "parking_lot",
+ "parking_lot 0.13.0",
  "serde",
  "serde_json",
  "tempfile",
@@ -7054,7 +7085,7 @@ name = "velesdb-python"
 version = "7.0.0"
 dependencies = [
  "numpy",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pyo3",
  "pyo3-build-config",
  "serde_json",
@@ -7082,7 +7113,7 @@ dependencies = [
  "governor",
  "hyper",
  "hyper-util",
- "parking_lot",
+ "parking_lot 0.13.0",
  "reqwest",
  "rustls",
  "rustls-pemfile",
@@ -7478,7 +7509,7 @@ dependencies = [
  "js-sys",
  "log",
  "naga",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -7511,7 +7542,7 @@ dependencies = [
  "naga",
  "naga-types",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -7588,7 +7619,7 @@ dependencies = [
  "objc2-quartz-core",
  "once_cell",
  "ordered-float",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",

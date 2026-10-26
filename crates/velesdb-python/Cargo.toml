@@ -52,7 +52,7 @@ pyo3 = { version = "0.29", features = [
 ] }
 serde_json = { workspace = true }
 numpy = "0.29"
-parking_lot = "0.12"
+parking_lot = "0.13"
 # Hosts the background streaming-ingestion drain task (Collection.enable_streaming).
 # The Python process has no ambient Tokio runtime, so the bindings provide a
 # shared multi-thread runtime for the StreamIngester to spawn its drain loop on.
