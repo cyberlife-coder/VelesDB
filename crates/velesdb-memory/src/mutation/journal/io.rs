@@ -48,7 +48,7 @@ pub(super) fn write_compacted<F>(
     header: &JournalHeader,
     watermark: u64,
     fault: F,
-) -> Result<u64, MemoryError>
+) -> Result<(File, u64), MemoryError>
 where
     F: Fn(FaultPoint) -> Result<(), MemoryError>,
 {
@@ -57,7 +57,7 @@ where
     let header_bytes = write_header(&mut output, header)?;
     copy_records_after(&mut input, &mut output, watermark)?;
     sync_compacted(&mut output, &fault)?;
-    Ok(header_bytes)
+    Ok((output, header_bytes))
 }
 
 fn sync_compacted<F>(output: &mut File, fault: &F) -> Result<(), MemoryError>
