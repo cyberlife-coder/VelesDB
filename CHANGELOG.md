@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The update check measures installs and how long they stay in use, and no
+  longer reads anything about the machine.** The payload gains `entry`
+  (`"server"` or `"cli"`, declared by each binary) and `ci` (true when a CI
+  system's environment variables are present), next to `version`, `os`, `arch`,
+  `instance_hash` and `edition`. `instance_hash` is now the SHA-256 of a random
+  id generated once and kept in the per-user configuration directory
+  (`~/.config/velesdb/install-id`, `~/Library/Application Support/velesdb/`,
+  `%APPDATA%\velesdb\`), then in the server's data directory, then for the
+  process only. It used to hash the machine id and the data directory path,
+  which gave one machine many ids (the CLI passed `.`) and many machines one id
+  (a baked image); the `ioreg`/`reg`/`/etc/machine-id` reads and the `hostname`
+  and `whoami` dependencies of the `update-check` feature are gone. The
+  **server** now repeats the check every 24 hours while it runs; the CLI still
+  checks once. `docs/guides/CONFIGURATION.md` lists every field sent, what the
+  receiving worker stores, and every opt-out. Hashes change once, at upgrade:
+  an existing install is counted as new.
+
+- **`[update_check]` in `velesdb.toml` is now read.** `enabled = false`,
+  `endpoint` and `timeout_ms` were documented but neither binary loaded the
+  section, so the config-file opt-out never worked; only the environment
+  variables did. Both binaries now read it from `--config`/`VELESDB_CONFIG`,
+  else `./velesdb.toml`, through `UpdateCheckConfig::from_config_file`. A
+  config file that exists but cannot be read, or an `[update_check]` table that
+  cannot be understood (a wrong type under any key), switches the check off
+  instead of falling back to the defaults and ignoring an `enabled = false`
+  that may be in it; a `--config` / `VELESDB_CONFIG` path that does not exist
+  does the same, and only a missing implicit `./velesdb.toml` gives the
+  defaults. `velesdb-server` refuses to start on a file that is not valid TOML,
+  so it never reaches the check; the unreadable-table case is logged there as a
+  warning. `velesdb-cli` spawns the check before its own config loader runs, so
+  this is what keeps an invalid file from leaving the check on in that window.
+
+### Deprecated
+
+- **`velesdb_core::{check_for_updates, spawn_update_check, compute_instance_hash}`
+  carry `#[deprecated]`.** None of them can say which binary calls it, and the
+  hash no longer depends on the machine or the data directory. Use
+  `check_for_updates_with` and `spawn_update_check_with` (one check) or
+  `spawn_update_heartbeat` (start-up check, then every 24 hours), each taking an
+  `UpdateCheckContext::new(entry, edition)`. The deprecated pair keeps working
+  and reports the entry `"library"`; `compute_instance_hash` now returns the
+  hash of the stored install id (`data_dir` is only a fallback place to look
+  for it) and never creates the id file, so calling it cannot write on behalf of
+  an install that opted out. With no stored id it returns the hash of a fresh
+  random id on every call, so two calls then differ.
+
 ## [7.0.0] - 2026-10-25
 
 > **MAJOR release.** The breaking changes are listed in
@@ -1287,36 +1335,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NotFound`, matching every sibling accessor.
 
 ### Changed
-- **The update check measures installs and how long they stay in use, and no
-  longer reads anything about the machine.** The payload gains `entry`
-  (`"server"` or `"cli"`, declared by each binary) and `ci` (true when a CI
-  system's environment variables are present), next to `version`, `os`, `arch`,
-  `instance_hash` and `edition`. `instance_hash` is now the SHA-256 of a random
-  id generated once and kept in the per-user configuration directory
-  (`~/.config/velesdb/install-id`, `~/Library/Application Support/velesdb/`,
-  `%APPDATA%\velesdb\`), then in the server's data directory, then for the
-  process only. It used to hash the machine id and the data directory path,
-  which gave one machine many ids (the CLI passed `.`) and many machines one id
-  (a baked image); the `ioreg`/`reg`/`/etc/machine-id` reads and the `hostname`
-  and `whoami` dependencies of the `update-check` feature are gone. The
-  **server** now repeats the check every 24 hours while it runs; the CLI still
-  checks once. `docs/guides/CONFIGURATION.md` lists every field sent, what the
-  receiving worker stores, and every opt-out. Hashes change once, at upgrade:
-  an existing install is counted as new.
-- **`[update_check]` in `velesdb.toml` is now read.** `enabled = false`,
-  `endpoint` and `timeout_ms` were documented but neither binary loaded the
-  section, so the config-file opt-out never worked; only the environment
-  variables did. Both binaries now read it from `--config`/`VELESDB_CONFIG`,
-  else `./velesdb.toml`, through `UpdateCheckConfig::from_config_file`. A
-  config file that exists but cannot be read, or an `[update_check]` table that
-  cannot be understood (a wrong type under any key), switches the check off
-  instead of falling back to the defaults and ignoring an `enabled = false`
-  that may be in it; a `--config` / `VELESDB_CONFIG` path that does not exist
-  does the same, and only a missing implicit `./velesdb.toml` gives the
-  defaults. `velesdb-server` refuses to start on a file that is not valid TOML,
-  so it never reaches the check; the unreadable-table case is logged there as a
-  warning. `velesdb-cli` spawns the check before its own config loader runs, so
-  this is what keeps an invalid file from leaving the check on in that window.
 
 - **BREAKING (Rust API, velesdb-migrate) — `Error::Yaml` now carries a `String`
   (RUSTSEC-2024-0449).** The variant was `Yaml(serde_yaml::Error)`; it is
@@ -1665,18 +1683,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the v1 read path was written here rather than inherited.
 
 ### Deprecated
-
-- **`velesdb_core::{check_for_updates, spawn_update_check, compute_instance_hash}`
-  carry `#[deprecated]`.** None of them can say which binary calls it, and the
-  hash no longer depends on the machine or the data directory. Use
-  `check_for_updates_with` and `spawn_update_check_with` (one check) or
-  `spawn_update_heartbeat` (start-up check, then every 24 hours), each taking an
-  `UpdateCheckContext::new(entry, edition)`. The deprecated pair keeps working
-  and reports the entry `"library"`; `compute_instance_hash` now returns the
-  hash of the stored install id (`data_dir` is only a fallback place to look
-  for it) and never creates the id file, so calling it cannot write on behalf of
-  an install that opted out. With no stored id it returns the hash of a fresh
-  random id on every call, so two calls then differ.
 
 - **`StorageConfig::{data_dir, mmap_cache_mb, vector_alignment}` carry
   `#[deprecated]`.** They were deprecated in prose only (#2220): a Rust caller

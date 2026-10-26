@@ -295,7 +295,7 @@ pub(super) fn install_hash(data_dir: Option<&Path>) -> String {
 /// returns the hash of a fresh random id that is not kept, so two calls
 /// then return two different values.
 #[deprecated(
-    since = "6.1.0",
+    since = "7.1.0",
     note = "the update check derives its install hash itself; this reads the stored id, never creates one (a fresh random hash on every call when none is stored), and is no longer machine- or data-dir-bound"
 )]
 #[must_use]

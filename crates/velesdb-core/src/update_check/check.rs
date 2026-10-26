@@ -211,7 +211,7 @@ pub async fn check_for_updates_with(config: &UpdateCheckConfig, context: &Update
 /// Deprecated form of [`check_for_updates_with`]: it cannot say which binary
 /// it runs in, so the check is reported with the entry `"library"`.
 #[deprecated(
-    since = "6.1.0",
+    since = "7.1.0",
     note = "use `check_for_updates_with`, which reports the calling binary"
 )]
 pub async fn check_for_updates(config: &UpdateCheckConfig, data_dir: &Path, edition: &str) {
@@ -288,7 +288,7 @@ pub fn spawn_update_heartbeat(config: UpdateCheckConfig, context: UpdateCheckCon
 /// Deprecated form of [`spawn_update_check_with`]: it cannot say which
 /// binary it runs in, so the check is reported with the entry `"library"`.
 #[deprecated(
-    since = "6.1.0",
+    since = "7.1.0",
     note = "use `spawn_update_check_with`, which reports the calling binary"
 )]
 pub fn spawn_update_check(config: UpdateCheckConfig, data_dir: PathBuf, edition: String) {
