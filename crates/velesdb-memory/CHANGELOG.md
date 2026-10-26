@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Journal compaction no longer reopens the journal by name (#2407).**
+  `DirtyJournal::compact_through` closed its handle, renamed the compacted
+  staging file over the journal path, then reopened the path — a window in
+  which a hard link planted by someone with write access to the workspace
+  directory could become the file the next append wrote to. It now keeps the
+  staging handle across the rename (a handle follows its inode) and uses it as
+  the live one (2026-10-26).
+
 - **A controller-state or online-migration-job record that a hard-link backup
   left with `nlink > 1` now loads instead of being refused (#2426).**
   `mutation::controller::state::read_state_bytes` and

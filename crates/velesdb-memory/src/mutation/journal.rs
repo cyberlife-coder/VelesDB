@@ -153,17 +153,22 @@ impl DirtyJournal {
     fn compact_locked(&self, inner: &mut JournalInner, watermark: u64) -> Result<(), MemoryError> {
         let next_header = next_header(&inner.header, watermark)?;
         let staging = self.workspace.join(STAGING_FILE);
-        let header_bytes =
+        let (compacted, header_bytes) =
             write_compacted(&self.path, &staging, &next_header, watermark, |point| {
                 self.maybe_fail(point)
             })?;
-        self.publish_compaction(inner, &staging, next_header, header_bytes)
+        self.publish_compaction(inner, &staging, compacted, next_header, header_bytes)
     }
 
+    /// Publishes `compacted` over the journal path and keeps that same handle
+    /// as the live one. Reopening the path by name afterwards would be a
+    /// second lookup a hard link planted in the gap could win (#2407); a
+    /// handle to the inode `promote` renamed cannot be redirected.
     fn publish_compaction(
         &self,
         inner: &mut JournalInner,
         staging: &Path,
+        compacted: File,
         next_header: JournalHeader,
         header_bytes: u64,
     ) -> Result<(), MemoryError> {
@@ -176,10 +181,7 @@ impl DirtyJournal {
         durability_barrier(&self.workspace)
             .map_err(|err| capture(format!("cannot sync journal directory: {err}")))?;
         self.maybe_fail(FaultPoint::AfterDirectorySync)?;
-        let mut reopen_options = OpenOptions::new();
-        reopen_options.read(true).write(true);
-        let file = open_regular_file(&self.path, "journal", reopen_options)?;
-        inner.file = Some(file);
+        inner.file = Some(compacted);
         inner.header = next_header;
         inner.header_bytes = header_bytes;
         Ok(())
