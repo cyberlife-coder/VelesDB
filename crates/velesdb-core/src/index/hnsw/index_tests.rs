@@ -4538,9 +4538,16 @@ fn reordering_renumbers_the_slots_and_the_mappings_follow() {
          from: the renumbering is not a permutation of them",
         before.len()
     );
+    // `Perfect` scores every stored vector, so the nearest one to `id`'s own
+    // vector is `id` unless the mappings stopped following the slots. A graph
+    // search would also miss now and then on an index built by parallel
+    // inserts, and that is recall, not what this test is about.
     for id in [0, RENUMBERED / 2, RENUMBERED - 1] {
+        let hits = index
+            .search_with_quality(&wide_vector(id), 1, SearchQuality::Perfect)
+            .expect("test: exact search");
         assert_eq!(
-            index.search(&wide_vector(id), 1).first().map(|hit| hit.id),
+            hits.first().map(|hit| hit.id),
             Some(id),
             "after the renumbering {id}'s own vector no longer finds {id}: \
              the mappings did not follow the slots"
