@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes an input this repository passes. The diffs of the two dependency-bot
   pull requests (#2500, #2503) were taken as one maintainer commit.
 
+- **TypeScript SDK dev tooling: `typescript-eslint` 8.72.0 and `eslint` 10.13.0
+  (#2506).** `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser` and
+  `typescript-eslint` move from 8.71.2 to 8.72.0, `eslint` from 10.12.0 to
+  10.13.0, in `sdks/typescript/package-lock.json` only. Dev dependencies; the
+  published package and its behaviour are unchanged.
+
 ### Deprecated
 
 - **`velesdb_core::{check_for_updates, spawn_update_check, compute_instance_hash}`
