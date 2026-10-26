@@ -844,4 +844,4 @@ skill teaches an agent the full workflow — including when *not* to compress.
 
 ---
 
-Last updated: 2026-09-03 · Applies to: velesdb-memory 0.14.2
+Last updated: 2026-10-26 · Applies to: velesdb-memory 0.15.0
