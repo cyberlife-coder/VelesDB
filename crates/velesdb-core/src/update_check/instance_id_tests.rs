@@ -196,9 +196,11 @@ fn test_hash_is_64_lowercase_hex_and_versioned() {
 /// One round of [`race`]: its directory and what each thread returned.
 type Round = (PathBuf, Vec<Option<String>>);
 
-/// Starts four threads together on a fresh directory per round, after
-/// `prepare` has set the directory up, and returns what each of them got
-/// from `load_or_create` along with that directory, round by round.
+/// Starts four threads together on a fresh path per round, after `prepare`
+/// has run on it, and returns what each of them got from `load_or_create`
+/// along with that path, round by round. The path does not exist unless
+/// `prepare` creates it: a real first start finds no `velesdb/` directory,
+/// and the racing starts must create it together.
 fn race(rounds: usize, prepare: impl Fn(&Path)) -> (TempDir, Vec<Round>) {
     use std::sync::{Arc, Barrier};
     const THREADS: usize = 4;
@@ -207,7 +209,6 @@ fn race(rounds: usize, prepare: impl Fn(&Path)) -> (TempDir, Vec<Round>) {
     let results = (0..rounds)
         .map(|round| {
             let dir = base.join(format!("round-{round}"));
-            std::fs::create_dir(&dir).expect("mkdir");
             prepare(&dir);
             let (shared, barrier) = (Arc::new(dir.clone()), Arc::new(Barrier::new(THREADS)));
             let handles: Vec<_> = (0..THREADS)
@@ -336,6 +337,7 @@ fn test_deprecated_hash_helper_reads_a_stored_id() {
 #[test]
 fn test_concurrent_starts_over_a_corrupt_file_agree_on_one_id() {
     let (_tmp, rounds) = race(100, |dir| {
+        std::fs::create_dir(dir).expect("mkdir");
         std::fs::write(dir.join(FILE_NAME), "").expect("write corrupt file");
     });
     for (round, (dir, ids)) in rounds.iter().enumerate() {

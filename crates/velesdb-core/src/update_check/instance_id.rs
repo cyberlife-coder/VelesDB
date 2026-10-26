@@ -112,8 +112,10 @@ const LOCK_NAME: &str = ".install-id.lock";
 /// longer than [`LOCK_WAIT`], or the filesystem does not support locking)
 /// the directory counts as unusable and the next candidate is tried: at
 /// worst that start reports an id of its own for one run. On a filesystem
-/// without locking (a network home, some FUSE mounts) that is every start:
-/// each run then gets an ephemeral id and counts as a new install.
+/// without locking (a network home, some FUSE mounts) the next candidate is
+/// tried, and a start gets an ephemeral id, counting as a new install, only
+/// when no candidate directory supports locking (always the case for the CLI,
+/// which has no data directory, if its config directory cannot lock).
 pub(super) fn load_or_create(dir: &Path) -> Option<String> {
     load_or_create_within(dir, LOCK_WAIT)
 }

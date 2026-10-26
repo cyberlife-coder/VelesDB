@@ -28,9 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on one id: the file is written under an exclusive advisory lock on
   `.install-id.lock` (`File::try_lock`, which the kernel releases when its holder
   dies), and a start that cannot get the lock or whose filesystem has no locking
-  falls through to the next location, or to an id of its own for that run (on a
-  filesystem without locking, such as a network home, every run then counts as a
-  new install).
+  falls through to the next location, or to an id of its own for that run. On a
+  filesystem without locking, such as a network home, that last case happens
+  only when no location supports locking (always for `velesdb-cli`, which has no
+  data directory, if its config directory cannot lock), and each such run counts
+  as a new install.
 
 - **`[update_check]` in `velesdb.toml` is now read.** `enabled = false`,
   `endpoint` and `timeout_ms` were documented but neither binary loaded the
