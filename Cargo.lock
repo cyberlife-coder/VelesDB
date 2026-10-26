@@ -3538,7 +3538,7 @@ dependencies = [
  "num-integer",
  "num-traits",
  "pyo3",
- "pyo3-build-config",
+ "pyo3-build-config 0.29.2",
  "rustc-hash 2.1.3",
 ]
 
@@ -4267,7 +4267,7 @@ dependencies = [
  "libc",
  "once_cell",
  "portable-atomic",
- "pyo3-build-config",
+ "pyo3-build-config 0.29.2",
  "pyo3-ffi",
  "pyo3-macros",
 ]
@@ -4282,13 +4282,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyo3-build-config"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70130e2b6dd1ee589a8788026a429561ca5c40fa7a2fa7914c2282eddae24700"
+dependencies = [
+ "target-lexicon 0.13.5",
+]
+
+[[package]]
 name = "pyo3-ffi"
 version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327"
 dependencies = [
  "libc",
- "pyo3-build-config",
+ "pyo3-build-config 0.29.2",
 ]
 
 [[package]]
@@ -6658,7 +6667,7 @@ dependencies = [
  "serde",
  "tempfile",
  "textwrap",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.1.8+spec-1.1.0",
  "uniffi_internal_macros",
  "uniffi_meta",
  "uniffi_pipeline",
@@ -6704,7 +6713,7 @@ dependencies = [
  "quote",
  "serde",
  "syn 2.0.117",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.1.8+spec-1.1.0",
  "uniffi_meta",
 ]
 
@@ -7056,7 +7065,7 @@ dependencies = [
  "numpy",
  "parking_lot",
  "pyo3",
- "pyo3-build-config",
+ "pyo3-build-config 0.30.1",
  "serde_json",
  "tokio",
  "velesdb-core",
