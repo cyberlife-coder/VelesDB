@@ -4505,6 +4505,10 @@ const RENUMBERED: u64 = 1_200;
 /// Should `REORDER_THRESHOLD` ever rise past [`RENUMBERED`], the pass starts
 /// declining here, `moved` falls to zero, and this test says so rather than
 /// passing on a silent skip.
+///
+/// The lookups at the end are exact (`SearchQuality::Perfect`): the question
+/// is whether an id still resolves to its own vector, which a graph search
+/// answers only up to its recall.
 #[test]
 fn reordering_renumbers_the_slots_and_the_mappings_follow() {
     use std::collections::{BTreeMap, BTreeSet};
