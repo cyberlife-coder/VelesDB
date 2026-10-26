@@ -233,7 +233,11 @@ fn test_no_temporary_file_is_left_behind() {
     let temporaries: Vec<_> = std::fs::read_dir(tmp.path())
         .expect("read_dir")
         .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".tmp"))
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext == "tmp")
+        })
         .collect();
     assert!(temporaries.is_empty(), "{id}: {temporaries:?}");
 }
