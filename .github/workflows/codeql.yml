@@ -65,6 +65,9 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          # One generated-code false positive is kept out of the analysis; the
+          # file explains why and what it costs.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
