@@ -1604,6 +1604,11 @@
   ],
   "unwired": [
     {
+      "script": "scripts/memory_upgrade_guard.py",
+      "reason": "Not in `CI Success`, by design: it builds the last published velesdb-memory and this tree (two cold cargo builds) and replays upgrade, rollback and a kill mid-write. It runs as `Memory Upgrade Guard` on pull requests that touch the memory crate or core, and `release-memory.yml` makes `publish-crate` need it, so nothing reaches crates.io without it. scripts.tests.test_memory_upgrade_guard proves every decision around the builds: the base release, the retrieval floor, the step order and each refusal.",
+      "issue": null
+    },
+    {
       "script": "scripts/changelog-release-notes.py",
       "reason": "Release-time only, by design: release-memory.yml runs it to turn the crate CHANGELOG section into the GitHub Release body, and it refuses (exit 1) a real release whose version the CHANGELOG does not document. A pull request has no release to write notes for; scripts.tests.test_changelog_release_notes proves the refusals, the exact-version match, the terminal-section case and the workflow wiring.",
       "issue": null
