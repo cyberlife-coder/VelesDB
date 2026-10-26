@@ -60,6 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning. `velesdb-cli` spawns the check before its own config loader runs, so
   this is what keeps an invalid file from leaving the check on in that window.
 
+- **The pinned third-party actions move to their latest patch and minor
+  releases (#2507).** `actions/upload-artifact` 7.0.2, `actions/download-artifact`
+  8.0.2, `Swatinem/rust-cache` 2.9.3, `actions/setup-python` 7.1.0,
+  `taiki-e/install-action` 2.87.31, `github/codeql-action` 4.39.1,
+  `pypa/gh-action-pypi-publish` 1.14.3 (a security release) and
+  `dtolnay/rust-toolchain`, whose pin follows `master` to the commit that
+  passes its inputs to the shell through `env:` instead of expanding them into
+  the script. Every use stays pinned by full commit SHA; none of the releases
+  removes an input this repository passes. The diffs of the two dependency-bot
+  pull requests (#2500, #2503) were taken as one maintainer commit.
+
 - **TypeScript SDK dev tooling: `typescript-eslint` 8.72.0 and `eslint` 10.13.0
   (#2506).** `@typescript-eslint/eslint-plugin`, `@typescript-eslint/parser` and
   `typescript-eslint` move from 8.71.2 to 8.72.0, `eslint` from 10.12.0 to
