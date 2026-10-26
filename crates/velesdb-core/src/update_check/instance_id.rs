@@ -111,7 +111,9 @@ const LOCK_NAME: &str = ".install-id.lock";
 /// in the file. When the lock cannot be had (another process holds it for
 /// longer than [`LOCK_WAIT`], or the filesystem does not support locking)
 /// the directory counts as unusable and the next candidate is tried: at
-/// worst that start reports an id of its own for one run.
+/// worst that start reports an id of its own for one run. On a filesystem
+/// without locking (a network home, some FUSE mounts) that is every start:
+/// each run then gets an ephemeral id and counts as a new install.
 pub(super) fn load_or_create(dir: &Path) -> Option<String> {
     load_or_create_within(dir, LOCK_WAIT)
 }
@@ -126,6 +128,34 @@ fn load_or_create_within(dir: &Path, wait: Duration) -> Option<String> {
     read_id(&path).or_else(|| write_new(dir, &path))
 }
 
+/// What a start does after one attempt to take the lock.
+#[derive(Debug, PartialEq, Eq)]
+enum LockStep {
+    /// The lock is ours.
+    Acquired,
+    /// Held by someone else and still within the wait: sleep and try again.
+    Retry,
+    /// Held for longer than the wait, or the filesystem cannot lock at all:
+    /// this directory is unusable.
+    GiveUp,
+}
+
+/// Maps the outcome of [`std::fs::File::try_lock`] to the next step. A lock
+/// error that is not contention (`TryLockError::Error`, for instance a
+/// filesystem without locking) is never retried and never ignored: writing
+/// without the lock would let concurrent first starts disagree.
+fn lock_step(
+    attempt: &Result<(), std::fs::TryLockError>,
+    waited: Duration,
+    wait: Duration,
+) -> LockStep {
+    match attempt {
+        Ok(()) => LockStep::Acquired,
+        Err(std::fs::TryLockError::WouldBlock) if waited < wait => LockStep::Retry,
+        Err(_) => LockStep::GiveUp,
+    }
+}
+
 /// Opens `path` and takes an exclusive advisory lock on it, polling for at
 /// most `wait`. The lock lasts as long as the returned file is open.
 fn lock_exclusive(path: &Path, wait: Duration) -> Option<std::fs::File> {
@@ -137,12 +167,10 @@ fn lock_exclusive(path: &Path, wait: Duration) -> Option<std::fs::File> {
         .ok()?;
     let started = std::time::Instant::now();
     loop {
-        match file.try_lock() {
-            Ok(()) => return Some(file),
-            Err(std::fs::TryLockError::WouldBlock) if started.elapsed() < wait => {
-                std::thread::sleep(LOCK_POLL);
-            }
-            Err(_) => return None,
+        match lock_step(&file.try_lock(), started.elapsed(), wait) {
+            LockStep::Acquired => return Some(file),
+            LockStep::Retry => std::thread::sleep(LOCK_POLL),
+            LockStep::GiveUp => return None,
         }
     }
 }

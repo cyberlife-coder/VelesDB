@@ -193,36 +193,58 @@ fn test_hash_is_64_lowercase_hex_and_versioned() {
     );
 }
 
+/// One round of [`race`]: its directory and what each thread returned.
+type Round = (PathBuf, Vec<Option<String>>);
+
+/// Starts four threads together on a fresh directory per round, after
+/// `prepare` has set the directory up, and returns what each of them got
+/// from `load_or_create` along with that directory, round by round.
+fn race(rounds: usize, prepare: impl Fn(&Path)) -> (TempDir, Vec<Round>) {
+    use std::sync::{Arc, Barrier};
+    const THREADS: usize = 4;
+    let tmp = TempDir::new().expect("tempdir");
+    let base = tmp.path().to_path_buf();
+    let results = (0..rounds)
+        .map(|round| {
+            let dir = base.join(format!("round-{round}"));
+            std::fs::create_dir(&dir).expect("mkdir");
+            prepare(&dir);
+            let (shared, barrier) = (Arc::new(dir.clone()), Arc::new(Barrier::new(THREADS)));
+            let handles: Vec<_> = (0..THREADS)
+                .map(|_| {
+                    let (shared, barrier) = (Arc::clone(&shared), Arc::clone(&barrier));
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        load_or_create(&shared)
+                    })
+                })
+                .collect();
+            let ids = handles
+                .into_iter()
+                .map(|h| h.join().expect("thread"))
+                .collect();
+            (dir, ids)
+        })
+        .collect();
+    (tmp, results)
+}
+
+fn assert_one_id(round: usize, ids: &[Option<String>]) {
+    assert!(ids.iter().all(Option::is_some), "round {round}: {ids:?}");
+    assert!(
+        ids.iter().all(|id| *id == ids[0]),
+        "round {round}: processes disagree: {ids:?}"
+    );
+}
+
 /// Two processes starting for the first time must end with one id. The old
 /// implementation created the file, then wrote it: a racer saw the winner's
 /// empty file as corrupt, deleted it, and the two ended with different ids.
 #[test]
 fn test_concurrent_first_starts_agree_on_one_id() {
-    use std::sync::{Arc, Barrier};
-    const ROUNDS: usize = 300;
-    const THREADS: usize = 4;
-    let tmp = TempDir::new().expect("tempdir");
-    for round in 0..ROUNDS {
-        let dir = Arc::new(tmp.path().join(format!("round-{round}")));
-        let barrier = Arc::new(Barrier::new(THREADS));
-        let handles: Vec<_> = (0..THREADS)
-            .map(|_| {
-                let (dir, barrier) = (Arc::clone(&dir), Arc::clone(&barrier));
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    load_or_create(&dir)
-                })
-            })
-            .collect();
-        let ids: Vec<Option<String>> = handles
-            .into_iter()
-            .map(|h| h.join().expect("thread"))
-            .collect();
-        assert!(ids.iter().all(Option::is_some), "round {round}: {ids:?}");
-        assert!(
-            ids.iter().all(|id| *id == ids[0]),
-            "round {round}: processes disagree: {ids:?}"
-        );
+    let (_tmp, rounds) = race(300, |_| {});
+    for (round, (_, ids)) in rounds.iter().enumerate() {
+        assert_one_id(round, ids);
     }
 }
 
@@ -313,40 +335,17 @@ fn test_deprecated_hash_helper_reads_a_stored_id() {
 /// corruption, and they must still end with one id.
 #[test]
 fn test_concurrent_starts_over_a_corrupt_file_agree_on_one_id() {
-    use std::sync::{Arc, Barrier};
-    const ROUNDS: usize = 100;
-    const THREADS: usize = 4;
-    let tmp = TempDir::new().expect("tempdir");
-    for round in 0..ROUNDS {
-        let dir = tmp.path().join(format!("round-{round}"));
-        std::fs::create_dir(&dir).expect("mkdir");
+    let (_tmp, rounds) = race(100, |dir| {
         std::fs::write(dir.join(FILE_NAME), "").expect("write corrupt file");
-        let dir = Arc::new(dir);
-        let barrier = Arc::new(Barrier::new(THREADS));
-        let handles: Vec<_> = (0..THREADS)
-            .map(|_| {
-                let (dir, barrier) = (Arc::clone(&dir), Arc::clone(&barrier));
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    load_or_create(&dir)
-                })
-            })
-            .collect();
-        let ids: Vec<Option<String>> = handles
-            .into_iter()
-            .map(|h| h.join().expect("thread"))
-            .collect();
-        assert!(ids.iter().all(Option::is_some), "round {round}: {ids:?}");
-        assert!(
-            ids.iter().all(|id| *id == ids[0]),
-            "round {round}: processes disagree: {ids:?}"
-        );
+    });
+    for (round, (dir, ids)) in rounds.iter().enumerate() {
+        assert_one_id(round, ids);
         assert_eq!(
             read_id(&dir.join(FILE_NAME)),
             ids[0],
             "round {round}: the file holds the id everyone returned"
         );
-        let mut leftovers: Vec<_> = std::fs::read_dir(dir.as_ref())
+        let mut leftovers: Vec<_> = std::fs::read_dir(dir)
             .expect("read_dir")
             .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
             .collect();
@@ -426,4 +425,39 @@ fn test_a_leftover_lock_file_is_harmless() {
 
     assert!(started.elapsed() < Duration::from_secs(1));
     assert_eq!(read_id(&tmp.path().join(FILE_NAME)), Some(id));
+}
+
+#[test]
+fn test_lock_step_covers_every_outcome_of_try_lock() {
+    use std::fs::TryLockError;
+    let wait = Duration::from_millis(100);
+
+    assert_eq!(lock_step(&Ok(()), Duration::ZERO, wait), LockStep::Acquired);
+    assert_eq!(
+        lock_step(&Ok(()), wait * 10, wait),
+        LockStep::Acquired,
+        "late but ours"
+    );
+
+    assert_eq!(
+        lock_step(
+            &Err(TryLockError::WouldBlock),
+            Duration::from_millis(10),
+            wait
+        ),
+        LockStep::Retry,
+        "contention within the wait is retried"
+    );
+    assert_eq!(
+        lock_step(&Err(TryLockError::WouldBlock), wait, wait),
+        LockStep::GiveUp,
+        "contention past the wait is given up on"
+    );
+
+    let unsupported = || TryLockError::Error(std::io::Error::from(std::io::ErrorKind::Unsupported));
+    assert_eq!(
+        lock_step(&Err(unsupported()), Duration::ZERO, wait),
+        LockStep::GiveUp,
+        "a filesystem that cannot lock is given up on at once, never written without the lock"
+    );
 }
