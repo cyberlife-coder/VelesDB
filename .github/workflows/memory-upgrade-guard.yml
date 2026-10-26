@@ -7,7 +7,8 @@
 # unreadable fact fails the job. See scripts/memory_upgrade_guard.py.
 #
 # It runs on pull requests that touch the memory crate or the core it builds
-# against, and gates the crates.io publish in release-memory.yml.
+# against, and gates the crates.io publish in release-memory.yml. It is not in
+# `CI Success` because it needs two cold cargo builds (scripts/guards.json).
 name: Memory Upgrade Guard
 
 on:
