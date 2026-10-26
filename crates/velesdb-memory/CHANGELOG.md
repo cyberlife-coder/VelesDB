@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-26
+
+> **BREAKING for Rust callers (0.x minor).** `velesdb-memory` now builds
+> against `velesdb-core` 7.0.0, where 0.14.x built against 6.x. Two variants of
+> `MemoryError` carry core types: `Storage` holds a `velesdb_core::Error` and
+> `Memory` an `AgentMemoryError`. A crate that names or matches either has to
+> depend on `velesdb-core` 7 as well; the breaking changes of that major are in
+> [`docs/guides/MIGRATION_v7.0.0.md`](../../docs/guides/MIGRATION_v7.0.0.md).
+> On disk, core 7 writes `.vectors` v2, a derived file that a 6.x build
+> rebuilds from the primary data (`docs/STORAGE_FORMAT.md`), so a store opened
+> by this version can still be opened by 0.14.x.
+
 ### Added
 
 - **`OpenAiExtractor::with_chat_template_kwargs`** and the
