@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CodeQL no longer reports the `#[napi]` glue of `velesdb-node` as
+  `rust/access-invalid-pointer`.** The class `MemoryService` in
+  `crates/velesdb-node/src/lib.rs` is expanded by napi-derive, and the code it
+  generates was reported at the struct as a high-severity alert with no source
+  to fix: the crate forbids `unsafe` (`#![deny(unsafe_code)]`) and holds no
+  pointer code of its own. `.github/codeql/codeql-config.yml` now excludes that
+  one file from the analysis, with the reason beside it; the rule keeps running
+  over `velesdb-core` and every other crate. `test_codeql_config.py` fails if an
+  excluded file stops forbidding `unsafe`, so the exclusion cannot outlive its
+  justification.
+
 - **The update check measures installs and how long they stay in use, and no
   longer reads anything about the machine.** The payload gains `entry`
   (`"server"` or `"cli"`, declared by each binary) and `ci` (true when a CI

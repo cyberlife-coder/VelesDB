@@ -1,0 +1,24 @@
+# Configuration read by .github/workflows/codeql.yml (`config-file:` on init).
+#
+# The only entry is a file CodeQL does not analyze, and why.
+#
+# crates/velesdb-node/src/lib.rs declares the napi-rs class `MemoryService`
+# with `#[napi]`. The Rust extractor expands the macro, and CodeQL reports the
+# code napi-derive generates for the class at the struct as
+# `rust/access-invalid-pointer` ("Access of invalid pointer", high). The file
+# has no pointer code of its own: it carries `#![deny(unsafe_code)]`, so the
+# compiler already refuses any `unsafe` block a reviewer could be asked to
+# read. The alert cannot be fixed in the source, and dismissing it in the
+# Security tab failed ("something went wrong loading the alert history") on an
+# alert that existed only on a pull request ref.
+#
+# This is a whole-file exclusion, not a rule exclusion, on purpose: the rule
+# stays active over velesdb-core and the other crates, which hold the
+# repository's real `unsafe` (SIMD kernels, mmap, raw allocation) and are the
+# reason the rule is worth running. The cost is that no other query looks at
+# this file either. scripts/tests/test_codeql_config.py fails if an excluded
+# file stops carrying `#![deny(unsafe_code)]`, so the exclusion cannot outlive
+# its justification.
+name: VelesDB CodeQL configuration
+paths-ignore:
+  - crates/velesdb-node/src/lib.rs
