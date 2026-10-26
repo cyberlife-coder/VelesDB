@@ -740,7 +740,7 @@ Nothing else is read or sent: no hostname, user name, machine identifier, data-d
 
 Blocking `velesdb.com` at the network level also works: the check fails silently, though the id file is still written locally.
 
-The environment variables win over the configuration file. A `[update_check]` config file that exists but cannot be read or parsed (invalid TOML such as `enabled = no`, a duplicate `[update_check]` table, a wrong type such as `timeout_ms = "fast"`) disables the check, so a typo next to `enabled = false` never turns it back on; only a missing file gives the defaults. `velesdb-server` logs a warning; `velesdb-cli` has no log output and simply sends nothing.
+The environment variables win over the configuration file. A config file that exists but cannot be read, an `[update_check]` table that cannot be understood (a wrong type such as `timeout_ms = "fast"`), and a `--config` / `VELESDB_CONFIG` path that does not exist all disable the check, so a typo next to `enabled = false` never turns it back on; only a missing implicit `./velesdb.toml` gives the defaults. `velesdb-server` refuses to start on a file that is not valid TOML (for example `enabled = no`) and logs a warning for an unreadable `[update_check]` table; `velesdb-cli` has no log output and simply sends nothing, and its own config loader then reports the invalid file.
 
 ### Section [premium]
 

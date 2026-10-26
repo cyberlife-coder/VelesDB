@@ -360,7 +360,7 @@ fn test_stale_lock_is_taken_over_after_the_patience() {
     let tmp = TempDir::new().expect("tempdir");
     let path = tmp.path().join(FILE_NAME);
     std::fs::write(&path, "").expect("corrupt id file");
-    std::fs::write(tmp.path().join(LOCK_NAME), "").expect("stale lock");
+    std::fs::write(lock_path(tmp.path(), 1), "").expect("stale lock");
     let temporary = tmp.path().join("temporary");
     std::fs::write(&temporary, "0123456789abcdef0123456789abcdef\n").expect("temporary");
 
@@ -373,5 +373,49 @@ fn test_stale_lock_is_taken_over_after_the_patience() {
 
     assert_eq!(id.as_deref(), Some("0123456789abcdef0123456789abcdef"));
     assert_eq!(read_id(&path), id);
-    assert!(!tmp.path().join(LOCK_NAME).exists(), "lock released");
+    assert!(newest_lock(tmp.path()).is_none(), "every lock released");
+}
+
+/// Racers that all give up on the same leftover lock must still take it over
+/// one at a time: two holders would each rename their own id into place.
+#[test]
+fn test_racing_takeovers_of_a_stale_lock_agree_on_one_id() {
+    use std::sync::{Arc, Barrier};
+    const ROUNDS: usize = 200;
+    const THREADS: usize = 4;
+    let tmp = TempDir::new().expect("tempdir");
+    for round in 0..ROUNDS {
+        let dir = tmp.path().join(format!("round-{round}"));
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::write(dir.join(FILE_NAME), "").expect("corrupt id file");
+        std::fs::write(lock_path(&dir, 1), "").expect("leftover lock");
+        let dir = Arc::new(dir);
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|n| {
+                let (dir, barrier) = (Arc::clone(&dir), Arc::clone(&barrier));
+                std::thread::spawn(move || {
+                    let id = format!("{n:032x}");
+                    let temporary = dir.join(format!("temporary-{n}"));
+                    std::fs::write(&temporary, format!("{id}\n")).expect("temporary");
+                    barrier.wait();
+                    replace_corrupt(
+                        &temporary,
+                        &dir.join(FILE_NAME),
+                        &id,
+                        Duration::from_millis(20),
+                    )
+                })
+            })
+            .collect();
+        let ids: Vec<Option<String>> = handles
+            .into_iter()
+            .map(|h| h.join().expect("thread"))
+            .collect();
+        assert!(ids.iter().all(Option::is_some), "round {round}: {ids:?}");
+        assert!(
+            ids.iter().all(|id| *id == ids[0]),
+            "round {round}: processes disagree: {ids:?}"
+        );
+    }
 }

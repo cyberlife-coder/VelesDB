@@ -235,9 +235,20 @@ fn test_config_file_is_read_from_an_explicit_path() {
     assert!(!UpdateCheckConfig::from_config_file(Some(&path)).enabled);
 }
 
+/// Only the implicit `./velesdb.toml` may be absent; a path the user gave
+/// (`--config`, `VELESDB_CONFIG`) that does not exist is a mistake the CLI
+/// refuses elsewhere, and a mistake must not leave the check on.
 #[test]
-fn test_missing_config_file_gives_defaults() {
+fn test_missing_implicit_file_gives_defaults_but_a_missing_explicit_one_does_not() {
     let dir = tempfile::TempDir::new().expect("tempdir");
-    let config = UpdateCheckConfig::from_config_file(Some(&dir.path().join("absent.toml")));
-    assert!(config.enabled);
+    let absent = dir.path().join("absent.toml");
+
+    assert!(UpdateCheckConfig::load(&absent, false).enabled);
+    assert!(!UpdateCheckConfig::load(&absent, true).enabled);
+    assert!(!UpdateCheckConfig::from_config_file(Some(&absent)).enabled);
+}
+
+#[test]
+fn test_implicit_file_name_is_velesdb_toml() {
+    assert_eq!(DEFAULT_CONFIG_FILE, "velesdb.toml");
 }

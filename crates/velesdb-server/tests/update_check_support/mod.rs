@@ -98,14 +98,24 @@ fn is_complete(request: &[u8]) -> bool {
     body.len() >= wanted
 }
 
-/// Writes a `velesdb.toml` whose `[update_check]` points at `endpoint`, with
-/// `enabled` set when given.
-pub fn write_config(dir: &Path, enabled: Option<bool>, endpoint: &str) -> PathBuf {
+/// Writes `relative` (a path under `dir`, directories created) as a config
+/// file whose `[update_check]` points at `endpoint`, with `enabled` set when
+/// given.
+pub fn write_config(
+    dir: &Path,
+    relative: &str,
+    enabled: Option<bool>,
+    endpoint: &Endpoint,
+) -> PathBuf {
     let enabled_line = enabled.map_or_else(String::new, |value| format!("enabled = {value}\n"));
-    let path = dir.join("velesdb.toml");
+    let path = dir.join(relative);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("create config dir");
     std::fs::write(
         &path,
-        format!("[update_check]\n{enabled_line}endpoint = \"{endpoint}\"\n"),
+        format!(
+            "[update_check]\n{enabled_line}endpoint = \"{}\"\n",
+            endpoint.url()
+        ),
     )
     .expect("write config");
     path

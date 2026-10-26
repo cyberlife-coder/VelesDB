@@ -1238,10 +1238,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   section, so the config-file opt-out never worked; only the environment
   variables did. Both binaries now read it from `--config`/`VELESDB_CONFIG`,
   else `./velesdb.toml`, through `UpdateCheckConfig::from_config_file`. A
-  config file that exists but cannot be read or parsed (invalid TOML, a duplicate
-  table, a wrong type under any key) switches the check off, and the server logs
-  a warning, rather than falling back to the defaults and ignoring an
-  `enabled = false` that may be in it; only a missing file gives the defaults.
+  config file that exists but cannot be read, or an `[update_check]` table that
+  cannot be understood (a wrong type under any key), switches the check off
+  instead of falling back to the defaults and ignoring an `enabled = false`
+  that may be in it; a `--config` / `VELESDB_CONFIG` path that does not exist
+  does the same, and only a missing implicit `./velesdb.toml` gives the
+  defaults. `velesdb-server` refuses to start on a file that is not valid TOML,
+  so it never reaches the check; the unreadable-table case is logged there as a
+  warning. `velesdb-cli` spawns the check before its own config loader runs, so
+  this is what keeps an invalid file from leaving the check on in that window.
 
 - **BREAKING (Rust API, velesdb-migrate) — `Error::Yaml` now carries a `String`
   (RUSTSEC-2024-0449).** The variant was `Yaml(serde_yaml::Error)`; it is

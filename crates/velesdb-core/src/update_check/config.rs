@@ -5,6 +5,9 @@
 use serde::Deserialize;
 use std::path::Path;
 
+/// The config file read when none was given.
+const DEFAULT_CONFIG_FILE: &str = "velesdb.toml";
+
 /// Configuration for update check feature.
 ///
 /// # Priority Order
@@ -53,19 +56,28 @@ impl UpdateCheckConfig {
     /// Reads the `[update_check]` table of the configuration file.
     ///
     /// `path` is the file passed with `--config`/`VELESDB_CONFIG`; without it
-    /// `./velesdb.toml` is read when it exists. Only a file that is **missing**
-    /// (or a document without the table) gives the defaults. A file that
+    /// `./velesdb.toml` is read when it exists. Only a missing `./velesdb.toml`
+    /// (or a document without the table) gives the defaults; a `path` that was
+    /// given and does not exist does not. A file that
     /// exists but cannot be read or parsed switches the check off and logs a
     /// warning: the section exists to express an opt-out, the CLI spawns the
     /// check before any other code reads the file, and a file that does not
     /// parse may well have held `enabled = false`.
     #[must_use]
     pub fn from_config_file(path: Option<&Path>) -> Self {
-        let default_path = Path::new("velesdb.toml");
-        let path = path.unwrap_or(default_path);
+        match path {
+            Some(explicit) => Self::load(explicit, true),
+            None => Self::load(Path::new(DEFAULT_CONFIG_FILE), false),
+        }
+    }
+
+    /// Reads `path`. A missing file gives the defaults only when it is the
+    /// implicit one: an `explicit` path that does not exist is a mistake, and
+    /// like any unreadable file it switches the check off.
+    fn load(path: &Path, explicit: bool) -> Self {
         match std::fs::read_to_string(path) {
             Ok(document) => Self::from_toml_str(&document),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Self::default(),
             Err(error) => Self::fail_closed(&error),
         }
     }

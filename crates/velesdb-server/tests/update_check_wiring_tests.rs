@@ -1,8 +1,12 @@
 //! The server binary's update check, end to end: `main.rs` must hand the
 //! check the config file the server was started with and name itself
 //! `server`. A unit test of the plan function cannot catch a call site that
-//! stops using it, so these run the real binary against a loopback endpoint
+//! stops using it, so these run the real binary against loopback endpoints
 //! (`update_check_support`) and watch what it sends.
+//!
+//! The `--config` file lives in `conf/` while the working directory holds a
+//! different `velesdb.toml`, so a binary that read the wrong one would send
+//! to, or stay silent for, the wrong endpoint.
 
 #![cfg(all(feature = "persistence", feature = "update-check"))]
 
@@ -10,8 +14,7 @@ mod update_check_support;
 
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use update_check_support::{isolate, write_config, ChildGuard, Endpoint};
 
@@ -38,7 +41,8 @@ fn wait_for_port(port: u16, within: Duration) -> bool {
     false
 }
 
-fn start_server(home: &TempDir, args: &[&str], cwd: &std::path::Path) -> (ChildGuard, u16) {
+/// Starts the server in `home` (its working directory) with `args`.
+fn start_server(home: &TempDir, args: &[&str]) -> (ChildGuard, u16) {
     let port = free_port();
     let mut command = Command::new(env!("CARGO_BIN_EXE_velesdb-server"));
     isolate(&mut command, home.path());
@@ -46,7 +50,7 @@ fn start_server(home: &TempDir, args: &[&str], cwd: &std::path::Path) -> (ChildG
         .args(["--host", "127.0.0.1", "--port", &port.to_string()])
         .args(["--data-dir", &home.path().join("data").to_string_lossy()])
         .args(args)
-        .current_dir(cwd)
+        .current_dir(home.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -54,48 +58,63 @@ fn start_server(home: &TempDir, args: &[&str], cwd: &std::path::Path) -> (ChildG
     (child, port)
 }
 
+/// `--config conf/custom.toml` (enabled, endpoint `named`) next to a
+/// `./velesdb.toml` that points at `other` and opts out.
 #[test]
-fn test_server_reports_itself_with_the_config_file_endpoint() {
+fn test_server_uses_the_config_file_it_was_given_not_the_working_directory_one() {
+    let home = TempDir::new().expect("tempdir");
+    let (named, other) = (Endpoint::bind(), Endpoint::bind());
+    let config = write_config(home.path(), "conf/custom.toml", None, &named);
+    write_config(home.path(), "velesdb.toml", Some(false), &other);
+
+    let _server = start_server(&home, &["--config", &config.to_string_lossy()]);
+
+    let request = named
+        .receive(WAIT)
+        .expect("the server reports to the endpoint named in --config");
+    assert!(request.contains("\"entry\":\"server\""), "{request}");
+    assert!(request.contains("\"ci\":"), "{request}");
+    assert!(other.receive(Duration::from_millis(500)).is_none());
+}
+
+/// `--config` opts out while `./velesdb.toml` would send: silence proves the
+/// first one won.
+#[test]
+fn test_server_opt_out_in_the_given_config_file_beats_the_working_directory_file() {
     let home = TempDir::new().expect("tempdir");
     let endpoint = Endpoint::bind();
-    let config = write_config(home.path(), None, &endpoint.url());
+    let config = write_config(home.path(), "conf/off.toml", Some(false), &endpoint);
+    write_config(home.path(), "velesdb.toml", Some(true), &endpoint);
 
-    let _server = start_server(&home, &["--config", &config.to_string_lossy()], home.path());
+    let (_server, port) = start_server(&home, &["--config", &config.to_string_lossy()]);
+
+    assert!(wait_for_port(port, WAIT), "the server came up");
+    assert!(endpoint.receive(GRACE).is_none());
+}
+
+/// Without `--config` the check reads `./velesdb.toml`, and uses it.
+#[test]
+fn test_server_without_config_reads_velesdb_toml_from_its_working_directory() {
+    let home = TempDir::new().expect("tempdir");
+    let endpoint = Endpoint::bind();
+    write_config(home.path(), "velesdb.toml", None, &endpoint);
+
+    let _server = start_server(&home, &[]);
 
     let request = endpoint
         .receive(WAIT)
-        .expect("the server sends its start-up check to the configured endpoint");
+        .expect("the server reports to the endpoint named in ./velesdb.toml");
     assert!(request.contains("\"entry\":\"server\""), "{request}");
-    assert!(request.contains("\"ci\":"), "{request}");
 }
 
 #[test]
-fn test_server_sends_nothing_when_its_config_file_opts_out() {
+fn test_server_without_config_honours_an_opt_out_in_velesdb_toml() {
     let home = TempDir::new().expect("tempdir");
     let endpoint = Endpoint::bind();
-    let config = write_config(home.path(), Some(false), &endpoint.url());
+    write_config(home.path(), "velesdb.toml", Some(false), &endpoint);
 
-    let (_server, port) =
-        start_server(&home, &["--config", &config.to_string_lossy()], home.path());
-
-    assert!(wait_for_port(port, WAIT), "the server came up");
-    assert!(
-        endpoint.receive(GRACE).is_none(),
-        "enabled = false in the --config file must silence the check"
-    );
-}
-
-#[test]
-fn test_server_reads_velesdb_toml_from_its_working_directory() {
-    let home = TempDir::new().expect("tempdir");
-    let endpoint = Endpoint::bind();
-    write_config(home.path(), Some(false), &endpoint.url());
-
-    let (_server, port) = start_server(&home, &[], home.path());
+    let (_server, port) = start_server(&home, &[]);
 
     assert!(wait_for_port(port, WAIT), "the server came up");
-    assert!(
-        endpoint.receive(GRACE).is_none(),
-        "without --config, ./velesdb.toml is the file the check reads"
-    );
+    assert!(endpoint.receive(GRACE).is_none());
 }
