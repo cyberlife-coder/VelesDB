@@ -3,8 +3,8 @@
 # There is no mobile-specific config format: this is the same file the server
 # and the CLI read, minus the sections that belong to them. Only the ENGINE
 # sections below are considered — [search], [hnsw], [storage], [limits],
-# [quantization], [wal_batch]. A [server] or [logging] table sitting in the
-# same shared file is dropped, not rejected.
+# [quantization]. A [server] or [logging] table sitting in the same shared
+# file is dropped, not rejected.
 #
 # Two ways to load it:
 #
@@ -59,12 +59,6 @@ max_layers = 0
 # not yet applied by the engine (core issue #2087).
 storage_mode = "mmap"
 
-# mmap_cache_mb and vector_alignment are deprecated (core issue #2087): no
-# engine counterpart exists to wire them to. Parsed only for backward
-# compatibility with existing config files; tuning them has no effect.
-mmap_cache_mb = 256
-vector_alignment = 64
-
 [limits]
 # Guard rails. The mobile binding can also raise or lower the per-query limits
 # at runtime through `updateGuardrails(limits:)` with a MobileQueryLimits
@@ -87,11 +81,3 @@ rerank_enabled = true
 rerank_multiplier = 2
 auto_quantization = true
 auto_quantization_threshold = 10000
-
-[wal_batch]
-# RESERVED — parsed but not yet wired (issue #2078): enabling it changes
-# nothing today, and the engine logs a warning if you do. Batch writes
-# already pay one durability barrier per call.
-enabled = false
-commit_delay_us = 100
-max_batch_size = 128

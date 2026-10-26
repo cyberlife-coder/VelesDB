@@ -21,11 +21,23 @@ needs nobody: the release commit that raises the major cannot go green until the
 removal lands. The check is only as good as its list, and the list is short on
 purpose — an entry is added when a removal is deliberately postponed, which is
 rare and always a decision someone wrote down.
+
+# Why the list may be empty
+
+It is empty when nothing is owed, which is the normal state between promises.
+The two entries this guard was written for — `[wal_batch]` (#2174) and the three
+inert `[storage]` fields (#2087) — were removed ahead of 7.0.0, and an entry
+whose removal has landed is deleted rather than left to pass forever. What
+keeps the guard able to refuse while its own list is empty is `--registry`: the
+refusal vectors in `scripts/guards.json` hand it a list on disk, inside the
+tree they materialise, so the mechanism is proved without a fake promise in
+the real one.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -34,47 +46,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 #: Removals promised for a future major, and every site that must be gone.
 #:
-#: A removal that leaves one site behind is not done, which is why sites are
-#: listed individually rather than as a single symbol: `WalBatchConfig` also has
-#: a field, an `ENGINE_SECTIONS` entry and an `ENV_SECTIONS` entry, and #2174
-#: records that the last of those was missed by the issue text itself.
-DEFERRED_REMOVALS: "list[dict]" = [
-    {
-        "what": "WalBatchConfig and its [wal_batch] config table",
-        "remove_at_major": 7,
-        "issue": 2174,
-        "sites": [
-            ("crates/velesdb-core/src/config.rs", "pub struct WalBatchConfig"),
-            ("crates/velesdb-core/src/config.rs", "pub wal_batch:"),
-            ("crates/velesdb-core/src/config.rs", '"wal_batch"'),
-            # The compiler catches the Rust sites; it says nothing about a guide
-            # that keeps documenting a table users can no longer set.
-            ("docs/guides/CONFIGURATION.md", "wal_batch"),
-            ("docs/CORE_WIRING_DEBT.md", "wal_batch"),
-        ],
-        # `docs/guides/MIGRATION_v6.0.0.md` is deliberately NOT a site. It
-        # records that the table stayed in 6.0.0, which remains true after 7.0.0
-        # removes it — a historical note is not stale merely because history
-        # moved on, and forcing its deletion would falsify the record.
-    },
-    {
-        "what": "the three inert [storage] entries (#2087)",
-        "remove_at_major": 7,
-        "issue": 2087,
-        # The Rust fields, the guide that documents them, and the Python option
-        # mirror that still writes them through `to_core()`. The mirror is listed
-        # because the compiler will not fail when the core fields go: the Python
-        # surface is a separate struct that would keep advertising settings with
-        # nowhere left to land.
-        "sites": [
-            ("crates/velesdb-core/src/config.rs", "pub data_dir: String"),
-            ("crates/velesdb-core/src/config.rs", "pub mmap_cache_mb: usize"),
-            ("crates/velesdb-core/src/config.rs", "pub vector_alignment: usize"),
-            ("crates/velesdb-python/src/options.rs", "pub mmap_cache_mb:"),
-            ("docs/guides/CONFIGURATION.md", "mmap_cache_mb"),
-        ],
-    },
-]
+#: Each entry is `{"what", "remove_at_major", "issue", "sites"}`, with `sites` a
+#: list of `(repo-relative path, needle)` pairs. A removal that leaves one site
+#: behind is not done, which is why sites are listed individually rather than
+#: as a single symbol: `WalBatchConfig` also had a field, an `ENGINE_SECTIONS`
+#: entry and an `ENV_SECTIONS` entry, and #2174 records that the last of those
+#: was missed by the issue text itself. List the docs too: the compiler catches
+#: the Rust sites, and says nothing about a guide that keeps documenting a key
+#: users can no longer set.
+#:
+#: Empty since #2174 and #2087 landed. Add an entry together with a refusal
+#: vector for it in `scripts/guards.json`.
+DEFERRED_REMOVALS: "list[dict]" = []
 
 #: Anchored inside `[workspace.package]`, and matching any version string
 #: rather than a strict triple.
@@ -122,6 +105,8 @@ def validate_entry(entry: "dict") -> None:
     `run` uncaught, and Python exits 1 on an uncaught exception — a refusal this
     guard never made, wearing the exit code of one it did.
     """
+    if not isinstance(entry, dict):
+        raise RuntimeError(f"a deferred-removal entry must be an object, got {entry!r}")
     for key in ("what", "remove_at_major", "issue", "sites"):
         if key not in entry:
             raise RuntimeError(f"deferred-removal entry is missing {key!r}: {entry}")
@@ -134,6 +119,30 @@ def validate_entry(entry: "dict") -> None:
             f"deferred-removal entry {entry['what']!r} lists no sites, so it "
             "would pass the day its major arrives while the code is untouched"
         )
+    for site in entry["sites"]:
+        if (
+            not isinstance(site, (list, tuple))
+            or len(site) != 2
+            or not all(isinstance(part, str) for part in site)
+        ):
+            raise RuntimeError(
+                f"a site must be a (path, needle) pair of strings, got {site!r}"
+            )
+
+
+def load_registry(path: Path) -> "list[dict]":
+    """Reads a JSON list of entries shaped like `DEFERRED_REMOVALS`.
+
+    Raises `RuntimeError` on an unreadable file or a document that is not a
+    list, so a broken registry answers 2 like any other unreadable input.
+    """
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"cannot read deferred-removal registry {path}: {exc}") from exc
+    if not isinstance(entries, list):
+        raise RuntimeError(f"deferred-removal registry {path} must be a JSON list")
+    return entries
 
 
 def surviving_sites(root: Path, entry: "dict") -> "list[str]":
@@ -153,10 +162,13 @@ def surviving_sites(root: Path, entry: "dict") -> "list[str]":
     return survivors
 
 
-def run(root: Path) -> int:
+def run(root: Path, removals: "list[dict] | None" = None) -> int:
+    """Checks `removals` (by default `DEFERRED_REMOVALS`) against `root`."""
+    if removals is None:
+        removals = DEFERRED_REMOVALS
     major = workspace_major(root)
     overdue = []
-    for entry in DEFERRED_REMOVALS:
+    for entry in removals:
         validate_entry(entry)
         if major < entry["remove_at_major"]:
             continue
@@ -165,7 +177,7 @@ def run(root: Path) -> int:
             overdue.append((entry, survivors))
 
     if not overdue:
-        pending = [e for e in DEFERRED_REMOVALS if major < e["remove_at_major"]]
+        pending = [e for e in removals if major < e["remove_at_major"]]
         print(
             f"PASSED: workspace major is {major}; "
             f"{len(pending)} deferred removal(s) not yet due, none overdue."
@@ -197,11 +209,17 @@ def run(root: Path) -> int:
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=str(REPO_ROOT), help="repository root to scan")
+    parser.add_argument(
+        "--registry",
+        help="JSON list of entries checked instead of DEFERRED_REMOVALS "
+        "(how the refusal vectors exercise the guard while its own list is empty)",
+    )
     args = parser.parse_args(argv)
     # A tree this guard cannot read answers 2, never 1: a refusal it never made
     # must not look like a refusal.
     try:
-        return run(Path(args.root).resolve())
+        removals = load_registry(Path(args.registry)) if args.registry else None
+        return run(Path(args.root).resolve(), removals)
     except (OSError, RuntimeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

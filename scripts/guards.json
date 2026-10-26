@@ -1337,50 +1337,63 @@
       "self_test_required": true,
       "blind_spot": {
         "issue": null,
-        "summary": "The registry it reads is a list inside the guard, so deleting an entry disarms that entry. The refusal vectors below close it for the entry that exists: emptying DEFERRED_REMOVALS stops the v7 tree being refused and fails this file's own contract. A FUTURE entry added without its own vector would still be silently deletable, which is why an entry and a vector are added together."
+        "summary": "The registry it reads is a list inside the guard, so deleting an entry disarms that entry, and the list is legitimately empty between promises (#2174 and #2087 were kept). The refusal vectors therefore hand the guard a registry of their own through --registry, which proves the mechanism without a fake promise in the shipped list; what they cannot prove is that a postponed removal was ever written into that list, which stays a review decision."
       },
       "must_refuse": [
         {
           "vector": "the promised major arrived and the removal did not happen — the v6.0.0 miss of #2174",
           "files": {
             "Cargo.toml": "[workspace.package]\nversion = \"7.0.0\"\n",
-            "crates/velesdb-core/src/config.rs": "pub struct WalBatchConfig {}\n"
+            "crates/velesdb-core/src/config.rs": "pub struct WalBatchConfig {}\n",
+            "registry.json": "[{\"what\": \"WalBatchConfig and its [wal_batch] config table\", \"remove_at_major\": 7, \"issue\": 2174, \"sites\": [[\"crates/velesdb-core/src/config.rs\", \"pub struct WalBatchConfig\"]]}]\n"
           },
           "accepts": {
-            "Cargo.toml": "[workspace.package]\nversion = \"7.0.0\"\n"
+            "Cargo.toml": "[workspace.package]\nversion = \"7.0.0\"\n",
+            "registry.json": "[{\"what\": \"WalBatchConfig and its [wal_batch] config table\", \"remove_at_major\": 7, \"issue\": 2174, \"sites\": [[\"crates/velesdb-core/src/config.rs\", \"pub struct WalBatchConfig\"]]}]\n"
           },
           "argv": [
             "--root",
-            "{root}"
+            "{root}",
+            "--registry",
+            "{root}/registry.json"
           ]
         },
         {
           "vector": "a dependency table above [workspace.package] must not be read as the workspace version",
           "files": {
             "Cargo.toml": "[workspace]\n[workspace.dependencies.some-crate]\nversion = \"1.2.3\"\n[workspace.package]\nversion = \"7.0.0\"\n",
-            "crates/velesdb-core/src/config.rs": "pub struct WalBatchConfig {}\n"
+            "crates/velesdb-core/src/config.rs": "pub struct WalBatchConfig {}\n",
+            "registry.json": "[{\"what\": \"WalBatchConfig and its [wal_batch] config table\", \"remove_at_major\": 7, \"issue\": 2174, \"sites\": [[\"crates/velesdb-core/src/config.rs\", \"pub struct WalBatchConfig\"]]}]\n"
           },
           "accepts": {
             "Cargo.toml": "[workspace]\n[workspace.dependencies.some-crate]\nversion = \"1.2.3\"\n[workspace.package]\nversion = \"6.0.0\"\n",
-            "crates/velesdb-core/src/config.rs": "pub struct WalBatchConfig {}\n"
+            "crates/velesdb-core/src/config.rs": "pub struct WalBatchConfig {}\n",
+            "registry.json": "[{\"what\": \"WalBatchConfig and its [wal_batch] config table\", \"remove_at_major\": 7, \"issue\": 2174, \"sites\": [[\"crates/velesdb-core/src/config.rs\", \"pub struct WalBatchConfig\"]]}]\n"
           },
           "argv": [
             "--root",
-            "{root}"
+            "{root}",
+            "--registry",
+            "{root}/registry.json"
           ]
         },
         {
-          "vector": "the [storage] entries promised for 7.0.0 (#2087) survived the major",
+          "vector": "a field-level site survived the major — the shape of the [storage] promise of #2087",
           "files": {
             "Cargo.toml": "[workspace.package]\nversion = \"7.0.0\"\n",
-            "crates/velesdb-core/src/config.rs": "pub struct S { pub mmap_cache_mb: usize }\n"
+            "crates/velesdb-core/src/config.rs": "pub struct S { pub mmap_cache_mb: usize }\n",
+            "registry.json": "[{\"what\": \"the three inert [storage] entries\", \"remove_at_major\": 7, \"issue\": 2087, \"sites\": [[\"crates/velesdb-core/src/config.rs\", \"pub mmap_cache_mb: usize\"]]}]\n"
           },
           "accepts": {
-            "Cargo.toml": "[workspace.package]\nversion = \"7.0.0\"\n"
+            "Cargo.toml": "[workspace.package]\nversion = \"7.0.0\"\n",
+            "crates/velesdb-core/src/config.rs": "pub struct S {}\n",
+            "registry.json": "[{\"what\": \"the three inert [storage] entries\", \"remove_at_major\": 7, \"issue\": 2087, \"sites\": [[\"crates/velesdb-core/src/config.rs\", \"pub mmap_cache_mb: usize\"]]}]\n"
           },
           "argv": [
             "--root",
-            "{root}"
+            "{root}",
+            "--registry",
+            "{root}/registry.json"
           ]
         }
       ]

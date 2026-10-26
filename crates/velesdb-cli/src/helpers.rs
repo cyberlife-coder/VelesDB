@@ -72,7 +72,7 @@ pub fn open_database(path: &Path) -> Result<Database> {
 ///   as the error source.
 ///
 ///   Only the engine sections (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/
-///   `[quantization]`/`[wal_batch]`) are read; any other top-level table —
+///   `[quantization]`) are read; any other top-level table —
 ///   notably `[server]`/`[auth]`/`[tls]`/`[cors]`, which `--config` files
 ///   shared with `velesdb-server` legitimately use for its own HTTP
 ///   transport — is silently ignored rather than being parsed into

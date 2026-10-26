@@ -1,6 +1,6 @@
 # Tauri plugin — command, event and permission reference
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 6.0.0*
+*Last updated: 2026-07-25 · Applies to: velesdb-core 7.0.0*
 
 Complete surface of [`tauri-plugin-velesdb`](../../crates/tauri-plugin-velesdb/README.md):
 every IPC command, every event, the permission model, and the storage/metric
@@ -211,7 +211,7 @@ missing, unparsable or invalid file raises `Error::ConfigLoad`, never a silent
 fallback to defaults.
 
 Only the engine sections are read (`[search]`, `[hnsw]`, `[storage]`,
-`[limits]`, `[quantization]`, `[wal_batch]`); any other top-level table — for
+`[limits]`, `[quantization]`); any other top-level table — for
 instance a `[server]` section owned by `velesdb-server` in a shared config file
 — is ignored rather than rejected. `VELESDB_*` environment variables still
 layer on top of the filtered file. Field-by-field reference: the

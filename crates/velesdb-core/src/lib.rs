@@ -104,6 +104,7 @@ pub mod config;
 #[cfg(test)]
 mod config_env_tests;
 pub mod config_quantization;
+mod config_removed;
 #[cfg(test)]
 mod config_tests;
 mod config_validation;

@@ -28,6 +28,13 @@ python3 scripts/bump_version.py X.Y.Z
 # bump just created, leaving docs/openapi.{json,yaml} at the old version.
 UPDATE_OPENAPI_SNAPSHOT=1 cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --include-ignored --test-threads=1
 cargo build  # refresh Cargo.lock
+# Refresh the lockfiles of the standalone Rust projects that path-depend on the
+# workspace crates (fuzz/, the examples, the Tauri demo): `--locked` jobs such
+# as "Fuzz Targets Compile Check" fail on the release commit if one still pins
+# the previous version.
+for m in $(git ls-files '*Cargo.lock' | grep -v '^Cargo.lock$' | xargs -n1 dirname); do
+  cargo update --workspace --manifest-path "$m/Cargo.toml"
+done
 python3 scripts/check-version-sync.py  # must report: All versions match
 ```
 
@@ -130,6 +137,30 @@ workflow-là n'écoute que les tags de version finale.
 - crates.io : https://crates.io/crates/velesdb-core
 - PyPI : https://pypi.org/project/velesdb/
 - npm : https://www.npmjs.com/package/@wiscale/velesdb-wasm
+
+### 8. Merge `main` back into `develop`
+
+The release pull request is squashed, so `main` holds the release as one commit
+whose history is not `develop`'s even though the content is. Until `main` is an
+ancestor of `develop`, the next release repeats the same large conflict (38
+files for 7.0.0). Open a `chore/` pull request into `develop` and merge it with
+a **merge commit**, never a squash: a squash reproduces the tree but leaves
+`main` outside `develop`'s ancestry.
+
+When `develop` gained nothing that the release branch did not already contain
+(the release branch was last synced from it), the merge takes `main`'s tree
+wholesale:
+
+```bash
+git switch -c chore/merge-main-into-develop-X.Y.Z origin/develop
+git merge -s ours --no-commit origin/main
+git read-tree -u --reset origin/main
+git commit -m "chore: merge main into develop after the X.Y.Z release"
+test "$(git rev-parse HEAD^{tree})" = "$(git rev-parse origin/main^{tree})"
+```
+
+If `develop` did move after the last sync, merge `main` normally and resolve
+the conflicts instead: taking `main`'s tree would drop those commits.
 
 ## Pre-releases
 

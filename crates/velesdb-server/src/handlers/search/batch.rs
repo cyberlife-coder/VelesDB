@@ -226,14 +226,18 @@ fn parse_batch_filters(
     state: &AppState,
     req: &BatchSearchRequest,
 ) -> Result<Vec<Option<velesdb_core::Filter>>, axum::response::Response> {
-    let mut filters: Vec<Option<velesdb_core::Filter>> = Vec::with_capacity(req.searches.len());
-    for (idx, search) in req.searches.iter().enumerate() {
-        if let Some(filter_json) = &search.filter {
-            match serde_json::from_value(filter_json.clone()) {
-                Ok(filter) => filters.push(Some(filter)),
-                Err(e) => {
+    req.searches
+        .iter()
+        .enumerate()
+        .map(|(idx, search)| {
+            let Some(filter_json) = &search.filter else {
+                return Ok(None);
+            };
+            serde_json::from_value(filter_json.clone())
+                .map(Some)
+                .map_err(|e| {
                     state.onboarding_metrics.record_filter_parse_error();
-                    return Err((
+                    (
                         StatusCode::BAD_REQUEST,
                         Json(ErrorResponse {
                             error: format!(
@@ -242,14 +246,10 @@ fn parse_batch_filters(
                             code: None,
                         }),
                     )
-                        .into_response());
-                }
-            }
-        } else {
-            filters.push(None);
-        }
-    }
-    Ok(filters)
+                        .into_response()
+                })
+        })
+        .collect()
 }
 
 /// Convert batch search results into response objects, recording metrics for empty results.

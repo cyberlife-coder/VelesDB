@@ -4,7 +4,7 @@ This roadmap commits to **what we are building**, **why**, and **when**. It is u
 
 It is intentionally narrow. Items not on this roadmap are tracked as `roadmap` issues but **not committed** until they reach a milestone here.
 
-> **Last updated:** 2026-08-17 — covers v6.0.0 (current) — the workspace manifest version; the latest published packages are 5.0.0, `velesdb-memory` 0.12.0. The v1.x-era horizon framing is retired: everything those horizons shipped is compressed into the Delivered table, and the next commitments are derived from the repo's own registers ([`CHANGELOG.md`](CHANGELOG.md) [Unreleased], [`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md), [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md)).
+> **Last updated:** 2026-08-17 — covers v7.0.0 (current) — the workspace manifest version; the latest published packages are 5.0.0, `velesdb-memory` 0.12.0. The v1.x-era horizon framing is retired: everything those horizons shipped is compressed into the Delivered table, and the next commitments are derived from the repo's own registers ([`CHANGELOG.md`](CHANGELOG.md) [Unreleased], [`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md), [`docs/reference/KNOWN_LIMITATIONS.md`](docs/reference/KNOWN_LIMITATIONS.md)).
 
 ---
 
@@ -51,11 +51,10 @@ Two items, in priority order. Each has a register in the repository as its sourc
 
 ### P2 — Pay down the core wiring debt
 
-[`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md) registers subsystems that exist in `velesdb-core` but are not wired to the runtime; each entry names its target outcome. Three remain open:
+[`docs/CORE_WIRING_DEBT.md`](docs/CORE_WIRING_DEBT.md) registers subsystems that exist in `velesdb-core` but are not wired to the runtime; each entry names its target outcome. Two remain open (entry 1, `WalBatchConfig`, is closed: removed from the schema for 7.0.0, #2174):
 
 | Entry | State | Target outcome |
 |---|---|---|
-| 1 — `WalBatchConfig` / `WalBatcher` | code exists, **zero call sites**, now `pub(crate)` (off the public surface); TOML parsed and ignored | execute the declared premium transfer — or drop the dormant `enabled` field in the 5.0.0 break |
 | 3 — `deferred_indexing` / `async_index_builder` | runtime-wired; no TOML/create-time surface | the "Streaming Ingestion Configuration" RFC |
 | 4 — `SearchConfig` global defaults | hard-coded local defaults shadow the runtime config | consolidate the fallback chain through one helper |
 

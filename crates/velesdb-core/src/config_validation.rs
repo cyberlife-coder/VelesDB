@@ -36,9 +36,6 @@ const MAX_PERFECT_MODE_VECTORS_CAP: usize = 100_000_000;
 const QUERY_TIMEOUT_MS_CAP: u64 = 86_400_000;
 /// Hard ceiling for `hnsw.max_layers`. `0` means "auto".
 const MAX_LAYERS_CAP: usize = 64;
-/// Hard ceiling for `storage.mmap_cache_mb` (1 TiB). `0` is rejected: a
-/// zero-byte mmap cache is never a meaningful configuration.
-const MMAP_CACHE_MB_CAP: usize = 1_048_576;
 /// Hard ceiling for `server.workers`. `0` means "auto" (derive from CPU
 /// count), so it is allowed; any positive value is capped to a sane ceiling.
 const WORKERS_CAP: usize = 4_096;
@@ -84,8 +81,6 @@ impl VelesConfig {
         self.validate_server()?;
         self.validate_storage()?;
         self.validate_logging()?;
-        self.warn_inert_wal_batch();
-        self.warn_deprecated_storage_fields();
         self.warn_inert_engine_sections();
         self.warn_perfect_global_default();
         Ok(())
@@ -102,11 +97,9 @@ impl VelesConfig {
     /// applied at collection creation. Only `max_layers` remains inert — the
     /// layer count is drawn per node by the level generator and no engine
     /// path caps it — so the warning narrows to that single field. `[storage]`
-    /// is narrowed the same way: `data_dir`, `mmap_cache_mb` and
-    /// `vector_alignment` are deprecated rather than inert (no engine
-    /// counterpart to wire them to at all) and get their own warning in
-    /// [`Self::warn_deprecated_storage_fields`]; only `storage_mode` — still
-    /// awaiting its own decision — stays reported here. Reporting the field
+    /// is narrowed the same way: `storage_mode` is its only field since
+    /// 7.0.0 removed the three that had no engine counterpart (#2087), and
+    /// it stays reported here pending its own decision. Reporting the field
     /// rather than the section is the point: a warning that fires on knobs
     /// that now work, or that are leaving rather than pending, would train
     /// readers to ignore it.
@@ -195,68 +188,6 @@ impl VelesConfig {
             inert.push("[quantization]");
         }
         inert
-    }
-
-    /// `[wal_batch]` is parsed but not wired (issue #2078): warn — rather
-    /// than reject — when a config enables it, so existing files keep
-    /// loading while no deployment silently believes it has group commit.
-    fn warn_inert_wal_batch(&self) {
-        if self.wal_batch.enabled {
-            tracing::warn!(
-                "[wal_batch] enabled = true is parsed but not yet wired: no group \
-                 commit occurs and every write keeps its own durability barrier \
-                 (see issue #2078)"
-            );
-        }
-    }
-
-    /// `storage.data_dir`, `storage.mmap_cache_mb` and
-    /// `storage.vector_alignment` have no engine counterpart to wire them
-    /// to (issue #2087's per-knob verdict) — not merely unwired, *absent*.
-    /// Warn — rather than reject — when a config sets any of them away from
-    /// its default, so existing files keep loading while no deployment
-    /// silently believes these knobs do anything. This is only *half* the
-    /// same treatment [`Self::warn_inert_wal_batch`] gives `[wal_batch]`:
-    /// that field has no validation at all, while `validate_storage` keeps a
-    /// hard range check on `mmap_cache_mb` (`0` and values over the cap are
-    /// still rejected). That check predates this deprecation and is left as
-    /// is deliberately — loosening it is a second, separate behavior change
-    /// this PR does not make.
-    /// `storage.storage_mode` is a separate, still-open decision and stays
-    /// reported by [`Self::warn_inert_engine_sections`] instead.
-    fn warn_deprecated_storage_fields(&self) {
-        let deprecated = self.deprecated_storage_entries();
-        if !deprecated.is_empty() {
-            tracing::warn!(
-                deprecated = deprecated.join(", "),
-                "these [storage] entries are parsed but have no engine \
-                 counterpart and will be removed at the next major; see \
-                 issue #2087"
-            );
-        }
-    }
-
-    /// The `[storage]` fields with no engine counterpart, as they would be
-    /// named in a TOML file. Split out of
-    /// [`Self::warn_deprecated_storage_fields`] so the set is assertable —
-    /// mirrors [`Self::inert_engine_entries`].
-    #[allow(
-        deprecated,
-        reason = "validation still reads the deprecated fields: range check and deprecation warning"
-    )]
-    pub(crate) fn deprecated_storage_entries(&self) -> Vec<&'static str> {
-        let default = crate::config::server::StorageConfig::default();
-        let mut deprecated = Vec::new();
-        if self.storage.data_dir != default.data_dir {
-            deprecated.push("storage.data_dir");
-        }
-        if self.storage.mmap_cache_mb != default.mmap_cache_mb {
-            deprecated.push("storage.mmap_cache_mb");
-        }
-        if self.storage.vector_alignment != default.vector_alignment {
-            deprecated.push("storage.vector_alignment");
-        }
-        deprecated
     }
 
     fn validate_search(&self) -> Result<(), ConfigError> {
@@ -352,10 +283,6 @@ impl VelesConfig {
         range_check_upper("server.workers", self.server.workers, WORKERS_CAP)
     }
 
-    #[allow(
-        deprecated,
-        reason = "validation still reads the deprecated fields: range check and deprecation warning"
-    )]
     fn validate_storage(&self) -> Result<(), ConfigError> {
         let valid_modes = ["mmap", "memory"];
         if !valid_modes.contains(&self.storage.storage_mode.as_str()) {
@@ -367,14 +294,6 @@ impl VelesConfig {
                 ),
             });
         }
-
-        // A zero-byte mmap cache is meaningless; cap the upper bound so an
-        // out-of-range value cannot drive an absurd reservation.
-        range_check_capacity(
-            "storage.mmap_cache_mb",
-            self.storage.mmap_cache_mb,
-            MMAP_CACHE_MB_CAP,
-        )?;
         Ok(())
     }
 

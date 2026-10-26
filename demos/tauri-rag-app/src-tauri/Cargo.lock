@@ -4888,7 +4888,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "6.0.0"
+version = "7.0.0"
 dependencies = [
  "dirs 7.0.0",
  "parking_lot",
@@ -5625,7 +5625,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-core"
-version = "6.0.0"
+version = "7.0.0"
 dependencies = [
  "arc-swap",
  "atomicwrites",

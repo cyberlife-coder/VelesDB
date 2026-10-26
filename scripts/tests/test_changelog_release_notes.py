@@ -129,14 +129,19 @@ class ExtractorTests(unittest.TestCase):
         self.assertIn("### Fixed", result.stdout)
 
 
-def unreleased_headings(text: str) -> "list[str]":
-    """The `### …` headings inside `## [Unreleased]`, in order.
+def unreleased_block(text: str) -> str:
+    """The text between `## [Unreleased]` and the next `## [` heading.
 
-    Stops at the next `## ` so a released section's own headings never leak in.
+    Stops at the next `## ` so a released section's own text never leaks in.
     """
-    start = text.index("## [Unreleased]")
-    end = text.index("\n## [", start + 10)
-    return re.findall(r"^### (.+)$", text[start:end], re.M)
+    start = text.index("## [Unreleased]") + len("## [Unreleased]")
+    end = text.index("\n## [", start)
+    return text[start:end]
+
+
+def unreleased_headings(text: str) -> "list[str]":
+    """The `### …` headings inside `## [Unreleased]`, in order."""
+    return re.findall(r"^### (.+)$", unreleased_block(text), re.M)
 
 
 class UnreleasedSectionTests(unittest.TestCase):
@@ -179,12 +184,23 @@ class UnreleasedSectionTests(unittest.TestCase):
                 )
 
     def test_the_block_has_headings_at_all(self) -> None:
-        """Otherwise an empty parse would satisfy the test above forever."""
+        """Otherwise an empty parse would satisfy the test above forever.
+
+        A block with nothing in it is the state right after a release is cut,
+        not a parse failure: only text without a single heading is suspect.
+        """
+        if not unreleased_block(self.text).strip():
+            return
         self.assertTrue(
             unreleased_headings(self.text),
             "no `### …` heading found under `[Unreleased]` — the parser or the "
             "file changed shape, and the duplicate check is now vacuous",
         )
+
+    def test_a_freshly_cut_release_leaves_an_empty_block_the_parser_reads_as_empty(self) -> None:
+        cut = "# Changelog\n\n## [Unreleased]\n\n## [7.0.0] - 2026-10-25\n\n### Added\n- a\n"
+        self.assertEqual(unreleased_block(cut).strip(), "")
+        self.assertEqual(unreleased_headings(cut), [])
 
     def test_the_parser_sees_a_duplicate_when_there_is_one(self) -> None:
         synthetic = (

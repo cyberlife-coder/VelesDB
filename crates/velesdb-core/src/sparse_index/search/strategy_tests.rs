@@ -93,3 +93,92 @@ fn both_accumulators_agree_on_a_plain_positive_query() {
 
     assert_eq!(as_pairs(&dense), as_pairs(&hashmap));
 }
+
+// --- A caller-supplied `k` must not size the heap -------------------------
+//
+// `BinaryHeap::with_capacity(k + 1)` asked the allocator for `k + 1` entries up
+// front. The top-k a client sends reaches this module unclamped, so a huge `k`
+// aborted the process on allocation failure and `usize::MAX` overflowed the
+// `+ 1` (a panic in debug builds). The heap never holds more entries than there
+// are scored documents, so the reservation is an optimisation, not a need.
+
+mod unbounded_k {
+    use super::super::maxscore_search;
+    use super::{entry, linear_scan_dense, linear_scan_hashmap};
+    use crate::sparse_index::inverted_index::SparseInvertedIndex;
+    use crate::sparse_index::search::sparse_search;
+    use crate::sparse_index::types::SparseVector;
+
+    const HUGE_K: [usize; 3] = [1 << 40, usize::MAX - 1, usize::MAX];
+
+    fn two_doc_postings() -> Vec<(f32, Vec<crate::sparse_index::types::PostingEntry>)> {
+        vec![(1.0, vec![entry(0, 1.0), entry(1, 2.0)])]
+    }
+
+    fn two_doc_index() -> (SparseInvertedIndex, SparseVector) {
+        let index = SparseInvertedIndex::new();
+        index.insert(0, &SparseVector::new(vec![(1, 1.0)]));
+        index.insert(1, &SparseVector::new(vec![(1, 2.0)]));
+        (index, SparseVector::new(vec![(1, 1.0)]))
+    }
+
+    #[test]
+    fn the_dense_accumulator_returns_every_document_for_a_huge_k() {
+        for k in HUGE_K {
+            let ids: Vec<u64> = linear_scan_dense(k, 1, &two_doc_postings())
+                .iter()
+                .map(|r| r.doc_id)
+                .collect();
+            assert_eq!(ids, vec![1, 0], "k = {k}");
+        }
+    }
+
+    #[test]
+    fn the_hash_map_accumulator_returns_every_document_for_a_huge_k() {
+        for k in HUGE_K {
+            let ids: Vec<u64> = linear_scan_hashmap(k, &two_doc_postings())
+                .iter()
+                .map(|r| r.doc_id)
+                .collect();
+            assert_eq!(ids, vec![1, 0], "k = {k}");
+        }
+    }
+
+    #[test]
+    fn maxscore_returns_every_document_for_a_huge_k() {
+        let (index, query) = two_doc_index();
+        for k in HUGE_K {
+            let ids: Vec<u64> = maxscore_search(&index, &query, k)
+                .iter()
+                .map(|r| r.doc_id)
+                .collect();
+            assert_eq!(ids, vec![1, 0], "k = {k}");
+        }
+    }
+
+    #[test]
+    fn the_filtered_router_survives_a_k_whose_oversampling_would_overflow() {
+        use crate::sparse_index::search::sparse_search_filtered;
+        let (index, query) = two_doc_index();
+        let keep_all = |_: u64| true;
+        for k in HUGE_K {
+            let ids: Vec<u64> = sparse_search_filtered(&index, &query, k, Some(&keep_all))
+                .iter()
+                .map(|r| r.doc_id)
+                .collect();
+            assert_eq!(ids, vec![1, 0], "k = {k}");
+        }
+    }
+
+    #[test]
+    fn the_router_returns_every_document_for_a_huge_k() {
+        let (index, query) = two_doc_index();
+        for k in HUGE_K {
+            let ids: Vec<u64> = sparse_search(&index, &query, k)
+                .iter()
+                .map(|r| r.doc_id)
+                .collect();
+            assert_eq!(ids, vec![1, 0], "k = {k}");
+        }
+    }
+}

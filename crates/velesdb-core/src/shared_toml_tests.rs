@@ -66,18 +66,14 @@ fn test_from_toml_engine_only_ignores_shell_owned_server_section() {
 fn test_load_from_path_engine_only_still_applies_non_server_engine_sections() {
     let dir = tempfile::tempdir().expect("test: temp dir");
     let path = dir.path().join("velesdb.toml");
-    std::fs::write(
-        &path,
-        "[hnsw]\nm = 24\n\n[wal_batch]\nenabled = true\ncommit_delay_us = 250\n",
-    )
-    .expect("test: write toml");
+    std::fs::write(&path, "[hnsw]\nm = 24\n\n[limits]\nmax_collections = 9\n")
+        .expect("test: write toml");
 
     let config = VelesConfig::load_from_path_engine_only(&path)
-        .expect("engine-only loader must still apply hnsw/wal_batch");
+        .expect("engine-only loader must still apply hnsw/limits");
 
     assert_eq!(config.hnsw.m, Some(24));
-    assert!(config.wal_batch.enabled);
-    assert_eq!(config.wal_batch.commit_delay_us, 250);
+    assert_eq!(config.limits.max_collections, 9);
 }
 
 #[test]

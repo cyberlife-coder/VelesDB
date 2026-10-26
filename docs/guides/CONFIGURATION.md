@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 6.0.0 — Last updated: 2026-09-07*
+*Version 7.0.0 — Last updated: 2026-09-07*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -69,19 +69,18 @@ To point at a file anywhere else, pass it explicitly:
 > `search.query_timeout_ms`, `[quantization]`, `hnsw.max_layers` and
 > `storage.storage_mode` — each still pending its own decision. Setting any of
 > these away from its default logs a warning at load, naming exactly what is
-> inert. Three more
-> `[storage]` fields — `data_dir`, `mmap_cache_mb`, `vector_alignment` — are
-> not pending anything: no engine counterpart exists to wire them to, so
-> they are **deprecated** instead (their own warning, same treatment as
-> `[wal_batch]` below) and targeted for removal at the next major.
-> `[wal_batch]` is parsed and ignored (issue #2078) — its group-commit front
-> was deleted as unwired, and the batch write APIs already pay one
-> durability barrier per call. Query-time overrides (`WITH (ef_search = N)`)
-> are a separate, working mechanism, as are per-collection creation options.
+> inert. Query-time overrides (`WITH (ef_search = N)`) are a separate,
+> working mechanism, as are per-collection creation options.
+>
+> **Removed in 7.0.0.** One table and three `[storage]` fields that 6.x
+> parsed and never applied are gone (issues #2174 and #2087; the CHANGELOG's
+> 7.0.0 `Removed` entry names each one and its migration). A file or a
+> `VELESDB_*` variable that still sets one keeps loading: the key is ignored,
+> whatever its value, and the loader names it in a single warning.
 
 Both binaries can load the **same** file, but only the *engine* sections —
-`[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`,
-`[wal_batch]` — reach `VelesConfig` and, via
+`[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]` — reach
+`VelesConfig` and, via
 [`Database::open_with_config`](../../crates/velesdb-core/src/database/mod.rs),
 the running engine. Reaching `VelesConfig` is not the same as changing
 behaviour: see the note above for which of them the engine actually acts
@@ -139,9 +138,6 @@ velesdb collection create ./my_database docs --dimension 768 --config ./velesdb.
 # velesdb.toml - Configuration minimale
 [search]
 default_mode = "balanced"
-
-[storage]
-data_dir = "./data"
 ```
 
 ### Full Example
@@ -149,7 +145,7 @@ data_dir = "./data"
 ```toml
 # =============================================================================
 # VelesDB Configuration File
-# Version: 6.0.0
+# Version: 7.0.0
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -205,11 +201,6 @@ max_layers = 0
 # Gestion du stockage des données
 # -----------------------------------------------------------------------------
 [storage]
-# Répertoire de données principal
-# Default: "./velesdb_data"
-# Deprecated (#2087) — parsed but has no effect; targeted for removal at 7.0.0.
-data_dir = "./velesdb_data"
-
 # Mode de stockage des vecteurs
 # Valeurs: "mmap" | "memory"
 # - mmap: Fichiers mappés en mémoire (recommandé pour grands datasets)
@@ -217,16 +208,6 @@ data_dir = "./velesdb_data"
 # Default: "mmap"
 # Reserved (#2087) — parsed but not yet applied by the engine.
 storage_mode = "mmap"
-
-# Taille maximale du cache mmap en mégaoctets
-# Default: 1024 (1 GB)
-# Deprecated (#2087) — parsed but has no effect; targeted for removal at 7.0.0.
-mmap_cache_mb = 1024
-
-# Alignement mémoire pour les vecteurs (octets)
-# Default: 64
-# Deprecated (#2087) — parsed but has no effect; targeted for removal at 7.0.0.
-vector_alignment = 64
 
 # -----------------------------------------------------------------------------
 # LIMITS CONFIGURATION
@@ -424,17 +405,13 @@ name kept as they are:
 | `VELESDB_HNSW_EF_CONSTRUCTION` | `hnsw.ef_construction` | `600` |
 | `VELESDB_LIMITS_MAX_COLLECTIONS` | `limits.max_collections` | `50` |
 | `VELESDB_LIMITS_MAX_DIMENSIONS` | `limits.max_dimensions` | `4096` |
-| `VELESDB_STORAGE_DATA_DIR` | `storage.data_dir` | `/var/lib/velesdb` |
 | `VELESDB_STORAGE_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
-| `VELESDB_WAL_BATCH_ENABLED` | `wal_batch.enabled` | `false` |
 | `VELESDB_LOGGING_LEVEL` | `logging.level` | `debug` |
 
 Setting one of these is exactly equivalent to setting its TOML key. Most are
 **reserved** and stay reserved when set this way: `VELESDB_SEARCH_MAX_RESULTS`
 is parsed, validated and applied by nothing, just like `[search] max_results`;
 see the note at the top of this guide for what the engine acts on.
-`VELESDB_STORAGE_DATA_DIR` is stronger than reserved — `storage.data_dir` is
-**deprecated**, not merely unwired; see [Section \[storage\]](#section-storage).
 
 Note `VELESDB_STORAGE_STORAGE_MODE`, not `VELESDB_STORAGE_MODE`: the section is
 `storage` and the field is `storage_mode`. Earlier revisions of this table
@@ -600,23 +577,13 @@ section — it sizes the candidate pool of one query; nothing here does.
 
 | Key | Type | Default | Description | Applied |
 |-----|------|---------|-------------|---------|
-| `data_dir` | string | `"./velesdb_data"` | Data directory | **no** — deprecated (#2087) |
 | `storage_mode` | string | `"mmap"` | Mode: mmap or memory | **no** — reserved (#2087) |
-| `mmap_cache_mb` | int | `1024` | mmap cache in MB | **no** — deprecated (#2087) |
-| `vector_alignment` | int | `64` | Memory alignment | **no** — deprecated (#2087) |
 
-`data_dir`, `mmap_cache_mb` and `vector_alignment` are deprecated, not
-reserved: no engine counterpart exists to wire them to at all, and
-`data_dir` also conflicts irreducibly with the path passed to
-`Database::open`. They are parsed and validated only so existing TOML files
-keep loading, and are targeted for removal at the next major — the same
-warn-not-reject cycle `[wal_batch]` (#2078) is already running, though
-`[wal_batch]` has no validation at all while `mmap_cache_mb` keeps its
-pre-existing hard range check (`0` and values over the cap still fail load
-— left as is; loosening it would be a second change). `VelesConfig::validate`
-warns when any of the three is set away from its default. `storage_mode` is
-a separate, still-open decision (distinct from `quantization::StorageMode`)
-and stays reserved rather than deprecated.
+`storage_mode` is a still-open decision (distinct from
+`quantization::StorageMode`) and stays reserved. The section's other three
+fields were removed in 7.0.0 (#2087): none of them had an engine
+counterpart. The data directory is the path passed to `Database::open`, or
+`velesdb-server`'s own `[server] data_dir`.
 
 ### Section [limits]
 
@@ -823,7 +790,6 @@ ef_construction = 200
 
 [storage]
 storage_mode = "mmap"
-mmap_cache_mb = 128
 
 [quantization]
 default_type = "binary"  # 32x compression
@@ -839,8 +805,6 @@ max_dimensions = 768
 [server]
 host = "0.0.0.0"  # Écouter sur toutes les interfaces
 port = 8080
-
-[storage]
 data_dir = "/data"  # Volume monté
 
 [logging]
@@ -860,7 +824,7 @@ VelesDB validates the configuration at startup and displays errors clearly:
 ERROR: Configuration validation failed:
   - search.default_mode: invalid value "ultra_fast", expected one of: fast, balanced, accurate, perfect
   - hnsw.m: value 256 exceeds maximum 128
-  - storage.data_dir: directory "/nonexistent" does not exist and cannot be created
+  - limits.max_collections: value 0 is out of range [1, 1000000]
 ```
 
 ### Warnings
@@ -1038,4 +1002,4 @@ impl VelesConfig {
 
 ---
 
-*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 6.0.0*
+*VelesDB Documentation — Last updated: 2026-08-08 · Applies to: velesdb-core 7.0.0*

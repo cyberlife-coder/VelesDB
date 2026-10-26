@@ -33,7 +33,7 @@ whole point: a typo in a config file should stop the app, not quietly halve
 your recall.
 
 Only the engine sections are read: `[search]`, `[hnsw]`, `[storage]`,
-`[limits]`, `[quantization]`, `[wal_batch]`. A `[server]` table belonging to
+`[limits]`, `[quantization]`. A `[server]` table belonging to
 another VelesDB component in a shared file is ignored, not rejected.
 
 ## Cargo features

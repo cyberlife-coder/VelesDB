@@ -194,7 +194,7 @@ impl Builder {
     /// Loads an engine [`VelesConfig`] from a TOML file, fail-fast.
     ///
     /// Only the engine sections (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/
-    /// `[quantization]`/`[wal_batch]`) are read (via
+    /// `[quantization]`) are read (via
     /// [`VelesConfig::load_from_path_engine_only`]); any other top-level
     /// table — e.g. a `[server]` section owned by `velesdb-server` in a
     /// shared config file — is ignored rather than being parsed into

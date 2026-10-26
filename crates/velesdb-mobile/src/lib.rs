@@ -191,7 +191,7 @@ impl VelesDatabase {
     /// The file is parsed with
     /// [`VelesConfig::load_from_path_engine_only`](velesdb_core::config::VelesConfig::load_from_path_engine_only):
     /// only the engine sections (`[search]`/`[hnsw]`/`[storage]`/`[limits]`/
-    /// `[quantization]`/`[wal_batch]`) are considered, any other top-level
+    /// `[quantization]`) are considered, any other top-level
     /// table is dropped, and `VELESDB_*` environment variables still layer on
     /// top of the filtered file. The database is then opened with
     /// [`Database::open_with_config`](velesdb_core::Database::open_with_config),
