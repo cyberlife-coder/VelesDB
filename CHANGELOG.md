@@ -66,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   10.13.0, in `sdks/typescript/package-lock.json` only. Dev dependencies; the
   published package and its behaviour are unchanged.
 
+- **Cargo.lock: non-major dependency updates, `pyo3` 0.29.3 (#2511).** `arc-swap`
+  1.9.2 to 1.9.3, `libc` 0.2.190 to 0.2.191, `memmap2` 0.9.11 to 0.9.12,
+  `napi` 3.14.2 to 3.15.0 (with `napi-sys` 3.4.0 to 3.4.1), `napi-derive` 3.6.12
+  to 3.6.13 (with `napi-derive-backend` 6.1.5 to 6.1.6), `pulldown-cmark`
+  0.13.4 to 0.13.5, `redis` 1.7.1 to 1.8.0 (`velesdb-migrate`) and `rmcp` 3.6.0
+  to 3.7.0 (`velesdb-memory`); `pyo3`, `pyo3-ffi`, `pyo3-macros`,
+  `pyo3-macros-backend` and `pyo3-build-config` 0.29.2 to 0.29.3
+  (`velesdb-python`). Lockfile only, no manifest or source change.
+  `pyo3-build-config` stays on 0.29.x: 0.30 does not match `pyo3` 0.29.
+
 ### Deprecated
 
 - **`velesdb_core::{check_for_updates, spawn_update_check, compute_instance_hash}`
