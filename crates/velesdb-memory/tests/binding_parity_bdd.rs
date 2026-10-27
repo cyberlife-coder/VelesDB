@@ -1619,14 +1619,22 @@ fn binding_structs(binding: &Binding) -> BTreeMap<String, String> {
         .expect("a binding surface file lives in the crate's src/")
         .to_path_buf();
     let mut structs = BTreeMap::new();
-    for entry in std::fs::read_dir(&crate_src).expect("read the binding crate's src/") {
+    collect_structs_under(&crate_src, &mut structs);
+    structs
+}
+
+/// Walk `dir` and its sub-directories: a binding may split its DTOs into
+/// child modules (`memory_service/dto.rs`) without moving the surface block.
+fn collect_structs_under(dir: &std::path::Path, structs: &mut BTreeMap<String, String>) {
+    for entry in std::fs::read_dir(dir).expect("read the binding crate's src/") {
         let path = entry.expect("read a src/ entry").path();
-        if path.extension().is_some_and(|ext| ext == "rs") {
+        if path.is_dir() {
+            collect_structs_under(&path, structs);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
             let source = std::fs::read_to_string(&path).expect("read a binding source file");
-            collect_structs(&source, &mut structs);
+            collect_structs(&source, structs);
         }
     }
-    structs
 }
 
 /// Pair each `struct X {` line with the lines up to its column-0 closing
