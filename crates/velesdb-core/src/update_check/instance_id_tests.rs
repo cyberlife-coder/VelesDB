@@ -463,3 +463,56 @@ fn test_lock_step_covers_every_outcome_of_try_lock() {
         "a filesystem that cannot lock is given up on at once, never written without the lock"
     );
 }
+
+/// Runs `f` on a thread and fails the test if it has not returned within
+/// `secs`, so a regression to a blocking `open` fails instead of hanging.
+fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(Duration::from_secs(secs))
+        .expect("call did not return: it blocked on a special file")
+}
+
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("run mkfifo");
+    assert!(status.success(), "mkfifo failed");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_fifo_named_like_an_install_file_is_unusable_not_blocking() {
+    for name in [LOCK_NAME, FILE_NAME] {
+        let tmp = TempDir::new().expect("tempdir");
+        mkfifo(&tmp.path().join(name));
+        let dir = tmp.path().to_path_buf();
+        let loaded = within(10, move || load_or_create(&dir));
+        // A special lock file makes the directory unusable; a special id file
+        // is not read and is replaced by the rename.
+        assert_eq!(loaded.is_none(), name == LOCK_NAME, "{name}");
+        let dir = tmp.path().to_path_buf();
+        assert!(is_id(&within(10, move || peek_install_id(&[dir]))));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_dangling_symlink_named_like_an_install_file_is_not_followed() {
+    for name in [LOCK_NAME, FILE_NAME] {
+        let tmp = TempDir::new().expect("tempdir");
+        let target = tmp.path().join("elsewhere");
+        std::os::unix::fs::symlink(&target, tmp.path().join(name)).expect("symlink");
+        let dir = tmp.path().to_path_buf();
+        let loaded = within(10, move || load_or_create(&dir));
+        assert_eq!(loaded.is_none(), name == LOCK_NAME, "{name}");
+        assert!(
+            !target.exists(),
+            "{name} was followed and created its target"
+        );
+    }
+}
