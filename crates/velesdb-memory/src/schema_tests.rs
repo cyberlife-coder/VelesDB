@@ -57,9 +57,9 @@ fn scalarized(schema: serde_json::Value) -> serde_json::Value {
     let serde_json::Value::Object(map) = schema else {
         panic!("test: le schema d'entree est un objet JSON");
     };
-    let mut wire = super::WireInputSchema::adopt(map);
-    super::scalarize_slot_types(&mut wire);
-    serde_json::Value::Object(wire.0)
+    let mut wire = super::wire::WireInputSchema::adopt(map);
+    super::scalarize::scalarize_slot_types(&mut wire);
+    serde_json::Value::Object(std::mem::take(wire.map_mut()))
 }
 
 /// (a) `anyOf: [T, null]` → `T`, et les mots-cles freres du slot ecrasent
