@@ -1,18 +1,17 @@
-//! The `OpenAI`-compatible extraction backend, split out of [`super`] to keep
-//! that file from growing (`scripts/check-file-budgets.py`). A child module,
-//! so it keeps access to the parent's private prompt and reply helpers.
+//! The `OpenAI`-compatible extraction backend. It shares the prompts, the reply
+//! reader and the request limits with the Ollama backend: only the transport
+//! differs between the two.
 
-use super::{
-    build_graph_prompt, build_prompt, extraction_from_reply, facts_from_reply, ExtractError,
-    ExtractedFact, Extraction, Extractor, MAX_GENERATION_TOKENS, REQUEST_TIMEOUT_SECS,
-};
+use super::prompt::{build_graph_prompt, build_prompt};
+use super::reply::{extraction_from_reply, facts_from_reply};
+use super::wire::{MAX_GENERATION_TOKENS, REQUEST_TIMEOUT_SECS};
+use super::{ExtractError, ExtractedFact, Extraction, Extractor};
 
 /// Extracts through any **OpenAI-compatible** `/v1/chat/completions` endpoint.
 ///
 /// A sibling of [`OllamaExtractor`](super::OllamaExtractor), not a layer over it — the same shape the
 /// embedding role takes. The prompt stays here, on the role side: it is what
 /// this crate wants said, not something the protocol knows about.
-#[cfg(feature = "extractor-http")]
 pub struct OpenAiExtractor {
     client: crate::http_client::HttpJsonClient,
     model: String,
@@ -24,7 +23,6 @@ pub struct OpenAiExtractor {
 /// given, and a derive would print them into whatever log or panic message
 /// carries this struct. The field stays listed — only its value is withheld —
 /// so a `Debug` dump still tells whether the setting is in effect.
-#[cfg(feature = "extractor-http")]
 impl std::fmt::Debug for OpenAiExtractor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpenAiExtractor")
@@ -38,7 +36,6 @@ impl std::fmt::Debug for OpenAiExtractor {
     }
 }
 
-#[cfg(feature = "extractor-http")]
 impl OpenAiExtractor {
     /// Build an extractor targeting `model` on the server at `base_url`
     /// (origin and port, no path).
@@ -114,7 +111,6 @@ impl OpenAiExtractor {
     }
 }
 
-#[cfg(feature = "extractor-http")]
 impl Extractor for OpenAiExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
         facts_from_reply(&self.generate(&build_prompt(text))?)
@@ -124,3 +120,7 @@ impl Extractor for OpenAiExtractor {
         extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
     }
 }
+
+#[cfg(test)]
+#[path = "openai_extractor_tests.rs"]
+mod tests;
