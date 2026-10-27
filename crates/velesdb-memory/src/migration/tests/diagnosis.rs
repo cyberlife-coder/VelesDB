@@ -855,7 +855,9 @@ fn a_v5_report_is_refused_for_its_age_and_never_accused_of_inconsistency() {
     let json = serde_json::to_string(&older).expect("serialize older report");
 
     for refusal in [
-        DiagnosisReport::parse(&json).expect_err("an older format must be refused"),
+        DiagnosisReport::parse(&json)
+            .expect_err("an older format must be refused")
+            .to_string(),
         serde_json::from_str::<DiagnosisReport>(&json)
             .expect_err("Deserialize itself must refuse an older report")
             .to_string(),
@@ -882,7 +884,9 @@ fn a_report_from_a_future_format_is_refused_before_its_shape_is_interpreted() {
     future["a_field_from_the_future"] = serde_json::json!({ "shape": "unknown" });
     let json = serde_json::to_string(&future).expect("serialize future report");
 
-    let refusal = DiagnosisReport::parse(&json).expect_err("future format must be refused");
+    let refusal = DiagnosisReport::parse(&json)
+        .expect_err("future format must be refused")
+        .to_string();
     assert!(
         refusal.contains(&(DIAGNOSIS_FORMAT_VERSION + 1).to_string())
             && refusal.contains("newer")

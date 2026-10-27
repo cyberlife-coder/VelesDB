@@ -81,7 +81,7 @@ fn run_switch(
     allow_completed: bool,
 ) -> Result<SwitchOutcome, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-switch").map_err(precondition)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-switch")?;
     let result = switch_locked(
         store,
         destination,
@@ -141,14 +141,12 @@ fn entry_state(
     workspace: &Path,
     allow_completed: bool,
 ) -> Result<MigrationState, crate::MemoryError> {
-    let state = MigrationState::read(workspace)
-        .map_err(integrity)?
-        .ok_or_else(|| {
-            not_found(format!(
-                "no migration journal at {}; there is nothing to switch",
-                workspace.display()
-            ))
-        })?;
+    let state = MigrationState::read(workspace)?.ok_or_else(|| {
+        not_found(format!(
+            "no migration journal at {}; there is nothing to switch",
+            workspace.display()
+        ))
+    })?;
     if state.phase == Phase::Committed && !allow_completed {
         return Err(precondition(
             "this migration is complete; there is nothing left to switch, and \
@@ -416,7 +414,8 @@ fn advance(
     lock: &MigrationLock,
 ) -> Result<(), crate::MemoryError> {
     state.phase = phase;
-    state.write(workspace, lock).map_err(environment)
+    state.write(workspace, lock)?;
+    Ok(())
 }
 
 fn unrecognised_disk(observed: SwitchState, at: Phase) -> crate::MemoryError {

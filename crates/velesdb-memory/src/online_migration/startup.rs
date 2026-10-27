@@ -108,7 +108,7 @@ fn recover_source(
     controller: &mut ConvergenceController,
 ) -> Result<(), MemoryError> {
     let identity = &record.spec.identity;
-    let state = MigrationState::read(&record.spec.workspace).map_err(capture)?;
+    let state = MigrationState::read(&record.spec.workspace)?;
     if state.is_some() {
         rollback_staged_live_switch(identity.source_path(), identity.destination_path())?;
     } else {

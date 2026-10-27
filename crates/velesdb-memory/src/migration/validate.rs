@@ -82,7 +82,7 @@ pub fn validate_destination(
     batch: usize,
 ) -> Result<ValidationOutcome, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-validate").map_err(precondition)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-validate")?;
     let result = validate_locked(store, destination, target, batch, &workspace, &lock);
     super::execute::reconcile(result, lock.release())
 }
@@ -109,7 +109,7 @@ fn validate_locked(
 
     if state.phase == Phase::Prepared {
         state.phase = Phase::DestinationValidated;
-        state.write(workspace, lock).map_err(environment)?;
+        state.write(workspace, lock)?;
     }
     Ok(outcome)
 }
@@ -142,15 +142,13 @@ fn journalled_state(
     target: &TargetContract,
     workspace: &Path,
 ) -> Result<MigrationState, crate::MemoryError> {
-    let state = MigrationState::read(workspace)
-        .map_err(integrity)?
-        .ok_or_else(|| {
-            not_found(format!(
-                "no migration journal at {}; there is nothing to validate — run \
+    let state = MigrationState::read(workspace)?.ok_or_else(|| {
+        not_found(format!(
+            "no migration journal at {}; there is nothing to validate — run \
                  the rebuild first",
-                workspace.display()
-            ))
-        })?;
+            workspace.display()
+        ))
+    })?;
     require_validatable(&state)?;
     let fingerprint = super::filesystem::fingerprint(&state.source_path)?;
     state

@@ -44,6 +44,26 @@ pub enum MigrationError {
 }
 
 impl MigrationError {
+    /// See [`Self::NotFound`].
+    pub(crate) fn not_found(message: impl Into<String>) -> Self {
+        Self::NotFound(message.into())
+    }
+
+    /// See [`Self::Precondition`].
+    pub(crate) fn precondition(message: impl Into<String>) -> Self {
+        Self::Precondition(message.into())
+    }
+
+    /// See [`Self::Environment`].
+    pub(crate) fn environment(message: impl Into<String>) -> Self {
+        Self::Environment(message.into())
+    }
+
+    /// See [`Self::Integrity`].
+    pub(crate) fn integrity(message: impl Into<String>) -> Self {
+        Self::Integrity(message.into())
+    }
+
     /// The class of this failure, as [`crate::MemoryError::category`] reports it.
     pub(crate) fn category(&self) -> crate::ErrorCategory {
         match self {

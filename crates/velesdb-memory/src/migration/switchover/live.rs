@@ -37,7 +37,7 @@ fn run_live_action(
     allow_completed: bool,
 ) -> Result<SwitchOutcome, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-live-switch").map_err(precondition)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-live-switch")?;
     let result = live_action_locked(
         store,
         destination,

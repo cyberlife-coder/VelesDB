@@ -26,6 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal as `Error: <message>` (its `Display`), no longer through the `Debug`
   rendering `main` returned it with, which showed a typed error as its fields.
 
+- **BREAKING: the migration journal and its lock fail with `MigrationError`,
+  not `String`.** `MigrationState::read`, `write` and `may_resume`,
+  `MigrationLock::acquire`, `release` and the helpers behind them used to return
+  `Result<_, String>`, and every caller guessed a class for the message. The class
+  is now decided where the refusal happens: a lock held by another migration, a
+  journal from another format version, a request that names another model or an
+  invalid identity, a stale or special staging file are `Precondition`; a
+  filesystem call that failed is `Environment`; a journal that is not JSON, lost
+  a collection or contradicts its own phase, and a source whose fingerprint
+  changed under the journal, are `Integrity`. A caller that matched the `String`
+  has to read `to_string()` or the variant. The messages are unchanged.
+  `DiagnosisReport::parse` follows: a report from another format version is a
+  `Precondition` (run a fresh diagnosis), a report that is not JSON or whose derived
+  fields contradict each other is `Integrity`; its `TryFrom` error is a
+  `MigrationError` too.
+
 - **Migration and export failures are typed, not smuggled through
   `velesdb_core::Error::Query`.** Every refusal of the migration, online
   migration, switchover, diagnostic copy and export paths (a missing workspace,

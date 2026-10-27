@@ -101,7 +101,8 @@ fn writing_without_the_exact_workspace_lock_is_refused() {
 
     let error = state(Phase::Prepared)
         .write(workspace.path(), &wrong_lock)
-        .expect_err("wrong lock must refuse");
+        .expect_err("wrong lock must refuse")
+        .to_string();
     assert!(error.contains("exact workspace"), "{error}");
     assert!(!workspace.path().join(STATE_FILE).exists());
     assert!(!workspace.path().join(STATE_TEMP_FILE).exists());
@@ -123,20 +124,23 @@ fn live_os_guard_blocks_reacquisition_after_canonical_lock_deletion() {
     // sibling's OS lock must still close the delete/recreate ABA window.
     std::fs::remove_file(workspace.path().join(LOCK_FILE)).expect("remove A lock");
     let blocked = MigrationLock::acquire(workspace.path(), "run-B")
-        .expect_err("B must not pass A's still-live OS guard");
+        .expect_err("B must not pass A's still-live OS guard")
+        .to_string();
     assert!(blocked.contains("workspace guard"), "{blocked}");
     assert!(!workspace.path().join(LOCK_FILE).exists());
 
     let write_error = state(Phase::Prepared)
         .write(workspace.path(), &active)
-        .expect_err("A must stop when its canonical identity disappears");
+        .expect_err("A must stop when its canonical identity disappears")
+        .to_string();
     assert!(write_error.contains("lock identity"), "{write_error}");
     assert!(!workspace.path().join(STATE_FILE).exists());
     assert!(!workspace.path().join(STATE_TEMP_FILE).exists());
 
     let release_error = active
         .release()
-        .expect_err("release must refuse an absent canonical identity");
+        .expect_err("release must refuse an absent canonical identity")
+        .to_string();
     assert!(
         release_error.contains("later acquisition"),
         "{release_error}"
@@ -169,7 +173,8 @@ fn erroneous_release_leaves_canonical_evidence_for_manual_cleanup() {
 
     let error = lock
         .release()
-        .expect_err("release must refuse a changed canonical identity");
+        .expect_err("release must refuse a changed canonical identity")
+        .to_string();
     assert!(error.contains("invalid"), "{error}");
     assert_eq!(
         std::fs::read(workspace.path().join(LOCK_FILE)).expect("evidence remains"),
@@ -178,7 +183,8 @@ fn erroneous_release_leaves_canonical_evidence_for_manual_cleanup() {
     );
 
     let stale = MigrationLock::acquire(workspace.path(), "run-B")
-        .expect_err("the stale canonical record must still block after A drops");
+        .expect_err("the stale canonical record must still block after A drops")
+        .to_string();
     assert!(stale.contains("lock record remains"), "{stale}");
 
     std::fs::remove_file(workspace.path().join(LOCK_FILE)).expect("manual cleanup");
@@ -199,7 +205,8 @@ fn ordinary_drop_and_panic_leave_the_canonical_lock_fail_closed() {
         "Drop must never remove canonical evidence"
     );
     let refusal = MigrationLock::acquire(dropped_workspace.path(), "after-drop")
-        .expect_err("a dropped handle must leave a stale canonical lock");
+        .expect_err("a dropped handle must leave a stale canonical lock")
+        .to_string();
     assert!(refusal.contains("lock record remains"), "{refusal}");
     std::fs::remove_file(dropped_workspace.path().join(LOCK_FILE)).expect("manual drop cleanup");
     MigrationLock::acquire(dropped_workspace.path(), "after-cleanup")
@@ -221,7 +228,8 @@ fn ordinary_drop_and_panic_leave_the_canonical_lock_fail_closed() {
         "unwinding must leave canonical evidence"
     );
     let refusal = MigrationLock::acquire(panic_workspace.path(), "after-panic")
-        .expect_err("panic evidence must block a later acquisition");
+        .expect_err("panic evidence must block a later acquisition")
+        .to_string();
     assert!(refusal.contains("lock record remains"), "{refusal}");
 }
 
@@ -235,7 +243,8 @@ fn state_write_refuses_non_current_versions_before_creating_files() {
 
         let error = candidate
             .write(workspace.path(), &lock)
-            .expect_err("only the current state version may be persisted");
+            .expect_err("only the current state version may be persisted")
+            .to_string();
         assert!(
             error.contains(&format!("version {format_version}")),
             "{error}"
@@ -254,7 +263,8 @@ fn read_refuses_semantically_invalid_state_without_mutation() {
         std::fs::write(workspace.path().join(STATE_FILE), &bytes).expect("plant invalid state");
 
         let error = MigrationState::read(workspace.path())
-            .expect_err("read must reject semantically invalid current-format state");
+            .expect_err("read must reject semantically invalid current-format state")
+            .to_string();
         assert!(error.contains(field), "{field} refusal was: {error}");
         assert_eq!(
             std::fs::read(workspace.path().join(STATE_FILE)).expect("state evidence"),
@@ -273,7 +283,8 @@ fn write_refuses_semantically_invalid_state_before_staging() {
 
         let error = candidate
             .write(workspace.path(), &lock)
-            .expect_err("write must reject semantically invalid state");
+            .expect_err("write must reject semantically invalid state")
+            .to_string();
         assert!(error.contains(field), "{field} refusal was: {error}");
         assert!(!workspace.path().join(STATE_FILE).exists());
         assert!(!workspace.path().join(STATE_TEMP_FILE).exists());
@@ -291,7 +302,8 @@ fn may_resume_refuses_semantically_invalid_in_memory_state() {
                 diagnosis::TARGET_MODEL,
                 diagnosis::TARGET_DIM,
             )
-            .expect_err("may_resume must reject semantically invalid state");
+            .expect_err("may_resume must reject semantically invalid state")
+            .to_string();
         assert!(error.contains(field), "{field} refusal was: {error}");
     }
 }
@@ -325,7 +337,8 @@ fn state_write_keeps_the_migration_identity_immutable() {
     ] {
         let error = candidate
             .write(workspace.path(), &lock)
-            .expect_err("migration identity drift must be refused");
+            .expect_err("migration identity drift must be refused")
+            .to_string();
         assert!(error.contains(field), "{field} refusal was: {error}");
         assert_eq!(
             std::fs::read(workspace.path().join(STATE_FILE)).expect("state retained"),
@@ -359,7 +372,9 @@ fn state_write_allows_only_idempotence_or_one_phase_forward() {
                     panic!("{from:?} -> {to:?} should be permitted: {error}")
                 });
             } else {
-                let error = result.expect_err("phase regression or skip must be refused");
+                let error = result
+                    .expect_err("phase regression or skip must be refused")
+                    .to_string();
                 assert!(error.contains("phase transition"), "{error}");
                 assert_eq!(
                     std::fs::read(workspace.path().join(STATE_FILE)).expect("state retained"),
@@ -380,7 +395,8 @@ fn a_new_journal_must_start_prepared() {
 
     let error = state(Phase::DestinationValidated)
         .write(workspace.path(), &lock)
-        .expect_err("a fresh journal must not skip its prepared phase");
+        .expect_err("a fresh journal must not skip its prepared phase")
+        .to_string();
     assert!(error.contains("must start"), "{error}");
     assert!(!workspace.path().join(STATE_FILE).exists());
     assert!(!workspace.path().join(STATE_TEMP_FILE).exists());
@@ -400,7 +416,8 @@ fn preexisting_staging_is_refused_and_preserved_byte_for_byte() {
 
     let error = state(Phase::DestinationValidated)
         .write(workspace.path(), &lock)
-        .expect_err("ambiguous staging must refuse");
+        .expect_err("ambiguous staging must refuse")
+        .to_string();
     assert!(error.contains("interrupted state write"), "{error}");
     assert_eq!(
         std::fs::read(workspace.path().join(STATE_FILE)).expect("final after"),
@@ -427,7 +444,8 @@ fn a_corrupt_existing_state_is_refused_without_overwriting_evidence() {
 
     let error = state(Phase::Prepared)
         .write(workspace.path(), &lock)
-        .expect_err("corrupt state must refuse");
+        .expect_err("corrupt state must refuse")
+        .to_string();
     assert!(error.contains("not readable JSON"), "{error}");
     assert_eq!(
         std::fs::read(workspace.path().join(STATE_FILE)).expect("corrupt retained"),
@@ -456,7 +474,8 @@ fn symlink_and_directory_destinations_are_refused_without_touching_them() {
 
     let error = state(Phase::Prepared)
         .write(workspace.path(), &lock)
-        .expect_err("symlink destination must refuse");
+        .expect_err("symlink destination must refuse")
+        .to_string();
     assert!(error.contains("symlink"), "{error}");
     assert_eq!(
         std::fs::read(outside.path()).expect("outside intact"),
@@ -467,7 +486,8 @@ fn symlink_and_directory_destinations_are_refused_without_touching_them() {
 
     let error = state(Phase::Prepared)
         .write(workspace.path(), &lock)
-        .expect_err("directory destination must refuse");
+        .expect_err("directory destination must refuse")
+        .to_string();
     assert!(error.contains("directory"), "{error}");
     assert!(final_path.is_dir(), "directory obstacle must remain");
     lock.release().expect("release");
@@ -489,7 +509,8 @@ fn promotion_failure_keeps_old_state_and_cleans_owned_staging() {
         fail_promote,
         barrier,
     )
-    .expect_err("promotion failure must surface");
+    .expect_err("promotion failure must surface")
+    .to_string();
     assert!(error.contains("injected promotion failure"), "{error}");
     assert_eq!(
         std::fs::read(workspace.path().join(STATE_FILE)).expect("old intact"),
@@ -515,7 +536,8 @@ fn barrier_failure_reports_visible_new_state_without_rollback() {
         promote,
         fail_barrier,
     )
-    .expect_err("barrier failure must surface");
+    .expect_err("barrier failure must surface")
+    .to_string();
     assert!(error.contains("visible"), "{error}");
     assert!(error.contains("Do not retry blindly"), "{error}");
     assert_eq!(

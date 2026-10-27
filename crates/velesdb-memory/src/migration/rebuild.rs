@@ -338,7 +338,6 @@ fn journal_progress(
     progress: CollectionProgress,
 ) -> Result<(), crate::MemoryError> {
     state.progress.insert(collection.to_owned(), progress);
-    state
-        .write(journal.workspace, journal.lock)
-        .map_err(environment)
+    state.write(journal.workspace, journal.lock)?;
+    Ok(())
 }

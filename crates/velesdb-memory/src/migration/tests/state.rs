@@ -77,7 +77,8 @@ fn two_migrations_cannot_hold_the_lock() {
 
     // (2) a second acquisition fails while the first is held...
     let refusal = MigrationLock::acquire(workspace.path(), "run-B")
-        .expect_err("two migrations must not hold one workspace");
+        .expect_err("two migrations must not hold one workspace")
+        .to_string();
     // (3) ...and the refusal names who has it.
     assert!(
         refusal.contains("run-A"),
@@ -126,7 +127,8 @@ fn two_migrations_cannot_hold_the_lock() {
     )
     .expect("plant a stale lock");
     let stale = MigrationLock::acquire(workspace.path(), "run-C")
-        .expect_err("a stale lock must be refused, never stolen");
+        .expect_err("a stale lock must be refused, never stolen")
+        .to_string();
     assert!(
         stale.contains("a-dead-run"),
         "the refusal must name the holder recorded in the stale lock: {stale}"
@@ -158,7 +160,7 @@ fn a_lock_file_swapped_for_a_symlink_is_refused_not_followed() {
 
     let refusal = lock
         .release()
-        .expect_err("a symlinked lock record must be refused, not followed, even with a valid-looking record behind it");
+        .expect_err("a symlinked lock record must be refused, not followed, even with a valid-looking record behind it").to_string();
     assert!(
         refusal.contains(super::LOCK_FILE),
         "the refusal must name the lock file it would not touch: {refusal}"
@@ -274,7 +276,8 @@ fn a_newer_state_version_is_refused() {
     .expect("write newer state");
 
     let refusal = MigrationState::read(workspace.path())
-        .expect_err("a state from a newer version must be refused");
+        .expect_err("a state from a newer version must be refused")
+        .to_string();
     assert!(
         refusal.contains(&format!("version {}", super::STATE_FORMAT_VERSION + 1)),
         "the refusal must name the version it found: {refusal}"
@@ -328,7 +331,8 @@ fn an_older_weak_fingerprint_state_requires_a_fresh_diagnosis() {
     .expect("write old state");
 
     let refusal = MigrationState::read(workspace.path())
-        .expect_err("a weak length-only fingerprint must never resume");
+        .expect_err("a weak length-only fingerprint must never resume")
+        .to_string();
     assert!(
         refusal.contains("older") && refusal.contains("fresh diagnosis"),
         "the refusal must name the state as older and say how to recover: {refusal}"
@@ -348,7 +352,8 @@ fn an_older_weak_fingerprint_state_requires_a_fresh_diagnosis() {
             TARGET_MODEL,
             TARGET_DIM,
         )
-        .expect_err("an in-memory old state must not bypass the version gate");
+        .expect_err("an in-memory old state must not bypass the version gate")
+        .to_string();
     assert!(refusal.contains("fresh diagnosis"), "{refusal}");
 }
 
@@ -373,7 +378,8 @@ fn a_changed_source_fingerprint_refuses_resume() {
             TARGET_MODEL,
             TARGET_DIM,
         )
-        .expect_err("a source that changed under a prepared migration must refuse");
+        .expect_err("a source that changed under a prepared migration must refuse")
+        .to_string();
     assert!(
         refusal.contains(&state.source_fingerprint) && refusal.contains("ffffffffffffffff"),
         "the refusal must name BOTH fingerprints — one of them alone leaves the \
@@ -436,7 +442,8 @@ fn a_changed_target_model_refuses_resume() {
             "some-other-model",
             TARGET_DIM,
         )
-        .expect_err("a migration prepared for one model must not resume against another");
+        .expect_err("a migration prepared for one model must not resume against another")
+        .to_string();
     assert!(
         refusal.contains(TARGET_MODEL) && refusal.contains("some-other-model"),
         "the refusal must name both models: {refusal}"
@@ -459,7 +466,8 @@ fn changed_source_path_and_target_dimension_refuse_resume() {
             TARGET_MODEL,
             TARGET_DIM,
         )
-        .expect_err("a journal must not transfer to another source path");
+        .expect_err("a journal must not transfer to another source path")
+        .to_string();
     assert!(path_refusal.contains("/store"), "{path_refusal}");
     assert!(path_refusal.contains("/another-store"), "{path_refusal}");
 
@@ -470,7 +478,8 @@ fn changed_source_path_and_target_dimension_refuse_resume() {
             TARGET_MODEL,
             TARGET_DIM + 1,
         )
-        .expect_err("a journal must not change vector width");
+        .expect_err("a journal must not change vector width")
+        .to_string();
     assert!(
         dimension_refusal.contains(&TARGET_DIM.to_string()),
         "{dimension_refusal}"

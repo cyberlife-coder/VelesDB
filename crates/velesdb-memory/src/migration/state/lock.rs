@@ -1,4 +1,5 @@
 use super::STATE_FILE;
+use crate::migration::MigrationError;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,7 +51,7 @@ impl MigrationLock {
     /// # Errors
     /// The OS guard is held, a canonical record remains, or the workspace is
     /// unwritable. Neither an active nor a dead lock is stolen automatically.
-    pub fn acquire(workspace: &Path, holder: &str) -> Result<Self, String> {
+    pub fn acquire(workspace: &Path, holder: &str) -> Result<Self, MigrationError> {
         let path = workspace.join(LOCK_FILE);
         let guard = open_and_lock_guard(workspace)?;
         ensure_lock_record_absent(workspace, &path)?;
@@ -75,13 +76,13 @@ impl MigrationLock {
         })
     }
 
-    pub(super) fn verify_workspace(&self, workspace: &Path) -> Result<(), String> {
+    pub(super) fn verify_workspace(&self, workspace: &Path) -> Result<(), MigrationError> {
         let expected = workspace.join(LOCK_FILE);
         if self.path != expected || !self.owns_current_lock() {
-            return Err(format!(
+            return Err(MigrationError::precondition(format!(
                 "cannot write {STATE_FILE} without the exact live migration lock identity for {}; acquire MigrationLock for this exact workspace first",
                 workspace.display()
-            ));
+            )));
         }
         Ok(())
     }
@@ -94,14 +95,16 @@ impl MigrationLock {
             })
     }
 
-    fn remove_if_owned(&self) -> Result<(), String> {
+    fn remove_if_owned(&self) -> Result<(), MigrationError> {
         if !self.owns_current_lock() {
-            return Err(format!(
+            return Err(MigrationError::precondition(format!(
                 "cannot release {LOCK_FILE}: the lock at {} is absent, invalid, or belongs to a later acquisition",
                 self.path.display()
-            ));
+            )));
         }
-        std::fs::remove_file(&self.path).map_err(|err| format!("cannot release {LOCK_FILE}: {err}"))
+        std::fs::remove_file(&self.path).map_err(|err| {
+            MigrationError::environment(format!("cannot release {LOCK_FILE}: {err}"))
+        })
     }
 
     /// Release the lock.
@@ -109,10 +112,12 @@ impl MigrationLock {
     /// # Errors
     /// The canonical lock identity changed, the lock file cannot be removed,
     /// or the OS guard cannot be unlocked.
-    pub fn release(self) -> Result<(), String> {
+    pub fn release(self) -> Result<(), MigrationError> {
         self.remove_if_owned()?;
         fs2::FileExt::unlock(&self.guard).map_err(|err| {
-            format!("removed {LOCK_FILE} but cannot unlock {LOCK_GUARD_FILE}: {err}")
+            MigrationError::environment(format!(
+                "removed {LOCK_FILE} but cannot unlock {LOCK_GUARD_FILE}: {err}"
+            ))
         })
     }
 }
@@ -151,7 +156,7 @@ fn legacy_holder_line(body: &str) -> Option<String> {
     (printable && line.len() <= MAX_LEGACY_HOLDER_BYTES).then(|| line.to_owned())
 }
 
-fn open_and_lock_guard(workspace: &Path) -> Result<std::fs::File, String> {
+fn open_and_lock_guard(workspace: &Path) -> Result<std::fs::File, MigrationError> {
     let guard_path = workspace.join(LOCK_GUARD_FILE);
     let guard = std::fs::OpenOptions::new()
         .read(true)
@@ -159,49 +164,59 @@ fn open_and_lock_guard(workspace: &Path) -> Result<std::fs::File, String> {
         .create(true)
         .truncate(false)
         .open(&guard_path)
-        .map_err(|err| format!("cannot open persistent {LOCK_GUARD_FILE}: {err}"))?;
+        .map_err(|err| {
+            MigrationError::environment(format!("cannot open persistent {LOCK_GUARD_FILE}: {err}"))
+        })?;
     validate_guard_file(&guard_path, &guard)?;
     lock_guard(workspace, &guard)?;
     Ok(guard)
 }
 
-fn validate_guard_file(path: &Path, guard: &std::fs::File) -> Result<(), String> {
-    let path_metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| format!("cannot inspect {LOCK_GUARD_FILE}: {err}"))?;
+fn validate_guard_file(path: &Path, guard: &std::fs::File) -> Result<(), MigrationError> {
+    let path_metadata = std::fs::symlink_metadata(path).map_err(|err| {
+        MigrationError::environment(format!("cannot inspect {LOCK_GUARD_FILE}: {err}"))
+    })?;
     let handle_is_file = guard.metadata().is_ok_and(|metadata| metadata.is_file());
     if !path_metadata.file_type().is_symlink() && handle_is_file {
         return Ok(());
     }
-    Err(format!(
+    Err(MigrationError::precondition(format!(
         "refusing {LOCK_GUARD_FILE} at {}: the persistent guard must be a regular, non-symlink file",
         path.display()
-    ))
+    )))
 }
 
-fn lock_guard(workspace: &Path, guard: &std::fs::File) -> Result<(), String> {
+fn lock_guard(workspace: &Path, guard: &std::fs::File) -> Result<(), MigrationError> {
     match fs2::FileExt::try_lock_exclusive(guard) {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Err(format!(
-            "a live migration still holds this workspace guard ({}). The OS guard is NOT stolen and deleting {LOCK_FILE} cannot release it; wait for the owner or stop it explicitly.",
-            MigrationLock::holder(workspace).unwrap_or_else(|| "holder record missing".to_owned()),
-        )),
-        Err(err) => Err(format!("cannot lock {LOCK_GUARD_FILE}: {err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(MigrationError::precondition(format!(
+                "a live migration still holds this workspace guard ({}). The OS guard is NOT stolen and deleting {LOCK_FILE} cannot release it; wait for the owner or stop it explicitly.",
+                MigrationLock::holder(workspace)
+                    .unwrap_or_else(|| "holder record missing".to_owned()),
+            )))
+        }
+        Err(err) => Err(MigrationError::environment(format!(
+            "cannot lock {LOCK_GUARD_FILE}: {err}"
+        ))),
     }
 }
 
-fn ensure_lock_record_absent(workspace: &Path, path: &Path) -> Result<(), String> {
+fn ensure_lock_record_absent(workspace: &Path, path: &Path) -> Result<(), MigrationError> {
     match std::fs::symlink_metadata(path) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!("cannot inspect {LOCK_FILE}: {err}")),
-        Ok(_) => Err(format!(
+        Err(err) => Err(MigrationError::environment(format!(
+            "cannot inspect {LOCK_FILE}: {err}"
+        ))),
+        Ok(_) => Err(MigrationError::precondition(format!(
             "a migration lock record remains in this workspace ({}). It is NOT stolen automatically: a dead process releases the OS guard but leaves this evidence behind. If you are certain no migration is running, delete {} yourself.",
             MigrationLock::holder(workspace).unwrap_or_else(|| "holder unknown".to_owned()),
             path.display()
-        )),
+        ))),
     }
 }
 
-fn create_lock_record(path: &Path, holder: &str) -> Result<String, String> {
+fn create_lock_record(path: &Path, holder: &str) -> Result<String, MigrationError> {
     let token = next_lock_token();
     let record = LockRecord {
         format_version: LOCK_FORMAT_VERSION,
@@ -209,25 +224,25 @@ fn create_lock_record(path: &Path, holder: &str) -> Result<String, String> {
         token: token.clone(),
     };
     let body = serde_json::to_vec_pretty(&record)
-        .map_err(|err| format!("cannot serialise {LOCK_FILE}: {err}"))?;
+        .map_err(|err| MigrationError::integrity(format!("cannot serialise {LOCK_FILE}: {err}")))?;
     // `read_lock_body` refuses a record past this bound, so one written
     // anyway could never be released: refuse it before anything exists.
     if body.len() as u64 > MAX_LOCK_RECORD_BYTES {
-        return Err(format!(
+        return Err(MigrationError::precondition(format!(
             "refusing {LOCK_FILE}: holder name too long ({} byte record, limit {MAX_LOCK_RECORD_BYTES})",
             body.len()
-        ));
+        )));
     }
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|err| format!("cannot create {LOCK_FILE}: {err}"))?;
+        .map_err(|err| MigrationError::environment(format!("cannot create {LOCK_FILE}: {err}")))?;
     file.write_all(&body)
-        .map_err(|err| format!("cannot write {LOCK_FILE}: {err}"))?;
+        .map_err(|err| MigrationError::environment(format!("cannot write {LOCK_FILE}: {err}")))?;
     file.flush()
         .and_then(|()| file.sync_all())
-        .map_err(|err| format!("cannot persist {LOCK_FILE}: {err}"))?;
+        .map_err(|err| MigrationError::environment(format!("cannot persist {LOCK_FILE}: {err}")))?;
     Ok(token)
 }
 

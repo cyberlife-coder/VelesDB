@@ -13,7 +13,6 @@ use std::path::Path;
 
 use super::diagnosis::TargetContract;
 use super::execute::{execute, journal_workspace, ExecuteOutcome};
-use super::integrity;
 use super::state::{MigrationState, Phase};
 use super::switchover::{switch_over, SwitchOutcome};
 use super::validate::{validate_destination, ValidationOutcome};
@@ -68,6 +67,6 @@ pub fn migrate(
 /// Whether the journal says validation already happened.
 fn past_validation(destination: &Path) -> Result<bool, crate::MemoryError> {
     let workspace = journal_workspace(destination)?;
-    let state = MigrationState::read(&workspace).map_err(integrity)?;
+    let state = MigrationState::read(&workspace)?;
     Ok(state.is_some_and(|state| state.phase >= Phase::DestinationValidated))
 }

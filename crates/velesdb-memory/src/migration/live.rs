@@ -20,7 +20,7 @@ pub(crate) fn prepare_live_switch(
         .map_err(|err| environment(format!("cannot resolve live source: {err}")))?;
     let source_fingerprint = fingerprint(&source)?;
     let workspace = journal_workspace(destination)?;
-    let lock = MigrationLock::acquire(&workspace, "migrate-live-prepare").map_err(precondition)?;
+    let lock = MigrationLock::acquire(&workspace, "migrate-live-prepare")?;
     let result = prepare_locked(
         &workspace,
         &lock,
@@ -43,15 +43,13 @@ fn prepare_locked(
     target_dimension: usize,
     target_witness: &str,
 ) -> Result<(), crate::MemoryError> {
-    if let Some(existing) = MigrationState::read(workspace).map_err(integrity)? {
-        existing
-            .may_resume(
-                &source_path,
-                &source_fingerprint,
-                target_model,
-                target_dimension,
-            )
-            .map_err(precondition)?;
+    if let Some(existing) = MigrationState::read(workspace)? {
+        existing.may_resume(
+            &source_path,
+            &source_fingerprint,
+            target_model,
+            target_dimension,
+        )?;
         if existing.embedder_witness.as_deref() != Some(target_witness) {
             return Err(precondition(
                 "live switch target embedder witness changed; start a fresh migration",
@@ -66,9 +64,10 @@ fn prepare_locked(
         target_dimension,
         target_witness,
     );
-    state.write(workspace, lock).map_err(environment)?;
+    state.write(workspace, lock)?;
     state.phase = Phase::DestinationValidated;
-    state.write(workspace, lock).map_err(environment)
+    state.write(workspace, lock)?;
+    Ok(())
 }
 
 fn new_state(
