@@ -5571,7 +5571,7 @@
     },
     {
       "id": "rustdoc_extract_runaway_generation",
-      "file": "crates/velesdb-memory/src/extract.rs",
+      "file": "crates/velesdb-memory/src/extract/wire.rs",
       "must_contain": "1 min 59 s spent generating JSON",
       "validation_command": "none: commit 380fd655 names no command",
       "executable": false,
@@ -5588,7 +5588,7 @@
     },
     {
       "id": "rustdoc_extract_capped_generation",
-      "file": "crates/velesdb-memory/src/extract.rs",
+      "file": "crates/velesdb-memory/src/extract/wire.rs",
       "must_contain": "14.9 s. 512 sits just under that",
       "validation_command": "none: commit 380fd655 names no command",
       "executable": false,
