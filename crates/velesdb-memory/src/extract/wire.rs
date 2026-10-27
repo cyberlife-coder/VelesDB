@@ -14,7 +14,20 @@
 //! `every_required_key_of_the_schema_is_a_key_the_parser_reads` is what keeps
 //! the two from drifting.
 
-use super::MAX_GENERATION_TOKENS;
+/// Per-request timeout. Generation is far slower and more stall-prone than an
+/// embedding call, so a wedged model fails the call instead of hanging forever.
+pub(super) const REQUEST_TIMEOUT_SECS: u64 = 300;
+
+/// Ceiling on how many tokens one extraction call may generate.
+///
+/// Unbounded, the real graph-extraction prompt measured 3 933 completion
+/// tokens for a twelve-word sentence — 1 min 59 s spent generating JSON to
+/// store one fact (#1846). The same call capped at 600 tokens measured
+/// 14.9 s. 512 sits just under that, comfortably above what any realistic
+/// sentence's worth of triples needs, and turns the worst case into a
+/// bounded one instead of a tuning knob callers have to discover by timing
+/// out.
+pub(super) const MAX_GENERATION_TOKENS: u32 = 512;
 
 /// The body of one `/api/generate` call, built where a test can read it.
 ///
@@ -22,7 +35,6 @@ use super::MAX_GENERATION_TOKENS;
 /// asserted without a live model: a `format` that silently stopped being sent
 /// would restore the exact defect this shape exists to close, and no
 /// stub-backed extraction test would notice.
-#[cfg(feature = "extractor-http")]
 pub(super) fn generate_body(
     model: &str,
     prompt: &str,
@@ -49,10 +61,9 @@ pub(super) fn generate_body(
 
 /// One `{"fact": …, "entities": […]}` item, as a JSON Schema.
 ///
-/// Kept beside [`super::RawFact`], which is what parses it back: the two are one
+/// Kept beside `reply::RawFact`, which is what parses it back: the two are one
 /// contract stated twice, once for the sampler and once for the reader, and
 /// they must be changed together.
-#[cfg(feature = "extractor-http")]
 pub(super) fn fact_item_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -64,19 +75,17 @@ pub(super) fn fact_item_schema() -> serde_json::Value {
     })
 }
 
-/// The JSON Schema for [`super::build_prompt`]'s reply: a bare array of facts.
-#[cfg(feature = "extractor-http")]
+/// The JSON Schema for [`super::prompt::build_prompt`]'s reply: a bare array of facts.
 pub(super) fn fact_list_schema() -> serde_json::Value {
     serde_json::json!({ "type": "array", "items": fact_item_schema() })
 }
 
-/// The JSON Schema for [`super::build_graph_prompt`]'s reply, mirroring
-/// [`super::RawExtraction`].
+/// The JSON Schema for [`super::prompt::build_graph_prompt`]'s reply, mirroring
+/// `reply::RawExtraction`.
 ///
 /// `value` keeps the `number` arm the prompt insists on ("Emit numbers as JSON
 /// NUMBERS, never strings"): constraining it to `string` would silently undo
 /// what the prompt spends a line asking for.
-#[cfg(feature = "extractor-http")]
 pub(super) fn extraction_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
@@ -110,3 +119,7 @@ pub(super) fn extraction_schema() -> serde_json::Value {
         "required": ["facts", "relations", "attributes"],
     })
 }
+
+#[cfg(test)]
+#[path = "wire_tests.rs"]
+mod tests;
