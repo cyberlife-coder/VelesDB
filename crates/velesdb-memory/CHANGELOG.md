@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MemoryError::Migration(MigrationError)` (`persistence` feature), whose four
   variants (`NotFound`, `Precondition`, `Environment`, `Integrity`) map to the
   right `ErrorCategory` (`NotFound`, `InvalidInput`, `Internal`, `Internal`). The
-  messages are unchanged. `MemoryError` and `MigrationError` are
+  detail of each message is unchanged; its prefix reads `migration error:`
+  instead of `storage error: [VELES-010] Query error:`, so a caller that parsed
+  that prefix has to drop it. `MemoryError` and `MigrationError` are
   `#[non_exhaustive]`, so adding the variant breaks no exhaustive match; a caller
   that matched `Storage(Error::Query(_))` to recognise a migration refusal should
   match `Migration(_)` or read `category()` instead. A test scans the sources and
