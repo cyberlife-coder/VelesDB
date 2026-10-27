@@ -21,7 +21,7 @@ Four subcommands, cheapest first:
 Three rules the rest of the file exists to enforce.
 
 **The bench must not drift from the product.** The prompt and the generation cap
-are read out of `crates/velesdb-memory/src/extract.rs`, and the request body is
+are read out of `crates/velesdb-memory/src/extract/` (`prompt.rs` and `wire.rs`), and the request body is
 the one `openai::chat_body` builds — `temperature: 0` and `max_tokens` included.
 A bench that hand-copies the prompt measures a fossil: the 2026-08-07 campaign
 sent no cap at all, so it never once exercised the truncation the cap introduced.
@@ -80,7 +80,9 @@ from pathlib import Path
 # this version, and runs it under an interpreter of it when the machine has one.
 MINIMUM_PYTHON = (3, 9)
 ROOT = Path(__file__).resolve().parents[1]
-EXTRACT_RS = ROOT / "crates" / "velesdb-memory" / "src" / "extract.rs"
+EXTRACT_DIR = ROOT / "crates" / "velesdb-memory" / "src" / "extract"
+PROMPT_RS = EXTRACT_DIR / "prompt.rs"
+WIRE_RS = EXTRACT_DIR / "wire.rs"
 CASES_FILE = Path(__file__).resolve().parent / "memory-extraction-cases.json"
 DEFAULT_LOG = Path.home() / "Library" / "Logs" / "velesdb-memory" / "daemon.err.log"
 
@@ -146,7 +148,7 @@ def _unescape_rust_literal(raw: str) -> str:
     return text
 
 
-def read_graph_prompt_template(source: Path = EXTRACT_RS) -> str:
+def read_graph_prompt_template(source: Path = PROMPT_RS) -> str:
     """Read `build_graph_prompt`'s literal out of the crate.
 
     Sourced rather than copied so the bench cannot measure a prompt the product
@@ -167,7 +169,7 @@ def read_graph_prompt_template(source: Path = EXTRACT_RS) -> str:
     return _unescape_rust_literal(literal.group(1))
 
 
-def read_generation_cap(source: Path = EXTRACT_RS) -> int:
+def read_generation_cap(source: Path = WIRE_RS) -> int:
     """Read `MAX_GENERATION_TOKENS` out of the crate, for the same reason."""
     text = source.read_text(encoding="utf-8")
     match = re.search(r"const MAX_GENERATION_TOKENS: u32 = (\d+);", text)
