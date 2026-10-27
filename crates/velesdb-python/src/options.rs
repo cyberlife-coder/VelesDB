@@ -24,6 +24,10 @@
 //! would have mirrored was never wired and was removed in 7.0.0 (#2174).
 //! Concurrent WAL writing is a velesdb-premium Enterprise feature (see
 //! `docs/guides/WRITE_CONCURRENCY.md`).
+//!
+//! Each options class lives in its own module (`hnsw`, `limits`,
+//! `auto_reindex`, `search`, `hnsw_config`, `storage`, `quantization`,
+//! `config`); this file re-exports them and registers them on the module.
 
 mod auto_reindex;
 mod config;
