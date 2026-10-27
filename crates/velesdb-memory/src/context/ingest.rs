@@ -8,7 +8,7 @@
 //! once at the boundary, keep the pipeline core pure). Called from the MCP
 //! adapter (`crate::mcp::context_tools`) ahead of `compile_context` and
 //! `explain_compilation`; a `path` fragment that reaches the compiler
-//! unresolved is rejected with [`MemoryError::IngestDisabled`] (see
+//! unresolved is rejected with [`crate::error::MemoryError::IngestDisabled`] (see
 //! `context::validate`) rather than silently compiling empty content.
 //!
 //! # Security model
@@ -24,7 +24,7 @@
 //!    of the three is refused too. Checked first, independent of whether
 //!    ingestion is even enabled (a malformed request is a malformed
 //!    request regardless of server configuration).
-//! 2. At least one configured root, else [`MemoryError::IngestDisabled`].
+//! 2. At least one configured root, else [`crate::error::MemoryError::IngestDisabled`].
 //! 3. The number of `path` fragments in the request is bounded
 //!    ([`crate::limits::MAX_INGEST_FILES`]).
 //! 4. The path must be absolute — an MCP server's working directory is not

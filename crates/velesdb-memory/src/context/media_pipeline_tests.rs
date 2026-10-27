@@ -1,4 +1,4 @@
-//! Unit tests for the media-fragment plumbing private to `context.rs`
+//! Unit tests for the media-fragment plumbing private to the context pipeline
 //! (US-009, PR1): budget validation, the caption+image token formula, atomic
 //! piece construction, and the drop-vs-preserve verdict routing.
 //!
@@ -9,11 +9,21 @@
 //! branches unreachable from a single `compile()` call (e.g. a duplicate
 //! whose twin also failed to pack) still get pinned.
 
+use std::collections::BTreeMap;
+
+use super::analysis::{media_fragment_tokens, Analysis};
+use super::dedup::{DupKind, Duplicate};
+use super::packing::{pieces, Emission};
+use super::report::emitted_tokens;
+use super::validation::validate_media;
+use super::verdict::{decision, dup_verdict};
 use super::*;
 use crate::context::classify::RuleMatch;
 use crate::context::estimator::HeuristicEstimator;
 use crate::context::media;
 use crate::context::model::MediaRef;
+use crate::error::MemoryError;
+use crate::limits;
 
 /// A syntactically valid (well-formed base64), tiny PNG header — 64x48
 /// pixels, IHDR only. Its exact bytes don't matter to most tests here; only
