@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a collection or contradicts its own phase, and a source whose fingerprint
   changed under the journal, are `Integrity`. A caller that matched the `String`
   has to read `to_string()` or the variant. The messages are unchanged.
+  `DiagnosisReport::parse` follows: a report from another format version is a
+  `Precondition` (run a fresh diagnosis), a report that is not JSON or whose derived
+  fields contradict each other is `Integrity`; its `TryFrom` error is a
+  `MigrationError` too.
 
 - **Migration and export failures are typed, not smuggled through
   `velesdb_core::Error::Query`.** Every refusal of the migration, online

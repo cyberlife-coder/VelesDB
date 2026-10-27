@@ -6,6 +6,7 @@ use super::{
     assess, resolve, switch_filesystem_capability, Capability, CollectionInventory,
     DiagnosisReport, Resolution, SourceProvenance, Strategy, DIAGNOSIS_FORMAT_VERSION,
 };
+use crate::migration::MigrationError;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -42,7 +43,7 @@ struct UncheckedDiagnosisReport {
 }
 
 impl TryFrom<UncheckedDiagnosisReport> for DiagnosisReport {
-    type Error = String;
+    type Error = MigrationError;
 
     fn try_from(unchecked: UncheckedDiagnosisReport) -> Result<Self, Self::Error> {
         let report = assemble(unchecked);
@@ -129,24 +130,29 @@ impl DiagnosisReport {
     /// # Errors
     /// Returns a descriptive refusal when the JSON is malformed, has no
     /// integer `format_version`, or was produced with a different format.
-    pub fn parse(json: &str) -> Result<Self, String> {
-        let value: Value = serde_json::from_str(json)
-            .map_err(|err| format!("cannot parse diagnosis report JSON: {err}"))?;
+    pub fn parse(json: &str) -> Result<Self, MigrationError> {
+        let value: Value = serde_json::from_str(json).map_err(|err| {
+            MigrationError::integrity(format!("cannot parse diagnosis report JSON: {err}"))
+        })?;
         let version = value
             .get("format_version")
             .and_then(Value::as_u64)
             .ok_or_else(|| {
-                "diagnosis report has no unsigned integer `format_version`; refusing an unversioned artifact"
-                    .to_owned()
+                MigrationError::integrity(
+                    "diagnosis report has no unsigned integer `format_version`; refusing an unversioned artifact",
+                )
             })?;
         validate_format_version(version)?;
-        serde_json::from_value(value)
-            .map_err(|err| format!("cannot parse diagnosis report version {version}: {err}"))
+        serde_json::from_value(value).map_err(|err| {
+            MigrationError::integrity(format!(
+                "cannot parse diagnosis report version {version}: {err}"
+            ))
+        })
     }
 
     /// Validate every v5 field that is derived rather than independently
     /// observed.
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), MigrationError> {
         validate_format_version(u64::from(self.format_version))?;
         validate_capability_keys(&self.capabilities)?;
 
@@ -172,14 +178,16 @@ impl DiagnosisReport {
     }
 }
 
-fn validate_capability_keys(capabilities: &BTreeMap<String, Capability>) -> Result<(), String> {
+fn validate_capability_keys(
+    capabilities: &BTreeMap<String, Capability>,
+) -> Result<(), MigrationError> {
     let actual_keys: Vec<&str> = capabilities.keys().map(String::as_str).collect();
     if actual_keys == DIAGNOSIS_CAPABILITY_KEYS {
         return Ok(());
     }
-    Err(format!(
+    Err(MigrationError::integrity(format!(
         "diagnosis report capabilities are incomplete or unknown: expected exactly {DIAGNOSIS_CAPABILITY_KEYS:?}, got {actual_keys:?}"
-    ))
+    )))
 }
 
 /// Hold the four capabilities the parser cannot recalculate to their SHAPE.
@@ -192,17 +200,17 @@ fn validate_capability_keys(capabilities: &BTreeMap<String, Capability>) -> Resu
 /// that is empty says nothing, which no capability of any provenance does.
 fn validate_uncalculated_capability_shapes(
     capabilities: &BTreeMap<String, Capability>,
-) -> Result<(), String> {
+) -> Result<(), MigrationError> {
     for name in [
         "diagnostic_staging",
         "inventory",
         "source_access_is_read_only",
     ] {
         if let Some(Capability::Missing { .. }) = capabilities.get(name) {
-            return Err(format!(
+            return Err(MigrationError::integrity(format!(
                 "diagnosis capability `{name}` is inconsistent with its report \
                  fields: no diagnosis produces it as Missing"
-            ));
+            )));
         }
     }
     for (name, capability) in capabilities {
@@ -211,10 +219,10 @@ fn validate_uncalculated_capability_shapes(
             Capability::Missing { blocker } => blocker,
         };
         if text.trim().is_empty() {
-            return Err(format!(
+            return Err(MigrationError::integrity(format!(
                 "diagnosis capability `{name}` carries an empty text; evidence \
                  that says nothing is not evidence"
-            ));
+            )));
         }
     }
     Ok(())
@@ -248,7 +256,7 @@ fn canonical_capabilities(report: &DiagnosisReport) -> [(&'static str, Capabilit
 /// a build whose rule differed, must not be read as authority. Recomputing it
 /// here is what makes "this report says REUSE" mean "this store permits reuse"
 /// rather than "this file contains the word REUSE".
-fn validate_resolution(report: &DiagnosisReport) -> Result<(), String> {
+fn validate_resolution(report: &DiagnosisReport) -> Result<(), MigrationError> {
     let expected = resolve(
         report.requested_strategy,
         assess(
@@ -261,26 +269,26 @@ fn validate_resolution(report: &DiagnosisReport) -> Result<(), String> {
     if report.resolution == expected {
         return Ok(());
     }
-    Err(format!(
+    Err(MigrationError::integrity(format!(
         "diagnosis report states resolution {:?} for a {:?} request, but its own provenance and \
          target contract resolve to {expected:?}",
         report.resolution, report.requested_strategy
-    ))
+    )))
 }
 
-fn validate_blockers(report: &DiagnosisReport) -> Result<(), String> {
+fn validate_blockers(report: &DiagnosisReport) -> Result<(), MigrationError> {
     let expected = blockers_for(&report.capabilities, &report.collections);
     if report.blockers == expected {
         return Ok(());
     }
-    Err(format!(
+    Err(MigrationError::integrity(format!(
         "diagnosis report blockers do not match its capabilities and absent collections: expected {expected:?}, got {:?}",
         report.blockers
-    ))
+    )))
 }
 
 /// Refuse a report from a binary with different diagnosis semantics.
-fn validate_format_version(version: u64) -> Result<(), String> {
+fn validate_format_version(version: u64) -> Result<(), MigrationError> {
     if version == u64::from(DIAGNOSIS_FORMAT_VERSION) {
         return Ok(());
     }
@@ -289,7 +297,7 @@ fn validate_format_version(version: u64) -> Result<(), String> {
     } else {
         "newer"
     };
-    Err(format!(
+    Err(MigrationError::precondition(format!(
         "diagnosis report format version {version} is {relation} than the supported version {DIAGNOSIS_FORMAT_VERSION}; run a fresh diagnosis with this binary"
-    ))
+    )))
 }

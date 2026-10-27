@@ -236,26 +236,45 @@ pub fn export_edges_verified(
     Ok(exported)
 }
 
+/// How two edge sets that should be equal are not: the sizes and the
+/// symmetric difference, never the tuples themselves. An operator debugging a
+/// mismatch wants to know HOW diverged before wading into WHAT, and the full
+/// tuples are one export away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct EdgeDivergence {
+    pub(super) left: usize,
+    pub(super) right: usize,
+    pub(super) in_only_one: usize,
+}
+
+impl std::fmt::Display for EdgeDivergence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} tuples on one side, {} on the other, {} present in only one of them",
+            self.left, self.right, self.in_only_one,
+        )
+    }
+}
+
 /// Whether two collections of edges hold the same SET OF TUPLES, every field
 /// included.
 ///
-/// The failure names the sizes and the symmetric difference count rather than
-/// the tuples themselves: an operator debugging a mismatch wants to know HOW
-/// diverged before wading into WHAT, and the full tuples are one export away.
-///
 /// # Errors
-/// A message describing the divergence when the sets differ.
-pub(super) fn same_edge_tuples(left: &[GraphEdge], right: &[GraphEdge]) -> Result<(), String> {
+/// The [`EdgeDivergence`] between the two sets when they differ.
+pub(super) fn same_edge_tuples(
+    left: &[GraphEdge],
+    right: &[GraphEdge],
+) -> Result<(), EdgeDivergence> {
     let (left, right) = (comparable(left), comparable(right));
     if left == right {
         return Ok(());
     }
-    Err(format!(
-        "{} tuples on one side, {} on the other, {} present in only one of them",
-        left.len(),
-        right.len(),
-        left.symmetric_difference(&right).count(),
-    ))
+    Err(EdgeDivergence {
+        left: left.len(),
+        right: right.len(),
+        in_only_one: left.symmetric_difference(&right).count(),
+    })
 }
 
 /// The canonical, orderable form of one edge: every field, with properties

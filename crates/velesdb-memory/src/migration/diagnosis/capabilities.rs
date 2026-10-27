@@ -1,6 +1,7 @@
 use super::{Capability, CollectionInventory, SourceProvenance};
 use crate::migration::diagnostic_copy::DiagnosticCopy;
 use crate::migration::enumeration::AGENT_COLLECTIONS;
+use crate::migration::MigrationError;
 use std::collections::BTreeMap;
 
 /// The complete v4 capability vocabulary, in `BTreeMap` iteration order.
@@ -87,16 +88,16 @@ pub(super) fn require_canonical_capability(
     capabilities: &BTreeMap<String, Capability>,
     name: &str,
     expected: &Capability,
-) -> Result<(), String> {
-    let actual = capabilities
-        .get(name)
-        .ok_or_else(|| format!("diagnosis capability `{name}` is missing"))?;
+) -> Result<(), MigrationError> {
+    let actual = capabilities.get(name).ok_or_else(|| {
+        MigrationError::integrity(format!("diagnosis capability `{name}` is missing"))
+    })?;
     if actual == expected {
         Ok(())
     } else {
-        Err(format!(
+        Err(MigrationError::integrity(format!(
             "diagnosis capability `{name}` is inconsistent with its report fields: expected {expected:?}, got {actual:?}"
-        ))
+        )))
     }
 }
 
