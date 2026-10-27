@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`InvalidFilter`, `AlreadyInstalled`). Both are `#[non_exhaustive]` and `Display`
   the same messages as before. A caller that matched the `String` reads
   `to_string()` or the variant; the Node and Python bindings map a `SettingError`
-  to their invalid-argument error as they did.
+  to their invalid-argument error as they did. The daemon prints a startup
+  refusal as `Error: <message>` (its `Display`), no longer through the `Debug`
+  rendering `main` returned it with, which showed a typed error as its fields.
 
 - **Migration and export failures are typed, not smuggled through
   `velesdb_core::Error::Query`.** Every refusal of the migration, online

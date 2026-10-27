@@ -55,7 +55,23 @@ use commands::{run_compile_stdin, run_export, run_migrate_embeddings};
 use serve::{apply_logging, requested_http_bind, serve_selected_transport};
 use startup::{build_configured_server, build_configured_service};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Exit status 1 with the error's `Display` after `Error: `.
+///
+/// `main` does not return the `Result` itself: the runtime would print it with
+/// `Debug`, which was a quoted message while every startup refusal was a
+/// `String` and is the variant's field dump (`MissingUrl { role: ".." }`) now
+/// that they are typed. An operator reads the message, not the enum.
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if let Some(result) = run_early_command(&args) {
         return result;
