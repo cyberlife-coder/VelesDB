@@ -1,4 +1,7 @@
 use super::*;
+use velesdb_core::config::{
+    QuantizationType, SearchConfig as CoreSearchConfig, SearchMode, VelesConfig as CoreVelesConfig,
+};
 
 /// Tests that stringify a `PyErr` need a live interpreter (error
 /// formatting goes through the Python C-API). Idempotent.
