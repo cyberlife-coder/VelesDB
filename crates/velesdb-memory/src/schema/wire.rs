@@ -74,9 +74,9 @@ impl WireInputSchema {
         Self(map)
     }
 
-    /// La carte en cours de construction, pour les passes des modules freres
-    /// qui reecrivent un schema d'ENTREE en place. Le type reste la barriere :
-    /// seule une `WireInputSchema` donne acces a cette carte.
+    /// La carte que les passes des modules freres reecrivent en place sur un
+    /// schema d'ENTREE. Le type reste la barriere : seule une
+    /// `WireInputSchema` livre cette carte.
     pub(super) fn map_mut(&mut self) -> &mut Map<String, Value> {
         &mut self.0
     }
