@@ -167,6 +167,9 @@ pub mod rerank;
 /// `format` keywords so strict MCP clients don't warn on every id field).
 mod schema;
 pub mod service;
+mod setting;
+#[cfg(all(test, any(feature = "embedder-http", feature = "extractor-http")))]
+mod setting_tests;
 /// The storage backend abstraction — [`storage::MemoryStore`] and the
 /// default, file-backed [`storage::NativeStore`]. Implement `MemoryStore` to
 /// run the wedge over a different backend (e.g. an in-memory one for WASM).
@@ -236,6 +239,7 @@ pub use remote_endpoint::embedder_env_endpoint;
 pub use remote_endpoint::{role_auth, RemoteEndpoint};
 pub use rerank::{DynReranker, RerankError, Reranker};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};
+pub use setting::SettingError;
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
 pub use storage::{ColumnStore, FactStore, GraphStore, RecallStore, AUTO_DATE_FIELD};

@@ -46,7 +46,9 @@ fn role_auth_refuses_a_blank_value() {
     let _env = env_guard();
     let key = "VELESDB_MEMORY_TEST_TOKEN_BLANK";
     std::env::set_var(key, "   ");
-    let err = role_auth(key).expect_err("a blank token must be refused, not sent as-is");
+    let err = role_auth(key)
+        .expect_err("a blank token must be refused, not sent as-is")
+        .to_string();
     assert!(
         err.contains(key),
         "the refusal must name the variable, got: {err}"
@@ -107,7 +109,9 @@ fn embedder_env_endpoint_propagates_a_blank_token() {
     clear_embedder_vars();
     std::env::set_var("VELESDB_MEMORY_EMBEDDER_API_TOKEN", " ");
 
-    let err = embedder_env_endpoint().expect_err("a blank token must fail resolution");
+    let err = embedder_env_endpoint()
+        .expect_err("a blank token must fail resolution")
+        .to_string();
     assert!(
         err.contains("VELESDB_MEMORY_EMBEDDER_API_TOKEN"),
         "got: {err}"
@@ -124,6 +128,7 @@ fn require_reports_which_variable_is_missing() {
     };
     let err = endpoint
         .require("VELESDB_MEMORY_EMBEDDER")
-        .expect_err("a missing url must fail");
+        .expect_err("a missing url must fail")
+        .to_string();
     assert!(err.contains("VELESDB_MEMORY_EMBEDDER_URL"), "got: {err}");
 }

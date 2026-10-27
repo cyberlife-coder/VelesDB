@@ -62,10 +62,23 @@ fn the_installer_ships_the_incident_preset_verbatim() {
 fn an_unparseable_value_is_refused_with_the_var_name() {
     // Refusal proven, not assumed: an operator who set a broken filter
     // asked for logs and must not silently get silence instead.
-    let err =
-        filter_from_raw(Some("velesdb=notalevel")).expect_err("an invalid level must be refused");
+    let err = filter_from_raw(Some("velesdb=notalevel"))
+        .expect_err("an invalid level must be refused")
+        .to_string();
     assert!(
         err.contains("VELESDB_MEMORY_LOG"),
         "the message must name the var to fix, got: {err}"
+    );
+}
+
+#[test]
+fn a_bad_filter_is_reported_as_an_invalid_filter_with_the_text_that_was_given() {
+    let error = filter_from_raw(Some("velesdb=notalevel"))
+        .map(drop)
+        .expect_err("an invalid level must be refused");
+
+    assert!(
+        matches!(&error, super::LoggingError::InvalidFilter { directives, .. } if directives == "velesdb=notalevel"),
+        "{error}"
     );
 }

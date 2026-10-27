@@ -6,6 +6,7 @@
 //! [`Embedder`] trait with a default on-device model and a deterministic,
 //! network-free fallback for tests and air-gapped reproducibility.
 
+use crate::setting::SettingError;
 #[cfg(feature = "embedder-http")]
 use serde::Deserialize;
 
@@ -161,8 +162,9 @@ impl std::fmt::Debug for EmbedderSelection {
 /// touching the binary.
 ///
 /// # Errors
-/// A human-readable message naming the accepted forms, for an unknown backend.
-pub fn select_embedder(backend: Option<&str>) -> Result<EmbedderSelection, String> {
+/// [`SettingError::UnknownEmbedder`], whose message names the accepted forms, for an
+/// unknown backend.
+pub fn select_embedder(backend: Option<&str>) -> Result<EmbedderSelection, SettingError> {
     match backend {
         // No `#[cfg]` on this arm, deliberately: `hash` is linked into every
         // build, including the published one that has no HTTP backend at all,
@@ -177,13 +179,9 @@ pub fn select_embedder(backend: Option<&str>) -> Result<EmbedderSelection, Strin
         // different URL — never a new name here. That is what stops this
         // `match` from growing a vendor list (#1730).
         Some("openai") => Ok(EmbedderSelection::NeedsRemoteConfig("openai")),
-        Some(other) => Err(format!(
-            "unknown embedding backend '{other}' (expected 'hash' for the \
-             offline deterministic embedder, 'ollama' for a local model, or \
-             'openai' for any OpenAI-compatible server — oMLX, llama.cpp, LM \
-             Studio, vLLM or a hosted provider, selected by URL rather than by \
-             name)"
-        )),
+        Some(other) => Err(SettingError::UnknownEmbedder {
+            name: other.to_owned(),
+        }),
     }
 }
 

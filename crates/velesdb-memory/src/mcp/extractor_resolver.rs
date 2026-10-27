@@ -1,6 +1,7 @@
 //! Resolve the default and per-call extraction backends for MCP tools.
 
 use crate::extract::{select_extractor, DynExtractor, ExtractorSelection};
+use crate::setting::SettingError;
 
 /// Failure to resolve the extractor for one `remember_extracted` call.
 pub(super) enum ExtractorResolveError {
@@ -40,11 +41,9 @@ impl ExtractorResolver {
     }
 
     /// Attach and name the backend selected by the daemon at startup.
-    pub(super) fn named(backend: String, extractor: DynExtractor) -> Result<Self, String> {
+    pub(super) fn named(backend: String, extractor: DynExtractor) -> Result<Self, SettingError> {
         match select_extractor(&backend)? {
-            ExtractorSelection::Disabled => {
-                Err("a disabled extractor cannot be attached as the default".to_owned())
-            }
+            ExtractorSelection::Disabled => Err(SettingError::ExtractionDisabled),
             ExtractorSelection::Ready(_) | ExtractorSelection::NeedsRemoteConfig(_) => Ok(Self {
                 default: Some(NamedExtractor {
                     backend: Some(backend),
@@ -79,7 +78,8 @@ impl ExtractorResolver {
     }
 
     fn resolve_requested(&self, backend: &str) -> Result<ResolvedExtractor, ExtractorResolveError> {
-        match select_extractor(backend).map_err(ExtractorResolveError::InvalidRequest)? {
+        match select_extractor(backend)
+            .map_err(|error| ExtractorResolveError::InvalidRequest(error.to_string()))? {
             ExtractorSelection::Ready(extractor) => Ok(ResolvedExtractor {
                 backend: Some(backend.to_owned()),
                 extractor,

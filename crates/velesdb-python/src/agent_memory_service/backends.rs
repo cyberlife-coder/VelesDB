@@ -1,6 +1,6 @@
 //! Choosing the embedder and the extractor the service is built with.
 
-use super::errors::to_py_err;
+use super::errors::{setting_error, to_py_err};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use velesdb_memory::{
@@ -26,8 +26,7 @@ pub(super) fn build_embedder(
     model: Option<String>,
 ) -> PyResult<(DynEmbedder, String, bool)> {
     let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
-    let selection =
-        select_embedder(kind.or(backend_env.as_deref())).map_err(PyValueError::new_err)?;
+    let selection = select_embedder(kind.or(backend_env.as_deref())).map_err(setting_error)?;
     match selection {
         EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned(), name != "hash")),
         EmbedderSelection::NeedsRemoteConfig("ollama") => {
@@ -51,7 +50,7 @@ fn build_ollama_embedder(
     url: Option<String>,
     model: Option<String>,
 ) -> PyResult<(DynEmbedder, String)> {
-    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(PyValueError::new_err)?;
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(setting_error)?;
     let url = url
         .or(env_endpoint.url)
         .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
@@ -68,10 +67,10 @@ fn build_ollama_embedder(
 /// caller can never end up with a token sitting in their own source file —
 /// see [`velesdb_memory::RemoteEndpoint::require`].
 fn build_openai_embedder() -> PyResult<(DynEmbedder, String)> {
-    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(PyValueError::new_err)?;
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(setting_error)?;
     let (url, model, auth) = env_endpoint
         .require("VELESDB_MEMORY_EMBEDDER")
-        .map_err(PyValueError::new_err)?;
+        .map_err(setting_error)?;
     let embedder = OpenAiEmbedder::new(url, model.clone(), auth)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     Ok((Box::new(embedder), model))

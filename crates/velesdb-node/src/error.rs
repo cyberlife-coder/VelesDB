@@ -52,6 +52,11 @@ pub fn invalid_input(msg: impl AsRef<str>) -> Error {
     )
 }
 
+/// A startup setting the caller got wrong: always their input to correct.
+pub fn setting_error(error: velesdb_memory::SettingError) -> Error {
+    invalid_input(error.to_string())
+}
+
 #[cfg(test)]
 #[path = "error_tests.rs"]
 mod error_tests;

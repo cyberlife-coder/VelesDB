@@ -34,6 +34,33 @@ use std::time::Instant;
 /// decision.
 pub const LOG_ENV_VAR: &str = "VELESDB_MEMORY_LOG";
 
+/// Why the daemon's log subscriber could not be set up from [`LOG_ENV_VAR`].
+///
+/// Either way the operator asked for logging and would not get what they
+/// asked for, so startup stops rather than running with something else.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LoggingError {
+    /// The value is not a list of `EnvFilter` directives.
+    #[error(
+        "{LOG_ENV_VAR}='{directives}' is not a valid filter ({reason}) — use EnvFilter \
+         directives, e.g. 'info' or 'info,rmcp=debug', or unset it for silence"
+    )]
+    InvalidFilter {
+        /// The directives as the operator wrote them.
+        directives: String,
+        /// The parser's own explanation.
+        reason: String,
+    },
+
+    /// A global subscriber is already installed for this process.
+    #[error("{LOG_ENV_VAR}: cannot install the log subscriber: {reason}")]
+    AlreadyInstalled {
+        /// Why the installation was refused.
+        reason: String,
+    },
+}
+
 /// The filter an operator should run to diagnose a session incident (#1727):
 /// this crate's per-request events, plus rmcp's session-lifecycle signals —
 /// and **no client content, ever**, which is the property that makes it safe
@@ -71,13 +98,14 @@ pub const INCIDENT_PRESET: &str = "info,rmcp::service=error,rmcp::transport::wor
 /// Unset or blank installs nothing — see the module docs.
 ///
 /// # Errors
-/// A value that does not parse as `EnvFilter` directives, or a subscriber
-/// already installed for this process. Both abort startup rather than run
+/// [`LoggingError::InvalidFilter`] for a value that does not parse as `EnvFilter`
+/// directives, [`LoggingError::AlreadyInstalled`] for a subscriber already
+/// installed for this process. Both abort startup rather than run
 /// the daemon with logging silently different from what the operator asked
 /// for — same posture as the config file (`crate::config`): a daemon
 /// quietly running on defaults the operator believes they overrode is worse
 /// than a loud failure at boot.
-pub fn init_from_env() -> Result<(), String> {
+pub fn init_from_env() -> Result<(), LoggingError> {
     match filter_from_raw(std::env::var(LOG_ENV_VAR).ok().as_deref())? {
         None => Ok(()),
         Some(filter) => install(filter),
@@ -95,29 +123,32 @@ pub fn init_from_env() -> Result<(), String> {
 /// # Errors
 /// A set, non-blank value that `EnvFilter` refuses, with the exact
 /// directive text and the var's name in the message.
-fn filter_from_raw(raw: Option<&str>) -> Result<Option<tracing_subscriber::EnvFilter>, String> {
+fn filter_from_raw(
+    raw: Option<&str>,
+) -> Result<Option<tracing_subscriber::EnvFilter>, LoggingError> {
     let Some(directives) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
     tracing_subscriber::EnvFilter::try_new(directives)
         .map(Some)
-        .map_err(|err| {
-            format!(
-                "{LOG_ENV_VAR}='{directives}' is not a valid filter ({err}) — use EnvFilter \
-                 directives, e.g. 'info' or 'info,rmcp=debug', or unset it for silence"
-            )
+        .map_err(|err| LoggingError::InvalidFilter {
+            directives: directives.to_owned(),
+            reason: err.to_string(),
         })
 }
 
 /// Install the stderr `fmt` subscriber filtered by `filter`.
-fn install(filter: tracing_subscriber::EnvFilter) -> Result<(), String> {
+fn install(filter: tracing_subscriber::EnvFilter) -> Result<(), LoggingError> {
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .finish();
-    tracing::subscriber::set_global_default(subscriber)
-        .map_err(|err| format!("{LOG_ENV_VAR}: cannot install the log subscriber: {err}"))
+    tracing::subscriber::set_global_default(subscriber).map_err(|err| {
+        LoggingError::AlreadyInstalled {
+            reason: err.to_string(),
+        }
+    })
 }
 
 /// What the `session` field carries when a request has none (stdio, or an

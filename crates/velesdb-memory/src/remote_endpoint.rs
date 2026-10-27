@@ -14,6 +14,7 @@
 #[cfg(feature = "embedder-http")]
 use crate::config::{alias_conflict_notice, resolve_alias};
 use crate::http_client::Auth;
+use crate::setting::SettingError;
 
 /// A remote backend's configuration, read from one role's environment.
 #[derive(Debug)]
@@ -44,19 +45,14 @@ impl RemoteEndpoint {
     /// roles are configured independently on purpose.
     ///
     /// # Errors
-    /// A message naming the exact variable that is missing, per role.
-    pub fn require(self, prefix: &str) -> Result<(String, String, Auth), String> {
-        let url = self.url.ok_or_else(|| {
-            format!(
-                "{prefix}=openai requires {prefix}_URL — the server's origin and port, \
-                 no path (e.g. http://localhost:8020). There is no default: `openai` \
-                 is a protocol, and only you know which server speaks it here."
-            )
+    /// [`SettingError::MissingUrl`] or [`SettingError::MissingModel`], naming the exact
+    /// variable that is missing for the role.
+    pub fn require(self, prefix: &str) -> Result<(String, String, Auth), SettingError> {
+        let url = self.url.ok_or_else(|| SettingError::MissingUrl {
+            role: prefix.to_owned(),
         })?;
-        let model = self.model.ok_or_else(|| {
-            format!(
-                "{prefix}=openai requires {prefix}_MODEL — the model identifier the server expects"
-            )
+        let model = self.model.ok_or_else(|| SettingError::MissingModel {
+            role: prefix.to_owned(),
         })?;
         Ok((url, model, self.auth))
     }
@@ -81,14 +77,12 @@ fn env_opt(name: &str) -> Option<String> {
 /// unset: unset means "send no credential", while empty is a caller whose
 /// shell expansion produced nothing, and silently sending no credential would
 /// surface as a `401` they cannot explain.
-pub fn role_auth(name: &str) -> Result<Auth, String> {
+pub fn role_auth(name: &str) -> Result<Auth, SettingError> {
     match env_opt(name) {
         None => Ok(Auth::None),
-        Some(token) if token.trim().is_empty() => Err(format!(
-            "{name} is set but empty — unset it entirely to send no credential. An \
-             empty token would go out as `Authorization: Bearer `, which a server \
-             rejects as a bad credential rather than a missing one."
-        )),
+        Some(token) if token.trim().is_empty() => Err(SettingError::BlankToken {
+            variable: name.to_owned(),
+        }),
         Some(token) => Ok(Auth::Bearer(token)),
     }
 }
@@ -104,7 +98,7 @@ pub fn role_auth(name: &str) -> Result<Auth, String> {
 /// # Errors
 /// An `_API_TOKEN` that is set but empty.
 #[cfg(feature = "embedder-http")]
-pub fn embedder_env_endpoint() -> Result<(RemoteEndpoint, Option<String>), String> {
+pub fn embedder_env_endpoint() -> Result<(RemoteEndpoint, Option<String>), SettingError> {
     let url = resolve_alias(
         env_opt("VELESDB_MEMORY_EMBEDDER_URL").as_deref(),
         env_opt("VELESDB_MEMORY_OLLAMA_URL").as_deref(),

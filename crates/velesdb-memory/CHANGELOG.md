@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: the startup settings fail with `SettingError` and
+  `LoggingError`, not `String`.** `select_embedder`, `select_extractor`,
+  `RemoteEndpoint::require`, `role_auth`, `embedder_env_endpoint` and
+  `McpServer::with_named_extractor` used to return `Result<_, String>`, and every
+  language binding wrapped the message in its own invalid-argument error. They
+  return the new `SettingError` (`UnknownEmbedder`, `UnknownExtractor`,
+  `MissingUrl`, `MissingModel`, `BlankToken`, `ExtractionDisabled`), which names the
+  setting that is wrong; `logging::init_from_env` returns `LoggingError`
+  (`InvalidFilter`, `AlreadyInstalled`). Both are `#[non_exhaustive]` and `Display`
+  the same messages as before. A caller that matched the `String` reads
+  `to_string()` or the variant; the Node and Python bindings map a `SettingError`
+  to their invalid-argument error as they did.
+
 - **Migration and export failures are typed, not smuggled through
   `velesdb_core::Error::Query`.** Every refusal of the migration, online
   migration, switchover, diagnostic copy and export paths (a missing workspace,

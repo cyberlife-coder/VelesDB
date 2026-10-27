@@ -32,3 +32,8 @@ fn known_category_err(category: ErrorCategory, msg: String) -> Option<PyErr> {
         _ => return None,
     })
 }
+
+/// A startup setting the caller got wrong: always a `ValueError` to correct.
+pub(super) fn setting_error(error: velesdb_memory::SettingError) -> PyErr {
+    PyValueError::new_err(error.to_string())
+}

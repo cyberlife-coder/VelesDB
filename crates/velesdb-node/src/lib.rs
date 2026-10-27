@@ -66,7 +66,7 @@ use crate::dto::{
     ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
     FusionOptionsJs, LinkJs, RecollectionJs, RememberedExtractionJs, UnrelateJs,
 };
-use crate::error::{invalid_input, to_napi_err, CODE_INTERNAL};
+use crate::error::{invalid_input, setting_error, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
 
 /// Resolve and build the requested embedder, returning it alongside the model
@@ -86,7 +86,7 @@ fn build_embedder(
     model: Option<String>,
 ) -> napi::Result<(DynEmbedder, String, bool)> {
     let backend_env = std::env::var("VELESDB_MEMORY_EMBEDDER").ok();
-    let selection = select_embedder(kind.or(backend_env.as_deref())).map_err(invalid_input)?;
+    let selection = select_embedder(kind.or(backend_env.as_deref())).map_err(setting_error)?;
     match selection {
         EmbedderSelection::Ready(name, embedder) => Ok((embedder, name.to_owned(), name != "hash")),
         EmbedderSelection::NeedsRemoteConfig("ollama") => {
@@ -110,7 +110,7 @@ fn build_ollama_embedder(
     url: Option<String>,
     model: Option<String>,
 ) -> napi::Result<(DynEmbedder, String)> {
-    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(invalid_input)?;
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(setting_error)?;
     let url = url
         .or(env_endpoint.url)
         .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_owned());
@@ -127,10 +127,10 @@ fn build_ollama_embedder(
 /// never end up with a token sitting in their own source file — see
 /// [`velesdb_memory::RemoteEndpoint::require`].
 fn build_openai_embedder() -> napi::Result<(DynEmbedder, String)> {
-    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(invalid_input)?;
+    let (env_endpoint, _alias_conflict) = embedder_env_endpoint().map_err(setting_error)?;
     let (url, model, auth) = env_endpoint
         .require("VELESDB_MEMORY_EMBEDDER")
-        .map_err(invalid_input)?;
+        .map_err(setting_error)?;
     let embedder = OpenAiEmbedder::new(url, model.clone(), auth)
         .map_err(|e| napi::Error::from_reason(format!("[{CODE_INTERNAL}] {e}")))?;
     Ok((Box::new(embedder), model))

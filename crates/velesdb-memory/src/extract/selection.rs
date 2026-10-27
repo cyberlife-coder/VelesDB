@@ -1,6 +1,7 @@
 //! Resolving an extraction backend name to what the caller must do about it.
 
 use super::{DynExtractor, OutlineExtractor};
+use crate::setting::SettingError;
 
 /// What a caller must do to honour a requested extraction backend.
 ///
@@ -58,8 +59,9 @@ impl std::fmt::Debug for ExtractorSelection {
 /// real server with the result, instead of proving a seam written for the test.
 ///
 /// # Errors
-/// A human-readable message naming the accepted forms, for an unknown backend.
-pub fn select_extractor(backend: &str) -> Result<ExtractorSelection, String> {
+/// [`SettingError::UnknownExtractor`], whose message names the accepted forms, for an
+/// unknown backend.
+pub fn select_extractor(backend: &str) -> Result<ExtractorSelection, SettingError> {
     match backend {
         // No `#[cfg]` here, and that absence IS the fix: this arm must survive
         // in a build without any HTTP feature, which is exactly the build the
@@ -73,13 +75,9 @@ pub fn select_extractor(backend: &str) -> Result<ExtractorSelection, String> {
         // operator who learned one has learned the other.
         "openai" => Ok(ExtractorSelection::NeedsRemoteConfig("openai")),
         "none" | "" => Ok(ExtractorSelection::Disabled),
-        other => Err(format!(
-            "unknown extraction backend '{other}' (expected 'outline' for the \
-             offline deterministic reader, 'ollama' for a local generative \
-             model, 'openai' for any OpenAI-compatible server — oMLX, \
-             llama.cpp, LM Studio, vLLM or a hosted provider, selected by URL \
-             rather than by name — or 'none')"
-        )),
+        other => Err(SettingError::UnknownExtractor {
+            name: other.to_owned(),
+        }),
     }
 }
 

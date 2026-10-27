@@ -235,12 +235,13 @@ impl McpServer {
     /// omits its per-call `extractor` choice.
     ///
     /// # Errors
-    /// Returns an error when `backend` is unknown or disables extraction.
+    /// [`crate::SettingError::UnknownExtractor`] when `backend` is unknown, and
+    /// [`crate::SettingError::ExtractionDisabled`] when it disables extraction.
     pub fn with_named_extractor(
         self,
         backend: impl Into<String>,
         extractor: DynExtractor,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, crate::SettingError> {
         *self.extractors.write() = ExtractorResolver::named(backend.into(), extractor)?;
         Ok(self)
     }

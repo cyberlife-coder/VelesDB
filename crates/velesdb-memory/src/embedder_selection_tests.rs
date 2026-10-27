@@ -69,7 +69,9 @@ fn an_empty_value_is_refused_like_any_other_unknown_name() {
     // This is also where the embedder legitimately diverges from
     // [`crate::select_extractor`], which reads `""` as `none`: "no extraction"
     // is a real choice, "no embedder" is not.
-    let err = select_embedder(Some("")).expect_err("an empty backend name is not a selection");
+    let err = select_embedder(Some(""))
+        .expect_err("an empty backend name is not a selection")
+        .to_string();
     assert!(
         err.contains("hash") && err.contains("ollama") && err.contains("openai"),
         "the refusal must name the accepted forms, got: {err}"
@@ -82,7 +84,9 @@ fn an_unknown_backend_names_the_accepted_forms() {
     // of the whole protocol split is that reaching a new server is a different
     // URL rather than a new name here — so the refusal must steer a user who
     // typed their vendor towards the protocol they actually speak.
-    let err = select_embedder(Some("lmstudio")).expect_err("`lmstudio` is not a backend name");
+    let err = select_embedder(Some("lmstudio"))
+        .expect_err("`lmstudio` is not a backend name")
+        .to_string();
     assert!(
         err.contains("lmstudio"),
         "the refusal must quote what was asked for, got: {err}"
