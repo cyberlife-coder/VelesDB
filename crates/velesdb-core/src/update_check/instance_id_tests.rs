@@ -516,3 +516,17 @@ fn test_dangling_symlink_named_like_an_install_file_is_not_followed() {
         );
     }
 }
+
+#[test]
+fn test_directory_named_like_an_install_file_is_unusable() {
+    for name in [LOCK_NAME, FILE_NAME] {
+        let tmp = TempDir::new().expect("tempdir");
+        std::fs::create_dir(tmp.path().join(name)).expect("create directory");
+        let dir = tmp.path().to_path_buf();
+        let loaded = within(10, move || load_or_create(&dir));
+        assert!(
+            loaded.is_none(),
+            "{name}: a directory in the place of an install file must make the dir unusable"
+        );
+    }
+}
