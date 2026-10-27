@@ -6,6 +6,11 @@
 //! service **embeds text itself**, so the constructor selects an embedder. It
 //! wraps the exact same hardened Rust used by the MCP server — no logic is
 //! reimplemented here.
+//!
+//! This file holds the `MemoryService` class itself. What it converts through
+//! lives beside it: `errors` (a `MemoryError` as a Python exception),
+//! `filters` (the `recall_where` tuples), `backends` (choosing the embedder
+//! and the extractor) and `marshal` (memory types as dicts and lists).
 
 mod backends;
 mod errors;
