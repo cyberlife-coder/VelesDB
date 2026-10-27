@@ -137,22 +137,22 @@ where
 /// module returns. Defined once: six private copies of the old single
 /// conversion had already drifted into two signatures.
 pub(crate) fn not_found(message: impl Into<String>) -> crate::MemoryError {
-    MigrationError::NotFound(message.into()).into()
+    MigrationError::not_found(message).into()
 }
 
 /// See [`MigrationError::Precondition`].
 pub(crate) fn precondition(message: impl Into<String>) -> crate::MemoryError {
-    MigrationError::Precondition(message.into()).into()
+    MigrationError::precondition(message).into()
 }
 
 /// See [`MigrationError::Environment`].
 pub(crate) fn environment(message: impl Into<String>) -> crate::MemoryError {
-    MigrationError::Environment(message.into()).into()
+    MigrationError::environment(message).into()
 }
 
 /// See [`MigrationError::Integrity`].
 pub(crate) fn integrity(message: impl Into<String>) -> crate::MemoryError {
-    MigrationError::Integrity(message.into()).into()
+    MigrationError::integrity(message).into()
 }
 
 #[cfg(test)]

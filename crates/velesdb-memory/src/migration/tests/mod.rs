@@ -31,6 +31,7 @@ mod execute;
 mod orchestrate;
 mod rebuild;
 mod rebuild_state;
+mod state_errors;
 mod state_persistence;
 mod switchover;
 mod validate;

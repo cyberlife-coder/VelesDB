@@ -105,7 +105,8 @@ fn a_v2_state_is_refused_for_predating_rebuild_progress() {
     .expect("write v2 state");
 
     let refusal = MigrationState::read(workspace.path())
-        .expect_err("a v2 state must be refused, not silently upgraded");
+        .expect_err("a v2 state must be refused, not silently upgraded")
+        .to_string();
     assert!(
         refusal.contains("version 2") && refusal.contains(&STATE_FORMAT_VERSION.to_string()),
         "the refusal must name both versions: {refusal}"
@@ -157,7 +158,8 @@ fn progress_may_advance_or_repeat_but_never_regress() {
         candidate.insert("_semantic_memory".to_owned(), regressed);
         let refusal = state_with_progress(candidate)
             .write(workspace.path(), &lock)
-            .expect_err("a journal that can regress is a scratchpad");
+            .expect_err("a journal that can regress is a scratchpad")
+            .to_string();
         assert!(
             refusal.contains("_semantic_memory"),
             "refusing {label} must name the collection: {refusal}"
@@ -172,7 +174,8 @@ fn progress_may_advance_or_repeat_but_never_regress() {
     skipped.insert("_semantic_memory".to_owned(), CollectionProgress::Complete);
     let refusal = state_with_progress(skipped)
         .write(workspace.path(), &lock)
-        .expect_err("Complete without passing through Edges means the edge pass never ran");
+        .expect_err("Complete without passing through Edges means the edge pass never ran")
+        .to_string();
     assert!(
         refusal.contains("_semantic_memory"),
         "the refusal must name the collection: {refusal}"
@@ -192,7 +195,8 @@ fn progress_may_advance_or_repeat_but_never_regress() {
     reopened.insert("_semantic_memory".to_owned(), CollectionProgress::Edges);
     let refusal = state_with_progress(reopened)
         .write(workspace.path(), &lock)
-        .expect_err("a completed collection cannot be reopened");
+        .expect_err("a completed collection cannot be reopened")
+        .to_string();
     assert!(
         refusal.contains("_semantic_memory"),
         "the refusal must name the collection: {refusal}"
@@ -229,7 +233,8 @@ fn the_phase_cannot_leave_prepared_while_any_collection_is_unfinished() {
     premature.phase = Phase::DestinationValidated;
     let refusal = premature
         .write(workspace.path(), &lock)
-        .expect_err("validating a destination whose rebuild is unfinished");
+        .expect_err("validating a destination whose rebuild is unfinished")
+        .to_string();
     assert!(
         refusal.contains("_episodic_memory"),
         "the refusal must name the unfinished collection: {refusal}"
@@ -257,7 +262,8 @@ fn progress_keys_must_be_exactly_the_agent_collections() {
     missing.remove("_procedural_memory");
     let refusal = state_with_progress(missing)
         .write(workspace.path(), &lock)
-        .expect_err("a journal silently dropping a collection would skip its rebuild");
+        .expect_err("a journal silently dropping a collection would skip its rebuild")
+        .to_string();
     assert!(
         refusal.contains("_procedural_memory"),
         "the refusal must name the absent collection: {refusal}"
@@ -270,7 +276,8 @@ fn progress_keys_must_be_exactly_the_agent_collections() {
     );
     let refusal = state_with_progress(extra)
         .write(workspace.path(), &lock)
-        .expect_err("a journal tracking an unknown collection describes work nobody will do");
+        .expect_err("a journal tracking an unknown collection describes work nobody will do")
+        .to_string();
     assert!(
         refusal.contains("_not_a_collection"),
         "the refusal must name the unknown collection: {refusal}"

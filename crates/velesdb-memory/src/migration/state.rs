@@ -2,6 +2,8 @@ use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use super::error::MigrationError;
+
 mod lock;
 mod resume;
 mod switch;
@@ -154,7 +156,7 @@ impl MigrationState {
         source_fingerprint: &str,
         target_model: &str,
         target_dimension: usize,
-    ) -> Result<(), String> {
+    ) -> Result<(), MigrationError> {
         validate_current_state_version(self)?;
         validate_state_semantics(self)?;
         validate_migration_identity(
@@ -162,10 +164,12 @@ impl MigrationState {
             source_fingerprint,
             target_model,
             target_dimension,
-        )
-        .map_err(|reason| {
-            format!("cannot resume against an invalid requested identity: {reason}")
-        })?;
+            |reason| {
+                MigrationError::precondition(format!(
+                    "cannot resume against an invalid requested identity: {reason}"
+                ))
+            },
+        )?;
         resume::validate_resume_source(self, source_path)?;
         resume::validate_resume_fingerprint(self, source_fingerprint)?;
         resume::validate_resume_model(self, target_model)?;
@@ -183,17 +187,20 @@ impl MigrationState {
     /// # Errors
     /// The file is unreadable, is not JSON, or is stamped with a version newer
     /// from [`STATE_FORMAT_VERSION`].
-    pub fn read(workspace: &Path) -> Result<Option<Self>, String> {
+    pub fn read(workspace: &Path) -> Result<Option<Self>, MigrationError> {
         let Some(value) = read_state_value(workspace)? else {
             return Ok(None);
         };
         let version = serialized_state_version(&value)?;
         validate_serialized_state_version(version)?;
         let state: Self = serde_json::from_value(value).map_err(|err| {
-            format!("{STATE_FILE} is version {version} but does not parse: {err}")
+            MigrationError::integrity(format!(
+                "{STATE_FILE} is version {version} but does not parse: {err}"
+            ))
         })?;
-        validate_state_semantics(&state)
-            .map_err(|reason| format!("{STATE_FILE} has invalid semantics: {reason}"))?;
+        validate_state_semantics(&state).map_err(|reason| {
+            MigrationError::integrity(format!("{STATE_FILE} has invalid semantics: {reason}"))
+        })?;
         Ok(Some(state))
     }
 
@@ -208,14 +215,15 @@ impl MigrationState {
     /// # Errors
     /// The lock does not guard this workspace, an existing state is invalid,
     /// staging is ambiguous, or any write/durability step fails.
-    pub fn write(&self, workspace: &Path, lock: &MigrationLock) -> Result<(), String> {
+    pub fn write(&self, workspace: &Path, lock: &MigrationLock) -> Result<(), MigrationError> {
         lock.verify_workspace(workspace)?;
         validate_current_state_version(self)?;
         validate_state_semantics(self)?;
         let existing = validate_existing_state(workspace)?;
         validate_state_update(existing.as_ref(), self)?;
-        let body = serde_json::to_string_pretty(self)
-            .map_err(|err| format!("cannot serialise the migration state: {err}"))?;
+        let body = serde_json::to_string_pretty(self).map_err(|err| {
+            MigrationError::integrity(format!("cannot serialise the migration state: {err}"))
+        })?;
         // Re-check ownership immediately before the first mutation. Validation
         // above can be arbitrarily slow on a hostile filesystem; a stale
         // handle must not create even the staging file after an ABA replacement.
@@ -229,26 +237,30 @@ impl MigrationState {
     }
 }
 
-fn read_state_value(workspace: &Path) -> Result<Option<Value>, String> {
+fn read_state_value(workspace: &Path) -> Result<Option<Value>, MigrationError> {
     let path = workspace.join(STATE_FILE);
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(format!("cannot read {STATE_FILE}: {err}")),
+        Err(err) => {
+            return Err(MigrationError::environment(format!(
+                "cannot read {STATE_FILE}: {err}"
+            )))
+        }
     };
-    serde_json::from_str(&raw)
-        .map(Some)
-        .map_err(|err| format!("{STATE_FILE} is not readable JSON: {err}"))
+    serde_json::from_str(&raw).map(Some).map_err(|err| {
+        MigrationError::integrity(format!("{STATE_FILE} is not readable JSON: {err}"))
+    })
 }
 
-fn serialized_state_version(value: &Value) -> Result<u64, String> {
+fn serialized_state_version(value: &Value) -> Result<u64, MigrationError> {
     value
         .get("format_version")
         .and_then(Value::as_u64)
-        .ok_or_else(|| format!("{STATE_FILE} carries no format_version"))
+        .ok_or_else(|| MigrationError::integrity(format!("{STATE_FILE} carries no format_version")))
 }
 
-fn validate_serialized_state_version(version: u64) -> Result<(), String> {
+fn validate_serialized_state_version(version: u64) -> Result<(), MigrationError> {
     if version == u64::from(STATE_FORMAT_VERSION) {
         return Ok(());
     }
@@ -257,12 +269,12 @@ fn validate_serialized_state_version(version: u64) -> Result<(), String> {
     } else {
         "Use the version that wrote it."
     };
-    Err(format!(
+    Err(MigrationError::precondition(format!(
         "{STATE_FILE} is version {version} and this build requires version {STATE_FORMAT_VERSION}. Refusing incompatible migration semantics. {action}"
-    ))
+    )))
 }
 
-fn validate_current_state_version(state: &MigrationState) -> Result<(), String> {
+fn validate_current_state_version(state: &MigrationState) -> Result<(), MigrationError> {
     if state.format_version == STATE_FORMAT_VERSION {
         return Ok(());
     }
@@ -271,19 +283,20 @@ fn validate_current_state_version(state: &MigrationState) -> Result<(), String> 
     } else {
         "Use the version that wrote it."
     };
-    Err(format!(
+    Err(MigrationError::precondition(format!(
         "this migration state is version {} and this build requires version {}. \
          Resuming across incompatible state semantics is unsafe. {action}",
         state.format_version, STATE_FORMAT_VERSION,
-    ))
+    )))
 }
 
-fn validate_state_semantics(state: &MigrationState) -> Result<(), String> {
+fn validate_state_semantics(state: &MigrationState) -> Result<(), MigrationError> {
     validate_migration_identity(
         &state.source_path,
         &state.source_fingerprint,
         &state.target_model,
         state.target_dimension,
+        MigrationError::integrity,
     )?;
     validate_progress_keys(state)?;
     validate_phase_against_progress(state)?;
@@ -292,7 +305,7 @@ fn validate_state_semantics(state: &MigrationState) -> Result<(), String> {
 
 /// A present witness must be a well-formed digest, not free text an editor
 /// could plausibly have typed.
-fn validate_embedder_witness(state: &MigrationState) -> Result<(), String> {
+fn validate_embedder_witness(state: &MigrationState) -> Result<(), MigrationError> {
     let Some(witness) = &state.embedder_witness else {
         return Ok(());
     };
@@ -305,31 +318,30 @@ fn validate_embedder_witness(state: &MigrationState) -> Result<(), String> {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         });
     if digest.is_none() {
-        return Err(
+        return Err(MigrationError::integrity(
             "embedder_witness must be exactly 'sha256:' followed by 64 lowercase hexadecimal \
-             characters"
-                .to_owned(),
-        );
+             characters",
+        ));
     }
     Ok(())
 }
 
 /// The progress map must cover exactly the agent collections.
-fn validate_progress_keys(state: &MigrationState) -> Result<(), String> {
+fn validate_progress_keys(state: &MigrationState) -> Result<(), MigrationError> {
     for name in super::enumeration::AGENT_COLLECTIONS {
         if !state.progress.contains_key(*name) {
-            return Err(format!(
+            return Err(MigrationError::integrity(format!(
                 "progress carries no entry for collection '{name}'; a resume would \
                  silently skip its rebuild"
-            ));
+            )));
         }
     }
     for name in state.progress.keys() {
         if !super::enumeration::AGENT_COLLECTIONS.contains(&name.as_str()) {
-            return Err(format!(
+            return Err(MigrationError::integrity(format!(
                 "progress tracks '{name}', which is not an agent collection; this \
                  journal describes work nobody will do"
-            ));
+            )));
         }
     }
     Ok(())
@@ -338,19 +350,19 @@ fn validate_progress_keys(state: &MigrationState) -> Result<(), String> {
 /// A phase past [`Phase::Prepared`] asserts the rebuild is finished, so every
 /// collection must say so too — otherwise the journal contradicts itself and
 /// a later phase would validate, archive, or activate a half-built store.
-fn validate_phase_against_progress(state: &MigrationState) -> Result<(), String> {
+fn validate_phase_against_progress(state: &MigrationState) -> Result<(), MigrationError> {
     if state.phase == Phase::Prepared {
         return Ok(());
     }
     for (name, progress) in &state.progress {
         if *progress != CollectionProgress::Complete {
-            return Err(format!(
+            return Err(MigrationError::integrity(format!(
                 "phase {:?} asserts the rebuild is finished, but collection \
                  '{name}' stands at {progress:?}; the phase cannot leave \
                  {:?} while any collection is unfinished",
                 state.phase,
                 Phase::Prepared,
-            ));
+            )));
         }
     }
     Ok(())
@@ -361,15 +373,16 @@ fn validate_migration_identity(
     source_fingerprint: &str,
     target_model: &str,
     target_dimension: usize,
-) -> Result<(), String> {
+    fail: impl Fn(String) -> MigrationError,
+) -> Result<(), MigrationError> {
     if !source_path.is_absolute()
         || source_path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        return Err(
+        return Err(fail(
             "source_path must be an absolute normalized path produced by diagnosis".to_owned(),
-        );
+        ));
     }
     let digest = source_fingerprint
         .strip_prefix("sha256-tree-v2:")
@@ -380,16 +393,18 @@ fn validate_migration_identity(
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         });
     if digest.is_none() {
-        return Err(
+        return Err(fail(
             "source_fingerprint must be exactly 'sha256-tree-v2:' followed by 64 lowercase hexadecimal characters"
                 .to_owned(),
-        );
+        ));
     }
     if target_model.trim().is_empty() {
-        return Err("target_model must not be empty".to_owned());
+        return Err(fail("target_model must not be empty".to_owned()));
     }
     if target_dimension == 0 {
-        return Err("target_dimension must be greater than zero".to_owned());
+        return Err(fail(
+            "target_dimension must be greater than zero".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -397,14 +412,14 @@ fn validate_migration_identity(
 fn validate_state_update(
     existing: Option<&MigrationState>,
     candidate: &MigrationState,
-) -> Result<(), String> {
+) -> Result<(), MigrationError> {
     let Some(existing) = existing else {
         if candidate.phase != Phase::Prepared {
-            return Err(format!(
+            return Err(MigrationError::precondition(format!(
                 "a new migration journal must start at {:?}, not {:?}; refusing to invent skipped work",
                 Phase::Prepared,
                 candidate.phase
-            ));
+            )));
         }
         return Ok(());
     };
@@ -442,15 +457,15 @@ fn validate_state_update(
         None
     };
     if let Some(drift) = immutable_drift {
-        return Err(format!(
+        return Err(MigrationError::precondition(format!(
             "refusing to rewrite migration identity: {drift}. Start a fresh migration instead"
-        ));
+        )));
     }
     if !candidate.phase.may_follow(existing.phase) {
-        return Err(format!(
+        return Err(MigrationError::precondition(format!(
             "refusing migration phase transition from {:?} to {:?}: journal updates may be idempotent or advance exactly one phase, never regress or skip work",
             existing.phase, candidate.phase
-        ));
+        )));
     }
     validate_progress_advance(existing, candidate)
 }
@@ -462,38 +477,44 @@ fn validate_state_update(
 fn validate_progress_advance(
     existing: &MigrationState,
     candidate: &MigrationState,
-) -> Result<(), String> {
+) -> Result<(), MigrationError> {
     for (name, after) in &candidate.progress {
         let Some(before) = existing.progress.get(name) else {
             continue;
         };
         if !after.may_follow(*before) {
-            return Err(format!(
+            return Err(MigrationError::precondition(format!(
                 "refusing progress regression on collection '{name}': the journal \
                  records {before:?} and the update asserts {after:?}; a rebuild \
                  journal may repeat or advance, never regress"
-            ));
+            )));
         }
     }
     Ok(())
 }
 
-fn validate_existing_state(workspace: &Path) -> Result<Option<MigrationState>, String> {
+fn validate_existing_state(workspace: &Path) -> Result<Option<MigrationState>, MigrationError> {
     let path = workspace.join(STATE_FILE);
     let metadata = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(format!("cannot inspect existing {STATE_FILE}: {err}")),
+        Err(err) => {
+            return Err(MigrationError::environment(format!(
+                "cannot inspect existing {STATE_FILE}: {err}"
+            )))
+        }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(format!(
+        return Err(MigrationError::precondition(format!(
             "refusing to replace {STATE_FILE}: {} is a symlink, directory, or special file",
             path.display()
-        ));
+        )));
     }
-    MigrationState::read(workspace)?
-        .map(Some)
-        .ok_or_else(|| format!("{STATE_FILE} disappeared while it was being validated"))
+    MigrationState::read(workspace)?.map(Some).ok_or_else(|| {
+        MigrationError::integrity(format!(
+            "{STATE_FILE} disappeared while it was being validated"
+        ))
+    })
 }
 
 pub(super) fn commit_state_with<P, B>(
@@ -501,7 +522,7 @@ pub(super) fn commit_state_with<P, B>(
     body: &[u8],
     promote: P,
     durability_barrier: B,
-) -> Result<(), String>
+) -> Result<(), MigrationError>
 where
     P: FnOnce(&Path, &Path) -> std::io::Result<()>,
     B: FnOnce(&Path, &Path) -> std::io::Result<()>,
@@ -515,12 +536,16 @@ where
     {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(format!(
+            return Err(MigrationError::precondition(format!(
                 "refusing to overwrite pre-existing {STATE_TEMP_FILE} at {}: it may be evidence of an interrupted state write; inspect and remove that exact file manually",
                 temporary.display()
-            ));
+            )));
         }
-        Err(err) => return Err(format!("cannot create {STATE_TEMP_FILE}: {err}")),
+        Err(err) => {
+            return Err(MigrationError::environment(format!(
+                "cannot create {STATE_TEMP_FILE}: {err}"
+            )))
+        }
     };
 
     let write_result = (|| {
@@ -543,20 +568,22 @@ where
         );
     }
     durability_barrier(workspace, &final_path).map_err(|err| {
-        format!(
+        MigrationError::environment(format!(
             "{STATE_FILE} was replaced and is visible, but its durability could not be confirmed: {err}. Do not retry blindly; inspect the state before continuing"
-        )
+        ))
     })
 }
 
-fn cleanup_uncommitted_temp(temporary: &Path, primary: String) -> Result<(), String> {
+fn cleanup_uncommitted_temp(temporary: &Path, primary: String) -> Result<(), MigrationError> {
     match std::fs::remove_file(temporary) {
-        Ok(()) => Err(primary),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(primary),
-        Err(err) => Err(format!(
+        Ok(()) => Err(MigrationError::environment(primary)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err(MigrationError::environment(primary))
+        }
+        Err(err) => Err(MigrationError::environment(format!(
             "{primary}; additionally, cannot remove {}: {err}",
             temporary.display()
-        )),
+        ))),
     }
 }
 

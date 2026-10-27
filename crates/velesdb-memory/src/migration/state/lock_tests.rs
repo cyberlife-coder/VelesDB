@@ -129,7 +129,9 @@ fn a_symlinked_lock_record_is_never_read_for_its_holder() {
     symlink(&secret, workspace.path().join(LOCK_FILE)).expect("plant symlink");
 
     assert_eq!(MigrationLock::holder(workspace.path()), None);
-    let err = MigrationLock::acquire(workspace.path(), "run-B").expect_err("record remains");
+    let err = MigrationLock::acquire(workspace.path(), "run-B")
+        .expect_err("record remains")
+        .to_string();
     assert!(!err.contains("TOP-SECRET-CONTENT"), "leaked: {err}");
 }
 
@@ -140,7 +142,8 @@ fn a_symlinked_lock_record_is_never_read_for_its_holder() {
 fn an_oversized_holder_is_refused_before_any_record_exists() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let err = MigrationLock::acquire(workspace.path(), &"h".repeat(5000))
-        .expect_err("an oversized holder must be refused");
+        .expect_err("an oversized holder must be refused")
+        .to_string();
     assert!(err.contains("holder name too long"), "{err}");
     assert!(!workspace.path().join(LOCK_FILE).exists());
 
@@ -164,7 +167,9 @@ fn a_hard_linked_foreign_file_is_never_echoed_as_its_holder() {
 
         let holder = MigrationLock::holder(workspace.path()).expect("the record exists");
         assert!(!holder.contains("TOP-SECRET-CONTENT"), "leaked: {holder}");
-        let err = MigrationLock::acquire(workspace.path(), "run-B").expect_err("record remains");
+        let err = MigrationLock::acquire(workspace.path(), "run-B")
+            .expect_err("record remains")
+            .to_string();
         assert!(err.contains("record remains"), "{err}");
         assert!(!err.contains("TOP-SECRET-CONTENT"), "leaked: {err}");
     }

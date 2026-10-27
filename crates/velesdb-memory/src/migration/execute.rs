@@ -74,8 +74,7 @@ pub fn execute(
     let report = diagnose(store, scratch_parent, target, Some(destination))?;
     let staging = stage(&report, destination)?;
 
-    let lock =
-        MigrationLock::acquire(&staging.workspace, "migrate-embeddings").map_err(precondition)?;
+    let lock = MigrationLock::acquire(&staging.workspace, "migrate-embeddings")?;
     let result = execute_locked(
         &report,
         target,
@@ -112,7 +111,7 @@ pub fn execute(
 /// would have too.
 pub(super) fn reconcile<T>(
     result: Result<T, crate::MemoryError>,
-    released: Result<(), String>,
+    released: Result<(), super::MigrationError>,
 ) -> Result<T, crate::MemoryError> {
     match (result, released) {
         (Ok(value), Ok(())) => Ok(value),
@@ -307,7 +306,7 @@ fn journal_entry(
             .collect(),
         embedder_witness: witness,
     };
-    state.write(workspace, lock).map_err(environment)?;
+    state.write(workspace, lock)?;
     Ok(state)
 }
 
@@ -319,22 +318,18 @@ fn resume_journal(
     pass: &ExecutePass<'_>,
     witness: Option<&str>,
 ) -> Result<MigrationState, crate::MemoryError> {
-    let state = MigrationState::read(workspace)
-        .map_err(integrity)?
-        .ok_or_else(|| {
-            integrity(format!(
-                "the journal at {} disappeared between inspection and locking",
-                workspace.display()
-            ))
-        })?;
-    state
-        .may_resume(
-            &report.source_path,
-            pass.settled_fingerprint,
-            &target.model,
-            target.dimension,
-        )
-        .map_err(precondition)?;
+    let state = MigrationState::read(workspace)?.ok_or_else(|| {
+        integrity(format!(
+            "the journal at {} disappeared between inspection and locking",
+            workspace.display()
+        ))
+    })?;
+    state.may_resume(
+        &report.source_path,
+        pass.settled_fingerprint,
+        &target.model,
+        target.dimension,
+    )?;
     if state.embedder_witness.as_deref() != witness {
         return Err(precondition(format!(
             "this migration was prepared with an embedder whose witness was \
