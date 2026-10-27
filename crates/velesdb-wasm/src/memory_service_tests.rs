@@ -18,7 +18,9 @@
 //! lives in the `wasm-bindgen-test` suite (a real JS host via
 //! `wasm-pack test --node`).
 
+use super::dto::EntityRelationOut;
 use super::*;
+use velesdb_memory::{MemoryError, Metadata};
 
 // The segmentation glue moved to `velesdb_memory::context::transcript_bridge`;
 // these two policy/format types are still named directly by the tests below.
@@ -738,7 +740,7 @@ fn test_unrelate_serializes_to_the_documented_wire_shape() {
 fn every_error_category_is_mapped_explicitly() {
     for category in velesdb_memory::ErrorCategory::ALL {
         assert!(
-            super::known_category_code(*category).is_some(),
+            super::errors::known_category_code(*category).is_some(),
             "category {category:?} would fall through to the INTERNAL fallback; \
              map it explicitly in known_category_code; \
              the PyO3 adapter (velesdb-python agent_memory_service.rs) has the \
