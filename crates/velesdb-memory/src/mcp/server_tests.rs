@@ -807,6 +807,28 @@ impl Extractor for CountingExtractionStub {
     }
 }
 
+#[test]
+fn a_named_default_must_name_a_backend_that_extracts() {
+    let (_dir, srv) = server();
+    let error = srv
+        .with_named_extractor("none", Arc::new(GraphStub) as DynExtractor)
+        .map(drop)
+        .expect_err("`none` disables extraction: it cannot be the default");
+    assert_eq!(error, crate::SettingError::ExtractionDisabled);
+
+    let (_dir, srv) = server();
+    let error = srv
+        .with_named_extractor("lmstudio", Arc::new(GraphStub) as DynExtractor)
+        .map(drop)
+        .expect_err("an unknown backend cannot be the default");
+    assert_eq!(
+        error,
+        crate::SettingError::UnknownExtractor {
+            name: "lmstudio".to_owned()
+        }
+    );
+}
+
 #[tokio::test]
 async fn remember_extracted_builds_a_graph_through_the_server() {
     let (_dir, srv) = server();
