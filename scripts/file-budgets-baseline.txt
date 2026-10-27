@@ -1,2 +1,1 @@
 crates/velesdb-core/src/simd_native/x86_avx512.rs	1469
-crates/velesdb-python/src/agent_memory_service.rs	1095
