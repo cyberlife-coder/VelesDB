@@ -173,6 +173,7 @@ goes red, the cause is not in what you just ran — go read that job.
 | `perf-gate-e2e` | release wheel build + 10K recall/latency benchmark; no-ops green unless the search hot path changed |
 | `compat-matrix` | Windows, wasm32 and a loom check — runs on PRs but is *not* in `CI Success`'s `needs:`, so it cannot hold a merge |
 | node licence boundary | `cargo tree` assertion that `velesdb-node` never pulls `velesdb-core` |
+| `memory-upgrade-guard` | builds the last published `velesdb-memory` and this tree, replays upgrade, rollback and a kill mid-write on a 3 000-fact store (`scripts/memory_upgrade_guard.py`); runs on PRs touching the memory crate or core, and gates `publish-crate` in `release-memory.yml` |
 | `pr-governance` | branch prefix, and "not behind base" — properties of the PR, not of the tree |
 
 ---

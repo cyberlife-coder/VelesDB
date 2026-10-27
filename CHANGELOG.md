@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`velesdb-memory` upgrade guard.** `scripts/memory_upgrade_guard.py` builds the
+  last published `velesdb-memory` and this tree, writes a store with the former,
+  opens it with the latter, writes again, rolls back, and kills the writer
+  mid-write, then fails on any fact that is lost, altered or unreadable. Search
+  is approximate, so retrieval is held to a floor relative to the previous
+  version while everything read exactly (export, digest, deletions, expiry,
+  working contexts) must match. It runs as `Memory Upgrade Guard` on pull
+  requests touching the memory crate or core, and `release-memory.yml` will not
+  publish to crates.io unless it passes.
+
 ### Changed
 
 - **The `Code Coverage` job gets 90 minutes instead of 45.** Its single-threaded
