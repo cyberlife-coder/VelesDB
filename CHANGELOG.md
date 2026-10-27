@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests touching the memory crate or core, and `release-memory.yml` will not
   publish to crates.io unless it passes.
 
+### Fixed
+
+- **The update check no longer blocks on, or follows, a special file named like
+  its install-id files (#2493).** A FIFO named `.install-id.lock` or
+  `install-id` parked the update-check thread in `open` forever, and a dangling
+  symlink named `.install-id.lock` created its target. Both entries are now
+  refused before they are opened; the directory counts as unusable and the next
+  candidate is tried. A swap between the check and the open is not covered; it
+  needs the same write access as planting the entry.
+
 ### Changed
 
 - **The `Code Coverage` job gets 90 minutes instead of 45.** Its single-threaded

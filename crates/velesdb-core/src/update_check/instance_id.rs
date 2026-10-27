@@ -83,7 +83,22 @@ fn is_valid_id(candidate: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// Whether opening `path` is safe: it is a regular file or does not exist.
+/// A FIFO would block `open` forever and a symlink, dangling or not, would be
+/// followed to a file elsewhere, so both count as unusable. The check and the
+/// later open are not atomic; a swap in between needs the same write access
+/// to the directory that planting the entry needed.
+fn is_regular_or_absent(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.is_file(),
+        Err(err) => err.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 fn read_id(path: &Path) -> Option<String> {
+    if !is_regular_or_absent(path) {
+        return None;
+    }
     let content = std::fs::read_to_string(path).ok()?;
     let id = content.trim();
     is_valid_id(id).then(|| id.to_string())
@@ -161,6 +176,9 @@ fn lock_step(
 /// Opens `path` and takes an exclusive advisory lock on it, polling for at
 /// most `wait`. The lock lasts as long as the returned file is open.
 fn lock_exclusive(path: &Path, wait: Duration) -> Option<std::fs::File> {
+    if !is_regular_or_absent(path) {
+        return None;
+    }
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
