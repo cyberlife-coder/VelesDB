@@ -281,7 +281,7 @@ fn a_hard_linked_source_file_is_copied_not_refused() {
 
 /// A genuine I/O failure (here, permission denied) opening the source must
 /// keep its own detail, not the internal "migration capture error:" prefix
-/// `MemoryError::MigrationCapture`'s `Display` carries for its usual caller,
+/// `MigrationError::Capture`'s `Display` carries for its usual caller,
 /// the online-migration observer — this copy is unrelated to that (#2409
 /// round 7).
 #[cfg(unix)]

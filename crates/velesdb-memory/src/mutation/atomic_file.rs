@@ -7,11 +7,8 @@
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
+use crate::migration::capture;
 use crate::MemoryError;
-
-pub(crate) fn capture(message: impl Into<String>) -> MemoryError {
-    MemoryError::MigrationCapture(message.into())
-}
 
 /// A deliberate refusal — the path opened or inspected is not usable as a
 /// lone regular file (a symlink, a hard link, a directory, a socket, ...) —

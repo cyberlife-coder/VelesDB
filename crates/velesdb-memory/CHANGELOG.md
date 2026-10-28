@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `MemoryError::MigrationCapture` is `MigrationError::Capture`.** The
+  online-migration observer's refusals used a variant of their own on `MemoryError`,
+  beside the migration pipeline's `MemoryError::Migration`; both now live under
+  `MigrationError` (`Capture(String)`, class `Internal` as before), and the twelve
+  private `capture` helpers collapsed into one. A caller that matched
+  `MemoryError::MigrationCapture(detail)` matches
+  `MemoryError::Migration(MigrationError::Capture(detail))`. The `Display` loses its
+  `migration capture error:` prefix and reads `migration error: <detail>`.
+
 - **BREAKING: `IngestRoots::parse` fails with `IngestRootsError`, not `String`.**
   A root that cannot be resolved is `Unresolvable { entry, source }` (the io cause is
   kept as the error source), one that is not a directory is `NotADirectory { entry }`.

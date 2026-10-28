@@ -150,6 +150,11 @@ pub(crate) fn environment(message: impl Into<String>) -> crate::MemoryError {
     MigrationError::environment(message).into()
 }
 
+/// See [`MigrationError::Capture`].
+pub(crate) fn capture(message: impl Into<String>) -> crate::MemoryError {
+    MigrationError::capture(message).into()
+}
+
 /// See [`MigrationError::Integrity`].
 pub(crate) fn integrity(message: impl Into<String>) -> crate::MemoryError {
     MigrationError::integrity(message).into()

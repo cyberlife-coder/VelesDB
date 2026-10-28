@@ -671,7 +671,7 @@ impl GraphStore for NativeStore {
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
         if self.capture.is_active() {
-            return Err(MemoryError::MigrationCapture(format!(
+            return Err(crate::migration::capture(format!(
                 "cannot remove edge {edge_id} without its source id"
             )));
         }

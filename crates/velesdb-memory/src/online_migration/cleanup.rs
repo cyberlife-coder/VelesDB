@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::embedding_provenance::{self, EmbeddingProvenance};
+use crate::migration::capture;
 use crate::mutation::journal::{CutoverIdentity, DirtyJournal};
 use crate::MemoryError;
 
@@ -126,8 +127,4 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
-}
-
-fn capture(message: impl Into<String>) -> MemoryError {
-    MemoryError::MigrationCapture(message.into())
 }

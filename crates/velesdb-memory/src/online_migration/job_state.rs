@@ -2,8 +2,9 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::migration::capture;
 use crate::mutation::atomic_file::{
-    capture, open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
+    open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
     validate_regular_file, validate_workspace,
 };
 use crate::mutation::catchup::CatchUpConfig;
