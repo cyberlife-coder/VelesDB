@@ -18,8 +18,48 @@
 //! whole migration ([`migrate`](crate::migration::migrate) — rebuild,
 //! validation, switch) and requires the operator to name the destination.
 
-use super::{diagnose, DiagnosisReport, Strategy, TargetContract};
+use super::{diagnose, DiagnosisReport, Strategy, StrategyError, TargetContract};
+use crate::cli_flags::{value_after, FlagError};
 use std::path::{Path, PathBuf};
+
+/// Why a `migrate-embeddings` invocation cannot start.
+///
+/// These are the operator's to correct, never a store fault: the store is not
+/// touched before the invocation parses. `non_exhaustive`: a new refusal adds
+/// a variant without a breaking release.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum MigrateUsageError {
+    /// A flag is unknown or lacks its value.
+    #[error(transparent)]
+    Flag(#[from] FlagError),
+
+    /// `--strategy` names no regime.
+    #[error(transparent)]
+    Strategy(#[from] StrategyError),
+
+    /// A non-dry-run was asked for without naming where the rebuild goes.
+    #[error(
+        "a non-dry-run migrate-embeddings rebuilds into a destination you name: \
+         pass --destination <dir> (an empty or not-yet-existing directory on \
+         the store's filesystem), or --dry-run to only diagnose"
+    )]
+    MissingDestination,
+
+    /// The store path has no parent to stage the diagnosis copy beside.
+    #[error(
+        "cannot derive a scratch parent beside {}: pass --scratch <dir>. The diagnosis \
+         copies the whole store there, so a directory on the store's own volume is best",
+        store.display()
+    )]
+    NoScratchParent {
+        /// The store path, as resolved.
+        store: PathBuf,
+    },
+}
+
+/// The subcommand name its unknown-flag refusals carry.
+const COMMAND: &str = "migrate-embeddings";
 
 /// What the operator asked the command to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,9 +113,10 @@ const MIGRATION_COMPLETE: &str =
 /// binary: this crate ships one binary and does not carry `clap` for it.
 ///
 /// # Errors
-/// A message naming the offending flag when it is unknown, when a value is
-/// missing, or when `--strategy` is not one of the three arbitrated regimes.
-pub fn parse(args: &[String]) -> Result<MigrateOptions, String> {
+/// [`MigrateUsageError::Flag`] when a flag is unknown or its value is
+/// missing, [`MigrateUsageError::Strategy`] when `--strategy` is not one of
+/// the three arbitrated regimes.
+pub fn parse(args: &[String]) -> Result<MigrateOptions, MigrateUsageError> {
     let mut options = MigrateOptions::default();
     let mut index = 0;
     while index < args.len() {
@@ -85,30 +126,30 @@ pub fn parse(args: &[String]) -> Result<MigrateOptions, String> {
             index += 1;
             continue;
         }
-        let value = value_for(args, index, flag)?;
+        let value = value_after(args, index, flag)?;
         apply_valued_flag(&mut options, flag, value)?;
         index += 2;
     }
     Ok(options)
 }
 
-/// The value following `flag`, or a message naming what is missing.
-fn value_for<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a String, String> {
-    args.get(index + 1)
-        .ok_or_else(|| format!("{flag} requires a value"))
-}
-
 fn apply_valued_flag(
     options: &mut MigrateOptions,
     flag: &str,
     value: &String,
-) -> Result<(), String> {
+) -> Result<(), MigrateUsageError> {
     match flag {
         "--store" => options.store = Some(PathBuf::from(value)),
         "--destination" => options.destination = Some(PathBuf::from(value)),
         "--scratch" => options.scratch = Some(PathBuf::from(value)),
         "--strategy" => options.strategy = Strategy::parse(value)?,
-        other => return Err(format!("unknown migrate-embeddings flag {other:?}")),
+        other => {
+            return Err(FlagError::Unknown {
+                command: COMMAND,
+                flag: other.to_owned(),
+            }
+            .into())
+        }
     }
     Ok(())
 }
@@ -120,8 +161,7 @@ fn apply_valued_flag(
 /// is — so this runs against a store the daemon still holds.
 ///
 /// # Errors
-/// [`crate::MemoryError`] when the store cannot be read, copied or walked, and
-/// a plain message when the invocation is not a dry run.
+/// [`crate::MemoryError`] when the store cannot be read, copied or walked.
 pub fn dry_run(
     store: &Path,
     scratch_parent: &Path,
@@ -138,14 +178,13 @@ pub fn dry_run(
 /// operator names the destination, or the run does not start.
 ///
 /// # Errors
-/// A message naming the missing flag when `--destination` was not given.
-pub fn require_destination(options: &MigrateOptions) -> Result<PathBuf, String> {
-    options.destination.clone().ok_or_else(|| {
-        "a non-dry-run migrate-embeddings rebuilds into a destination you name: \
-         pass --destination <dir> (an empty or not-yet-existing directory on \
-         the store's filesystem), or --dry-run to only diagnose"
-            .to_owned()
-    })
+/// [`MigrateUsageError::MissingDestination`] when `--destination` was not
+/// given.
+pub fn require_destination(options: &MigrateOptions) -> Result<PathBuf, MigrateUsageError> {
+    options
+        .destination
+        .clone()
+        .ok_or(MigrateUsageError::MissingDestination)
 }
 
 /// Render a report for an operator: what is here, what would happen, and what
@@ -264,14 +303,13 @@ pub fn migration_complete_notice() -> &'static str {
 /// `--scratch`, never a quiet switch to a different volume.
 ///
 /// # Errors
-/// The store path has no non-empty parent to stage beside.
-pub fn default_scratch_parent(store: &Path) -> Result<PathBuf, String> {
+/// [`MigrateUsageError::NoScratchParent`] when the store path has no
+/// non-empty parent to stage beside.
+pub fn default_scratch_parent(store: &Path) -> Result<PathBuf, MigrateUsageError> {
     match store.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => Ok(parent.to_path_buf()),
-        _ => Err(format!(
-            "cannot derive a scratch parent beside {}: pass --scratch <dir>. The diagnosis \
-             copies the whole store there, so a directory on the store's own volume is best",
-            store.display()
-        )),
+        _ => Err(MigrateUsageError::NoScratchParent {
+            store: store.to_path_buf(),
+        }),
     }
 }

@@ -209,11 +209,12 @@ pub(crate) fn migrate_store_path(
 /// store — see `migration::default_scratch_parent` for why not the temp dir.
 ///
 /// # Errors
-/// The store path has no usable parent and `--scratch` was not given.
+/// [`velesdb_memory::migration::MigrateUsageError::NoScratchParent`] when the
+/// store path has no usable parent and `--scratch` was not given.
 pub(crate) fn migrate_scratch_parent(
     options: &velesdb_memory::migration::MigrateOptions,
     store_path: &std::path::Path,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<std::path::PathBuf, velesdb_memory::migration::MigrateUsageError> {
     if let Some(dir) = options.scratch.clone() {
         return Ok(dir);
     }
@@ -265,52 +266,76 @@ pub(crate) struct CompileStdinOutput {
     risk: String,
 }
 
+/// Why a `compile-stdin` invocation cannot start.
+#[cfg(feature = "context")]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum CompileStdinError {
+    /// A flag is unknown or lacks its value.
+    #[error(transparent)]
+    Flag(#[from] velesdb_memory::cli_flags::FlagError),
+
+    /// `--budget` is not an integer.
+    #[error("--budget expects a positive integer, got {raw:?}")]
+    InvalidBudget {
+        /// What was given.
+        raw: String,
+    },
+
+    /// `--budget 0`: a zero budget fits no fragment at all, so it could only
+    /// ever produce the empty-compilation failure [`compile_stdin_json`]
+    /// rejects anyway.
+    #[error("--budget must be greater than 0")]
+    ZeroBudget,
+}
+
+/// Validate `--budget`'s value. Split out of [`parse_compile_stdin_args`] to
+/// keep that loop's branching within the repo's complexity ceiling.
+///
+/// # Errors
+/// [`CompileStdinError::InvalidBudget`] for a value that is not an integer,
+/// [`CompileStdinError::ZeroBudget`] for zero.
+#[cfg(feature = "context")]
+pub(crate) fn parse_compile_stdin_budget(raw: &str) -> Result<u64, CompileStdinError> {
+    let parsed: u64 = raw.parse().map_err(|_| CompileStdinError::InvalidBudget {
+        raw: raw.to_owned(),
+    })?;
+    if parsed == 0 {
+        return Err(CompileStdinError::ZeroBudget);
+    }
+    Ok(parsed)
+}
+
 /// Parse `compile-stdin`'s flags. Hand-rolled for the same reason as
 /// `--version`/`--http` above: two flags do not justify a `clap` dependency
 /// in the shipped binary.
 ///
 /// # Errors
-/// A message naming the offending flag when it is unknown, when its value is
-/// missing, or when `--budget` is not a positive integer.
-/// Validate `--budget`'s value. Split out of [`parse_compile_stdin_args`] to
-/// keep that loop's branching within the repo's complexity ceiling.
-///
-/// # Errors
-/// When the value is absent, not an integer, or zero — a zero budget fits no
-/// fragment at all, so it can only ever produce the empty-compilation failure
-/// [`compile_stdin_json`] rejects anyway.
+/// [`CompileStdinError::Flag`] when a flag is unknown or its value is
+/// missing, and the [`parse_compile_stdin_budget`] refusals for `--budget`.
 #[cfg(feature = "context")]
-pub(crate) fn parse_compile_stdin_budget(value: Option<&String>) -> Result<u64, String> {
-    let raw = value.ok_or_else(|| "--budget requires a value".to_owned())?;
-    let parsed: u64 = raw
-        .parse()
-        .map_err(|_| format!("--budget expects a positive integer, got {raw:?}"))?;
-    if parsed == 0 {
-        return Err("--budget must be greater than 0".to_owned());
-    }
-    Ok(parsed)
-}
+pub(crate) fn parse_compile_stdin_args(
+    args: &[String],
+) -> Result<CompileStdinOptions, CompileStdinError> {
+    use velesdb_memory::cli_flags::{value_after, FlagError};
 
-#[cfg(feature = "context")]
-pub(crate) fn parse_compile_stdin_args(args: &[String]) -> Result<CompileStdinOptions, String> {
     let mut options = CompileStdinOptions::default();
     let mut index = 0;
     while index < args.len() {
         let flag = args[index].as_str();
-        let value = args.get(index + 1);
         match flag {
             "--budget" => {
-                options.token_budget = parse_compile_stdin_budget(value)?;
-                index += 2;
+                options.token_budget = parse_compile_stdin_budget(value_after(args, index, flag)?)?;
             }
-            "--query" => {
-                options
-                    .query
-                    .clone_from(value.ok_or_else(|| "--query requires a value".to_owned())?);
-                index += 2;
+            "--query" => options.query.clone_from(value_after(args, index, flag)?),
+            other => {
+                return Err(FlagError::Unknown {
+                    command: "compile-stdin",
+                    flag: other.to_owned(),
+                }
+                .into())
             }
-            other => return Err(format!("unknown compile-stdin flag {other:?}")),
         }
+        index += 2;
     }
     Ok(options)
 }

@@ -1,5 +1,6 @@
 use super::{
-    compile_stdin_json, parse_compile_stdin_args, CompileStdinOptions, DEFAULT_COMPILE_STDIN_BUDGET,
+    compile_stdin_json, parse_compile_stdin_args, CompileStdinError, CompileStdinOptions,
+    DEFAULT_COMPILE_STDIN_BUDGET,
 };
 
 /// A tool-output-shaped corpus: repetitive log lines, the exact case a
@@ -114,16 +115,58 @@ fn flags_default_and_override() {
 }
 
 #[test]
-fn malformed_flags_are_rejected() {
-    for bad in [
-        vec!["--budget".to_owned()],
-        vec!["--budget".to_owned(), "zero".to_owned()],
-        vec!["--budget".to_owned(), "0".to_owned()],
-        vec!["--nope".to_owned()],
-    ] {
-        assert!(
-            parse_compile_stdin_args(&bad).is_err(),
+fn malformed_flags_are_rejected_with_the_reason() {
+    use velesdb_memory::cli_flags::FlagError;
+
+    let cases = [
+        (
+            vec!["--budget"],
+            CompileStdinError::Flag(FlagError::MissingValue {
+                flag: "--budget".to_owned(),
+            }),
+        ),
+        (
+            vec!["--query"],
+            CompileStdinError::Flag(FlagError::MissingValue {
+                flag: "--query".to_owned(),
+            }),
+        ),
+        (
+            vec!["--budget", "zero"],
+            CompileStdinError::InvalidBudget {
+                raw: "zero".to_owned(),
+            },
+        ),
+        (vec!["--budget", "0"], CompileStdinError::ZeroBudget),
+        (
+            vec!["--nope"],
+            CompileStdinError::Flag(FlagError::Unknown {
+                command: "compile-stdin",
+                flag: "--nope".to_owned(),
+            }),
+        ),
+    ];
+    for (bad, expected) in cases {
+        let bad: Vec<String> = bad.into_iter().map(str::to_owned).collect();
+        assert_eq!(
+            parse_compile_stdin_args(&bad),
+            Err(expected),
             "must reject {bad:?}"
         );
     }
+}
+
+#[test]
+fn the_refusals_keep_their_wording() {
+    assert_eq!(
+        CompileStdinError::InvalidBudget {
+            raw: "zero".to_owned()
+        }
+        .to_string(),
+        r#"--budget expects a positive integer, got "zero""#
+    );
+    assert_eq!(
+        CompileStdinError::ZeroBudget.to_string(),
+        "--budget must be greater than 0"
+    );
 }

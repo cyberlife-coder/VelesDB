@@ -7,6 +7,7 @@
 
 use super::diagnosis::{diagnose_as, TARGET_DIM, TARGET_MODEL};
 use super::*;
+use crate::cli_flags::FlagError;
 
 fn args(raw: &[&str]) -> Vec<String> {
     raw.iter().map(|s| (*s).to_owned()).collect()
@@ -60,15 +61,29 @@ fn every_flag_is_parsed_and_an_unknown_one_is_named() {
 
     let unknown =
         parse_migrate_args(&args(&["--nope", "x"])).expect_err("an unknown flag must be refused");
-    assert!(unknown.contains("--nope"), "{unknown}");
+    assert_eq!(
+        unknown,
+        MigrateUsageError::Flag(FlagError::Unknown {
+            command: "migrate-embeddings",
+            flag: "--nope".to_owned(),
+        })
+    );
+    assert!(unknown.to_string().contains("--nope"), "{unknown}");
 }
 
 #[test]
 fn a_flag_without_its_value_names_the_flag_rather_than_the_position() {
     for flag in ["--store", "--destination", "--scratch", "--strategy"] {
-        let message =
+        let refusal =
             parse_migrate_args(&args(&[flag])).expect_err("a valueless flag must be refused");
 
+        assert_eq!(
+            refusal,
+            MigrateUsageError::Flag(FlagError::MissingValue {
+                flag: flag.to_owned()
+            })
+        );
+        let message = refusal.to_string();
         assert!(
             message.contains(flag) && message.contains("requires a value"),
             "{flag} should name itself: {message}"
@@ -80,9 +95,17 @@ fn a_flag_without_its_value_names_the_flag_rather_than_the_position() {
 fn force_reuse_is_refused_at_the_command_line_and_not_only_in_the_rule() {
     // An operator meets the command line, not `Strategy::parse`. A rule nobody
     // can reach refuses nothing.
-    let message = parse_migrate_args(&args(&["--strategy", "force-reuse"]))
+    let refusal = parse_migrate_args(&args(&["--strategy", "force-reuse"]))
         .expect_err("force-reuse must not parse");
 
+    assert!(
+        matches!(
+            refusal,
+            MigrateUsageError::Strategy(StrategyError::Refused { .. })
+        ),
+        "{refusal:?}"
+    );
+    let message = refusal.to_string();
     assert!(
         message.contains("does not exist, and not by oversight")
             && message.contains("--strategy reembed"),
@@ -102,6 +125,8 @@ fn a_rebuild_without_a_named_destination_is_refused_rather_than_guessing_one() {
 
     let refusal = require_destination(&asked_for_a_migration)
         .expect_err("a rebuild must not invent its own destination");
+    assert_eq!(refusal, MigrateUsageError::MissingDestination);
+    let refusal = refusal.to_string();
     assert!(
         refusal.contains("--destination") && refusal.contains("--dry-run"),
         "the refusal must name the missing flag and the diagnose-only alternative: {refusal}"
@@ -242,5 +267,11 @@ fn the_default_scratch_parent_is_the_store_s_own_volume_not_the_temp_dir() {
     // default would have resurfaced under another name.
     let rootless = default_scratch_parent(std::path::Path::new("/"))
         .expect_err("no parent to stage beside must refuse");
-    assert!(rootless.contains("--scratch"), "{rootless}");
+    assert_eq!(
+        rootless,
+        MigrateUsageError::NoScratchParent {
+            store: std::path::PathBuf::from("/")
+        }
+    );
+    assert!(rootless.to_string().contains("--scratch"), "{rootless}");
 }

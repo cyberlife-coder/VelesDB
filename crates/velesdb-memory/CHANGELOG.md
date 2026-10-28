@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`cli_flags::FlagError`**, the two refusals the hand-rolled subcommand parsers
+  share: `MissingValue { flag }` (`<flag> requires a value`) and
+  `Unknown { command, flag }` (`unknown <command> flag "<flag>"`), with
+  `cli_flags::value_after` to read a flag's value. `migrate-embeddings` and
+  `compile-stdin` both use it, so the same mistake is worded once.
+
+### Changed
+
+- **BREAKING: the `migrate-embeddings` parsers fail with `MigrateUsageError`, not
+  `String`.** `migration::parse_migrate_args`, `require_destination` and
+  `default_scratch_parent` return `MigrateUsageError` (`Flag(FlagError)`,
+  `Strategy(StrategyError)`, `MissingDestination`, `NoScratchParent { store }`),
+  and `Strategy::parse` returns `StrategyError` (`Refused { value }` for
+  `force-reuse`, `Unknown { value }`). All are `#[non_exhaustive]`. The messages
+  are unchanged; a caller that matched the `String` reads `to_string()` or the
+  variant.
+
+- **A malformed `VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS` is a
+  `SettingError`.** It is the new `SettingError::InvalidChatTemplateKwargs
+  { variable, reason }`, like the other startup settings, instead of a bare
+  message. The daemon still stops at startup with the same wording, and the
+  raw value is still never echoed.
+
 ## [0.16.0] - 2026-10-28
 
 > **BREAKING for Rust callers (0.x minor).** Fallible functions that returned

@@ -59,6 +59,9 @@
 //! The storage facets refine the unit that rule applies to: an adapter picks
 //! which *facets* it serves, but each facet it implements is forwarded whole.
 
+/// The refusals the binary's hand-rolled subcommand parsers share: a flag
+/// with no value, a flag the subcommand does not know.
+pub mod cli_flags;
 /// Wall-clock "today" as a `YYYYMMDD` integer, read only by `remember`'s
 /// auto-date stamping (see [`storage::AUTO_DATE_FIELD`]) — never by the
 /// context compiler, which stays clock-free and deterministic. Internal:
