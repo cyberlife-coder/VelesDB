@@ -313,7 +313,7 @@ pub(super) fn copy_regular_file(
     // path-agnostic), so it's the one case that needs the source path added
     // here; every other error (a genuine I/O failure) is built by `capture`
     // with the path already in it — adding it again would duplicate it.
-    // `MigrationError::Capture`'s own `Display` prefixes "migration capture
+    // `MigrationCapture`'s own `Display` prefixes "migration capture
     // error:", a wording meant for the online-migration observer, not for
     // this unrelated caller — unwrapped to its inner detail so a genuine
     // I/O failure here keeps its own detail instead.
@@ -326,9 +326,7 @@ pub(super) fn copy_regular_file(
         crate::MemoryError::NotARegularFile { .. } => {
             precondition(format!("{}: {err}", source.display()))
         }
-        crate::MemoryError::Migration(crate::migration::MigrationError::Capture(detail)) => {
-            environment(detail)
-        }
+        crate::MemoryError::MigrationCapture(detail) => environment(detail),
         other => environment(other.to_string()),
     })?;
     let mut output = OpenOptions::new()

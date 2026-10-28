@@ -6,7 +6,6 @@ use parking_lot::Mutex;
 
 use super::atomic_file::open_regular_file;
 use super::{DirtyKey, MutationObserver};
-use crate::migration::capture;
 use crate::MemoryError;
 
 mod format;
@@ -455,4 +454,8 @@ fn ensure_healthy(inner: &JournalInner) -> Result<(), MemoryError> {
         ));
     }
     Ok(())
+}
+
+fn capture(message: impl Into<String>) -> MemoryError {
+    MemoryError::MigrationCapture(message.into())
 }

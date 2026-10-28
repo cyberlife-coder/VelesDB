@@ -6,8 +6,7 @@ use super::format::{
     decode_record, read_header, write_header, EncodedRecord, JournalHeader, DIGEST_BYTES,
     RECORD_BODY_BYTES,
 };
-use super::FaultPoint;
-use crate::migration::capture;
+use super::{capture, FaultPoint};
 use crate::mutation::atomic_file::open_regular_file;
 use crate::MemoryError;
 

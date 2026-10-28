@@ -163,6 +163,12 @@ pub enum MemoryError {
     #[error("rerank error: {0}")]
     Rerank(#[from] RerankError),
 
+    /// The online-migration observer could not durably classify a mutation.
+    /// The source write has not run when this error is returned.
+    #[cfg(feature = "persistence")]
+    #[error("migration capture error: {0}")]
+    MigrationCapture(String),
+
     /// A migration step could not proceed. The class a client sees depends on
     /// the cause (see [`crate::migration::MigrationError`]): an operator
     /// mistake is invalid input, a missing store is not found, a failing disk
@@ -196,11 +202,11 @@ pub enum MemoryError {
     /// at `open`). On Windows, a directory is not covered by either case
     /// above: `CreateFileW` cannot open one at all without
     /// `FILE_FLAG_BACKUP_SEMANTICS`, which this crate does not set, so a
-    /// directory surfaces as a generic [`crate::migration::MigrationError::Capture`] open
+    /// directory surfaces as a generic [`Self::MigrationCapture`] open
     /// failure there instead of this variant (unverified — Windows CI only
     /// type-checks this crate, no test runs there). A deliberate refusal,
     /// not a failure to inspect the path — kept distinct from
-    /// [`crate::migration::MigrationError::Capture`] so a caller can match on this one
+    /// [`Self::MigrationCapture`] so a caller can match on this one
     /// specific, expected outcome without also catching an unrelated I/O
     /// failure (permission denied, too many open files) the same operation
     /// can raise.
@@ -463,7 +469,9 @@ impl MemoryError {
             #[cfg(feature = "persistence")]
             Self::Provenance(cause) => cause.category(),
             #[cfg(feature = "persistence")]
-            Self::Memory(_) | Self::NotARegularFile { .. } => ErrorCategory::Internal,
+            Self::Memory(_) | Self::MigrationCapture(_) | Self::NotARegularFile { .. } => {
+                ErrorCategory::Internal
+            }
             #[cfg(feature = "persistence")]
             Self::Migration(cause) => cause.category(),
             Self::Storage(_) | Self::Embed(_) | Self::Extract(_) | Self::Rerank(_) => {

@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use crate::migration::capture;
 use crate::MemoryError;
 
 use super::catchup::ReplayProgress;
@@ -484,4 +483,8 @@ fn ensure_activation_time(
         return Err(capture("cutover activation time is not monotonic"));
     }
     Ok(())
+}
+
+fn capture(message: impl Into<String>) -> MemoryError {
+    MemoryError::MigrationCapture(message.into())
 }

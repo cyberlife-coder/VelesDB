@@ -20,7 +20,7 @@ fn manager_starts_in_background_and_reports_durable_completion() {
     let slot = Arc::new(LiveGenerationSlot::new(service, "source-model"));
     let factory = Arc::new(|backend: &str| {
         if backend != "hash-3" {
-            return Err(crate::migration::capture(
+            return Err(crate::MemoryError::MigrationCapture(
                 "unsupported test backend".to_owned(),
             ));
         }
@@ -293,7 +293,7 @@ fn a_worker_failure_is_recorded_on_the_job_for_migration_status() {
     let record = failed_job_record(dir.path());
     let store = super::job_state::JobStore::create(&workspace, &record).expect("create");
 
-    let error = crate::migration::capture("the worker died");
+    let error = super::manager::capture("the worker died");
     super::manager::persist_worker_error(&store, &error);
 
     let reloaded = store.load().expect("load");
@@ -323,7 +323,7 @@ fn a_worker_failure_that_cannot_be_recorded_does_not_panic_or_corrupt_the_record
     let parked = dir.path().join("parked");
     std::fs::rename(&workspace, &parked).expect("park the workspace");
     std::fs::write(&workspace, b"not a directory").expect("occupy the path");
-    super::manager::persist_worker_error(&store, &crate::migration::capture("the worker died"));
+    super::manager::persist_worker_error(&store, &super::manager::capture("the worker died"));
     std::fs::remove_file(&workspace).expect("free the path");
     std::fs::rename(&parked, &workspace).expect("restore the workspace");
 

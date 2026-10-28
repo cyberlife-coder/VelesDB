@@ -2,7 +2,6 @@ use serde_json::Value;
 use velesdb_core::Point;
 
 use crate::embedder::Embedder;
-use crate::migration::capture;
 use crate::migration::RawFact;
 use crate::storage::NativeStore;
 use crate::MemoryError;
@@ -53,4 +52,8 @@ fn content(payload: &Value, id: u64) -> Result<&str, MemoryError> {
         .and_then(|object| object.get("content"))
         .and_then(Value::as_str)
         .ok_or_else(|| capture(format!("fact {id} has no string content")))
+}
+
+fn capture(message: impl Into<String>) -> MemoryError {
+    MemoryError::MigrationCapture(message.into())
 }

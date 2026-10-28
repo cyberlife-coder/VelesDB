@@ -250,7 +250,7 @@ fn verify_cancel_identity(
     permit: &CancellationPermit,
 ) -> Result<(), MemoryError> {
     if permit.epoch_id() != record.spec.identity.epoch_id() {
-        return Err(crate::migration::capture(
+        return Err(crate::MemoryError::MigrationCapture(
             "cancellation permit epoch mismatch".to_owned(),
         ));
     }

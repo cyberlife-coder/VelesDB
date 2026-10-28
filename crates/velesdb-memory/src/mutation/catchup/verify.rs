@@ -1,4 +1,3 @@
-use crate::migration::capture;
 use crate::storage::NativeStore;
 use crate::MemoryError;
 
@@ -61,4 +60,8 @@ fn compare_edges(
         }
     }
     Ok(())
+}
+
+fn capture(message: impl Into<String>) -> MemoryError {
+    MemoryError::MigrationCapture(message.into())
 }

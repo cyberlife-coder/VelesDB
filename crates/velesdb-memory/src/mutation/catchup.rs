@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::embedder::Embedder;
-use crate::migration::capture;
 use crate::storage::NativeStore;
 use crate::{MemoryError, MemoryService};
 
@@ -406,4 +405,8 @@ pub(super) enum FaultPoint {
 
 fn to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn capture(message: impl Into<String>) -> MemoryError {
+    MemoryError::MigrationCapture(message.into())
 }

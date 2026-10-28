@@ -1,7 +1,6 @@
 use velesdb_core::{AnyCollection, GraphEdge, Point};
 
 use super::NativeStore;
-use crate::migration::capture;
 use crate::migration::RawFact;
 use crate::MemoryError;
 
@@ -132,4 +131,8 @@ fn degree_error(from: u64, cap: usize) -> MemoryError {
     capture(format!(
         "outgoing degree of {from} exceeds migration cap {cap}"
     ))
+}
+
+fn capture(message: impl Into<String>) -> MemoryError {
+    MemoryError::MigrationCapture(message.into())
 }
