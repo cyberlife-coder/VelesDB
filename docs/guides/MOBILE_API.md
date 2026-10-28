@@ -434,4 +434,4 @@ not a measurement.
 
 ---
 
-Last updated: 2026-09-10 · Applies to: velesdb-core 7.0.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 7.1.0

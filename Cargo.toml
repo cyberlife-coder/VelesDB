@@ -20,7 +20,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "7.0.0"
+version = "7.1.0"
 edition = "2021"
 rust-version = "1.90"
 license-file = "LICENSE"
@@ -90,7 +90,7 @@ base64 = "0.23.1"
 smallvec = { version = "1.14.0", features = ["serde"] }
 
 # Internal workspace crates
-velesdb-core = { path = "crates/velesdb-core", version = "7.0.0", default-features = false }
+velesdb-core = { path = "crates/velesdb-core", version = "7.1.0", default-features = false }
 
 [profile.release]
 lto = true
