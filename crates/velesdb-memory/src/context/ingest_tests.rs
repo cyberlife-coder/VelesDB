@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::{resolve_one, IngestRoots};
+use super::{resolve_one, IngestRoots, IngestRootsError};
 use crate::context::model::ContextFragment;
 use crate::error::MemoryError;
 use crate::limits::{MAX_INGEST_FILES, MAX_INGEST_FILE_BYTES, MAX_TOTAL_INGEST_BYTES};
@@ -30,6 +30,35 @@ fn roots_for(dir: &Path) -> IngestRoots {
         .to_string_lossy()
         .into_owned();
     IngestRoots::parse(&value).expect("tempdir is a valid, existing directory")
+}
+
+#[test]
+fn a_root_that_does_not_exist_is_unresolvable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("absent");
+
+    let err = IngestRoots::parse(&missing.to_string_lossy()).expect_err("missing root");
+
+    assert!(
+        matches!(&err, IngestRootsError::Unresolvable { entry, .. } if *entry == missing),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("could not be resolved"), "{err}");
+}
+
+#[test]
+fn a_root_that_is_a_file_is_not_a_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("note.txt");
+    fs::write(&file, "x").expect("write");
+
+    let err = IngestRoots::parse(&file.to_string_lossy()).expect_err("file root");
+
+    assert!(
+        matches!(&err, IngestRootsError::NotADirectory { entry } if *entry == file),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("is not a directory"), "{err}");
 }
 
 #[test]

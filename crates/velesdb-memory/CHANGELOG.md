@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `IngestRoots::parse` fails with `IngestRootsError`, not `String`.**
+  A root that cannot be resolved is `Unresolvable { entry, source }` (the io cause is
+  kept as the error source), one that is not a directory is `NotADirectory { entry }`.
+  The messages are unchanged.
+
 - **BREAKING: the startup settings fail with `SettingError` and
   `LoggingError`, not `String`.** `select_embedder`, `select_extractor`,
   `RemoteEndpoint::require`, `role_auth`, `embedder_env_endpoint` and

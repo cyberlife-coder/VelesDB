@@ -76,7 +76,7 @@ pub mod wire;
 pub use chunk::{chunk_text, ChunkBoundary, ChunkPolicy, TextChunk};
 pub use estimator::{DynTokenEstimator, HeuristicEstimator, TokenEstimator};
 #[cfg(not(target_arch = "wasm32"))]
-pub use ingest::IngestRoots;
+pub use ingest::{IngestRoots, IngestRootsError};
 pub use insights::{CompilationInsights, ModelPricing, PricingTable};
 pub use model::{
     CompilePolicy, CompileRequest, CompiledContext, CompiledSection, ContextAction,
