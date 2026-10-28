@@ -37,6 +37,9 @@ keep_alive = "30m"
 backend = "ollama"
 model = "qwen3.6:35b-mlx"
 url = "http://localhost:11434"
+
+[search]
+quality = "accurate"
 "#,
     );
     let loaded = load(&path).expect("valid config");
@@ -66,6 +69,7 @@ url = "http://localhost:11434"
     assert_eq!(v["VELESDB_MEMORY_EXTRACTOR"], "ollama");
     assert_eq!(v["VELESDB_MEMORY_EXTRACTOR_MODEL"], "qwen3.6:35b-mlx");
     assert_eq!(v["VELESDB_MEMORY_EXTRACTOR_URL"], "http://localhost:11434");
+    assert_eq!(v["VELESDB_MEMORY_SEARCH_QUALITY"], "accurate");
 }
 
 /// The eighteen variables the binary reads, minus the two that are not file
@@ -100,6 +104,8 @@ url = "u"
 ingest_roots = ["/tmp"]
 [graph]
 autograph = true
+[search]
+quality = "fast"
 "#,
     );
     let loaded = load(&path).expect("valid config");
@@ -123,6 +129,7 @@ autograph = true
         "VELESDB_MEMORY_EXTRACTOR_URL",
         "VELESDB_MEMORY_INGEST_ROOTS",
         "VELESDB_MEMORY_AUTOGRAPH",
+        "VELESDB_MEMORY_SEARCH_QUALITY",
     ];
     for key in expected {
         assert!(

@@ -111,6 +111,19 @@ pub struct ConfigFile {
     /// Knowledge-graph settings.
     #[serde(default)]
     pub graph: GraphConfig,
+    /// Recall settings.
+    #[serde(default)]
+    pub search: SearchConfig,
+}
+
+/// `[search]` — how recall reads the vector index.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchConfig {
+    /// Recall quality (`VELESDB_MEMORY_SEARCH_QUALITY`): `fast`, `balanced`,
+    /// `accurate`, `perfect`, `autotune`, or `custom:<ef>`. Absent keeps the
+    /// collection's own quality.
+    pub quality: Option<String>,
 }
 
 /// `[graph]` — how much structure the memory builds on its own.
@@ -405,6 +418,7 @@ impl ConfigFile {
         set("VELESDB_MEMORY_EXTRACTOR_URL", self.extractor.url);
 
         set("VELESDB_MEMORY_AUTOGRAPH", self.graph.autograph.map(flag));
+        set("VELESDB_MEMORY_SEARCH_QUALITY", self.search.quality);
 
         if let Some(roots) = self.context.ingest_roots {
             let joined = std::env::join_paths(roots).map_err(|_| ConfigError::PathList {

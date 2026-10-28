@@ -76,4 +76,12 @@ pub enum SettingError {
     /// required, such as the daemon-level default.
     #[error("a disabled extractor cannot be attached as the default")]
     ExtractionDisabled,
+
+    /// The configured recall quality is not one the search engine knows.
+    #[cfg(feature = "persistence")]
+    #[error("{detail}")]
+    InvalidSearchQuality {
+        /// The search engine's own wording: the value, and the accepted forms.
+        detail: String,
+    },
 }

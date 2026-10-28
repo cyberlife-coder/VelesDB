@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Recall quality is a setting.** `VELESDB_MEMORY_SEARCH_QUALITY` (`[search] quality`
+  in `velesdb-memory.toml`) sets the quality recall searches the vector index at:
+  `fast`, `balanced`, `accurate`, `perfect`, `autotune` or `custom:<ef>`, the grammar
+  the REST API and the CLI already speak. Unset keeps the collection's own quality,
+  so nothing changes for a store that does not opt in; a value that is not a quality
+  stops the daemon at startup. Library callers use
+  `MemoryService::with_search_quality` / `NativeStore::with_search_quality`, and
+  `select_search_quality` parses the setting (`SettingError::InvalidSearchQuality`).
+  Needs a `velesdb-core` that has `SemanticMemory::query_filtered_with_quality`.
+
 ### Changed
 
 - **BREAKING: `IngestRoots::parse` fails with `IngestRootsError`, not `String`.**

@@ -166,6 +166,9 @@ pub mod rerank;
 /// Shared JSON Schema post-processing (strips `schemars`' non-standard integer
 /// `format` keywords so strict MCP clients don't warn on every id field).
 mod schema;
+/// Which recall quality the operator asked for ([`select_search_quality`]).
+#[cfg(feature = "persistence")]
+pub mod search_quality;
 pub mod service;
 mod setting;
 #[cfg(all(test, any(feature = "embedder-http", feature = "extractor-http")))]
@@ -238,11 +241,15 @@ pub use remote_endpoint::embedder_env_endpoint;
 #[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub use remote_endpoint::{role_auth, RemoteEndpoint};
 pub use rerank::{DynReranker, RerankError, Reranker};
+#[cfg(feature = "persistence")]
+pub use search_quality::{select_search_quality, SEARCH_QUALITY_VAR};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 pub use setting::SettingError;
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
 pub use storage::{ColumnStore, FactStore, GraphStore, RecallStore, AUTO_DATE_FIELD};
+#[cfg(feature = "persistence")]
+pub use velesdb_core::SearchQuality;
 // Re-exported separately so the deprecation shim's allowance covers only the
 // alias, never the facet traits above.
 #[allow(deprecated)]
