@@ -10,11 +10,19 @@
 //! field added to a `context` type only needs updating in one place, not
 //! silently missed in whichever binding a copy-paste forgot.
 //!
-//! Deliberately `String`-erred, not binding-specific: this crate depends on
-//! neither `napi` nor `wasm-bindgen`, so each binding maps the `String`
-//! error to its own error type at the call site.
+//! Deliberately binding-agnostic: this crate depends on neither `napi` nor
+//! `wasm-bindgen`, so each binding maps the [`InvalidId`](crate::context::wire::InvalidId) error to its own
+//! error type at the call site.
 
 use serde_json::Value;
+
+/// An id that is not a decimal `u64` string.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid id '{text}' (expected a decimal u64 string)")]
+pub struct InvalidId {
+    /// The offending text, as received.
+    pub text: String,
+}
 
 /// Object keys whose `u64` values (or arrays of them) must cross to JS as
 /// decimal strings. Token counts stay numbers: they are bounded far below
@@ -70,9 +78,9 @@ fn stringify_ids_in(value: &mut Value) {
 /// and an id key can never be user data on these wire shapes.
 ///
 /// # Errors
-/// Returns the offending text if an [`ID_KEYS`] field holds a string that
+/// Returns [`InvalidId`] if an [`ID_KEYS`] field holds a string that
 /// does not parse as a decimal `u64`.
-pub fn parse_id_fields(value: &mut Value) -> Result<(), String> {
+pub fn parse_id_fields(value: &mut Value) -> Result<(), InvalidId> {
     match value {
         Value::Object(map) => {
             for (key, entry) in map.iter_mut() {
@@ -94,7 +102,7 @@ pub fn parse_id_fields(value: &mut Value) -> Result<(), String> {
 }
 
 /// Rewrite one id value (or an array of them) from decimal string to number.
-fn parse_ids_in(value: &mut Value) -> Result<(), String> {
+fn parse_ids_in(value: &mut Value) -> Result<(), InvalidId> {
     match value {
         Value::String(text) => {
             *value = Value::Number(parse_u64(text)?.into());
@@ -115,9 +123,9 @@ fn parse_ids_in(value: &mut Value) -> Result<(), String> {
 /// corrupt caller metadata that happens to use that name.
 ///
 /// # Errors
-/// Returns the offending text if a fragment's `id` does not parse as a
+/// Returns [`InvalidId`] if a fragment's `id` does not parse as a
 /// decimal `u64`.
-pub fn parse_fragment_id_strings(request: &mut Value) -> Result<(), String> {
+pub fn parse_fragment_id_strings(request: &mut Value) -> Result<(), InvalidId> {
     let Some(fragments) = request.get_mut("fragments").and_then(Value::as_array_mut) else {
         return Ok(());
     };
@@ -132,9 +140,10 @@ pub fn parse_fragment_id_strings(request: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn parse_u64(text: &str) -> Result<u64, String> {
-    text.parse()
-        .map_err(|_| format!("invalid id '{text}' (expected a decimal u64 string)"))
+pub(crate) fn parse_u64(text: &str) -> Result<u64, InvalidId> {
+    text.parse().map_err(|_| InvalidId {
+        text: text.to_owned(),
+    })
 }
 
 /// Serde `deserialize_with` for [`super::model::ContextFragment::id`]:

@@ -46,9 +46,10 @@ fn parse_id_fields_rejects_a_non_numeric_id_string() {
     let err = parse_id_fields(&mut value).unwrap_err();
 
     assert!(
-        err.contains("not-a-number"),
+        err.to_string().contains("not-a-number"),
         "error names the offending value: {err}"
     );
+    assert_eq!(err.text, "not-a-number");
 }
 
 #[test]

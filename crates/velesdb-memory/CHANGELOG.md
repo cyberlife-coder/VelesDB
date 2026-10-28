@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: the id wire helpers fail with `InvalidId`, not `String`.**
+  `context::wire::parse_id_fields` and `parse_fragment_id_strings` returned
+  `Result<(), String>`; they return `InvalidId { text }`, whose message is unchanged
+  (`invalid id '<text>' (expected a decimal u64 string)`). The Node and WASM bindings
+  render it with `to_string()` as before.
+
 - **BREAKING: the embedding record fails with `ProvenanceError`, not `String`.**
   `embedding_provenance::read`, `write` and `check` (`persistence` feature) returned
   `Result<_, String>`, and each caller billed the message as it saw fit: the online
