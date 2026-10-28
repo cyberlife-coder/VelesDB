@@ -77,6 +77,14 @@ pub enum SettingError {
     #[error("a disabled extractor cannot be attached as the default")]
     ExtractionDisabled,
 
+    /// The configured recall quality is not one the search engine knows.
+    #[cfg(feature = "persistence")]
+    #[error("{detail}")]
+    InvalidSearchQuality {
+        /// The search engine's own wording: the value, and the accepted forms.
+        detail: String,
+    },
+
     /// The extractor's chat-template arguments are set but are not a JSON
     /// object. The reason is the parser's position message, or the kind of
     /// value found — never the raw text, which may hold a secret the chat
@@ -88,13 +96,5 @@ pub enum SettingError {
         variable: String,
         /// Why the value is not an object.
         reason: String,
-    },
-
-    /// The configured recall quality is not one the search engine knows.
-    #[cfg(feature = "persistence")]
-    #[error("{detail}")]
-    InvalidSearchQuality {
-        /// The search engine's own wording: the value, and the accepted forms.
-        detail: String,
     },
 }
