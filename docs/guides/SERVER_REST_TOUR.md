@@ -526,20 +526,20 @@ public when API keys are configured.
 `/v1/health` always answers `200` while the process is up:
 
 ```json
-{"status": "ok", "version": "7.0.0"}
+{"status": "ok", "version": "7.1.0"}
 ```
 
 `/v1/ready` answers `200` once every collection is loaded from disk:
 
 ```json
-{"status": "ready", "version": "7.0.0"}
+{"status": "ready", "version": "7.1.0"}
 ```
 
 …and `503` until then, which is what makes it usable as a Kubernetes
 readiness probe:
 
 ```json
-{"status": "not_ready", "version": "7.0.0"}
+{"status": "not_ready", "version": "7.1.0"}
 ```
 
 ---
@@ -586,4 +586,4 @@ each on the machine named with it:
 
 ---
 
-Last updated: 2026-09-10 · Applies to: velesdb-core 7.0.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 7.1.0

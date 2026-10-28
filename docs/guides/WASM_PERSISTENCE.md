@@ -158,4 +158,4 @@ different shape from the table above; expect different absolute numbers.
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 7.0.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 7.1.0

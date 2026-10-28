@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-10-28
+
+> **MINOR release.** Additive: no breaking change to the public API, the on-disk
+> format or the wire protocols. `SemanticMemory` gains three methods that take a
+> `SearchQuality`, which `velesdb-memory` 0.16.0 needs from crates.io.
+> `velesdb-memory` is released on its own `velesdb-memory-v*` tag, after this one,
+> and its crate `CHANGELOG.md` carries its own changes.
+
 ### Added
 
 - **`SemanticMemory` searches at an explicit `SearchQuality`.** `query_with_quality`,

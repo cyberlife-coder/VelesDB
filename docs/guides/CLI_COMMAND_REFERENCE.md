@@ -549,4 +549,4 @@ Numeric `VELES-*` codes are listed in
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 7.0.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 7.1.0
