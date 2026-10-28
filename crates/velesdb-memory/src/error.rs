@@ -177,6 +177,13 @@ pub enum MemoryError {
     #[error("migration error: {0}")]
     Migration(#[from] crate::migration::MigrationError),
 
+    /// The embedding record of a store could not be read or written, or names
+    /// another model than the configured one. See
+    /// [`crate::embedding_provenance::ProvenanceError`].
+    #[cfg(feature = "persistence")]
+    #[error("embedding record error: {0}")]
+    Provenance(#[from] crate::embedding_provenance::ProvenanceError),
+
     /// A path backing an internal state/record file, or a diagnostic-copy
     /// source file, is not usable as a lone regular file: it names a
     /// symlink, a hard link, a directory, or another non-regular type, so
@@ -459,6 +466,8 @@ impl MemoryError {
             #[cfg(feature = "context")]
             Self::WorkingContextCodec { .. } => ErrorCategory::Internal,
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
+            #[cfg(feature = "persistence")]
+            Self::Provenance(cause) => cause.category(),
             #[cfg(feature = "persistence")]
             Self::Memory(_) | Self::MigrationCapture(_) | Self::NotARegularFile { .. } => {
                 ErrorCategory::Internal

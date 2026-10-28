@@ -387,11 +387,9 @@ fn require_journalled_fingerprint(
 /// The occupant of the source's name must carry the TARGET's provenance stamp
 /// — the one validation wrote on the destination and the old source never had.
 fn require_target_stamp(slots: &Slots, state: &MigrationState) -> Result<(), crate::MemoryError> {
-    let stamped = crate::embedding_provenance::read(&slots.source)
-        .map_err(integrity)?
-        .filter(|stamp| {
-            stamp.model == state.target_model && stamp.dimension == state.target_dimension
-        });
+    let stamped = crate::embedding_provenance::read(&slots.source)?.filter(|stamp| {
+        stamp.model == state.target_model && stamp.dimension == state.target_dimension
+    });
     if stamped.is_some() {
         return Ok(());
     }

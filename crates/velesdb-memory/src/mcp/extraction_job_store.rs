@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use super::extraction_jobs::{JobError, JobRecord};
+use super::extraction_jobs::{ExtractionJobError, JobRecord};
 
 const JOB_DIRECTORY: &str = "extraction-jobs";
 const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
@@ -14,12 +14,12 @@ pub(super) struct JobStore {
 }
 
 impl JobStore {
-    pub(super) fn open(root: &Path) -> Result<Self, JobError> {
+    pub(super) fn open(root: &Path) -> Result<Self, ExtractionJobError> {
         let directory = root.join(JOB_DIRECTORY);
         ensure_job_directory(root, &directory)?;
         let metadata = std::fs::symlink_metadata(&directory).map_err(storage_error)?;
         if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
-            return Err(JobError::Storage(format!(
+            return Err(ExtractionJobError::Storage(format!(
                 "{} must be a real directory, not a symlink",
                 directory.display()
             )));
@@ -27,7 +27,7 @@ impl JobStore {
         Ok(Self { directory })
     }
 
-    pub(super) fn pending(&self) -> Result<Vec<String>, JobError> {
+    pub(super) fn pending(&self) -> Result<Vec<String>, ExtractionJobError> {
         let mut pending = Vec::new();
         for entry in self.entries()? {
             if remove_if_temporary(&entry)? {
@@ -42,7 +42,7 @@ impl JobStore {
         Ok(pending)
     }
 
-    pub(super) fn load(&self, request_id: &str) -> Result<Option<JobRecord>, JobError> {
+    pub(super) fn load(&self, request_id: &str) -> Result<Option<JobRecord>, ExtractionJobError> {
         let path = self.path(request_id);
         let Some(bytes) = read_record_bytes(&path)? else {
             return Ok(None);
@@ -53,28 +53,28 @@ impl JobStore {
         Ok(Some(record))
     }
 
-    pub(super) fn save(&self, record: &JobRecord) -> Result<(), JobError> {
+    pub(super) fn save(&self, record: &JobRecord) -> Result<(), ExtractionJobError> {
         let bytes = serialize_record(record)?;
         let temporary_path = write_temporary(&self.directory, &bytes)?;
         promote(&temporary_path, &self.path(&record.request_id)).map_err(storage_error)?;
         sync_directory(&self.directory).map_err(storage_error)
     }
 
-    fn entries(&self) -> Result<Vec<std::fs::DirEntry>, JobError> {
+    fn entries(&self) -> Result<Vec<std::fs::DirEntry>, ExtractionJobError> {
         let entries = std::fs::read_dir(&self.directory).map_err(storage_error)?;
         entries.map(|entry| entry.map_err(storage_error)).collect()
     }
 
-    fn load_entry(&self, entry: &std::fs::DirEntry) -> Result<JobRecord, JobError> {
+    fn load_entry(&self, entry: &std::fs::DirEntry) -> Result<JobRecord, ExtractionJobError> {
         let name = entry.file_name().to_string_lossy().into_owned();
         let request_id = name.strip_suffix(".json").ok_or_else(|| {
-            JobError::Storage(format!(
+            ExtractionJobError::Storage(format!(
                 "unexpected entry in {}: {name}",
                 self.directory.display()
             ))
         })?;
         self.load(request_id)?
-            .ok_or_else(|| JobError::Storage(format!("job record vanished: {name}")))
+            .ok_or_else(|| ExtractionJobError::Storage(format!("job record vanished: {name}")))
     }
 
     fn path(&self, request_id: &str) -> PathBuf {
@@ -82,7 +82,7 @@ impl JobStore {
     }
 }
 
-fn ensure_job_directory(root: &Path, directory: &Path) -> Result<(), JobError> {
+fn ensure_job_directory(root: &Path, directory: &Path) -> Result<(), ExtractionJobError> {
     match std::fs::create_dir(directory) {
         Ok(()) => sync_directory(root).map_err(storage_error),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
@@ -90,7 +90,7 @@ fn ensure_job_directory(root: &Path, directory: &Path) -> Result<(), JobError> {
     }
 }
 
-fn remove_if_temporary(entry: &std::fs::DirEntry) -> Result<bool, JobError> {
+fn remove_if_temporary(entry: &std::fs::DirEntry) -> Result<bool, ExtractionJobError> {
     let name = entry.file_name().to_string_lossy().into_owned();
     let is_temporary = name.starts_with(TEMP_PREFIX)
         && entry
@@ -104,7 +104,7 @@ fn remove_if_temporary(entry: &std::fs::DirEntry) -> Result<bool, JobError> {
     Ok(true)
 }
 
-fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
+fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, ExtractionJobError> {
     // `path_exists`'s own failure is built by `capture`, which carries
     // `MigrationCapture`'s "migration capture error:" framing — meant for
     // the online-migration observer, not this unrelated caller. Unwrapped
@@ -150,14 +150,14 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
     )
     .map_err(|err| match err {
         crate::MemoryError::NotARegularFile { .. } => {
-            JobError::Storage(format!("invalid extraction job record {}", path.display()))
+            ExtractionJobError::Storage(format!("invalid extraction job record {}", path.display()))
         }
         crate::MemoryError::MigrationCapture(detail) => storage_error(detail),
         other => storage_error(other),
     })?;
     let length = metadata.len();
     if length > MAX_RECORD_BYTES {
-        return Err(JobError::Storage(format!(
+        return Err(ExtractionJobError::Storage(format!(
             "invalid extraction job record {}",
             path.display()
         )));
@@ -167,9 +167,13 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, JobError> {
     Ok(Some(bytes))
 }
 
-fn validate_filename(record: &JobRecord, request_id: &str, path: &Path) -> Result<(), JobError> {
+fn validate_filename(
+    record: &JobRecord,
+    request_id: &str,
+    path: &Path,
+) -> Result<(), ExtractionJobError> {
     if record.request_id != request_id {
-        return Err(JobError::Storage(format!(
+        return Err(ExtractionJobError::Storage(format!(
             "job filename does not match its request_id: {}",
             path.display()
         )));
@@ -177,11 +181,11 @@ fn validate_filename(record: &JobRecord, request_id: &str, path: &Path) -> Resul
     Ok(())
 }
 
-fn serialize_record(record: &JobRecord) -> Result<Vec<u8>, JobError> {
+fn serialize_record(record: &JobRecord) -> Result<Vec<u8>, ExtractionJobError> {
     record.validate()?;
     let bytes = serde_json::to_vec(record).map_err(storage_error)?;
     if bytes.len() as u64 > MAX_RECORD_BYTES {
-        return Err(JobError::Storage(format!(
+        return Err(ExtractionJobError::Storage(format!(
             "job '{}' exceeds the {} byte snapshot limit",
             record.request_id, MAX_RECORD_BYTES
         )));
@@ -189,7 +193,7 @@ fn serialize_record(record: &JobRecord) -> Result<Vec<u8>, JobError> {
     Ok(bytes)
 }
 
-fn write_temporary(directory: &Path, bytes: &[u8]) -> Result<PathBuf, JobError> {
+fn write_temporary(directory: &Path, bytes: &[u8]) -> Result<PathBuf, ExtractionJobError> {
     let mut temporary = tempfile::Builder::new()
         .prefix(TEMP_PREFIX)
         .suffix(".tmp")
@@ -205,8 +209,8 @@ fn write_temporary(directory: &Path, bytes: &[u8]) -> Result<PathBuf, JobError> 
     Ok(temporary_path)
 }
 
-pub(super) fn storage_error(error: impl std::fmt::Display) -> JobError {
-    JobError::Storage(error.to_string())
+pub(super) fn storage_error(error: impl std::fmt::Display) -> ExtractionJobError {
+    ExtractionJobError::Storage(error.to_string())
 }
 
 #[cfg(unix)]

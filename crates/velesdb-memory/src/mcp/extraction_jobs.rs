@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use super::extraction_job_model::RECORD_VERSION;
 pub(super) use super::extraction_job_model::{
-    valid_digest, ExtractionJobState, JobError, JobReceipt, JobRecord, JobView, PersistedRequest,
+    valid_digest, ExtractionJobError, ExtractionJobState, JobReceipt, JobRecord, JobView,
+    PersistedRequest,
 };
 use super::extraction_job_store::{storage_error, JobStore};
 use super::extractor_resolver::ExtractorResolver;
@@ -74,11 +75,11 @@ impl ExtractionJobs {
         root: &Path,
         service: Arc<LiveGenerationSlot<DynEmbedder>>,
         extractors: Arc<RwLock<ExtractorResolver>>,
-    ) -> Result<Self, JobError> {
+    ) -> Result<Self, ExtractionJobError> {
         let store = JobStore::open(root)?;
         let pending = store.pending()?;
         if pending.len() > crate::limits::MAX_EXTRACTION_JOBS {
-            return Err(JobError::Storage(format!(
+            return Err(ExtractionJobError::Storage(format!(
                 "{} non-terminal extraction jobs exceed the limit of {}",
                 pending.len(),
                 crate::limits::MAX_EXTRACTION_JOBS
@@ -101,10 +102,13 @@ impl ExtractionJobs {
         let join = std::thread::Builder::new()
             .name("velesdb-extraction-jobs".to_owned())
             .spawn(move || worker_loop(&worker_shared, &rx))
-            .map_err(|error| JobError::Storage(format!("cannot spawn worker: {error}")))?;
+            .map_err(|error| {
+                ExtractionJobError::Storage(format!("cannot spawn worker: {error}"))
+            })?;
         for request_id in pending {
-            tx.send(Command::Run(request_id))
-                .map_err(|_| JobError::Storage("worker stopped during recovery".to_owned()))?;
+            tx.send(Command::Run(request_id)).map_err(|_| {
+                ExtractionJobError::Storage("worker stopped during recovery".to_owned())
+            })?;
         }
         let guard = Arc::new(WorkerGuard {
             closing,
@@ -124,7 +128,7 @@ impl ExtractionJobs {
         metadata: Option<Metadata>,
         requested_backend: Option<&str>,
         idempotency_key: Option<&str>,
-    ) -> Result<JobReceipt, JobError> {
+    ) -> Result<JobReceipt, ExtractionJobError> {
         let prepared = prepare_submission(text, metadata, requested_backend, idempotency_key)?;
         let mut runtime = self.shared.runtime.lock();
         if let Some(receipt) = self.reused_receipt(&prepared, &mut runtime)? {
@@ -137,12 +141,12 @@ impl ExtractionJobs {
         &self,
         prepared: &PreparedSubmission,
         runtime: &mut RuntimeState,
-    ) -> Result<Option<JobReceipt>, JobError> {
+    ) -> Result<Option<JobReceipt>, ExtractionJobError> {
         let Some(existing) = self.shared.store.load(&prepared.request_id)? else {
             return Ok(None);
         };
         if existing.input_digest != prepared.input_digest {
-            return Err(JobError::Conflict);
+            return Err(ExtractionJobError::Conflict);
         }
         enqueue_if_needed(&self.tx, runtime, &prepared.request_id, existing.state)?;
         Ok(Some(JobReceipt {
@@ -157,10 +161,10 @@ impl ExtractionJobs {
         mut prepared: PreparedSubmission,
         requested_backend: Option<&str>,
         runtime: &mut RuntimeState,
-    ) -> Result<JobReceipt, JobError> {
+    ) -> Result<JobReceipt, ExtractionJobError> {
         prepared.request.backend = self.resolve_backend(requested_backend)?;
         if runtime.pending >= crate::limits::MAX_EXTRACTION_JOBS {
-            return Err(JobError::AtCapacity);
+            return Err(ExtractionJobError::AtCapacity);
         }
         stamp_acceptance_date(&mut prepared.request.metadata);
         let record = JobRecord::accepted(
@@ -183,7 +187,10 @@ impl ExtractionJobs {
         })
     }
 
-    fn resolve_backend(&self, requested: Option<&str>) -> Result<Option<String>, JobError> {
+    fn resolve_backend(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<Option<String>, ExtractionJobError> {
         self.shared
             .extractors
             .read()
@@ -191,17 +198,17 @@ impl ExtractionJobs {
             .map(|resolved| resolved.backend)
             .map_err(|error| match error {
                 super::extractor_resolver::ExtractorResolveError::DefaultNotConfigured => {
-                    JobError::BackendNotConfigured
+                    ExtractionJobError::BackendNotConfigured
                 }
                 super::extractor_resolver::ExtractorResolveError::InvalidRequest(message) => {
-                    JobError::Invalid(message)
+                    ExtractionJobError::Invalid(message)
                 }
             })
     }
 
-    pub(super) fn status(&self, request_id: &str) -> Result<JobView, JobError> {
+    pub(super) fn status(&self, request_id: &str) -> Result<JobView, ExtractionJobError> {
         if !valid_digest(request_id) {
-            return Err(JobError::Invalid(
+            return Err(ExtractionJobError::Invalid(
                 "request_id must be 64 lowercase hexadecimal characters".to_owned(),
             ));
         }
@@ -210,7 +217,7 @@ impl ExtractionJobs {
             .shared
             .store
             .load(request_id)?
-            .ok_or_else(|| JobError::NotFound(request_id.to_owned()))?;
+            .ok_or_else(|| ExtractionJobError::NotFound(request_id.to_owned()))?;
         enqueue_if_needed(&self.tx, &mut runtime, request_id, record.state)?;
         Ok(JobView {
             request_id: record.request_id,
@@ -233,7 +240,7 @@ fn prepare_submission(
     metadata: Option<Metadata>,
     requested_backend: Option<&str>,
     idempotency_key: Option<&str>,
-) -> Result<PreparedSubmission, JobError> {
+) -> Result<PreparedSubmission, ExtractionJobError> {
     let request = normalized_request(text, metadata)?;
     let fingerprint = InputFingerprint {
         text: &request.text,
@@ -251,10 +258,12 @@ fn prepare_submission(
 fn normalized_request(
     text: &str,
     metadata: Option<Metadata>,
-) -> Result<PersistedRequest, JobError> {
+) -> Result<PersistedRequest, ExtractionJobError> {
     let text = text.trim().to_owned();
     if text.is_empty() {
-        return Err(JobError::Invalid("text must not be empty".to_owned()));
+        return Err(ExtractionJobError::Invalid(
+            "text must not be empty".to_owned(),
+        ));
     }
     validate_metadata(metadata.as_ref())?;
     Ok(PersistedRequest {
@@ -264,7 +273,7 @@ fn normalized_request(
     })
 }
 
-fn validate_metadata(metadata: Option<&Metadata>) -> Result<(), JobError> {
+fn validate_metadata(metadata: Option<&Metadata>) -> Result<(), ExtractionJobError> {
     let Some(metadata) = metadata else {
         return Ok(());
     };
@@ -272,13 +281,13 @@ fn validate_metadata(metadata: Option<&Metadata>) -> Result<(), JobError> {
         .keys()
         .find(|key| crate::storage::is_reserved_key(key))
     {
-        return Err(JobError::Invalid(format!(
+        return Err(ExtractionJobError::Invalid(format!(
             "metadata key '{key}' is reserved"
         )));
     }
     let bytes = crate::limits::metadata_bytes(metadata);
     if bytes > crate::limits::MAX_METADATA_BYTES {
-        return Err(JobError::Invalid(format!(
+        return Err(ExtractionJobError::Invalid(format!(
             "metadata of {bytes} bytes exceeds the cap of {} bytes",
             crate::limits::MAX_METADATA_BYTES
         )));
@@ -301,17 +310,17 @@ fn stamp_acceptance_date(metadata: &mut Option<Metadata>) {
         .insert(crate::storage::AUTO_DATE_FIELD.to_owned(), today.into());
 }
 
-fn request_id(key: Option<&str>, encoded: &[u8]) -> Result<String, JobError> {
+fn request_id(key: Option<&str>, encoded: &[u8]) -> Result<String, ExtractionJobError> {
     let Some(key) = key else {
         return Ok(hex_digest(b"velesdb extraction request v1\0", encoded));
     };
     if key.trim().is_empty() {
-        return Err(JobError::Invalid(
+        return Err(ExtractionJobError::Invalid(
             "idempotency_key must not be empty".to_owned(),
         ));
     }
     if key.len() > crate::limits::MAX_IDEMPOTENCY_KEY_BYTES {
-        return Err(JobError::Invalid(format!(
+        return Err(ExtractionJobError::Invalid(format!(
             "idempotency_key exceeds {} bytes",
             crate::limits::MAX_IDEMPOTENCY_KEY_BYTES
         )));
@@ -341,13 +350,13 @@ fn enqueue_if_needed(
     runtime: &mut RuntimeState,
     request_id: &str,
     state: ExtractionJobState,
-) -> Result<(), JobError> {
+) -> Result<(), ExtractionJobError> {
     if state.is_terminal() || !runtime.queued.insert(request_id.to_owned()) {
         return Ok(());
     }
     if tx.send(Command::Run(request_id.to_owned())).is_err() {
         runtime.queued.remove(request_id);
-        return Err(JobError::Storage(
+        return Err(ExtractionJobError::Storage(
             "extraction worker is unavailable".to_owned(),
         ));
     }

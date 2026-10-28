@@ -67,7 +67,8 @@ fn a_hash_store_survives_the_switch_to_a_semantic_embedder() {
         .expect("read the record back")
         .expect("the record exists");
     let refusal = embedding_provenance::check(Some(&recorded), NEW_MODEL, NEW_DIMENSION)
-        .expect_err("two different models must be refused, never served");
+        .expect_err("two different models must be refused, never served")
+        .to_string();
     assert!(
         refusal.contains("migrate-embeddings"),
         "the refusal must name the recovery command — a dead end here is the \

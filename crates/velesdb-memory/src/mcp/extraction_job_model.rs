@@ -55,22 +55,31 @@ impl From<RememberedExtraction> for JobOutcome {
     }
 }
 
-/// Submission/status failures mapped to JSON-RPC by the MCP layer.
+/// Submission, status and durable-storage failures of the extraction jobs.
+/// The MCP layer maps them to JSON-RPC codes; startup surfaces them from
+/// [`McpServer::with_extraction_jobs`](super::McpServer::with_extraction_jobs).
 #[derive(Debug, thiserror::Error)]
-pub(super) enum JobError {
+#[non_exhaustive]
+pub enum ExtractionJobError {
+    /// The request itself is unacceptable.
     #[error("{0}")]
     Invalid(String),
+    /// The idempotency key was already used by a different request.
     #[error("idempotency key already belongs to a different extraction request")]
     Conflict,
+    /// Too many jobs are pending.
     #[error("too many extraction jobs are pending; retry after one reaches a terminal state")]
     AtCapacity,
+    /// No extraction backend is configured for the job.
     #[error(
         "extraction backend not configured: set VELESDB_MEMORY_EXTRACTOR, or pass \
          extractor='outline' for the offline deterministic reader"
     )]
     BackendNotConfigured,
+    /// No job carries this request id.
     #[error("extraction request '{0}' does not exist")]
     NotFound(String),
+    /// The durable job directory failed to open, read or write.
     #[error("durable extraction job storage failed: {0}")]
     Storage(String),
 }
@@ -112,25 +121,25 @@ impl JobRecord {
         }
     }
 
-    pub(super) fn validate(&self) -> Result<(), JobError> {
+    pub(super) fn validate(&self) -> Result<(), ExtractionJobError> {
         self.validate_identity()?;
         if self.has_valid_shape() {
             return Ok(());
         }
-        Err(JobError::Storage(format!(
+        Err(ExtractionJobError::Storage(format!(
             "inconsistent extraction job '{}'",
             self.request_id
         )))
     }
 
-    fn validate_identity(&self) -> Result<(), JobError> {
+    fn validate_identity(&self) -> Result<(), ExtractionJobError> {
         if self.version != RECORD_VERSION || !valid_digest(&self.request_id) {
-            return Err(JobError::Storage(
+            return Err(ExtractionJobError::Storage(
                 "invalid extraction job identity".to_owned(),
             ));
         }
         if !valid_digest(&self.input_digest) {
-            return Err(JobError::Storage(
+            return Err(ExtractionJobError::Storage(
                 "invalid extraction input digest".to_owned(),
             ));
         }

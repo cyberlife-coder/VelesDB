@@ -39,6 +39,7 @@ mod context_tools;
 mod advanced_tools;
 mod dto;
 mod extraction_job_model;
+pub use extraction_job_model::ExtractionJobError;
 mod extraction_job_store;
 mod extraction_jobs;
 mod extractor_resolver;
@@ -50,7 +51,7 @@ use dto::{
     RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult, RememberParams,
     RememberResult, UnrelateParams, UnrelateResult,
 };
-use extraction_jobs::{ExtractionJobs, JobError};
+use extraction_jobs::ExtractionJobs;
 use extractor_resolver::ExtractorResolver;
 
 /// Le constructeur de schema d'ENTREE, unique pour tous les outils :
@@ -253,20 +254,17 @@ impl McpServer {
     /// fails startup instead of silently losing a receipt.
     ///
     /// # Errors
-    /// Returns a descriptive error if the job directory cannot be created,
+    /// [`ExtractionJobError::Storage`] if the job directory cannot be created,
     /// validated, read, or if the recovery worker cannot start.
     pub fn with_extraction_jobs(
         mut self,
         store_root: impl AsRef<std::path::Path>,
-    ) -> Result<Self, String> {
-        self.extraction_jobs = Some(
-            ExtractionJobs::open(
-                store_root.as_ref(),
-                Arc::clone(&self.service),
-                Arc::clone(&self.extractors),
-            )
-            .map_err(|error| error.to_string())?,
-        );
+    ) -> Result<Self, ExtractionJobError> {
+        self.extraction_jobs = Some(ExtractionJobs::open(
+            store_root.as_ref(),
+            Arc::clone(&self.service),
+            Arc::clone(&self.extractors),
+        )?);
         Ok(self)
     }
 
@@ -675,14 +673,14 @@ fn assert_every_input_slot_is_typed(router: &ToolRouter<McpServer>) {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn job_error(error: JobError) -> ErrorData {
+fn job_error(error: ExtractionJobError) -> ErrorData {
     let code = match error {
-        JobError::Invalid(_) | JobError::Conflict | JobError::NotFound(_) => {
-            ErrorCode::INVALID_PARAMS
-        }
-        JobError::AtCapacity | JobError::BackendNotConfigured | JobError::Storage(_) => {
-            ErrorCode::INTERNAL_ERROR
-        }
+        ExtractionJobError::Invalid(_)
+        | ExtractionJobError::Conflict
+        | ExtractionJobError::NotFound(_) => ErrorCode::INVALID_PARAMS,
+        ExtractionJobError::AtCapacity
+        | ExtractionJobError::BackendNotConfigured
+        | ExtractionJobError::Storage(_) => ErrorCode::INTERNAL_ERROR,
     };
     ErrorData::new(code, error.to_string(), None)
 }

@@ -31,13 +31,15 @@ pub(super) fn stringify_id_fields(value: &mut Value) {
 /// binding applies before deserializing a `WorkingContext`). Shared with the
 /// Node binding via `velesdb_memory::context::wire`, not duplicated here.
 pub(super) fn parse_id_fields(value: &mut Value) -> Result<(), JsValue> {
-    velesdb_memory::context::wire::parse_id_fields(value).map_err(invalid_input)
+    velesdb_memory::context::wire::parse_id_fields(value)
+        .map_err(|error| invalid_input(error.to_string()))
 }
 
 /// Accept `fragments[].id` in decimal-string form (the Node binding's
 /// contract, mirrored) by rewriting it to the numeric wire form.
 pub(super) fn parse_fragment_id_strings(request: &mut Value) -> Result<(), JsValue> {
-    velesdb_memory::context::wire::parse_fragment_id_strings(request).map_err(invalid_input)
+    velesdb_memory::context::wire::parse_fragment_id_strings(request)
+        .map_err(|error| invalid_input(error.to_string()))
 }
 
 /// `undefined`/`null` → `None`; a plain object → `Some(Metadata)`; anything

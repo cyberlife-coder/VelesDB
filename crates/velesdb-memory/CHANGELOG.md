@@ -16,6 +16,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept as the error source), one that is not a directory is `NotADirectory { entry }`.
   The messages are unchanged.
 
+- **BREAKING: `McpServer::with_extraction_jobs` fails with `ExtractionJobError`, not
+  `String`.** The job error enum was private to the MCP layer; it is now public
+  (`mcp::ExtractionJobError`, `#[non_exhaustive]`) and is what startup returns when the
+  durable job directory cannot be created, read or recovered. The messages are unchanged.
+
+- **BREAKING: the id wire helpers fail with `InvalidId`, not `String`.**
+  `context::wire::parse_id_fields` and `parse_fragment_id_strings` returned
+  `Result<(), String>`; they return `InvalidId { text }`, whose message is unchanged
+  (`invalid id '<text>' (expected a decimal u64 string)`). The Node and WASM bindings
+  render it with `to_string()` as before.
+
+- **BREAKING: the embedding record fails with `ProvenanceError`, not `String`.**
+  `embedding_provenance::read`, `write` and `check` (`persistence` feature) returned
+  `Result<_, String>`, and each caller billed the message as it saw fit: the online
+  migration as a capture failure, the migration steps as integrity or environment
+  faults. They return `ProvenanceError` (`Read`, `Parse`, `Serialise`, `Write`,
+  `ModelMismatch`), which `MemoryError::Provenance` carries: a store filled with
+  another model than the configured one is `InvalidInput` (point the daemon back at
+  the recorded model, or migrate), the record or the disk failing is `Internal`. The
+  messages are unchanged; a caller that matched the `String` reads `to_string()` or
+  the variant.
+
 - **BREAKING: the startup settings fail with `SettingError` and
   `LoggingError`, not `String`.** `select_embedder`, `select_extractor`,
   `RemoteEndpoint::require`, `role_auth`, `embedder_env_endpoint` and

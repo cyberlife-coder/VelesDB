@@ -82,7 +82,7 @@ fn verify_workspace_path(destination: &Path, workspace: &Path) -> Result<(), Mem
 fn verify_target_provenance(record: &JobRecord) -> Result<(), MemoryError> {
     let identity = &record.spec.identity;
     let expected = EmbeddingProvenance::new(identity.target_model(), identity.target_dimension());
-    let actual = embedding_provenance::read(identity.destination_path()).map_err(capture)?;
+    let actual = embedding_provenance::read(identity.destination_path())?;
     if actual.as_ref() == Some(&expected) {
         return Ok(());
     }

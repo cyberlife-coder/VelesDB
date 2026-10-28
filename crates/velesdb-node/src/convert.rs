@@ -110,13 +110,15 @@ pub fn stringify_id_fields(value: &mut Value) {
 /// `context` id field given in the binding's decimal-string form back into
 /// the numeric form the domain types deserialize.
 pub fn parse_id_fields(value: &mut Value) -> napi::Result<()> {
-    velesdb_memory::context::wire::parse_id_fields(value).map_err(invalid_input)
+    velesdb_memory::context::wire::parse_id_fields(value)
+        .map_err(|error| invalid_input(error.to_string()))
 }
 
 /// Accept `fragments[].id` in the binding's decimal-string form by rewriting
 /// it to the numeric form the domain type deserializes.
 pub fn parse_fragment_id_strings(request: &mut Value) -> napi::Result<()> {
-    velesdb_memory::context::wire::parse_fragment_id_strings(request).map_err(invalid_input)
+    velesdb_memory::context::wire::parse_fragment_id_strings(request)
+        .map_err(|error| invalid_input(error.to_string()))
 }
 
 /// Marshal a resolved `ctx://source/<hash>` lookup into the binding's
