@@ -376,4 +376,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-memory v0.15.0` · Last updated: 2026-10-26 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-memory v0.16.0` · Last updated: 2026-10-28 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
