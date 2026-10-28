@@ -322,7 +322,8 @@ impl OpenAiEmbedder {
                     ),
                 ))
             })?;
-        crate::openai::parse_embeddings_response(&payload).map_err(EmbedError::Backend)
+        crate::openai::parse_embeddings_response(&payload)
+            .map_err(|error| EmbedError::Backend(error.to_string()))
     }
 }
 

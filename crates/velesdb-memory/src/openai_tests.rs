@@ -81,11 +81,11 @@ fn an_error_envelope_is_reported_as_a_refusal_not_a_malformed_response() {
     let err = parse_embeddings_response(r#"{"error":{"message":"model not found"}}"#)
         .expect_err("an error envelope is not a vector");
     assert!(
-        err.contains("model not found"),
-        "the server's own words must survive into the message, got: {err}"
+        matches!(&err, ResponseError::Refused { message } if message == "model not found"),
+        "the server's own words must survive, as a refusal, got: {err:?}"
     );
     assert!(
-        err.contains("refused"),
+        err.to_string().contains("refused"),
         "and it must read as a refusal, got: {err}"
     );
 }
@@ -96,9 +96,10 @@ fn a_non_json_response_names_what_came_back() {
     let err = parse_chat_response("<html>502 Bad Gateway</html>")
         .expect_err("HTML is not a chat completion");
     assert!(
-        err.contains("not JSON") && err.contains("502"),
-        "the reader must see what actually arrived, got: {err}"
+        matches!(&err, ResponseError::NotJson { preview, .. } if preview.contains("502")),
+        "the reader must see what actually arrived, got: {err:?}"
     );
+    assert!(err.to_string().contains("not JSON"), "{err}");
 }
 
 #[test]
@@ -107,7 +108,11 @@ fn a_missing_field_is_reported_rather_than_silently_empty() {
     let err = parse_embeddings_response(r#"{"data":[]}"#)
         .expect_err("an empty data array carries no vector");
     assert!(
-        err.contains("data[0].embedding"),
+        matches!(err, ResponseError::NoEmbedding { .. }),
+        "an empty data array is its own case, got: {err:?}"
+    );
+    assert!(
+        err.to_string().contains("data[0].embedding"),
         "the message must name the field it looked for, got: {err}"
     );
 }
@@ -117,12 +122,20 @@ fn a_missing_field_is_reported_rather_than_silently_empty() {
 fn a_long_payload_is_previewed_not_pasted_whole() {
     let payload = format!(r#"{{"junk":"{}"}}"#, "x".repeat(5_000));
     let err = parse_chat_response(&payload).expect_err("no content field");
+    let message = err.to_string();
     assert!(
-        err.len() < 400,
-        "a whole model response must not land in an error message, got {} chars",
-        err.len()
+        matches!(err, ResponseError::NoContent { .. }),
+        "no assistant text is its own case, got: {err:?}"
     );
-    assert!(err.contains('…'), "the preview must say it was cut: {err}");
+    assert!(
+        message.len() < 400,
+        "a whole model response must not land in an error message, got {} chars",
+        message.len()
+    );
+    assert!(
+        message.contains('…'),
+        "the preview must say it was cut: {message}"
+    );
 }
 
 // --- The base URL an operator actually copies --------------------------------
