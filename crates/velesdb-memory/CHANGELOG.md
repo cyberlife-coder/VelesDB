@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-28
+
+> **BREAKING for Rust callers (0.x minor).** Fallible functions that returned
+> `Result<_, String>` now return a typed error, `MemoryError::MigrationCapture` is
+> `MigrationError::Capture`, and `ConfigFile` gains a `search` field. Each change is
+> listed under *Changed* with the form a caller migrates to. Nothing changes on disk:
+> a store written by 0.15.0 opens unchanged, and the daemon, the MCP tools and the
+> bindings behave as before (the one message that changes is noted below). Recall quality is opt-in, so a store
+> that does not set it searches as before. This version needs `velesdb-core` 7.1.0
+> or later.
+
 ### Added
 
 - **Recall quality is a setting.** `VELESDB_MEMORY_SEARCH_QUALITY` (`[search] quality`
