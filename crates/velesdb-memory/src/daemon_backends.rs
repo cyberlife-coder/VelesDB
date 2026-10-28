@@ -276,18 +276,27 @@ fn parse_chat_template_kwargs(
     };
     match serde_json::from_str::<Value>(raw) {
         Ok(object @ Value::Object(_)) => Ok(Some(object)),
-        Ok(other) => {
-            let kind = match other {
-                Value::Null => "null",
-                Value::Bool(_) => "a boolean",
-                Value::Number(_) => "a number",
-                Value::String(_) => "a string",
-                Value::Array(_) => "an array",
-                Value::Object(_) => "an object",
-            };
-            Err(invalid_chat_template_kwargs(format!("found {kind}")))
-        }
+        Ok(other) => Err(invalid_chat_template_kwargs(format!(
+            "found {}",
+            json_kind(&other)
+        ))),
         Err(err) => Err(invalid_chat_template_kwargs(err.to_string())),
+    }
+}
+
+/// The kind of a JSON value, worded for a refusal: what was found instead of
+/// an object, without the value itself.
+#[cfg(feature = "extractor-http")]
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    use serde_json::Value;
+
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
     }
 }
 
