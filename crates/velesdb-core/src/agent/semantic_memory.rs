@@ -500,14 +500,41 @@ impl SemanticMemory {
         query_embedding: &[f32],
         k: usize,
     ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
-        let results = memory_helpers::search_filtered(
-            &self.db,
-            &self.collection_name,
-            self.dimension,
+        self.query_at(query_embedding, k, None)
+    }
+
+    /// [`Self::query`] at an explicit [`SearchQuality`](crate::SearchQuality)
+    /// instead of the collection's runtime quality.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when embedding dimension is invalid, collection access
+    /// fails, or vector search fails (for example `Perfect` over a collection
+    /// larger than the exhaustive-scan guard).
+    pub fn query_with_quality(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        self.query_at(query_embedding, k, Some(quality))
+    }
+
+    fn query_at(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        quality: Option<crate::SearchQuality>,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
+        let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
+        let results = memory_helpers::search_live(
+            &collection,
             query_embedding,
             k,
             &self.ttl,
             MemoryKind::Semantic,
+            quality,
         )?;
 
         Ok(results
@@ -539,6 +566,35 @@ impl SemanticMemory {
         filter: &Map<String, Value>,
         offset: usize,
     ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        self.query_filtered_at(query_embedding, k, filter, offset, None)
+    }
+
+    /// [`Self::query_filtered`] at an explicit
+    /// [`SearchQuality`](crate::SearchQuality) instead of the collection's
+    /// runtime quality.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::query_with_quality`].
+    pub fn query_filtered_with_quality(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        filter: &Map<String, Value>,
+        offset: usize,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        self.query_filtered_at(query_embedding, k, filter, offset, Some(quality))
+    }
+
+    fn query_filtered_at(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        filter: &Map<String, Value>,
+        offset: usize,
+        quality: Option<crate::SearchQuality>,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
         // over-fetch to absorb TTL evictions + payload filter misses + offset
         let need = k.saturating_add(offset);
         let fetch_k = need
@@ -548,7 +604,8 @@ impl SemanticMemory {
 
         memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
-        let raw = memory_helpers::search_collection(&collection, query_embedding, fetch_k)?;
+        let raw =
+            memory_helpers::search_collection(&collection, query_embedding, fetch_k, quality)?;
 
         Ok(raw
             .into_iter()
@@ -582,15 +639,43 @@ impl SemanticMemory {
         k: usize,
         exclude: &Map<String, Value>,
     ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        self.query_excluding_at(query_embedding, k, exclude, None)
+    }
+
+    /// [`Self::query_excluding`] at an explicit
+    /// [`SearchQuality`](crate::SearchQuality) instead of the collection's
+    /// runtime quality.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::query_with_quality`].
+    pub fn query_excluding_with_quality(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        exclude: &Map<String, Value>,
+        quality: crate::SearchQuality,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        self.query_excluding_at(query_embedding, k, exclude, Some(quality))
+    }
+
+    fn query_excluding_at(
+        &self,
+        query_embedding: &[f32],
+        k: usize,
+        exclude: &Map<String, Value>,
+        quality: Option<crate::SearchQuality>,
+    ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
         memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
         if exclude.is_empty() || k == 0 {
-            return self.query(query_embedding, k);
+            return self.query_at(query_embedding, k, quality);
         }
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let base = k.saturating_add(self.ttl.expired_count(MemoryKind::Semantic));
         let mut fetch_k = base.saturating_mul(2).max(k.saturating_add(8));
         loop {
-            let raw = memory_helpers::search_collection(&collection, query_embedding, fetch_k)?;
+            let raw =
+                memory_helpers::search_collection(&collection, query_embedding, fetch_k, quality)?;
             let exhausted = raw.len() < fetch_k;
             let kept: Vec<(u64, f32, String)> = raw
                 .into_iter()

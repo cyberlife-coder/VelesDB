@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SemanticMemory` searches at an explicit `SearchQuality`.** `query_with_quality`,
+  `query_filtered_with_quality` and `query_excluding_with_quality` take the quality
+  the existing `query`, `query_filtered` and `query_excluding` leave to the
+  collection's runtime setting, which stay unchanged. `velesdb-memory` needs them to
+  honour a per-deployment recall/latency choice instead of whatever the collection
+  was opened with.
+
 - **`velesdb-memory` upgrade guard.** `scripts/memory_upgrade_guard.py` builds the
   last published `velesdb-memory` and this tree, writes a store with the former,
   opens it with the latter, writes again, rolls back, and kills the writer

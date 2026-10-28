@@ -179,15 +179,19 @@ pub(super) fn upsert_points(
         .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))
 }
 
-/// Searches a collection by vector similarity.
+/// Searches a collection by vector similarity at `quality`; `None` keeps the
+/// collection's own runtime quality.
 pub(super) fn search_collection(
     collection: &Collection,
     query: &[f32],
     k: usize,
+    quality: Option<crate::SearchQuality>,
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
-    collection
-        .search(query, k)
-        .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))
+    match quality {
+        Some(quality) => collection.search_with_quality(query, k, quality),
+        None => collection.search(query, k),
+    }
+    .map_err(|e| AgentMemoryError::CollectionError(e.to_string()))
 }
 
 /// Deletes a point by ID, removes it from the `stored_ids` tracking set, and
@@ -260,6 +264,20 @@ pub(super) fn search_filtered(
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
     validate_dimension(dimension, query_embedding.len())?;
     let collection = get_collection(db, collection_name)?;
+    search_live(&collection, query_embedding, k, ttl, kind, None)
+}
+
+/// The top `k` live points of `collection` at `quality` (`None` keeps the
+/// collection's runtime quality). The caller has already validated the
+/// dimension.
+pub(super) fn search_live(
+    collection: &Collection,
+    query_embedding: &[f32],
+    k: usize,
+    ttl: &super::ttl::MemoryTtl,
+    kind: super::ttl::MemoryKind,
+    quality: Option<crate::SearchQuality>,
+) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
     // Over-fetch so that expired-but-not-yet-deleted points evicted by the
     // post-search TTL filter do not shrink the result set below `k`. Expired
     // ids occupy at most `expired_count` of the top-k slots, so fetching
@@ -267,7 +285,7 @@ pub(super) fn search_filtered(
     // Scoped to `kind` so another subsystem's expired entries do not inflate
     // the over-fetch.
     let fetch_k = k.saturating_add(ttl.expired_count(kind));
-    let results = search_collection(&collection, query_embedding, fetch_k)?;
+    let results = search_collection(collection, query_embedding, fetch_k, quality)?;
     Ok(results
         .into_iter()
         .filter(|r| !ttl.is_expired(kind, r.point.id))

@@ -1592,4 +1592,127 @@ mod tests {
         );
         assert_eq!(sm.relations(1).unwrap().len(), 1, "eight threads, one edge");
     }
+
+    // ── search quality: the same neighbours, whatever the quality asked ─────────
+
+    use crate::SearchQuality;
+
+    const EVERY_QUALITY: [SearchQuality; 4] = [
+        SearchQuality::Fast,
+        SearchQuality::Balanced,
+        SearchQuality::Accurate,
+        SearchQuality::Perfect,
+    ];
+
+    /// Three facts at known distances from `[1,0,0,0]`: ids 1, 2, 3 by rank.
+    fn make_ranked(db: Arc<Database>) -> SemanticMemory {
+        let sm = make_semantic(db);
+        sm.store(1, "nearest", &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        sm.store(2, "middle", &[0.8, 0.6, 0.0, 0.0]).unwrap();
+        sm.store(3, "farthest", &[0.0, 1.0, 0.0, 0.0]).unwrap();
+        sm
+    }
+
+    #[test]
+    fn test_query_with_quality_ranks_like_query_for_every_quality() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_ranked(Arc::clone(&db));
+        let probe = [1.0_f32, 0.0, 0.0, 0.0];
+        let expected: Vec<u64> = sm.query(&probe, 3).unwrap().iter().map(|r| r.0).collect();
+
+        for quality in EVERY_QUALITY {
+            let ids: Vec<u64> = sm
+                .query_with_quality(&probe, 3, quality)
+                .unwrap()
+                .iter()
+                .map(|r| r.0)
+                .collect();
+            assert_eq!(ids, expected, "{quality:?} must rank the same facts");
+            assert_eq!(ids, vec![1, 2, 3]);
+        }
+    }
+
+    #[test]
+    fn test_query_with_quality_skips_expired() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_ranked(Arc::clone(&db));
+        sm.store_with_ttl(4, "gone", &[1.0, 0.0, 0.0, 0.0], 0)
+            .unwrap();
+
+        let ids: Vec<u64> = sm
+            .query_with_quality(&[1.0, 0.0, 0.0, 0.0], 3, SearchQuality::Accurate)
+            .unwrap()
+            .iter()
+            .map(|r| r.0)
+            .collect();
+
+        assert_eq!(ids, vec![1, 2, 3], "an expired fact never takes a slot");
+    }
+
+    #[test]
+    fn test_query_with_quality_dimension_mismatch_rejected() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+
+        let result = sm.query_with_quality(&[1.0, 0.0], 1, SearchQuality::Fast);
+
+        assert!(matches!(
+            result,
+            Err(AgentMemoryError::DimensionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_query_filtered_with_quality_applies_filter_and_offset() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let mut keep = serde_json::Map::new();
+        keep.insert("topic".to_string(), serde_json::json!("keep"));
+        let mut drop = serde_json::Map::new();
+        drop.insert("topic".to_string(), serde_json::json!("drop"));
+        sm.store_with_metadata(1, "a", &[1.0, 0.0, 0.0, 0.0], &keep)
+            .unwrap();
+        sm.store_with_metadata(2, "b", &[0.9, 0.1, 0.0, 0.0], &drop)
+            .unwrap();
+        sm.store_with_metadata(3, "c", &[0.8, 0.2, 0.0, 0.0], &keep)
+            .unwrap();
+
+        for quality in EVERY_QUALITY {
+            let first = sm
+                .query_filtered_with_quality(&[1.0, 0.0, 0.0, 0.0], 5, &keep, 0, quality)
+                .unwrap();
+            let second_page = sm
+                .query_filtered_with_quality(&[1.0, 0.0, 0.0, 0.0], 5, &keep, 1, quality)
+                .unwrap();
+
+            assert_eq!(first.iter().map(|r| r.0).collect::<Vec<_>>(), vec![1, 3]);
+            assert_eq!(second_page.iter().map(|r| r.0).collect::<Vec<_>>(), vec![3]);
+        }
+    }
+
+    #[test]
+    fn test_query_excluding_with_quality_drops_the_excluded() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(dir.path()).unwrap());
+        let sm = make_semantic(Arc::clone(&db));
+        let mut hub = serde_json::Map::new();
+        hub.insert("kind".to_string(), serde_json::json!("hub"));
+        sm.store_with_metadata(1, "hub", &[1.0, 0.0, 0.0, 0.0], &hub)
+            .unwrap();
+        sm.store(2, "fact", &[0.9, 0.1, 0.0, 0.0]).unwrap();
+
+        for quality in EVERY_QUALITY {
+            let ids: Vec<u64> = sm
+                .query_excluding_with_quality(&[1.0, 0.0, 0.0, 0.0], 5, &hub, quality)
+                .unwrap()
+                .iter()
+                .map(|r| r.0)
+                .collect();
+            assert_eq!(ids, vec![2], "{quality:?} must not return the hub");
+        }
+    }
 }
