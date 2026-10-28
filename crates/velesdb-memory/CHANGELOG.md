@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `McpServer::with_extraction_jobs` fails with `ExtractionJobError`, not
+  `String`.** The job error enum was private to the MCP layer; it is now public
+  (`mcp::ExtractionJobError`, `#[non_exhaustive]`) and is what startup returns when the
+  durable job directory cannot be created, read or recovered. The messages are unchanged.
+
 - **BREAKING: the id wire helpers fail with `InvalidId`, not `String`.**
   `context::wire::parse_id_fields` and `parse_fragment_id_strings` returned
   `Result<(), String>`; they return `InvalidId { text }`, whose message is unchanged

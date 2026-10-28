@@ -24,6 +24,24 @@ fn server() -> (TempDir, McpServer) {
     (dir, server)
 }
 
+#[test]
+fn a_store_root_that_is_a_file_cannot_hold_extraction_jobs() {
+    let dir = TempDir::new().expect("create tempdir");
+    let embedder: DynEmbedder = Box::new(HashEmbedder::new(crate::DEFAULT_DIMENSION));
+    let service = MemoryService::open(dir.path(), embedder).expect("open memory store");
+    let file = dir.path().join("not-a-directory");
+    std::fs::write(&file, b"x").expect("write file");
+
+    let Err(error) = McpServer::new(service).with_extraction_jobs(&file) else {
+        panic!("a file cannot hold the job directory");
+    };
+
+    assert!(
+        matches!(error, crate::mcp::ExtractionJobError::Storage(_)),
+        "{error:?}"
+    );
+}
+
 async fn committed_extraction(
     server: &McpServer,
     receipt: RememberExtractedResult,
