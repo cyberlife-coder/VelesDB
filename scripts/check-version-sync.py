@@ -63,6 +63,17 @@ TARGETS: "list[tuple[str, str]]" = [
     # in root Cargo.toml. Not under [workspace.package], so the cargo-version
     # reader never saw it; found stale at 1.16.0 during the v1.17.0 audit.
     ("Cargo.toml", "cargo_dep_pin"),
+    # The lockfiles of the crates built OUTSIDE the workspace (the fuzz targets,
+    # the Rust examples, the Tauri demo) pin velesdb-core by path, so each
+    # records its version. `cargo build` at the root refreshes only the root
+    # lockfile: these stayed on the old version through the 7.1.0 bump and the
+    # fuzz compile check, which builds with `--locked`, failed the release PR.
+    ("demos/tauri-rag-app/src-tauri/Cargo.lock", "cargo_lock_core"),
+    ("examples/agent_memory/Cargo.lock", "cargo_lock_core"),
+    ("examples/ecommerce_recommendation/Cargo.lock", "cargo_lock_core"),
+    ("examples/mini_recommender/Cargo.lock", "cargo_lock_core"),
+    ("examples/rust/Cargo.lock", "cargo_lock_core"),
+    ("fuzz/Cargo.lock", "cargo_lock_core"),
     ("docs/openapi.json", "json_openapi"),
     # Doc snippets that mirror the /health and /ready REST responses. The
     # server echoes the workspace version, so the example in the docs has
@@ -452,6 +463,15 @@ def _read_npm_lock_pkg_version(path: Path) -> str:
     return str(root_pkg["version"])
 
 
+def _read_cargo_lock_core(path: Path) -> str:
+    """Read the `velesdb-core` package version recorded in a lockfile."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'name = "velesdb-core"\nversion = "(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f"No velesdb-core package in {path}")
+    return match.group(1)
+
+
 def _read_cargo_dep_pin(path: Path) -> str:
     """Read the intra-workspace `velesdb-core = { path = ..., version = "X" }`
     dependency pin from the root Cargo.toml."""
@@ -624,6 +644,7 @@ _READERS = {
     "deb_release_tag": _read_deb_release_tag,
     "npm_lock_pkg": _read_npm_lock_pkg_version,
     "cargo_dep_pin": _read_cargo_dep_pin,
+    "cargo_lock_core": _read_cargo_lock_core,
     "deb_download_path": _read_deb_download_path,
     "md_version_label": _read_md_version_label,
     "mcp_server_json": _read_mcp_server_json_versions,

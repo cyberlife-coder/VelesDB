@@ -231,3 +231,22 @@ class CrateFootersAreActuallyPolicedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CargoLockCoreVersionTests(unittest.TestCase):
+    def _read(self, text: str) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "Cargo.lock"
+            lock.write_text(text, encoding="utf-8")
+            return cvs._READERS["cargo_lock_core"](lock)
+
+    def test_reads_the_version_of_the_core_package(self) -> None:
+        text = (
+            '[[package]]\nname = "serde"\nversion = "1.0.200"\n\n'
+            '[[package]]\nname = "velesdb-core"\nversion = "7.1.0"\n'
+        )
+        self.assertEqual(self._read(text), "7.1.0")
+
+    def test_a_lockfile_without_the_core_is_an_error_not_a_silent_skip(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self._read('[[package]]\nname = "serde"\nversion = "1.0.200"\n')
