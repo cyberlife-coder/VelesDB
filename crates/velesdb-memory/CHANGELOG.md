@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stops the daemon at startup. Library callers use
   `MemoryService::with_search_quality` / `NativeStore::with_search_quality`, and
   `select_search_quality` parses the setting (`SettingError::InvalidSearchQuality`).
+  `resolve_search_quality` is the explicit-then-environment rule the bindings use: the Node
+  `MemoryService.open(path, embedder, ollamaUrl, ollamaModel, searchQuality)` and the
+  Python `MemoryService(path, ..., search_quality=...)` take it as a trailing optional
+  argument, an explicit value winning over `VELESDB_MEMORY_SEARCH_QUALITY`.
   Needs a `velesdb-core` that has `SemanticMemory::query_filtered_with_quality`.
 
 ### Changed

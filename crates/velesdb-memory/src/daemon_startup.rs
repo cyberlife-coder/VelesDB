@@ -225,17 +225,8 @@ pub(crate) fn build_configured_service(
 /// `VELESDB_MEMORY_INGEST_ROOTS` follow.
 pub(crate) fn configured_search_quality(
 ) -> Result<Option<velesdb_memory::SearchQuality>, Box<dyn std::error::Error>> {
-    use velesdb_memory::SEARCH_QUALITY_VAR;
-
-    let raw = match std::env::var(SEARCH_QUALITY_VAR) {
-        Ok(raw) => Some(raw),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err(format!("{SEARCH_QUALITY_VAR} is not valid unicode").into())
-        }
-    };
-    velesdb_memory::select_search_quality(raw.as_deref())
-        .map_err(|error| format!("{SEARCH_QUALITY_VAR}: {error}").into())
+    velesdb_memory::resolve_search_quality(None)
+        .map_err(|error| format!("{}: {error}", velesdb_memory::SEARCH_QUALITY_VAR).into())
 }
 
 pub(crate) fn embedder_after_startup_recovery(

@@ -242,7 +242,7 @@ pub use remote_endpoint::embedder_env_endpoint;
 pub use remote_endpoint::{role_auth, RemoteEndpoint};
 pub use rerank::{DynReranker, RerankError, Reranker};
 #[cfg(feature = "persistence")]
-pub use search_quality::{select_search_quality, SEARCH_QUALITY_VAR};
+pub use search_quality::{resolve_search_quality, select_search_quality, SEARCH_QUALITY_VAR};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 pub use setting::SettingError;
 #[cfg(feature = "persistence")]

@@ -31,6 +31,42 @@ pub fn select_search_quality(mode: Option<&str>) -> Result<Option<SearchQuality>
         .map_err(|detail| SettingError::InvalidSearchQuality { detail })
 }
 
+/// The quality to run at: an explicit one (a binding's argument) wins over
+/// [`SEARCH_QUALITY_VAR`], which wins over "not configured".
+///
+/// Mirrors how the bindings already resolve the embedder: the caller who named
+/// a value gets exactly that value, and only a caller who named nothing is
+/// handed the operator's environment.
+///
+/// # Errors
+/// [`SettingError::InvalidSearchQuality`] when the value in force is not a
+/// quality, or the variable is not valid unicode.
+pub fn resolve_search_quality(
+    explicit: Option<&str>,
+) -> Result<Option<SearchQuality>, SettingError> {
+    let environment = match std::env::var(SEARCH_QUALITY_VAR) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(SettingError::InvalidSearchQuality {
+                detail: format!("{SEARCH_QUALITY_VAR} is not valid unicode"),
+            })
+        }
+    };
+    resolve(explicit, environment.as_deref())
+}
+
+/// [`resolve_search_quality`] with the environment's value passed in.
+fn resolve(
+    explicit: Option<&str>,
+    environment: Option<&str>,
+) -> Result<Option<SearchQuality>, SettingError> {
+    match explicit.map(str::trim).filter(|mode| !mode.is_empty()) {
+        Some(mode) => select_search_quality(Some(mode)),
+        None => select_search_quality(environment),
+    }
+}
+
 #[cfg(test)]
 #[path = "search_quality_tests.rs"]
 mod tests;

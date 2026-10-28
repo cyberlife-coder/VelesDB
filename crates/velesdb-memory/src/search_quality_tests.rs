@@ -62,3 +62,39 @@ fn an_unknown_quality_is_refused_with_the_accepted_forms() {
     );
     assert!(error.to_string().contains("fast"), "{error}");
 }
+
+#[test]
+fn an_explicit_quality_wins_over_the_environment() {
+    assert_eq!(
+        resolve(Some("fast"), Some("perfect")),
+        Ok(Some(SearchQuality::Fast))
+    );
+}
+
+#[test]
+fn the_environment_applies_when_nothing_is_explicit() {
+    assert_eq!(
+        resolve(None, Some("perfect")),
+        Ok(Some(SearchQuality::Perfect))
+    );
+    assert_eq!(
+        resolve(Some("  "), Some("perfect")),
+        Ok(Some(SearchQuality::Perfect)),
+        "a blank explicit value is nothing"
+    );
+}
+
+#[test]
+fn nothing_anywhere_leaves_the_collections_own_quality() {
+    assert_eq!(resolve(None, None), Ok(None));
+}
+
+#[test]
+fn a_bad_explicit_quality_is_refused_even_when_the_environment_is_fine() {
+    assert!(resolve(Some("turbo"), Some("fast")).is_err());
+}
+
+#[test]
+fn a_bad_environment_quality_is_refused_when_nothing_is_explicit() {
+    assert!(resolve(None, Some("turbo")).is_err());
+}

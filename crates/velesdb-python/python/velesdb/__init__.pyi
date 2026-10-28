@@ -2310,6 +2310,7 @@ class MemoryService:
         embedder: str = "hash",
         ollama_url: Optional[str] = None,
         ollama_model: Optional[str] = None,
+        search_quality: Optional[str] = None,
     ) -> None:
         """Open or create a memory store at ``path``.
 
@@ -2319,12 +2320,18 @@ class MemoryService:
                 ``"ollama"`` (real semantic recall via a local model).
             ollama_url: Ollama server URL (used when ``embedder="ollama"``).
             ollama_model: Ollama model name (used when ``embedder="ollama"``).
+            search_quality: Recall quality: ``"fast"``, ``"balanced"``,
+                ``"accurate"``, ``"perfect"``, ``"autotune"`` or
+                ``"custom:<ef>"``. An explicit value wins over
+                ``VELESDB_MEMORY_SEARCH_QUALITY``; omitting both keeps the
+                collection's own quality.
 
         Opening with ``"hash"`` emits one degraded-recall notice on stderr.
         Set ``VELESDB_MEMORY_QUIET=1`` to suppress it for deliberate offline use.
 
         Raises:
-            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``.
+            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``, or
+                ``search_quality`` is not a quality.
             RuntimeError: If the store cannot be opened or the Ollama embedder
                 cannot be initialised.
         """

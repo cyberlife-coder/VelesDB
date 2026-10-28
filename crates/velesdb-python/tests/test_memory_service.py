@@ -116,6 +116,20 @@ def test_forget_unknown_id_reports_not_found(mem):
     assert mem.forget(999_999) is False
 
 
+def test_unknown_search_quality_raises_value_error_naming_the_forms(tmp_path):
+    with pytest.raises(ValueError, match="turbo"):
+        MemoryService(str(tmp_path / "store"), search_quality="turbo")
+
+
+def test_search_quality_open_still_recalls(tmp_path):
+    mem = MemoryService(str(tmp_path / "store"), search_quality="perfect")
+    fact_id = mem.remember("we chose parking_lot to avoid lock poisoning")
+
+    hits = mem.recall("lock poisoning", 5)
+
+    assert fact_id in [hit["id"] for hit in hits]
+
+
 def test_reserved_metadata_key_raises_value_error(mem):
     with pytest.raises(ValueError):
         mem.remember("x", metadata={"_veles_hub": True})

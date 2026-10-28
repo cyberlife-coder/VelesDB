@@ -18,7 +18,7 @@ mod filters;
 mod marshal;
 
 use backends::{build_embedder, extract_with, warn_hash_embedder_not_semantic};
-use errors::to_py_err;
+use errors::{setting_error, to_py_err};
 use filters::to_column_filters;
 use marshal::{
     dated_recall_to_dict, entity_profile_to_value, explanation_to_dict, fusion_options_from_dict,
@@ -103,18 +103,29 @@ impl PyMemoryService {
     ///         environment exclusively — see `crates/velesdb-memory/README.md`.
     ///     Opening with `hash` emits one degraded-recall notice on stderr;
     ///         `VELESDB_MEMORY_QUIET=1` suppresses it for deliberate offline use.
+    ///     search_quality: recall quality ("fast", "balanced", "accurate",
+    ///         "perfect", "autotune" or "custom:<ef>"). An explicit value wins
+    ///         over `VELESDB_MEMORY_SEARCH_QUALITY`; omitting both keeps the
+    ///         collection's own quality. An unknown value raises `ValueError`.
     #[new]
-    #[pyo3(signature = (path, embedder = None, ollama_url = None, ollama_model = None))]
+    #[pyo3(signature = (path, embedder = None, ollama_url = None, ollama_model = None, search_quality = None))]
     fn new(
         path: String,
         embedder: Option<&str>,
         ollama_url: Option<String>,
         ollama_model: Option<String>,
+        search_quality: Option<&str>,
     ) -> PyResult<Self> {
+        let quality =
+            velesdb_memory::resolve_search_quality(search_quality).map_err(setting_error)?;
         let (emb, embedder_model, embedder_semantic) =
             build_embedder(embedder, ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_py_err)?;
+        let svc = match quality {
+            Some(quality) => svc.with_search_quality(quality),
+            None => svc,
+        };
         warn_hash_embedder_not_semantic(embedder_semantic);
         Ok(Self {
             svc,

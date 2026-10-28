@@ -206,6 +206,35 @@ test('open throws synchronously on an unknown embedder — not a rejected Promis
   }
 })
 
+test('open throws synchronously on an unknown search quality, naming the accepted forms', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    assert.throws(
+      () => MemoryService.open(dir, 'hash', undefined, undefined, 'turbo'),
+      (err) =>
+        err instanceof Error &&
+        err.message.includes('INVALID_INPUT') &&
+        err.message.includes('turbo') &&
+        /fast/.test(err.message),
+      'a bad quality must be refused, not ignored',
+    )
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
+test('open accepts a search quality and recall still finds the fact', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
+  try {
+    const store = MemoryService.open(dir, 'hash', undefined, undefined, 'perfect')
+    await store.remember('we chose parking_lot to avoid lock poisoning')
+    const hits = await store.recall('lock poisoning', 5)
+    assert.ok(hits.length >= 1, 'recall at an explicit quality must still return the fact')
+  } finally {
+    rmStoreDir(dir)
+  }
+})
+
 test('open defaults to the offline hash embedder when none is named', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'velesdb-node-'))
   try {
