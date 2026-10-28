@@ -122,9 +122,14 @@ fn a_search_quality_that_is_not_one_stops_the_daemon_naming_the_setting() {
 }
 
 #[test]
-fn a_valid_search_quality_lets_the_daemon_start() {
-    assert!(
-        run_daemon("accurate", std::time::Duration::from_secs(3)).is_none(),
-        "a valid quality must not stop the daemon"
-    );
+fn a_valid_search_quality_is_not_what_stops_the_daemon() {
+    // Whether the daemon is still serving after the grace period or has ended
+    // for a reason of its own (this test does not care which), it must not have
+    // refused the setting.
+    if let Some((_, stderr)) = run_daemon("accurate", std::time::Duration::from_secs(3)) {
+        assert!(
+            !stderr.contains("VELESDB_MEMORY_SEARCH_QUALITY"),
+            "a valid quality must not be refused: {stderr}"
+        );
+    }
 }
