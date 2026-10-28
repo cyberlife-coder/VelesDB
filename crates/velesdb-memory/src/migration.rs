@@ -63,7 +63,7 @@ mod validate;
 
 pub use cli::{
     default_scratch_parent, dry_run, migration_complete_notice, parse as parse_migrate_args,
-    refuses, render, require_destination, MigrateOptions,
+    refuses, render, require_destination, MigrateOptions, MigrateUsageError,
 };
 pub use diagnosis::{
     diagnose, same_filesystem, Capability, CollectionInventory, DiagnosisReport, SourceProvenance,
@@ -92,7 +92,7 @@ pub use state::{
     CollectionProgress, MigrationLock, MigrationState, Phase, Recovery, SwitchState, LOCK_FILE,
     PHASES, STATE_FILE, STATE_FORMAT_VERSION, STATE_TEMP_FILE,
 };
-pub use strategy::{assess, resolve, Compatibility, Resolution, Strategy};
+pub use strategy::{assess, resolve, Compatibility, Resolution, Strategy, StrategyError};
 pub(crate) use switchover::{
     commit_retained_switch, finalize_staged_live_switch, rollback_staged_live_switch,
     stage_live_switch,

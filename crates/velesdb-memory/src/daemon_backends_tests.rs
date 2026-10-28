@@ -3,6 +3,7 @@
 //! that a bad value stops the daemon at startup instead of being dropped.
 
 use super::{build_openai_extractor, parse_chat_template_kwargs, CHAT_TEMPLATE_KWARGS_VAR};
+use velesdb_memory::SettingError;
 
 #[test]
 fn an_unset_variable_means_no_kwargs() {
@@ -40,6 +41,11 @@ fn invalid_json_is_refused_and_names_the_variable() {
     let err = parse_chat_template_kwargs(Some(r#"{"enable_thinking": "#))
         .expect_err("truncated JSON must not be silently dropped");
     assert!(
+        matches!(err, SettingError::InvalidChatTemplateKwargs { ref variable, .. } if variable == CHAT_TEMPLATE_KWARGS_VAR),
+        "{err:?}"
+    );
+    let err = err.to_string();
+    assert!(
         err.starts_with(&format!(
             "{CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object: "
         )),
@@ -55,7 +61,8 @@ fn invalid_json_is_refused_and_names_the_variable() {
 fn a_json_value_that_is_not_an_object_is_refused() {
     for raw in ["[1, 2]", "\"text\"", "42", "true", "null"] {
         let err = parse_chat_template_kwargs(Some(raw))
-            .expect_err("only an object is a set of template arguments");
+            .expect_err("only an object is a set of template arguments")
+            .to_string();
         assert!(
             err.starts_with(&format!(
                 "{CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object: "
@@ -74,7 +81,9 @@ fn a_refusal_never_echoes_the_raw_value() {
         "\"sk-live-hunter2\"",
         "{\"k\": sk-live-hunter2}",
     ] {
-        let err = parse_chat_template_kwargs(Some(raw)).expect_err("not an object");
+        let err = parse_chat_template_kwargs(Some(raw))
+            .expect_err("not an object")
+            .to_string();
         assert!(!err.contains("hunter2"), "{raw} leaked into: {err}");
     }
 }

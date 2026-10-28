@@ -305,13 +305,26 @@ fn the_three_arbitrated_values_parse_and_nothing_else_does() {
     assert_eq!(Strategy::parse("reembed"), Ok(Strategy::Reembed));
 
     let rejected = Strategy::parse("Auto").expect_err("case-folding is not parsing");
-    assert!(rejected.contains("auto, reuse or reembed"));
+    assert_eq!(
+        rejected,
+        StrategyError::Unknown {
+            value: "Auto".to_owned()
+        }
+    );
+    assert!(rejected.to_string().contains("auto, reuse or reembed"));
 }
 
 #[test]
 fn force_reuse_is_refused_by_name_rather_than_merely_absent() {
     for spelling in ["force-reuse", "force_reuse"] {
-        let message = Strategy::parse(spelling).expect_err("force-reuse must not parse");
+        let refusal = Strategy::parse(spelling).expect_err("force-reuse must not parse");
+        assert_eq!(
+            refusal,
+            StrategyError::Refused {
+                value: spelling.to_owned()
+            }
+        );
+        let message = refusal.to_string();
 
         assert!(
             message.contains("does not exist, and not by oversight"),
