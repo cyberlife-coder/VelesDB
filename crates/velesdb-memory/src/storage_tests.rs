@@ -18,7 +18,7 @@ impl MutationObserver for RecordingObserver {
     fn before_mutation(&self, key: DirtyKey) -> Result<(), MemoryError> {
         let failure = self.failure.lock().clone();
         if let Some(message) = failure {
-            return Err(MemoryError::MigrationCapture(message));
+            return Err(crate::migration::capture(message));
         }
         self.keys.lock().push(key);
         Ok(())
@@ -40,7 +40,7 @@ impl MutationObserver for FailOnObserver {
     fn before_mutation(&self, key: DirtyKey) -> Result<(), MemoryError> {
         self.seen.lock().push(key);
         if key == self.key {
-            return Err(MemoryError::MigrationCapture("injected refusal".to_owned()));
+            return Err(crate::migration::capture("injected refusal"));
         }
         Ok(())
     }
@@ -127,7 +127,10 @@ fn observer_failure_prevents_the_source_mutation() {
         .store(7, "must not persist", &[1.0, 0.0, 0.0, 0.0])
         .expect_err("capture refusal must be returned");
 
-    assert!(matches!(error, MemoryError::MigrationCapture(_)));
+    assert!(matches!(
+        error,
+        MemoryError::Migration(crate::migration::MigrationError::Capture(_))
+    ));
     assert!(store.get(7).unwrap().is_none());
 }
 
@@ -277,7 +280,10 @@ fn captured_link_failure_also_captures_the_rollback_delete() {
         )
         .expect_err("edge capture refusal must fail remember");
 
-    assert!(matches!(error, MemoryError::MigrationCapture(_)));
+    assert!(matches!(
+        error,
+        MemoryError::Migration(crate::migration::MigrationError::Capture(_))
+    ));
     assert_eq!(
         *observer.seen.lock(),
         vec![

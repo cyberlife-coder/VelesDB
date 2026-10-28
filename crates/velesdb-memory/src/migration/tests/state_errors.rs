@@ -150,3 +150,18 @@ fn writing_without_the_matching_lock_is_a_precondition() {
 
     assert!(matches!(error, MigrationError::Precondition(_)), "{error}");
 }
+
+#[test]
+fn a_refused_capture_is_a_server_fault_that_names_its_cause() {
+    let error = crate::migration::capture("a mutation observer is already active");
+
+    assert_eq!(error.category(), ErrorCategory::Internal);
+    assert!(
+        matches!(error, MemoryError::Migration(MigrationError::Capture(_))),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "migration error: a mutation observer is already active"
+    );
+}

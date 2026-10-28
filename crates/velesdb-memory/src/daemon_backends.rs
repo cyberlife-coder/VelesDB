@@ -312,8 +312,8 @@ pub(crate) fn build_migration_target(
     backend: &str,
 ) -> Result<(DynEmbedder, String), velesdb_memory::MemoryError> {
     let configured = build_embedder_selection(Some(backend)).map_err(|error| {
-        velesdb_memory::MemoryError::MigrationCapture(format!(
-            "cannot configure migration target '{backend}': {error}"
+        velesdb_memory::MemoryError::Migration(velesdb_memory::migration::MigrationError::Capture(
+            format!("cannot configure migration target '{backend}': {error}"),
         ))
     })?;
     Ok((configured.embedder, configured.model))

@@ -35,6 +35,12 @@ pub enum MigrationError {
     #[error("{0}")]
     Environment(String),
 
+    /// The online-migration observer could not durably classify a mutation, or
+    /// refused one it cannot account for. The source write has not run when
+    /// this error is returned.
+    #[error("{0}")]
+    Capture(String),
+
     /// The data contradicts itself: an edge whose id its triple does not
     /// derive, two indexes that disagree, a source that changed under a
     /// diagnosis, a fact that exists on one side only. Not the caller's fault
@@ -59,6 +65,11 @@ impl MigrationError {
         Self::Environment(message.into())
     }
 
+    /// See [`Self::Capture`].
+    pub(crate) fn capture(message: impl Into<String>) -> Self {
+        Self::Capture(message.into())
+    }
+
     /// See [`Self::Integrity`].
     pub(crate) fn integrity(message: impl Into<String>) -> Self {
         Self::Integrity(message.into())
@@ -69,7 +80,9 @@ impl MigrationError {
         match self {
             Self::NotFound(_) => crate::ErrorCategory::NotFound,
             Self::Precondition(_) => crate::ErrorCategory::InvalidInput,
-            Self::Environment(_) | Self::Integrity(_) => crate::ErrorCategory::Internal,
+            Self::Environment(_) | Self::Capture(_) | Self::Integrity(_) => {
+                crate::ErrorCategory::Internal
+            }
         }
     }
 }

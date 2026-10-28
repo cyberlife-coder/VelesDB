@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use crate::migration::capture;
 use crate::MemoryError;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -181,8 +182,4 @@ pub(super) fn validate_epoch_id(epoch_id: &str) -> Result<(), MemoryError> {
         return Err(capture("epoch id must be 32 hexadecimal characters"));
     }
     Ok(())
-}
-
-fn capture(message: impl Into<String>) -> MemoryError {
-    MemoryError::MigrationCapture(message.into())
 }
