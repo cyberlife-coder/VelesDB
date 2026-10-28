@@ -83,35 +83,63 @@ pub(crate) fn chat_body(
     body.to_string()
 }
 
+/// Why an OpenAI-compatible answer could not be read. The payload is previewed
+/// ([`preview`]), never pasted whole, so a message stays short.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ResponseError {
+    /// The body is not JSON at all (an HTML gateway page, a truncated stream).
+    #[error("response is not JSON ({cause}): {preview}")]
+    NotJson {
+        cause: serde_json::Error,
+        preview: String,
+    },
+    /// The server answered `200` with the protocol's own
+    /// `{"error":{"message":...}}` envelope.
+    #[error("the server refused the request: {message}")]
+    Refused { message: String },
+    /// The body is JSON but does not have the embeddings shape.
+    #[cfg(feature = "embedder-http")]
+    #[error("response has no `data[0].embedding` array ({cause}): {preview}")]
+    MalformedEmbeddings {
+        cause: serde_json::Error,
+        preview: String,
+    },
+    /// The embeddings shape is right but `data` is empty.
+    #[cfg(feature = "embedder-http")]
+    #[error("response has no `data[0].embedding` array: {preview}")]
+    NoEmbedding { preview: String },
+    /// The chat completion carries no assistant text.
+    #[cfg(feature = "extractor-http")]
+    #[error("response has no `choices[0].message.content` string: {preview}")]
+    NoContent { preview: String },
+}
+
 /// The vector out of an embeddings response: `{"data":[{"embedding":[...]}]}`.
 ///
 /// # Errors
-/// A message naming what was wrong with the payload, including the protocol's
-/// own `{"error":{"message":...}}` envelope when the server sent one — a
-/// server that answers `200` with an error body is common enough that reading
-/// past it would report "malformed response" for a perfectly clear refusal.
+/// [`ResponseError::Refused`] when the server sent the protocol's own
+/// `{"error":{"message":...}}` envelope — a server that answers `200` with an
+/// error body is common enough that reading past it would report "malformed
+/// response" for a perfectly clear refusal — otherwise the variant naming what
+/// was wrong with the payload.
 #[cfg(feature = "embedder-http")]
-pub(crate) fn parse_embeddings_response(payload: &str) -> Result<Vec<f32>, String> {
+pub(crate) fn parse_embeddings_response(payload: &str) -> Result<Vec<f32>, ResponseError> {
     let value = parse_json(payload)?;
     // Deserialized into a typed `Vec<f32>` rather than walked as `Value` and
     // cast: serde narrows each component, so there is no hand-written
     // `as f32` to justify — the same shape the Ollama backend already uses.
-    let response: EmbeddingsResponse = serde_json::from_value(value).map_err(|err| {
-        format!(
-            "response has no `data[0].embedding` array ({err}): {}",
-            preview(payload)
-        )
-    })?;
+    let response: EmbeddingsResponse =
+        serde_json::from_value(value).map_err(|cause| ResponseError::MalformedEmbeddings {
+            cause,
+            preview: preview(payload),
+        })?;
     response
         .data
         .into_iter()
         .next()
         .map(|datum| datum.embedding)
-        .ok_or_else(|| {
-            format!(
-                "response has no `data[0].embedding` array: {}",
-                preview(payload)
-            )
+        .ok_or_else(|| ResponseError::NoEmbedding {
+            preview: preview(payload),
         })
 }
 
@@ -134,7 +162,7 @@ struct EmbeddingDatum {
 /// # Errors
 /// As [`parse_embeddings_response`].
 #[cfg(feature = "extractor-http")]
-pub(crate) fn parse_chat_response(payload: &str) -> Result<String, String> {
+pub(crate) fn parse_chat_response(payload: &str) -> Result<String, ResponseError> {
     let value = parse_json(payload)?;
     value
         .get("choices")
@@ -143,25 +171,26 @@ pub(crate) fn parse_chat_response(payload: &str) -> Result<String, String> {
         .and_then(|message| message.get("content"))
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "response has no `choices[0].message.content` string: {}",
-                preview(payload)
-            )
+        .ok_or_else(|| ResponseError::NoContent {
+            preview: preview(payload),
         })
 }
 
-/// Parse a payload, surfacing the protocol's error envelope as the message
+/// Parse a payload, surfacing the protocol's error envelope as a refusal
 /// when there is one.
-fn parse_json(payload: &str) -> Result<Value, String> {
-    let value: Value = serde_json::from_str(payload)
-        .map_err(|err| format!("response is not JSON ({err}): {}", preview(payload)))?;
+fn parse_json(payload: &str) -> Result<Value, ResponseError> {
+    let value: Value = serde_json::from_str(payload).map_err(|cause| ResponseError::NotJson {
+        cause,
+        preview: preview(payload),
+    })?;
     if let Some(message) = value
         .get("error")
         .and_then(|error| error.get("message"))
         .and_then(Value::as_str)
     {
-        return Err(format!("the server refused the request: {message}"));
+        return Err(ResponseError::Refused {
+            message: message.to_owned(),
+        });
     }
     Ok(value)
 }

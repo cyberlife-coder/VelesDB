@@ -107,7 +107,8 @@ impl OpenAiExtractor {
                     ),
                 ))
             })?;
-        crate::openai::parse_chat_response(&payload).map_err(ExtractError::Backend)
+        crate::openai::parse_chat_response(&payload)
+            .map_err(|error| ExtractError::Backend(error.to_string()))
     }
 }
 
