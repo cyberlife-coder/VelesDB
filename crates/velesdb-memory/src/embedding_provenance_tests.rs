@@ -55,7 +55,8 @@ fn the_same_model_at_the_same_dimension_opens() {
 fn a_different_model_is_refused_naming_both_configurations() {
     let stored = EmbeddingProvenance::new("bge-m3", 1024);
     let err = check(Some(&stored), "all-minilm", 384)
-        .expect_err("a store filled with one model cannot be searched with another");
+        .expect_err("a store filled with one model cannot be searched with another")
+        .to_string();
     for expected in ["bge-m3", "1024", "all-minilm", "384"] {
         assert!(
             err.contains(expected),
@@ -75,7 +76,9 @@ fn the_same_model_at_a_different_dimension_is_refused() {
     // (a quantisation swap, a provider re-pointing an alias). The name matching
     // is then a false reassurance, so the dimension is checked on its own.
     let stored = EmbeddingProvenance::new("bge-m3", 1024);
-    let err = check(Some(&stored), "bge-m3", 768).expect_err("same name, different vectors");
+    let err = check(Some(&stored), "bge-m3", 768)
+        .expect_err("same name, different vectors")
+        .to_string();
     assert!(
         err.contains("1024") && err.contains("768"),
         "the refusal must name both dimensions, got: {err}"
@@ -113,7 +116,9 @@ fn a_corrupt_record_is_an_error_rather_than_a_silent_pass() {
     // guard on exactly the store whose metadata is already damaged.
     let dir = store_dir();
     std::fs::write(dir.path().join(PROVENANCE_FILE), "{not json").expect("write junk");
-    let err = read(dir.path()).expect_err("a damaged record must be reported");
+    let err = read(dir.path())
+        .expect_err("a damaged record must be reported")
+        .to_string();
     assert!(
         err.contains(PROVENANCE_FILE),
         "the error must name the file to delete, got: {err}"
@@ -136,5 +141,40 @@ fn a_record_from_a_newer_version_still_reads_its_known_fields() {
         read_back,
         Some(EmbeddingProvenance::new("bge-m3", 1024)),
         "the fields this version knows must survive an unknown one"
+    );
+}
+
+#[test]
+fn each_failure_of_the_record_has_its_own_class() {
+    use crate::{ErrorCategory, MemoryError};
+
+    let dir = store_dir();
+    std::fs::write(dir.path().join(PROVENANCE_FILE), "{not json").expect("write junk");
+    let damaged = read(dir.path()).expect_err("damaged record");
+    assert!(matches!(damaged, ProvenanceError::Parse(_)), "{damaged}");
+    assert_eq!(
+        MemoryError::from(damaged).category(),
+        ErrorCategory::Internal,
+        "a damaged record is the store's fault, not the caller's"
+    );
+
+    let stored = EmbeddingProvenance::new("all-minilm", 384);
+    let mismatch = check(Some(&stored), "bge-m3", 1024).expect_err("another model");
+    assert!(
+        matches!(&mismatch, ProvenanceError::ModelMismatch { stored_model, configured_model, .. }
+            if stored_model == "all-minilm" && configured_model == "bge-m3"),
+        "{mismatch}"
+    );
+    assert_eq!(
+        MemoryError::from(mismatch).category(),
+        ErrorCategory::InvalidInput,
+        "pointing the daemon at another model is a configuration to correct"
+    );
+
+    let missing = dir.path().join("absent");
+    let unwritable = write(&missing, &stored).expect_err("a missing directory is unwritable");
+    assert!(
+        matches!(unwritable, ProvenanceError::Write(_)),
+        "{unwritable}"
     );
 }

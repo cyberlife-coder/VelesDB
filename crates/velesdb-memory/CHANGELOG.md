@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: the embedding record fails with `ProvenanceError`, not `String`.**
+  `embedding_provenance::read`, `write` and `check` (`persistence` feature) returned
+  `Result<_, String>`, and each caller billed the message as it saw fit: the online
+  migration as a capture failure, the migration steps as integrity or environment
+  faults. They return `ProvenanceError` (`Read`, `Parse`, `Serialise`, `Write`,
+  `ModelMismatch`), which `MemoryError::Provenance` carries: a store filled with
+  another model than the configured one is `InvalidInput` (point the daemon back at
+  the recorded model, or migrate), the record or the disk failing is `Internal`. The
+  messages are unchanged; a caller that matched the `String` reads `to_string()` or
+  the variant.
+
 - **BREAKING: the startup settings fail with `SettingError` and
   `LoggingError`, not `String`.** `select_embedder`, `select_extractor`,
   `RemoteEndpoint::require`, `role_auth`, `embedder_env_endpoint` and

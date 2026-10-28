@@ -293,8 +293,8 @@ fn prepare_destination(record: &JobRecord, dimension: usize) -> Result<(), Memor
     embedding_provenance::write(
         destination,
         &EmbeddingProvenance::new(record.spec.identity.target_model(), dimension),
-    )
-    .map_err(capture)
+    )?;
+    Ok(())
 }
 
 fn verify_target<E: Embedder>(

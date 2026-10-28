@@ -42,6 +42,68 @@ use std::path::Path;
 /// carrying.
 pub const PROVENANCE_FILE: &str = "embedding-provenance.json";
 
+/// Why the embedding record could not be read, written or honoured.
+///
+/// `ModelMismatch` is the configuration the operator can correct; the other
+/// variants are the record or the disk failing, which [`crate::MemoryError`]
+/// reports as internal.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ProvenanceError {
+    /// The record exists but could not be read.
+    #[error("cannot read {PROVENANCE_FILE}: {0}")]
+    Read(#[source] std::io::Error),
+
+    /// The record exists but is not the JSON this crate writes.
+    #[error(
+        "cannot parse {PROVENANCE_FILE}: {0} — delete it to reset the embedding record (the \
+         store's own data is untouched)"
+    )]
+    Parse(#[source] serde_json::Error),
+
+    /// The record could not be serialised.
+    #[error("cannot serialise the embedding record: {0}")]
+    Serialise(#[source] serde_json::Error),
+
+    /// The record could not be written into the store directory.
+    #[error("cannot write {PROVENANCE_FILE}: {0}")]
+    Write(#[source] std::io::Error),
+
+    /// The store was filled with another model than the one configured.
+    #[error(
+        "this store was filled with the embedding model '{stored_model}' ({stored_dimension} \
+         dimensions), and the daemon is configured for '{configured_model}' \
+         ({configured_dimension} dimensions). Vectors from two different models are not \
+         comparable, so recall would silently return nonsense. Either point \
+         VELESDB_MEMORY_EMBEDDER_MODEL back at '{stored_model}', or migrate the store against \
+         the new model with `velesdb-memory migrate-embeddings` (start with --dry-run; see \
+         #1762). Which backend serves the model does not matter and is not recorded: the same \
+         model over Ollama, oMLX or an OpenAI-compatible API produces the same vectors."
+    )]
+    ModelMismatch {
+        /// The model the store records.
+        stored_model: String,
+        /// The width the store records.
+        stored_dimension: usize,
+        /// The model the daemon is configured for.
+        configured_model: String,
+        /// The width of the configured model.
+        configured_dimension: usize,
+    },
+}
+
+impl ProvenanceError {
+    /// The class of this failure, as [`crate::MemoryError::category`] reports it.
+    pub(crate) fn category(&self) -> crate::ErrorCategory {
+        match self {
+            Self::ModelMismatch { .. } => crate::ErrorCategory::InvalidInput,
+            Self::Read(_) | Self::Parse(_) | Self::Serialise(_) | Self::Write(_) => {
+                crate::ErrorCategory::Internal
+            }
+        }
+    }
+}
+
 /// The embedder a store was filled by.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EmbeddingProvenance {
@@ -75,12 +137,12 @@ impl EmbeddingProvenance {
 /// "absent" would silently disable the guard on exactly the store whose
 /// metadata is already damaged; the message names the file so the operator can
 /// delete it and let the check degrade knowingly.
-pub fn read(store_dir: &Path) -> Result<Option<EmbeddingProvenance>, String> {
+pub fn read(store_dir: &Path) -> Result<Option<EmbeddingProvenance>, ProvenanceError> {
     let path = store_dir.join(PROVENANCE_FILE);
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(format!("cannot read {PROVENANCE_FILE}: {err}")),
+        Err(err) => return Err(ProvenanceError::Read(err)),
     };
     // Unknown fields are IGNORED on purpose (no `deny_unknown_fields` here,
     // unlike the operator-facing config file): a store stamped by a newer
@@ -89,18 +151,16 @@ pub fn read(store_dir: &Path) -> Result<Option<EmbeddingProvenance>, String> {
     // by hand.
     serde_json::from_str(&raw)
         .map(Some)
-        .map_err(|err| format!("cannot parse {PROVENANCE_FILE}: {err} — delete it to reset the embedding record (the store's own data is untouched)"))
+        .map_err(ProvenanceError::Parse)
 }
 
 /// Write the record into `store_dir`.
 ///
 /// # Errors
 /// The directory is unwritable, or serialisation fails.
-pub fn write(store_dir: &Path, provenance: &EmbeddingProvenance) -> Result<(), String> {
-    let body = serde_json::to_string_pretty(provenance)
-        .map_err(|err| format!("cannot serialise the embedding record: {err}"))?;
-    std::fs::write(store_dir.join(PROVENANCE_FILE), body)
-        .map_err(|err| format!("cannot write {PROVENANCE_FILE}: {err}"))
+pub fn write(store_dir: &Path, provenance: &EmbeddingProvenance) -> Result<(), ProvenanceError> {
+    let body = serde_json::to_string_pretty(provenance).map_err(ProvenanceError::Serialise)?;
+    std::fs::write(store_dir.join(PROVENANCE_FILE), body).map_err(ProvenanceError::Write)
 }
 
 /// Compare what the store recorded against what the daemon is configured for.
@@ -110,14 +170,14 @@ pub fn write(store_dir: &Path, provenance: &EmbeddingProvenance) -> Result<(), S
 /// guard — see [`unrecorded_model_note`].
 ///
 /// # Errors
-/// A message naming **both** configurations and what can be done about them.
-/// Naming only the mismatch would leave the operator guessing which side to
-/// change.
+/// [`ProvenanceError::ModelMismatch`], whose message names **both** configurations
+/// and what can be done about them. Naming only the mismatch would leave the
+/// operator guessing which side to change.
 pub fn check(
     stored: Option<&EmbeddingProvenance>,
     model: &str,
     dimension: usize,
-) -> Result<(), String> {
+) -> Result<(), ProvenanceError> {
     let Some(stored) = stored else {
         return Ok(());
     };
@@ -127,16 +187,12 @@ pub fn check(
     // The dimension is stated on both sides even when only the name differs:
     // it is what tells an operator whether a re-index is a re-embed or a
     // rebuild, and a served model can change what its own name means.
-    Err(format!(
-        "this store was filled with the embedding model '{}' ({} dimensions), and the daemon is \
-         configured for '{}' ({} dimensions). Vectors from two different models are not \
-         comparable, so recall would silently return nonsense. Either point \
-         VELESDB_MEMORY_EMBEDDER_MODEL back at '{}', or migrate the store against the new model \
-         with `velesdb-memory migrate-embeddings` (start with --dry-run; see #1762). Which \
-         backend serves the model does not matter and is not recorded: the same model over \
-         Ollama, oMLX or an OpenAI-compatible API produces the same vectors.",
-        stored.model, stored.dimension, model, dimension, stored.model
-    ))
+    Err(ProvenanceError::ModelMismatch {
+        stored_model: stored.model.clone(),
+        stored_dimension: stored.dimension,
+        configured_model: model.to_owned(),
+        configured_dimension: dimension,
+    })
 }
 
 /// What to say when the store carries no model record.

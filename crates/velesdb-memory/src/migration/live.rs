@@ -2,9 +2,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
-    environment, execute::journal_workspace, fingerprint, integrity, precondition,
-    CollectionProgress, MigrationLock, MigrationState, Phase, AGENT_COLLECTIONS,
-    STATE_FORMAT_VERSION,
+    environment, execute::journal_workspace, fingerprint, precondition, CollectionProgress,
+    MigrationLock, MigrationState, Phase, AGENT_COLLECTIONS, STATE_FORMAT_VERSION,
 };
 
 pub(crate) fn prepare_live_switch(
@@ -107,7 +106,7 @@ fn verify_target_provenance(
     target_model: &str,
     target_dimension: usize,
 ) -> Result<(), crate::MemoryError> {
-    let recorded = crate::embedding_provenance::read(destination).map_err(integrity)?;
-    crate::embedding_provenance::check(recorded.as_ref(), target_model, target_dimension)
-        .map_err(precondition)
+    let recorded = crate::embedding_provenance::read(destination)?;
+    crate::embedding_provenance::check(recorded.as_ref(), target_model, target_dimension)?;
+    Ok(())
 }

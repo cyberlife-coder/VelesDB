@@ -37,7 +37,7 @@
 //! checked against — after the comparison passes and before the phase
 //! advances.
 
-use super::{environment, integrity, not_found, precondition};
+use super::{integrity, not_found, precondition};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -104,8 +104,7 @@ fn validate_locked(
             &state.target_model,
             state.target_dimension,
         ),
-    )
-    .map_err(environment)?;
+    )?;
 
     if state.phase == Phase::Prepared {
         state.phase = Phase::DestinationValidated;
