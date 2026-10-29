@@ -138,6 +138,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb query execute --format json` prints `[]` for a SELECT that matches
+  nothing.** It printed the prose line `No results.`, which no JSON parser
+  accepts; the table format keeps the message. Found by the new executor
+  conformance case X020 (`OFFSET` past the end), which the CLI runs.
+
 - **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
   search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
   one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
