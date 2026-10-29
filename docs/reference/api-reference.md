@@ -1402,8 +1402,10 @@ collections never appear in them. Their histogram buckets are 1 ms, 5 ms,
 families are not per collection: every `MATCH` records into one process-wide
 collector. `velesdb_match_latency_seconds` buckets run from 1 ms to 5 s, with
 `_sum` (seconds) and `_count`. The process-wide `velesdb_traversal_*` families
-of earlier releases were never fed and are no longer written; per-collection
-traversal counts are the `velesdb_graph_traversal*` families above.
+of earlier releases were never fed and are no longer written, and core's
+`TraversalMetrics`, the type that wrote them, is removed in 8.0.0;
+per-collection traversal counts are the `velesdb_graph_traversal*` families
+above.
 `velesdb_query_duration_seconds` buckets are 1 ms, 5 ms, 10 ms, 50 ms, 100 ms,
 500 ms, 1 s and 5 s, with `_sum` and `_count`.
 

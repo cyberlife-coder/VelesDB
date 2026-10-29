@@ -60,37 +60,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)] // Reason: pins the deprecated helper until its removal (issue #2087)
-    fn test_config_effective_ef_search_from_mode() {
-        // Arrange
-        let config = VelesConfig::default();
-
-        // Act
-        let ef = config.effective_ef_search();
-
-        // Assert
-        assert_eq!(ef, 160); // Balanced mode
-    }
-
-    #[test]
-    #[allow(deprecated)] // Reason: pins the deprecated helper until its removal (issue #2087)
-    fn test_config_effective_ef_search_override() {
-        // Arrange
-        let mut config = VelesConfig::default();
-        config.search.ef_search = Some(512);
-
-        // Act
-        let ef = config.effective_ef_search();
-
-        // Assert
-        assert_eq!(ef, 512);
-    }
-
-    // ========================================================================
-    // TOML parsing tests
-    // ========================================================================
-
-    #[test]
     fn test_config_from_toml_minimal() {
         // Arrange
         let toml = r#"
