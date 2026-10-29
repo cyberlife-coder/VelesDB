@@ -35,9 +35,6 @@ mod bounded_top_k;
 #[cfg(test)]
 mod component_scores_tests;
 pub(crate) mod condition_tree;
-mod distinct;
-#[cfg(test)]
-mod distinct_tests;
 mod early_return;
 mod execution_paths;
 mod extraction;
@@ -391,7 +388,7 @@ impl Collection {
     // analyze_join_pushdown, apply_select_postprocessing moved to select_dispatch.rs
 
     // NOTE: apply_distinct and compute_distinct_key moved to distinct.rs
-    // (EPIC-061/US-003 refactoring)
+    // (EPIC-061/US-003 refactoring), then to velesql/distinct_evaluator.rs
 
     // NOTE: filter_by_similarity, execute_not_similarity_query, extract_not_similarity_condition,
     // execute_scan_query moved to similarity_filter.rs (Plan 04-04)

@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `persistence` feature, so a `default-features = false` consumer
   (`velesdb-wasm`) reads search modes with core's parser instead of its own copy.
 
+- **`velesdb_core::velesql::distinct_evaluator`.** DISTINCT deduplication
+  (`apply_distinct`) moves out of the `persistence`-gated collection query
+  engine, beside `window_evaluator`, so the WASM executor dedups through the
+  same key as core.
+
 ### Changed
 
 - **BREAKING (behavior) — `velesdb-wasm` storage modes return core's results,
