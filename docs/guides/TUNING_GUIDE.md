@@ -236,7 +236,7 @@ parameter with dynamic scaling based on the requested result count `k`.
 \* Recall@10 in `recall_benchmark` (10K random 128-D vectors, an index built with `HnswParams::max_recall`, 100 queries), measured 2026-09-10 on 6.0.0; see [BENCHMARKS.md](../BENCHMARKS.md#hnsw-recall-profiles-10k128d). No recorded run measures `AutoTune` or `Adaptive` yet (#2266).
 
 > Source of truth for these values:
-> `crates/velesdb-core/src/index/hnsw/params.rs` (`SearchQuality::ef_search`).
+> `crates/velesdb-core/src/search_quality.rs` (`SearchQuality::ef_search`).
 
 ### Adaptive Search
 

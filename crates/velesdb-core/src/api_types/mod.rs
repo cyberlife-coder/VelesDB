@@ -59,10 +59,10 @@ pub fn default_fusion_strategy() -> String {
     "rrf".to_string()
 }
 
-/// Default RRF k parameter.
+/// Default RRF k parameter, [`crate::fusion::DEFAULT_RRF_K`].
 #[must_use]
 pub const fn default_rrf_k() -> u32 {
-    60
+    crate::fusion::DEFAULT_RRF_K
 }
 
 /// Default average weight for weighted fusion.
@@ -91,16 +91,18 @@ pub const fn default_hit_weight() -> f32 {
     crate::fusion::DEFAULT_WEIGHTED_HIT_WEIGHT
 }
 
-/// Default dense weight for relative score fusion.
+/// Default dense weight for relative score fusion,
+/// [`crate::fusion::DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT`].
 #[must_use]
 pub const fn default_dense_weight() -> f32 {
-    0.5
+    crate::fusion::DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT
 }
 
-/// Default sparse weight for relative score fusion.
+/// Default sparse weight for relative score fusion,
+/// [`crate::fusion::DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT`].
 #[must_use]
 pub const fn default_sparse_weight() -> f32 {
-    0.5
+    crate::fusion::DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT
 }
 
 /// Default index type: hash.
@@ -119,14 +121,12 @@ pub fn default_index_type() -> String {
 /// Returns `None` for a mode it cannot read, or whose ef falls outside the
 /// `ef_search` range. An entry point that must refuse such a mode rather than
 /// fall back uses [`parse_search_mode`], which says why.
-#[cfg(feature = "persistence")]
 #[must_use]
 pub fn mode_to_search_quality(mode: &str) -> Option<crate::SearchQuality> {
     parse_search_mode(mode).ok()
 }
 
 /// The accepted search mode forms, as every mode error names them.
-#[cfg(feature = "persistence")]
 pub(crate) const SEARCH_MODE_FORMS: &str = concat!(
     "Valid values: 'fast', 'balanced', 'accurate', 'perfect', ",
     "'autotune' (aliases: 'auto_tune', 'auto'), 'custom:<ef>', ",
@@ -149,7 +149,6 @@ pub(crate) const SEARCH_MODE_FORMS: &str = concat!(
 /// `adaptive:` ef is an integer outside `[MIN_EF_SEARCH, MAX_EF_SEARCH]`,
 /// the range the dedicated `ef_search` option enforces (#2275). The range
 /// is checked first: `adaptive:5000:32` names 5000.
-#[cfg(feature = "persistence")]
 pub fn parse_search_mode(mode: &str) -> Result<crate::SearchQuality, String> {
     let quality = match mode.to_lowercase().as_str() {
         "fast" => Some(crate::SearchQuality::Fast),
@@ -168,7 +167,6 @@ pub fn parse_search_mode(mode: &str) -> Result<crate::SearchQuality, String> {
 /// range, which is checked before the order of the adaptive bounds, since no
 /// order makes such a bound valid; `Ok(None)` for a malformed mode, or an
 /// out-of-order one whose bounds are both in range.
-#[cfg(feature = "persistence")]
 fn parse_advanced_quality(mode: &str) -> Result<Option<crate::SearchQuality>, String> {
     if let Some(ef) = mode.strip_prefix("custom:") {
         return Ok(parse_mode_ef(ef)
@@ -194,7 +192,6 @@ fn parse_advanced_quality(mode: &str) -> Result<Option<crate::SearchQuality>, St
 /// integer, `Some(Err)` when it is one outside the `ef_search` range: a
 /// negative one, and one past `usize::MAX`, included, as `WITH (ef_search =
 /// ...)` reads them.
-#[cfg(feature = "persistence")]
 fn parse_mode_ef(raw: &str) -> Option<Result<usize, String>> {
     use std::num::IntErrorKind::{NegOverflow, PosOverflow};
     let in_range = |ef: usize| validate_ef_search(ef).map(|()| ef);

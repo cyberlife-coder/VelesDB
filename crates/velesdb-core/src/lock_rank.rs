@@ -17,7 +17,7 @@
 //!    collision. Alongside the observer port (`core/src/observer/`), this
 //!    is one of the two declared premium extension points in core — which
 //!    is why the type is public despite having no in-tree production
-//!    caller: its consumer is `velesdb-private`. Zero in-tree usage is the
+//!    caller: its consumer is an out-of-tree layer. Zero in-tree usage is the
 //!    expected state of a reservation, not dead code.
 //!
 //! [`assert_lock_order`] is offered to implementations that adopt this
