@@ -1,6 +1,7 @@
 """
-The module-level core contracts: ``velesdb.hash_id``,
-``velesdb.metric_higher_is_better`` and ``velesdb.validate_search_quality``.
+The core contracts exposed to Python: ``velesdb.hash_id``,
+``velesdb.metric_higher_is_better``, ``velesdb.validate_search_quality`` and
+``FusionStrategy.fused_higher_is_better``.
 
 Each is a call into velesdb-core, so these tests pin what Python sees against
 core's own behaviour (its conformance vectors, the order a search actually
@@ -70,6 +71,57 @@ def test_metric_direction_is_the_order_search_returns(temp_db, metric):
     scores = [r["score"] for r in results]
     expected = sorted(scores, reverse=velesdb.metric_higher_is_better(metric))
     assert scores == expected
+
+
+def _every_fusion_strategy():
+    return {
+        "average": velesdb.FusionStrategy.average(),
+        "maximum": velesdb.FusionStrategy.maximum(),
+        "weighted": velesdb.FusionStrategy.weighted(0.6, 0.3, 0.1),
+        "rrf": velesdb.FusionStrategy.rrf(),
+        "relative_score": velesdb.FusionStrategy.relative_score(0.5, 0.5),
+    }
+
+
+def test_fused_direction_keeps_distance_units_only_for_score_space_strategies():
+    """Average, maximum and weighted keep a distance metric's units; RRF and
+    RSF scores are higher-is-better under every metric (core's
+    ``FusionStrategy::fused_direction``)."""
+    observed = {
+        (name, metric): strategy.fused_higher_is_better(metric)
+        for name, strategy in _every_fusion_strategy().items()
+        for metric in velesdb.DISTANCE_METRICS
+    }
+    keeps_units = {"average", "maximum", "weighted"}
+    expected = {
+        (name, metric): velesdb.metric_higher_is_better(metric) or name not in keeps_units
+        for name, metric in observed
+    }
+    assert observed == expected
+
+
+def test_fused_direction_refuses_an_unknown_metric():
+    with pytest.raises(ValueError, match="Unknown metric"):
+        velesdb.FusionStrategy.rrf().fused_higher_is_better("manhattan")
+
+
+@pytest.mark.parametrize("metric", ["euclidean", "cosine"])
+@pytest.mark.parametrize("name", ["average", "maximum", "weighted", "rrf", "relative_score"])
+def test_fused_direction_is_the_order_multi_query_search_returns(temp_db, metric, name):
+    """Fused results come best first, so their scores run in the declared direction."""
+    collection = temp_db.create_collection(f"fdir_{metric}_{name}", dimension=4, metric=metric)
+    collection.upsert([
+        {"id": 1, "vector": [1.0, 1.0, 0.0, 0.0]},
+        {"id": 2, "vector": [1.0, 0.0, 0.0, 0.0]},
+        {"id": 3, "vector": [0.0, 0.0, 1.0, 1.0]},
+    ])
+    strategy = _every_fusion_strategy()[name]
+    results = collection.multi_query_search(
+        vectors=[[1.0, 1.0, 0.0, 0.0], [0.9, 1.0, 0.0, 0.0]], top_k=3, fusion=strategy,
+    )
+    assert results[0]["id"] == 1
+    scores = [r["score"] for r in results]
+    assert scores == sorted(scores, reverse=strategy.fused_higher_is_better(metric))
 
 
 @pytest.mark.parametrize("mode", ["fast", "AUTO", "custom:16", "custom:+256", "adaptive:32:512"])

@@ -334,11 +334,7 @@ impl FusionStrategy {
         }
         let mut fused = self.fuse(results)?;
 
-        let all_lower = !directions.is_empty()
-            && directions
-                .iter()
-                .all(|d| *d == ScoreDirection::LowerIsBetter);
-        if all_lower && self.preserves_score_space() {
+        if self.fused_direction(directions) == ScoreDirection::LowerIsBetter {
             // Restore metric units; descending negated order is ascending
             // distance, so the list stays best-first.
             for entry in &mut fused {
@@ -346,6 +342,32 @@ impl FusionStrategy {
             }
         }
         Ok(fused)
+    }
+
+    /// The polarity of the scores [`Self::fuse_with_directions`] returns for
+    /// branches of the given `directions`.
+    ///
+    /// `LowerIsBetter` only when **every** branch is lower-is-better and the
+    /// strategy keeps the input score space (`Average`, `Maximum`,
+    /// `Weighted`): the fused scores are then still in the metric's own
+    /// units, a distance. Rank-based strategies (`RRF`, `WeightedRRF`),
+    /// `RelativeScore` (normalized `[0, 1]`) and any mixed or empty set of
+    /// branches produce higher-is-better scores.
+    ///
+    /// A caller that maps fused scores to a similarity, such as the Python
+    /// integrations, reads the direction here instead of keeping its own
+    /// list of score-space strategies.
+    #[must_use]
+    pub fn fused_direction(&self, directions: &[ScoreDirection]) -> ScoreDirection {
+        let all_lower = !directions.is_empty()
+            && directions
+                .iter()
+                .all(|d| *d == ScoreDirection::LowerIsBetter);
+        if all_lower && self.preserves_score_space() {
+            ScoreDirection::LowerIsBetter
+        } else {
+            ScoreDirection::HigherIsBetter
+        }
     }
 
     /// True for strategies that rank purely by input order, ignoring raw scores.

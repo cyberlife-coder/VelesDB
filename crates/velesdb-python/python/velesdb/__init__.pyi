@@ -197,6 +197,21 @@ class FusionStrategy:
         """
         ...
 
+    def fused_higher_is_better(self, metric: str) -> bool:
+        """Whether a higher fused score is a closer match under ``metric``.
+
+        The direction of the scores ``Collection.multi_query_search`` returns
+        with this strategy, read from velesdb-core's
+        ``FusionStrategy::fused_direction``: ``average``, ``maximum`` and
+        ``weighted`` keep a distance metric's units (lower is closer under
+        ``euclidean`` and ``hamming``); ``rrf`` and ``relative_score`` scores
+        are higher-is-better under every metric.
+
+        Raises:
+            ValueError: If the metric is unknown
+        """
+        ...
+
 
 class SearchOptions:
     """Options for a vector search request (v1.15+).

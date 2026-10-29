@@ -46,7 +46,7 @@ def test_compatibility_stub_surface_matches_runtime() -> None:
     classes = _classes()
 
     expected = {
-        "FusionStrategy": {"rsf", "from_name"},
+        "FusionStrategy": {"rsf", "from_name", "fused_higher_is_better"},
         "Database": {"get_collections"},
         "GraphStore": {
             "get_outgoing_edges",

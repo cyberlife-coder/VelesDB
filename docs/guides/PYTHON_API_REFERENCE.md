@@ -382,6 +382,18 @@ strategy = FusionStrategy.from_name("rsf", dense_weight=0.7)  # sparse_weight = 
 | `relative_score(d, s)` / `rsf(d, s)` | d*dense + s*sparse | Dense+sparse hybrid pipelines |
 | `from_name(name, **params)` | the named strategy | A strategy chosen by a config string; `ValueError` on an unknown name |
 
+The direction of the fused scores depends on the strategy as well as the
+metric. `strategy.fused_higher_is_better(metric)` answers it from velesdb-core
+(`FusionStrategy::fused_direction`): `rrf` and `relative_score` scores are
+higher-is-better under every metric, while `average`, `maximum` and `weighted`
+keep the metric's units, so on a `euclidean` or `hamming` collection their
+`multi_query_search` scores are distances (lower is closer):
+
+```python
+FusionStrategy.average().fused_higher_is_better("euclidean")  # False
+FusionStrategy.rrf().fused_higher_is_better("euclidean")      # True
+```
+
 ## Distance metrics
 
 | Metric | Description | Use Case |

@@ -4,6 +4,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use velesdb_core::fusion::ScoreDirection;
 use velesdb_core::{FusionParams, FusionStrategy as CoreFusionStrategy};
 
 /// Fusion strategy for combining results from multiple vector searches.
@@ -206,6 +207,35 @@ impl FusionStrategy {
             .map_err(|e| PyValueError::new_err(format!("{e}")))
     }
 
+    /// Whether a higher fused score is a closer match when this strategy
+    /// fuses branches scored by ``metric``, as
+    /// ``Collection.multi_query_search`` does.
+    ///
+    /// Reads velesdb-core's ``FusionStrategy::fused_direction``: ``average``,
+    /// ``maximum`` and ``weighted`` keep a distance metric's units (lower is
+    /// closer under ``euclidean`` and ``hamming``); ``rrf`` and
+    /// ``relative_score`` scores are higher-is-better under every metric.
+    ///
+    /// Args:
+    ///     metric: Distance metric name or alias, as ``create_collection``
+    ///         accepts it
+    ///
+    /// Returns:
+    ///     bool: ``True`` if a higher fused score is a closer match
+    ///
+    /// Raises:
+    ///     ValueError: If the metric is unknown
+    ///
+    /// Example:
+    ///     >>> FusionStrategy.average().fused_higher_is_better("euclidean")
+    ///     False
+    ///     >>> FusionStrategy.rrf().fused_higher_is_better("euclidean")
+    ///     True
+    fn fused_higher_is_better(&self, metric: &str) -> PyResult<bool> {
+        let direction = crate::utils::parse_metric(metric)?.score_direction();
+        Ok(self.inner.fused_direction(&[direction]) == ScoreDirection::HigherIsBetter)
+    }
+
     fn __repr__(&self) -> String {
         match &self.inner {
             CoreFusionStrategy::Average => "FusionStrategy.average()".to_string(),
@@ -302,3 +332,7 @@ fn optional_weight(weights: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f3
         None => Ok(None),
     }
 }
+
+#[cfg(test)]
+#[path = "fusion_tests.rs"]
+mod tests;
