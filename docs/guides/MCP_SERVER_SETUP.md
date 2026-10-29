@@ -808,8 +808,10 @@ choose one. The dial trades latency for recall:
 | `perfect` | Scores every stored vector. Exact, and O(n): the engine refuses it past its exhaustive-scan guard, and recall then fails rather than scanning. |
 | `autotune` | The engine picks per query. |
 | `custom:<ef>` | An explicit `ef_search`. |
+| `adaptive:<min_ef>:<max_ef>` | Starts at `min_ef` and searches once more, up to `max_ef`, only when the first results are scattered. |
 
-The same names the REST API and VelesQL accept. A value that is
+The same names the REST API and VelesQL accept, in any letter case (`auto` and
+`auto_tune` are aliases of `autotune`), each ef in `[16, 4096]`. A value that is
 none of them stops the daemon at startup and names the accepted forms, rather
 than being ignored. Fused recall with column predicates (`recall_where`) uses its
 own search path and is not affected.
@@ -909,4 +911,4 @@ trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-10-28 · Applies to: velesdb-memory 0.16.0
+Last updated: 2026-10-29 · Applies to: velesdb-memory 0.16.0

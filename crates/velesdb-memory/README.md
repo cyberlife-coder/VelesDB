@@ -191,6 +191,13 @@ Two things to know when switching:
   which re-embeds every fact under its original id. Switching embedders
   never costs you your memories.
 
+Recall quality is a separate dial: `VELESDB_MEMORY_SEARCH_QUALITY` (or
+`[search] quality` in the config file) trades the vector search's latency for
+recall — `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`
+or `adaptive:<min_ef>:<max_ef>`. Unset keeps the collection's own quality; a
+value that is none of these stops the daemon at startup. See
+[recall quality](../../docs/guides/MCP_SERVER_SETUP.md#recall-quality).
+
 ## See the wedge (offline, one command)
 
 ![velesdb-memory wow demo: a vector recall misses the 2-hop ticket; why() reaches it through the graph](https://raw.githubusercontent.com/cyberlife-coder/VelesDB/develop/crates/velesdb-memory/media/wow.gif)
@@ -376,4 +383,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-memory v0.16.0` · Last updated: 2026-10-28 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-memory v0.16.0` · Last updated: 2026-10-29 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
