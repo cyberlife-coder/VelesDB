@@ -17,6 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parser `search_with_quality` uses, raising `ValueError` with its message. The
   MIT integrations call them instead of carrying copies (below), so a change in
   core reaches them with the next wheel.
+- **`FusionStrategy::from_name`: one fusion strategy name grammar in core.**
+  `velesdb_core::FusionStrategy::from_name(name, FusionParams)` reads `rrf`,
+  `average` (alias `avg`), `maximum` (alias `max`), `weighted` and
+  `relative_score` (alias `rsf`), case-insensitively, fills every parameter the
+  caller leaves out with core's default, and builds the weighted strategies
+  through the validating constructors. An unknown name is the new
+  `FusionError::UnknownStrategy`, whose message lists the accepted names. A
+  single `relative_score` weight implies its complement. `FusionParams` is
+  `#[non_exhaustive]`, built from `FusionParams::default()` and its `with_*`
+  setters. The defaults it fills are now constants too: `DEFAULT_RRF_K` (60),
+  `DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT` and `DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT`
+  (0.5 each), beside the existing `DEFAULT_WEIGHTED_*` ones. Python gets the same
+  grammar as `FusionStrategy.from_name(name, *, k=..., avg_weight=..., ...)`.
+- **`parse_search_mode` and `SearchQuality` no longer need `persistence`.**
+  `SearchQuality` moved from `index::hnsw::params` to its own ungated module.
+  It is re-exported at `velesdb_core::SearchQuality` and at its old path.
+  `api_types::parse_search_mode` and `mode_to_search_quality` now build without
+  the `persistence` feature, so a `default-features = false` consumer
+  (`velesdb-wasm`) reads search modes with core's parser instead of its own copy.
 
 ### Changed
 
@@ -65,6 +84,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a binding change. An unknown mode still raises `ValueError` naming
   `default_mode`, now worded `invalid search.default_mode: unknown variant
   ..., expected one of ...`.
+- **Every surface that takes a fusion strategy by name now goes through
+  `FusionStrategy::from_name`.** Before, seven `match` blocks had drifted apart:
+  - **CLI** (`multi-search --strategy weighted` and the REPL's
+    `.hybrid-sparse --strategy weighted`): `weighted` now uses core's
+    0.6 / 0.3 / 0.1 instead of the pre-#1545 literals 0.5 / 0.3 / 0.2, so it
+    ranks the same as the server, Python, WASM and Tauri. **This reorders
+    `weighted` results from the CLI.** The REPL now reads names
+    case-insensitively and accepts `avg`;
+  - **Tauri**: `parse_fusion_strategy` accepts `avg` and `max`, builds the
+    weighted strategies through the validating constructors (weights it would
+    have refused only when the fusion ran are refused when the strategy is
+    built), and a single `denseWeight`/`sparseWeight` implies the other. A `k`
+    past `u32::MAX` is refused whatever the strategy;
+  - **REST** (`/search/multi` and the hybrid `fusion` object): the accepted
+    names are unchanged. The two endpoints now report core's message for an
+    unknown strategy (`Unknown fusion strategy '...'. Valid values: ...`) and
+    for refused weights, instead of their own wording. The multi-query
+    endpoint used to say `Invalid strategy: ...`;
+  - **WASM** `fuse_results`: the name grammar is core's. The N-branch `rsf`
+    aggregation stays WASM-local by design (fixture divergence D005).
+  - **MIT integrations** (`velesdb_common.fusion.build_fusion_strategy`, used
+    by LangChain and LlamaIndex): the name goes to the binding's
+    `FusionStrategy.from_name`, so they accept core's aliases and casing and
+    report core's errors. A wheel older than the export (velesdb < 7.2.0)
+    keeps the previous literal dispatch, as the other `velesdb_common` helpers
+    do.
+- **`velesdb-wasm` validates search modes with core's `parse_search_mode`.**
+  `search_with_quality` accepts and refuses exactly what every other surface
+  does, and its refusals now carry core's messages (`Unknown search mode
+  '...'. Valid values: ...`, which names the `auto_tune` and `auto` aliases),
+  replacing `Unknown search quality`, `Invalid custom ef_search value`,
+  `Invalid adaptive ...` and `Adaptive min_ef ... must be <= max_ef`.
+- **The metric aliases are listed once in core.** `DistanceMetric::parse_alias`
+  reads them from one table, and VelesQL DDL validation calls it instead of
+  repeating the list. A `WITH (metric = ' L2 ')` is therefore trimmed at
+  validation as it already was at execution. The DDL executor's unknown-metric
+  message now lists every alias (it named five of the nine).
+- **One `LIMIT` ceiling in the query pipeline.** The union query used its own
+  `MAX_LIMIT` copy, and `JOIN_ROW_CEILING` is now defined from the same
+  constant instead of mirroring it by hand. Both values are unchanged (100 000).
+- The core rustdoc no longer names a private crate. The observer port is
+  described by what it is, the hook an out-of-tree policy layer implements.
+- The REST `FusionRequest` and `MultiQuerySearchRequest` docs (and so the
+  OpenAPI spec) list the strategy aliases and core's weighted defaults. The
+  `FusionRequest` field docs had kept the pre-#1545 0.5 / 0.3 / 0.2, and the
+  `MultiQuerySearchRequest` examples 0.5 and 0.2.
 
 ### Fixed
 

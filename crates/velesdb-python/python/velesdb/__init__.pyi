@@ -174,6 +174,29 @@ class FusionStrategy:
         """Short alias for :meth:`relative_score` (``USING FUSION rsf`` in VelesQL)."""
         ...
 
+    @staticmethod
+    def from_name(
+        name: str,
+        *,
+        k: Optional[int] = None,
+        avg_weight: Optional[float] = None,
+        max_weight: Optional[float] = None,
+        hit_weight: Optional[float] = None,
+        dense_weight: Optional[float] = None,
+        sparse_weight: Optional[float] = None,
+    ) -> "FusionStrategy":
+        """Create the strategy a name stands for, through velesdb-core's grammar.
+
+        Names: ``rrf``, ``average`` (``avg``), ``maximum`` (``max``),
+        ``weighted``, ``relative_score`` (``rsf``), case-insensitive. A
+        parameter left out takes core's default (k=60; 0.6/0.3/0.1;
+        0.5/0.5); a single ``relative_score`` weight implies the other.
+
+        Raises:
+            ValueError: If the name is unknown or the weights are invalid
+        """
+        ...
+
 
 class SearchOptions:
     """Options for a vector search request (v1.15+).

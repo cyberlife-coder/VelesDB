@@ -7,8 +7,7 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 
-/// Maximum allowed LIMIT value (re-imported from parent for local use).
-const MAX_LIMIT: usize = 100_000;
+use super::MAX_LIMIT;
 
 impl Collection {
     /// EPIC-044 US-002: Execute union query for similarity() OR metadata patterns.

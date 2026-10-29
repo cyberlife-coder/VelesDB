@@ -3,6 +3,11 @@
 Centralises ``build_fusion_strategy`` so that both the LangChain and
 LlamaIndex integration packages can import from a single source instead
 of maintaining identical copies (US-018 — no duplication < 2%).
+
+The name grammar itself (names, aliases, case, defaults) is velesdb-core's
+``FusionStrategy::from_name``, read through the binding's
+``velesdb.FusionStrategy.from_name``. A wheel older than that export
+(velesdb < 7.2.0) falls back to the literal dispatch below.
 """
 
 from __future__ import annotations
@@ -25,6 +30,17 @@ if TYPE_CHECKING:
 DEFAULT_WEIGHTED_AVG_WEIGHT = 0.6
 DEFAULT_WEIGHTED_MAX_WEIGHT = 0.3
 DEFAULT_WEIGHTED_HIT_WEIGHT = 0.1
+
+# The keyword parameters ``velesdb.FusionStrategy.from_name`` accepts. Other
+# keys in ``fusion_params`` are ignored, as the literal dispatch always did.
+_FROM_NAME_PARAMS = (
+    "k",
+    "avg_weight",
+    "max_weight",
+    "hit_weight",
+    "dense_weight",
+    "sparse_weight",
+)
 
 
 def resolve_weighted_params(params: Optional[dict]) -> Tuple[float, float, float]:
@@ -49,22 +65,24 @@ def build_fusion_strategy(
     """Build a :class:`velesdb.FusionStrategy` from a string name and params.
 
     Args:
-        fusion: Fusion strategy name.  One of ``"average"``, ``"maximum"``,
-            ``"rrf"``, ``"weighted"``, ``"relative_score"``, or ``"rsf"``
-            (alias for ``"relative_score"``).
+        fusion: Fusion strategy name, read with velesdb-core's grammar:
+            ``"rrf"``, ``"average"`` (``"avg"``), ``"maximum"`` (``"max"``),
+            ``"weighted"`` or ``"relative_score"`` (``"rsf"``),
+            case-insensitive.
         fusion_params: Optional parameters for the chosen strategy:
 
             - ``"rrf"``: ``{"k": 60}`` (default k=60)
             - ``"weighted"``: ``{"avg_weight": 0.6, "max_weight": 0.3,
               "hit_weight": 0.1}``
             - ``"relative_score"`` / ``"rsf"``: ``{"dense_weight": 0.5,
-              "sparse_weight": 0.5}``
+              "sparse_weight": 0.5}``; a single weight implies the other
 
     Returns:
         A configured :class:`velesdb.FusionStrategy` instance.
 
     Raises:
-        ValueError: If *fusion* is not one of the supported strategy names.
+        ValueError: If *fusion* is not a strategy name core knows, or the
+            weights are invalid.
     """
     # Imported lazily (rather than at module scope) so pure helpers in this
     # module — e.g. `resolve_weighted_params` — stay importable/testable
@@ -73,16 +91,27 @@ def build_fusion_strategy(
 
     params = fusion_params or {}
 
+    from_name = getattr(velesdb.FusionStrategy, "from_name", None)
+    if from_name is not None:
+        known = {key: params[key] for key in _FROM_NAME_PARAMS if key in params}
+        return from_name(fusion, **known)
+    return _literal_fusion_strategy(velesdb.FusionStrategy, fusion, params)
+
+
+def _literal_fusion_strategy(
+    strategy: type[velesdb.FusionStrategy], fusion: str, params: dict
+) -> velesdb.FusionStrategy:
+    """The name dispatch for a wheel without ``FusionStrategy.from_name``."""
     if fusion == "average":
-        return velesdb.FusionStrategy.average()
+        return strategy.average()
     if fusion == "maximum":
-        return velesdb.FusionStrategy.maximum()
+        return strategy.maximum()
     if fusion == "rrf":
         k = params.get("k", 60)
-        return velesdb.FusionStrategy.rrf(k=k)
+        return strategy.rrf(k=k)
     if fusion == "weighted":
         avg_weight, max_weight, hit_weight = resolve_weighted_params(params)
-        return velesdb.FusionStrategy.weighted(
+        return strategy.weighted(
             avg_weight=avg_weight,
             max_weight=max_weight,
             hit_weight=hit_weight,
@@ -90,7 +119,7 @@ def build_fusion_strategy(
     if fusion in ("relative_score", "rsf"):
         dense_weight = params.get("dense_weight", 0.5)
         sparse_weight = params.get("sparse_weight", 0.5)
-        return velesdb.FusionStrategy.relative_score(dense_weight, sparse_weight)
+        return strategy.relative_score(dense_weight, sparse_weight)
 
     raise ValueError(
         f"Unknown fusion strategy '{fusion}'. "

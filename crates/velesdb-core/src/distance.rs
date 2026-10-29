@@ -25,6 +25,34 @@ use std::str::FromStr;
 /// slice stays exhaustive so adding a variant without updating it fails CI.
 pub const DISTANCE_METRIC_NAMES: &[&str] = &["cosine", "euclidean", "dot", "hamming", "jaccard"];
 
+/// The aliases of [`METRIC_ALIASES`], comma-separated, as a literal: the
+/// infallible [`FromStr`] error is a `&'static str`, so it is built with
+/// `concat!`, which takes a literal and not a `const`.
+/// `the_listed_aliases_are_exactly_the_parsed_ones` keeps the two in step.
+macro_rules! metric_alias_list {
+    () => {
+        "cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard"
+    };
+}
+
+/// Every name [`DistanceMetric::parse_alias`] accepts, and the metric it
+/// stands for: the one alias table, read by the parser, the `VelesQL` DDL
+/// validation and every unknown-metric message alike.
+const METRIC_ALIASES: [(&str, DistanceMetric); 9] = [
+    ("cosine", DistanceMetric::Cosine),
+    ("euclidean", DistanceMetric::Euclidean),
+    ("l2", DistanceMetric::Euclidean),
+    ("dot", DistanceMetric::DotProduct),
+    ("dotproduct", DistanceMetric::DotProduct),
+    ("inner", DistanceMetric::DotProduct),
+    ("ip", DistanceMetric::DotProduct),
+    ("hamming", DistanceMetric::Hamming),
+    ("jaccard", DistanceMetric::Jaccard),
+];
+
+/// The accepted metric aliases as every unknown-metric message lists them.
+pub(crate) const METRIC_ALIAS_LIST: &str = metric_alias_list!();
+
 /// Canonical serde `type` tags of every [`Condition`](crate::filter::Condition)
 /// variant, in declaration order.
 ///
@@ -97,7 +125,8 @@ impl DistanceMetric {
         }
     }
 
-    /// Parses a metric name/alias into a [`DistanceMetric`].
+    /// Parses a metric name/alias into a [`DistanceMetric`], trimmed and
+    /// case-insensitively.
     ///
     /// Supported aliases:
     /// - cosine
@@ -107,14 +136,11 @@ impl DistanceMetric {
     /// - jaccard
     #[must_use]
     pub fn parse_alias(value: &str) -> Option<Self> {
-        match value.trim().to_lowercase().as_str() {
-            "cosine" => Some(Self::Cosine),
-            "euclidean" | "l2" => Some(Self::Euclidean),
-            "dot" | "dotproduct" | "inner" | "ip" => Some(Self::DotProduct),
-            "hamming" => Some(Self::Hamming),
-            "jaccard" => Some(Self::Jaccard),
-            _ => None,
-        }
+        let value = value.trim().to_lowercase();
+        METRIC_ALIASES
+            .iter()
+            .find(|(name, _)| *name == value)
+            .map(|&(_, metric)| metric)
     }
 
     /// Calculates the distance between two vectors using the specified metric.
@@ -289,8 +315,7 @@ impl FromStr for DistanceMetric {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_alias(s)
-            .ok_or("Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard")
+        Self::parse_alias(s).ok_or(concat!("Unknown metric. Use: ", metric_alias_list!()))
     }
 }
 

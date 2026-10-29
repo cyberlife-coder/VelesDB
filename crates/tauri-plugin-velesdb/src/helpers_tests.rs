@@ -187,6 +187,47 @@ fn test_parse_fusion_strategy_case_insensitive() {
     assert!(parse_fusion_strategy("MAXIMUM", None).is_ok());
 }
 
+/// Tauri refused `avg` and `max`, which every other surface accepts: the
+/// name grammar is core's now.
+#[test]
+fn test_parse_fusion_strategy_accepts_cores_aliases() {
+    use velesdb_core::fusion::FusionStrategy;
+
+    assert_eq!(
+        parse_fusion_strategy("avg", None).expect("test: avg"),
+        FusionStrategy::Average
+    );
+    assert_eq!(
+        parse_fusion_strategy("max", None).expect("test: max"),
+        FusionStrategy::Maximum
+    );
+}
+
+#[test]
+fn test_parse_fusion_strategy_defaults_are_cores() {
+    use velesdb_core::fusion::FusionStrategy;
+
+    assert_eq!(
+        parse_fusion_strategy("weighted", None).expect("test: weighted"),
+        FusionStrategy::weighted_default()
+    );
+    let params = serde_json::json!({ "denseWeight": 0.7 });
+    assert_eq!(
+        parse_fusion_strategy("rsf", Some(&params)).expect("test: one rsf weight"),
+        FusionStrategy::relative_score(0.7, 1.0 - 0.7).expect("test: valid pair")
+    );
+}
+
+/// Weights were built as enum literals and only refused when the fusion
+/// ran; they are refused when the strategy is built now.
+#[test]
+fn test_parse_fusion_strategy_refuses_invalid_weights() {
+    let params = serde_json::json!({ "avgWeight": 0.9, "maxWeight": 0.9, "hitWeight": 0.9 });
+    let error = parse_fusion_strategy("weighted", Some(&params))
+        .expect_err("test: weights summing to 2.7 must be refused");
+    assert!(error.to_string().contains("sum to 1.0"), "{error}");
+}
+
 // =====================================================================
 // require_collection type-check tests
 // =====================================================================

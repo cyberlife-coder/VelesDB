@@ -153,8 +153,10 @@ below `Number.MAX_SAFE_INTEGER`.
 
 - **Brute-force search only.** There is no HNSW graph in the WASM build; search
   is O(n) over every vector. `search_with_quality()` accepts the same quality
-  strings as the Python and Server SDKs, but all modes return identical
-  results — the parameter exists for API parity.
+  strings as the Python and Server SDKs, read by core's own
+  `parse_search_mode` (so it refuses what they refuse, with the same message),
+  but all modes return identical results — the parameter exists for API
+  parity.
 - **~100 K vectors is the practical ceiling**, set by browser RAM. Beyond that,
   move to the REST server.
 - **Single collection per query.** Cross-collection `MATCH` (`@collection`)

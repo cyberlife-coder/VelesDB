@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`MemoryService`**: `compileTranscript`, `explainCompilation`,
+  `contextSavings`, and `suggestBudget` — the context-compiler tools that
+  were previously Node/MCP-only are now reachable in the browser.
+  `compileTranscript` deterministically segments a raw agent-session
+  transcript into turns (plain marker-based or JSONL) and code/log/body
+  sub-segments, then compiles the result exactly like `compileContext`;
+  it accepts only an inline `transcript` (no `path` — there is no
+  filesystem in WASM). `feedback` and `rememberExtracted` remain
+  intentionally absent — see `memory_service.rs`'s module doc for why.
+  (#1547)
+
 ### Changed
+
 - **BREAKING (behavior) — every storage mode returns `velesdb-core`'s results
   and keeps f32 vectors.** `sq8`, `pq` and `rabitq` stores kept a per-vector
   SQ8 encoding and `binary` stores packed sign bits, and every search scored
@@ -34,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pin this per mode). Its original f32 values were never saved; re-insert them
   for exact scores. An older build refuses a v3 blob (`Unsupported version: 3`)
   instead of loading a quantized store with no codes.
+
+- **Search modes and fusion names are read with `velesdb-core`'s grammar.**
+  `search_with_quality` validates its mode with core's `parse_search_mode`,
+  which no longer needs the `persistence` feature. The local copy in
+  `parsing.rs` is gone. The accepted modes are unchanged, but the refusal
+  messages are core's (`Unknown search mode '...'. Valid values: ...`). The
+  strategy name of `multi_query_search` is read by
+  `FusionStrategy::from_name`, so it is the same name grammar as the server,
+  CLI, Tauri and Python, and an unknown name reports core's message. The
+  N-branch `rsf` aggregation stays local by design (fixture divergence D005).
 - **BREAKING (behavior) — `weighted` fusion default weights**: the default
   weights used by `multi_query_search(..., strategy: "weighted")` when no
   explicit weights are supplied changed from the WASM-local, non-overridable
@@ -52,7 +76,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WASM-local reimplementation of the same math. Purely internal
   single-sourcing; output is unchanged. (Issue #1545.)
 
+### Removed
+
+- **Retracted claim**: WASM SIMD128 distance kernels. The `simd.rs` module
+  depending on the `wide` crate was not wired into the distance paths used
+  by `VectorStore`; distance calculations run on the scalar code paths of
+  `velesdb-core` under `wasm32-unknown-unknown`. The `wide` dependency has
+  been removed. `wasm-opt --enable-simd` remains enabled as an optimizer
+  hint but is not part of the public API contract.
+
 ### Fixed
+
 - **A corrupt store is rejected at load instead of aborting at search.**
   `import_from_bytes`/`load` now check that the vector buffer (and, for a v2
   quantized store, the code buffers) hold exactly one row per id. A v2 `sq8`
@@ -124,30 +158,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   avoids the issue entirely.
 
 ### Note
+
 - Versions 1.12 through the current workspace version (the crate is
   workspace-versioned; see the root `Cargo.toml`) are tracked in the workspace
   root `CHANGELOG.md`, not here; this file's per-crate entries resume from
   this point rather than inventing history for the skipped range.
-
-### Added
-- **`MemoryService`**: `compileTranscript`, `explainCompilation`,
-  `contextSavings`, and `suggestBudget` — the context-compiler tools that
-  were previously Node/MCP-only are now reachable in the browser.
-  `compileTranscript` deterministically segments a raw agent-session
-  transcript into turns (plain marker-based or JSONL) and code/log/body
-  sub-segments, then compiles the result exactly like `compileContext`;
-  it accepts only an inline `transcript` (no `path` — there is no
-  filesystem in WASM). `feedback` and `rememberExtracted` remain
-  intentionally absent — see `memory_service.rs`'s module doc for why.
-  (#1547)
-
-### Removed
-- **Retracted claim**: WASM SIMD128 distance kernels. The `simd.rs` module
-  depending on the `wide` crate was not wired into the distance paths used
-  by `VectorStore`; distance calculations run on the scalar code paths of
-  `velesdb-core` under `wasm32-unknown-unknown`. The `wide` dependency has
-  been removed. `wasm-opt --enable-simd` remains enabled as an optimizer
-  hint but is not part of the public API contract.
 
 ## [1.11.1] - 2026-04-04
 

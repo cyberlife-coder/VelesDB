@@ -42,6 +42,11 @@ pub enum FusionError {
         /// Number of branches passed to fuse.
         branches: usize,
     },
+    /// A strategy name [`FusionStrategy::from_name`] does not know.
+    UnknownStrategy {
+        /// The name as the caller gave it.
+        name: String,
+    },
 }
 
 impl std::fmt::Display for FusionError {
@@ -66,6 +71,11 @@ impl std::fmt::Display for FusionError {
             } => write!(
                 f,
                 "fuse_with_directions requires one direction per branch: {directions} directions for {branches} branches",
+            ),
+            Self::UnknownStrategy { name } => write!(
+                f,
+                "Unknown fusion strategy '{name}'. Valid values: {}",
+                super::name::FUSION_STRATEGY_NAMES,
             ),
         }
     }
@@ -107,6 +117,20 @@ pub const DEFAULT_WEIGHTED_MAX_WEIGHT: f32 = 0.3;
 /// Canonical default weight for the hit-ratio component of
 /// [`FusionStrategy::Weighted`]. See [`DEFAULT_WEIGHTED_AVG_WEIGHT`].
 pub const DEFAULT_WEIGHTED_HIT_WEIGHT: f32 = 0.1;
+
+/// Canonical default ranking constant of [`FusionStrategy::RRF`]:
+/// [`FusionStrategy::rrf_default`], [`FusionStrategy::default`], and `rrf`
+/// named without a `k` ([`FusionStrategy::from_name`]).
+pub const DEFAULT_RRF_K: u32 = 60;
+
+/// Canonical default dense-branch weight of [`FusionStrategy::RelativeScore`]
+/// when a caller names `relative_score` without weights
+/// ([`FusionStrategy::from_name`]).
+pub const DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT: f32 = 0.5;
+
+/// Canonical default sparse-branch weight of [`FusionStrategy::RelativeScore`].
+/// See [`DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT`].
+pub const DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT: f32 = 0.5;
 
 /// Strategy for fusing results from multiple vector searches.
 ///
@@ -185,10 +209,11 @@ pub enum FusionStrategy {
 }
 
 impl FusionStrategy {
-    /// Creates an RRF strategy with the standard k=60 parameter.
+    /// Creates an RRF strategy with the standard k=60 parameter
+    /// ([`DEFAULT_RRF_K`]).
     #[must_use]
     pub fn rrf_default() -> Self {
-        Self::RRF { k: 60 }
+        Self::RRF { k: DEFAULT_RRF_K }
     }
 
     /// Creates a `WeightedRRF` strategy with validation.
@@ -616,7 +641,7 @@ impl FusionStrategy {
 
 impl Default for FusionStrategy {
     fn default() -> Self {
-        Self::RRF { k: 60 }
+        Self::rrf_default()
     }
 }
 

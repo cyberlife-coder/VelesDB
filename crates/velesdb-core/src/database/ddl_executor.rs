@@ -325,7 +325,8 @@ fn ddl_operation_info(ddl: &DdlStatement) -> (&str, String) {
 fn resolve_metric(s: &str) -> Result<crate::DistanceMetric> {
     crate::DistanceMetric::parse_alias(s).ok_or_else(|| {
         Error::Query(format!(
-            "Unknown metric '{s}'. Use: cosine, euclidean, dot, hamming, jaccard"
+            "Unknown metric '{s}'. Use: {}",
+            crate::distance::METRIC_ALIAS_LIST
         ))
     })
 }

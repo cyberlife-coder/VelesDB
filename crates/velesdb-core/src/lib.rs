@@ -166,6 +166,7 @@ pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
 pub mod scored_result;
+mod search_quality;
 pub mod simd_dispatch;
 #[cfg(test)]
 mod simd_dispatch_tests;
@@ -210,7 +211,8 @@ pub use update_check::{
 pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 
 #[cfg(feature = "persistence")]
-pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
+pub use index::{HnswIndex, HnswParams, VectorIndex};
+pub use search_quality::SearchQuality;
 
 #[cfg(feature = "persistence")]
 pub use collection::streaming::{BackpressureError, StreamIngester, StreamingConfig};
@@ -290,8 +292,8 @@ pub use config::{
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};
 pub use fusion::{
-    FusionError, FusionStrategy, DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT,
-    DEFAULT_WEIGHTED_MAX_WEIGHT,
+    FusionError, FusionParams, FusionStrategy, DEFAULT_RRF_K, DEFAULT_WEIGHTED_AVG_WEIGHT,
+    DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
 };
 #[cfg(feature = "persistence")]
 pub use guardrails::QueryLimits;

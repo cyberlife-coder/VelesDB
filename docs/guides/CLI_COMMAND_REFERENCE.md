@@ -297,14 +297,16 @@ velesdb query explain ./data "SELECT * FROM docs LIMIT 10" --format json
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-k, --top-k` | `10` | Number of results to return |
-| `-s, --strategy` | `rrf` | Fusion strategy: `average`, `maximum`, `rrf`, `weighted` |
+| `-s, --strategy` | `rrf` | Fusion strategy: `average`, `maximum`, `rrf`, `weighted`, `relative_score` |
 | `--rrf-k` | `60` | RRF k parameter (only used with the `rrf` strategy) |
 | `-f, --format` | `table` | Output format (`table`, `json`) |
 
 Strategy aliases: `average` (also `avg`), `maximum` (also `max`), `rrf`
-(default), `weighted`. The `weighted` strategy uses fixed weights
-(`avg_weight=0.5`, `max_weight=0.3`, `hit_weight=0.2`) that are not configurable
-from the CLI.
+(default), `weighted`, `relative_score` (also `rsf`), in any case — the name
+grammar of `velesdb_core::FusionStrategy::from_name`, shared with the server,
+Python, WASM and Tauri. The `weighted` strategy uses core's default weights
+(`avg_weight=0.6`, `max_weight=0.3`, `hit_weight=0.1`), the same as every other
+surface; they are not configurable from the CLI.
 
 **`query batch-search` flags:** `-k, --top-k` (default `10`) and
 `-f, --format` (default `table`). Output groups results per query:
