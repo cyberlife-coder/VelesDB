@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior) — VelesQL queries go through `velesdb-core`'s
+  `QueryValidator`.** A query core refuses is refused here too. `USING FUSION`
+  over a single `NEAR` now fails with V012 for every strategy (`rrf`, `maximum`
+  and `average` were accepted as a "no-op", but `rrf` re-ranked the hits by RRF
+  against a constant metadata branch), and `NEAR_FUSED` with `weighted` or
+  `rsf` fails with V012 instead of running as `rrf`. Drop the clause from a
+  single-`NEAR` query; give `NEAR_FUSED` `rrf`, `average` or `maximum`.
+- **`SELECT DISTINCT` runs in the plain SELECT pipeline** through core's
+  `apply_distinct`: `ORDER BY`, `OFFSET` and the default `LIMIT` of 10 now
+  apply to distinct rows, `DISTINCT *` collapses rows whose payloads are equal
+  (it used to key on id and score), and rows keep their point id instead of 0.
 - **BREAKING (behavior) — every storage mode returns `velesdb-core`'s results
   and keeps f32 vectors.** `sq8`, `pq` and `rabitq` stores kept a per-vector
   SQ8 encoding and `binary` stores packed sign bits, and every search scored
@@ -87,6 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`similarity()` thresholds without `NEAR` rank and score like core.** The
+  passing rows came back in insertion order with score 0.0; each now carries
+  its similarity and the rows are ranked best first.
 - **A corrupt store is rejected at load instead of aborting at search.**
   `import_from_bytes`/`load` now check that the vector buffer (and, for a v2
   quantized store, the code buffers) hold exactly one row per id. A v2 `sq8`

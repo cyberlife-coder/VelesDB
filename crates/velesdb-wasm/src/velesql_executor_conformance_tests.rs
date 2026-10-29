@@ -14,9 +14,10 @@
 //!
 //! # Case coverage
 //!
-//! All ten `cases` (X001–X010) are runnable by the WASM executor (scalar WHERE
-//! filter, single- and multi-column ORDER BY, the ascending-id tie-break, and
-//! bounded top-k) and are asserted against the golden ids. WASM runs its OWN
+//! Every fixture section is runnable by the WASM executor and asserted against
+//! the core goldens: the scalar `cases` (X001–X020), JOIN, aggregate, set
+//! operation and MATCH cases, and the vector (`near_cases`, `fusion_cases`),
+//! refusal, DML and projection sections. WASM runs its OWN
 //! SELECT/ORDER BY pipeline (`velesql_select`/`velesql_orderby`), independent of
 //! the core executor, so these goldens pin it against the `velesdb-core` result
 //! set rather than assuming shared-executor equivalence.
@@ -53,6 +54,19 @@ struct Fixture {
     setops_cases: Vec<Case>,
     #[serde(default)]
     match_cases: Vec<MatchCase>,
+    /// Vectors bound to `$name` in every vector, DML and projection case.
+    #[serde(default)]
+    query_params: Value,
+    #[serde(default)]
+    near_cases: Vec<Case>,
+    #[serde(default)]
+    fusion_cases: Vec<Case>,
+    #[serde(default)]
+    rejected_cases: Vec<RejectedCase>,
+    #[serde(default)]
+    dml_cases: Vec<DmlCase>,
+    #[serde(default)]
+    projection_cases: Vec<ProjectionCase>,
 }
 
 #[derive(Deserialize)]
@@ -75,7 +89,37 @@ struct Case {
     id: String,
     query: String,
     expect_ids: Vec<u64>,
+    /// Per-row scores, in `expect_ids` order, for cases a vector ranks.
+    #[serde(default)]
+    expect_scores: Option<Vec<f32>>,
 }
+
+/// A query core refuses; the WASM executor must refuse it too.
+#[derive(Deserialize)]
+struct RejectedCase {
+    id: String,
+    query: String,
+}
+
+/// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
+/// then the `query` of the flattened [`Case`] is asserted.
+#[derive(Deserialize)]
+struct DmlCase {
+    statements: Vec<String>,
+    #[serde(flatten)]
+    check: Case,
+}
+
+/// A case compared on its projected JSON rows (`DISTINCT`, named columns).
+#[derive(Deserialize)]
+struct ProjectionCase {
+    id: String,
+    query: String,
+    expect_rows: Vec<Value>,
+}
+
+/// Tolerance on `expect_scores`, which the fixture rounds to six decimals.
+const SCORE_TOLERANCE: f32 = 1e-5;
 
 /// A GROUP BY / HAVING golden case (issue #1544). Unlike core (which has a
 /// separate `execute_aggregate` entry point), WASM's default SELECT dispatch
@@ -162,23 +206,56 @@ fn seed_dataset(db: &mut DatabaseInner, ds: &Dataset) {
 
 /// Runs every case through the WASM executor and asserts ids + ordering.
 fn assert_cases(db: &mut DatabaseInner, cases: &[Case]) {
+    assert_cases_with(db, cases, None);
+}
+
+/// [`assert_cases`] with `$name` bindings (the fixture's `query_params`).
+fn assert_cases_with(db: &mut DatabaseInner, cases: &[Case], params: Option<&str>) {
     for case in cases {
-        let result = execute(db, &case.query, None)
-            .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
-        let ids: Vec<u64> = result
-            .rows_ref()
-            .iter()
-            .map(crate::velesql_result::QueryResultRow::id)
-            .collect();
-        assert_eq!(
-            ids, case.expect_ids,
-            "WASM executor conformance mismatch for case {}: query={:?}",
-            case.id, case.query
-        );
+        assert_case(db, case, params);
     }
 }
 
-/// All golden `cases` (X001–X010) must reproduce the core result set exactly.
+fn assert_case(db: &mut DatabaseInner, case: &Case, params: Option<&str>) {
+    let result = execute(db, &case.query, params)
+        .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
+    let rows = result.rows_ref();
+    let ids: Vec<u64> = rows
+        .iter()
+        .map(crate::velesql_result::QueryResultRow::id)
+        .collect();
+    assert_eq!(
+        ids, case.expect_ids,
+        "WASM executor conformance mismatch for case {}: query={:?}",
+        case.id, case.query
+    );
+    if let Some(expected) = &case.expect_scores {
+        let scores: Vec<f32> = rows
+            .iter()
+            .map(crate::velesql_result::QueryResultRow::score)
+            .collect();
+        assert_eq!(
+            scores.len(),
+            expected.len(),
+            "case {}: score count",
+            case.id
+        );
+        for (got, want) in scores.iter().zip(expected) {
+            assert!(
+                (got - want).abs() <= SCORE_TOLERANCE,
+                "WASM case {}: scores {scores:?}, expected {expected:?}",
+                case.id
+            );
+        }
+    }
+}
+
+/// The fixture's `query_params`, serialized as the executor's params JSON.
+fn params_json(fixture: &Fixture) -> String {
+    serde_json::to_string(&fixture.query_params).expect("test: serialize query_params")
+}
+
+/// All golden `cases` (X001–X020) must reproduce the core result set exactly.
 #[test]
 fn test_wasm_velesql_executor_conformance_fixture_cases() {
     let fixture = load_fixture();
@@ -338,6 +415,81 @@ fn test_wasm_velesql_executor_match_cases() {
             ids, case.expect_ids,
             "WASM match conformance mismatch for case {}: wasm_query={:?}",
             case.id, case.wasm_query
+        );
+    }
+}
+
+/// NEAR ranking, hybrid NEAR + metadata and `similarity()` thresholds against
+/// the core goldens: ids in order and each row's similarity score.
+#[test]
+fn test_wasm_velesql_executor_near_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.near_cases, Some(&params));
+}
+
+/// `NEAR_FUSED` with every strategy core accepts: ids in order and fused
+/// scores (`velesql_fused` against core's `dispatch_fused_query`).
+#[test]
+fn test_wasm_velesql_executor_fusion_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.fusion_cases, Some(&params));
+}
+
+/// Every query core refuses is refused here too, rather than answered.
+#[test]
+fn test_wasm_velesql_executor_rejected_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    let params = params_json(&fixture);
+    for case in &fixture.rejected_cases {
+        assert!(
+            execute(&mut db, &case.query, Some(&params)).is_err(),
+            "WASM accepted rejected case {}: query={:?}",
+            case.id,
+            case.query
+        );
+    }
+}
+
+/// UPDATE / DELETE through `velesql_update` / `velesql_delete`: each case
+/// mutates its own fresh copy of the dataset, then asserts its query.
+#[test]
+fn test_wasm_velesql_executor_dml_cases() {
+    let fixture = load_fixture();
+    let params = params_json(&fixture);
+    for case in &fixture.dml_cases {
+        let mut db = build_dataset(&fixture.dataset);
+        for statement in &case.statements {
+            execute(&mut db, statement, Some(&params)).unwrap_or_else(|e| {
+                panic!("dml case {} statement {statement:?}: {e}", case.check.id)
+            });
+        }
+        assert_case(&mut db, &case.check, Some(&params));
+    }
+}
+
+/// DISTINCT and named-column projection, compared on the projected rows.
+#[test]
+fn test_wasm_velesql_executor_projection_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    let params = params_json(&fixture);
+    for case in &fixture.projection_cases {
+        let result = execute(&mut db, &case.query, Some(&params))
+            .unwrap_or_else(|e| panic!("projection case {} failed to execute: {e}", case.id));
+        let rows: Vec<Value> = result
+            .rows_ref()
+            .iter()
+            .map(|row| serde_json::from_str(&row.data_json()).expect("test: parse row JSON"))
+            .collect();
+        assert_eq!(
+            rows, case.expect_rows,
+            "WASM projection conformance mismatch for case {}: query={:?}",
+            case.id, case.query
         );
     }
 }

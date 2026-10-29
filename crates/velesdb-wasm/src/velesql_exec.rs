@@ -19,8 +19,8 @@
 //! | `JOIN` (INNER, LEFT) + `ON ...=...`         | full             |
 //! | `WHERE similarity(v, $q) > t`               | full             |
 //! | `FUSION` over `NEAR_FUSED` (rrf/max/avg)    | full             |
-//! | `FUSION` over single-vector `NEAR` (rrf)    | metadata = hard filter; clause is a no-op |
-//! | `FUSION` weighted / rsf over single `NEAR`  | **rejected** (no second scored branch) |
+//! | `FUSION` weighted / rsf over `NEAR_FUSED`   | **rejected** (V012, core's validator) |
+//! | `FUSION` over a single `NEAR`               | **rejected** (V012: nothing to fuse) |
 //! | `INSERT / UPSERT INTO coll (…) VALUES`      | full             |
 //! | `UPDATE coll SET … WHERE …`                 | full             |
 //! | `DELETE FROM coll WHERE …`                  | full             |
@@ -39,8 +39,13 @@
 //!
 //! Rejected statements surface a descriptive error mentioning the unsupported
 //! feature so JavaScript callers can react without parsing the SQL themselves.
+//!
+//! Semantic validation is core's: every statement goes through the same
+//! [`QueryValidator`] that `Database::execute_query` runs, so a query core
+//! refuses is refused here too rather than answered with a result core never
+//! produces (`rejected_cases` in `conformance/velesql_executor_cases.json`).
 
-use velesdb_core::velesql::{DmlStatement, Parser, Query};
+use velesdb_core::velesql::{DmlStatement, Parser, Query, QueryValidator};
 
 use crate::database::DatabaseInner;
 use crate::velesql_result::{classify_query, QueryResult, QueryResultRow};
@@ -67,6 +72,7 @@ pub(crate) fn execute(
     })?;
     let params = parse_params(params_json)?;
 
+    QueryValidator::validate(&parsed).map_err(|e| e.to_string())?;
     reject_unsupported_top_level(&parsed)?;
 
     let kind = classify_query(&parsed);

@@ -10,8 +10,12 @@
 //! filtering/ordering/limit behaviour fails CI instead of going unnoticed.
 //!
 //! The fixture's `known_bugs` array carries the CORRECT expectation for a
-//! confirmed core bug; it is asserted only by the `#[ignore]`d reproducer
-//! below so CI stays green until the bug is fixed.
+//! former core bug, now fixed; `test_velesql_executor_known_bugs` locks it.
+//!
+//! The vector, DML and projection sections (`near_cases`, `fusion_cases`,
+//! `rejected_cases`, `dml_cases`, `projection_cases`) pin the statement
+//! families the WASM executor implements on its own, so a drift there fails
+//! the WASM half of this suite (`velesql_executor_conformance_tests.rs`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -20,6 +24,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tempfile::TempDir;
 use velesdb_core::collection::graph::GraphEdge;
+use velesdb_core::collection::search::query::projection::project_results;
 use velesdb_core::velesql::Parser;
 use velesdb_core::{Database, DistanceMetric, Point};
 
@@ -39,6 +44,19 @@ struct Fixture {
     setops_cases: Vec<Case>,
     #[serde(default)]
     match_cases: Vec<MatchCase>,
+    /// Vectors bound to `$name` in every vector, DML and projection case.
+    #[serde(default)]
+    query_params: HashMap<String, Value>,
+    #[serde(default)]
+    near_cases: Vec<Case>,
+    #[serde(default)]
+    fusion_cases: Vec<Case>,
+    #[serde(default)]
+    rejected_cases: Vec<RejectedCase>,
+    #[serde(default)]
+    dml_cases: Vec<DmlCase>,
+    #[serde(default)]
+    projection_cases: Vec<ProjectionCase>,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +79,38 @@ struct Case {
     id: String,
     query: String,
     expect_ids: Vec<u64>,
+    /// Per-row scores, in `expect_ids` order, for cases a vector ranks.
+    #[serde(default)]
+    expect_scores: Option<Vec<f32>>,
 }
+
+/// A query every executor must refuse (an error, not an empty result).
+#[derive(Deserialize)]
+struct RejectedCase {
+    id: String,
+    query: String,
+}
+
+/// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
+/// then the `query` of the flattened [`Case`] is asserted.
+#[derive(Deserialize)]
+struct DmlCase {
+    statements: Vec<String>,
+    #[serde(flatten)]
+    check: Case,
+}
+
+/// A case compared on its projected JSON rows (`DISTINCT`, named columns),
+/// which carry no point id to compare.
+#[derive(Deserialize)]
+struct ProjectionCase {
+    id: String,
+    query: String,
+    expect_rows: Vec<Value>,
+}
+
+/// Tolerance on `expect_scores`, which the fixture rounds to six decimals.
+const SCORE_TOLERANCE: f32 = 1e-5;
 
 /// A GROUP BY / HAVING golden case, asserted via [`Database::execute_aggregate`]
 /// rather than [`Database::execute_query`] (issue #1544): `execute_query` only
@@ -122,20 +171,48 @@ fn open_loaded_db(ds: &Dataset) -> (TempDir, Database) {
     (dir, db)
 }
 
-fn assert_cases(db: &Database, cases: &[Case]) {
-    let params = HashMap::new();
-    for case in cases {
-        let query = Parser::parse(&case.query)
-            .unwrap_or_else(|e| panic!("case {} failed to parse: {e}", case.id));
-        let results = db
-            .execute_query(&query, &params)
-            .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
-        let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
-        assert_eq!(
-            ids, case.expect_ids,
-            "executor conformance mismatch for case {}: query={:?}",
-            case.id, case.query
+fn run_query(
+    db: &Database,
+    id: &str,
+    sql: &str,
+    params: &HashMap<String, Value>,
+) -> Vec<velesdb_core::SearchResult> {
+    let query = Parser::parse(sql).unwrap_or_else(|e| panic!("case {id} failed to parse: {e}"));
+    db.execute_query(&query, params)
+        .unwrap_or_else(|e| panic!("case {id} failed to execute: {e}"))
+}
+
+fn assert_case(db: &Database, case: &Case, params: &HashMap<String, Value>) {
+    let results = run_query(db, &case.id, &case.query, params);
+    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+    assert_eq!(
+        ids, case.expect_ids,
+        "executor conformance mismatch for case {}: query={:?}",
+        case.id, case.query
+    );
+    if let Some(expected) = &case.expect_scores {
+        let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+        assert_scores(&case.id, &scores, expected);
+    }
+}
+
+fn assert_scores(id: &str, scores: &[f32], expected: &[f32]) {
+    assert_eq!(scores.len(), expected.len(), "case {id}: score count");
+    for (got, want) in scores.iter().zip(expected) {
+        assert!(
+            (got - want).abs() <= SCORE_TOLERANCE,
+            "case {id}: scores {scores:?}, expected {expected:?}"
         );
+    }
+}
+
+fn assert_cases(db: &Database, cases: &[Case]) {
+    assert_cases_with(db, cases, &HashMap::new());
+}
+
+fn assert_cases_with(db: &Database, cases: &[Case], params: &HashMap<String, Value>) {
+    for case in cases {
+        assert_case(db, case, params);
     }
 }
 
@@ -144,6 +221,78 @@ fn test_velesql_executor_conformance_fixture_cases() {
     let fixture = load_fixture();
     let (_dir, db) = open_loaded_db(&fixture.dataset);
     assert_cases(&db, &fixture.cases);
+}
+
+/// NEAR ranking, hybrid NEAR + metadata and `similarity()` thresholds: ids in
+/// order and each row's similarity score.
+#[test]
+fn test_velesql_executor_conformance_near_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    assert_cases_with(&db, &fixture.near_cases, &fixture.query_params);
+}
+
+/// `NEAR_FUSED` with each strategy core accepts: ids in order and fused scores.
+#[test]
+fn test_velesql_executor_conformance_fusion_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    assert_cases_with(&db, &fixture.fusion_cases, &fixture.query_params);
+}
+
+/// Queries core refuses; the WASM executor must refuse the same ones.
+#[test]
+fn test_velesql_executor_conformance_rejected_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    for case in &fixture.rejected_cases {
+        let outcome = Parser::parse(&case.query)
+            .map_err(|e| e.to_string())
+            .and_then(|q| {
+                db.execute_query(&q, &fixture.query_params)
+                    .map_err(|e| e.to_string())
+            });
+        assert!(
+            outcome.is_err(),
+            "rejected case {} was accepted: query={:?}",
+            case.id,
+            case.query
+        );
+    }
+}
+
+/// UPDATE / DELETE: each case mutates its own fresh copy of the dataset.
+#[test]
+fn test_velesql_executor_conformance_dml_cases() {
+    let fixture = load_fixture();
+    for case in &fixture.dml_cases {
+        let (_dir, db) = open_loaded_db(&fixture.dataset);
+        for statement in &case.statements {
+            run_query(&db, &case.check.id, statement, &fixture.query_params);
+        }
+        assert_case(&db, &case.check, &fixture.query_params);
+    }
+}
+
+/// DISTINCT and named-column projection, compared on the rows core's
+/// `project_results` builds from the result set — what the CLI prints.
+#[test]
+fn test_velesql_executor_conformance_projection_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    for case in &fixture.projection_cases {
+        let query = Parser::parse(&case.query)
+            .unwrap_or_else(|e| panic!("case {} failed to parse: {e}", case.id));
+        let results = db
+            .execute_query(&query, &fixture.query_params)
+            .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
+        let rows = project_results(&results, &query.select.columns);
+        assert_eq!(
+            rows, case.expect_rows,
+            "projection conformance mismatch for case {}: query={:?}",
+            case.id, case.query
+        );
+    }
 }
 
 /// Regression lock for B001 (scalar `ORDER BY` + `LIMIT`): formerly LIMIT was
