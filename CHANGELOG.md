@@ -53,6 +53,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `executeQuery` answered `"N row(s) affected"` for a read; it now answers
   `"N row(s) returned"`, as WASM always did.
 
+- **The Python binding exposes three core contracts as module functions.**
+  `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
+  `u64` point id; `velesdb.metric_higher_is_better(metric)` is
+  `DistanceMetric::higher_is_better`, the order core sorts results by; and
+  `velesdb.validate_search_quality(mode)` runs core's `parse_search_mode`, the
+  parser `search_with_quality` uses, raising `ValueError` with its message. The
+  MIT integrations call them instead of carrying copies (below), so a change in
+  core reaches them with the next wheel.
+
+### Fixed
+
+- **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
+  *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
+  among the distances and mapped its scores through `1 / (1 + s)`: the best
+  match got the lowest similarity, so `similarity_cutoff` and node
+  postprocessors dropped it first. The direction now comes from
+  `velesdb.metric_higher_is_better` through the new
+  `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
+  the binding by a drift test, for a wheel that predates the function. Euclidean
+  and Hamming keep their `1 / (1 + d)` mapping.
+
+### Changed
+
+- **`velesdb_common` calls the binding instead of re-implementing core.** Its
+  FNV-1a copy and its search-quality grammar (preset set, `custom:`/`adaptive:`
+  regexes, a mirrored 16–4096 ef range) are gone. `stable_hash_id(value,
+  algorithm="fnv1a")` is `velesdb.hash_id` and raises `ImportError` naming
+  velesdb 7.2.0 with an older wheel; its SHA-256 default is unchanged, needs no
+  binding, and still differs from core's FNV-1a by design (KNOWN_LIMITATIONS
+  #12). `validate_search_quality` accepts exactly what core accepts (now
+  `custom:+256` too) and its `SecurityError` carries core's message; with a
+  wheel older than 7.2.0 it checks only the type and leaves the mode to the
+  binding, which refuses an invalid one at search time. The connectors' declared
+  `velesdb` floors stay where they are, since every new call is
+  feature-detected.
+- **`SearchConfigOptions.default_mode` reads core's own mode names.** The
+  binding parsed and rendered `fast`/`balanced`/`accurate`/`perfect` from a
+  hand-written table; it now goes through `SearchMode`'s serde names, the ones
+  the `[search]` TOML section is read with, so a mode core adds is accepted
+  without a binding change. An unknown mode still raises `ValueError` naming
+  `default_mode`, now worded `invalid search.default_mode: unknown variant
+  ..., expected one of ...`.
+
 ### Documentation
 
 - **The core surfaces the 7.1.0 parity audit found undocumented now have usage

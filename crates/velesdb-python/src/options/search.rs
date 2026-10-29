@@ -3,36 +3,24 @@
 use pyo3::prelude::*;
 use velesdb_core::config::{SearchConfig as CoreSearchConfig, SearchMode};
 
-/// Valid values for `SearchConfigOptions.default_mode`, mirroring the
-/// serde `snake_case` names of [`SearchMode`].
-const SEARCH_MODES: &[&str] = &["fast", "balanced", "accurate", "perfect"];
-
 /// Parses a Python-side mode string into a core [`SearchMode`].
+///
+/// Goes through `SearchMode`'s serde names, the ones the `[search]` TOML
+/// section is read with, so Python accepts exactly the modes a config file
+/// does, a variant core adds included, and the error lists them.
 fn parse_search_mode(mode: &str) -> PyResult<SearchMode> {
-    match mode {
-        "fast" => Ok(SearchMode::Fast),
-        "balanced" => Ok(SearchMode::Balanced),
-        "accurate" => Ok(SearchMode::Accurate),
-        "perfect" => Ok(SearchMode::Perfect),
-        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "invalid search.default_mode '{other}' (expected one of: {SEARCH_MODES:?})"
-        ))),
-    }
+    serde_json::from_value(serde_json::Value::from(mode)).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("invalid search.default_mode: {e}"))
+    })
 }
 
-/// Renders a core [`SearchMode`] as its Python-side mode string.
-///
-/// Fallible: [`SearchMode`] is `#[non_exhaustive]`, so a future core
-/// variant unknown to this binding is rejected loudly instead of being
-/// silently re-mapped.
-fn search_mode_str(mode: SearchMode) -> PyResult<&'static str> {
-    match mode {
-        SearchMode::Fast => Ok("fast"),
-        SearchMode::Balanced => Ok("balanced"),
-        SearchMode::Accurate => Ok("accurate"),
-        SearchMode::Perfect => Ok("perfect"),
+/// Renders a core [`SearchMode`] as its Python-side mode string: its serde
+/// name, the one [`parse_search_mode`] reads back.
+fn search_mode_str(mode: SearchMode) -> PyResult<String> {
+    match serde_json::to_value(mode) {
+        Ok(serde_json::Value::String(name)) => Ok(name),
         other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "unsupported search mode in configuration: {other:?}"
+            "unsupported search mode in configuration: {mode:?} ({other:?})"
         ))),
     }
 }
@@ -112,11 +100,11 @@ impl SearchConfigOptions {
     /// Builds a fully-populated options object from a core section
     /// (see [`LimitsOptions::from_core`]). `ef_search` stays `None` when
     /// the core leaves it unset (mode-driven), preserving the override
-    /// semantics on round-trip. Fallible because [`SearchMode`] is
-    /// `#[non_exhaustive]` (see [`search_mode_str`]).
+    /// semantics on round-trip. Fallible in signature only: every
+    /// [`SearchMode`] serializes to a name (see [`search_mode_str`]).
     pub(super) fn from_core(core: &CoreSearchConfig) -> PyResult<Self> {
         Ok(Self {
-            default_mode: Some(search_mode_str(core.default_mode)?.to_string()),
+            default_mode: Some(search_mode_str(core.default_mode)?),
             ef_search: core.ef_search,
             max_results: Some(core.max_results),
             query_timeout_ms: Some(core.query_timeout_ms),

@@ -1,6 +1,13 @@
 import pytest
 
+from velesdb_common import ids
 from velesdb_common.ids import make_initial_id_counter, stable_hash_id
+
+# `algorithm="fnv1a"` is `velesdb.hash_id` (velesdb >= 7.2.0): its tests need
+# a binding that provides it.
+requires_core_hash_id = pytest.mark.skipif(
+    ids._core_hash_id is None, reason="installed velesdb predates velesdb.hash_id"
+)
 
 
 def test_make_initial_id_counter_returns_positive_int():
@@ -41,11 +48,11 @@ def test_stable_hash_id_returns_positive_int():
 #
 # The default MUST stay "sha256" and MUST stay byte-for-byte unchanged
 # (backward compatibility for every existing store built via LangChain,
-# LlamaIndex, or Haystack). `algorithm="fnv1a"` is new, additive, opt-in
-# behavior, verified against golden vectors published by VelesDB core
-# (crates/velesdb-core/src/wire/stable_hash_tests.rs and the equivalent
-# vectors added to crates/velesdb-migrate and crates/velesdb-memory for the
-# same issue) — reproduced here as literals, no Rust import involved.
+# LlamaIndex, or Haystack). `algorithm="fnv1a"` is opt-in and delegates to
+# the binding's `velesdb.hash_id`, i.e. velesdb_core::hash_id. The golden
+# vectors below are the ones core pins (crates/velesdb-core/src/wire/
+# stable_hash_tests.rs, conformance/hash.rs) plus multi-byte UTF-8 inputs,
+# checked through that delegation.
 # ─────────────────────────────────────────────────────────────
 
 # (input, expected velesdb_core::hash_id / hash_id_bytes output)
@@ -68,11 +75,21 @@ def test_stable_hash_id_default_algorithm_is_sha256_and_unchanged():
     assert stable_hash_id("hello") == stable_hash_id("hello", algorithm="sha256")
 
 
+@requires_core_hash_id
 @pytest.mark.parametrize("value,expected", _CORE_FNV1A_GOLDEN_VECTORS)
 def test_stable_hash_id_fnv1a_matches_core_golden_vectors(value, expected):
     assert stable_hash_id(value, algorithm="fnv1a") == expected
 
 
+@requires_core_hash_id
+def test_stable_hash_id_fnv1a_is_the_binding_hash_id():
+    import velesdb
+
+    for value in ("doc://alpha", "tenant:acme", "日本語"):
+        assert stable_hash_id(value, algorithm="fnv1a") == velesdb.hash_id(value)
+
+
+@requires_core_hash_id
 def test_stable_hash_id_fnv1a_can_exceed_positive_i63_range():
     # Unlike the sha256 default, fnv1a does not clear the sign bit: it must
     # match velesdb_core::hash_id's full unsigned 64-bit output exactly, so
@@ -82,6 +99,7 @@ def test_stable_hash_id_fnv1a_can_exceed_positive_i63_range():
     assert result > 0x7FFFFFFFFFFFFFFF
 
 
+@requires_core_hash_id
 def test_stable_hash_id_fnv1a_diverges_from_sha256_default():
     # This is the documented interop boundary itself: the two algorithms
     # must NOT agree for the same input (that's the entire point of the
@@ -94,3 +112,13 @@ def test_stable_hash_id_fnv1a_diverges_from_sha256_default():
 def test_stable_hash_id_rejects_unknown_algorithm():
     with pytest.raises(ValueError, match="fnv1a"):
         stable_hash_id("hello", algorithm="blake3")
+
+
+def test_stable_hash_id_fnv1a_without_the_binding_says_what_is_missing(monkeypatch):
+    # No local FNV-1a copy to fall back to: an older wheel is named, never
+    # silently answered with a different derivation.
+    monkeypatch.setattr(ids, "_core_hash_id", None)
+    with pytest.raises(ImportError, match="velesdb >= 7.2.0"):
+        stable_hash_id("hello", algorithm="fnv1a")
+    # The SHA-256 default needs no binding.
+    assert stable_hash_id("hello") > 0

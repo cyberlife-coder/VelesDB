@@ -16,6 +16,26 @@ STORAGE_MODES: Tuple[str, ...]
 CONDITION_TYPES: Tuple[str, ...]
 
 
+# Core contracts, each a call into velesdb-core.
+
+def hash_id(value: str) -> int:
+    """The canonical string -> u64 point id: ``velesdb_core::hash_id``,
+    FNV-1a 64-bit over the UTF-8 bytes (full unsigned 64-bit range)."""
+    ...
+
+def metric_higher_is_better(metric: str) -> bool:
+    """Whether a higher score is a closer match under ``metric``: ``True``
+    for cosine, dot and Jaccard (similarities), ``False`` for Euclidean and
+    Hamming (distances). Raises ``ValueError`` for an unknown metric."""
+    ...
+
+def validate_search_quality(mode: str) -> None:
+    """Checks a search quality mode with core's parser, the one
+    ``Collection.search_with_quality`` uses. Raises ``ValueError`` with
+    core's message for a mode no search would accept."""
+    ...
+
+
 # ---------------------------------------------------------------------------
 # Structural return types (TypedDict)
 #

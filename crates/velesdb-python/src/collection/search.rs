@@ -706,7 +706,7 @@ fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
 /// (`fast`, `balanced`, `accurate`, `perfect`, `autotune`), `custom:<ef>`
 /// and `adaptive:<min_ef>:<max_ef>`, each ef in the `ef_search` range
 /// (#2275). A copy of that parser lived here and answered differently.
-fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
+pub(crate) fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
     velesdb_core::api_types::parse_search_mode(mode).map_err(PyValueError::new_err)
 }
 
