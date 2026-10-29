@@ -51,7 +51,7 @@ Each binding has its own reference guide; the
 | Binding | Reference |
 |---------|-----------|
 | Cross-surface | [API correspondence](./guides/API_CORRESPONDENCE.md) |
-| Rust (`velesdb-core`) | [Public API map](./guides/CORE_API_MAP.md) · [VelesQL](./guides/CORE_VELESQL_REFERENCE.md) |
+| Rust (`velesdb-core`) | [Public API map](./guides/CORE_API_MAP.md) · [VelesQL](./guides/CORE_VELESQL_REFERENCE.md) · [Operations API](./guides/CORE_OPERATIONS_API.md) |
 | Python | [API reference](./guides/PYTHON_API_REFERENCE.md) |
 | WASM (browser) | [JavaScript API](./guides/WASM_API.md) |
 | Node.js | [Addon reference](./guides/NODE_ADDON.md) |
@@ -180,4 +180,4 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 *VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*
 
 ---
-Last updated: 2026-08-20 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0

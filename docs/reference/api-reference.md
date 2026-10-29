@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-09-02 (VelesDB v7.1.0). The machine-readable source of
+> **Last updated**: 2026-10-29 (VelesDB v7.1.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -548,9 +548,16 @@ Search for similar vectors.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| vector | array[float] | Yes | Query vector |
+| vector | array[float] | Yes, for a dense or hybrid search | Query vector |
 | top_k | integer | No | Number of results (default: 10) |
 | filter | object | No | Optional metadata filter (see shape below) |
+| mode | string | No | Search quality, in any letter case: `fast`, `balanced`, `accurate`, `perfect`, `autotune` (aliases `auto_tune`, `auto`), `custom:<ef>` or `adaptive:<min_ef>:<max_ef>` (`min_ef` ≤ `max_ef`, each ef in `[16, 4096]`). Any other value gets a `400` naming the accepted forms (#2267, #2275). Applied only to a dense search with neither `filter` nor `ef_search` |
+| ef_search | integer | No | HNSW `ef_search`, in `[16, 4096]`; outside it, a `400` naming the value (#2274). Wins over `mode` for an unfiltered dense search; a filtered search applies neither |
+| timeout_ms | integer | No | Per-request time budget in milliseconds |
+| sparse_vector | object | No | Sparse query vector, `{"indices": [...], "values": [...]}` or `{"<term id>": weight}`. Alone: a sparse search; with `vector`: a hybrid search |
+| sparse_vectors | object | No | Named sparse query vectors, `{"<index name>": <sparse vector>}` |
+| sparse_index | string | No | Which named sparse index to search |
+| fusion | object | No | Hybrid fusion: `{"strategy": "rrf" \| "rsf" \| ..., ...}`; schema in [`openapi.yaml`](../openapi.yaml) (`FusionRequest`) |
 
 **Example:**
 ```json
@@ -559,6 +566,21 @@ Search for similar vectors.
   "top_k": 5
 }
 ```
+
+**Example at an explicit quality:**
+```json
+{
+  "vector": [0.15, 0.25, 0.35, ...],
+  "top_k": 5,
+  "mode": "accurate"
+}
+```
+
+`{"mode": "custom:256"}` and `{"ef_search": 256}` request the same traversal;
+if both are given, `ef_search` wins. The same grammar is accepted by VelesQL's
+`WITH (mode = ...)` and by the embedded SDKs, all parsed by
+`velesdb_core::api_types::parse_search_mode` — see
+[Search modes](../guides/SEARCH_MODES.md#when-the-two-phases-run).
 
 **Example with a metadata filter:**
 
@@ -729,9 +751,11 @@ Execute multiple searches in a single request.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| searches | array | Yes | Array of search requests |
+| searches | array | Yes | Array of search requests, each shaped like a `POST /collections/:name/search` body |
 | searches[].vector | array[float] | Yes | Query vector |
 | searches[].top_k | integer | No | Results per query (default: 10) |
+| searches[].filter | object | No | Per-entry metadata filter (same shape as `/search`) |
+| searches[].mode, searches[].ef_search | string, integer | No | **Validated, not applied**: an invalid value refuses the whole batch with a `400`, a valid one is ignored — every entry runs at the collection's default quality |
 
 **Example:**
 ```json
@@ -1273,18 +1297,36 @@ Get the current query guard-rails configuration.
 {
   "max_depth": 10,
   "max_cardinality": 100000,
-  "memory_limit_bytes": 1073741824,
+  "memory_limit_bytes": 104857600,
   "timeout_ms": 30000,
-  "rate_limit_qps": 100,
+  "rate_limit_qps": 100000,
   "circuit_failure_threshold": 5,
   "circuit_recovery_seconds": 30
 }
 ```
 
+The values above are the defaults a server starts with
+(`velesdb_core::QueryLimits::default()`): depth 10, 100 000 intermediate
+results, 100 MiB per query, 30 s, a rate limit of 100 000 queries per second
+per client, and a circuit breaker that opens after 5 consecutive failures for
+30 s. A
+`timeout_ms` of `0` disables the timeout.
+
 ### PUT /guardrails
 
 Partially update the guard-rails configuration. Accepts any subset of the
 fields above; returns the updated configuration.
+
+What an update reaches, exactly (`Database::update_guardrails`):
+
+- `max_depth`, `max_cardinality`, `memory_limit_bytes` and `timeout_ms` apply
+  to the next query on every collection **open at the time of the call**.
+- `rate_limit_qps`, `circuit_failure_threshold` and
+  `circuit_recovery_seconds` are stored and returned, but a collection's rate
+  limiter and circuit breaker keep the values they were built with — the
+  defaults above.
+- A collection created or reopened after the call starts from the defaults,
+  and nothing is persisted: a restart returns to the defaults.
 
 ---
 
@@ -1292,10 +1334,63 @@ fields above; returns the updated configuration.
 
 ### GET /metrics
 
-Prometheus exposition-format metrics (text/plain), including plan-cache
-statistics. Served by default in released binaries (the server's `prometheus`
-cargo feature is a default feature). Unlike `/health` and `/ready`, `/metrics`
-**requires authentication** when API keys are configured.
+Prometheus exposition-format metrics (`text/plain; version=0.0.4`). Served by
+default in released binaries (the server's `prometheus` cargo feature is a
+default feature). Unlike `/health` and `/ready`, `/metrics` **requires
+authentication** when API keys are configured.
+
+```bash
+curl -s -H "Authorization: Bearer $KEY" http://localhost:8080/metrics \
+  | grep -E '^velesdb_(graph|match)_'
+```
+
+The families, in the order they are written:
+
+| Family | Type | Labels | Fed by |
+|--------|------|--------|--------|
+| `velesdb_info` | gauge | `version` | constant `1` |
+| `velesdb_up` | gauge | — | constant `1` |
+| `velesdb_plan_cache_hits_total`, `velesdb_plan_cache_misses_total` | counter | — | VelesQL plan cache |
+| `velesdb_plan_cache_size` | gauge | — | cached plans (L1 + L2) |
+| `velesdb_plan_cache_hit_rate` | gauge | — | hits / (hits + misses) |
+| `velesdb_queries_total` | counter | `status` = `success` \| `error` \| `rate_limited` | REST search handlers |
+| `velesdb_queries_by_type` | counter | `type` = `vector` \| `graph` \| `hybrid` | REST search handlers (`graph` is never incremented today) |
+| `velesdb_documents_total`, `velesdb_index_size_bytes`, `velesdb_active_connections` | gauge | — | not fed by the server: always `0` |
+| `velesdb_limits_exceeded_total` | counter | `limit_type` = `timeout` \| `depth` \| `cardinality` \| `memory` | not fed yet: always `0` |
+| `velesdb_rate_limit_requests_total` | counter | `decision` = `allowed` \| `rejected` | not fed yet: always `0` (rate-limited requests are counted in `velesdb_queries_total{status="rate_limited"}`) |
+| `velesdb_like_guardrail_rejected_total` | counter | — | `LIKE`/`ILIKE` patterns refused by the guard-rail |
+| `velesdb_parser_depth_limit_rejected_total` | counter | — | VelesQL statements refused for nesting depth |
+| `velesdb_invalid_offset_read_errors_total` | counter | — | storage reads at an invalid offset |
+| `velesdb_cache_collision_fallback_total` | counter | — | not fed yet: always `0` |
+| `velesdb_wal_replay_corrupt_entries_total` | counter | — | corrupt WAL entries skipped during replay |
+| `velesdb_traversal_nodes_visited_total`, `velesdb_traversal_edges_scanned_total` | counter | — | not fed by the server: always `0` — per-collection traversal figures are in `velesdb_graph_*` below |
+| `velesdb_traversal_max_depth` | gauge | — | not fed by the server: always `0` |
+| `velesdb_graph_edges_total` | gauge | `collection` | current edge count of each graph collection |
+| `velesdb_graph_edge_inserts_total`, `velesdb_graph_edge_deletes_total` | counter | `collection` | edge writes |
+| `velesdb_graph_traversals_total`, `velesdb_graph_traversal_nodes_visited_total` | counter | `collection` | BFS / DFS traversals: `/graph/traverse`, `/graph/traverse/stream`, the embedded `traverse_bfs` / `traverse_dfs` (`/graph/traverse/parallel` and `traverse_bfs_parallel` are not counted) |
+| `velesdb_graph_edge_insert_duration_seconds` | histogram | `collection`, `le` | batch edge inserts only (a single-edge insert is counted, not timed) |
+| `velesdb_graph_traversal_duration_seconds` | histogram | `collection`, `le` | BFS / DFS traversals |
+| `velesdb_match_queries_total`, `velesdb_match_queries_success_total`, `velesdb_match_queries_failed_total` | counter | — | every VelesQL `MATCH` query, process-wide |
+| `velesdb_match_latency_seconds` | histogram (buckets only) | `le` | `MATCH` latency, process-wide |
+| `velesdb_match_results_total` | counter | — | rows returned by `MATCH` |
+| `velesdb_match_guardrail_hits_total`, `velesdb_match_similarity_queries_total` | counter | — | not fed yet: always `0` |
+| `velesdb_query_duration_seconds` | histogram | `le` | REST search, batch search, `/query` and `/aggregate` duration |
+
+The `velesdb_graph_*` families are declared once and carry one sample per
+graph collection (`collection="<name>"`, sorted by name); they are absent
+while the database holds no graph collection, and vector or metadata
+collections never appear in them. Their histogram buckets are 1 ms, 5 ms,
+10 ms, 50 ms, 100 ms, 500 ms, 1 s, 5 s and 10 s. The `velesdb_match_*`
+families are not per collection: every `MATCH` records into one process-wide
+collector. `velesdb_match_latency_seconds` exposes its `_bucket` series
+(1 ms to 5 s) but no `_sum` or `_count`, so take rates from
+`velesdb_match_queries_total` rather than from a histogram count.
+`velesdb_query_duration_seconds` buckets are 1 ms, 5 ms, 10 ms, 50 ms, 100 ms,
+500 ms, 1 s and 5 s, with `_sum` and `_count`.
+
+An embedding application renders the same graph and `MATCH` text with
+`Database::graph_metrics_prometheus()` and `Database::match_metrics_prometheus()`;
+see [Core: operations API](../guides/CORE_OPERATIONS_API.md#observability).
 
 ---
 

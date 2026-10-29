@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message. The daemon still stops at startup with the same wording, and the
   raw value is still never echoed.
 
+### Documentation
+
+- **The README names the recall-quality setting.** `VELESDB_MEMORY_SEARCH_QUALITY`
+  (`[search] quality`) was documented only in `MCP_SERVER_SETUP.md`; the README
+  now lists its accepted forms, `adaptive:<min_ef>:<max_ef>` included, and that
+  an invalid value stops the daemon at startup.
+
 ## [0.16.0] - 2026-10-28
 
 > **BREAKING for Rust callers (0.x minor).** Fallible functions that returned
