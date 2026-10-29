@@ -300,8 +300,13 @@ export interface QueryResponse {
 export interface CommandError {
   /** Human-readable error message. */
   message: string;
-  /** Error code for programmatic handling. */
+  /**
+   * Core taxonomy code (`VELES-###`) for programmatic handling, or
+   * `TASK_JOIN` when the plugin's blocking task could not be joined.
+   */
   code: string;
+  /** Whether retrying can succeed, as core answers for the same condition. */
+  recoverable: boolean;
 }
 
 // ============================================================================

@@ -214,7 +214,7 @@ returns a `QueryResult`:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | `QueryResultKind` | `Rows`, `Mutation`, `Deletion`, `Ddl`, `Train`, `Admin` |
+| `kind` | `QueryResultKind` | `Rows`, `Mutation`, `Deletion`, `Ddl`, `Train`, `Admin`, mapped from core's `Query::result_kind` (so `SELECT EDGES` is `Rows`, as on WASM) |
 | `rows` | `[QueryResultRow]` | Empty for DDL/TRAIN/FLUSH |
 | `rowCount` | `UInt32` | Convenience count |
 | `message` | `String` | Human-readable status, e.g. `"3 rows inserted"` |
@@ -398,7 +398,11 @@ The Swift memberwise initializers are explicit and take **every** field: pass
 | `DimensionMismatch` | `expected`, `actual` | Vector length differs from the collection dimension |
 
 `recoverable` mirrors core's `Error::is_recoverable`, so a retry policy can be driven
-from the FFI boundary without string matching.
+from the FFI boundary without string matching. Every call that reaches core keeps
+core's code and recoverability, `executeQuery`, `query`, `trainPq` and the sparse
+and multi-query searches included; a VelesQL parse error is core's query error,
+`VELES-010`. A core `DimensionMismatch` or a missing or duplicate collection
+surfaces as the typed `DimensionMismatch` or `Collection` variant instead.
 
 ## Performance notes
 

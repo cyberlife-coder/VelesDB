@@ -830,6 +830,62 @@ fn test_sparse_leaves_return_their_hits_without_payload() {
     assert_mapped(&filtered);
 }
 
+/// A core error on the sparse and multi-query leaves of
+/// `collection_sparse.rs` reaches the caller through core's taxonomy: a
+/// `Config` failure keeps VELES-009, a dimension mismatch stays typed.
+#[test]
+fn test_sparse_and_multi_query_leaves_keep_core_error_codes() {
+    let tmp = TempDir::new().unwrap();
+    let db = VelesDatabase::open(tmp.path().to_str().unwrap().to_string()).unwrap();
+    db.create_collection("codes".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("codes".to_string()).unwrap().unwrap();
+    let query = || VelesSparseVector {
+        indices: vec![0],
+        values: vec![1.0],
+    };
+
+    let err = col
+        .sparse_search(query(), 3, Some("missing".to_string()))
+        .expect_err("unknown sparse index");
+    let VelesError::Database {
+        code, recoverable, ..
+    } = &err
+    else {
+        panic!("expected VelesError::Database, got {err:?}");
+    };
+    assert_eq!(code, "VELES-009", "{err:?}");
+    assert!(*recoverable, "{err:?}");
+
+    let short = || vec![vec![1.0, 0.0]];
+    let is_mismatch = |err: &VelesError| {
+        matches!(
+            err,
+            VelesError::DimensionMismatch {
+                expected: 4,
+                actual: 2
+            }
+        )
+    };
+    let err = col
+        .multi_query_search(short(), 3, FusionStrategy::Average)
+        .expect_err("short vector");
+    assert!(is_mismatch(&err), "{err:?}");
+    let err = col
+        .multi_query_search_ids(short(), 3, FusionStrategy::Average)
+        .expect_err("short vector");
+    assert!(is_mismatch(&err), "{err:?}");
+    let err = col
+        .multi_query_search_with_filter(
+            short(),
+            3,
+            FusionStrategy::Average,
+            r#"{"condition": {"type": "eq", "field": "category", "value": "a"}}"#.to_string(),
+        )
+        .expect_err("short vector");
+    assert!(is_mismatch(&err), "{err:?}");
+}
+
 // =========================================================================
 // Multi-Query Search Tests
 // =========================================================================

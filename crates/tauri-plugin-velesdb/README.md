@@ -243,10 +243,10 @@ plugin targets.
 |---|---|---|
 | `{ code: "VELES-002", message: "Collection 'x' not found" }` | the collection was never created, or the name differs | call `create_collection` first; names are case-sensitive |
 | `{ code: "VELES-001" }` on `create_collection` | the collection already exists | reuse it, or `delete_collection` first |
-| `{ code: "INVALID_CONFIG", message: "Collection 'x' is not a vector collection" }` | `upsert` / `search` aimed at a graph or metadata-only collection | use the matching family: graph commands for graph collections, `upsert_metadata` for metadata ones |
+| `{ code: "VELES-009", message: "Invalid configuration: Collection 'x' is not a vector collection" }` | `upsert` / `search` aimed at a graph or metadata-only collection | use the matching family: graph commands for graph collections, `upsert_metadata` for metadata ones |
 | `invoke` rejects with a permission error before reaching the plugin | the capability from step 2 is missing, or `windows` does not list the calling window's label | add `"velesdb:default"` to a capability that covers that window |
 | Panic at startup: `velesdb.toml missing or invalid` | `Builder::with_config_path` fails fast on a missing, unparsable or out-of-range config | fix the path or the values; `Error::ConfigLoad` carries the typed core error |
-| `{ code: "INVALID_CONFIG", message: "VelesQL parse error: ..." }` | malformed query string sent to `query` | check the syntax against the [VelesQL guides](../../docs/guides/MULTIMODEL_QUERIES.md) |
+| `{ code: "VELES-010", message: "Database error: [VELES-010] Query error: ..." }` | malformed query string sent to `query` | check the syntax against the [VelesQL guides](../../docs/guides/MULTIMODEL_QUERIES.md) |
 
 ## License
 
