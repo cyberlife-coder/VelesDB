@@ -211,6 +211,52 @@ fn test_try_remove_edge_reports_a_refused_wal_append_as_a_storage_error() {
     );
 }
 
+#[cfg(feature = "persistence")]
+#[test]
+fn test_truncate_removes_edges_then_nodes_and_counts_them() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20, 30] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(1, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+    col.add_edge(GraphEdge::new(2, 20, 30, "KNOWS").unwrap())
+        .unwrap();
+
+    assert_eq!(col.truncate().unwrap(), (2, 3));
+    assert_eq!(col.edge_count(), 0);
+    assert!(col.all_node_ids().is_empty());
+    assert_eq!(
+        col.truncate().unwrap(),
+        (0, 0),
+        "an empty graph truncates to nothing"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_truncate_keeps_the_nodes_when_an_edge_removal_is_refused() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(7, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+    col.break_edge_wal_for_test().unwrap();
+
+    let err = col
+        .truncate()
+        .expect_err("a refused edge removal fails the truncate");
+    assert_eq!(err.code(), "VELES-006", "{err}");
+    assert!(err.to_string().contains("failed on edge 7"), "{err}");
+    assert!(col.has_edge(7), "the edge is left in place");
+    assert_eq!(
+        col.all_node_ids().len(),
+        2,
+        "no node is deleted under a surviving edge"
+    );
+}
+
 #[test]
 fn test_get_edge_returns_the_edge_by_id() {
     let (_dir, col) = make_test_collection(None);

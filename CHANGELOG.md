@@ -26,8 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in place". `try_remove_edge` returns `Ok(true)` for a removal, `Ok(false)` for
   an absent edge, and core's storage error (`VELES-006`) carrying the reason
   otherwise, the code `TRUNCATE` already gives the same failures.
-  `remove_edge` is unchanged. The mobile graph store's `removeEdge` and `clear`
-  use it.
+  `remove_edge` is unchanged. The mobile graph store's `removeEdge` uses it.
+- **`GraphCollection::truncate()` removes every edge, then every node, by the
+  rule VelesQL `TRUNCATE` follows.** It attempts every edge, removes the nodes
+  only if no edge removal failed, and returns `(edges, nodes)` removed, or
+  core's storage error (`VELES-006`) naming the first failed edge with the
+  nodes left in place. `TRUNCATE` and the mobile graph store's `clear` call
+  it, where the mobile store had its own copy of the loop.
 
 - **The Python binding exposes three core contracts as module functions.**
   `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
@@ -153,22 +158,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `false` when there was none, which stays a no-op. A removal the edge
     write-ahead log refuses leaves the edge in place and throws core's storage
     error (`Database`, code `VELES-006`) instead of passing silently. `clear()`
-    removes the edges before the nodes, as core's `TRUNCATE` does, and throws
-    the first refused edge removal with the nodes left in place, so no edge is
-    left pointing at a deleted node.
+    runs core's `TRUNCATE` rule (the new `GraphCollection::truncate`): every
+    edge is attempted, then the nodes are removed only if none was refused, so
+    a refusal throws with the nodes left in place and no edge is left pointing
+    at a deleted node.
   - Core's rules apply. `addEdge` refuses an edge whose source or target was
     never added, and an empty edge label; edge labels are trimmed.
     `properties_json` must be a JSON object and must not contain the reserved
     `_labels` key, which is where core keeps the node's label.
     `bfsTraverseParallel` reports a node reached from two sources once per
-    source. A node's `vector` needs a collection created with embeddings.
+    source, ordered by depth across sources. A node's `vector` needs a
+    collection created with embeddings.
+  - `addNode` on an existing ID replaces its label and properties; a `vector`
+    replaces its embedding and `nil` keeps it, as core's `upsert_node` does
+    (the old store replaced the whole record). A node read back carries one
+    label, its first: one with several labels, written through VelesQL, keeps
+    only the label `addNode` is given if it is rewritten. `propertiesJson` reads
+    back as core re-serializes it (key order and whitespace may differ, and
+    `"{}"` reads back as nil), and `getOutgoing`/`getIncoming` return edges in
+    core's order, not insertion order.
 
   Migration: an app holding a graph saved by the old `save(path)` creates the
   graph collection, gets its store, and calls `importSnapshot(path)` once. It
   reads that JSON file as written, upserts its nodes and adds its edges, and
   refuses, before writing anything, an edge ID the store already holds or an
   edge whose endpoint is in neither the file nor the store; add any such node
-  with `addNode`, then import again. The old file can be deleted afterwards.
+  with `addNode`, then import again. An edge whose ID another writer takes
+  while the import runs is reported as an error rather than skipped. The old
+  file can be deleted afterwards.
 
 - **BREAKING (mobile) — the `Collection` and `DimensionMismatch` errors carry
   core's `code` and `recoverable`, as `Database` does.** A missing or
@@ -277,6 +294,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MultiQuerySearchRequest` examples 0.5 and 0.2.
 
 ### Fixed
+
+- **`GraphCollection::traverse_bfs_parallel` counts only results against
+  `limit`.** The traverser emitted each start node at depth 0, which took a
+  slot of `limit` before the `min_depth` filter dropped it, so
+  `traverse_bfs_parallel(&[1], limit = 1)` returned nothing where
+  `traverse_bfs_config(1, limit = 1)` returns one node, and two starts with
+  `limit = 2` returned none. The start entries now get slots of their own, and
+  the result is truncated to `limit` after the filter. REST
+  `/graph/traverse/parallel` and Mobile `bfsTraverseParallel` call it.
 
 - **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
   *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`

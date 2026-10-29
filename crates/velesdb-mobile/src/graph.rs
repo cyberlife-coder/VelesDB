@@ -194,12 +194,15 @@ impl MobileGraphStore {
 
 #[uniffi::export]
 impl MobileGraphStore {
-    /// Adds a node, or replaces the node with the same ID.
+    /// Adds a node, or updates the node with the same ID.
     ///
-    /// The label is stored as core's node label, so VelesQL `MATCH (n:Label)`
-    /// finds the node. `properties_json` must be a JSON object and must not
-    /// carry the reserved `_labels` key. A `vector` requires a collection
-    /// created with embeddings, of the matching dimension.
+    /// The label and properties are replaced. A `vector` replaces the node's
+    /// embedding; `nil` keeps the one it has, as core's
+    /// `GraphCollection::upsert_node` does. The label is stored as core's node
+    /// label, so VelesQL `MATCH (n:Label)` finds the node. `properties_json`
+    /// must be a JSON object and must not carry the reserved `_labels` key. A
+    /// `vector` requires a collection created with embeddings, of the
+    /// matching dimension.
     pub fn add_node(&self, node: MobileGraphNode) -> Result<(), VelesError> {
         let payload = node_payload(&node)?;
         self.inner.upsert_node(node.id, &payload, node.vector)?;
@@ -369,23 +372,15 @@ impl MobileGraphStore {
         Ok(self.inner.try_remove_edge(edge_id)?)
     }
 
-    /// Removes every node and edge.
+    /// Removes every node and edge, through core's
+    /// `GraphCollection::truncate`, the rule VelesQL `TRUNCATE` follows.
     ///
-    /// The edges go first and the nodes only once none is left, the order
-    /// core's `TRUNCATE` follows: deleting the nodes of an edge whose removal
-    /// failed would leave that edge dangling. Every edge is attempted, and the
-    /// first failure is the one reported.
+    /// Every edge is attempted, then the nodes are removed only if no edge
+    /// removal failed: deleting the nodes of a surviving edge would leave it
+    /// dangling. On a failure the edges that could be removed are gone, the
+    /// nodes stay, and the error (`VELES-006`) names the first failed edge.
     pub fn clear(&self) -> Result<(), VelesError> {
-        let mut first_failure = None;
-        for edge in self.inner.get_edges(None) {
-            if let Err(err) = self.inner.try_remove_edge(edge.id()) {
-                first_failure.get_or_insert(err);
-            }
-        }
-        if let Some(err) = first_failure {
-            return Err(err.into());
-        }
-        self.inner.delete(&self.inner.all_node_ids())?;
+        self.inner.truncate()?;
         Ok(())
     }
 

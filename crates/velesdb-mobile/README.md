@@ -179,8 +179,9 @@ Every read passes the database's read gate, so a `MobileObserver` can deny it.
 An edge needs both of its nodes added first. `removeEdge` returns whether it
 removed an edge (`false` for an absent one, a no-op), and throws core's storage
 error (`VELES-006`) when the edge write-ahead log refuses the removal, the edge
-left in place; `clear` removes the edges before the nodes and stops there on
-such a refusal, as core's `TRUNCATE` does.
+left in place; `clear` runs core's `TRUNCATE` rule: it attempts every edge,
+then removes the nodes only if no edge removal was refused, so a refused one
+leaves the removable edges gone, the nodes in place, and throws.
 
 ### Migrating a graph saved by an earlier release
 

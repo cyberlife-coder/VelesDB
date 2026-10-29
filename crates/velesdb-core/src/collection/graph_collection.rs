@@ -366,6 +366,40 @@ impl GraphCollection {
         self.inner.remove_edge_detailed(edge_id)
     }
 
+    /// Removes every edge, then every node; returns `(edges, nodes)` removed.
+    ///
+    /// The one rule VelesQL `TRUNCATE` and the bindings' `clear` follow. Every
+    /// edge is attempted even after a failure, and the nodes are removed only
+    /// once no edge removal failed: deleting them anyway is what turns a
+    /// surviving edge into a dangling one pointing at ids that no longer
+    /// exist. It is not atomic and makes no rollback promise: removals that
+    /// succeeded before a failure stay applied, and the error counts them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Storage`](crate::Error::Storage) (`VELES-006`) naming
+    /// the first edge whose removal failed and how many edges were removed,
+    /// the nodes left in place; or the node deletion's own error.
+    pub fn truncate(&self) -> Result<(usize, usize)> {
+        let edges = self.get_edges(None);
+        let (edge_count, failure) =
+            remove_edges_reporting_failure(edges.iter().map(GraphEdge::id), |id| {
+                self.remove_edge_detailed(id)
+            });
+        if let Some((edge_id, reason)) = failure {
+            return Err(crate::Error::Storage(format!(
+                "TRUNCATE removed {edge_count} of {} edges, then failed on edge {edge_id}: \
+                 {reason}. The nodes were left in place; the collection is NOT empty.",
+                edges.len()
+            )));
+        }
+        let node_ids = self.all_node_ids();
+        if !node_ids.is_empty() {
+            self.delete(&node_ids)?;
+        }
+        Ok((edge_count, node_ids.len()))
+    }
+
     /// Test-only fault injection — makes the edge write-ahead log unwritable so
     /// edge removals fail while the edges themselves stay healthy.
     #[cfg(all(test, feature = "persistence"))]
@@ -533,6 +567,34 @@ impl GraphCollection {
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.search_by_embedding(query, k)
     }
+}
+
+/// Removes every id via the injected `remove` closure, returning how many were
+/// actually removed together with the FIRST genuine failure, if any.
+///
+/// Every id is attempted even after a failure — the loop never short-circuits —
+/// so a failure partway through still lets the remaining ids be removed rather
+/// than stranding them. [`EdgeRemoval::Absent`] is deliberately NOT a failure:
+/// removing an edge that is already gone is a documented no-op that callers
+/// rely on.
+pub(crate) fn remove_edges_reporting_failure(
+    ids: impl Iterator<Item = u64>,
+    mut remove: impl FnMut(u64) -> EdgeRemoval,
+) -> (usize, Option<(u64, String)>) {
+    let mut removed = 0usize;
+    let mut first_failure: Option<(u64, String)> = None;
+    for id in ids {
+        match remove(id) {
+            EdgeRemoval::Removed => removed += 1,
+            EdgeRemoval::Absent => {}
+            EdgeRemoval::Failed(reason) => {
+                if first_failure.is_none() {
+                    first_failure = Some((id, reason));
+                }
+            }
+        }
+    }
+    (removed, first_failure)
 }
 
 #[cfg(test)]

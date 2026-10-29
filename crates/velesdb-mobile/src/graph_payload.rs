@@ -197,10 +197,11 @@ fn write_nodes(
 ///
 /// Every refusal this binding can detect (malformed properties, an empty edge
 /// label, a taken or repeated edge ID, a missing endpoint, a vector without
-/// embeddings) happens before the first write. A storage failure, or core
-/// refusing an embedding's dimension, can still stop the import part-way:
-/// node writes are upserts, so importing the same file again after fixing
-/// the cause completes it.
+/// embeddings) happens before the first write. A storage failure, core
+/// refusing an embedding's dimension or an oversized payload, or a writer
+/// that takes an edge ID or removes an endpoint while the import runs, can
+/// still stop it part-way, with an error: node writes are upserts, so
+/// importing the same file again after fixing the cause completes it.
 pub(crate) fn import_snapshot(graph: &GraphCollection, path: &str) -> Result<(), VelesError> {
     let snapshot = read_snapshot(path)?;
     check_embeddings(graph, &snapshot.nodes)?;
@@ -217,6 +218,16 @@ pub(crate) fn import_snapshot(graph: &GraphCollection, path: &str) -> Result<(),
         .map(|node| node_payload(&node).map(|payload| (node, payload)))
         .collect::<Result<Vec<_>, _>>()?;
     write_nodes(graph, nodes)?;
-    graph.add_edges_batch(edges)?;
+    let expected = edges.len();
+    let added = graph.add_edges_batch(edges)?;
+    if added < expected {
+        // Core skips an edge whose ID is taken: one written by a concurrent
+        // caller after `check_edges`. Report it rather than claim the import.
+        return Err(VelesError::database(format!(
+            "{} of {expected} snapshot edges were not imported: their IDs were \
+             taken during the import",
+            expected - added
+        )));
+    }
     Ok(())
 }

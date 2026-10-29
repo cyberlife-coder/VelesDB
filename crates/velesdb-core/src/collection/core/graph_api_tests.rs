@@ -556,6 +556,34 @@ mod tests {
         );
     }
 
+    /// The start nodes themselves (depth 0) are never results under
+    /// `min_depth = 1`, so they must not use up `limit`: a limit of 1 from one
+    /// start returns one reachable node, as `traverse_bfs_config` does, and a
+    /// limit of 2 from two starts returns two.
+    #[test]
+    fn test_traverse_bfs_parallel_limit_counts_only_results() {
+        let (collection, _temp) = create_test_collection();
+        add_edge_with_nodes(&collection, make_edge(1, 1, 2, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(2, 2, 3, "NEXT")).unwrap();
+        add_edge_with_nodes(&collection, make_edge(10, 10, 20, "NEXT")).unwrap();
+
+        let limited = |limit| TraversalConfig {
+            max_depth: 3,
+            min_depth: 1,
+            rel_types: vec![],
+            limit,
+            deadline: None,
+        };
+        let one = collection.traverse_bfs_parallel(&[1], &limited(1));
+        let sequential = collection.traverse_bfs_config(1, &limited(1));
+        let two = collection.traverse_bfs_parallel(&[1, 10], &limited(2));
+
+        assert_eq!(one.len(), 1, "got {one:?}");
+        assert_eq!(one.len(), sequential.len());
+        assert_eq!(two.len(), 2, "got {two:?}");
+        assert!(two.iter().all(|r| r.depth >= 1));
+    }
+
     #[test]
     fn test_traverse_bfs_parallel_empty_graph() {
         let (collection, _temp) = create_test_collection();

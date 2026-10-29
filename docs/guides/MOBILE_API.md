@@ -262,7 +262,7 @@ fails closed on a scope filter.
 
 | Method | Description |
 |--------|-------------|
-| `addNode(node)` | Adds or replaces a `MobileGraphNode`; `propertiesJson` must be a JSON object without the reserved `_labels` key |
+| `addNode(node)` | Adds or updates a `MobileGraphNode`: label and properties are replaced, a `vector` replaces the embedding and `nil` keeps it (core's `upsert_node`); `propertiesJson` must be a JSON object without the reserved `_labels` key |
 | `addEdge(edge)` | Adds a `MobileGraphEdge`; throws on a duplicate edge ID, an empty label, or an endpoint node never added |
 | `getNode(id)` / `getEdge(id)` | Lookup, nil/null when absent |
 | `hasNode(id)` / `hasEdge(id)` | Existence checks |
