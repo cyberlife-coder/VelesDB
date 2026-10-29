@@ -355,7 +355,9 @@ Two distinct fusion paths exist, with different reach:
 - The **richer `fusion::FusionStrategy`** (RRF, RSF, weighted, average, max) is
   currently reachable only through dense+sparse fusion and `NEAR_FUSED`. RSF /
   weighted / avg / max are **not** selectable for the plain vector + BM25 hybrid;
-  use `NEAR_FUSED` (or dense+sparse) to choose a non-RRF strategy.
+  use dense+sparse to choose any non-RRF strategy, or `NEAR_FUSED` for average
+  / max (it rejects RSF and weighted with `V012`: N query vectors against one
+  index are not two branches to weigh).
 
 ## Related Documentation
 

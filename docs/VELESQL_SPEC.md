@@ -752,6 +752,25 @@ SELECT * FROM docs WHERE vector NEAR $v LIMIT 10
 WITH (mode = 'accurate', ef_search = 256)
 ```
 
+**`NEAR` under `OR`.** `NEAR` ranks rows; as a boolean it is TRUE for every
+row it ranks. A disjunction with a `NEAR` side is therefore TRUE, and the rest
+of the `WHERE` is read with the `NEAR` leaf as TRUE:
+
+```sql
+-- Same rows, same order, same scores as `WHERE vector NEAR $v LIMIT 5`
+SELECT * FROM docs WHERE vector NEAR $v OR category = 'other' LIMIT 5
+
+-- `(TRUE OR ...) AND year >= 2021`: the NEAR ranking, filtered by year
+SELECT * FROM docs
+WHERE (vector NEAR $v OR category = 'other') AND year >= 2021
+LIMIT 5
+```
+
+Every row carries its `NEAR` score. This differs from a `similarity()`
+threshold under `OR`, which is a real predicate: `similarity(...) > 0.8 OR
+category = 'other'` returns the union of both sides, the metadata-only rows
+scored 1.0.
+
 ### Sparse Vector Search (SPARSE_NEAR, v2.2+)
 
 Use `SPARSE_NEAR` for sparse vector similarity search (SPLADE, BM42, or custom
@@ -787,9 +806,9 @@ with MaxScore DAAT for efficient top-K retrieval.
 using a fusion strategy (multi-modal or ensemble search). It is executed by
 routing to the engine's multi-vector fusion (`multi_query_search`): each query
 vector runs its own search and the rankings are fused. `USING FUSION 'rrf'`
-(default, `k=60`), `'average'`, and `'maximum'` are honored; other strategies
-fall back to RRF. An optional `AND <metadata>` predicate is applied as a
-pre-fusion filter.
+(default, `k=60`), `'average'`, and `'maximum'` are honored; `'weighted'` and
+`'rsf'` are rejected at validation (see the strategy table below). An optional
+`AND <metadata>` predicate is applied as a pre-fusion filter.
 
 `NEAR_FUSED` must be the **only vector predicate** in the `WHERE`: combining it
 with `OR`/`NOT`, or with another `NEAR` / `similarity()` / `SPARSE_NEAR`, is
@@ -823,9 +842,11 @@ literals (`[0.1, 0.2, ...]`).
 | `average` | Balanced score blending | (none) |
 | `maximum` | Conservative high-precision | (none) |
 
-Only `rrf`, `average`, and `maximum` are honored. Any other strategy name
-(e.g. `rsf`, `weighted`) is **rejected at validation** — per-branch dense/sparse
-weights are ill-defined over N homogeneous query vectors.
+Only `rrf`, `average`, and `maximum` are honored. `rsf` and `weighted` are
+**rejected at validation** with `V012` — per-branch dense/sparse weights are
+ill-defined over N homogeneous query vectors. A strategy name outside these
+five is not rejected on `NEAR_FUSED` (unlike the query-level
+`USING FUSION(strategy = ...)`, whose parser refuses it): it runs as `rrf`.
 
 ### Similarity Function (v1.3+)
 

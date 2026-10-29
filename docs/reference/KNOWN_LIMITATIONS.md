@@ -427,10 +427,13 @@ scalar-expression ones below, which use the same single-collection dataset):
 **Fixture v2.1.0 (2026-10-29)** adds the statement families the WASM executor
 implements on its own modules (`velesql_similarity`, `velesql_fused`,
 `velesql_update`, `velesql_delete`, DISTINCT), again checked against **core and
-WASM**, plus three more scalar cases the CLI runs too:
+WASM**, plus more scalar cases the CLI runs too:
 
 - `cases` X015–X020: `LIKE` (`%` and `_`), `ILIKE`, and `OFFSET` with and
   without `LIMIT`, including an offset past the end.
+- `cases` X021–X022: `vector NEAR` under `OR`, alone and inside an `AND`. The
+  NEAR leaf is TRUE in a boolean context and its ranking orders the rows, on
+  all three executors.
 - `near_cases` N001–N012: `NEAR` ranking with `LIMIT`/`OFFSET`, hybrid
   `NEAR` + metadata, `ORDER BY similarity()` or a column over `NEAR` hits, and
   `similarity()` thresholds with and without `NEAR`. Each case also asserts the

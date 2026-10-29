@@ -15,7 +15,7 @@
 //! # Case coverage
 //!
 //! Every fixture section is runnable by the WASM executor and asserted against
-//! the core goldens: the scalar `cases` (X001–X020), JOIN, aggregate, set
+//! the core goldens: the scalar `cases` (X001–X022), JOIN, aggregate, set
 //! operation and MATCH cases, and the vector (`near_cases`, `fusion_cases`),
 //! refusal, DML and projection sections. WASM runs its OWN
 //! SELECT/ORDER BY pipeline (`velesql_select`/`velesql_orderby`), independent of
@@ -255,7 +255,7 @@ fn params_json(fixture: &Fixture) -> String {
     serde_json::to_string(&fixture.query_params).expect("test: serialize query_params")
 }
 
-/// All golden `cases` (X001–X020) must reproduce the core result set exactly.
+/// All golden `cases` (X001–X022) must reproduce the core result set exactly.
 #[test]
 fn test_wasm_velesql_executor_conformance_fixture_cases() {
     let fixture = load_fixture();

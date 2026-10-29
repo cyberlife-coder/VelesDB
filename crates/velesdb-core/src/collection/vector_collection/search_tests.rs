@@ -563,3 +563,91 @@ fn hybrid_sparse_search_is_filtered_with_none() {
     let b: Vec<u64> = none.iter().map(|r| r.point.id).collect();
     assert_eq!(a, b);
 }
+
+/// A dense query of the wrong dimension is the caller's error, not an empty
+/// dense branch: the hybrid search used to swallow the dense failure and
+/// answer with the sparse hits alone.
+#[test]
+fn hybrid_sparse_search_surfaces_a_dense_dimension_mismatch() {
+    let (coll, _dir) = create_test_vc();
+    seed_sparse_points(&coll);
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(10, 1.0)]);
+    let strategy = crate::fusion::FusionStrategy::rrf_default();
+
+    let err = coll
+        .hybrid_sparse_search(&[0.5, 0.5], &sparse_q, 5, "", &strategy)
+        .expect_err("a 2-dim dense query on a 4-dim collection must fail");
+
+    assert!(
+        matches!(
+            err,
+            crate::error::Error::DimensionMismatch {
+                expected: 4,
+                actual: 2
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+/// An unknown sparse index is an error, as it is for the sparse-only search
+/// (`sparse_search_named`) — not an empty sparse branch the fusion skips.
+#[test]
+fn hybrid_sparse_search_on_an_unknown_sparse_index_is_an_error() {
+    let (coll, _dir) = create_test_vc();
+    seed_sparse_points(&coll);
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(10, 1.0)]);
+    let strategy = crate::fusion::FusionStrategy::rrf_default();
+
+    let err = coll
+        .hybrid_sparse_search(&[0.5, 0.5, 0.3, 0.1], &sparse_q, 5, "missing", &strategy)
+        .expect_err("an unknown sparse index must fail");
+
+    assert_eq!(
+        err.to_string(),
+        "[VELES-009] Configuration error: Sparse index 'missing' not found"
+    );
+}
+
+/// The public hybrid search fuses through the collection's own
+/// `fuse_dense_sparse`, which aligns a distance metric's polarity (#2102). On
+/// a Euclidean collection a score-level strategy (RSF) must therefore rank
+/// the dense-nearest point first, exactly like the `Collection` entry point.
+#[test]
+fn hybrid_sparse_search_aligns_distance_polarity_like_the_collection() {
+    let dir = TempDir::new().unwrap();
+    let coll = VectorCollection::create(
+        dir.path().join("euclid"),
+        "euclid",
+        4,
+        DistanceMetric::Euclidean,
+        StorageMode::Full,
+    )
+    .unwrap();
+    seed_sparse_points(&coll);
+    // Same weight on every point: the sparse branch ties, the dense one decides.
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(20, 1.0)]);
+    let rsf = crate::fusion::FusionStrategy::relative_score(0.5, 0.5).unwrap();
+    let dense_q = [0.0, 0.5, 0.3, 0.1]; // point 0's vector
+
+    let public: Vec<u64> = coll
+        .hybrid_sparse_search(&dense_q, &sparse_q, 3, "", &rsf)
+        .unwrap()
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    let inner: Vec<u64> = coll
+        .inner
+        .hybrid_sparse_search(&dense_q, &sparse_q, 3, &rsf)
+        .unwrap()
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+
+    assert_eq!(
+        public.first(),
+        Some(&0),
+        "dense-nearest first, got {public:?}"
+    );
+    assert_eq!(public, inner);
+}

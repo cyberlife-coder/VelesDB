@@ -47,6 +47,14 @@ impl Collection {
 
     /// Internal helper to extract vector search from WHERE clause.
     ///
+    /// Walks `AND`, `OR` and groups. A `NEAR` under an `OR` is still the
+    /// query's ranking vector: the leaf is TRUE in a boolean context, so the
+    /// disjunction it sits in admits every candidate the search ranks, and
+    /// [`extract_metadata_filter`](Self::extract_metadata_filter) drops that
+    /// `OR` from the payload filter accordingly. `NOT` is not walked: a
+    /// negated vector leaf takes the full-scan path
+    /// (`has_similarity_under_not`) before the dispatch that reads this.
+    ///
     /// Delegates to [`resolve_vector`](Self::resolve_vector) for parameter
     /// resolution, eliminating the duplicated f64-to-f32 conversion logic.
     pub(crate) fn extract_vector_search(
@@ -58,7 +66,7 @@ impl Collection {
                 let vec = Self::resolve_vector(&vs.vector, params)?;
                 Ok(Some(vec))
             }
-            Condition::And(left, right) => {
+            Condition::And(left, right) | Condition::Or(left, right) => {
                 if let Some(v) = Self::extract_vector_search(left, params)? {
                     return Ok(Some(v));
                 }
@@ -71,9 +79,10 @@ impl Collection {
 
     /// Extracts a `NEAR_FUSED` multi-vector search from the WHERE clause: the
     /// resolved query vectors plus the fusion config, routed to
-    /// [`multi_query_search`](Self::multi_query_search). Walks the same
-    /// AND/Group recursion as [`extract_vector_search`](Self::extract_vector_search)
-    /// and reuses [`resolve_vector`](Self::resolve_vector) for each `VectorExpr`.
+    /// [`multi_query_search`](Self::multi_query_search). Walks `AND` and
+    /// groups only — a `NEAR_FUSED` under `OR`/`NOT` is refused first by
+    /// [`validate_similarity_query_structure`](Self::validate_similarity_query_structure)
+    /// — and reuses [`resolve_vector`](Self::resolve_vector) for each `VectorExpr`.
     pub(crate) fn extract_fused_vectors(
         condition: &Condition,
         params: &std::collections::HashMap<String, serde_json::Value>,
