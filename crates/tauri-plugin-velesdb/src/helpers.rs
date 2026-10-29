@@ -184,7 +184,6 @@ pub fn parse_filter(filter: &Option<serde_json::Value>) -> Result<Option<velesdb
 /// accepted forms. Returns `Ok(None)` when the mode is absent.
 ///
 /// [`SearchQuality`]: velesdb_core::SearchQuality
-#[cfg(feature = "persistence")]
 pub fn parse_search_quality(mode: &Option<String>) -> Result<Option<velesdb_core::SearchQuality>> {
     mode.as_deref()
         .map(velesdb_core::api_types::parse_search_mode)

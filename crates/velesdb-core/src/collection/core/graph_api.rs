@@ -3,8 +3,6 @@
 //! Exposes Knowledge Graph operations on Collection for use by
 //! Tauri plugin, REST API, and other consumers.
 
-use rustc_hash::{FxHashMap, FxHashSet};
-
 use crate::collection::graph::{
     EdgeRemoval, GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
 };
@@ -15,8 +13,7 @@ use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 
 use super::graph_property_index_wiring::extract_labels;
 use super::graph_traversal_helpers::{
-    bfs_pop, bfs_push, dfs_pop, dfs_push, expand_dfs_neighbors, reconstruct_path,
-    traverse_with_frontier, DfsFrontier, TraversalEntry, TraversalParams,
+    bfs_pop, bfs_push, dfs_pop, dfs_push, traverse_with_frontier, TraversalParams,
 };
 
 // Traversal helper functions are in graph_traversal_helpers.rs
@@ -766,69 +763,17 @@ impl Collection {
 
     /// Inner DFS traversal without metrics (see [`Self::traverse_dfs_config`]).
     ///
-    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    /// Runs the loop [`crate::collection::graph::dfs_traverse`] runs on a
+    /// standalone `EdgeStore`, over this collection's sharded edge store.
     #[must_use]
     fn traverse_dfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
-        let rel_filter: FxHashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
-
-        let mut results = Vec::new();
-        let mut visited: FxHashSet<u64> = FxHashSet::default();
-        let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
-        let mut stack: Vec<TraversalEntry> = vec![(source_id, 0)];
-
-        // Start at the threshold so an already-expired deadline aborts on the
-        // first pop; otherwise the clock is only read every N pops.
-        let mut nodes_since_check = crate::collection::graph::DEADLINE_CHECK_INTERVAL;
-        while let Some((node_id, depth)) = stack.pop() {
-            if results.len() >= config.limit {
-                break;
-            }
-            if crate::collection::graph::deadline_reached(config.deadline, &mut nodes_since_check) {
-                break;
-            }
-            // Issue #906: bound the visited set / parent map. A highly-connected
-            // graph with a high limit/max_depth would otherwise grow these
-            // unboundedly (OOM). Consistent with the streaming iterators and
-            // `traverse_with_frontier`: stop and return the bounded result.
-            //
-            // NOTE: this pop-time guard alone is insufficient for DFS — a single
-            // high-out-degree hub fills `stack`/`parent_map` at PUSH time while
-            // `visited` stays tiny. `expand_dfs_neighbors` therefore also caps
-            // push-time growth at `MAX_VISITED_SIZE`.
-            if visited.len() >= crate::collection::graph::MAX_VISITED_SIZE {
-                break;
-            }
-            if !visited.insert(node_id) {
-                continue;
-            }
-            if depth >= config.min_depth && depth > 0 {
-                let path = reconstruct_path(&parent_map, source_id, node_id);
-                results.push(TraversalResult::new(node_id, path, depth));
-                if results.len() >= config.limit {
-                    break;
-                }
-            }
-            if depth < config.max_depth {
-                let mut frontier = DfsFrontier {
-                    stack: &mut stack,
-                    parent_map: &mut parent_map,
-                    max_pending: crate::collection::graph::MAX_VISITED_SIZE,
-                };
-                expand_dfs_neighbors(
-                    &self.graph.edge_store,
-                    node_id,
-                    depth,
-                    &rel_filter,
-                    &visited,
-                    &mut frontier,
-                );
-            }
-        }
-        results
+        crate::collection::graph::dfs_traverse_with(source_id, config, |node| {
+            self.graph.edge_store.get_outgoing(node)
+        })
     }
 
     /// Parallel BFS traversal from multiple start nodes using rayon.

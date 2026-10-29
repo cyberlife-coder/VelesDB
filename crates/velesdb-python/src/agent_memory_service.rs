@@ -104,7 +104,8 @@ impl PyMemoryService {
     ///     Opening with `hash` emits one degraded-recall notice on stderr;
     ///         `VELESDB_MEMORY_QUIET=1` suppresses it for deliberate offline use.
     ///     search_quality: recall quality ("fast", "balanced", "accurate",
-    ///         "perfect", "autotune" or "custom:<ef>"). An explicit value wins
+    ///         "perfect", "autotune", "custom:<ef>" or
+    ///         "adaptive:<min_ef>:<max_ef>"). An explicit value wins
     ///         over `VELESDB_MEMORY_SEARCH_QUALITY`; omitting both keeps the
     ///         collection's own quality. An unknown value raises `ValueError`.
     #[new]

@@ -196,38 +196,33 @@ pub enum SearchQuality {
 impl TryFrom<SearchQuality> for velesdb_core::SearchQuality {
     type Error = VelesError;
 
-    /// Fallible: `Custom`'s `ef` and `Adaptive`'s `min_ef`/`max_ef` are
-    /// checked against the range the `ef_search` `WITH` option enforces
-    /// elsewhere, [`velesdb_core::api_types::validate_ef_search`]'s, so a
-    /// Swift/Kotlin caller cannot reach the HNSW traversal with an unbounded
-    /// `ef` through this FFI boundary (#2275).
+    /// Fallible: checked by core's
+    /// [`velesdb_core::api_types::validate_search_quality`], the rules its
+    /// `custom:` / `adaptive:` parser applies — every ef in the `ef_search`
+    /// range, so a Swift/Kotlin caller cannot reach the HNSW traversal with
+    /// an unbounded `ef` through this FFI boundary (#2275), and
+    /// `min_ef <= max_ef` for `Adaptive`.
     ///
     /// # Errors
     ///
     /// Returns [`VelesError::Database`] when `ef`, `min_ef` or `max_ef` falls
-    /// outside the accepted range.
+    /// outside the accepted range, or `min_ef` exceeds `max_ef`.
     fn try_from(quality: SearchQuality) -> Result<Self, Self::Error> {
-        Ok(match quality {
+        let to_usize = |ef: u32| usize::try_from(ef).unwrap_or(usize::MAX);
+        let quality = match quality {
             SearchQuality::Fast => velesdb_core::SearchQuality::Fast,
             SearchQuality::Balanced => velesdb_core::SearchQuality::Balanced,
             SearchQuality::Accurate => velesdb_core::SearchQuality::Accurate,
             SearchQuality::Perfect => velesdb_core::SearchQuality::Perfect,
-            SearchQuality::Custom { ef } => {
-                let ef = usize::try_from(ef).unwrap_or(usize::MAX);
-                velesdb_core::api_types::validate_ef_search(ef).map_err(VelesError::database)?;
-                velesdb_core::SearchQuality::Custom(ef)
-            }
-            SearchQuality::Adaptive { min_ef, max_ef } => {
-                let min_ef = usize::try_from(min_ef).unwrap_or(usize::MAX);
-                let max_ef = usize::try_from(max_ef).unwrap_or(usize::MAX);
-                velesdb_core::api_types::validate_ef_search(min_ef)
-                    .map_err(VelesError::database)?;
-                velesdb_core::api_types::validate_ef_search(max_ef)
-                    .map_err(VelesError::database)?;
-                velesdb_core::SearchQuality::Adaptive { min_ef, max_ef }
-            }
+            SearchQuality::Custom { ef } => velesdb_core::SearchQuality::Custom(to_usize(ef)),
+            SearchQuality::Adaptive { min_ef, max_ef } => velesdb_core::SearchQuality::Adaptive {
+                min_ef: to_usize(min_ef),
+                max_ef: to_usize(max_ef),
+            },
             SearchQuality::AutoTune => velesdb_core::SearchQuality::AutoTune,
-        })
+        };
+        velesdb_core::api_types::validate_search_quality(&quality).map_err(VelesError::database)?;
+        Ok(quality)
     }
 }
 

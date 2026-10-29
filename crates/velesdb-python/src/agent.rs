@@ -16,6 +16,7 @@ use velesdb_core::agent::{
     DEFAULT_DIMENSION,
 };
 
+use crate::collection::parse_search_quality;
 use crate::collection::query::convert_params;
 use crate::collection_helpers::{core_err, search_results_to_multimodel_dicts};
 use crate::exceptions::DimensionMismatchError;
@@ -553,17 +554,40 @@ impl PySemanticMemory {
     /// Args:
     ///     embedding: Query vector
     ///     top_k: Number of results to return (default: 10)
+    ///     quality: Search quality for this query, as
+    ///         `Collection.search_with_quality` takes it: "fast", "balanced",
+    ///         "accurate", "perfect", "autotune", "custom:<ef>" or
+    ///         "adaptive:<min_ef>:<max_ef>", each ef in 16-4096. None
+    ///         (default) keeps the collection's own quality.
     ///
     /// Returns:
     ///     List of dicts with 'id', 'score', 'content' keys
     ///
+    /// Raises:
+    ///     ValueError: If `quality` names no mode, or gives an ef out of range.
+    ///
     /// Example:
     ///     >>> results = memory.semantic.query(embedding, top_k=5)
+    ///     >>> exact = memory.semantic.query(embedding, top_k=5, quality="perfect")
     ///     >>> for r in results:
     ///     ...     print(f"{r['content']} (score: {r['score']:.3f})")
-    #[pyo3(signature = (embedding, top_k = 10))]
-    fn query(&self, py: Python<'_>, embedding: Vec<f32>, top_k: usize) -> PyResult<Py<PyAny>> {
-        let results = py.detach(|| self.inner().query(&embedding, top_k).map_err(to_py_err))?;
+    #[pyo3(signature = (embedding, top_k = 10, quality = None))]
+    fn query(
+        &self,
+        py: Python<'_>,
+        embedding: Vec<f32>,
+        top_k: usize,
+        quality: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        let quality = quality.map(parse_search_quality).transpose()?;
+        let results = py.detach(|| {
+            let semantic = self.inner();
+            match quality {
+                Some(quality) => semantic.query_with_quality(&embedding, top_k, quality),
+                None => semantic.query(&embedding, top_k),
+            }
+            .map_err(to_py_err)
+        })?;
 
         // Phase 3: Build Python objects (GIL held)
         // set_item is infallible on fresh dicts with interned keys and basic Python types.

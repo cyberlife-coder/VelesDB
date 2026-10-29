@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent-memory semantic search at an explicit quality in Python, Tauri and
+  mobile.** The bindings now reach core 7.1.0's
+  `SemanticMemory::query_with_quality`: Python's
+  `memory.semantic.query(embedding, top_k=10, quality=None)` and the Tauri
+  `semantic_query` command's optional `quality` field (guest-js
+  `SemanticQueryRequest.quality`) take a mode string, parsed by core's
+  `parse_search_mode` as `Collection.search_with_quality` and `search` already
+  parse theirs: `fast`, `balanced`, `accurate`, `perfect`, `autotune`/`auto`,
+  `custom:<ef>` or `adaptive:<min_ef>:<max_ef>`, each ef in 16–4096. An
+  unusable mode is a `ValueError` in Python and `VELES-009` in Tauri, never the
+  default quality. Mobile's `VelesSemanticMemory` gains
+  `query_with_quality(embedding, top_k, quality)` (`queryWithQuality`), taking
+  the `SearchQuality` enum `VelesCollection.search_with_quality` takes; it stays
+  on that gated collection search rather than core's `SemanticMemory`, which
+  reads the collection leaf without the observer read gate every mobile read
+  passes (#1392). Omitting the quality keeps the collection's own everywhere.
+- **`api_types::validate_search_quality` checks a typed `SearchQuality` by
+  the rules of `parse_search_mode`.** Every `Custom`/`Adaptive` ef must be in
+  the `ef_search` range and an `Adaptive` `min_ef` must not exceed `max_ef`,
+  so a binding's enum is accepted exactly when its `custom:`/`adaptive:`
+  string would be. Mobile's `SearchQuality` conversion goes through it, and
+  now refuses `Adaptive { min_ef: 512, max_ef: 32 }`, which core's parser
+  already refused and which ran as a search that never escalated.
+- **`collection::graph::dfs_traverse(&EdgeStore, source, &TraversalConfig)`:
+  core's DFS over a standalone edge store.** It is the loop a collection's
+  `traverse_dfs_config` runs (moved, not copied, into
+  `collection/graph/traversal_dfs.rs`, with its #906 push-time bound), so a
+  binding holding a bare `EdgeStore` gets the same order, depths, paths and
+  bounds as a collection; a test pins the two answers equal.
 - **`velesql::Query::result_kind()` classifies a statement by the result it
   produces.** It returns the new `velesql::QueryResultKind` (`Rows`, `Mutation`,
   `Deletion`, `Ddl`, `Train`, `Admin`), with `SELECT EDGES` as `Rows`. The
@@ -211,6 +240,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Python: `GraphStore.traverse_dfs` runs core's DFS.** It ran a DFS of its
+  own (`dfs_collect` in `crates/velesdb-python/src/graph_store.rs`) that
+  emitted one result per edge pushed, so a node reached by two edges came back
+  twice, in an order neither depth-first nor core's. It now calls
+  `dfs_traverse`, as `traverse_bfs` already called core's `bfs_stream`: one
+  result per node reached, in depth-first order, describing the edge that
+  reached it, with `limit` (`StreamingConfig.max_visited`) capping the results
+  as it does for BFS. The `TraversalResult` shape is unchanged. An empty
+  `relationship_types` list now follows every edge, as BFS and core read it;
+  the old DFS followed none and returned no result.
+
 - **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
   *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
   among the distances and mapped its scores through `1 / (1 + s)`: the best
@@ -344,6 +384,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match `label == "secondary"` or `"btree"`.
 
 ### Documentation
+
+- **The memory wedge's `search_quality` docs list the `adaptive:<min_ef>:<max_ef>`
+  form** core's parser accepts: the Node README and `MemoryService.open` doc,
+  the Python `MemoryService` stub and docstring, the LangGraph README and the
+  `velesdb-memory` `[search] quality` rustdoc named only the five presets and
+  `custom:<ef>`.
 
 - **The core surfaces the 7.1.0 parity audit found undocumented now have usage
   docs.** `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and

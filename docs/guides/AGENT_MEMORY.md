@@ -1019,8 +1019,14 @@ accept, see [Search modes](./SEARCH_MODES.md#when-the-two-phases-run)),
 which refuses an unknown name or an ef outside `[16, 4096]` instead of
 falling back to the default.
 
-These are Rust-only on this path: the Python `AgentMemory.semantic` binding
-does not take a quality. The high-level memory wedge built on top of them does,
+The bindings reach the plain query at a quality per call, parsed by that same
+`parse_search_mode`: `memory.semantic.query(embedding, top_k=10, quality=None)`
+in Python (an unusable mode raises `ValueError`), the Tauri `semantic_query`
+command's optional `quality` field (refused as `VELES-009`), and
+`VelesSemanticMemory.queryWithQuality(embedding, topK, quality)` on mobile,
+which takes the typed `SearchQuality` its `searchWithQuality` takes and runs
+through the collection's read gate. The filtered and excluding variants stay
+Rust-only. The high-level memory wedge built on top of them takes a quality
 per deployment — `VELESDB_MEMORY_SEARCH_QUALITY` for the
 [MCP server](./MCP_SERVER_SETUP.md#recall-quality),
 `MemoryService(path, ..., search_quality=...)` in

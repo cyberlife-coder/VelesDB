@@ -192,7 +192,8 @@ impl NodeMemoryService {
     /// stderr; `VELESDB_MEMORY_QUIET=1` suppresses it for deliberate offline use.
     ///
     /// `searchQuality` is the recall quality (`"fast"`, `"balanced"`,
-    /// `"accurate"`, `"perfect"`, `"autotune"` or `"custom:<ef>"`); an explicit
+    /// `"accurate"`, `"perfect"`, `"autotune"`, `"custom:<ef>"` or
+    /// `"adaptive:<min_ef>:<max_ef>"`, each ef in 16-4096); an explicit
     /// value wins over `VELESDB_MEMORY_SEARCH_QUALITY`, and omitting both keeps
     /// the collection's own quality. An unknown value rejects the open.
     #[napi(factory)]

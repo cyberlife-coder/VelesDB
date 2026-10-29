@@ -902,6 +902,8 @@ export interface SemanticQueryRequest {
   embedding: number[];
   /** Number of results to return. Default: 10. */
   topK?: number;
+  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', 'custom:<ef>' or 'adaptive:<min_ef>:<max_ef>', each ef in 16-4096; any other value is refused. Omitted keeps the memory collection's own quality. */
+  quality?: string;
 }
 
 /** Result from semantic memory query. */
