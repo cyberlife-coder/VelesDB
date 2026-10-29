@@ -28,10 +28,10 @@ impl Collection {
     /// Recursively walks the condition tree to find a `SparseVectorSearch` node.
     ///
     /// **First-wins semantics**: when multiple `SparseVectorSearch` nodes exist
-    /// in a compound condition (e.g. `AND`), only the left-most one is returned.
-    /// Queries containing more than one `SPARSE_NEAR` clause are currently not
-    /// supported; callers that need to detect this case should call
-    /// [`Self::validate_single_sparse_search`] before invoking this function.
+    /// in a compound condition (e.g. `AND`), only the left-most one is
+    /// returned, and it is the only sparse branch the query runs. The VelesQL
+    /// spec defines one sparse branch per hybrid query but does not reject a
+    /// second `SPARSE_NEAR`, so nothing upstream refuses one either.
     pub(crate) fn extract_sparse_vector_search(
         condition: &Condition,
     ) -> Option<&SparseVectorSearch> {
@@ -46,36 +46,6 @@ impl Collection {
             }
             _ => None,
         }
-    }
-
-    /// Counts `SparseVectorSearch` nodes in the condition tree.
-    ///
-    /// Returns an error if more than one `SPARSE_NEAR` clause is found,
-    /// because the planner only handles a single sparse branch per query.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` when the condition contains more than one
-    /// `SparseVectorSearch` node (ambiguous multi-sparse query).
-    #[allow(dead_code)] // Reason: Query validator guard for multi-sparse disambiguation — wired in future planner
-    pub(crate) fn validate_single_sparse_search(condition: &Condition) -> Result<()> {
-        fn count(cond: &Condition) -> usize {
-            match cond {
-                Condition::SparseVectorSearch(_) => 1,
-                Condition::And(l, r) | Condition::Or(l, r) => count(l) + count(r),
-                Condition::Group(inner) | Condition::Not(inner) => count(inner),
-                _ => 0,
-            }
-        }
-
-        let n = count(condition);
-        if n > 1 {
-            return Err(Error::Query(format!(
-                "Query contains {n} SPARSE_NEAR clauses; only one is supported per query. \
-                 Use separate queries for each sparse search."
-            )));
-        }
-        Ok(())
     }
 
     /// Resolve a `SparseVectorExpr` to a concrete `SparseVector`.
@@ -280,32 +250,6 @@ impl Collection {
     // ------------------------------------------------------------------
     // Hybrid dense+sparse execution
     // ------------------------------------------------------------------
-
-    /// Execute hybrid dense+sparse search with the default RRF strategy.
-    ///
-    /// Runs both branches (optionally in parallel via `rayon::join`), then
-    /// fuses results using RRF with k=60.
-    ///
-    /// Currently only exercised by integration tests; production callers use
-    /// [`Self::execute_hybrid_search_with_strategy`] directly.
-    #[allow(dead_code)] // Reason: Integration-test entry point; production callers use execute_hybrid_search_with_strategy
-    pub(crate) fn execute_hybrid_search(
-        &self,
-        dense_vector: &[f32],
-        svs: &SparseVectorSearch,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        filter_condition: Option<&Condition>,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
-        self.execute_hybrid_search_with_strategy(
-            dense_vector,
-            svs,
-            params,
-            filter_condition,
-            limit,
-            &FusionStrategy::rrf_default(),
-        )
-    }
 
     /// Execute hybrid search with an explicit fusion strategy.
     #[allow(clippy::too_many_arguments)]

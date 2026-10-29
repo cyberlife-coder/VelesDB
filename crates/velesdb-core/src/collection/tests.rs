@@ -1449,7 +1449,7 @@ fn test_traverse_bfs_config_respects_min_depth() {
 }
 
 #[test]
-fn test_legacy_traverse_paths_use_edge_ids() {
+fn test_traverse_paths_use_edge_ids() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("graph_collection");
     let collection = Collection::create_graph_collection(
@@ -1473,14 +1473,20 @@ fn test_legacy_traverse_paths_use_edge_ids() {
         .add_edge(crate::collection::graph::GraphEdge::new(101, 2, 3, "KNOWS").unwrap())
         .unwrap();
 
-    let bfs = collection.traverse_bfs(1, 3, None, 10).unwrap();
+    let bfs = collection.traverse_bfs_config(
+        1,
+        &crate::collection::graph::TraversalConfig::with_range(1, 3).with_limit(10),
+    );
     let bfs_to_3 = bfs
         .iter()
         .find(|r| r.target_id == 3 && r.depth == 2)
         .expect("BFS must reach node 3 at depth 2");
     assert_eq!(bfs_to_3.path.as_slice(), &[100, 101]);
 
-    let dfs = collection.traverse_dfs(1, 3, None, 10).unwrap();
+    let dfs = collection.traverse_dfs_config(
+        1,
+        &crate::collection::graph::TraversalConfig::with_range(1, 3).with_limit(10),
+    );
     let dfs_to_3 = dfs
         .iter()
         .find(|r| r.target_id == 3 && r.depth == 2)

@@ -78,25 +78,6 @@ impl StreamingConfig {
     }
 }
 
-/// Internal write mode discriminator (not exposed to users).
-///
-/// Distinguishes between API-driven writes (synchronous upsert) and
-/// streaming-driven writes (micro-batch drain).
-///
-/// Future: integrate WriteMode into StreamingConfig (STREAM-03)
-///
-/// `WriteMode` is currently unused. Once streaming-specific write paths
-/// (e.g., bypass WAL for low-latency inserts) are implemented, wire this
-/// into the flush pipeline.
-#[allow(dead_code)] // Tracked: STREAM-03
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WriteMode {
-    /// Standard synchronous API upsert.
-    Api,
-    /// Streaming micro-batch drain.
-    Streaming,
-}
-
 /// Error returned when the streaming channel cannot accept a point.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

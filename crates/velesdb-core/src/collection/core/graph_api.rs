@@ -12,11 +12,6 @@ use crate::point::{Point, SearchResult};
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 
 use super::graph_property_index_wiring::extract_labels;
-use super::graph_traversal_helpers::{
-    bfs_pop, bfs_push, dfs_pop, dfs_push, traverse_with_frontier, TraversalParams,
-};
-
-// Traversal helper functions are in graph_traversal_helpers.rs
 
 impl Collection {
     /// Adds an edge to the collection's knowledge graph.
@@ -407,100 +402,6 @@ impl Collection {
         self.graph.edge_store.get_incoming_bounded(node_id, cap)
     }
 
-    /// Traverses the graph using BFS from a source node.
-    ///
-    /// # Arguments
-    ///
-    /// * `source` - Starting node ID
-    /// * `max_depth` - Maximum traversal depth
-    /// * `rel_types` - Optional filter by relationship types
-    /// * `limit` - Maximum number of results
-    ///
-    /// # Returns
-    ///
-    /// Vector of traversal results with target nodes and paths.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if traversal fails.
-    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
-    pub fn traverse_bfs(
-        &self,
-        source: u64,
-        max_depth: u32,
-        rel_types: Option<&[&str]>,
-        limit: usize,
-    ) -> Result<Vec<TraversalResult>> {
-        let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let params = self.traversal_params(source, max_depth, filter, limit);
-        let mut frontier = std::collections::VecDeque::new();
-        frontier.push_back((source, 0u32));
-
-        Ok(traverse_with_frontier(
-            &params,
-            bfs_pop,
-            bfs_push,
-            &mut frontier,
-        ))
-    }
-
-    /// Builds the [`TraversalParams`] bundle shared by `traverse_bfs` and
-    /// `traverse_dfs`; the two differ only in their frontier type and
-    /// pop/push functions, which stay with each method.
-    fn traversal_params<'a>(
-        &'a self,
-        source: u64,
-        max_depth: u32,
-        filter: &'a [&'a str],
-        limit: usize,
-    ) -> TraversalParams<'a> {
-        TraversalParams {
-            store: &self.graph.edge_store,
-            filter,
-            limit,
-            max_depth,
-            source,
-        }
-    }
-
-    /// Traverses the graph using DFS from a source node.
-    ///
-    /// # Arguments
-    ///
-    /// * `source` - Starting node ID
-    /// * `max_depth` - Maximum traversal depth
-    /// * `rel_types` - Optional filter by relationship types
-    /// * `limit` - Maximum number of results
-    ///
-    /// # Returns
-    ///
-    /// Vector of traversal results with target nodes and paths.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if traversal fails.
-    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
-    pub fn traverse_dfs(
-        &self,
-        source: u64,
-        max_depth: u32,
-        rel_types: Option<&[&str]>,
-        limit: usize,
-    ) -> Result<Vec<TraversalResult>> {
-        let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let params = self.traversal_params(source, max_depth, filter, limit);
-        let mut frontier = vec![(source, 0u32)];
-
-        Ok(traverse_with_frontier(
-            &params,
-            dfs_pop,
-            dfs_push,
-            &mut frontier,
-        ))
-    }
-
     /// Gets the in-degree and out-degree of a node.
     ///
     /// Uses degree counters instead of materializing edge vectors for O(1) lookup.
@@ -649,13 +550,6 @@ impl Collection {
     #[must_use]
     pub fn graph_schema(&self) -> Option<GraphSchema> {
         self.storage.config.read().graph_schema.clone()
-    }
-
-    /// Returns `true` if this collection was created as a graph collection.
-    #[must_use]
-    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
-    pub fn is_graph(&self) -> bool {
-        self.storage.config.read().graph_schema.is_some()
     }
 
     /// Returns `true` if this graph collection stores node embeddings.

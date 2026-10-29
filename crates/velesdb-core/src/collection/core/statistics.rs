@@ -274,17 +274,6 @@ impl Collection {
             }
         }
     }
-
-    /// Returns the selectivity estimate for a column.
-    ///
-    /// Selectivity is 1/cardinality, representing the probability
-    /// that a random row matches a specific value.
-    #[must_use]
-    #[allow(dead_code)] // Reason: Public API for cost model — used by typed wrappers
-    pub fn estimate_column_selectivity(&self, column: &str) -> f64 {
-        let stats = self.get_stats();
-        stats.estimate_selectivity(column)
-    }
 }
 
 #[cfg(test)]

@@ -2061,12 +2061,6 @@ mod proptest_tests {
         8usize..=256
     }
 
-    /// Strategy for generating a random f32 vector of given dimension
-    #[allow(dead_code)]
-    fn vector_strategy(dim: usize) -> impl Strategy<Value = Vec<f32>> {
-        proptest::collection::vec(-1.0f32..1.0, dim)
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(50))]
 

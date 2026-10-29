@@ -591,7 +591,7 @@ fn hybrid_sparse_search_surfaces_a_dense_dimension_mismatch() {
 }
 
 /// An unknown sparse index is an error, as it is for the sparse-only search
-/// (`sparse_search_named`) — not an empty sparse branch the fusion skips.
+/// (`VectorCollection::sparse_search`) — not an empty sparse branch the fusion skips.
 #[test]
 fn hybrid_sparse_search_on_an_unknown_sparse_index_is_an_error() {
     let (coll, _dir) = create_test_vc();
@@ -612,9 +612,9 @@ fn hybrid_sparse_search_on_an_unknown_sparse_index_is_an_error() {
 /// The public hybrid search fuses through the collection's own
 /// `fuse_dense_sparse`, which aligns a distance metric's polarity (#2102). On
 /// a Euclidean collection a score-level strategy (RSF) must therefore rank
-/// the dense-nearest point first, exactly like the `Collection` entry point.
+/// the dense-nearest point first.
 #[test]
-fn hybrid_sparse_search_aligns_distance_polarity_like_the_collection() {
+fn hybrid_sparse_search_aligns_distance_polarity() {
     let dir = TempDir::new().unwrap();
     let coll = VectorCollection::create(
         dir.path().join("euclid"),
@@ -636,20 +636,11 @@ fn hybrid_sparse_search_aligns_distance_polarity_like_the_collection() {
         .iter()
         .map(|r| r.point.id)
         .collect();
-    let inner: Vec<u64> = coll
-        .inner
-        .hybrid_sparse_search(&dense_q, &sparse_q, 3, &rsf)
-        .unwrap()
-        .iter()
-        .map(|r| r.point.id)
-        .collect();
-
     assert_eq!(
         public.first(),
         Some(&0),
         "dense-nearest first, got {public:?}"
     );
-    assert_eq!(public, inner);
 }
 
 /// A sparse term no point carries leaves the sparse branch empty. The result

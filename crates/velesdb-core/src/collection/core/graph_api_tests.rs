@@ -20,6 +20,19 @@ mod tests {
         GraphEdge::new(id, source, target, label).expect("edge should be valid")
     }
 
+    /// Traversal config reaching `1..=max_depth` hops, optionally restricted
+    /// to `rel_types`, returning at most `limit` results.
+    fn hops(max_depth: u32, rel_types: Option<&[&str]>, limit: usize) -> TraversalConfig {
+        let rel_types = rel_types
+            .unwrap_or_default()
+            .iter()
+            .map(|t| (*t).to_string())
+            .collect();
+        TraversalConfig::with_range(1, max_depth)
+            .with_limit(limit)
+            .with_rel_types(rel_types)
+    }
+
     /// Test helper: stores empty payloads for both edge endpoints, then adds
     /// the edge. Schemaless `add_edge` requires endpoints to already exist
     /// (#1442), so tests that only care about edge/traversal mechanics use
@@ -220,7 +233,7 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         build_chain(&collection);
 
-        let results = collection.traverse_bfs(1, 3, None, 100).unwrap();
+        let results = collection.traverse_bfs_config(1, &hops(3, None, 100));
         assert_eq!(results.len(), 3, "should reach nodes 2, 3, 4");
     }
 
@@ -229,7 +242,7 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         build_chain(&collection);
 
-        let results = collection.traverse_bfs(1, 1, None, 100).unwrap();
+        let results = collection.traverse_bfs_config(1, &hops(1, None, 100));
         assert_eq!(results.len(), 1, "depth=1 should only reach node 2");
         assert_eq!(results[0].target_id, 2);
         assert_eq!(results[0].depth, 1);
@@ -241,7 +254,7 @@ mod tests {
         add_edge_with_nodes(&collection, make_edge(1, 1, 2, "NEXT")).unwrap();
         add_edge_with_nodes(&collection, make_edge(2, 1, 3, "OTHER")).unwrap();
 
-        let results = collection.traverse_bfs(1, 3, Some(&["NEXT"]), 100).unwrap();
+        let results = collection.traverse_bfs_config(1, &hops(3, Some(&["NEXT"]), 100));
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].target_id, 2);
     }
@@ -251,7 +264,7 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         build_chain(&collection);
 
-        let results = collection.traverse_bfs(1, 10, None, 2).unwrap();
+        let results = collection.traverse_bfs_config(1, &hops(10, None, 2));
         assert_eq!(
             results.len(),
             2,
@@ -264,7 +277,7 @@ mod tests {
     #[test]
     fn test_traverse_bfs_empty_graph() {
         let (collection, _temp) = create_test_collection();
-        let results = collection.traverse_bfs(1, 5, None, 100).unwrap();
+        let results = collection.traverse_bfs_config(1, &hops(5, None, 100));
         assert!(results.is_empty());
     }
 
@@ -276,7 +289,7 @@ mod tests {
         add_edge_with_nodes(&collection, make_edge(2, 2, 3, "A")).unwrap();
         add_edge_with_nodes(&collection, make_edge(3, 3, 1, "A")).unwrap();
 
-        let results = collection.traverse_bfs(1, 10, None, 100).unwrap();
+        let results = collection.traverse_bfs_config(1, &hops(10, None, 100));
         // Should visit 2 and 3, but not revisit 1
         assert_eq!(results.len(), 2);
     }
@@ -290,7 +303,7 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         build_chain(&collection);
 
-        let results = collection.traverse_dfs(1, 3, None, 100).unwrap();
+        let results = collection.traverse_dfs_config(1, &hops(3, None, 100));
         assert_eq!(results.len(), 3, "should reach nodes 2, 3, 4");
     }
 
@@ -299,7 +312,7 @@ mod tests {
         let (collection, _temp) = create_test_collection();
         build_chain(&collection);
 
-        let results = collection.traverse_dfs(1, 1, None, 100).unwrap();
+        let results = collection.traverse_dfs_config(1, &hops(1, None, 100));
         assert_eq!(results.len(), 1);
     }
 
@@ -309,7 +322,7 @@ mod tests {
         add_edge_with_nodes(&collection, make_edge(1, 1, 2, "NEXT")).unwrap();
         add_edge_with_nodes(&collection, make_edge(2, 1, 3, "OTHER")).unwrap();
 
-        let results = collection.traverse_dfs(1, 3, Some(&["NEXT"]), 100).unwrap();
+        let results = collection.traverse_dfs_config(1, &hops(3, Some(&["NEXT"]), 100));
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].target_id, 2);
     }
@@ -317,7 +330,7 @@ mod tests {
     #[test]
     fn test_traverse_dfs_empty_graph() {
         let (collection, _temp) = create_test_collection();
-        let results = collection.traverse_dfs(1, 5, None, 100).unwrap();
+        let results = collection.traverse_dfs_config(1, &hops(5, None, 100));
         assert!(results.is_empty());
     }
 
@@ -645,12 +658,6 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_is_graph_false_for_plain_collection() {
-        let (collection, _temp) = create_test_collection();
-        assert!(!collection.is_graph());
-    }
-
-    #[test]
     fn test_has_embeddings_false_for_plain_collection() {
         let (collection, _temp) = create_test_collection();
         assert!(!collection.has_embeddings());
@@ -704,7 +711,7 @@ mod tests {
             "B must have no incoming edge to the deleted node A"
         );
         // Traversal from A returns nothing.
-        let results = collection.traverse_bfs(100, 5, None, 100).unwrap();
+        let results = collection.traverse_bfs_config(100, &hops(5, None, 100));
         assert!(
             results.is_empty(),
             "traversal from deleted node yields nothing"
@@ -846,14 +853,12 @@ mod tests {
 
     #[test]
     fn test_eager_bfs_frontier_bounded_on_dense_cyclic_graph() {
-        // traverse_bfs (frontier helper) on a dense cyclic graph with high
-        // limit/depth must terminate and stay bounded.
+        // BFS on a dense cyclic graph with high limit/depth must terminate
+        // and stay bounded.
         let (collection, _temp) = create_graph_test_collection();
         build_dense_cyclic_graph(&collection, 200, 8);
 
-        let results = collection
-            .traverse_bfs(0, u32::MAX, None, usize::MAX)
-            .unwrap();
+        let results = collection.traverse_bfs_config(0, &hops(u32::MAX, None, usize::MAX));
 
         assert!(
             results.len() <= crate::collection::graph::MAX_VISITED_SIZE,

@@ -62,7 +62,7 @@ impl Collection {
 
     /// Validates a vector-collection upsert batch at the cold boundary:
     /// runtime ingest limits (parity item E) followed by the per-point
-    /// dimension check. Shared by [`Self::upsert`] and `upsert_bulk_inner`
+    /// dimension check. Shared by [`Self::upsert`] and [`Self::upsert_bulk`]
     /// so both ingest paths apply the identical pre-storage validation.
     ///
     /// # Errors

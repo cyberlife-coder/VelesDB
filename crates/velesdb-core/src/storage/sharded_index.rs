@@ -202,20 +202,6 @@ impl ShardedIndex {
         map
     }
 
-    /// Returns the maximum offset value across all shards.
-    #[must_use]
-    #[allow(dead_code)] // API completeness
-    pub fn max_offset(&self) -> Option<usize> {
-        let mut max = None;
-        for shard in &self.shards {
-            let guard = shard.read();
-            for &offset in guard.entries.values() {
-                max = Some(max.map_or(offset, |m: usize| m.max(offset)));
-            }
-        }
-        max
-    }
-
     /// Reserves capacity in all shards.
     ///
     /// Distributes the expected capacity evenly across shards.

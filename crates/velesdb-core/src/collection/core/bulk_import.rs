@@ -205,26 +205,10 @@ impl Collection {
     /// Extracted from `bulk_store_payloads` to accept `(u64, &Value)` pairs
     /// directly, avoiding the need to reconstruct `Point` structs.
     fn bulk_store_payload_entries(&self, entries: &[(u64, &serde_json::Value)]) -> Result<()> {
-        self.bulk_store_payload_entries_inner(entries, true)
-    }
-
-    /// Stores payload entries with configurable fsync behavior.
-    fn bulk_store_payload_entries_inner(
-        &self,
-        entries: &[(u64, &serde_json::Value)],
-        fsync: bool,
-    ) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
-        if fsync {
-            self.storage.payload_storage.write().store_batch(entries)?;
-        } else {
-            self.storage
-                .payload_storage
-                .write()
-                .store_batch_deferred(entries)?;
-        }
+        self.storage.payload_storage.write().store_batch(entries)?;
         Ok(())
     }
 

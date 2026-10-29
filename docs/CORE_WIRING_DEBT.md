@@ -195,7 +195,7 @@ helper. Community-scope cleanup, not a feature.
   search boundary:
   - `max_vectors_per_collection` — one O(1) `len() + batch > cap` check
     (shared `enforce_vector_count` helper) on every ingest entry:
-    `Collection::upsert` / `upsert_bulk_inner` / `upsert_metadata` (Point
+    `Collection::upsert` / `upsert_bulk` / `upsert_metadata` (Point
     paths) and `upsert_bulk_from_raw` (the zero-copy Python/REST bulk path),
     before any storage lock or WAL write. It is a conservative pre-count: a
     pure update batch re-supplying existing ids is counted as net-new, so a
@@ -447,7 +447,7 @@ avoid implying a guarantee that does not exist. Community-scope.
 
 ---
 
-*Last updated: 2026-10-25 · Applies to: velesdb-core 7.1.0 (this stamp tracks
-the document revision; this revision closes entry 1, removed from the schema
-for 7.0.0. The rest of the inventory was last re-verified against the code on
+*Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0 (this stamp tracks
+the document revision; this revision names `upsert_bulk` for the bulk
+ingest limit check, its private `upsert_bulk_inner` being folded into it. The rest of the inventory was last re-verified against the code on
 2026-06-14, as stated at the top of this page)*
