@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-10-29 (v7.1.0; velesdb-memory 0.16.0)
+Last updated: 2026-10-29 (v7.1.0 + unreleased fusion/search-mode grammar; velesdb-memory 0.16.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -216,7 +216,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Core | ✅ (source of truth) | |
 | Server | ✅ | |
 | Python | ✅ | |
-| WASM | N/A | Brute-force only, no HNSW index |
+| WASM | N/A | Brute-force only, no HNSW index; the mode string is still validated by core's `parse_search_mode` |
 | Mobile | ✅ | `SearchQuality` enum mapped to core (`search_with_quality`) |
 | CLI | ✅ | |
 | TS SDK | ✅ | |
@@ -261,6 +261,8 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 - **The Python integrations call core instead of copying it.** `velesdb-python` now exposes `velesdb.hash_id` (`velesdb_core::hash_id`), `velesdb.metric_higher_is_better` (`DistanceMetric::higher_is_better`) and `velesdb.validate_search_quality` (`api_types::parse_search_mode`). The MIT `velesdb_common` package dropped its FNV-1a copy (`stable_hash_id(algorithm="fnv1a")` delegates, and raises `ImportError` on a wheel older than 7.2.0) and its search-quality grammar (it delegates and wraps core's `ValueError` as `SecurityError`; an older wheel leaves the check to search time). The SHA-256 default of `stable_hash_id` and its documented divergence from core ([KNOWN_LIMITATIONS #12](./KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components)) are unchanged.
 - **LlamaIndex score direction fixed for Jaccard.** `VelesDBVectorStore` treated Jaccard, a similarity in core, as a distance and inverted its ranking through `1 / (1 + s)`. The direction now comes from the binding via `velesdb_common.scores.score_to_similarity` (offline fallback pinned to the binding by a drift test), with an end-to-end regression test on a real Jaccard collection. Not done here: LangChain's `similarity_search_with_relevance_scores` still applies `score >= score_threshold` to raw scores, which keeps the farthest documents under `euclidean`/`hamming`; it is a separate change to what that method returns.
 - **`SearchConfigOptions.default_mode` maps through core's serde names** instead of a hand-written table in `crates/velesdb-python/src/options/search.rs`, so a `SearchMode` variant core adds is accepted from Python as it is from a `[search]` TOML section.
+- **Fusion strategy names are single-sourced in core.** `velesdb_core::FusionStrategy::from_name(name, FusionParams)` is the one reading of `rrf`, `average`/`avg`, `maximum`/`max`, `weighted`, `relative_score`/`rsf` (case-insensitive), with core's defaults (`DEFAULT_RRF_K`, `DEFAULT_WEIGHTED_*`, `DEFAULT_RELATIVE_SCORE_*`) and the validating constructors. The server (`/search/multi` and the hybrid `fusion` object), the CLI (`multi-search` and the REPL's `.hybrid-sparse`), Tauri and WASM's `fuse_results` delegate to it; Python exposes it as `FusionStrategy.from_name`. This removed three drifts: the CLI's `weighted` used the pre-#1545 0.5/0.3/0.2, the REPL was case-sensitive and refused `avg`, and Tauri refused `avg`/`max`. WASM's N-branch `rsf` aggregation stays local (D005); only its name parsing moved. Still on their own name tables, outside this change: the MIT `velesdb_common.fusion` builder and the TS SDK's `FUSION_STRATEGY_NAMES` (`sdks/typescript/src/backends/wasm-search.ts`).
+- **WASM's search-mode grammar is core's.** `SearchQuality` and `api_types::parse_search_mode` no longer need `persistence`, so `velesdb-wasm` validates `search_with_quality` modes with core's parser. Its local copy in `parsing.rs` is gone, and an equivalence test pins the decision on a shared table.
 
 ## Recently Landed (2026-06-14)
 

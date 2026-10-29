@@ -2946,19 +2946,19 @@ components:
           - number
           - "null"
           format: float
-          description: "Weighted fusion: weight applied to the average score component\n(only for strategy = \"weighted\", default 0.5)."
+          description: "Weighted fusion: weight applied to the average score component\n(only for strategy = \"weighted\", default 0.6)."
         dense_w:
           type:
           - number
           - "null"
           format: float
-          description: Dense weight (only for strategy = "rsf", default 0.5).
+          description: "Dense weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `sparse_w` when only that one is given)."
         hit_w:
           type:
           - number
           - "null"
           format: float
-          description: "Weighted fusion: weight applied to the hit-ratio component\n(only for strategy = \"weighted\", default 0.2)."
+          description: "Weighted fusion: weight applied to the hit-ratio component\n(only for strategy = \"weighted\", default 0.1)."
         k:
           type:
           - integer
@@ -2977,10 +2977,10 @@ components:
           - number
           - "null"
           format: float
-          description: Sparse weight (only for strategy = "rsf", default 0.5).
+          description: "Sparse weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `dense_w` when only that one is given)."
         strategy:
           type: string
-          description: "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\"."
+          description: "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\",\ncase-insensitive — the grammar of `FusionStrategy::from_name`."
           example: rrf
     GraphSearchRequest:
       type: object
@@ -3358,7 +3358,7 @@ components:
           type: number
           format: float
           description: "Weighted fusion: weight for average score component."
-          example: 0.5
+          example: 0.6
         dense_weight:
           type: number
           format: float
@@ -3376,7 +3376,7 @@ components:
           type: number
           format: float
           description: "Weighted fusion: weight for hit count component."
-          example: 0.2
+          example: 0.1
         max_weight:
           type: number
           format: float
@@ -3395,7 +3395,7 @@ components:
           example: 0.5
         strategy:
           type: string
-          description: "Fusion strategy: \"average\", \"maximum\", \"rrf\", \"weighted\", \"`relative_score`\"."
+          description: "Fusion strategy: \"average\" (alias \"avg\"), \"maximum\" (alias \"max\"),\n\"rrf\", \"weighted\", or \"`relative_score`\" (alias \"rsf\"),\ncase-insensitive — the grammar of `FusionStrategy::from_name`."
           example: rrf
         top_k:
           type: integer

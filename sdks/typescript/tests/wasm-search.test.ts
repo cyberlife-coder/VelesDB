@@ -161,17 +161,20 @@ describe('wasmSearch — validation + dense happy path', () => {
 });
 
 /**
- * What `@wiscale/velesdb-wasm` 6.0.0 throws for an unparseable preset —
- * a BARE STRING, not an `Error`. wasm-bindgen raises a `Result::Err(String)`
- * by throwing the string itself, so a fake that throws `new Error(…)` is
- * kinder than the binding and lets an `e.message` read pass that would
- * return `undefined` in production. Probed, not assumed:
+ * What `@wiscale/velesdb-wasm` throws for an unparseable preset — the text
+ * of velesdb-core's `parse_search_mode` refusal, which the binding reports
+ * verbatim — as a BARE STRING, not an `Error`. wasm-bindgen raises a
+ * `Result::Err(String)` by throwing the string itself, so a fake that throws
+ * `new Error(…)` is kinder than the binding and lets an `e.message` read pass
+ * that would return `undefined` in production. Probed on 6.0.0, not assumed:
  * `probe.search_with_quality(new Float32Array(0), 0, 'nonsense')` reports
  * `typeof e === 'string'`, `e instanceof Error === false`.
  */
 const REFUSAL =
-  "Unknown search quality: 'nonsense'. Valid: fast, balanced, accurate, " +
-  'perfect, autotune, custom:<ef>, adaptive:<min_ef>:<max_ef>';
+  "Unknown search mode 'nonsense'. Valid values: 'fast', 'balanced', " +
+  "'accurate', 'perfect', 'autotune' (aliases: 'auto_tune', 'auto'), " +
+  "'custom:<ef>', 'adaptive:<min_ef>:<max_ef>' (min_ef <= max_ef), " +
+  'each ef in the ef_search range';
 
 /** A module whose `new_metadata_only()` hands back `probe`. */
 function moduleWithProbe(probe: WasmVectorStore): Partial<WasmModule> {
@@ -267,7 +270,7 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
       const outcome = await settle(
         wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' })
       );
-      expectBadRequest(outcome, /Unknown search quality/);
+      expectBadRequest(outcome, /Unknown search mode/);
 
       expect(refuse).toHaveBeenCalledWith(expect.any(Float32Array), 0, 'nonsense');
       expect(probe.free).toHaveBeenCalled();
@@ -312,7 +315,7 @@ describe('wasmSearchBatch — an unparseable preset stops the batch before it st
         { vector: [0.3, 0.4], quality: 'nonsense' as SearchQuality },
       ])
     );
-    expectBadRequest(outcome, /Unknown search quality/);
+    expectBadRequest(outcome, /Unknown search mode/);
 
     expect(search_with_quality).not.toHaveBeenCalled();
   });

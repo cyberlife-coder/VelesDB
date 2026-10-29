@@ -819,7 +819,7 @@
     },
     {
       "id": "rustdoc_params_fast_recall",
-      "file": "crates/velesdb-core/src/index/hnsw/params.rs",
+      "file": "crates/velesdb-core/src/search_quality.rs",
       "must_contain": "`ef_search=96`: 97.4% recall@10 in `recall_benchmark`",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "executable": false,
@@ -831,7 +831,7 @@
     },
     {
       "id": "rustdoc_params_balanced_recall",
-      "file": "crates/velesdb-core/src/index/hnsw/params.rs",
+      "file": "crates/velesdb-core/src/search_quality.rs",
       "must_contain": "`ef_search=160`: 99.8% recall@10 in",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "executable": false,
@@ -843,7 +843,7 @@
     },
     {
       "id": "rustdoc_params_accurate_recall",
-      "file": "crates/velesdb-core/src/index/hnsw/params.rs",
+      "file": "crates/velesdb-core/src/search_quality.rs",
       "must_contain": "`ef_search=512`: 100% recall@10 in",
       "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
       "executable": false,
@@ -4707,7 +4707,7 @@
     },
     {
       "id": "rustdoc_params_accurate_sift1m",
-      "file": "crates/velesdb-core/src/index/hnsw/params.rs",
+      "file": "crates/velesdb-core/src/search_quality.rs",
       "must_contain": "0.98 on SIFT1M's 1M (`docs/BENCHMARKS.md`)",
       "validation_command": "cargo bench -p velesdb-core --bench sift1m_recall --features bench-sift1m",
       "executable": false,

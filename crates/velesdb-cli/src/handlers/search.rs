@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use colored::Colorize;
-use velesdb_core::FusionStrategy;
+use velesdb_core::{FusionParams, FusionStrategy};
 
 /// Handles the `multi-search` subcommand: multi-query vector fusion search.
 pub fn handle_multi_search(
@@ -53,26 +53,13 @@ fn execute_multi_search(
         .map_err(|e| anyhow::anyhow!("Search failed: {e}"))
 }
 
-/// Parses a fusion strategy string into the core enum.
-fn parse_fusion_strategy(strategy: &str, rrf_k: u32) -> Result<FusionStrategy> {
-    match strategy.to_lowercase().as_str() {
-        "average" | "avg" => Ok(FusionStrategy::Average),
-        "maximum" | "max" => Ok(FusionStrategy::Maximum),
-        "rrf" => Ok(FusionStrategy::RRF { k: rrf_k }),
-        "weighted" => Ok(FusionStrategy::Weighted {
-            avg_weight: 0.5,
-            max_weight: 0.3,
-            hit_weight: 0.2,
-        }),
-        "relative_score" | "rsf" => Ok(FusionStrategy::RelativeScore {
-            dense_weight: 0.5,
-            sparse_weight: 0.5,
-        }),
-        _ => anyhow::bail!(
-            "Invalid strategy '{}'. Valid: average, maximum, rrf, weighted, relative_score",
-            strategy
-        ),
-    }
+/// Parses a fusion strategy name into the core enum, through core's name
+/// grammar ([`FusionStrategy::from_name`]): its aliases, its case rule and its
+/// defaults, so `weighted` here ranks as it does on every other surface.
+/// Shared by `multi-search` and the REPL's `.hybrid-sparse`.
+pub(crate) fn parse_fusion_strategy(strategy: &str, rrf_k: u32) -> Result<FusionStrategy> {
+    FusionStrategy::from_name(strategy, FusionParams::default().with_rrf_k(Some(rrf_k)))
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Dispatches search results to the appropriate output format.
@@ -207,3 +194,7 @@ fn print_batch_table(batch: &[Vec<velesdb_core::SearchResult>]) {
     }
     println!();
 }
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;

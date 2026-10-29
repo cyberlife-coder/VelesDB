@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Search modes and fusion names are read with `velesdb-core`'s grammar.**
+  `search_with_quality` validates its mode with core's `parse_search_mode`,
+  which no longer needs the `persistence` feature. The local copy in
+  `parsing.rs` is gone. The accepted modes are unchanged, but the refusal
+  messages are core's (`Unknown search mode '...'. Valid values: ...`). The
+  strategy name of `multi_query_search` is read by
+  `FusionStrategy::from_name`, so it is the same name grammar as the server,
+  CLI, Tauri and Python, and an unknown name reports core's message. The
+  N-branch `rsf` aggregation stays local by design (fixture divergence D005).
 - **BREAKING (behavior) — `weighted` fusion default weights**: the default
   weights used by `multi_query_search(..., strategy: "weighted")` when no
   explicit weights are supplied changed from the WASM-local, non-overridable

@@ -157,8 +157,8 @@ async fn test_multi_query_search_invalid_strategy_returns_400() {
         json["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("Invalid strategy"),
-        "expected an 'Invalid strategy' error, got {json:?}"
+            .contains("Unknown fusion strategy 'definitely_not_a_strategy'"),
+        "expected core's unknown-strategy error, got {json:?}"
     );
 }
 
