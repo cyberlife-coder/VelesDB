@@ -10,8 +10,12 @@ use std::collections::HashMap;
 use crate::repl::{QueryKind, QueryResult};
 
 /// Print query results in the specified format
+///
+/// In `json` format a SELECT always prints a JSON array — `[]` when nothing
+/// matched — so a script parsing the output never meets a prose line.
 pub fn print_result(result: &QueryResult, format: &str) {
-    if result.rows.is_empty() {
+    let json_select = result.kind == QueryKind::Select && format.eq_ignore_ascii_case("json");
+    if result.rows.is_empty() && !json_select {
         let msg = match result.kind {
             QueryKind::Ddl => "DDL statement executed successfully.",
             QueryKind::Dml => "DML statement executed successfully.",

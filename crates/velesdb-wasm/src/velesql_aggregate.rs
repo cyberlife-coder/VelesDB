@@ -4,18 +4,18 @@
 //! optional GROUP BY and HAVING clauses. When GROUP BY is absent, all
 //! matching rows collapse into a single group (implicit global group).
 //!
-//! DISTINCT (`SELECT DISTINCT`) is also handled here since it is a pure-row
-//! post-processing step and shares the "scan-then-collapse" pipeline.
+//! A DISTINCT without aggregates is not handled here: it runs in the plain
+//! SELECT pipeline through core's `apply_distinct`, which honours ORDER BY and
+//! the default LIMIT (`velesql_select::finalize_plain`).
 //!
 //! # Layer contract
 //!
 //! The caller hands us the full scanned row set (after WHERE), then this
-//! module decides whether to return the raw rows, group them, or apply
-//! DISTINCT. Vector / similarity / fusion concerns live outside.
+//! module groups it. Vector / similarity / fusion concerns live outside.
 //!
 //! # NLOC budget
 //!
-//! Measured NLOC is 409 (via lizard) — well under the 500-line ceiling.
+//! Measured NLOC is 395 (via lizard) — well under the 500-line ceiling.
 //! If this file grows past 450 NLOC, split the projection-building
 //! helpers (`write_plain_columns`, `write_aggregates`, `write_group_keys`)
 //! into a sibling `velesql_aggregate_project.rs`. See Devin Review
@@ -24,8 +24,8 @@
 use std::collections::BTreeMap;
 
 use velesdb_core::velesql::{
-    AggregateArg, AggregateFunction, AggregateType, CompareOp, DistinctMode, HavingClause,
-    HavingCondition, LogicalOp, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement, Value,
+    AggregateArg, AggregateFunction, AggregateType, CompareOp, HavingClause, HavingCondition,
+    LogicalOp, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement, Value,
 };
 
 use crate::velesql_result::QueryResultRow;
@@ -37,13 +37,10 @@ use crate::velesql_value::{json_values_cmp, json_values_equal, resolve_value, Pa
 /// or for synthetic vector-only rows). The aggregator handles it as "empty".
 pub(crate) type ScannedRow<'a> = (u64, f32, Option<&'a serde_json::Value>);
 
-/// Returns true if the SELECT uses any aggregation / GROUP BY / DISTINCT
+/// Returns true if the SELECT uses any aggregation / GROUP BY / HAVING
 /// feature that needs post-processing beyond the raw scan.
 pub(crate) fn needs_aggregation_pipeline(stmt: &SelectStatement) -> bool {
-    matches!(stmt.distinct, DistinctMode::All)
-        || stmt.group_by.is_some()
-        || stmt.having.is_some()
-        || has_aggregate_columns(&stmt.columns)
+    stmt.group_by.is_some() || stmt.having.is_some() || has_aggregate_columns(&stmt.columns)
 }
 
 /// Returns true if the SELECT column list contains any aggregate function.
@@ -55,8 +52,8 @@ pub(crate) fn has_aggregate_columns(cols: &SelectColumns) -> bool {
     }
 }
 
-/// Applies the aggregation / grouping / DISTINCT pipeline to a scanned row
-/// set, returning the final row list to surface through [`QueryResult`].
+/// Applies the aggregation / grouping pipeline to a scanned row set,
+/// returning the final row list to surface through [`QueryResult`].
 ///
 /// [`QueryResult`]: crate::velesql_result::QueryResult
 pub(crate) fn apply(
@@ -64,70 +61,7 @@ pub(crate) fn apply(
     rows: &[ScannedRow<'_>],
     params: &Params,
 ) -> Result<Vec<QueryResultRow>, String> {
-    if matches!(stmt.distinct, DistinctMode::All) && !has_aggregate_columns(&stmt.columns) {
-        return dedup_rows(&stmt.columns, rows);
-    }
     aggregate(stmt, rows, params)
-}
-
-// --- DISTINCT -------------------------------------------------------------
-
-/// Deduplicates rows by the canonical JSON form of their selected columns.
-///
-/// DISTINCT without aggregations: project, then deduplicate preserving the
-/// first-seen order. Ties are broken by insertion order to keep results
-/// deterministic for JS callers.
-fn dedup_rows(
-    cols: &SelectColumns,
-    rows: &[ScannedRow<'_>],
-) -> Result<Vec<QueryResultRow>, String> {
-    let mut seen: Vec<String> = Vec::with_capacity(rows.len());
-    let mut out: Vec<QueryResultRow> = Vec::with_capacity(rows.len());
-    for &(id, score, payload) in rows {
-        let proj = project_for_distinct(cols, id, score, payload);
-        let key = serde_json::to_string(&proj)
-            .map_err(|e| format!("DISTINCT canonicalization failed: {e}"))?;
-        if seen.iter().any(|k| k == &key) {
-            continue;
-        }
-        seen.push(key);
-        out.push(QueryResultRow::synthetic(proj)?);
-    }
-    Ok(out)
-}
-
-/// Builds the JSON object used both to display a DISTINCT row and to
-/// canonicalize it for deduplication. The output is a proper JSON object so
-/// stable key ordering follows serde's default (lexicographic) serialization.
-fn project_for_distinct(
-    cols: &SelectColumns,
-    id: u64,
-    score: f32,
-    payload: Option<&serde_json::Value>,
-) -> serde_json::Value {
-    match cols {
-        SelectColumns::Columns(cs) => {
-            let mut map = serde_json::Map::new();
-            for col in cs {
-                map.insert(col.name.clone(), extract_column(&col.name, id, payload));
-            }
-            serde_json::Value::Object(map)
-        }
-        _ => {
-            // DISTINCT * / DISTINCT on mixed — fall back to "full payload" key.
-            let mut map = serde_json::Map::new();
-            map.insert("id".to_string(), serde_json::json!(id));
-            map.insert("score".to_string(), serde_json::json!(score));
-            if let Some(serde_json::Value::Object(obj)) = payload {
-                for (k, v) in obj {
-                    if k != "id" && k != "score" {
-                        map.insert(k.clone(), v.clone());
-                    }
-                }
-            }
-            serde_json::Value::Object(map)
-        }
-    }
 }
 
 // --- Aggregation ----------------------------------------------------------

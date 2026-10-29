@@ -169,10 +169,10 @@ fn test_distinct_star_all_rows_distinct() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT DISTINCT * FROM products LIMIT 100", None).expect("test: d*");
     assert_eq!(r.row_count(), 5); // no rows lost
-                                  // DISTINCT * goes through the synthetic-row path: row id is reset to 0
-                                  // (QueryResultRow::synthetic), unlike a plain scan which preserves the id.
+                                  // DISTINCT * keeps each surviving point, id included (core's
+                                  // `apply_distinct` keys on the payload and returns the rows).
     let first = r.row(0).expect("test: first");
-    assert_eq!(first.id(), 0);
+    assert_eq!(first.id(), 1);
     // The full payload columns are projected into each row.
     let body = r.rows_json();
     assert!(body.contains("\"category\":\"tech\""), "got: {body}");

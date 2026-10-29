@@ -10,7 +10,8 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
 
-use super::{distinct, pushdown, ExtractedComponents, MAX_LIMIT};
+use super::{pushdown, ExtractedComponents, MAX_LIMIT};
+use crate::velesql::distinct_evaluator;
 
 impl Collection {
     /// Computes the CBO execution strategy and over-fetch factor for the query.
@@ -489,7 +490,7 @@ impl Collection {
         // Step 1: DISTINCT — deduplication before any ranking (see pipeline
         // order contract in the doc comment above).
         if stmt.distinct == crate::velesql::DistinctMode::All {
-            results = distinct::apply_distinct(results, &stmt.columns);
+            results = distinct_evaluator::apply_distinct(results, &stmt.columns);
         }
         // Step 2: Window functions — after DISTINCT, before ORDER BY/LIMIT.
         if let Some(wfs) = Self::extract_window_functions(&stmt.columns) {

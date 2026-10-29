@@ -361,7 +361,7 @@ fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Valu
 /// - `Value::Number(1)` vs `Value::String("1")` → `1` vs `"1"` (distinct)
 /// - `Value::Bool(true)` vs `Value::String("true")` → `true` vs `"true"`
 ///
-/// Consistent with `distinct::canonical_json_string` which applies the same
+/// Consistent with `distinct_evaluator::canonical_json_string` which applies the same
 /// rule for DISTINCT deduplication keys.
 fn extract_payload_value(result: &SearchResult, column: &str) -> String {
     extract_nested_value(result, column).to_string()

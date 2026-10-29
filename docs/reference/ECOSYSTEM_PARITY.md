@@ -141,6 +141,24 @@ and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k
 [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli)
 (resolved).
 
+Since fixture v2.1.0 (2026-10-29) the core and WASM halves also cover the
+statement families the WASM executor implements on its own rather than through
+core: NEAR ranking, hybrid NEAR + metadata and `similarity()` thresholds, with
+each row's score (`near_cases`); `NEAR_FUSED` rrf/average/maximum
+(`fusion_cases`); queries both engines must refuse (`rejected_cases`);
+UPDATE/DELETE followed by a SELECT (`dml_cases`); DISTINCT and named-column
+projection (`projection_cases`). LIKE, ILIKE and OFFSET joined the scalar cases
+the CLI runs as well. Growing the fixture surfaced three WASM defects, now
+fixed: the executor did not run core's `QueryValidator` (it answered `USING
+FUSION` over a single `NEAR`, and `NEAR_FUSED` weighted/rsf, which core
+refuses), a `similarity()` threshold without `NEAR` came back unranked with
+score 0.0, and `SELECT DISTINCT` ignored `ORDER BY` and the default `LIMIT`.
+The accepted gaps that remain are the fixture's `documented_divergences`:
+D001 (unaliased aggregate key), D003 (set-operation row order), D004 (MATCH data
+model), D005 (multi-query rsf), D007 (WASM DELETE accepts any WHERE, core only
+id predicates), D008 (core UPDATE may set `vector`) and D009 (an unranked row
+scores 1.0 on core, 0.0 on WASM).
+
 ## Enum Propagation Matrix
 
 Tracks whether core enums are fully propagated to each ecosystem component.
@@ -271,6 +289,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 ## Recently Landed (2026-06-14)
 
 - **WASM fusion now delegates 4/5 strategies to core.** `average`/`maximum`/`weighted`/`rrf` map onto `velesdb_core::FusionStrategy::fuse` (ranking identical to core, pinned by an equivalence test); `relative_score`/`rsf` stays WASM-local by design because its N-branch equal-weight semantics differ from core's two-branch dense+sparse weighted sum. See the RSF/Weighted note above.
+- **(2026-10-29) Executor conformance covers the WASM executor's own modules.** Fixture v2.1.0 adds NEAR, `similarity()`, `NEAR_FUSED`, rejected, UPDATE/DELETE and DISTINCT/projection cases, run against core and WASM; the WASM executor now validates with core's `QueryValidator` and dedups through core's `velesql::distinct_evaluator`. See the Conformance Test Coverage section above.
 - **Executor-level conformance now exists for core.** `conformance/velesql_executor_cases.json` + `crates/velesdb-core/tests/velesql_executor_conformance.rs` assert result rows/counts/ordering (not just that a query parses). Extended to the WASM and CLI executors on 2026-06-20 (action item 2 — now done).
 - **Scalar `ORDER BY` + `LIMIT` correctness bug fixed.** A scalar (non-`similarity()`) `ORDER BY <col> ... LIMIT k` previously truncated to `k` in storage order *before* sorting; it now fetches the full matching set so the sort precedes truncation, restoring the [KNOWN_LIMITATIONS #9](./KNOWN_LIMITATIONS.md#9-bounded-query-result-materialization) bounded==unbounded guarantee. The `similarity()`-ordered HNSW fast path was untouched, so recall is unaffected. (Surfaced by the new executor conformance net above.)
 - **Point-ID hashing single-sourced for Haystack.** The Haystack `DocumentStore` now imports the canonical `velesdb_common.ids.stable_hash_id` instead of a bit-identical forked copy (behaviour-preserving; removes a re-implemented hash from an MIT package). The intentional remaining divergence — `velesdb-migrate`'s distinct `stable_point_id` — is documented in [KNOWN_LIMITATIONS #12](./KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components).
