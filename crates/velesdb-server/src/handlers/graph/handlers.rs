@@ -323,6 +323,7 @@ pub async fn traverse_graph(
     Json(request): Json<TraverseRequest>,
 ) -> Result<Json<TraverseResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
+    state.operational_metrics.record_graph_query();
 
     let use_bfs = match request.strategy.to_lowercase().as_str() {
         "bfs" => true,

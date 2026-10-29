@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// Legacy configurations persisted with a `sync_mode` field are
 /// accepted transparently: serde ignores unknown fields by default,
 /// so the value is dropped silently on load.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsyncIndexBuilderConfig {
     /// Number of buffered vectors that triggers a build.
     #[serde(default = "default_merge_threshold")]
@@ -91,6 +91,12 @@ impl AsyncIndexBuilder {
             config,
             building: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The configuration this builder was built with.
+    #[must_use]
+    pub(crate) fn config(&self) -> &AsyncIndexBuilderConfig {
+        &self.config
     }
 
     /// Enqueues vectors for deferred indexation.

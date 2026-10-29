@@ -140,7 +140,8 @@ impl Collection {
         k: usize,
         metric: DistanceMetric,
     ) -> Vec<ScoredResult> {
-        let Some(ref di) = self.streaming.deferred_indexer else {
+        let slot = self.streaming.deferred_indexer.load();
+        let Some(di) = slot.as_ref() else {
             return results;
         };
         if !di.is_searchable() {

@@ -249,7 +249,7 @@ impl MatchQueryPlanner {
     }
 
     /// Check if WHERE clause contains a similarity condition.
-    fn has_similarity_condition(where_clause: Option<&Condition>) -> bool {
+    pub(crate) fn has_similarity_condition(where_clause: Option<&Condition>) -> bool {
         where_clause.is_some_and(Self::condition_has_similarity)
     }
 

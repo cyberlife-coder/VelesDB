@@ -7,10 +7,8 @@ fn test_app_state() -> Arc<AppState> {
     Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
-        query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
         ready: std::sync::atomic::AtomicBool::new(true),
         operational_metrics: velesdb_core::metrics::OperationalMetrics::new_arc(),
-        traversal_metrics: std::sync::Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
         query_duration_histogram: std::sync::Arc::new(
             velesdb_core::metrics::DurationHistogram::new(),
         ),
@@ -96,4 +94,49 @@ async fn test_match_metrics_in_prometheus_output() {
         text.contains("velesdb_match_guardrail_hits_total"),
         "should contain MATCH guard-rail hits"
     );
+}
+
+async fn scrape(state: Arc<AppState>) -> String {
+    let response = prometheus_metrics(State(state)).await.into_response();
+    let body = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    String::from_utf8(body.to_vec()).unwrap()
+}
+
+/// `velesdb_documents_total` is read from the database at scrape time; it
+/// used to be declared and never set, so it read 0 whatever was stored.
+#[tokio::test]
+async fn test_documents_total_reflects_the_stored_points() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = velesdb_core::Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 2, velesdb_core::DistanceMetric::Cosine)
+        .unwrap();
+    db.get_vector_collection("docs")
+        .unwrap()
+        .upsert(vec![
+            velesdb_core::Point::new(1, vec![1.0, 0.0], None),
+            velesdb_core::Point::new(2, vec![0.0, 1.0], None),
+        ])
+        .unwrap();
+    let state = Arc::new(AppState {
+        db,
+        onboarding_metrics: OnboardingMetrics::default(),
+        ready: std::sync::atomic::AtomicBool::new(true),
+        operational_metrics: velesdb_core::metrics::OperationalMetrics::new_arc(),
+        query_duration_histogram: std::sync::Arc::new(
+            velesdb_core::metrics::DurationHistogram::new(),
+        ),
+    });
+
+    let text = scrape(state).await;
+    assert!(text.contains("velesdb_documents_total 2\n"), "{text}");
+}
+
+/// The process-wide `velesdb_traversal_*` families were never fed; the
+/// per-collection `velesdb_graph_traversal*` families core feeds replace them.
+#[tokio::test]
+async fn test_unfed_traversal_families_are_not_exported() {
+    let text = scrape(test_app_state()).await;
+    assert!(!text.contains("velesdb_traversal_"), "{text}");
 }

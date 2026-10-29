@@ -1214,15 +1214,15 @@ export interface ListIndexesRequest {
 
 /** A single secondary index entry. */
 export interface IndexInfoOutput {
-  /** Node label (or field name for secondary indexes). */
+  /** Node label (`secondary` for a secondary payload index). */
   label: string;
-  /** Property name. */
+  /** Property name (the payload field for a secondary index). */
   property: string;
-  /** Index type (`hash`, `range`, or `secondary`). */
+  /** Index type: `hash` (graph property), `range` (graph range) or `btree` (secondary payload index). */
   indexType: string;
-  /** Number of unique values indexed. */
+  /** Number of distinct values indexed. */
   cardinality: number;
-  /** Memory usage in bytes. */
+  /** Estimated heap size of the index, in bytes. */
   memoryBytes: number;
 }
 

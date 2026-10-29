@@ -914,7 +914,9 @@ impl Database {
     ///         ``circuit_recovery_seconds``.
     ///
     /// Raises:
-    ///     ValueError: If a field is missing, unknown, or has an invalid value.
+    ///     ValueError: If a field is missing, unknown, or has an invalid
+    ///         value, or if ``rate_limit_qps`` or ``circuit_failure_threshold``
+    ///         is ``0`` (core's ``QueryLimits::validate``; nothing changes).
     #[pyo3(signature = (limits))]
     fn update_guardrails(&self, py: Python<'_>, limits: Py<PyAny>) -> PyResult<()> {
         let json = utils::python_to_json(py, &limits)?;
@@ -924,7 +926,11 @@ impl Database {
         validate_guardrail_keys(obj)?;
         let parsed: velesdb_core::guardrails::QueryLimits = serde_json::from_value(json)
             .map_err(|e| PyValueError::new_err(format!("invalid guardrails: {e}")))?;
-        py.detach(|| self.inner.update_guardrails(&parsed));
+        py.detach(|| {
+            self.inner
+                .update_guardrails_with(|live| live.clone_from(&parsed))
+        })
+        .map_err(core_err)?;
         Ok(())
     }
 }

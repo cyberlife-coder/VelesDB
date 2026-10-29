@@ -190,19 +190,36 @@ assert_eq!(docs.guard_rails().limits().max_depth, 5);
 
 `QueryLimits::default()` is depth 10, 100 000 intermediate results, 100 MiB,
 30 s, a rate limit of 100 000 queries per second per client, and a breaker
-opening after 5 consecutive failures for 30 s. What `Database::update_guardrails` reaches:
+opening after 5 consecutive failures for 30 s. `Database::update_guardrails`
+replaces all seven fields, and every one of them reaches every collection:
 
-- `max_depth`, `max_cardinality`, `memory_limit_bytes` and `timeout_ms`
-  change for the next query on every collection open at the time of the call;
-- `rate_limit_qps`, `circuit_failure_threshold` and
-  `circuit_recovery_seconds` do not: each collection's `RateLimiter` and
-  `CircuitBreaker` keep the values they were built with;
-- a collection created or opened afterwards starts from the defaults, and
-  nothing is persisted.
+- `max_depth`, `max_cardinality`, `memory_limit_bytes` and `timeout_ms` apply
+  from the next query;
+- `rate_limit_qps` reconfigures each collection's `RateLimiter` in place: the
+  next refill uses the new rate and clamps the tokens a client has banked to
+  the new ceiling, so a lowered limit takes hold at once;
+- `circuit_failure_threshold` and `circuit_recovery_seconds` reconfigure each
+  `CircuitBreaker` in place: failures already counted count toward the new
+  threshold, and an open breaker measures the time it has spent open against
+  the new recovery time. Neither the buckets nor the breaker state are reset;
+- a collection created, loaded or first opened afterwards starts from the
+  updated limits. The limits are not persisted: a reopened database starts
+  from the defaults.
 
-The server's `PUT /guardrails` is this call, with the same reach
+`Database::guardrail_limits()` returns the limits in force, and
+`Database::update_guardrails_with(|limits| ...)` edits them in place and
+propagates the result as one step, so concurrent partial updates do not lose
+each other. It first checks the edited limits with `QueryLimits::validate`,
+which refuses a `rate_limit_qps` or a `circuit_failure_threshold` of `0`
+(`Error::Config`; nothing changes), where `update_guardrails` applies its
+argument unchecked. The edit runs under the guard-rail lock, so it must not
+call back into the database. The server's `PUT /guardrails` is that partial
+form, the Python, Mobile and Tauri `update_guardrails` call it with the whole
+replacement, and
+`GET /guardrails` reads `guardrail_limits()`
 ([REST reference](../reference/api-reference.md#put-guardrails)).
-`RateLimiter` and `CircuitBreaker` are also usable on their own:
+`RateLimiter` and `CircuitBreaker` are also usable on their own, and
+reconfigurable with `set_limit_qps` and `reconfigure`:
 
 ```rust
 use velesdb_core::guardrails::{CircuitBreaker, RateLimiter};
@@ -274,7 +291,7 @@ let docs = db.get_vector_collection("docs").ok_or("collection not found")?;
 for info in docs.list_indexes() {
     println!("{} {} ({}): {} distinct values", info.label, info.property, info.index_type, info.cardinality);
 }
-println!("graph property + range indexes: {} bytes", docs.indexes_memory_usage());
+println!("secondary + graph property + range indexes: {} bytes", docs.indexes_memory_usage());
 
 // ORDER BY advisor: scalar `ORDER BY <field> LIMIT k` queries that fell back
 // to a full sort, counted per field since the collection was opened.
@@ -290,13 +307,15 @@ for advice in docs.order_by_index_advice(10) {
 }
 ```
 
-`list_indexes` returns secondary payload indexes (`label` = `"secondary"`),
-graph property indexes and graph range indexes. Its per-entry
-`memory_bytes` is `0` for every kind today, `cardinality` is `0` for range
-indexes, and secondary indexes report `index_type` `"hash"` although they are
-B-trees; `indexes_memory_usage` totals the graph property and range indexes
-only. The ORDER BY advisor only observes: it never creates an index, and it
-tracks at most 1 024 distinct fields.
+`list_indexes` returns secondary payload indexes (`label` = `"secondary"`,
+`index_type` = `"btree"`), graph property indexes (`"hash"`) and graph range
+indexes (`"range"`). Each entry reports the number of distinct values it
+indexes and `memory_bytes`, an estimate of its heap size: the key bytes plus
+the serialized size of each value's id bitmap. `indexes_memory_usage` is the
+sum of those entries plus the two graph index containers' fixed size; the
+HNSW graph and the BM25 index carry no size accounting and are not counted.
+The ORDER BY advisor only observes: it never creates an index, and it tracks
+at most 1 024 distinct fields.
 
 ### Advanced configuration
 
@@ -320,11 +339,25 @@ docs.apply_advanced_config(
 
 `pq_rescore_oversampling` (default `Some(4)`; `None` or `Some(0)` disables
 the full-precision rescore of a Product Quantization collection) is read by
-the next search. `deferred_indexing` and `async_index_builder` are written to
-`config.json` but read only when the collection is opened, so they apply from
-the next `Database::open`; and the async index builder's `segment_count` is
-reserved, parsed but not used. The server applies the same fields from a
-`POST /collections` body, with the same timing.
+the next search. A deferred indexer or an async index builder is installed at
+once into a collection that runs none, and every handle on the collection
+sees it — which covers setting either right after creation, as the server
+does from a `POST /collections` body. Changing or disabling one the collection
+already runs is persisted but takes effect at the next open: a write uses the
+component without a lock spanning its use, so swapping it live could strand
+what a writer pushed into the old one. `pending_reopen()` names the settings
+in that state:
+
+```rust
+use velesdb_core::collection::streaming::PendingReopen;
+
+for setting in docs.pending_reopen() {
+    println!("{} applies at the next open", setting.field_name());
+}
+assert!(!docs.pending_reopen().contains(&PendingReopen::DeferredIndexing));
+```
+
+The async index builder's `segment_count` is reserved, parsed but not used.
 
 ### Auto-reindex detection
 
@@ -481,16 +514,23 @@ println!("p50 {:?}  p95 {:?}  p99 {:?}", stats.p50, stats.p95, stats.p99);
   an empty string when there is no graph collection. One collection's metrics
   are also readable directly, through `GraphCollection::metrics()`.
 - `Database::match_metrics_prometheus()` renders the single process-wide
-  `MATCH` collector: queries, successes, failures, rows returned, and a latency
-  histogram written as `_bucket` lines only.
-- `global_guardrails_metrics()` counts rejections the engine records itself:
-  `LIKE` patterns, parser depth, invalid storage offsets and corrupt WAL
-  entries skipped at replay.
-- `OperationalMetrics`, `TraversalMetrics` and `DurationHistogram` are
-  counters for the caller to feed; the engine does not update them.
+  `MATCH` collector: queries, successes, failures, rows returned, queries with
+  a `similarity()` condition, queries stopped by a guard rail while running,
+  and a latency histogram with its `_sum` and `_count`.
+- `global_guardrails_metrics()` counts what the engine records itself: every
+  guard-rail limit a query exceeds (`limit_type` timeout, depth, cardinality,
+  memory), every rate-limiter decision, `LIKE` patterns, parser depth,
+  query-cache hash collisions, invalid storage offsets and corrupt WAL entries
+  skipped at replay.
+- `Database::refresh_storage_gauges(&ops)` sets an `OperationalMetrics`'s
+  `velesdb_documents_total` (points across every collection) and
+  `velesdb_index_size_bytes` (the summed `indexes_memory_usage`) from the
+  database as it is; call it before each export.
+- The query counters of `OperationalMetrics`, `TraversalMetrics` and
+  `DurationHistogram` are for the caller to feed; the engine does not update
+  them.
 
-The complete list of families the server writes to `GET /metrics`, with the
-ones it declares but does not feed yet, is in the
+The complete list of families the server writes to `GET /metrics` is in the
 [REST reference](../reference/api-reference.md#get-metrics).
 
 ### Retrieval-quality metrics

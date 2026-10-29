@@ -90,7 +90,7 @@ results.forEach { result ->
 | `VelesDatabase.openWithObserver(path, observer)` | Opens with a read-path `MobileObserver` attached (audit **and deny**) |
 | `VelesDatabase.openWithObserverAndConfig(path, observer, configPath)` | Observer + config file |
 | `VelesDatabase.openWithObserverAndConfigToml(path, observer, configToml)` | Observer + config string |
-| `updateGuardrails(limits)` | Live-updates query guardrail limits (`MobileQueryLimits`) |
+| `updateGuardrails(limits)` | Live-updates query guardrail limits (`MobileQueryLimits`); throws for a `rateLimitQps` or `circuitFailureThreshold` of `0` |
 | `createCollection(name, dimension, metric)` | Creates a vector collection |
 | `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates a collection with quantized storage |
 | `createMetadataCollection(name)` | Creates a metadata-only collection (no vectors) |
@@ -156,7 +156,8 @@ An empty `vectors` list on any multi-query method is an error
 | `getStats()` | Latest statistics snapshot (no recomputation) |
 | `diagnostics()` | `MobileCollectionDiagnostics`: readiness + index health |
 | `guardRails()` | The guardrail limits currently in force for this collection |
-| `applyAdvancedConfig(config)` | Post-creation overrides (`MobileAdvancedConfig`); `None` fields are left unchanged |
+| `applyAdvancedConfig(config)` | Post-creation overrides (`MobileAdvancedConfig`); `None` fields are left unchanged. A deferred indexer or async index builder the collection does not run yet takes effect at once; a change to one it runs takes effect at the next open |
+| `pendingReopen()` | Streaming settings persisted by `applyAdvancedConfig` but not in force until the next open (`"deferred_indexing"`, `"async_index_builder"`) |
 
 ### Indexes
 
@@ -292,7 +293,12 @@ read (dense / text / hybrid / sparse / multi-query search, VelesQL `SELECT` and
 
 Guardrails are the other half of the control plane: `updateGuardrails(limits)` sets
 `maxDepth`, `maxCardinality`, `memoryLimitBytes`, `timeoutMs` (0 disables),
-`rateLimitQps`, `circuitFailureThreshold`, and `circuitRecoverySeconds`.
+`rateLimitQps`, `circuitFailureThreshold`, and `circuitRecoverySeconds` on every
+collection — the rate limiter and circuit breaker included — and every collection
+opened afterwards starts from them. They are not persisted. It throws
+`VelesError` (`VELES-009`) and changes nothing for a `rateLimitQps` or a
+`circuitFailureThreshold` of `0`, which would reject every query or open the
+breaker on the first failure.
 
 ## Enums
 
@@ -438,4 +444,4 @@ not a measurement.
 
 ---
 
-Last updated: 2026-09-10 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0

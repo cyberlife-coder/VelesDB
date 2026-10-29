@@ -5,7 +5,7 @@
 //! - **Circuit breaker** for automatic failure protection
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use super::limits::GuardRailViolation;
@@ -96,6 +96,7 @@ impl RateLimiter {
             Err(GuardRailViolation::RateLimitExceeded { limit_qps })
         };
         drop(clients);
+        crate::metrics::global_guardrails_metrics().record_rate_limit(verdict.is_ok());
         verdict
     }
 
@@ -135,6 +136,19 @@ impl RateLimiter {
         if let Some(key) = idle.or_else(|| oldest.map(|(id, _)| id)) {
             clients.remove(&key);
         }
+    }
+
+    /// Replaces the queries-per-second limit (`PUT /guardrails`).
+    ///
+    /// Every bucket keeps its tokens and its last-refill instant: the next
+    /// [`check`](Self::check) refills at the new rate and clamps the balance
+    /// to the new ceiling, so lowering the limit cannot be bypassed with
+    /// tokens banked under the old one, and raising it does not hand out a
+    /// burst nobody earned. A client seen for the first time starts with a
+    /// full bucket at the new limit.
+    pub fn set_limit_qps(&self, limit_qps: u32) {
+        self.limit_qps
+            .store(limit_qps, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Returns the number of currently tracked client buckets.
@@ -208,10 +222,10 @@ pub struct CircuitBreaker {
     core: parking_lot::RwLock<CircuitCore>,
     /// Consecutive failure count.
     failure_count: AtomicU64,
-    /// Failure threshold before opening.
-    failure_threshold: u32,
-    /// Recovery time in seconds.
-    recovery_seconds: u64,
+    /// Failure threshold before opening (reconfigurable, see [`Self::reconfigure`]).
+    failure_threshold: AtomicU32,
+    /// Recovery time in seconds (reconfigurable, see [`Self::reconfigure`]).
+    recovery_seconds: AtomicU64,
 }
 
 impl CircuitBreaker {
@@ -224,9 +238,24 @@ impl CircuitBreaker {
                 opened_at: None,
             }),
             failure_count: AtomicU64::new(0),
-            failure_threshold,
-            recovery_seconds,
+            failure_threshold: AtomicU32::new(failure_threshold),
+            recovery_seconds: AtomicU64::new(recovery_seconds),
         }
+    }
+
+    /// Replaces the failure threshold and the recovery time (`PUT /guardrails`).
+    ///
+    /// The state machine is left where it is: a closed breaker stays closed
+    /// and keeps the failures it has counted, which now count toward the new
+    /// threshold on the next [`record_failure`](Self::record_failure); an open
+    /// breaker measures the time it has already spent open against the new
+    /// recovery time on the next [`check`](Self::check). Reconfiguring never
+    /// trips or resets the breaker by itself.
+    pub fn reconfigure(&self, failure_threshold: u32, recovery_seconds: u64) {
+        self.failure_threshold
+            .store(failure_threshold, Ordering::Relaxed);
+        self.recovery_seconds
+            .store(recovery_seconds, Ordering::Relaxed);
     }
 
     /// Checks if a request is allowed.
@@ -250,9 +279,10 @@ impl CircuitBreaker {
         };
 
         let elapsed = opened_at.elapsed().as_secs();
-        if elapsed < self.recovery_seconds {
+        let recovery_seconds = self.recovery_seconds.load(Ordering::Relaxed);
+        if elapsed < recovery_seconds {
             return Err(GuardRailViolation::CircuitOpen {
-                recovery_in_seconds: self.recovery_seconds.saturating_sub(elapsed),
+                recovery_in_seconds: recovery_seconds.saturating_sub(elapsed),
             });
         }
 
@@ -288,7 +318,7 @@ impl CircuitBreaker {
         // resetting opened_at and extending the recovery window.
         let mut core = self.core.write();
         let count = self.failure_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if count >= u64::from(self.failure_threshold)
+        if count >= u64::from(self.failure_threshold.load(Ordering::Relaxed))
             && (core.state == CircuitState::Closed || core.state == CircuitState::HalfOpen)
         {
             core.state = CircuitState::Open;

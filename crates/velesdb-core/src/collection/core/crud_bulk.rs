@@ -10,7 +10,7 @@
 //! graph for higher throughput.
 
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::index::hnsw::direct_writer::DirectVectorWriter;
 use crate::point::Point;
 use crate::storage::VectorStorage;
@@ -83,10 +83,14 @@ impl Collection {
         // backend that would desynchronize the positional encoding store
         // from the node ids. Quantized collections always take the standard
         // path.
-        let use_v2 = self.streaming.async_index_builder.is_some()
-            && !self.storage.index.is_quantized_backend();
-        let count = if use_v2 {
-            self.upsert_bulk_v2_path(&vector_refs, points, &sparse_batch, fsync)?
+        // Loaded once: the V2 path and its builder are one decision.
+        let builder = self
+            .streaming
+            .async_index_builder
+            .load_full()
+            .filter(|_| !self.storage.index.is_quantized_backend());
+        let count = if let Some(aib) = builder {
+            self.upsert_bulk_v2_path(&aib, &vector_refs, points, &sparse_batch, fsync)?
         } else {
             self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch, fsync)?
         };
@@ -108,17 +112,12 @@ impl Collection {
     /// written once (#2264).
     fn upsert_bulk_v2_path(
         &self,
+        aib: &crate::collection::streaming::AsyncIndexBuilder,
         vector_refs: &[(u64, &[f32])],
         points: &[Point],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
         fsync: bool,
     ) -> Result<usize> {
-        let Some(aib) = self.streaming.async_index_builder.as_ref() else {
-            return Err(Error::Config(
-                "bulk v2 path requires async index builder".to_string(),
-            ));
-        };
-
         // Collect pre-batch payloads before overwriting — used for histogram decrements.
         let old_payloads = {
             let storage = self.storage.payload_storage.read();

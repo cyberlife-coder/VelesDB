@@ -7,6 +7,11 @@
 //! Metrics exposed:
 //! - `velesdb_info`: Server version info
 //! - `velesdb_up`: Server availability gauge
+//! - `velesdb_queries_*`, `velesdb_documents_total`, `velesdb_index_size_bytes`,
+//!   `velesdb_active_connections`: core `OperationalMetrics`, the two storage
+//!   gauges refreshed from the database on every scrape
+//! - `velesdb_limits_exceeded_total`, `velesdb_rate_limit_requests_total` and
+//!   the other guard-rail counters: the process-wide core collector
 //! - `velesdb_graph_*`: per-collection graph counters and latency histograms
 //! - `velesdb_match_*`: MATCH query throughput, latency histogram and
 //!   guard-rail hits (process-wide, not per collection)
@@ -63,7 +68,7 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
 ///
 /// Aggregates server-level metrics (info, uptime, plan cache) with
 /// core operational metrics (query throughput, connections, guardrails,
-/// traversal stats, query duration histogram).
+/// per-collection graph metrics, MATCH metrics, query duration histogram).
 fn write_metrics(output: &mut String, state: &AppState) -> std::fmt::Result {
     writeln!(output, "# VelesDB Prometheus Metrics")?;
     writeln!(output)?;
@@ -76,14 +81,13 @@ fn write_metrics(output: &mut String, state: &AppState) -> std::fmt::Result {
     write_cache_metrics(output, cache_metrics, &cache_stats)?;
 
     // Core operational metrics: query throughput, connections, doc counts.
+    // The storage gauges are read from the database as it is now.
+    state.db.refresh_storage_gauges(&state.operational_metrics);
     output.push_str(&state.operational_metrics.export_prometheus());
 
     // Guard-rails metrics: rate limiting, resource limits, error counters.
     // Uses the process-wide singleton (OnceLock) — always available.
     output.push_str(&velesdb_core::metrics::global_guardrails_metrics().export_prometheus());
-
-    // Graph traversal metrics: nodes visited, depth, edges scanned.
-    output.push_str(&state.traversal_metrics.export_prometheus());
 
     // Graph metrics, per graph collection. Empty when the database holds
     // none, so no family is declared without samples.

@@ -319,7 +319,7 @@ impl Collection {
 
         // Lock order: deferred_indexer(11) acquired after delta_buffer(10).
         #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.streaming.deferred_indexer {
+        if let Some(di) = self.streaming.deferred_indexer.load().as_ref() {
             for &id in ids {
                 di.remove(id);
             }

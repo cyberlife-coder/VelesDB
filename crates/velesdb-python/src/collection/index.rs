@@ -48,7 +48,10 @@ impl Collection {
     /// List all indexes on this collection.
     ///
     /// Returns:
-    ///     List of dicts with keys: label, property, index_type, cardinality, memory_bytes
+    ///     List of dicts with keys: label, property, index_type (``hash``,
+    ///     ``range``, or ``btree`` for a secondary payload index, whose label
+    ///     is ``secondary``), cardinality (distinct values) and memory_bytes
+    ///     (estimated heap size).
     fn list_indexes(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let indexes = self.inner.list_indexes();
         let py_indexes: Vec<Py<PyAny>> = indexes

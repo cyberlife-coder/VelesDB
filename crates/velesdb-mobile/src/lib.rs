@@ -318,9 +318,19 @@ impl VelesDatabase {
 
     /// Updates query guardrail limits for every collection in this database.
     ///
-    /// This is a full replacement: all fields of `limits` are applied.
-    pub fn update_guardrails(&self, limits: MobileQueryLimits) {
-        self.inner.update_guardrails(&limits.into());
+    /// This is a full replacement: all fields of `limits` are applied, once
+    /// they pass core's `QueryLimits::validate`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the core error (`VELES-009`) for a `rate_limit_qps` or
+    /// `circuit_failure_threshold` of `0`; nothing changes.
+    pub fn update_guardrails(&self, limits: MobileQueryLimits) -> Result<(), VelesError> {
+        let limits: velesdb_core::guardrails::QueryLimits = limits.into();
+        self.inner
+            .update_guardrails_with(|live| live.clone_from(&limits))
+            .map_err(|e| VelesError::from_core("update_guardrails", e))?;
+        Ok(())
     }
 
     /// Creates a new collection with the specified parameters.

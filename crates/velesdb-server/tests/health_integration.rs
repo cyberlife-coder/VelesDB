@@ -81,10 +81,8 @@ async fn ready_returns_503_when_not_ready() {
     let state = Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
-        query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
         ready: std::sync::atomic::AtomicBool::new(false),
         operational_metrics: velesdb_core::metrics::OperationalMetrics::new_arc(),
-        traversal_metrics: std::sync::Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
         query_duration_histogram: std::sync::Arc::new(
             velesdb_core::metrics::DurationHistogram::new(),
         ),

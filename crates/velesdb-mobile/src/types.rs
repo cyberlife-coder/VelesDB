@@ -441,11 +441,12 @@ pub struct MobileIndexInfo {
     pub label: String,
     /// Property name.
     pub property: String,
-    /// Index type name.
+    /// Index type: `hash` (graph property), `range` (graph range) or `btree`
+    /// (secondary payload index, whose `label` is `secondary`).
     pub index_type: String,
     /// Number of distinct values.
     pub cardinality: u64,
-    /// Approximate memory usage in bytes.
+    /// Estimated heap size of the index, in bytes.
     pub memory_bytes: u64,
 }
 

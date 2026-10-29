@@ -394,11 +394,15 @@ fn diagnostics_to_response(
     )
 )]
 pub async fn get_guardrails(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let limits = state.query_limits.read();
-    Json(limits_to_response(&limits))
+    Json(limits_to_response(&state.db.guardrail_limits()))
 }
 
 /// Update guard-rails configuration (partial update).
+///
+/// Every named field reaches every collection: the per-query limits, the
+/// rate limiter and the circuit breaker of the collections already open, and
+/// the starting limits of every collection created or opened afterwards
+/// (`Database::update_guardrails_with`). Not persisted across a restart.
 #[utoipa::path(
     put,
     path = "/guardrails",
@@ -406,21 +410,24 @@ pub async fn get_guardrails(State(state): State<Arc<AppState>>) -> impl IntoResp
     request_body = GuardRailsConfigRequest,
     responses(
         (status = 200, description = "Updated guard-rails config", body = GuardRailsConfigResponse),
+        (status = 400, description = "Refused limits (`rate_limit_qps` or `circuit_failure_threshold` of 0); nothing changed", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn update_guardrails(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GuardRailsConfigRequest>,
-) -> impl IntoResponse {
-    let mut limits = state.query_limits.write();
-    apply_guardrails_update(&mut limits, &req);
-
-    // Propagate the updated limits to all active collections so that
-    // subsequent queries use the new thresholds (EPIC-048).
-    state.db.update_guardrails(&limits);
-
-    Json(limits_to_response(&limits))
+) -> axum::response::Response {
+    // The edit, its validation and its propagation are one step in core, so
+    // two concurrent partial updates of different fields both land and a
+    // refused one changes nothing (EPIC-048).
+    match state
+        .db
+        .update_guardrails_with(|limits| apply_guardrails_update(limits, &req))
+    {
+        Ok(limits) => Json(limits_to_response(&limits)).into_response(),
+        Err(e) => auto_core_error_response(&e),
+    }
 }
 
 /// Convert `QueryLimits` to the REST response type.

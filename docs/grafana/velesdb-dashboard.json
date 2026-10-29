@@ -137,12 +137,12 @@
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
       "targets": [
         {
-          "expr": "rate(velesdb_traversal_nodes_visited_total[5m])",
+          "expr": "sum(rate(velesdb_graph_traversal_nodes_visited_total[5m]))",
           "legendFormat": "Nodes/s"
         },
         {
-          "expr": "rate(velesdb_traversal_edges_scanned_total[5m])",
-          "legendFormat": "Edges/s"
+          "expr": "sum(rate(velesdb_graph_traversals_total[5m]))",
+          "legendFormat": "Traversals/s"
         }
       ]
     },
@@ -188,31 +188,6 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps"
-        }
-      }
-    },
-    {
-      "title": "Max Traversal Depth",
-      "type": "gauge",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 16 },
-      "targets": [
-        {
-          "expr": "velesdb_traversal_max_depth",
-          "legendFormat": "Max Depth"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "max": 20,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 10 },
-              { "color": "red", "value": 15 }
-            ]
-          }
         }
       }
     }

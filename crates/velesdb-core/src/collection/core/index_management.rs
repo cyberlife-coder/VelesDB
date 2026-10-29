@@ -18,11 +18,15 @@ pub struct IndexInfo {
     pub label: String,
     /// Property name.
     pub property: String,
-    /// Index type (hash or range).
+    /// Index kind: `hash` (graph property index), `range` (graph range
+    /// index) or `btree` (secondary payload index, whose `label` is
+    /// `secondary`).
     pub index_type: String,
-    /// Number of unique values indexed.
+    /// Number of distinct values indexed.
     pub cardinality: usize,
-    /// Memory usage in bytes.
+    /// Estimated heap bytes of this index; the entries of one collection sum
+    /// to its `indexes_memory_usage()` minus the two graph index containers'
+    /// fixed size.
     pub memory_bytes: usize,
 }
 
@@ -590,15 +594,12 @@ impl Collection {
         // Secondary indexes (metadata field indexes created via create_index)
         let sec_indexes = self.query.secondary_indexes.read();
         for (field, index) in sec_indexes.iter() {
-            let cardinality = match index {
-                crate::index::SecondaryIndex::BTree(tree) => tree.read().len(),
-            };
             indexes.push(IndexInfo {
                 label: "secondary".to_string(),
                 property: field.clone(),
-                index_type: "hash".to_string(),
-                cardinality,
-                memory_bytes: 0,
+                index_type: "btree".to_string(),
+                cardinality: index.cardinality(),
+                memory_bytes: index.memory_usage(),
             });
         }
         drop(sec_indexes);
@@ -608,12 +609,15 @@ impl Collection {
         let prop_index = self.graph.property_index.read();
         for (label, property) in prop_index.indexed_properties() {
             let cardinality = prop_index.cardinality(&label, &property).unwrap_or(0);
+            let memory_bytes = prop_index
+                .index_memory_usage(&label, &property)
+                .unwrap_or(0);
             indexes.push(IndexInfo {
                 label,
                 property,
                 index_type: "hash".to_string(),
                 cardinality,
-                memory_bytes: 0,
+                memory_bytes,
             });
         }
         // Released before `range_index` is taken, so the two order-7 reads no
@@ -623,12 +627,14 @@ impl Collection {
         // List range indexes
         let range_idx = self.graph.range_index.read();
         for (label, property) in range_idx.indexed_properties() {
+            let cardinality = range_idx.cardinality(&label, &property).unwrap_or(0);
+            let memory_bytes = range_idx.index_memory_usage(&label, &property).unwrap_or(0);
             indexes.push(IndexInfo {
                 label,
                 property,
                 index_type: "range".to_string(),
-                cardinality: 0,
-                memory_bytes: 0,
+                cardinality,
+                memory_bytes,
             });
         }
         drop(range_idx);
@@ -675,14 +681,23 @@ impl Collection {
         Ok(dropped_range)
     }
 
-    /// Get total memory usage of all indexes.
+    /// Estimated heap bytes of the secondary, graph property and graph range
+    /// indexes — every index [`Self::list_indexes`] lists. The HNSW graph and
+    /// the BM25 index are not counted (they carry no size accounting).
     #[must_use]
     pub fn indexes_memory_usage(&self) -> usize {
-        // LOCK ORDER: property_index(7) read — then range_index(7) read.
-        // Same level, reads-only; canonical order prevents deadlock.
+        // LOCK ORDER: secondary_indexes(6), then property_index(7) and
+        // range_index(7) — each read released before the next is taken.
+        let secondary_mem: usize = self
+            .query
+            .secondary_indexes
+            .read()
+            .values()
+            .map(crate::index::SecondaryIndex::memory_usage)
+            .sum();
         let prop_mem = self.graph.property_index.read().memory_usage();
         let range_mem = self.graph.range_index.read().memory_usage();
-        prop_mem + range_mem
+        secondary_mem + prop_mem + range_mem
     }
 
     /// Reorders HNSW graph nodes in BFS traversal order for improved cache locality.

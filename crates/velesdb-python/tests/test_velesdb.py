@@ -280,6 +280,12 @@ class TestCollection:
         ) is None
         assert collection.apply_advanced_config({}) is None
 
+        # The builder was installed live (none ran before); changing it now
+        # waits for the next open, and pending_reopen says so.
+        assert collection.pending_reopen() == []
+        collection.apply_advanced_config({"async_index_builder": {"merge_threshold": 7}})
+        assert collection.pending_reopen() == ["async_index_builder"]
+
         # Verify the collection is still functional after the clear/no-op calls.
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
         assert collection.count() == 1
@@ -334,6 +340,16 @@ class TestCollection:
         """A misspelled/unknown key is rejected loudly."""
         with pytest.raises(ValueError, match="unknown guardrail field"):
             temp_db.update_guardrails(self._full_guardrails(timeoutMs=5000))
+
+    def test_update_guardrails_refuses_a_zero_rate_limit(self, temp_db):
+        """A limit that would reject every query is refused and changes nothing."""
+        collection = temp_db.create_collection("gr_zero", dimension=4)
+        before = collection.guard_rails()
+
+        with pytest.raises(ValueError, match="rate_limit_qps"):
+            temp_db.update_guardrails(self._full_guardrails(rate_limit_qps=0, timeout_ms=1))
+
+        assert collection.guard_rails() == before
 
     def test_auto_reindex_lifecycle_without_manager(self, temp_db):
         """detach/divergence behave when no auto-reindex manager is attached."""

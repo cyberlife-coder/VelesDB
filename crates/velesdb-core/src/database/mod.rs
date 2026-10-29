@@ -57,7 +57,11 @@ mod ddl_executor_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod graph_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod guardrails_wiring_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod hnsw_config_wiring_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod metrics_wiring_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod query_engine_tests;
 #[cfg(all(test, feature = "persistence"))]
@@ -130,6 +134,20 @@ pub struct Database {
     /// never cached (expiry does not bump `write_generation`).
     join_store_cache:
         parking_lot::RwLock<std::collections::HashMap<String, query_join::JoinStoreEntry>>,
+    /// The live query guard-rails (EPIC-048): the single source every
+    /// collection's `GuardRails` is set from.
+    ///
+    /// [`Database::update_guardrails`] replaces it and pushes it to every
+    /// registered collection; every registration path pushes it to the
+    /// collection it admits (`Database::admit_collection`). **Not persisted**
+    /// — a reopened database starts from `QueryLimits::default()`.
+    ///
+    /// Lock order: taken *before* the three registries, on both sides. The
+    /// update holds it for write while it reads them; a registration holds it
+    /// for read across its registry insert, so an update racing a
+    /// registration either ran first (the registration pushes its value) or
+    /// waits until the collection is in a registry (the update reaches it).
+    guardrail_limits: parking_lot::RwLock<crate::guardrails::QueryLimits>,
 }
 
 #[cfg(feature = "persistence")]
@@ -252,6 +270,7 @@ impl Database {
             schema_version: std::sync::atomic::AtomicU64::new(0),
             compiled_plan_cache: crate::cache::CompiledPlanCache::new(1_000, 10_000),
             join_store_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            guardrail_limits: parking_lot::RwLock::new(crate::guardrails::QueryLimits::default()),
         };
 
         // Auto-load all existing collections from disk (replaces manual load_collections()).
