@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-09-10 — applies to v7.x (workspace 7.1.0).
+> **Last updated:** 2026-09-10 — applies to v8.x (workspace 8.0.0).
 
 ---
 
