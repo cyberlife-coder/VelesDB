@@ -258,3 +258,58 @@ class TestBfsStreaming:
         # Start from node 999 which has no edges
         results = store.traverse_bfs_streaming(999, config)
         assert len(results) == 0
+
+
+class TestDfsTraversal:
+    """GraphStore.traverse_dfs runs core's DFS, as traverse_bfs runs core's BFS."""
+
+    @staticmethod
+    def _store(edges):
+        store = GraphStore()
+        for edge_id, source, target, label in edges:
+            store.add_edge(
+                {"id": edge_id, "source": source, "target": target, "label": label}
+            )
+        return store
+
+    def test_dfs_walks_depth_first(self):
+        """1 -> 2 -> 4, 1 -> 3: node 4 is reached before node 3."""
+        store = self._store([(10, 1, 2, "A"), (11, 1, 3, "A"), (12, 2, 4, "A")])
+
+        results = store.traverse_dfs(source=1, max_depth=5)
+
+        assert [(r.target, r.depth, r.source, r.edge_id) for r in results] == [
+            (2, 1, 1, 10),
+            (4, 2, 2, 12),
+            (3, 1, 1, 11),
+        ]
+
+    def test_dfs_node_reached_by_two_edges_is_one_result(self):
+        """A node is a result once, however many edges lead to it."""
+        store = self._store([(10, 1, 2, "A"), (11, 1, 2, "B"), (12, 2, 3, "A")])
+
+        results = store.traverse_dfs(source=1, max_depth=5)
+
+        assert sorted(r.target for r in results) == [2, 3]
+
+    def test_dfs_limit_caps_results_like_bfs(self):
+        """``limit`` (``StreamingConfig.max_visited``) caps the results of both."""
+        store = self._store([(i, i, i + 1, "NEXT") for i in range(200)])
+
+        dfs = store.traverse_dfs(source=0, max_depth=100, limit=50)
+        bfs = store.traverse_bfs(source=0, max_depth=100, limit=50)
+
+        assert len(dfs) == len(bfs) == 50
+
+    def test_dfs_relationship_filter(self):
+        """Only edges of the listed types are followed."""
+        store = self._store(
+            [(1, 0, 1, "KNOWS"), (2, 0, 2, "BLOCKED"), (3, 1, 3, "KNOWS")]
+        )
+
+        results = store.traverse_dfs(
+            source=0, max_depth=3, relationship_types=["KNOWS"]
+        )
+
+        assert [r.target for r in results] == [1, 3]
+        assert all(r.label == "KNOWS" for r in results)
