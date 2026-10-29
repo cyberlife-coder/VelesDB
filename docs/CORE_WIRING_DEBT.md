@@ -204,12 +204,15 @@ helper. Community-scope cleanup, not a feature.
     `config.point_count`, so this field does not apply to pure-graph node
     ingest.
   - `max_payload_size` — a per-point serialized-size check (shared
-    `enforce_payload_value_size` helper) on the same cold ingest boundary for
+    `enforce_payload_limits` helper) on the same cold ingest boundary for
     every payload path: Point upsert, raw bulk, and graph node writes
     (`store_node_payload`). The size is measured with a bounded counting
     writer that aborts past the cap, so it allocates no throwaway buffer and
     serializes at most `cap + 1` bytes — **not** in the innermost WAL
-    `write_store_record` loop.
+    `write_store_record` loop. The same helper first refuses a payload nested
+    deeper than `MAX_VALUE_DEPTH` (124) arrays and objects, which
+    `serde_json` could not read back from every document core writes it
+    into (the agent-memory snapshot is the deepest).
   - `max_perfect_mode_vectors` — a single gate (`enforce_perfect_mode_limit`)
     consulted by all four index search entry points
     (`search_with_quality` / `search_with_opts` and the filtered path

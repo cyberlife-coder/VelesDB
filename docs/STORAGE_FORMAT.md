@@ -201,6 +201,15 @@ DELETE entry:
 
 The CRC32 covers all preceding fields of the record.
 
+The JSON data is the payload as one document, read back with `serde_json`,
+which parses at most 127 nested arrays and objects. Every ingest path
+refuses, with `VELES-017` and before writing anything, a payload nested
+deeper than `MAX_VALUE_DEPTH` (124, the payload counting as the first
+level): the payload log itself would read back up to 127, but the deepest
+document core writes a payload into, the agent-memory snapshot, holds it
+three levels down, and one bound for every stored value (edge properties
+have the same) keeps every collection's data portable into agent memory.
+
 ### Entry Types
 
 | Type | Value | Description |

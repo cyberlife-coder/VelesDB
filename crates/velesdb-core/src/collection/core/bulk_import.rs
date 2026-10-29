@@ -159,7 +159,7 @@ impl Collection {
         if let Some(ps) = payloads {
             for (i, opt) in ps.iter().enumerate() {
                 if let Some(payload) = opt {
-                    Self::enforce_payload_value_size(ids[i], payload, limits.max_payload_size)?;
+                    Self::enforce_payload_limits(ids[i], payload, limits.max_payload_size)?;
                 }
             }
         }
