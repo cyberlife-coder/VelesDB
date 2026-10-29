@@ -74,10 +74,11 @@ pub use gated_search::GatedRead;
 /// `Database::open()` automatically loads all previously created collections from disk.
 /// There is no need to call `load_collections()` separately.
 ///
-/// # Extension (Premium)
+/// # Extension
 ///
-/// Use [`Database::open_with_observer`] to inject a [`DatabaseObserver`] implementation
-/// from `velesdb-premium` without modifying this crate.
+/// Use [`Database::open_with_observer`] to inject a [`DatabaseObserver`]
+/// implementation — an out-of-tree policy layer, say — without modifying this
+/// crate.
 #[cfg(feature = "persistence")]
 pub struct Database {
     /// Path to the data directory
@@ -107,7 +108,8 @@ pub struct Database {
     collection_stats: parking_lot::RwLock<
         std::collections::HashMap<String, crate::collection::stats::CollectionStats>,
     >,
-    /// Optional lifecycle observer (used by velesdb-premium for RBAC, audit, multi-tenant).
+    /// Optional lifecycle observer (an out-of-tree policy layer implementing
+    /// [`DatabaseObserver`]: RBAC, audit, multi-tenant).
     observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
     /// Monotonic DDL schema version counter (CACHE-01).
     ///
@@ -172,7 +174,8 @@ impl Database {
         Self::open_impl(path, None, Some(config))
     }
 
-    /// Opens a database with a [`DatabaseObserver`] (used by velesdb-premium).
+    /// Opens a database with a [`DatabaseObserver`], the port an out-of-tree
+    /// policy layer implements.
     ///
     /// The observer receives lifecycle hooks for every collection operation,
     /// enabling RBAC, audit logging, multi-tenant routing, etc.

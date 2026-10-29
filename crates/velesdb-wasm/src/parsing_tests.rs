@@ -144,7 +144,9 @@ fn test_parse_search_quality_custom_case_insensitive() {
 fn test_parse_search_quality_custom_invalid() {
     let err = parse_search_quality_inner("custom:abc");
     assert!(err.is_err());
-    assert!(err.unwrap_err().contains("Invalid custom ef_search"));
+    assert!(err
+        .unwrap_err()
+        .contains("Unknown search mode 'custom:abc'"));
 }
 
 #[test]
@@ -161,21 +163,54 @@ fn test_parse_search_quality_adaptive_equal_bounds() {
 fn test_parse_search_quality_adaptive_inverted_range() {
     let err = parse_search_quality_inner("adaptive:512:32");
     assert!(err.is_err());
-    assert!(err.unwrap_err().contains("must be <= max_ef"));
+    assert!(err.unwrap_err().contains("(min_ef <= max_ef)"));
 }
 
 #[test]
 fn test_parse_search_quality_adaptive_missing_max() {
     let err = parse_search_quality_inner("adaptive:32");
     assert!(err.is_err());
-    assert!(err.unwrap_err().contains("Invalid adaptive format"));
+    assert!(err
+        .unwrap_err()
+        .contains("Unknown search mode 'adaptive:32'"));
 }
 
 #[test]
 fn test_parse_search_quality_unknown() {
     let err = parse_search_quality_inner("nonexistent");
     assert!(err.is_err());
-    assert!(err.unwrap_err().contains("Unknown search quality"));
+    let err = err.unwrap_err();
+    assert!(err.contains("Unknown search mode 'nonexistent'"), "{err}");
+    // The accepted forms are named in full, aliases included: the local
+    // grammar this replaced accepted `auto_tune` and `auto` but never said so.
+    assert!(err.contains("'auto_tune', 'auto'"), "{err}");
+}
+
+/// WASM reads the mode through core's parser, not a copy of its grammar: one
+/// table of accepted and refused forms gives the same decision and the same
+/// message on both, so a form core gains or drops reaches WASM with it.
+#[test]
+fn test_parse_search_quality_is_cores_grammar() {
+    for mode in [
+        "fast",
+        "AUTO_TUNE",
+        "custom:256",
+        "+256",
+        "custom:+256",
+        "adaptive:32:512",
+        "adaptive:512:32",
+        "adaptive:32",
+        "custom:-1",
+        "custom:99999999999999999999999",
+        " fast",
+        "",
+    ] {
+        assert_eq!(
+            parse_search_quality_inner(mode),
+            velesdb_core::api_types::parse_search_mode(mode).map(drop),
+            "{mode}"
+        );
+    }
 }
 
 /// Each ef is bounded as on every other surface (#2275): WASM applies no ef,

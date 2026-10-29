@@ -366,6 +366,11 @@ strategy = FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1)  # legacy kwa
 # Relative Score Fusion -- linear blend of dense and sparse scores
 strategy = FusionStrategy.relative_score(dense_weight=0.7, sparse_weight=0.3)
 strategy = FusionStrategy.rsf(dense_weight=0.7, sparse_weight=0.3)  # alias
+
+# By name -- the grammar the REST server, CLI, Tauri and WASM read (velesdb-core's)
+strategy = FusionStrategy.from_name("avg")                 # aliases, any case
+strategy = FusionStrategy.from_name("weighted")            # core defaults 0.6/0.3/0.1
+strategy = FusionStrategy.from_name("rsf", dense_weight=0.7)  # sparse_weight = 0.3
 ```
 
 | Strategy | Formula | Best For |
@@ -375,6 +380,7 @@ strategy = FusionStrategy.rsf(dense_weight=0.7, sparse_weight=0.3)  # alias
 | `maximum()` | max(scores) | When any single match is sufficient |
 | `weighted(a, m, h)` / `weighted(dict)` | a*avg + m*max + h*hit_ratio | Fine-grained scoring control |
 | `relative_score(d, s)` / `rsf(d, s)` | d*dense + s*sparse | Dense+sparse hybrid pipelines |
+| `from_name(name, **params)` | the named strategy | A strategy chosen by a config string; `ValueError` on an unknown name |
 
 ## Distance metrics
 

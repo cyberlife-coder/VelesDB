@@ -473,7 +473,6 @@ fn test_default_fusion_weights() {
 // E. mode_to_search_quality advanced modes (Custom, Adaptive)
 // ============================================================================
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_named_modes() {
     use super::mode_to_search_quality;
@@ -503,7 +502,6 @@ fn test_mode_to_search_quality_named_modes() {
     ));
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_custom() {
     use super::mode_to_search_quality;
@@ -511,7 +509,6 @@ fn test_mode_to_search_quality_custom() {
     assert!(matches!(q, Some(crate::SearchQuality::Custom(256))));
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_adaptive() {
     use super::mode_to_search_quality;
@@ -525,7 +522,6 @@ fn test_mode_to_search_quality_adaptive() {
     ));
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_invalid_custom() {
     use super::mode_to_search_quality;
@@ -533,7 +529,6 @@ fn test_mode_to_search_quality_invalid_custom() {
     assert!(mode_to_search_quality("custom:").is_none());
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_invalid_adaptive() {
     use super::mode_to_search_quality;
@@ -547,7 +542,6 @@ fn test_mode_to_search_quality_invalid_adaptive() {
 // bound the dedicated `ef_search` `WITH` option enforces (#2275): an ef
 // outside `[MIN_EF_SEARCH, MAX_EF_SEARCH]` must not silently pass through
 // this alternate spelling of the option.
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_custom_out_of_range_is_rejected() {
     use super::mode_to_search_quality;
@@ -556,7 +550,6 @@ fn test_mode_to_search_quality_custom_out_of_range_is_rejected() {
     assert!(mode_to_search_quality("custom:18446744073709551615").is_none());
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_custom_in_range_boundaries() {
     use super::mode_to_search_quality;
@@ -570,7 +563,6 @@ fn test_mode_to_search_quality_custom_in_range_boundaries() {
     ));
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_adaptive_out_of_range_is_rejected() {
     use super::mode_to_search_quality;
@@ -585,7 +577,6 @@ fn test_mode_to_search_quality_adaptive_out_of_range_is_rejected() {
     assert!(mode_to_search_quality("adaptive:32:18446744073709551615").is_none());
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_mode_to_search_quality_unknown() {
     use super::mode_to_search_quality;
@@ -597,7 +588,6 @@ fn test_mode_to_search_quality_unknown() {
 // E2. parse_search_mode: same parsing, but an unparseable mode is an Err (#2267)
 // ============================================================================
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_parse_search_mode_accepts_every_documented_form() {
     use super::parse_search_mode;
@@ -651,7 +641,6 @@ fn test_parse_search_mode_accepts_every_documented_form() {
     ));
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_parse_search_mode_rejects_unknown_mode() {
     use super::parse_search_mode;
@@ -660,7 +649,6 @@ fn test_parse_search_mode_rejects_unknown_mode() {
     assert!(err.contains("balanced"), "error should name valid values");
 }
 
-#[cfg(feature = "persistence")]
 #[test]
 fn test_parse_search_mode_rejects_bare_adaptive() {
     use super::parse_search_mode;
@@ -673,7 +661,6 @@ fn test_parse_search_mode_rejects_bare_adaptive() {
 /// `ef_search` range is not an unknown mode: the error names the value, as
 /// `ef_search`'s own does, instead of listing `custom:<ef>` among the valid
 /// forms the caller just used (#2275).
-#[cfg(feature = "persistence")]
 #[test]
 fn test_parse_search_mode_names_the_out_of_range_ef() {
     use super::{ef_search_out_of_range, parse_search_mode};
@@ -703,7 +690,6 @@ fn test_parse_search_mode_names_the_out_of_range_ef() {
 /// A malformed `adaptive:` mode stays an unknown one whatever its other
 /// bound holds, and so does an out-of-order one whose bounds are both in
 /// range (#2275).
-#[cfg(feature = "persistence")]
 #[test]
 fn test_parse_search_mode_malformed_adaptive_stays_unknown() {
     use super::parse_search_mode;

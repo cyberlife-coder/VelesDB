@@ -12,7 +12,7 @@
 //! so is desirable — it makes the compiler force this test to be updated
 //! whenever a new variant is added, documenting the full variant set.
 //!
-//! From an *external* crate (e.g. `velesdb-premium`), the same `match` would
+//! From an *external* crate (e.g. an out-of-tree observer), the same `match` would
 //! fail to compile without a trailing wildcard (`_ => ...`) arm, because the
 //! compiler cannot prove the match covers every future variant. That
 //! external-crate wildcard requirement is exactly the forward-compatibility
