@@ -38,6 +38,13 @@ fn test_classify_admin_flush() {
 }
 
 #[test]
+fn test_classify_select_edges_returns_rows() {
+    let query = velesdb_core::velesql::Parser::parse("SELECT EDGES FROM kg WHERE source = 1")
+        .expect("test: parse SELECT EDGES");
+    assert!(matches!(classify_query(&query), QueryResultKind::Rows));
+}
+
+#[test]
 fn test_classify_introspection() {
     let query = velesdb_core::velesql::Parser::parse("SHOW COLLECTIONS").expect("test: parse SHOW");
     assert!(matches!(classify_query(&query), QueryResultKind::Rows));

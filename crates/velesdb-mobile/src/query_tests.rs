@@ -282,12 +282,13 @@ fn test_execute_query_invalid_sql_returns_error() {
 
     assert!(result.is_err(), "invalid SQL should return an error");
     let err = result.expect_err("test: error expected");
+    // A parse failure is core's query error (VELES-010), as on wasm.
     match err {
-        VelesError::Database { message, .. } => {
-            assert!(
-                message.contains("parse error"),
-                "error should mention parse error, got: {message}"
-            );
+        VelesError::Database {
+            code, recoverable, ..
+        } => {
+            assert_eq!(code, "VELES-010");
+            assert!(recoverable);
         }
         other => panic!("expected VelesError::Database, got: {other:?}"),
     }
@@ -329,10 +330,60 @@ fn test_execute_query_vector_insert_missing_vector() {
         None,
     );
 
+    // The execution failure keeps core's code instead of a codeless
+    // `Database` error.
+    let Err(VelesError::Database { code, .. }) = result else {
+        panic!("INSERT without vector on vector collection should fail: {result:?}");
+    };
+    assert!(code.starts_with("VELES-"), "{code}");
+}
+
+#[test]
+fn test_execute_query_missing_collection_keeps_core_mapping() {
+    let tmp = TempDir::new().expect("test: temp dir");
+    let path = tmp.path().to_str().expect("test: path").to_string();
+    let db = VelesDatabase::open(path).expect("test: open db");
+
+    let err = db
+        .execute_query("SELECT * FROM ghost LIMIT 5".to_string(), None)
+        .expect_err("query on nonexistent collection should fail");
+
     assert!(
-        result.is_err(),
-        "INSERT without vector on vector collection should fail"
+        matches!(&err, VelesError::Collection { message } if message.contains("ghost")),
+        "{err:?}"
     );
+}
+
+#[test]
+fn test_execute_query_select_edges_reports_rows() {
+    let tmp = TempDir::new().expect("test: temp dir");
+    let path = tmp.path().to_str().expect("test: path").to_string();
+    let db = VelesDatabase::open(path).expect("test: open db");
+    db.execute_query(
+        "CREATE GRAPH COLLECTION kg (dimension = 4, metric = 'cosine') SCHEMALESS".to_string(),
+        None,
+    )
+    .expect("test: create graph collection");
+    for id in [1, 2] {
+        db.execute_query(
+            format!("INSERT NODE INTO kg (id = {id}, payload = '{{}}')"),
+            None,
+        )
+        .expect("test: insert node");
+    }
+    db.execute_query(
+        "INSERT EDGE INTO kg (source = 1, target = 2, label = 'KNOWS')".to_string(),
+        None,
+    )
+    .expect("test: insert edge");
+
+    let result = db
+        .execute_query("SELECT EDGES FROM kg WHERE source = 1".to_string(), None)
+        .expect("test: SELECT EDGES");
+
+    assert!(matches!(result.kind, QueryResultKind::Rows), "{result:?}");
+    assert_eq!(result.row_count, 1, "{result:?}");
+    assert_eq!(result.message, "1 row(s) returned");
 }
 
 // =========================================================================
@@ -363,6 +414,10 @@ fn test_train_pq_still_works_after_execute_query() {
         msg.contains("PQ training failed"),
         "expected mobile-wrapped training error, got: {msg}"
     );
+    let VelesError::Database { code, .. } = &err else {
+        panic!("expected VelesError::Database, got {err:?}");
+    };
+    assert!(code.starts_with("VELES-"), "core code kept, got: {err:?}");
 }
 
 // =========================================================================

@@ -233,6 +233,8 @@ pub use ast::{
     // WITH clause
     QuantizationMode,
     Query,
+    // Result shape of a statement (single source for the bindings)
+    QueryResultKind,
     SchemaDefinition,
     SelectColumns,
     SelectEdgesStatement,

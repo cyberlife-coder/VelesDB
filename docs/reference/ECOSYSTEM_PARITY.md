@@ -328,3 +328,20 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     - [CORE_COLLECTIONS_AND_METRICS.md](../guides/CORE_COLLECTIONS_AND_METRICS.md): `AnyCollection`'s shared operations and `is_*` / `as_*` / `into_*` access; [SEARCH_MODES.md](../guides/SEARCH_MODES.md): the `api_types` mode parser and ef bounds; [AGENT_MEMORY.md](../guides/AGENT_MEMORY.md): the `*_with_quality` searches, incoming and bounded relations, and relations on episodic and procedural memory; [CORE_API_MAP.md](../guides/CORE_API_MAP.md): the import paths of all of the above.
 
     Writing them down surfaced behaviour that is now documented as it is, and is a code follow-up rather than a doc one: `PUT /guardrails` / `update_guardrails` does not reach the rate limiter or the circuit breaker, nor collections opened afterwards; `deferred_indexing` and `async_index_builder` set by `apply_advanced_config` (and by `POST /collections`) take effect at the next open; several `/metrics` families are declared but never fed (`velesdb_documents_total`, `velesdb_index_size_bytes`, `velesdb_active_connections`, `velesdb_queries_by_type{type="graph"}`, `velesdb_limits_exceeded_total`, `velesdb_rate_limit_requests_total`, `velesdb_cache_collision_fallback_total`, `velesdb_traversal_*`, `velesdb_match_guardrail_hits_total`, `velesdb_match_similarity_queries_total`), and `velesdb_match_latency_seconds` has no `_sum` / `_count`; `IndexInfo::memory_bytes` is always `0`.
+12. ✅ **Done (2026-10-29). Bindings carry core's error taxonomy and result
+    kind instead of re-deriving them.** `tauri-plugin-velesdb` reports
+    core's `VELES-###` code and `Error::is_recoverable` for every condition core
+    codes, the ones the plugin detects itself included (`VELES-003`,
+    `VELES-004`, `VELES-009`, `VELES-010`, `VELES-012` replace `NOT_FOUND`,
+    `DIMENSION_MISMATCH`, `INVALID_CONFIG` and `SERIALIZATION_ERROR`;
+    `crates/tauri-plugin-velesdb/src/error.rs`), with `TASK_JOIN` the one
+    plugin-only code. `velesdb-mobile` maps a core error through core's code
+    and recoverability on `execute_query`, `query`, `train_pq` and the sparse
+    and multi-query leaves, which answered a codeless, always-recoverable
+    `Database` error (`VelesError::from_core`, `crates/velesdb-mobile/src/types.rs`).
+    The statement result kind is single-sourced in core as
+    `velesql::Query::result_kind`, which mobile and WASM both map from, so
+    mobile's `SELECT EDGES` is `Rows`, as WASM's was. `velesdb-server` was
+    checked and needed no change: its `VELES-004` and `VELES-027` literals
+    match core's taxonomy (`VELES-027` covers a timeout through
+    `GuardRailViolation::Timeout`).
