@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Python binding exposes three core contracts as module functions.**
+  `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
+  `u64` point id; `velesdb.metric_higher_is_better(metric)` is
+  `DistanceMetric::higher_is_better`, the order core sorts results by; and
+  `velesdb.validate_search_quality(mode)` runs core's `parse_search_mode`, the
+  parser `search_with_quality` uses, raising `ValueError` with its message. The
+  MIT integrations call them instead of carrying copies (below), so a change in
+  core reaches them with the next wheel.
+
 ### Changed
 
 - **BREAKING (behavior) — `velesdb-wasm` storage modes return core's results,
@@ -35,40 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `QuantizedVector::to_f32`, sign bits as 0/1), since its f32 values were never
   saved. An older build refuses a v3 blob with `Unsupported version: 3`.
 
-### Fixed
-
-- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
-  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
-  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
-  This includes a v2 quantized store filled through the old `insert_batch`,
-  which appended to the f32 buffer whatever the mode and left the codes short,
-  so its first search indexed out of bounds.
-
-### Added
-
-- **The Python binding exposes three core contracts as module functions.**
-  `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
-  `u64` point id; `velesdb.metric_higher_is_better(metric)` is
-  `DistanceMetric::higher_is_better`, the order core sorts results by; and
-  `velesdb.validate_search_quality(mode)` runs core's `parse_search_mode`, the
-  parser `search_with_quality` uses, raising `ValueError` with its message. The
-  MIT integrations call them instead of carrying copies (below), so a change in
-  core reaches them with the next wheel.
-
-### Fixed
-
-- **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
-  *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
-  among the distances and mapped its scores through `1 / (1 + s)`: the best
-  match got the lowest similarity, so `similarity_cutoff` and node
-  postprocessors dropped it first. The direction now comes from
-  `velesdb.metric_higher_is_better` through the new
-  `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
-  the binding by a drift test, for a wheel that predates the function. Euclidean
-  and Hamming keep their `1 / (1 + d)` mapping.
-
-### Changed
-
 - **`velesdb_common` calls the binding instead of re-implementing core.** Its
   FNV-1a copy and its search-quality grammar (preset set, `custom:`/`adaptive:`
   regexes, a mirrored 16–4096 ef range) are gone. `stable_hash_id(value,
@@ -88,6 +65,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a binding change. An unknown mode still raises `ValueError` naming
   `default_mode`, now worded `invalid search.default_mode: unknown variant
   ..., expected one of ...`.
+
+### Fixed
+
+- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
+  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
+  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
+  This includes a v2 quantized store filled through the old `insert_batch`,
+  which appended to the f32 buffer whatever the mode and left the codes short,
+  so its first search indexed out of bounds.
+
+- **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
+  *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
+  among the distances and mapped its scores through `1 / (1 + s)`: the best
+  match got the lowest similarity, so `similarity_cutoff` and node
+  postprocessors dropped it first. The direction now comes from
+  `velesdb.metric_higher_is_better` through the new
+  `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
+  the binding by a drift test, for a wheel that predates the function. Euclidean
+  and Hamming keep their `1 / (1 + d)` mapping.
 
 ### Documentation
 
