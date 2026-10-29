@@ -128,7 +128,9 @@ fn build_hnsw_params_override(
 /// has been registered. This two-step approach keeps the core
 /// `Database::create_vector_collection_*` API stable while still
 /// honouring the full PROP-CONFIG-ADVANCED field set on the REST
-/// surface.
+/// surface. All three take effect at once: the collection is new, so it
+/// runs no deferred indexer or async index builder that the second step
+/// would have to replace (`VectorCollection::pending_reopen` stays empty).
 #[allow(clippy::result_large_err)]
 fn create_vector_collection(
     state: &AppState,

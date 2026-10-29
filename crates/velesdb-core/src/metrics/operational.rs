@@ -34,11 +34,12 @@ pub struct OperationalMetrics {
     pub graph_queries: AtomicU64,
     /// Hybrid queries (vector + graph)
     pub hybrid_queries: AtomicU64,
-    /// Total documents across all collections
+    /// Points across all collections (set by `Database::refresh_storage_gauges`)
     pub documents_total: AtomicU64,
-    /// Total index size in bytes
+    /// Estimated heap bytes of the secondary, property and range indexes,
+    /// HNSW excluded (set by `Database::refresh_storage_gauges`)
     pub index_size_bytes: AtomicU64,
-    /// Active connections (for server)
+    /// Open client connections (fed by the server's connection accept paths)
     pub active_connections: AtomicU64,
 }
 
@@ -185,19 +186,19 @@ impl OperationalMetrics {
         Self::write_gauge(
             &mut output,
             "velesdb_documents_total",
-            "Total documents in database",
+            "Points across all collections",
             self.documents_total.load(Ordering::Relaxed),
         );
         Self::write_gauge(
             &mut output,
             "velesdb_index_size_bytes",
-            "Total index size in bytes",
+            "Estimated heap bytes of the secondary, property and range indexes (HNSW excluded)",
             self.index_size_bytes.load(Ordering::Relaxed),
         );
         Self::write_gauge(
             &mut output,
             "velesdb_active_connections",
-            "Current active connections",
+            "Open client connections",
             self.active_connections.load(Ordering::Relaxed),
         );
 

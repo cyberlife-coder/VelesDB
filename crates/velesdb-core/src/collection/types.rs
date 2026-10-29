@@ -26,6 +26,7 @@ use crate::point::Point;
 use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
+use arc_swap::ArcSwapOption;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -479,9 +480,17 @@ pub(crate) struct StreamingState {
     /// `None` when deferred indexing is not configured. When `Some`, inserts
     /// are buffered and batch-merged into the HNSW index at threshold.
     ///
+    /// Built from the config when the collection is assembled. A shared slot,
+    /// so that `apply_advanced_config` can install one into a collection
+    /// running none and every clone sees it (the registry's included); it
+    /// never replaces a live one — see [`PendingReopen`]. Read lock-free with
+    /// `load()` on the write and search paths.
+    ///
     /// Lock order position: **11** (after `delta_buffer` at 10).
+    ///
+    /// [`PendingReopen`]: crate::collection::streaming::PendingReopen
     #[cfg(feature = "persistence")]
-    pub(crate) deferred_indexer: Option<Arc<DeferredIndexer>>,
+    pub(crate) deferred_indexer: Arc<ArcSwapOption<DeferredIndexer>>,
 
     /// Async index builder for bulk insert V2 (Issue #488).
     ///
@@ -489,8 +498,10 @@ pub(crate) struct StreamingState {
     /// bulk import and flushes them to the HNSW index via
     /// `HnswIndex::insert_batch_parallel`.
     ///
+    /// Same slot contract as `deferred_indexer`.
+    ///
     /// Lock order position: **11** (same tier as `deferred_indexer`).
-    pub(crate) async_index_builder: Option<Arc<AsyncIndexBuilder>>,
+    pub(crate) async_index_builder: Arc<ArcSwapOption<AsyncIndexBuilder>>,
 
     /// Runtime-only auto-reindex manager (Wave 3 Commit 9).
     ///

@@ -394,11 +394,15 @@ fn diagnostics_to_response(
     )
 )]
 pub async fn get_guardrails(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let limits = state.query_limits.read();
-    Json(limits_to_response(&limits))
+    Json(limits_to_response(&state.db.guardrail_limits()))
 }
 
 /// Update guard-rails configuration (partial update).
+///
+/// Every named field reaches every collection: the per-query limits, the
+/// rate limiter and the circuit breaker of the collections already open, and
+/// the starting limits of every collection created or opened afterwards
+/// (`Database::update_guardrails_with`). Not persisted across a restart.
 #[utoipa::path(
     put,
     path = "/guardrails",
@@ -413,12 +417,11 @@ pub async fn update_guardrails(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GuardRailsConfigRequest>,
 ) -> impl IntoResponse {
-    let mut limits = state.query_limits.write();
-    apply_guardrails_update(&mut limits, &req);
-
-    // Propagate the updated limits to all active collections so that
-    // subsequent queries use the new thresholds (EPIC-048).
-    state.db.update_guardrails(&limits);
+    // The edit and its propagation are one step in core, so two concurrent
+    // partial updates of different fields both land (EPIC-048).
+    let limits = state
+        .db
+        .update_guardrails_with(|limits| apply_guardrails_update(limits, &req));
 
     Json(limits_to_response(&limits))
 }

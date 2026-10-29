@@ -524,6 +524,11 @@ impl Collection {
     ///         None), ``async_index_builder`` (dict with keys
     ///         ``merge_threshold``, ``segment_count``, or None).
     ///
+    /// ``pq_rescore_oversampling`` takes effect at once, and so does a
+    /// deferred indexer or an async index builder on a collection that runs
+    /// none. Changing or disabling one the collection already runs takes
+    /// effect at the next open: ``pending_reopen()`` names such settings.
+    ///
     /// Returns:
     ///     None
     #[pyo3(signature = (config))]
@@ -537,6 +542,20 @@ impl Collection {
                 .apply_advanced_config(pq, deferred, async_builder)
                 .map_err(core_err)
         })
+    }
+
+    /// Streaming settings persisted by ``apply_advanced_config`` that are not
+    /// in force yet and will be after the next open.
+    ///
+    /// Returns:
+    ///     list[str]: config field names (``"deferred_indexing"``,
+    ///     ``"async_index_builder"``); empty when every setting is live.
+    fn pending_reopen(&self) -> Vec<&'static str> {
+        self.inner
+            .pending_reopen()
+            .into_iter()
+            .map(velesdb_core::collection::streaming::PendingReopen::field_name)
+            .collect()
     }
 
     /// Get the current query guardrail limits for this collection.
@@ -617,7 +636,8 @@ impl Collection {
         self.inner.drop_secondary_index(field)
     }
 
-    /// Get total memory usage of all indexes in bytes.
+    /// Estimated heap bytes of every index ``list_indexes`` lists
+    /// (secondary, graph property and range); the HNSW graph is not counted.
     ///
     /// Returns:
     ///     int: Memory usage in bytes

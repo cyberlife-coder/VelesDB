@@ -182,6 +182,114 @@ mod tests {
         );
     }
 
+    /// Points carrying a `tag` payload field (secondary index) and a `:Doc`
+    /// node label with `year` (graph property / range indexes). `indexes`
+    /// runs before the upsert, so incrementally maintained indexes see it.
+    fn populated_collection(indexes: impl FnOnce(&Collection)) -> (Collection, TempDir) {
+        let (collection, temp) = create_test_collection();
+        indexes(&collection);
+        let points = (0u64..6).map(|i| {
+            let mut v = vec![0.0f32; 128];
+            v[0] = 1.0;
+            crate::point::Point::new(
+                i,
+                v,
+                Some(serde_json::json!({
+                    "tag": format!("t{}", i % 3),
+                    "_labels": ["Doc"],
+                    "year": 2000 + i,
+                })),
+            )
+        });
+        collection.upsert(points.collect::<Vec<_>>()).unwrap();
+        (collection, temp)
+    }
+
+    #[test]
+    fn test_list_indexes_labels_a_secondary_index_btree() {
+        let (collection, _temp) = populated_collection(|_| {});
+        collection.create_index("tag").unwrap();
+
+        let indexes = collection.list_indexes();
+        let secondary = indexes
+            .iter()
+            .find(|i| i.label == "secondary" && i.property == "tag")
+            .expect("the secondary index is listed");
+        assert_eq!(
+            secondary.index_type, "btree",
+            "a secondary index is a B-tree, not a hash index"
+        );
+        assert_eq!(secondary.cardinality, 3, "three distinct tags");
+    }
+
+    #[test]
+    fn test_list_indexes_reports_memory_of_every_kind() {
+        let (collection, _temp) = populated_collection(|c| {
+            c.create_property_index("Doc", "year").unwrap();
+            c.create_range_index("Doc", "year").unwrap();
+        });
+        collection.create_index("tag").unwrap();
+
+        let indexes = collection.list_indexes();
+        assert_eq!(indexes.len(), 3);
+        let listed: usize = indexes.iter().map(|i| i.memory_bytes).sum();
+        assert_eq!(
+            collection.indexes_memory_usage(),
+            listed
+                + std::mem::size_of::<crate::collection::graph::PropertyIndex>()
+                + std::mem::size_of::<crate::collection::graph::RangeIndex>(),
+            "the total is the listed entries plus the two containers"
+        );
+        for index in &indexes {
+            assert!(
+                index.memory_bytes > 0,
+                "{} {}.{} reports no memory",
+                index.index_type,
+                index.label,
+                index.property
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_indexes_reports_range_cardinality() {
+        let (collection, _temp) = create_test_collection();
+        collection.create_range_index("Doc", "year").unwrap();
+        // Filled through the index itself: what is under test is what
+        // list_indexes reads back from it, not how it is maintained.
+        let mut range = collection.graph.range_index.write();
+        for id in 0u64..6 {
+            assert!(range.insert("Doc", "year", &serde_json::json!(2000 + id), id));
+        }
+        drop(range);
+
+        let range = collection
+            .list_indexes()
+            .into_iter()
+            .find(|i| i.index_type == "range")
+            .expect("the range index is listed");
+        assert_eq!(range.cardinality, 6, "six distinct years");
+    }
+
+    #[test]
+    fn test_indexes_memory_usage_counts_secondary_indexes() {
+        let (collection, _temp) = populated_collection(|_| {});
+        let before = collection.indexes_memory_usage();
+
+        collection.create_index("tag").unwrap();
+
+        let secondary = collection
+            .list_indexes()
+            .into_iter()
+            .find(|i| i.label == "secondary")
+            .expect("the secondary index is listed");
+        assert_eq!(
+            collection.indexes_memory_usage(),
+            before + secondary.memory_bytes,
+            "the total is the sum of what list_indexes reports"
+        );
+    }
+
     // =========================================================================
     // Bitmap pre-filter tests
     // =========================================================================

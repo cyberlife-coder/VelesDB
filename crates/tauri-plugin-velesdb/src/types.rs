@@ -947,14 +947,15 @@ pub struct ListIndexesRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexInfoOutput {
-    /// Node label (or field name for secondary indexes).
+    /// Node label (`secondary` for a secondary payload index).
     pub label: String,
-    /// Property name.
+    /// Property name (the payload field for a secondary index).
     pub property: String,
-    /// Index type (hash, range, or secondary).
+    /// Index type: `hash` (graph property), `range` (graph range) or `btree`
+    /// (secondary payload index).
     pub index_type: String,
-    /// Number of unique values indexed.
+    /// Number of distinct values indexed.
     pub cardinality: usize,
-    /// Memory usage in bytes.
+    /// Estimated heap size of the index, in bytes.
     pub memory_bytes: usize,
 }

@@ -4,6 +4,26 @@ use super::match_metrics::*;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+/// A Prometheus histogram is `_bucket` lines plus `_sum` and `_count`;
+/// `rate(_sum) / rate(_count)` is how a dashboard reads a mean latency.
+#[test]
+fn test_latency_histogram_exports_sum_and_count() {
+    let metrics = MatchMetrics::new();
+    metrics.record_success(Duration::from_millis(250), 1, 1);
+    metrics.record_failure(Duration::from_millis(750));
+
+    let text = metrics.to_prometheus();
+    assert!(
+        text.contains("velesdb_match_latency_seconds_count 2\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("velesdb_match_latency_seconds_sum 1\n")
+            || text.contains("velesdb_match_latency_seconds_sum 1.0\n"),
+        "0.25 s + 0.75 s must sum to 1 s: {text}"
+    );
+}
+
 #[test]
 fn test_metrics_record_success() {
     let metrics = MatchMetrics::new();

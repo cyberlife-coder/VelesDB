@@ -149,6 +149,7 @@ fn run_match(
 
     let collection = resolve_match_collection(state, collection_name)
         .ok_or_else(|| Error::CollectionNotFound(collection_name.to_string()))?;
+    state.operational_metrics.record_graph_query();
 
     let match_clause = parse_match_clause(&request.query)?;
     validate_threshold(request.threshold)?;

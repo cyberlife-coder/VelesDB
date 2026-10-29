@@ -56,8 +56,10 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
-        let raw = self.dispatch_match_strategy(match_clause, params, ctx)?;
-        self.finalize_match_results(match_clause, raw, ctx, params)
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx);
+        count_guard_rail_stop(
+            raw.and_then(|raw| self.finalize_match_results(match_clause, raw, ctx, params)),
+        )
     }
 
     /// Public ordered-MATCH entry point: runs the full cost-based planner
@@ -116,8 +118,10 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
-        let raw = self.dispatch_match_strategy(match_clause, params, ctx)?;
-        self.finalize_match_ordering(match_clause, raw, ctx, params)
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx);
+        count_guard_rail_stop(
+            raw.and_then(|raw| self.finalize_match_ordering(match_clause, raw, ctx, params)),
+        )
     }
 
     /// Selects and runs the planner strategy, returning RAW (unordered,
@@ -133,6 +137,11 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         let start = std::time::Instant::now();
+        if crate::velesql::match_planner::MatchQueryPlanner::has_similarity_condition(
+            match_clause.where_clause.as_ref(),
+        ) {
+            global_match_metrics().record_similarity_query();
+        }
 
         // W6-A2: Cost-based strategy selection.
         let stats = self.compute_match_collection_stats();
@@ -364,6 +373,21 @@ impl Collection {
         }
         Ok(())
     }
+}
+
+/// Counts a MATCH stopped by a guard rail during execution — depth,
+/// cardinality, memory or timeout, raised by the strategy or by the final
+/// checks — in `velesdb_match_guardrail_hits_total`, and passes the result on.
+///
+/// Both MATCH funnels ([`Collection::dispatch_match_query`] and
+/// [`Collection::dispatch_match_ordered`]) end here, so each stop is counted
+/// once. A rate-limit or circuit-breaker refusal happens before a MATCH
+/// starts and is not one of these (see `velesdb_rate_limit_requests_total`).
+fn count_guard_rail_stop<T>(result: Result<T>) -> Result<T> {
+    if matches!(result, Err(crate::error::Error::GuardRail(_))) {
+        global_match_metrics().record_guard_rail_hit();
+    }
+    result
 }
 
 /// Computes the effective RETURN `LIMIT` for a MATCH query, clamped to the

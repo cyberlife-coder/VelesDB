@@ -114,8 +114,8 @@ impl Collection {
                 #[cfg(feature = "persistence")]
                 delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
                 #[cfg(feature = "persistence")]
-                deferred_indexer,
-                async_index_builder,
+                deferred_indexer: Arc::new(arc_swap::ArcSwapOption::new(deferred_indexer)),
+                async_index_builder: Arc::new(arc_swap::ArcSwapOption::new(async_index_builder)),
                 auto_reindex: Arc::new(RwLock::new(None)),
             },
             runtime: crate::collection::types::RuntimeGuards::default(),
@@ -177,7 +177,7 @@ impl Collection {
     /// Returns `Some(Arc<DeferredIndexer>)` when `deferred_indexing` is
     /// configured and enabled; `None` otherwise.
     #[cfg(feature = "persistence")]
-    fn build_deferred_indexer(
+    pub(super) fn build_deferred_indexer(
         config: &CollectionConfig,
     ) -> Option<Arc<crate::collection::streaming::DeferredIndexer>> {
         config
@@ -195,7 +195,7 @@ impl Collection {
     ///
     /// Returns `Some(Arc<AsyncIndexBuilder>)` when `async_index_builder` is
     /// configured; `None` otherwise.
-    fn build_async_index_builder(
+    pub(super) fn build_async_index_builder(
         config: &CollectionConfig,
     ) -> Option<Arc<crate::collection::streaming::AsyncIndexBuilder>> {
         config.async_index_builder.as_ref().map(|cfg| {

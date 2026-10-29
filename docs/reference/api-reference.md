@@ -1240,7 +1240,11 @@ in the Points section.
 
 ### GET /collections/:name/indexes
 
-List all property indexes on a collection.
+List every index on a collection: secondary payload indexes (`label`
+`secondary`, `index_type` `btree`), graph property indexes (`hash`) and graph
+range indexes (`range`). Each entry reports `cardinality`, the number of
+distinct values indexed, and `memory_bytes`, an estimate of its heap size
+(key bytes plus each value's serialized id bitmap).
 
 ### POST /collections/:name/indexes
 
@@ -1317,16 +1321,24 @@ per client, and a circuit breaker that opens after 5 consecutive failures for
 Partially update the guard-rails configuration. Accepts any subset of the
 fields above; returns the updated configuration.
 
-What an update reaches, exactly (`Database::update_guardrails`):
+What an update reaches (`Database::update_guardrails_with`, which applies the
+named fields and propagates the result in one step, so two concurrent partial
+updates both land):
 
 - `max_depth`, `max_cardinality`, `memory_limit_bytes` and `timeout_ms` apply
-  to the next query on every collection **open at the time of the call**.
-- `rate_limit_qps`, `circuit_failure_threshold` and
-  `circuit_recovery_seconds` are stored and returned, but a collection's rate
-  limiter and circuit breaker keep the values they were built with — the
-  defaults above.
-- A collection created or reopened after the call starts from the defaults,
-  and nothing is persisted: a restart returns to the defaults.
+  to the next query on every collection.
+- `rate_limit_qps` reconfigures every collection's rate limiter in place: the
+  next refill uses the new rate and caps the tokens a client has banked at
+  the new limit, so lowering it takes hold at once.
+- `circuit_failure_threshold` and `circuit_recovery_seconds` reconfigure every
+  circuit breaker in place: failures already counted count toward the new
+  threshold, and an open breaker measures its time open against the new
+  recovery time. Neither buckets nor breaker state are reset.
+- A collection created, or opened from disk, after the call starts from the
+  updated limits. Nothing is persisted: a restart returns to the defaults.
+
+`GET /guardrails` reads the limits in force from the database
+(`Database::guardrail_limits`).
 
 ---
 
@@ -1353,27 +1365,28 @@ The families, in the order they are written:
 | `velesdb_plan_cache_hits_total`, `velesdb_plan_cache_misses_total` | counter | — | VelesQL plan cache |
 | `velesdb_plan_cache_size` | gauge | — | cached plans (L1 + L2) |
 | `velesdb_plan_cache_hit_rate` | gauge | — | hits / (hits + misses) |
-| `velesdb_queries_total` | counter | `status` = `success` \| `error` \| `rate_limited` | REST search handlers |
-| `velesdb_queries_by_type` | counter | `type` = `vector` \| `graph` \| `hybrid` | REST search handlers (`graph` is never incremented today) |
-| `velesdb_documents_total`, `velesdb_index_size_bytes`, `velesdb_active_connections` | gauge | — | not fed by the server: always `0` |
-| `velesdb_limits_exceeded_total` | counter | `limit_type` = `timeout` \| `depth` \| `cardinality` \| `memory` | not fed yet: always `0` |
-| `velesdb_rate_limit_requests_total` | counter | `decision` = `allowed` \| `rejected` | not fed yet: always `0` (rate-limited requests are counted in `velesdb_queries_total{status="rate_limited"}`) |
+| `velesdb_queries_total` | counter | `status` = `success` \| `error` \| `rate_limited` | REST search handlers, and the graph queries `velesdb_queries_by_type{type="graph"}` counts |
+| `velesdb_queries_by_type` | counter | `type` = `vector` \| `graph` \| `hybrid` | REST search handlers; `graph` counts `/graph/traverse`, `/graph/traverse/parallel`, `/graph/traverse/stream` and `/match` |
+| `velesdb_documents_total` | gauge | — | points across every collection, read from the database at each scrape |
+| `velesdb_index_size_bytes` | gauge | — | estimated heap of every secondary, graph property and range index (`indexes_memory_usage` summed), read at each scrape; the HNSW graph and BM25 are not counted |
+| `velesdb_active_connections` | gauge | — | open client connections, HTTP and HTTPS, from accept to close |
+| `velesdb_limits_exceeded_total` | counter | `limit_type` = `timeout` \| `depth` \| `cardinality` \| `memory` | every guard-rail limit a query exceeds while running |
+| `velesdb_rate_limit_requests_total` | counter | `decision` = `allowed` \| `rejected` | every per-collection rate-limiter decision (REST search handlers, VelesQL, `MATCH`) |
 | `velesdb_like_guardrail_rejected_total` | counter | — | `LIKE`/`ILIKE` patterns refused by the guard-rail |
 | `velesdb_parser_depth_limit_rejected_total` | counter | — | VelesQL statements refused for nesting depth |
 | `velesdb_invalid_offset_read_errors_total` | counter | — | storage reads at an invalid offset |
-| `velesdb_cache_collision_fallback_total` | counter | — | not fed yet: always `0` |
+| `velesdb_cache_collision_fallback_total` | counter | — | VelesQL query-cache inserts a hash collision sent to an occupied bucket |
 | `velesdb_wal_replay_corrupt_entries_total` | counter | — | corrupt WAL entries skipped during replay |
-| `velesdb_traversal_nodes_visited_total`, `velesdb_traversal_edges_scanned_total` | counter | — | not fed by the server: always `0` — per-collection traversal figures are in `velesdb_graph_*` below |
-| `velesdb_traversal_max_depth` | gauge | — | not fed by the server: always `0` |
 | `velesdb_graph_edges_total` | gauge | `collection` | current edge count of each graph collection |
 | `velesdb_graph_edge_inserts_total`, `velesdb_graph_edge_deletes_total` | counter | `collection` | edge writes |
 | `velesdb_graph_traversals_total`, `velesdb_graph_traversal_nodes_visited_total` | counter | `collection` | BFS / DFS traversals: `/graph/traverse`, `/graph/traverse/stream`, the embedded `traverse_bfs` / `traverse_dfs` (`/graph/traverse/parallel` and `traverse_bfs_parallel` are not counted) |
 | `velesdb_graph_edge_insert_duration_seconds` | histogram | `collection`, `le` | batch edge inserts only (a single-edge insert is counted, not timed) |
 | `velesdb_graph_traversal_duration_seconds` | histogram | `collection`, `le` | BFS / DFS traversals |
 | `velesdb_match_queries_total`, `velesdb_match_queries_success_total`, `velesdb_match_queries_failed_total` | counter | — | every VelesQL `MATCH` query, process-wide |
-| `velesdb_match_latency_seconds` | histogram (buckets only) | `le` | `MATCH` latency, process-wide |
+| `velesdb_match_latency_seconds` | histogram | `le` | `MATCH` latency, process-wide |
 | `velesdb_match_results_total` | counter | — | rows returned by `MATCH` |
-| `velesdb_match_guardrail_hits_total`, `velesdb_match_similarity_queries_total` | counter | — | not fed yet: always `0` |
+| `velesdb_match_guardrail_hits_total` | counter | — | `MATCH` queries a guard rail stopped while running (depth, cardinality, memory, timeout) |
+| `velesdb_match_similarity_queries_total` | counter | — | `MATCH` queries with a `similarity()` condition |
 | `velesdb_query_duration_seconds` | histogram | `le` | REST search, batch search, `/query` and `/aggregate` duration |
 
 The `velesdb_graph_*` families are declared once and carry one sample per
@@ -1382,9 +1395,10 @@ while the database holds no graph collection, and vector or metadata
 collections never appear in them. Their histogram buckets are 1 ms, 5 ms,
 10 ms, 50 ms, 100 ms, 500 ms, 1 s, 5 s and 10 s. The `velesdb_match_*`
 families are not per collection: every `MATCH` records into one process-wide
-collector. `velesdb_match_latency_seconds` exposes its `_bucket` series
-(1 ms to 5 s) but no `_sum` or `_count`, so take rates from
-`velesdb_match_queries_total` rather than from a histogram count.
+collector. `velesdb_match_latency_seconds` buckets run from 1 ms to 5 s, with
+`_sum` (seconds) and `_count`. The process-wide `velesdb_traversal_*` families
+of earlier releases were never fed and are no longer written; per-collection
+traversal counts are the `velesdb_graph_traversal*` families above.
 `velesdb_query_duration_seconds` buckets are 1 ms, 5 ms, 10 ms, 50 ms, 100 ms,
 500 ms, 1 s and 5 s, with `_sum` and `_count`.
 

@@ -27,9 +27,10 @@ pub use resilience::{CircuitBreaker, RateLimiter};
 
 /// Global guard-rails manager (EPIC-048).
 ///
-/// Holds query limits behind a [`parking_lot::RwLock`] so that the REST
-/// `PUT /guardrails` endpoint can propagate updated limits to every active
-/// collection without replacing the `Arc<GuardRails>`.
+/// Holds query limits behind a [`parking_lot::RwLock`], and a rate limiter
+/// and circuit breaker that reconfigure in place, so that
+/// `Database::update_guardrails` (REST `PUT /guardrails`) can propagate
+/// updated limits to every collection without replacing the `Arc<GuardRails>`.
 #[derive(Debug)]
 pub struct GuardRails {
     /// Query limits (behind `RwLock` for runtime updates via REST API).
@@ -75,13 +76,21 @@ impl GuardRails {
         self.limits.read().clone()
     }
 
-    /// Updates query limits at runtime (called from `Database::update_guardrails`).
+    /// Updates every limit at runtime (called from `Database::update_guardrails`).
     ///
-    /// Only updates the limits snapshot. The `RateLimiter` and `CircuitBreaker`
-    /// are **not** reconstructed — their internal state (token buckets, failure
-    /// counts) is preserved. This is intentional: changing limits mid-flight
-    /// should not reset circuit breaker state or clear rate-limit buckets.
+    /// Replaces the per-query snapshot (depth, cardinality, memory, timeout)
+    /// read by the next [`create_context`](Self::create_context), and
+    /// reconfigures the rate limiter ([`RateLimiter::set_limit_qps`]) and the
+    /// circuit breaker ([`CircuitBreaker::reconfigure`]) in place. Neither is
+    /// rebuilt: token buckets and failure counts survive the update, so
+    /// changing a limit mid-flight neither clears a throttled client nor
+    /// closes a tripped breaker.
     pub fn update_limits(&self, new_limits: &QueryLimits) {
+        self.rate_limiter.set_limit_qps(new_limits.rate_limit_qps);
+        self.circuit_breaker.reconfigure(
+            new_limits.circuit_failure_threshold,
+            new_limits.circuit_recovery_seconds,
+        );
         *self.limits.write() = new_limits.clone();
     }
 

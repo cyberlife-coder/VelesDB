@@ -3254,6 +3254,7 @@
           "guardrails"
         ],
         "summary": "Update guard-rails configuration (partial update).",
+        "description": "Every named field reaches every collection: the per-query limits, the\nrate limiter and the circuit breaker of the collections already open, and\nthe starting limits of every collection created or opened afterwards\n(`Database::update_guardrails_with`). Not persisted across a restart.",
         "operationId": "update_guardrails",
         "requestBody": {
           "content": {

@@ -103,11 +103,11 @@ impl Database {
         schema: &crate::collection::GraphSchema,
     ) {
         // Parity item E: thread the live LimitsConfig caps into the collection.
-        self.push_runtime_limits(&coll.inner);
-
-        self.graph_colls
-            .write()
-            .insert(name.to_string(), coll.clone());
+        self.admit_collection(&coll.inner, || {
+            self.graph_colls
+                .write()
+                .insert(name.to_string(), coll.clone());
+        });
 
         if let Some(ref obs) = self.observer {
             let kind = CollectionType::Graph {
@@ -147,10 +147,11 @@ impl Database {
         cfg.graph_schema.as_ref()?;
         let coll = GraphCollection::open(self.data_dir.join(name)).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
-        self.push_runtime_limits(&coll.inner);
-        self.graph_colls
-            .write()
-            .insert(name.to_string(), coll.clone());
+        self.admit_collection(&coll.inner, || {
+            self.graph_colls
+                .write()
+                .insert(name.to_string(), coll.clone());
+        });
         Some(coll)
     }
 }

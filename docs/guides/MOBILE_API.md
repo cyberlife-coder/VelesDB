@@ -156,7 +156,8 @@ An empty `vectors` list on any multi-query method is an error
 | `getStats()` | Latest statistics snapshot (no recomputation) |
 | `diagnostics()` | `MobileCollectionDiagnostics`: readiness + index health |
 | `guardRails()` | The guardrail limits currently in force for this collection |
-| `applyAdvancedConfig(config)` | Post-creation overrides (`MobileAdvancedConfig`); `None` fields are left unchanged |
+| `applyAdvancedConfig(config)` | Post-creation overrides (`MobileAdvancedConfig`); `None` fields are left unchanged. A deferred indexer or async index builder the collection does not run yet takes effect at once; a change to one it runs takes effect at the next open |
+| `pendingReopen()` | Streaming settings persisted by `applyAdvancedConfig` but not in force until the next open (`"deferred_indexing"`, `"async_index_builder"`) |
 
 ### Indexes
 
@@ -292,7 +293,9 @@ read (dense / text / hybrid / sparse / multi-query search, VelesQL `SELECT` and
 
 Guardrails are the other half of the control plane: `updateGuardrails(limits)` sets
 `maxDepth`, `maxCardinality`, `memoryLimitBytes`, `timeoutMs` (0 disables),
-`rateLimitQps`, `circuitFailureThreshold`, and `circuitRecoverySeconds`.
+`rateLimitQps`, `circuitFailureThreshold`, and `circuitRecoverySeconds` on every
+collection — the rate limiter and circuit breaker included — and every collection
+opened afterwards starts from them. They are not persisted.
 
 ## Enums
 
@@ -438,4 +441,4 @@ not a measurement.
 
 ---
 
-Last updated: 2026-09-10 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0

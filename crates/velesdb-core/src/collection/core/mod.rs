@@ -6,6 +6,9 @@
 //! - Index management: `create_property_index`, `create_range_index`,
 //!   `list_indexes`, `drop_index`
 
+mod advanced_config;
+#[cfg(all(test, feature = "persistence"))]
+mod advanced_config_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod bm25_durability_tests;
 mod bulk_import;

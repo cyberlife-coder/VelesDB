@@ -419,7 +419,7 @@ impl Collection {
     pub(super) fn bulk_index_or_defer(&self, vector_refs: &[(u64, &[f32])]) -> usize {
         let count = vector_refs.len();
         #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.streaming.deferred_indexer {
+        if let Some(di) = self.streaming.deferred_indexer.load().as_ref() {
             // PERF3: the per-vector `to_vec()` copy is intrinsic to the
             // deferred contract — `vector_refs` borrows the caller's data and
             // does not outlive this call, while the deferred buffer must own

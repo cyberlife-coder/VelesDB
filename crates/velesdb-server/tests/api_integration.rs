@@ -4367,6 +4367,55 @@ async fn test_guardrails_circuit_breaker_503() {
 }
 
 // ============================================================================
+// GuardRails — PUT /guardrails reaches the rate limiter, including the one of
+// a collection created after the update
+// ============================================================================
+
+async fn send_json(app: &axum::Router, method: &str, uri: &str, body: Value) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn test_put_guardrails_rate_limit_reaches_later_collections() {
+    let temp_dir = TempDir::new().unwrap();
+    let (app, state) = create_test_app_with_state(&temp_dir);
+
+    let status = send_json(&app, "PUT", "/guardrails", json!({ "rate_limit_qps": 1 })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state.db.guardrail_limits().rate_limit_qps, 1);
+
+    // Created after the update: it must start from rate_limit_qps = 1.
+    let create = json!({ "name": "late_coll", "dimension": 4, "metric": "cosine" });
+    assert_eq!(
+        send_json(&app, "POST", "/collections", create).await,
+        StatusCode::CREATED
+    );
+
+    let search = json!({ "vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1 });
+    let uri = "/collections/late_coll/search";
+    assert_eq!(
+        send_json(&app, "POST", uri, search.clone()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send_json(&app, "POST", uri, search).await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the second query within one second must exceed the updated 1 qps"
+    );
+}
+
+// ============================================================================
 // Get point by ID
 // ============================================================================
 
@@ -5406,6 +5455,37 @@ async fn test_create_with_only_hnsw_alpha_uses_auto_defaults_for_rest() {
     assert!(
         hnsw_params["ef_construction"].as_u64().unwrap_or(0) > 0,
         "ef_construction must inherit auto default"
+    );
+}
+
+/// `deferred_indexing` and `async_index_builder` sent to `POST /collections`
+/// are in force on the created collection, not only written to its
+/// `config.json` for the next open.
+#[tokio::test]
+async fn test_create_with_streaming_settings_takes_effect_at_once() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+
+    let create = json!({
+        "name": "streaming_now",
+        "dimension": 4,
+        "metric": "cosine",
+        "deferred_indexing": { "enabled": true, "merge_threshold": 64 },
+        "async_index_builder": { "merge_threshold": 500 }
+    });
+    assert_eq!(
+        send_json(&app, "POST", "/collections", create).await,
+        StatusCode::CREATED
+    );
+
+    let coll = state.db.get_vector_collection("streaming_now").unwrap();
+    let config = coll.config();
+    assert!(config.async_index_builder.is_some() && config.deferred_indexing.is_some());
+    // Persisted and pending nothing: what an open would build is what runs.
+    assert!(
+        coll.pending_reopen().is_empty(),
+        "every streaming setting must be live, pending: {:?}",
+        coll.pending_reopen()
     );
 }
 

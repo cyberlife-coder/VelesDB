@@ -15,12 +15,13 @@ use velesdb_server::{
     auth::{auth_middleware, AuthState},
     batch_search, bulk_delete_points, collection_diagnostics, collection_sanity,
     compact_collection, create_collection, delete_collection, delete_point, enable_streaming,
-    explain, get_collection, get_collection_config, get_edges, get_node_degree, get_node_payload,
-    get_point, health_check, hybrid_search, list_collections, list_nodes, match_query,
-    multi_query_search, multi_query_search_ids, query, readiness_check, rebuild_index,
+    explain, get_collection, get_collection_config, get_edges, get_guardrails, get_node_degree,
+    get_node_payload, get_point, health_check, hybrid_search, list_collections, list_nodes,
+    match_query, multi_query_search, multi_query_search_ids, query, readiness_check, rebuild_index,
     relate_points, reorder_for_locality, scroll_points, search, search_ids, set_point_ttl,
-    stream_insert, stream_upsert_points, text_search, traverse_graph, upsert_node_payload,
-    upsert_points, upsert_points_raw, vacuum_collection, AppState, OnboardingMetrics,
+    stream_insert, stream_upsert_points, text_search, traverse_graph, update_guardrails,
+    upsert_node_payload, upsert_points, upsert_points_raw, vacuum_collection, AppState,
+    OnboardingMetrics,
 };
 
 fn base_routes() -> Router<Arc<AppState>> {
@@ -94,6 +95,7 @@ fn graph_and_maintenance_routes() -> Router<Arc<AppState>> {
             get(get_node_payload).put(upsert_node_payload),
         )
         .route("/collections/{name}/relations", post(relate_points))
+        .route("/guardrails", get(get_guardrails).put(update_guardrails))
         // Maintenance + bulk endpoints (PR #648)
         .route(
             "/collections/{name}/points/delete",
@@ -111,10 +113,8 @@ fn app_state_from_db(db: Database) -> Arc<AppState> {
     Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
-        query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
         ready: std::sync::atomic::AtomicBool::new(true),
         operational_metrics: velesdb_core::metrics::OperationalMetrics::new_arc(),
-        traversal_metrics: std::sync::Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
         query_duration_histogram: std::sync::Arc::new(
             velesdb_core::metrics::DurationHistogram::new(),
         ),

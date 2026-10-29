@@ -13,6 +13,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::limits::{GuardRailViolation, QueryLimits};
+use crate::metrics::{global_guardrails_metrics, LimitType};
+
+/// Counts a violation in `velesdb_limits_exceeded_total` and hands it back,
+/// so each check stays one expression.
+fn exceeded(limit: LimitType, violation: GuardRailViolation) -> GuardRailViolation {
+    global_guardrails_metrics().record_limit_exceeded(limit);
+    violation
+}
 
 /// Query execution context with guard-rail tracking (EPIC-048).
 #[derive(Debug)]
@@ -123,10 +131,13 @@ impl QueryContext {
         }
         let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
         if elapsed_ms >= self.limits.timeout_ms {
-            return Err(GuardRailViolation::Timeout {
-                max_ms: self.limits.timeout_ms,
-                elapsed_ms,
-            });
+            return Err(exceeded(
+                LimitType::Timeout,
+                GuardRailViolation::Timeout {
+                    max_ms: self.limits.timeout_ms,
+                    elapsed_ms,
+                },
+            ));
         }
         Ok(())
     }
@@ -141,10 +152,13 @@ impl QueryContext {
         self.current_depth
             .store(u64::from(depth), Ordering::Relaxed);
         if depth > self.limits.max_depth {
-            return Err(GuardRailViolation::DepthExceeded {
-                max: self.limits.max_depth,
-                actual: depth,
-            });
+            return Err(exceeded(
+                LimitType::Depth,
+                GuardRailViolation::DepthExceeded {
+                    max: self.limits.max_depth,
+                    actual: depth,
+                },
+            ));
         }
         Ok(())
     }
@@ -166,10 +180,13 @@ impl QueryContext {
     pub fn check_cardinality(&self, count: usize) -> Result<(), GuardRailViolation> {
         let current = self.current_cardinality.fetch_add(count, Ordering::Relaxed) + count;
         if current > self.limits.max_cardinality {
-            return Err(GuardRailViolation::CardinalityExceeded {
-                max: self.limits.max_cardinality,
-                actual: current,
-            });
+            return Err(exceeded(
+                LimitType::Cardinality,
+                GuardRailViolation::CardinalityExceeded {
+                    max: self.limits.max_cardinality,
+                    actual: current,
+                },
+            ));
         }
         Ok(())
     }
@@ -183,10 +200,13 @@ impl QueryContext {
     pub fn check_memory(&self, bytes: usize) -> Result<(), GuardRailViolation> {
         let current = self.memory_used.fetch_add(bytes, Ordering::Relaxed) + bytes;
         if current > self.limits.memory_limit_bytes {
-            return Err(GuardRailViolation::MemoryExceeded {
-                max_bytes: self.limits.memory_limit_bytes,
-                used_bytes: current,
-            });
+            return Err(exceeded(
+                LimitType::Memory,
+                GuardRailViolation::MemoryExceeded {
+                    max_bytes: self.limits.memory_limit_bytes,
+                    used_bytes: current,
+                },
+            ));
         }
         Ok(())
     }

@@ -269,6 +269,7 @@ pub async fn traverse_parallel(
     }
 
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
+    state.operational_metrics.record_graph_query();
 
     let limit = request.limit;
     let config = TraversalConfig::with_range(1, request.max_depth)

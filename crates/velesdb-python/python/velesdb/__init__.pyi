@@ -736,7 +736,23 @@ class Collection:
         ...
 
     def indexes_memory_usage(self) -> int:
-        """Get total memory usage of all indexes in bytes."""
+        """Estimated heap bytes of the secondary, property and range indexes
+        (every index ``list_indexes`` lists; the HNSW graph is not counted)."""
+        ...
+
+    def apply_advanced_config(self, config: Dict[str, Any]) -> None:
+        """Set ``pq_rescore_oversampling``, ``deferred_indexing`` and/or
+        ``async_index_builder`` and persist them (absent key = unchanged,
+        ``None`` = clear).
+
+        A setting the collection does not run yet takes effect at once; a
+        change to one it runs takes effect at the next open (see
+        ``pending_reopen``).
+        """
+        ...
+
+    def pending_reopen(self) -> List[str]:
+        """Streaming settings persisted but not in force until the next open."""
         ...
 
     def analyze(self) -> Dict[str, Any]:

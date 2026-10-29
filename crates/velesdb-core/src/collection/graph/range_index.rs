@@ -335,15 +335,45 @@ impl RangeIndex {
     /// Get memory usage estimate.
     #[must_use]
     pub fn memory_usage(&self) -> usize {
-        let mut total = std::mem::size_of::<Self>();
-        for ((label, prop), btree) in &self.indexes {
-            total += label.len() + prop.len();
-            for bitmap in btree.values() {
-                total += std::mem::size_of::<OrderedValue>();
-                total += bitmap.serialized_size();
-            }
-        }
-        total
+        std::mem::size_of::<Self>()
+            + self
+                .indexes
+                .iter()
+                .map(|((label, prop), btree)| Self::entry_memory(label, prop, btree))
+                .sum::<usize>()
+    }
+
+    /// Memory estimate in bytes of the range index on `(label, property)`, by
+    /// the formula [`Self::memory_usage`] sums; `None` when there is no such
+    /// index.
+    #[must_use]
+    pub fn index_memory_usage(&self, label: &str, property: &str) -> Option<usize> {
+        let key = make_label_prop_key(label, property);
+        self.indexes
+            .get(&key)
+            .map(|btree| Self::entry_memory(label, property, btree))
+    }
+
+    /// Number of distinct values in the range index on `(label, property)`;
+    /// `None` when there is no such index.
+    #[must_use]
+    pub fn cardinality(&self, label: &str, property: &str) -> Option<usize> {
+        self.indexes
+            .get(&make_label_prop_key(label, property))
+            .map(BTreeMap::len)
+    }
+
+    fn entry_memory(
+        label: &str,
+        prop: &str,
+        btree: &BTreeMap<OrderedValue, RoaringBitmap>,
+    ) -> usize {
+        label.len()
+            + prop.len()
+            + btree
+                .values()
+                .map(|bitmap| std::mem::size_of::<OrderedValue>() + bitmap.serialized_size())
+                .sum::<usize>()
     }
 
     /// Get all indexed (label, property) pairs.

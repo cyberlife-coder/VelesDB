@@ -131,6 +131,16 @@ impl VectorCollection {
     /// clippy allow is applied because the three-state semantics are
     /// the intended contract here.
     ///
+    /// `pq_rescore_oversampling` takes effect at once, and so does a
+    /// deferred indexer or an async index builder on a collection that runs
+    /// none — which covers enabling either right after creation. Changing
+    /// or disabling one the collection already runs is persisted and takes
+    /// effect at the next open; [`Self::pending_reopen`] lists such settings
+    /// until then (see [`PendingReopen`] for why a live one is never
+    /// swapped).
+    ///
+    /// [`PendingReopen`]: crate::collection::streaming::PendingReopen
+    ///
     /// # Errors
     ///
     /// Returns an error if the updated config cannot be written to disk.
@@ -149,6 +159,14 @@ impl VectorCollection {
             deferred_indexing,
             async_index_builder,
         )
+    }
+
+    /// Lists the streaming settings persisted by
+    /// [`Self::apply_advanced_config`] that are not in force yet and will be
+    /// after the next open. Empty when every setting is live.
+    #[must_use]
+    pub fn pending_reopen(&self) -> Vec<crate::collection::streaming::PendingReopen> {
+        self.inner.pending_reopen()
     }
 
     /// Returns CBO statistics.
@@ -218,7 +236,9 @@ impl VectorCollection {
         self.inner.list_indexes()
     }
 
-    /// Returns total memory usage of all indexes in bytes.
+    /// Estimated heap bytes of every index [`Self::list_indexes`] lists
+    /// (secondary, graph property and range); the HNSW graph and the BM25
+    /// index are not counted.
     #[must_use]
     pub fn indexes_memory_usage(&self) -> usize {
         self.inner.indexes_memory_usage()

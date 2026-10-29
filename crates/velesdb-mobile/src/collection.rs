@@ -588,6 +588,10 @@ impl VelesCollection {
     /// (`pq_rescore_oversampling`, `deferred_indexing`,
     /// `async_index_builder`) and persists the updated config. Each `Some`
     /// field is applied; each `None` field is left unchanged.
+    ///
+    /// A setting the collection does not run yet takes effect at once; a
+    /// change to a deferred indexer or an async index builder it already
+    /// runs takes effect at the next open, and `pending_reopen` names it.
     pub fn apply_advanced_config(&self, config: MobileAdvancedConfig) -> Result<(), VelesError> {
         self.inner.apply_advanced_config(
             config.pq_rescore_oversampling.map(Some),
@@ -595,6 +599,17 @@ impl VelesCollection {
             config.async_index_builder.map(|c| Some(c.into())),
         )?;
         Ok(())
+    }
+
+    /// Streaming settings persisted by `apply_advanced_config` that are not in
+    /// force yet and will be after the next open, by config field name
+    /// (`deferred_indexing`, `async_index_builder`). Empty when all are live.
+    pub fn pending_reopen(&self) -> Vec<String> {
+        self.inner
+            .pending_reopen()
+            .into_iter()
+            .map(|setting| setting.field_name().to_string())
+            .collect()
     }
 
     /// Returns all point IDs currently present in the collection.
@@ -649,7 +664,8 @@ impl VelesCollection {
         Ok(self.inner.drop_index(&label, &property)?)
     }
 
-    /// Returns total memory usage used by indexes.
+    /// Estimated heap bytes of every index `list_indexes` lists (secondary,
+    /// graph property and range); the HNSW graph is not counted.
     pub fn indexes_memory_usage(&self) -> u64 {
         u64::try_from(self.inner.indexes_memory_usage()).unwrap_or(u64::MAX)
     }

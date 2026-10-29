@@ -1,6 +1,6 @@
 # Tauri plugin — recipes
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0*
+*Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0*
 
 Copy-pasteable snippets for [`tauri-plugin-velesdb`](../../crates/tauri-plugin-velesdb/README.md),
 beyond the 60-second first success in the crate README. Command names, payload
@@ -234,7 +234,7 @@ await invoke('plugin:velesdb|create_index', {
 const indexes = await invoke('plugin:velesdb|list_indexes', {
   request: { collection: 'documents' }
 });
-// [{ label: "secondary", property: "category", indexType: "hash", cardinality: 42, memoryBytes: 1024 }]
+// [{ label: "secondary", property: "category", indexType: "btree", cardinality: 42, memoryBytes: 1024 }]
 
 const dropped = await invoke('plugin:velesdb|drop_index', {
   request: { collection: 'documents', fieldName: 'category' }

@@ -61,6 +61,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine, beside `window_evaluator`, so the WASM executor dedups through the
   same key as core.
 
+- **Guard-rails have one live source in core.** `Database::guardrail_limits()`
+  returns the limits in force, and `Database::update_guardrails_with(|limits|
+  ...)` edits them in place and propagates the result as one step, so two
+  concurrent partial updates both land. `RateLimiter::set_limit_qps` and
+  `CircuitBreaker::reconfigure` change a limiter or a breaker in place, keeping
+  its buckets and its state. `velesdb_core::metrics::LimitType`, the argument
+  of `GuardRailsMetrics::record_limit_exceeded`, is now exported.
+- **`VectorCollection::pending_reopen` names the streaming settings not in
+  force yet.** It returns the `PendingReopen` settings (`DeferredIndexing`,
+  `AsyncIndexBuilder`, with `field_name()`) whose persisted value differs from
+  the component the collection runs, and that the next open will apply. Python
+  `Collection.pending_reopen()` and Mobile `pending_reopen()` return the field
+  names.
+- **`Database::refresh_storage_gauges(&OperationalMetrics)`** sets
+  `velesdb_documents_total` (points across every collection) and
+  `velesdb_index_size_bytes` (the summed `indexes_memory_usage`) from the live
+  database; `/metrics` calls it before every export.
+
 ### Changed
 
 - **BREAKING (behavior) — the `velesdb-wasm` VelesQL executor validates queries
@@ -187,6 +205,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
+  *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
+  among the distances and mapped its scores through `1 / (1 + s)`: the best
+  match got the lowest similarity, so `similarity_cutoff` and node
+  postprocessors dropped it first. The direction now comes from
+  `velesdb.metric_higher_is_better` through the new
+  `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
+  the binding by a drift test, for a wheel that predates the function. Euclidean
+  and Hamming keep their `1 / (1 + d)` mapping.
+
+- **`PUT /guardrails` and `Database::update_guardrails` reach every limit they
+  set.** `rate_limit_qps`, `circuit_failure_threshold` and
+  `circuit_recovery_seconds` were returned but never applied: each collection's
+  rate limiter and circuit breaker kept the values they were built with. And a
+  collection created, loaded or opened after the update started from the
+  defaults. Every registration path now pushes the live limits, under a lock
+  that keeps a concurrent update from missing a collection being registered.
+  Python, Mobile and Tauri call the same core method and get the same reach.
+- **`apply_advanced_config` takes effect, or says when it will.** The deferred
+  indexer and the async index builder were built only when a collection was
+  opened, so setting either on an open collection, as `POST /collections`
+  does right after creating one, only rewrote `config.json`. One is now
+  installed at once into a collection that runs none, shared by every handle
+  on it; a change to one already running is persisted for the next open and
+  reported by `pending_reopen` (a write uses the component with no lock
+  spanning its use, so swapping it live could strand what a writer had pushed).
+- **Every `/metrics` family is fed.** `velesdb_limits_exceeded_total` now counts
+  every limit a query context refuses, `velesdb_rate_limit_requests_total`
+  every rate-limiter decision, `velesdb_cache_collision_fallback_total` every
+  VelesQL query-cache insert a hash collision sends to an occupied bucket,
+  `velesdb_match_guardrail_hits_total` the `MATCH` queries a guard rail stops
+  while running, and `velesdb_match_similarity_queries_total` the `MATCH`
+  queries with a `similarity()` condition. `velesdb_match_latency_seconds`
+  gains `_sum` and `_count`. The server counts open connections in
+  `velesdb_active_connections` on the HTTP and HTTPS paths, and
+  `velesdb_queries_by_type{type="graph"}` (and `velesdb_queries_total`) on
+  `/graph/traverse`, `/graph/traverse/parallel`, `/graph/traverse/stream` and
+  `/match`. All of them read `0` forever before.
+- **`list_indexes` reports what each index is and holds.** `memory_bytes` was
+  `0` for every index; it is now each index's heap estimate (key bytes plus each
+  value's serialized id bitmap). A secondary payload index was labelled
+  `"hash"`; it is a B-tree and is labelled `"btree"`. A range index reported a
+  `cardinality` of `0`; it reports its distinct values. `indexes_memory_usage`
+  left secondary indexes out; it now sums every index `list_indexes` lists.
+
 - **`velesdb-wasm` ranks a `similarity()` threshold like core.** `WHERE
   similarity(vector, $q) > t` without `NEAR` returned the passing rows in
   insertion order with score 0.0, so `ORDER BY similarity()` had nothing to sort
@@ -210,16 +273,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which appended to the f32 buffer whatever the mode and left the codes short,
   so its first search indexed out of bounds.
 
-- **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
-  *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
-  among the distances and mapped its scores through `1 / (1 + s)`: the best
-  match got the lowest similarity, so `similarity_cutoff` and node
-  postprocessors dropped it first. The direction now comes from
-  `velesdb.metric_higher_is_better` through the new
-  `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
-  the binding by a drift test, for a wheel that predates the function. Euclidean
-  and Hamming keep their `1 / (1 + d)` mapping.
-
 - **Mobile: a core error keeps its code and recoverability on every VelesQL,
   training and sparse or multi-query call.** `executeQuery`, `query`,
   `trainPq`, `sparseSearch`, `hybridSparseSearch` and the three
@@ -233,6 +286,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mobile: `SELECT EDGES` reports kind `Rows`, not `Mutation`.**
   `executeQuery` answered `"N row(s) affected"` for a read; it now answers
   `"N row(s) returned"`, as WASM always did.
+
+- **`/metrics` no longer writes `velesdb_traversal_nodes_visited_total`,
+  `velesdb_traversal_edges_scanned_total` and `velesdb_traversal_max_depth`.**
+  The server declared them process-wide and never fed them; the per-collection
+  `velesdb_graph_traversals_total` and `velesdb_graph_traversal_nodes_visited_total`
+  core already feeds are the traversal figures. The bundled Grafana dashboard
+  reads those instead and drops its max-depth panel. `velesdb-server`'s
+  `AppState` loses its `traversal_metrics` and `query_limits` fields; the
+  limits live in the `Database`. The HELP texts of `velesdb_documents_total`,
+  `velesdb_index_size_bytes` and `velesdb_active_connections` now say what
+  each gauge counts.
+- **A secondary index's `index_type` is `"btree"`** in `list_indexes`, REST
+  `GET /collections/{name}/indexes`, the CLI, Python, Mobile and Tauri, which all
+  relay it. A consumer that matched `"hash"` to find payload indexes should
+  match `label == "secondary"` or `"btree"`.
 
 ### Documentation
 
@@ -252,17 +320,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parser are documented where those topics already live. Every snippet was
   compiled and run against this tree.
 - **`/metrics` is documented family by family**, the `velesdb_graph_*` (per
-  graph collection) and `velesdb_match_*` (process-wide) series included, and
-  says which declared families the server never feeds, so they read `0`.
+  graph collection) and `velesdb_match_*` (process-wide) series included, each
+  with what feeds it (every family is fed — see Fixed).
 - **The REST reference no longer misstates `/search` and `/guardrails`.** The
   `/search` table gains `mode`, `ef_search`, `timeout_ms` and the sparse and
   fusion fields `openapi.yaml` already listed, and `/search/batch` says its
   entries' `mode` and `ef_search` are validated but not applied. The
   `GET /guardrails` example showed a 1 GiB memory limit and 100 queries per
   second; the defaults are 100 MiB and 100 000. `PUT /guardrails` now says what
-  it reaches: the depth, cardinality, memory and timeout limits of the
-  collections open at the time, not the rate limiter, the circuit breaker, or a
-  collection opened afterwards.
+  it reaches: every limit, on every collection, including those opened after
+  the update (see Fixed).
 
 ## [7.1.0] - 2026-10-28
 

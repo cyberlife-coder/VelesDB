@@ -60,7 +60,7 @@ impl Database {
     /// disk-open paths so all three thread the same runtime limits into the
     /// `Collection`. The limits are **not** persisted to `config.json`: they
     /// are re-pushed on every open from the live `VelesConfig`.
-    pub(super) fn push_runtime_limits(&self, coll: &crate::collection::Collection) {
+    fn push_runtime_limits(&self, coll: &crate::collection::Collection) {
         coll.set_runtime_limits(crate::collection::RuntimeLimits::from_config(
             &self.config.limits,
         ));
@@ -68,6 +68,26 @@ impl Database {
         // `Database` is the only component holding a `VelesConfig`, pushed on
         // every open, never persisted (#2087).
         coll.set_runtime_search_quality(self.config.search.resolved_quality());
+    }
+
+    /// Admits a collection into a typed registry: pushes the live runtime
+    /// limits and guard-rails into it, then runs `insert`.
+    ///
+    /// The single path every create, startup-load and disk-open registration
+    /// goes through, so no collection reaches a registry without the limits
+    /// of [`Database::update_guardrails`]. `insert` runs under the
+    /// `guardrail_limits` read lock — see that field for why the lock spans
+    /// the insert.
+    pub(super) fn admit_collection(
+        &self,
+        coll: &crate::collection::Collection,
+        insert: impl FnOnce(),
+    ) {
+        self.push_runtime_limits(coll);
+        let limits = self.guardrail_limits.read();
+        coll.guard_rails().update_limits(&limits);
+        insert();
+        drop(limits);
     }
 
     /// Checks whether a collection name exists in any of the typed registries.
@@ -269,6 +289,39 @@ impl Database {
         rendered
     }
 
+    /// Sets the two storage gauges of `metrics` from the live registries, so
+    /// a scrape reads the database as it is (EPIC-050):
+    ///
+    /// - `velesdb_documents_total` — points across every vector, graph and
+    ///   metadata collection;
+    /// - `velesdb_index_size_bytes` — the summed `indexes_memory_usage()` of
+    ///   every collection (see
+    ///   [`VectorCollection::indexes_memory_usage`](crate::VectorCollection::indexes_memory_usage)):
+    ///   the estimated heap of its secondary, property and range indexes. The
+    ///   HNSW graph and the BM25 index carry no size accounting and are not
+    ///   counted.
+    ///
+    /// Gauges rather than counters, recomputed per call: `/metrics` calls
+    /// this before every export.
+    pub fn refresh_storage_gauges(&self, metrics: &crate::metrics::OperationalMetrics) {
+        let mut points = 0usize;
+        let mut index_bytes = 0usize;
+        for coll in self.vector_colls.read().values() {
+            points += coll.inner.len();
+            index_bytes += coll.inner.indexes_memory_usage();
+        }
+        for coll in self.graph_colls.read().values() {
+            points += coll.inner.len();
+            index_bytes += coll.inner.indexes_memory_usage();
+        }
+        for coll in self.metadata_colls.read().values() {
+            points += coll.inner.len();
+            index_bytes += coll.inner.indexes_memory_usage();
+        }
+        metrics.set_documents(u64::try_from(points).unwrap_or(u64::MAX));
+        metrics.set_index_size(u64::try_from(index_bytes).unwrap_or(u64::MAX));
+    }
+
     /// Renders the process-wide MATCH query metrics as a Prometheus
     /// exposition (EPIC-050 US-002).
     ///
@@ -391,17 +444,51 @@ impl Database {
         serde_json::from_str(&data).ok()
     }
 
-    /// Propagates updated query limits to all active collections.
+    /// Returns the live query guard-rails: the last value
+    /// [`Self::update_guardrails`] applied, or `QueryLimits::default()`.
+    #[must_use]
+    pub fn guardrail_limits(&self) -> crate::guardrails::QueryLimits {
+        self.guardrail_limits.read().clone()
+    }
+
+    /// Replaces the query guard-rails of the whole database (full replacement).
+    ///
+    /// Every field reaches every collection — the registered ones now, and
+    /// every one created or opened afterwards, which starts from this value:
+    /// the per-query snapshot (`max_depth`, `max_cardinality`,
+    /// `memory_limit_bytes`, `timeout_ms`), the rate limiter
+    /// (`rate_limit_qps`) and the circuit breaker
+    /// (`circuit_failure_threshold`, `circuit_recovery_seconds`). Token
+    /// buckets and breaker state survive the update (see
+    /// [`GuardRails::update_limits`](crate::guardrails::GuardRails::update_limits)).
+    /// Not persisted: a reopened database starts from the defaults.
     pub fn update_guardrails(&self, limits: &crate::guardrails::QueryLimits) {
+        self.update_guardrails_with(|live| live.clone_from(limits));
+    }
+
+    /// Edits the live query guard-rails in place and propagates the result
+    /// as one atomic step; returns the limits now in force.
+    ///
+    /// The partial-update form of [`Self::update_guardrails`] (`PUT
+    /// /guardrails` changes only the fields its body names): two concurrent
+    /// edits of different fields both land, where a read-then-replace pair
+    /// would lose one.
+    pub fn update_guardrails_with(
+        &self,
+        edit: impl FnOnce(&mut crate::guardrails::QueryLimits),
+    ) -> crate::guardrails::QueryLimits {
+        let mut live = self.guardrail_limits.write();
+        edit(&mut live);
         for vc in self.vector_colls.read().values() {
-            vc.guard_rails().update_limits(limits);
+            vc.guard_rails().update_limits(&live);
         }
         for gc in self.graph_colls.read().values() {
-            gc.inner.guard_rails().update_limits(limits);
+            gc.inner.guard_rails().update_limits(&live);
         }
         for mc in self.metadata_colls.read().values() {
-            mc.inner.guard_rails().update_limits(limits);
+            mc.inner.guard_rails().update_limits(&live);
         }
+        live.clone()
     }
 
     /// Returns diagnostics for a named collection.

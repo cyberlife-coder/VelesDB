@@ -583,6 +583,9 @@ fn test_collection_apply_advanced_config() {
     })
     .unwrap();
 
+    // Both streaming components were installed live (none ran before).
+    assert!(col.pending_reopen().is_empty());
+
     let cfg2 = col.inner.config();
     assert_eq!(cfg2.pq_rescore_oversampling, Some(8));
     assert!(cfg2

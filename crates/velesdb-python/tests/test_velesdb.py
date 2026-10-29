@@ -280,6 +280,12 @@ class TestCollection:
         ) is None
         assert collection.apply_advanced_config({}) is None
 
+        # The builder was installed live (none ran before); changing it now
+        # waits for the next open, and pending_reopen says so.
+        assert collection.pending_reopen() == []
+        collection.apply_advanced_config({"async_index_builder": {"merge_threshold": 7}})
+        assert collection.pending_reopen() == ["async_index_builder"]
+
         # Verify the collection is still functional after the clear/no-op calls.
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
         assert collection.count() == 1
