@@ -218,11 +218,16 @@ pub(crate) fn import_snapshot(graph: &GraphCollection, path: &str) -> Result<(),
         .map(|node| node_payload(&node).map(|payload| (node, payload)))
         .collect::<Result<Vec<_>, _>>()?;
     write_nodes(graph, nodes)?;
+    write_edges(graph, edges)
+}
+
+/// Adds the snapshot's edges in one batch, refusing a short count: core
+/// skips an edge whose ID is taken, which here means a concurrent writer
+/// took it after `check_edges`, so the import is reported, not claimed.
+fn write_edges(graph: &GraphCollection, edges: Vec<GraphEdge>) -> Result<(), VelesError> {
     let expected = edges.len();
     let added = graph.add_edges_batch(edges)?;
     if added < expected {
-        // Core skips an edge whose ID is taken: one written by a concurrent
-        // caller after `check_edges`. Report it rather than claim the import.
         return Err(VelesError::database(format!(
             "{} of {expected} snapshot edges were not imported: their IDs were \
              taken during the import",
