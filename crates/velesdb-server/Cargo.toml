@@ -37,7 +37,6 @@ tower-http = { workspace = true }
 futures = "0.3"
 clap = { version = "4.6", features = ["derive", "env"] }
 toml = { workspace = true }
-parking_lot = "0.12.3"
 
 # Rate limiting
 tower_governor = "0.8"

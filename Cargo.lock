@@ -7082,7 +7082,6 @@ dependencies = [
  "governor",
  "hyper",
  "hyper-util",
- "parking_lot",
  "reqwest",
  "rustls",
  "rustls-pemfile",
