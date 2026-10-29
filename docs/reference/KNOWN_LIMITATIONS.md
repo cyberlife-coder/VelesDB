@@ -410,9 +410,6 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
   `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
   run on all three executors.
-- `cases` X015–X016: `vector NEAR` under `OR`, alone and inside an `AND`. The
-  NEAR leaf is TRUE in a boolean context and its ranking orders the rows, on
-  all three executors.
 - `join_cases` J001–J005: `JOIN ... ON` (both condition-side orders on both
   engines — J005 locks the joined-table-first order, issue #1555) and
   `JOIN ... USING (col)`.
@@ -426,6 +423,32 @@ scalar-expression ones below, which use the same single-collection dataset):
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
   (see D004 below).
+
+**Fixture v2.1.0 (2026-10-29)** adds the statement families the WASM executor
+implements on its own modules (`velesql_similarity`, `velesql_fused`,
+`velesql_update`, `velesql_delete`, DISTINCT), again checked against **core and
+WASM**, plus more scalar cases the CLI runs too:
+
+- `cases` X015–X020: `LIKE` (`%` and `_`), `ILIKE`, and `OFFSET` with and
+  without `LIMIT`, including an offset past the end.
+- `cases` X021–X022: `vector NEAR` under `OR`, alone and inside an `AND`. The
+  NEAR leaf is TRUE in a boolean context and its ranking orders the rows, on
+  all three executors.
+- `near_cases` N001–N012: `NEAR` ranking with `LIMIT`/`OFFSET`, hybrid
+  `NEAR` + metadata, `ORDER BY similarity()` or a column over `NEAR` hits, and
+  `similarity()` thresholds with and without `NEAR`. Each case also asserts the
+  rows' scores (`expect_scores`, within 1e-5); the vectors are bound from the
+  fixture's `query_params` and chosen so no two points tie.
+- `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
+  explicit `k`), `average` and `maximum` strategies, with a metadata filter,
+  and with a trailing `USING FUSION` clause; ids and fused scores.
+- `rejected_cases` R001–R004: queries both engines must refuse — `NEAR_FUSED`
+  with `weighted`/`rsf`, and `USING FUSION` over a single `NEAR`.
+- `dml_cases` W001–W008: `UPDATE` / `DELETE` statements run on a fresh copy of
+  the dataset, then a SELECT (or a `NEAR`) is asserted.
+- `projection_cases` P001–P005: `SELECT DISTINCT` with `ORDER BY`, `LIMIT`, a
+  filter and `NEAR`, and a named-column projection, compared as projected rows
+  (core's `project_results` on core, the row JSON on WASM).
 
 `documented_divergences` (informational entries in the same JSON file, not
 pass/fail cases) record real, currently-existing core↔WASM behavioural gaps
@@ -462,6 +485,23 @@ silently relied upon:
   cap — a LIMIT-less `GROUP BY` still returns every group). Locked by
   `aggregate_cases` G005 above and
   `crates/velesdb-core/tests/velesql_group_by_limit.rs`.
+- **D007** — `DELETE` on core accepts only `id = N` / `id IN (...)`; WASM
+  evaluates any `WHERE`. WASM is a superset, so the fixture's `dml_cases`
+  delete by id.
+- **D008** — `UPDATE ... SET vector = ...` works on core; WASM refuses it and
+  points to `UPSERT`. The fixture's `dml_cases` assign payload fields only.
+- **D009** — a row no vector ranked scores 1.0 on core and 0.0 on WASM; only
+  the vector cases assert scores.
+- ~~D010~~ — **fixed 2026-10-29**: the WASM executor now runs core's
+  `QueryValidator`, so it refuses `USING FUSION` over a single `NEAR` and
+  `NEAR_FUSED` with `weighted`/`rsf` (V012) instead of answering them. Locked
+  by `rejected_cases` R001–R004.
+- ~~D011~~ — **fixed 2026-10-29**: a WASM `similarity()` threshold without
+  `NEAR` ranks the rows by that similarity and carries it as their score
+  (`near_cases` N009–N012).
+- ~~D012~~ — **fixed 2026-10-29**: WASM `SELECT DISTINCT` goes through core's
+  `velesql::distinct_evaluator::apply_distinct` in the plain SELECT pipeline,
+  so `ORDER BY` and the default `LIMIT` apply (`projection_cases` P001–P004).
 
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 

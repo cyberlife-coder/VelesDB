@@ -1,6 +1,9 @@
 //! DISTINCT deduplication for query results (EPIC-061/US-003 refactoring).
 //!
-//! Extracted from mod.rs to reduce file size and improve modularity.
+//! Lives in `velesql`, beside [`super::window_evaluator`], rather than in the
+//! `persistence`-gated collection query engine, so the WASM executor dedups
+//! through the same key: one DISTINCT contract for both engines (conformance
+//! `projection_cases` in `conformance/velesql_executor_cases.json`).
 
 use std::fmt::Write as _;
 
@@ -36,6 +39,7 @@ use rustc_hash::FxHashSet;
 /// - `SimilarityScore(_)` → dedup by score only.
 /// - `All` / `QualifiedWildcard(_)` → dedup by full payload.
 /// - `Aggregations(_)` → no dedup (aggregations collapse rows themselves).
+#[must_use]
 pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Vec<SearchResult> {
     let (column_names, include_score) = match columns {
         SelectColumns::Columns(cols) => (cols.iter().map(|c| c.name.clone()).collect(), false),
@@ -81,7 +85,7 @@ pub fn apply_distinct(results: Vec<SearchResult>, columns: &SelectColumns) -> Ve
 /// logically equal objects produce identical keys.
 /// When `include_score` is true, the similarity score is appended to the key
 /// so rows differing only by score are not collapsed.
-pub fn compute_distinct_key(
+pub(crate) fn compute_distinct_key(
     result: &SearchResult,
     columns: &[String],
     include_score: bool,
@@ -138,5 +142,5 @@ fn canonical_json_string(value: &serde_json::Value) -> String {
 }
 
 #[cfg(test)]
-#[path = "distinct_unit_tests.rs"]
+#[path = "distinct_evaluator_unit_tests.rs"]
 mod tests;

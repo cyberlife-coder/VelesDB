@@ -44,7 +44,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `persistence` feature, so a `default-features = false` consumer
   (`velesdb-wasm`) reads search modes with core's parser instead of its own copy.
 
+- **The executor conformance fixture covers the WASM executor's own statement
+  families.** `conformance/velesql_executor_cases.json` (v2.1.0) adds, each
+  asserted against `velesdb-core` and the `velesdb-wasm` executor: NEAR ranking,
+  hybrid NEAR + metadata and `similarity()` thresholds with per-row scores
+  (`near_cases`), `NEAR_FUSED` rrf/average/maximum (`fusion_cases`), queries both
+  engines must refuse (`rejected_cases`), UPDATE/DELETE followed by a SELECT
+  (`dml_cases`) and DISTINCT/named-column projection (`projection_cases`).
+  LIKE, ILIKE and OFFSET join the scalar `cases` (X015-X020), which the CLI
+  runs too. Three accepted gaps are recorded as `documented_divergences`
+  D007-D009: DELETE takes any WHERE on WASM but only `id = N` / `id IN (...)`
+  on core, UPDATE may set `vector` on core only, and an unranked row scores
+  1.0 on core and 0.0 on WASM.
+- **`velesdb_core::velesql::distinct_evaluator`.** DISTINCT deduplication
+  (`apply_distinct`) moves out of the `persistence`-gated collection query
+  engine, beside `window_evaluator`, so the WASM executor dedups through the
+  same key as core.
+
 ### Changed
+
+- **BREAKING (behavior) — the `velesdb-wasm` VelesQL executor validates queries
+  with core's `QueryValidator`.** A query core refuses is now refused in the
+  browser instead of answered. In particular `USING FUSION` over a single
+  `NEAR` (one fusable branch) fails with V012 for every strategy: `rrf`,
+  `maximum` and `average` used to be accepted as a documented no-op, but `rrf`
+  re-ranked the hits by RRF against a constant metadata branch, so order and
+  scores changed. `NEAR_FUSED ... USING FUSION 'weighted'` or `'rsf'` also fails
+  with V012 instead of silently running as `rrf`. Migration: drop the `USING
+  FUSION` clause from a single-`NEAR` query (the metadata predicate already
+  filters), and give `NEAR_FUSED` `rrf`, `average` or `maximum`.
 
 - **BREAKING (Tauri plugin) — every rejection carries core's `VELES-###` code
   and a new `recoverable` field.** The plugin coded the conditions it detects
@@ -168,7 +196,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NEAR search with the rest of the WHERE read that way: the rows the NEAR
   search ranks, with their NEAR scores, and `(NEAR OR x) AND y` filtered by `y`.
   Core now returns what the WASM executor did; the shared executor fixture pins
-  both (X015, X016). A `similarity()` threshold under `OR` keeps the union
+  both (X021, X022). A `similarity()` threshold under `OR` keeps the union
   semantics. The extractor now also sees a NEAR vector under `OR`, so
   `NEAR $d OR SPARSE_NEAR $s` runs the same dense + sparse fusion as its `AND`
   form; it used to drop the dense vector and run a sparse-only search.
@@ -186,6 +214,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first. It now delegates to the collection's fusion, so the server, CLI,
   Python, mobile and Tauri hybrid searches rank like the VelesQL path. RRF was
   never affected.
+
+- **`velesdb-wasm` ranks a `similarity()` threshold like core.** `WHERE
+  similarity(vector, $q) > t` without `NEAR` returned the passing rows in
+  insertion order with score 0.0, so `ORDER BY similarity()` had nothing to sort
+  on. Each row now carries its similarity as its score and the rows come back
+  best first, as core returns them (conformance `near_cases` N009-N012).
+- **`velesdb-wasm` DISTINCT honours ORDER BY and LIMIT.** `SELECT DISTINCT` ran
+  in the aggregation pipeline, which ignored `ORDER BY`, applied no default
+  `LIMIT` and keyed `DISTINCT *` on id and score, so no row ever collapsed. It
+  now runs in the plain SELECT pipeline through core's `apply_distinct`:
+  DISTINCT, then ORDER BY, OFFSET and LIMIT (10 by default, as in core), and
+  each row keeps its point id instead of a synthetic 0.
+- **`velesdb query execute --format json` prints `[]` for a SELECT that matches
+  nothing.** It printed the prose line `No results.`, which no JSON parser
+  accepts; the table format keeps the message. Found by the new executor
+  conformance case X020 (`OFFSET` past the end), which the CLI runs.
+
+- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
+  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
+  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
+  This includes a v2 quantized store filled through the old `insert_batch`,
+  which appended to the f32 buffer whatever the mode and left the codes short,
+  so its first search indexed out of bounds.
 
 - **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
   *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
@@ -210,13 +261,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mobile: `SELECT EDGES` reports kind `Rows`, not `Mutation`.**
   `executeQuery` answered `"N row(s) affected"` for a read; it now answers
   `"N row(s) returned"`, as WASM always did.
-
-- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
-  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
-  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
-  This includes a v2 quantized store filled through the old `insert_batch`,
-  which appended to the f32 buffer whatever the mode and left the codes short,
-  so its first search indexed out of bounds.
 
 ### Documentation
 

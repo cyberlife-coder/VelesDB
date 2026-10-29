@@ -65,28 +65,18 @@ fn test_similarity_combined_with_payload_filter() {
 // =========================================================================
 
 #[test]
-fn test_fusion_rrf_applies_metadata_as_hard_filter() {
+fn test_fusion_over_single_near_is_rejected_like_core() {
     let mut db = db_with_vectors();
-    let r = execute(
+    let err = execute(
         &mut db,
         "SELECT * FROM vecs WHERE vector NEAR $q AND cat = 'a' LIMIT 10 USING FUSION (strategy = 'rrf')",
         Some(r#"{"q": [1.0, 0.0, 0.0, 0.0]}"#),
     )
-    .expect("test: rrf fusion");
-    // #9(b): a single-vector NEAR has no real second scored branch, so the
-    // metadata predicate `cat='a'` is a HARD filter (parity with core), not a
-    // soft fusion branch. Only cat='a' rows survive; the previous UNION-leak
-    // (4 rows) is gone.
-    assert_eq!(
-        r.row_count(),
-        2,
-        "metadata predicate is a hard filter under single-vector NEAR fusion"
-    );
-    let ids: Vec<u64> = (0..r.row_count() as usize)
-        .map(|i| r.row(i).expect("test: row").id())
-        .collect();
-    assert!(ids.contains(&1) && ids.contains(&2));
-    assert!(!ids.contains(&3) && !ids.contains(&4));
+    .expect_err("test: a single NEAR has nothing to fuse");
+    // A single-vector NEAR plus a metadata filter is one fusable branch. Core's
+    // validator refuses USING FUSION there (V012); WASM used to accept it and
+    // re-rank the hits by RRF against a constant metadata branch.
+    assert!(err.contains("V012"), "core's fusion refusal, got: {err}");
 }
 
 #[test]

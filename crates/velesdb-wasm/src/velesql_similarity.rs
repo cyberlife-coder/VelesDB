@@ -327,6 +327,12 @@ impl SimilarityEvaluator {
         Ok(Self { scores })
     }
 
+    /// The similarity of row `idx` to the query vector — the score a row the
+    /// threshold let through carries, as in core.
+    pub(crate) fn score_at(&self, idx: usize) -> f32 {
+        self.scores.get(idx).copied().unwrap_or(0.0)
+    }
+
     /// Returns `true` if the given `sim` predicate passes at row `idx`.
     ///
     /// Used by [`evaluate_where_with_similarity`] when it encounters a
@@ -336,7 +342,7 @@ impl SimilarityEvaluator {
     /// under a NOT) surface with the right polarity without mutating
     /// the evaluator.
     pub(crate) fn passes_with_cond(&self, cond: &SimilarityCondition, idx: usize) -> bool {
-        let score = self.scores.get(idx).copied().unwrap_or(0.0);
+        let score = self.score_at(idx);
         #[allow(clippy::cast_possible_truncation)]
         let threshold = cond.threshold as f32;
         match cond.operator {

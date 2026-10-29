@@ -4,7 +4,8 @@
 //! Contains the sparse query dispatch, hybrid search execution, graph-predicate
 //! filtering, result finalization, and fusion strategy resolution.
 
-use super::{distinct, Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
+use super::{Collection, ExtractedComponents, Result, SearchResult, MAX_LIMIT};
+use crate::velesql::distinct_evaluator;
 use tracing::warn;
 
 impl Collection {
@@ -166,7 +167,7 @@ impl Collection {
         mut results: Vec<SearchResult>,
     ) -> Result<Vec<SearchResult>> {
         if stmt.distinct == crate::velesql::DistinctMode::All {
-            results = distinct::apply_distinct(results, &stmt.columns);
+            results = distinct_evaluator::apply_distinct(results, &stmt.columns);
         }
         if let Some(ref order_by) = stmt.order_by {
             self.apply_order_by(&mut results, order_by, params)?;

@@ -1,12 +1,12 @@
 //! Additional tests for DISTINCT deduplication logic.
 //!
-//! The core unit tests live inline in `distinct.rs`. These tests exercise
+//! The core unit tests live in `distinct_evaluator_unit_tests.rs`. These tests exercise
 //! edge cases: null payloads, mixed types, and `SelectColumns::All`.
 
 #[cfg(test)]
 mod tests {
-    use crate::collection::search::query::distinct::{apply_distinct, compute_distinct_key};
     use crate::point::{Point, SearchResult};
+    use crate::velesql::distinct_evaluator::{apply_distinct, compute_distinct_key};
     use crate::velesql::{Column, SelectColumns};
 
     fn make_result(id: u64, payload: Option<serde_json::Value>) -> SearchResult {

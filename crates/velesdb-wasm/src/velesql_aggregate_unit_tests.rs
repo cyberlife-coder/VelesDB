@@ -4,7 +4,7 @@
 //! the 500-line NLOC ceiling enforced by Codacy.
 
 use velesdb_core::velesql::{
-    AggregateArg, AggregateFunction, AggregateType, Column, CompareOp, DistinctMode, GroupByClause,
+    AggregateArg, AggregateFunction, AggregateType, CompareOp, DistinctMode, GroupByClause,
     HavingClause, HavingCondition, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement,
     Value,
 };
@@ -27,10 +27,12 @@ fn base_select() -> SelectStatement {
 }
 
 #[test]
-fn test_needs_pipeline_flags_distinct() {
+fn test_needs_pipeline_leaves_plain_distinct_to_the_select_pipeline() {
+    // DISTINCT without aggregates runs core's `apply_distinct` in
+    // `velesql_select::finalize_plain`, where ORDER BY and LIMIT apply.
     let mut s = base_select();
     s.distinct = DistinctMode::All;
-    assert!(needs_aggregation_pipeline(&s));
+    assert!(!needs_aggregation_pipeline(&s));
 }
 
 #[test]
@@ -185,31 +187,6 @@ fn test_avg_numeric() {
     }]);
     let out = apply(&s, &rows, &Params::new()).expect("test: avg");
     assert!(out[0].data_json_ref().contains("\"avg_p\":20"));
-}
-
-#[test]
-fn test_distinct_dedups() {
-    let raw = vec![
-        row(1, 0.0, &serde_json::json!({"cat": "a"})),
-        row(2, 0.0, &serde_json::json!({"cat": "a"})),
-        row(3, 0.0, &serde_json::json!({"cat": "b"})),
-    ];
-    let rows = scanned(&raw);
-    let mut s = base_select();
-    s.distinct = DistinctMode::All;
-    s.columns = SelectColumns::Columns(vec![Column::new("cat")]);
-    let out = apply(&s, &rows, &Params::new()).expect("test: distinct");
-    assert_eq!(out.len(), 2);
-    let json: Vec<String> = out.iter().map(|r| r.data_json_ref().to_string()).collect();
-    // both distinct values survive, exactly once each
-    assert_eq!(
-        json.iter().filter(|j| j.contains("\"cat\":\"a\"")).count(),
-        1
-    );
-    assert_eq!(
-        json.iter().filter(|j| j.contains("\"cat\":\"b\"")).count(),
-        1
-    );
 }
 
 #[test]

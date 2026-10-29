@@ -65,7 +65,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 - **`load_working_context` returns an ENVELOPE on every surface since velesdb-memory 0.12.0**: `{found, working, other_sessions}` — the MCP tool, the Node, Python and WASM bindings, and the TS SDK. **Breaking** for the three bindings and the SDK, which until 0.12.0 returned the bare working context (or `null`/`None`): read `.working` for that value. The bare form could not express the difference between "nothing was ever saved" and "a typo in `session` missed a session that exists" — `other_sessions` names the near-misses, and is filled in on a hit too, since a typo landing on another REAL session is the case a caller can least detect. Shape parity is now enforced, not just method-name parity: `crates/velesdb-memory/tests/binding_parity_bdd.rs` reads each tool's `output_schema` root keys off the LIVE server and requires every binding to relay them or declare the divergence. Three pre-existing divergences it surfaced were declared there as known gaps (six entries, since two of them spanned more than one binding): all three bindings dropped `entity.relations_in` (added server-side by #1681), the Node binding's `CompiledContextJs` dropped `compile_context.warnings`, and both the Node and Python bindings dropped `remember_extracted.skipped_over_cap`. **All six are closed** (#1690, #1691, #1692); `SHAPE_DIVERGENCES` now holds deliberate unwraps only.
 - **The TypeScript SDK is inside a guard's perimeter (#1721)**: it had never been in one, and shipped 17 of the 19 methods the WASM binding exposed for its whole life — `entity` and `unrelate` were simply absent. It is checked as a SECOND LINK rather than as a fourth binding: the SDK wraps the WASM bundle and can never publish more than it does, so the invariant is "the SDK relays every tool that reaches WASM", composed with the existing "WASM relays every tool the server advertises". Framing it as a fourth binding would have duplicated WASM's `feedback` exemption into a second list — and a decision recorded twice is a decision that will drift. The reader is a small TypeScript-aware scan in the same file, because the tool list comes from a REAL running MCP server; a check living in the SDK's own test suite would have had to hard-code that list, which is the very defect #1721 reports.
 - **Hybrid Search (dense + sparse) — one fusion in core** (2026-10-29): `VectorCollection::hybrid_sparse_search` / `hybrid_sparse_search_filtered`, the entry point the server, CLI, Python, mobile and Tauri call, carried its own copy of the dense + sparse fusion without the #2102 score-direction alignment, so on a Euclidean or Hamming collection a score-level strategy ranked the farthest dense point first. It now delegates to `Collection::hybrid_sparse_search_inner`, the body the VelesQL `NEAR ... AND SPARSE_NEAR ...` path fuses through. On every one of those surfaces a dense vector of the wrong dimension fails with `DimensionMismatch` (VELES-004) and an unknown sparse index with `Sparse index '...' not found` (VELES-009), as the sparse-only search already did; both used to degrade to the other branch. WASM's in-memory `hybrid_search_fuse` is a separate path and unchanged.
-- **VelesQL `NEAR` under `OR`** (2026-10-29): core and WASM agree. `vector NEAR $v OR <metadata>` returns the NEAR ranking with NEAR scores and reads the rest of the WHERE with the NEAR leaf as TRUE — what the WASM executor already did, and what core's WHERE evaluator says. Core used to drop the NEAR hits. Executor fixture cases X015–X016 run on core, CLI and WASM.
+- **VelesQL `NEAR` under `OR`** (2026-10-29): core and WASM agree. `vector NEAR $v OR <metadata>` returns the NEAR ranking with NEAR scores and reads the rest of the WHERE with the NEAR leaf as TRUE — what the WASM executor already did, and what core's WHERE evaluator says. Core used to drop the NEAR hits. Executor fixture cases X021–X022 run on core, CLI and WASM.
 - **`NEAR_FUSED ... USING FUSION 'weighted'|'rsf'`** (known gap): core's validator rejects it with `V012`; the WASM executor does not run core's `QueryValidator` and executes it as `rrf` (`crates/velesdb-wasm/src/velesql_fused.rs`, `config_to_strategy`).
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
 - **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
@@ -143,6 +143,24 @@ and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k
 (`ORDER BY ... LIMIT k`); see
 [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli)
 (resolved).
+
+Since fixture v2.1.0 (2026-10-29) the core and WASM halves also cover the
+statement families the WASM executor implements on its own rather than through
+core: NEAR ranking, hybrid NEAR + metadata and `similarity()` thresholds, with
+each row's score (`near_cases`); `NEAR_FUSED` rrf/average/maximum
+(`fusion_cases`); queries both engines must refuse (`rejected_cases`);
+UPDATE/DELETE followed by a SELECT (`dml_cases`); DISTINCT and named-column
+projection (`projection_cases`). LIKE, ILIKE and OFFSET joined the scalar cases
+the CLI runs as well. Growing the fixture surfaced three WASM defects, now
+fixed: the executor did not run core's `QueryValidator` (it answered `USING
+FUSION` over a single `NEAR`, and `NEAR_FUSED` weighted/rsf, which core
+refuses), a `similarity()` threshold without `NEAR` came back unranked with
+score 0.0, and `SELECT DISTINCT` ignored `ORDER BY` and the default `LIMIT`.
+The accepted gaps that remain are the fixture's `documented_divergences`:
+D001 (unaliased aggregate key), D003 (set-operation row order), D004 (MATCH data
+model), D005 (multi-query rsf), D007 (WASM DELETE accepts any WHERE, core only
+id predicates), D008 (core UPDATE may set `vector`) and D009 (an unranked row
+scores 1.0 on core, 0.0 on WASM).
 
 ## Enum Propagation Matrix
 
@@ -274,6 +292,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 ## Recently Landed (2026-06-14)
 
 - **WASM fusion now delegates 4/5 strategies to core.** `average`/`maximum`/`weighted`/`rrf` map onto `velesdb_core::FusionStrategy::fuse` (ranking identical to core, pinned by an equivalence test); `relative_score`/`rsf` stays WASM-local by design because its N-branch equal-weight semantics differ from core's two-branch dense+sparse weighted sum. See the RSF/Weighted note above.
+- **(2026-10-29) Executor conformance covers the WASM executor's own modules.** Fixture v2.1.0 adds NEAR, `similarity()`, `NEAR_FUSED`, rejected, UPDATE/DELETE and DISTINCT/projection cases, run against core and WASM; the WASM executor now validates with core's `QueryValidator` and dedups through core's `velesql::distinct_evaluator`. See the Conformance Test Coverage section above.
 - **Executor-level conformance now exists for core.** `conformance/velesql_executor_cases.json` + `crates/velesdb-core/tests/velesql_executor_conformance.rs` assert result rows/counts/ordering (not just that a query parses). Extended to the WASM and CLI executors on 2026-06-20 (action item 2 — now done).
 - **Scalar `ORDER BY` + `LIMIT` correctness bug fixed.** A scalar (non-`similarity()`) `ORDER BY <col> ... LIMIT k` previously truncated to `k` in storage order *before* sorting; it now fetches the full matching set so the sort precedes truncation, restoring the [KNOWN_LIMITATIONS #9](./KNOWN_LIMITATIONS.md#9-bounded-query-result-materialization) bounded==unbounded guarantee. The `similarity()`-ordered HNSW fast path was untouched, so recall is unaffected. (Surfaced by the new executor conformance net above.)
 - **Point-ID hashing single-sourced for Haystack.** The Haystack `DocumentStore` now imports the canonical `velesdb_common.ids.stable_hash_id` instead of a bit-identical forked copy (behaviour-preserving; removes a re-implemented hash from an MIT package). The intentional remaining divergence — `velesdb-migrate`'s distinct `stable_point_id` — is documented in [KNOWN_LIMITATIONS #12](./KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components).

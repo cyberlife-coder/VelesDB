@@ -99,7 +99,9 @@ VelesQL without declaring a `vector` column.
 | Practical ceiling | ~100 K vectors (browser RAM) | millions |
 
 The single-collection executor supports `SELECT` (with `WHERE`, `NEAR`,
-`similarity()`), projection / aliases / window functions
+`NEAR_FUSED`, `similarity()` thresholds ranked by that similarity as in core),
+`SELECT DISTINCT` (core's dedup key, applied before `ORDER BY` and `LIMIT`),
+projection / aliases / window functions
 (`ROW_NUMBER`, `RANK`, `DENSE_RANK`), `GROUP BY` / `HAVING`, aggregates,
 `ORDER BY` (payload columns, `similarity()`, arithmetic expressions, and
 aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
@@ -110,6 +112,10 @@ aggregate `ORDER BY` over a `GROUP BY`), a default `LIMIT 10`,
 1–2 hop `MATCH`.
 
 ## What is rejected, and how
+
+Every query first goes through `velesdb-core`'s own `QueryValidator`, the one
+the server and the CLI run, so a query core refuses is refused here with the
+same `[Vnnn]` message rather than answered differently.
 
 Every unsupported shape is a **loud rejection**. WASM never returns a
 quietly-wrong result for a query it cannot honour, with one exception: the
@@ -146,14 +152,18 @@ Two cases deserve more than a one-liner:
 
 ### Fusion strategies
 
-`USING FUSION(strategy=…)` behaves differently depending on the query shape:
+`USING FUSION` follows core's validation (V012):
 
-- On a **single-vector `NEAR`**, WASM has no BM25 or graph branch to fuse
-  against, so weight-sensitive strategies (`weighted`, `rsf`) are meaningless.
-  Use `rrf`, `maximum` or `average`, or a plain metadata filter.
-- On a **multi-vector `NEAR_FUSED`** query the strategy is not rejected, but
-  only `rrf`, `average` and `maximum` are honoured — `weighted` and `rsf`
-  fall back to RRF, matching core's `fused_config_to_strategy`.
+- On a **single-vector `NEAR`** there is one fusable branch and nothing to
+  fuse, so `USING FUSION` is refused whatever the strategy. Drop the clause:
+  a metadata predicate beside the `NEAR` already filters the hits.
+- On a **multi-vector `NEAR_FUSED`** query, `rrf` (the default, with an
+  optional `k`), `average` and `maximum` run exactly as in core, scores
+  included; `weighted` and `rsf` are refused, being ill-defined over
+  homogeneous query vectors.
+
+Both rules, and the ranking of every accepted shape, are pinned against core by
+`conformance/velesql_executor_cases.json` (`fusion_cases`, `rejected_cases`).
 
 ### `ORDER BY similarity()`
 
@@ -244,4 +254,4 @@ version you run.
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0

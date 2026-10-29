@@ -1,6 +1,6 @@
 {
-  "version": "2.0.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014 and the NEAR-under-OR cases X015-X016, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison.",
+  "version": "2.1.0",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows).",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -100,12 +100,48 @@
     },
     {
       "id": "X015",
+      "query": "SELECT * FROM docs WHERE category LIKE 'te%' ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "LIKE with a trailing % wildcard"
+    },
+    {
+      "id": "X016",
+      "query": "SELECT * FROM docs WHERE category LIKE '_th%' ORDER BY year ASC",
+      "expect_ids": [5, 3],
+      "note": "LIKE with a single-character _ wildcard before a literal infix"
+    },
+    {
+      "id": "X017",
+      "query": "SELECT * FROM docs WHERE category ILIKE 'TE%' ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "ILIKE matches case-insensitively"
+    },
+    {
+      "id": "X018",
+      "query": "SELECT * FROM docs ORDER BY year ASC LIMIT 2 OFFSET 1",
+      "expect_ids": [1, 3],
+      "note": "OFFSET is applied after ORDER BY and before LIMIT: full year-ASC order [5,1,3,2,4], skip 1, take 2"
+    },
+    {
+      "id": "X019",
+      "query": "SELECT * FROM docs ORDER BY year ASC OFFSET 3",
+      "expect_ids": [2, 4],
+      "note": "OFFSET without LIMIT keeps the rest of the ordered rows"
+    },
+    {
+      "id": "X020",
+      "query": "SELECT * FROM docs ORDER BY year ASC LIMIT 2 OFFSET 10",
+      "expect_ids": [],
+      "note": "OFFSET past the end returns no row rather than an error"
+    },
+    {
+      "id": "X021",
       "query": "SELECT * FROM docs WHERE vector NEAR [0.8, 0.4, 0.2, 0.1] OR category = 'other' LIMIT 5",
       "expect_ids": [5, 1, 2, 3, 4],
       "note": "NEAR under OR: the NEAR leaf is TRUE in a boolean context, so the disjunction admits every row and the NEAR ranking orders them (cosine to the query vector ranks all five rows apart). Core used to route this shape to the similarity() union executor, which dropped every NEAR hit and returned only the metadata side [3, 5], each scored 1.0"
     },
     {
-      "id": "X016",
+      "id": "X022",
       "query": "SELECT * FROM docs WHERE (vector NEAR [0.8, 0.4, 0.2, 0.1] OR category = 'other') AND year >= 2021 LIMIT 5",
       "expect_ids": [2, 3, 4],
       "note": "NEAR under OR inside an AND: with the NEAR leaf read as TRUE the WHERE reduces to year >= 2021, which filters the NEAR ranking"
@@ -279,6 +315,254 @@
       "note": "issue #1544: 2-hop MATCH over the same chain topology as M001"
     }
   ],
+  "query_params": {
+    "a": [0.1, 0.2, 0.3, 0.4],
+    "b": [0.2, 0.4, 0.0, 0.1]
+  },
+  "near_cases": [
+    {
+      "id": "N001",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a LIMIT 5",
+      "expect_ids": [4, 3, 5, 2, 1],
+      "expect_scores": [0.730297, 0.547723, 0.387298, 0.365148, 0.182574],
+      "note": "NEAR ranks every point by cosine similarity to $a; $a was chosen so no two points tie"
+    },
+    {
+      "id": "N002",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a LIMIT 2",
+      "expect_ids": [4, 3],
+      "expect_scores": [0.730297, 0.547723],
+      "note": "NEAR + LIMIT keeps the k best"
+    },
+    {
+      "id": "N003",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a LIMIT 2 OFFSET 1",
+      "expect_ids": [3, 5],
+      "expect_scores": [0.547723, 0.387298],
+      "note": "OFFSET on a ranked result skips the best hit"
+    },
+    {
+      "id": "N004",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5",
+      "expect_ids": [4, 2, 1],
+      "expect_scores": [0.730297, 0.365148, 0.182574],
+      "note": "hybrid NEAR + metadata: the predicate is a hard filter and the vector ranking is kept"
+    },
+    {
+      "id": "N005",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a AND (category = 'other' OR year = 2020) LIMIT 5",
+      "expect_ids": [3, 5, 1],
+      "expect_scores": [0.547723, 0.387298, 0.182574],
+      "note": "hybrid NEAR + a parenthesized OR filter"
+    },
+    {
+      "id": "N006",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY similarity() ASC LIMIT 5",
+      "expect_ids": [1, 2, 5, 3, 4],
+      "expect_scores": [0.182574, 0.365148, 0.387298, 0.547723, 0.730297],
+      "note": "ORDER BY similarity() ASC reverses the natural ranking"
+    },
+    {
+      "id": "N007",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a ORDER BY year ASC LIMIT 5",
+      "expect_ids": [5, 1, 3, 2, 4],
+      "expect_scores": [0.387298, 0.182574, 0.547723, 0.365148, 0.730297],
+      "note": "ORDER BY a payload column re-orders the NEAR hits and keeps each hit's similarity score"
+    },
+    {
+      "id": "N008",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a AND similarity(vector, $a) > 0.5 LIMIT 5",
+      "expect_ids": [4, 3],
+      "expect_scores": [0.730297, 0.547723],
+      "note": "NEAR + similarity() threshold on the same vector"
+    },
+    {
+      "id": "N009",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $a) > 0.35 LIMIT 5",
+      "expect_ids": [4, 3, 5, 2],
+      "expect_scores": [0.730297, 0.547723, 0.387298, 0.365148],
+      "note": "similarity() threshold without NEAR: rows are ranked by that similarity and carry it as their score (was documented_divergences D011)"
+    },
+    {
+      "id": "N010",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $a) > 0.35 ORDER BY year ASC",
+      "expect_ids": [5, 3, 2, 4],
+      "expect_scores": [0.387298, 0.547723, 0.365148, 0.730297],
+      "note": "similarity() threshold + ORDER BY a column: the column decides the order, the score is still the similarity"
+    },
+    {
+      "id": "N011",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $a) > 0.35 AND category = 'tech' ORDER BY year ASC",
+      "expect_ids": [2, 4],
+      "expect_scores": [0.365148, 0.730297],
+      "note": "similarity() threshold combined with a metadata predicate"
+    },
+    {
+      "id": "N012",
+      "query": "SELECT * FROM docs WHERE similarity(vector, $a) <= 0.35 ORDER BY year ASC",
+      "expect_ids": [1],
+      "expect_scores": [0.182574],
+      "note": "similarity() upper bound"
+    }
+  ],
+  "fusion_cases": [
+    {
+      "id": "F001",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] LIMIT 5",
+      "expect_ids": [5, 4, 2, 3, 1],
+      "expect_scores": [0.032266, 0.032018, 0.031754, 0.031514, 0.031258],
+      "note": "NEAR_FUSED without a strategy fuses the two per-vector rankings with RRF (k=60)"
+    },
+    {
+      "id": "F002",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'average' LIMIT 5",
+      "expect_ids": [5, 2, 4, 1, 3],
+      "expect_scores": [0.656559, 0.61901, 0.474257, 0.309505, 0.273861],
+      "note": "average fusion; $a and $b were chosen so rrf, average and maximum give three different orders"
+    },
+    {
+      "id": "F003",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'maximum' LIMIT 5",
+      "expect_ids": [5, 2, 4, 3, 1],
+      "expect_scores": [0.92582, 0.872872, 0.730297, 0.547723, 0.436436],
+      "note": "maximum fusion"
+    },
+    {
+      "id": "F004",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rrf' (k=1) LIMIT 5",
+      "expect_ids": [5, 4, 2, 3, 1],
+      "expect_scores": [0.75, 0.7, 0.533333, 0.5, 0.416667],
+      "note": "an explicit RRF k reaches the fused scores"
+    },
+    {
+      "id": "F005",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'maximum' AND category = 'tech' LIMIT 5",
+      "expect_ids": [2, 4, 1],
+      "expect_scores": [0.872872, 0.730297, 0.436436],
+      "note": "NEAR_FUSED + metadata: the predicate filters before fusion"
+    },
+    {
+      "id": "F006",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] LIMIT 5 USING FUSION (strategy = 'rrf')",
+      "expect_ids": [5, 4, 2, 3, 1],
+      "expect_scores": [0.032266, 0.032018, 0.031754, 0.031514, 0.031258],
+      "note": "a trailing USING FUSION clause over a NEAR_FUSED is valid"
+    }
+  ],
+  "rejected_cases": [
+    {
+      "id": "R001",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted' LIMIT 5",
+      "note": "NEAR_FUSED accepts only rrf, average or maximum: weighted is ill-defined over homogeneous query vectors (V012). Was documented_divergences D010"
+    },
+    {
+      "id": "R002",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rsf' LIMIT 5",
+      "note": "NEAR_FUSED refuses rsf for the same reason (V012). Was documented_divergences D010"
+    },
+    {
+      "id": "R003",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'rrf')",
+      "note": "USING FUSION needs two fusable branches; a single NEAR plus a metadata filter has one (V012). Was documented_divergences D010"
+    },
+    {
+      "id": "R004",
+      "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'weighted')",
+      "note": "same as R003 for a weight-sensitive strategy"
+    }
+  ],
+  "dml_cases": [
+    {
+      "id": "W001",
+      "statements": ["UPDATE docs SET category = 'archived' WHERE year < 2021"],
+      "query": "SELECT * FROM docs WHERE category = 'archived' ORDER BY year ASC",
+      "expect_ids": [5, 1],
+      "note": "UPDATE with a range predicate; the new value is visible to an equality filter"
+    },
+    {
+      "id": "W002",
+      "statements": ["UPDATE docs SET year = 2030 WHERE category = 'other'"],
+      "query": "SELECT * FROM docs ORDER BY year DESC",
+      "expect_ids": [3, 5, 4, 2, 1],
+      "note": "UPDATE of a sort key; the two updated rows tie on 2030 and fall back to ascending id"
+    },
+    {
+      "id": "W003",
+      "statements": ["UPDATE docs SET category = 'x' WHERE id = 99"],
+      "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "UPDATE matching no row changes nothing"
+    },
+    {
+      "id": "W004",
+      "statements": ["UPDATE docs SET rank = 1 WHERE category LIKE 'te%'"],
+      "query": "SELECT * FROM docs WHERE rank = 1 ORDER BY year ASC",
+      "expect_ids": [1, 2, 4],
+      "note": "UPDATE adds a field that did not exist, selected by LIKE"
+    },
+    {
+      "id": "W005",
+      "statements": ["UPDATE docs SET category = 'tech' WHERE year BETWEEN 2019 AND 2021 AND category = 'other'"],
+      "query": "SELECT * FROM docs WHERE category = 'tech' ORDER BY year ASC",
+      "expect_ids": [5, 1, 3, 2, 4],
+      "note": "UPDATE with a conjunctive BETWEEN predicate"
+    },
+    {
+      "id": "W006",
+      "statements": ["UPDATE docs SET category = 'other' WHERE id = 4"],
+      "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'other' LIMIT 5",
+      "expect_ids": [4, 3, 5],
+      "expect_scores": [0.730297, 0.547723, 0.387298],
+      "note": "a payload UPDATE is visible to a filtered NEAR and leaves the vector untouched"
+    },
+    {
+      "id": "W007",
+      "statements": ["DELETE FROM docs WHERE id IN (2, 5)"],
+      "query": "SELECT * FROM docs ORDER BY year ASC",
+      "expect_ids": [1, 3, 4],
+      "note": "DELETE by id list. Only id predicates are common to both engines — see documented_divergences D007"
+    },
+    {
+      "id": "W008",
+      "statements": ["DELETE FROM docs WHERE id = 4"],
+      "query": "SELECT * FROM docs WHERE vector NEAR $a LIMIT 5",
+      "expect_ids": [3, 5, 2, 1],
+      "expect_scores": [0.547723, 0.387298, 0.365148, 0.182574],
+      "note": "a deleted point no longer ranks in NEAR"
+    }
+  ],
+  "projection_cases": [
+    {
+      "id": "P001",
+      "query": "SELECT DISTINCT category FROM docs ORDER BY category ASC",
+      "expect_rows": [{ "category": "other" }, { "category": "tech" }],
+      "note": "DISTINCT then ORDER BY on the distinct column (was documented_divergences D012)"
+    },
+    {
+      "id": "P002",
+      "query": "SELECT DISTINCT category FROM docs ORDER BY category ASC LIMIT 1",
+      "expect_rows": [{ "category": "other" }],
+      "note": "LIMIT applies to the ordered distinct rows"
+    },
+    {
+      "id": "P003",
+      "query": "SELECT DISTINCT category FROM docs WHERE year >= 2022 ORDER BY category ASC",
+      "expect_rows": [{ "category": "tech" }],
+      "note": "DISTINCT over a filtered scan"
+    },
+    {
+      "id": "P004",
+      "query": "SELECT DISTINCT category FROM docs WHERE vector NEAR $a LIMIT 5",
+      "expect_rows": [{ "category": "tech" }, { "category": "other" }],
+      "note": "DISTINCT keeps the first row of each value in ranking order: id 4 (tech) ranks before id 3 (other)"
+    },
+    {
+      "id": "P005",
+      "query": "SELECT category, year FROM docs WHERE category LIKE 'o%' ORDER BY year DESC",
+      "expect_rows": [{ "category": "other", "year": 2021 }, { "category": "other", "year": 2019 }],
+      "note": "named-column projection keeps only the selected fields"
+    }
+  ],
   "documented_divergences": [
     {
       "id": "D001",
@@ -327,6 +611,54 @@
       "wasm_behavior": "the WASM aggregate pipeline applies LIMIT to the grouped row set the same as a plain SELECT; both engines now agree",
       "status": "resolved by issue #1556 — aggregate case G005 exercises LIMIT on grouped rows and is asserted by both engines; unit coverage in crates/velesdb-core/tests/velesql_group_by_limit.rs",
       "evidence": "crates/velesdb-core/src/collection/search/query/aggregation/grouped.rs: build_grouped_results applies skip(offset)/take(limit) after sort; crates/velesdb-wasm/src/velesql_select.rs: finalize_aggregated routes through apply_limit_offset with u64::MAX default"
+    },
+    {
+      "id": "D007",
+      "area": "DELETE WHERE predicate shapes",
+      "core_behavior": "DELETE accepts only `id = N` or `id IN (N1, N2, ...)`; any other WHERE is refused with \"DELETE WHERE must use 'id = N' or 'id IN (N1, N2, ...)'\"",
+      "wasm_behavior": "DELETE evaluates any WHERE predicate row by row and removes every match (e.g. `DELETE FROM docs WHERE category = 'other'`)",
+      "status": "accepted — WASM is a superset: every DELETE core accepts gives the same rows on both engines (dml_cases W007/W008), and the extra WASM shapes are refused by core rather than answered differently. Narrowing the browser engine would break callers for no correctness gain",
+      "evidence": "crates/velesdb-core/src/database/dml_executor.rs: extract_delete_ids(); crates/velesdb-wasm/src/velesql_delete.rs: collect_matching_indices()"
+    },
+    {
+      "id": "D008",
+      "area": "UPDATE SET vector",
+      "core_behavior": "UPDATE may assign the `vector` column on a vector collection (apply_assignments_to_point re-parses it as the new embedding)",
+      "wasm_behavior": "UPDATE refuses `SET vector = ...` with \"UPDATE cannot modify the 'vector' column (use UPSERT)\"; payload assignments behave as in core",
+      "status": "accepted — WASM is a subset here; the fixture's dml_cases assign payload fields only. UPSERT is the WASM way to replace an embedding",
+      "evidence": "crates/velesdb-core/src/database/query_engine_dml.rs: apply_assignments_to_point(); crates/velesdb-wasm/src/velesql_update.rs: validate_assignments()"
+    },
+    {
+      "id": "D009",
+      "area": "score of rows that no vector ranked",
+      "core_behavior": "a scan with no NEAR, NEAR_FUSED or similarity() predicate returns every row with score 1.0",
+      "wasm_behavior": "the same rows carry score 0.0 (QueryResultRow::score in the JavaScript API)",
+      "status": "accepted — the value carries no ranking on either engine and SELECT * does not project it; only the vector cases (near_cases, fusion_cases, and the dml_cases that end in a NEAR) assert scores",
+      "evidence": "scalar-only cases (X001-X020) on both engines; crates/velesdb-wasm/src/velesql_select.rs: execute_plain()"
+    },
+    {
+      "id": "D010",
+      "area": "USING FUSION validation (single-branch NEAR, NEAR_FUSED weighted/rsf)",
+      "core_behavior": "QueryValidator refuses USING FUSION over a single NEAR (nothing to fuse) and NEAR_FUSED with weighted or rsf (V012)",
+      "wasm_behavior": "RESOLVED: the WASM executor now runs core's QueryValidator::validate before dispatch. It used to accept a single NEAR with USING FUSION rrf/maximum/average and re-rank it against a constant metadata branch (for rrf the order changed and the scores became RRF scores), and to run NEAR_FUSED weighted/rsf as rrf",
+      "status": "resolved — rejected_cases R001-R004 require both engines to refuse",
+      "evidence": "crates/velesdb-core/src/velesql/validation_fusion.rs: validate_fusion(); crates/velesdb-wasm/src/velesql_exec.rs: execute()"
+    },
+    {
+      "id": "D011",
+      "area": "similarity() threshold without NEAR",
+      "core_behavior": "the rows that pass the threshold are ranked by that similarity and carry it as their score",
+      "wasm_behavior": "RESOLVED: the plain scan now scores each row with the similarity it was filtered on and ranks by it in the metric's direction. It used to return the rows in insertion order with score 0.0, so ORDER BY similarity() had nothing to sort on",
+      "status": "resolved — near_cases N009-N012 assert ids and scores on both engines",
+      "evidence": "crates/velesdb-core/src/collection/search/query/execution_paths.rs: dispatch_similarity_query(); crates/velesdb-wasm/src/velesql_select.rs: execute_plain()"
+    },
+    {
+      "id": "D012",
+      "area": "DISTINCT with ORDER BY / LIMIT",
+      "core_behavior": "DISTINCT runs first (apply_distinct), then ORDER BY, OFFSET and LIMIT (default 10)",
+      "wasm_behavior": "RESOLVED: a DISTINCT without aggregates now goes through the plain SELECT pipeline and core's apply_distinct. It used to run in the aggregation pipeline, which ignored ORDER BY, had no default LIMIT, and keyed `DISTINCT *` on id and score so no row ever collapsed",
+      "status": "resolved — projection_cases P001-P004 assert the projected rows on both engines",
+      "evidence": "crates/velesdb-core/src/collection/search/query/distinct.rs: apply_distinct(); crates/velesdb-wasm/src/velesql_select.rs: finalize_plain()"
     }
   ]
 }
