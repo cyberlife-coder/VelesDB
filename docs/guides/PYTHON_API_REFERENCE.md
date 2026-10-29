@@ -391,6 +391,16 @@ maps to `euclidean` and `cos` to `cosine`. The canonical list is exported at
 runtime as `velesdb.DISTANCE_METRICS` (also `velesdb.STORAGE_MODES` and
 `velesdb.CONDITION_TYPES`).
 
+Three module functions answer from velesdb-core itself, so code built on the
+binding (the LangChain, LlamaIndex and Haystack integrations among it) needs
+no copy of core logic:
+
+| Function | Core source | Returns |
+|----------|-------------|---------|
+| `velesdb.metric_higher_is_better(metric)` | `DistanceMetric::higher_is_better` | `True` for `cosine`, `dot` and `jaccard` (similarities), `False` for `euclidean` and `hamming` (distances); `ValueError` for an unknown metric |
+| `velesdb.validate_search_quality(mode)` | `api_types::parse_search_mode` | `None` for a mode `search_with_quality` accepts, else `ValueError` with the same message |
+| `velesdb.hash_id(value)` | `velesdb_core::hash_id` | the canonical string → `u64` point id (FNV-1a 64-bit over the UTF-8 bytes) |
+
 ## Storage modes (quantization)
 
 Reduce memory usage with vector quantization:

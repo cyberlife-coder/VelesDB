@@ -1,5 +1,6 @@
 """Tests for VelesDB LlamaIndex VectorStore."""
 
+import importlib
 import tempfile
 import shutil
 
@@ -909,6 +910,14 @@ class TestServerUrlRemoved:
         assert not hasattr(store, "server_url")
 
 
+# search_quality is refused by velesdb-core's parser, which the binding exposes
+# from velesdb 7.2.0 on; an older wheel refuses a bad mode only at search time.
+requires_core_quality_parser = pytest.mark.skipif(
+    not hasattr(importlib.import_module("velesdb"), "validate_search_quality"),
+    reason="installed velesdb predates velesdb.validate_search_quality",
+)
+
+
 class TestSearchQualityLlamaIndex:
     """Tests for the search_quality parameter (feat/searchquality-propagation)."""
 
@@ -944,6 +953,7 @@ class TestSearchQualityLlamaIndex:
         assert store._search_quality is None
         assert store.search_quality is None
 
+    @requires_core_quality_parser
     def test_init_with_invalid_quality_raises(self, temp_dir):
         """Constructor raises SecurityError for unknown quality string."""
         from llamaindex_velesdb.security import SecurityError
@@ -1036,6 +1046,7 @@ class TestSearchQualityLlamaIndex:
                       "custom:128", "custom:1024", "adaptive:16:256", "adaptive:32:512"):
             assert validate_search_quality(value) == value
 
+    @requires_core_quality_parser
     def test_validate_search_quality_rejects_invalid(self):
         """validate_search_quality raises SecurityError for unknown strings."""
         from llamaindex_velesdb.security import validate_search_quality, SecurityError

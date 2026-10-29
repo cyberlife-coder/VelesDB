@@ -1,4 +1,5 @@
 import pytest
+from velesdb_common import security
 from velesdb_common.security import (
     validate_batch_size,
     validate_weight,
@@ -6,6 +7,7 @@ from velesdb_common.security import (
     validate_named_sparse_vector,
     SecurityError,
     validate_text,
+    validate_search_quality,
     ALLOWED_CONDITION_TYPES,
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
@@ -295,13 +297,18 @@ def test_validate_named_sparse_vector_empty_dict_is_flat():
     assert validate_named_sparse_vector({}) == {}
 
 
-class TestSearchQualityEfRange:
-    """custom/adaptive ef bounded as the binding bounds it (#2275)."""
+_requires_core_quality_parser = pytest.mark.skipif(
+    security._core_validate_search_quality is None,
+    reason="installed velesdb predates velesdb.validate_search_quality",
+)
+
+
+@_requires_core_quality_parser
+class TestSearchQualityIsCoresGrammar:
+    """search_quality is checked by velesdb-core's parser, through the
+    binding, so it accepts and refuses exactly what a search does (#2275)."""
 
     def test_out_of_range_efs_are_refused(self):
-        import pytest
-        from velesdb_common.security import SecurityError, validate_search_quality
-
         for mode in ["custom:8", "custom:4097", "custom:99999999",
                      "adaptive:0:512", "adaptive:32:4097", "adaptive:5000:32",
                      "custom:\u0661\u0666", "custom:16\n",
@@ -310,19 +317,30 @@ class TestSearchQualityEfRange:
                 validate_search_quality(mode)
 
     def test_the_bounds_are_accepted(self):
-        from velesdb_common.security import validate_search_quality
-
         for mode in ["custom:16", "custom:4096", "adaptive:16:4096"]:
             assert validate_search_quality(mode) == mode
 
-    def test_the_mirror_matches_core(self):
-        import pathlib
-        import re as _re
-        from velesdb_common import security
+    def test_a_signed_ef_is_accepted_as_core_accepts_it(self):
+        # Core reads an ef as an integer, sign included; the regex this
+        # package used to carry refused it.
+        assert validate_search_quality("custom:+256") == "custom:+256"
 
-        core = (pathlib.Path(__file__).resolve().parents[3]
-                / "crates/velesdb-core/src/api_types/mod.rs").read_text(encoding="utf-8")
-        for name in ("MIN_EF_SEARCH", "MAX_EF_SEARCH"):
-            found = _re.search(rf"pub const {name}: usize = (\d+);", core)
-            assert found, f"{name} not found in core"
-            assert int(found.group(1)) == getattr(security, name), name
+    def test_the_refusal_carries_cores_message(self):
+        import velesdb
+
+        with pytest.raises(ValueError) as core:
+            velesdb.validate_search_quality("adaptive:5000:32")
+        with pytest.raises(SecurityError) as ours:
+            validate_search_quality("adaptive:5000:32")
+        assert str(core.value) in str(ours.value)
+        assert "5000" in str(ours.value)
+
+
+def test_search_quality_without_the_core_parser_is_left_to_the_binding(monkeypatch):
+    """A wheel older than velesdb.validate_search_quality: no local grammar
+    stands in for core's, the type is still checked, and the binding refuses
+    a bad mode at search time."""
+    monkeypatch.setattr(security, "_core_validate_search_quality", None)
+    assert validate_search_quality("Custom:8") == "custom:8"
+    with pytest.raises(SecurityError, match="must be a string"):
+        validate_search_quality(42)
