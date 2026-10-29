@@ -9,11 +9,14 @@ use wasm_bindgen::JsValue;
 /// id + f32 vectors (Full mode); kept for reading legacy data.
 pub const HEADER_SIZE: usize = 18;
 
-/// v2 header size — v1 plus a storage-mode byte.
+/// v2/v3 header size — v1 plus a storage-mode byte.
 const HEADER_SIZE_V2: usize = 19;
 
 /// Current format version written by [`export_to_bytes`].
-const FORMAT_VERSION: u8 = 2;
+const FORMAT_VERSION: u8 = 3;
+
+#[path = "serialization_legacy.rs"]
+mod legacy;
 
 /// Maps a storage mode to its on-disk byte.
 fn mode_to_byte(mode: StorageMode) -> u8 {
@@ -65,17 +68,19 @@ fn write_payloads(out: &mut Vec<u8>, payloads: &[Option<serde_json::Value>]) {
     }
 }
 
-/// Serializes a `VectorStore` to the v2 binary format.
+/// Serializes a `VectorStore` to the v3 binary format.
 ///
-/// Layout (little-endian): `"VELS"`(4) | version=2(1) | dimension u32(4) |
+/// Layout (little-endian): `"VELS"`(4) | version=3(1) | dimension u32(4) |
 /// metric u8(1) | storage-mode u8(1) | count u64(8), then `count` u64 IDs, then
-/// five length-prefixed blobs (`data` f32, `data_sq8`, `data_binary`,
-/// `sq8_mins` f32, `sq8_scales` f32), then `count` payload blobs (empty = None).
+/// one length-prefixed f32 blob holding the `count * dimension` vectors, then
+/// `count` payload blobs (empty = None).
 ///
-/// Unlike v1 (id + f32 only, Full mode), v2 preserves the storage mode, the
-/// quantized buffers and the payloads, and never panics on a quantized store
-/// (v1 indexed the empty `data` buffer in SQ8/Binary mode). The sparse index is
-/// not persisted (rebuilt on demand), as in v1.
+/// v3 is v2 without its four quantized blobs (`data_sq8`, `data_binary`,
+/// `sq8_mins`, `sq8_scales`): every storage mode now keeps the f32 vectors, so
+/// `data` is populated whatever the mode. The version bump makes an older
+/// build reject a v3 blob ("Unsupported version: 3") rather than load a
+/// quantized-mode store with empty code buffers. The sparse index is not
+/// persisted (rebuilt on demand), as in v1/v2.
 pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"VELS");
@@ -93,10 +98,6 @@ pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
         bytes.extend_from_slice(&id.to_le_bytes());
     }
     write_f32_blob(&mut bytes, &store.data);
-    write_blob(&mut bytes, &store.data_sq8);
-    write_blob(&mut bytes, &store.data_binary);
-    write_f32_blob(&mut bytes, &store.sq8_mins);
-    write_f32_blob(&mut bytes, &store.sq8_scales);
     write_payloads(&mut bytes, &store.payloads);
     bytes
 }
@@ -171,13 +172,16 @@ pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
     }
     match bytes[4] {
         1 => import_v1(bytes),
-        2 => import_v2(bytes),
+        version @ (2 | 3) => import_v2_or_v3(bytes, version),
         v => Err(JsValue::from_str(&format!("Unsupported version: {v}"))),
     }
 }
 
-/// Reads the v2 format (storage mode, quantized buffers and payloads preserved).
-fn import_v2(bytes: &[u8]) -> Result<VectorStore, JsValue> {
+/// Reads the v2 or v3 format. They share the header, the ids, the f32 `data`
+/// blob and the payloads; v2 adds four quantized blobs between the last two,
+/// from which [`legacy::reconstruct_vectors`] rebuilds the f32 vectors of a
+/// quantized-mode store.
+fn import_v2_or_v3(bytes: &[u8], version: u8) -> Result<VectorStore, JsValue> {
     if bytes.len() < HEADER_SIZE_V2 {
         return Err(JsValue::from_str("Invalid data: too short"));
     }
@@ -199,26 +203,43 @@ fn import_v2(bytes: &[u8]) -> Result<VectorStore, JsValue> {
     for _ in 0..count {
         ids.push(read_u64(bytes, &mut offset)?);
     }
-    let data = read_f32_blob(bytes, &mut offset)?;
-    let data_sq8 = read_blob(bytes, &mut offset)?.to_vec();
-    let data_binary = read_blob(bytes, &mut offset)?.to_vec();
-    let sq8_mins = read_f32_blob(bytes, &mut offset)?;
-    let sq8_scales = read_f32_blob(bytes, &mut offset)?;
+    let mut data = read_f32_blob(bytes, &mut offset)?;
+    if version == 2 {
+        let buffers = legacy::LegacyBuffers {
+            data,
+            data_sq8: read_blob(bytes, &mut offset)?.to_vec(),
+            data_binary: read_blob(bytes, &mut offset)?.to_vec(),
+            sq8_mins: read_f32_blob(bytes, &mut offset)?,
+            sq8_scales: read_f32_blob(bytes, &mut offset)?,
+        };
+        data = legacy::reconstruct_vectors(storage_mode, count, dimension, buffers)
+            .map_err(|e| JsValue::from_str(&e))?;
+    }
+    check_vector_count(data.len(), count, dimension).map_err(|e| JsValue::from_str(&e))?;
     let payloads = read_payloads(bytes, &mut offset, count)?;
 
     Ok(VectorStore {
         ids,
         data,
-        data_sq8,
-        data_binary,
-        sq8_mins,
-        sq8_scales,
         payloads,
         dimension,
         metric,
         storage_mode,
         sparse_index: None,
     })
+}
+
+/// Checks that `data` holds exactly one `dimension`-float vector per id, so a
+/// corrupt blob is rejected at load rather than read out of bounds at search.
+fn check_vector_count(floats: usize, count: usize, dimension: usize) -> Result<(), String> {
+    match count.checked_mul(dimension) {
+        Some(expected) if expected == floats => Ok(()),
+        Some(expected) => Err(format!(
+            "Invalid data: {floats} vector floats for {count} ids of dimension {dimension} \
+             (expected {expected})"
+        )),
+        None => Err("Invalid data: vector size arithmetic overflow".to_string()),
+    }
 }
 
 /// Reads the legacy v1 format (id + f32 vectors only; Full mode, no payloads).
@@ -334,10 +355,6 @@ fn import_v1(bytes: &[u8]) -> Result<VectorStore, JsValue> {
     Ok(VectorStore {
         ids,
         data,
-        data_sq8: Vec::new(),
-        data_binary: Vec::new(),
-        sq8_mins: Vec::new(),
-        sq8_scales: Vec::new(),
         payloads: vec![None; count],
         dimension,
         metric,

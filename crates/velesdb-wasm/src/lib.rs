@@ -58,7 +58,6 @@ mod graph;
 mod graph_persistence;
 mod graph_store;
 mod graph_worker_hints;
-mod hybrid_quantized;
 mod idb_helpers;
 /// WASM binding for `velesdb-memory`'s agent-memory wedge — see
 /// [`memory_service::WasmMemoryService`], exported to JS as `MemoryService`.
@@ -138,24 +137,30 @@ pub struct QueryResult {
     pub column_data: Option<serde_json::Value>,
 }
 
-/// Storage mode for vector quantization.
+/// Storage mode of a `VectorStore`, mirroring `velesdb_core::StorageMode`.
+///
+/// Every mode keeps the f32 vectors (4 bytes per dimension) and scores them
+/// exactly, so a mode returns the same top-k and scores as a `velesdb-core`
+/// collection created with it: core's quantized modes re-rank their final
+/// top-k with exact f32 distances, and its `Binary` behaves as `Full`. The
+/// browser store searches by brute force over every vector, which has no
+/// candidate set to pre-filter, so it keeps no quantized codes: the mode is
+/// accepted, persisted and reported, but saves no memory here.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StorageMode {
-    /// Full f32 precision (4 bytes per dimension)
+    /// Full f32 precision.
     #[default]
     Full,
-    /// SQ8: 8-bit scalar quantization (1 byte per dimension, 4x compression)
+    /// SQ8 in core (int8 traversal, exact f32 re-rank); exact f32 here.
     SQ8,
-    /// Binary: 1-bit quantization (1 bit per dimension, 32x compression)
+    /// Binary in core (behaves as `Full`); exact f32 here.
     Binary,
-    /// Product Quantization — **WASM limitation**: PQ requires `rayon`/`persistence`
-    /// which are unavailable in WASM. This variant uses the SQ8 codepath as a
-    /// fallback. For true PQ, use the native `velesdb-core` crate.
+    /// Product Quantization in core; exact f32 here, matching core's
+    /// `search_with_quality` (see `quantization_parity_tests` for core's own
+    /// ADC split on its default `search()`).
     ProductQuantization,
-    /// `RaBitQ`: 1-bit with rotation + scalar correction (32x compression).
-    /// **WASM limitation**: training requires `ndarray`/`persistence`. Falls back
-    /// to Full precision in WASM builds.
+    /// `RaBitQ` in core (quantized traversal, exact f32 re-rank); exact f32 here.
     RaBitQ,
 }
 
@@ -218,6 +223,9 @@ mod velesql_executor_conformance_tests;
 #[path = "coverage_v3_tests.rs"]
 mod coverage_v3_tests;
 
-#[cfg(test)]
+// Host-only: compares against a `velesdb-core` collection, which needs core's
+// `persistence` feature — enabled by a dev-dependency that does not exist on
+// `wasm32` (see `Cargo.toml`).
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "quantization_parity_tests.rs"]
 mod quantization_parity_tests;

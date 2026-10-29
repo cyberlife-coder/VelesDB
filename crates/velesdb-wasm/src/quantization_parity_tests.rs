@@ -1,293 +1,193 @@
-//! Cross-implementation quantization parity tests (#1543).
+//! WASM ↔ core search parity per storage mode.
 //!
-//! The core-parity audit found that the WASM SQ8/Binary quantization paths
-//! (`store_insert::encode_sq8`, `store_insert::encode_binary`,
-//! `vector_ops::ScratchBuffer::decode_sq8`, `store_get::decode_sq8`) could
-//! diverge from `velesdb_core::{QuantizedVector, BinaryQuantizedVector}`:
+//! The contract: a `VectorStore` created with a given storage mode returns the
+//! same top-k, with the same scores, as a `velesdb-core` collection created
+//! with that mode, on the same data. Core keeps the f32 vectors in every mode
+//! and its quantized paths re-rank the final top-k with exact f32 distances
+//! (`StorageMode`'s docs in `velesdb-core/src/quantization/mod.rs`), with
+//! `Binary` behaving as `Full`. So the browser store keeps the f32 vectors for
+//! every mode too and scores them exactly.
 //!
-//! - SQ8 used an ad hoc `1e-10` degenerate-range epsilon instead of core's
-//!   `f32::EPSILON`, so a near-constant vector could quantize as "normal" in
-//!   WASM and "degenerate" in core.
-//! - The degenerate fallback itself differed: core fills every dimension
-//!   with byte 128 (`QuantizedVector::from_f32`); the old WASM formula
-//!   collapsed to byte 0 for every dimension.
-//! - Binary quantization parity with `BinaryQuantizedVector::from_f32` was
-//!   asserted only in a comment, never a test.
+//! Before this contract, the browser store kept only lossy codes for
+//! `sq8`/`pq`/`rabitq` (a per-vector SQ8) and `binary` (sign bits decoded to
+//! 0/1), and scored the reconstruction: the same mode name returned different
+//! scores and a different order than core, and `get()` returned the
+//! reconstruction instead of the inserted vector.
 //!
-//! These tests assert byte-for-byte equality of the *quantized data* against
-//! core on a fixed dataset that specifically includes the regression range
-//! (a vector whose min/max gap sits between the old `1e-10` WASM threshold
-//! and core's `f32::EPSILON` threshold), plus other degenerate/extreme edges.
-//! `test_sq8_restore_matches_core_within_float_tolerance` additionally checks
-//! dequantized (`to_f32`) values match core within a tight tolerance — not
-//! bit-for-bit, because the WASM on-disk/`IndexedDB` persistence format
-//! (`serialization.rs` v2) stores an *encode* scale (`255.0 / range`) rather
-//! than core's `(min, max)` pair, so decode divides by that scale instead of
-//! multiplying by core's independently-rounded `range / 255.0`. Changing the
-//! stored representation to guarantee bit-identical decode would change the
-//! v2 on-disk format and silently corrupt already-persisted `IndexedDB`
-//! stores from older WASM builds with no version bump — out of scope for
-//! this fix. See the PR description for the full trade-off.
+//! The core side runs through a real `Database`/`VectorCollection`, which is
+//! only compiled with core's `persistence` feature: the native-only
+//! dev-dependency in `Cargo.toml` turns it on for host test builds, so this
+//! module is excluded from `wasm32` test builds, where that dependency does
+//! not exist.
 //!
-//! Host-run (`#[test]`, native target): these run wherever
-//! `cargo test -p velesdb-wasm` runs, which already includes this crate via
-//! `cargo test --workspace` in the `Tests` CI job, and are additionally
-//! invoked as an explicitly named step in the `WASM Build Check` job
-//! (`.github/workflows/ci.yml`) for a dedicated, visible parity gate.
-//!
-//! TDD: before the #1543 fix, `test_sq8_quantization_matches_core_byte_for_byte`
-//! and `test_sq8_epsilon_regression_range_matches_core_degenerate_fallback`
-//! failed (RED) on the `near_constant_regression` and `constant` cases; after
-//! the fix all cases pass (GREEN).
-//!
-//! ## Follow-up: non-finite range (Fable review)
-//!
-//! The initial fix's `scale == 0.0` degenerate-range decode sentinel was not
-//! hermetic: a vector whose range overflows to `+Infinity` (finite min/max
-//! whose difference overflows, or a literal `+/-Infinity` element) also
-//! computes `scale = 255.0 / range = 0.0` — through the *normal* branch, not
-//! the degenerate one — colliding with the sentinel. `test_sq8_non_finite_range_matches_core_exactly`
-//! and the `range_*` dataset cases pin this down; they were RED (WASM decoded
-//! to `min`, core decodes to `NaN`) before `store_insert::encode_sq8` grew a
-//! dedicated, empirically-verified-against-core `!range.is_finite()` branch
-//! (all-zero encoded bytes, `f32::NAN` decode sentinel) ahead of the
-//! `range < f32::EPSILON` check.
+//! Core is compared through two entry points. `search_with_quality(Perfect)`
+//! is core's exact search for every mode — the result its approximate HNSW
+//! paths converge to — and runs here on enough points that core's lazy SQ8,
+//! `RaBitQ` and PQ quantizers have trained. Default `search()` is compared on a
+//! collection small enough for core to brute-force it (`<= 100` points), which
+//! also keeps it below core's PQ training threshold: once PQ trains, core's
+//! default `search()` returns ADC-approximated scores while
+//! `search_with_quality` keeps exact ones, a split inside core this module
+//! does not paper over.
+
+use velesdb_core::{
+    Database, Point, SearchQuality, SearchResult, StorageMode as CoreStorageMode, VectorCollection,
+};
 
 use crate::store_get::get_vector_at_index;
 use crate::store_insert::insert_vector;
 use crate::store_new::create_store;
-use crate::{DistanceMetric, StorageMode};
-use velesdb_core::{BinaryQuantizedVector, QuantizedVector};
+use crate::{DistanceMetric, StorageMode, VectorStore};
 
-/// Fixed parity dataset: `(case name, vector)`. Covers the normal path plus
-/// every degenerate/extreme edge called out by the #1543 audit.
-fn parity_dataset() -> Vec<(&'static str, Vec<f32>)> {
-    vec![
-        ("normal", vec![0.3, -1.2, 4.5, -0.001, 2.7]),
-        ("constant", vec![0.5, 0.5, 0.5, 0.5, 0.5, 0.5]),
-        // Range = 8e-8: above the OLD WASM threshold (`(max-min).abs() < 1e-10`,
-        // so the old code took the "normal" branch) but below core's
-        // `f32::EPSILON` (~1.1920929e-7, so core takes the degenerate
-        // branch). This is the exact divergence #1543 reports. Values are
-        // kept near zero magnitude so f32 has enough precision to represent
-        // an 8e-8 gap distinctly (near 1.0 the float spacing is itself
-        // `f32::EPSILON`, too coarse to express this gap at all).
-        (
-            "near_constant_regression",
-            vec![0.0, 5.0e-8, -3.0e-8, 2.0e-8, 1.0e-8],
-        ),
-        (
-            "extreme_magnitude",
-            vec![1.0e30, -1.0e30, 5.0e29, -2.5e29, 0.0, 3.0],
-        ),
-        ("with_nan", vec![1.0, f32::NAN, -3.0, 2.5, 0.0]),
-        ("zero_and_neg_zero", vec![0.0, -0.0, 0.0, 0.0, 0.0]),
-        ("not_multiple_of_8_dims", vec![1.0, -1.0, 1.0, -1.0, 1.0]),
-        // Non-finite range (Fable review, #1543 follow-up): min/max are
-        // finite but `max - min` overflows to +Infinity in f32. This is
-        // NOT the `range < f32::EPSILON` degenerate case (`+inf` is never
-        // `< EPSILON`) — core's `QuantizedVector::from_f32` takes the
-        // *normal* branch here, computes `scale = 255.0 / range = 0.0`,
-        // and every per-element `(v - min) * 0.0` term evaluates to
-        // exactly `0.0` (finite operand) or `NaN` (an operand that itself
-        // overflowed to infinity), which `round().clamp().cast()` always
-        // turns into byte 0. Confirmed empirically against core: encoded
-        // data is uniformly all-zero, `to_f32()` is uniformly all-NaN
-        // (`q * (range/255.0) + min` = `0.0 * inf + min` = NaN).
-        (
-            "range_overflow_finite_minmax",
-            vec![-f32::MAX, f32::MAX, 0.0, 1.0],
-        ),
-        // A literal +/-Infinity element: min stays finite, max becomes
-        // +inf (or vice versa), range is still +inf — same core behavior
-        // as the overflow case above (all-zero data, all-NaN restore).
-        (
-            "range_infinite_literal_element",
-            vec![1.0, f32::INFINITY, -3.0, 2.0],
-        ),
-        // Every element is NaN or +Infinity: min/max fold (NaN-ignoring)
-        // both settle on +inf, so range = inf - inf = NaN (not +inf, but
-        // still never `< f32::EPSILON`, so core again takes the "normal"
-        // branch). Empirically confirmed identical outcome to the +inf
-        // cases: all-zero data, all-NaN restore.
-        (
-            "range_nan_all_inf_or_nan",
-            vec![f32::NAN, f32::INFINITY, f32::NAN, f32::INFINITY],
-        ),
-    ]
-}
+const DIMENSION: usize = 16;
+const TOP_K: usize = 10;
+/// Absolute score tolerance: core's SIMD kernels (and its pre-normalised
+/// cosine) sum in a different order than the scalar `DistanceMetric::calculate`
+/// the browser store uses, so scores agree to rounding, not bit for bit.
+const SCORE_TOLERANCE: f32 = 1.0e-4;
 
-/// True when both values are `NaN`, or both are within `tol` of each other.
-/// Plain `(a - b).abs() <= tol` is always false when either side is `NaN`
-/// (IEEE 754), which would wrongly fail restore-parity checks for the
-/// non-finite-range dataset cases where *both* core and WASM legitimately
-/// restore to `NaN`.
-fn nan_aware_close(a: f32, b: f32, tol: f32) -> bool {
-    (a.is_nan() && b.is_nan()) || (a - b).abs() <= tol
-}
-
-/// Encodes `vector` through the real WASM `SQ8` insert path and returns
-/// `(quantized_bytes, min, scale)` for the single inserted vector.
-fn wasm_encode_sq8(vector: &[f32]) -> (Vec<u8>, f32, f32) {
-    let mut store = create_store(vector.len(), DistanceMetric::Euclidean, StorageMode::SQ8);
-    insert_vector(&mut store, 1, vector);
+const MODES: [(StorageMode, CoreStorageMode); 5] = [
+    (StorageMode::Full, CoreStorageMode::Full),
+    (StorageMode::SQ8, CoreStorageMode::SQ8),
+    (StorageMode::Binary, CoreStorageMode::Binary),
     (
-        store.data_sq8.clone(),
-        store.sq8_mins[0],
-        store.sq8_scales[0],
-    )
+        StorageMode::ProductQuantization,
+        CoreStorageMode::ProductQuantization,
+    ),
+    (StorageMode::RaBitQ, CoreStorageMode::RaBitQ),
+];
+
+const METRICS: [DistanceMetric; 3] = [
+    DistanceMetric::Cosine,
+    DistanceMetric::Euclidean,
+    DistanceMetric::DotProduct,
+];
+
+/// Deterministic vectors in `[-1, 1)` (xorshift64*), so a failure reproduces.
+fn dataset(count: usize, seed: u64) -> Vec<Vec<f32>> {
+    let mut state = seed.max(1);
+    let mut next = move || {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let bits = state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40;
+        (bits as f32 / (1u64 << 24) as f32).mul_add(2.0, -1.0)
+    };
+    (0..count)
+        .map(|_| (0..DIMENSION).map(|_| next()).collect())
+        .collect()
 }
 
-/// Encodes `vector` through the real WASM `Binary` insert path and returns
-/// the packed bytes for the single inserted vector.
-fn wasm_encode_binary(vector: &[f32]) -> Vec<u8> {
-    let mut store = create_store(vector.len(), DistanceMetric::Hamming, StorageMode::Binary);
-    insert_vector(&mut store, 1, vector);
-    store.data_binary.clone()
+fn wasm_store(vectors: &[Vec<f32>], metric: DistanceMetric, mode: StorageMode) -> VectorStore {
+    let mut store = create_store(DIMENSION, metric, mode);
+    for (id, vector) in (0u64..).zip(vectors) {
+        insert_vector(&mut store, id, vector);
+    }
+    store
 }
 
-#[test]
-fn test_sq8_quantization_matches_core_byte_for_byte() {
-    for (name, vector) in parity_dataset() {
-        let core_q = QuantizedVector::from_f32(&vector);
-        let (wasm_bytes, wasm_min, _wasm_scale) = wasm_encode_sq8(&vector);
+/// Runs `search` for each query against one core collection holding `vectors`.
+fn core_results(
+    vectors: &[Vec<f32>],
+    metric: DistanceMetric,
+    mode: CoreStorageMode,
+    queries: &[Vec<f32>],
+    search: impl Fn(&VectorCollection, &[f32]) -> Vec<SearchResult>,
+) -> Vec<Vec<(u64, f32)>> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = Database::open(dir.path()).expect("open core database");
+    db.create_vector_collection_with_options("parity", DIMENSION, metric, mode)
+        .expect("create core collection");
+    let collection = db.get_vector_collection("parity").expect("collection");
+    let points: Vec<Point> = (0u64..)
+        .zip(vectors)
+        .map(|(id, v)| Point::without_payload(id, v.clone()))
+        .collect();
+    collection.upsert_bulk(&points).expect("core upsert");
+    queries
+        .iter()
+        .map(|query| {
+            search(&collection, query)
+                .into_iter()
+                .map(|r| (r.point.id, r.score))
+                .collect()
+        })
+        .collect()
+}
 
-        assert_eq!(
-            wasm_bytes, core_q.data,
-            "SQ8 quantized bytes diverge from core for case `{name}` (vector={vector:?})"
-        );
-        assert_eq!(
-            wasm_min, core_q.min,
-            "SQ8 min diverges from core for case `{name}`"
+fn assert_same_top_k(label: &str, wasm: &[(u64, f32)], core: &[(u64, f32)]) {
+    let wasm_ids: Vec<u64> = wasm.iter().map(|r| r.0).collect();
+    let core_ids: Vec<u64> = core.iter().map(|r| r.0).collect();
+    assert_eq!(wasm_ids, core_ids, "{label}: top-k ids differ");
+    for ((id, w), (_, c)) in wasm.iter().zip(core) {
+        assert!(
+            (w - c).abs() <= SCORE_TOLERANCE,
+            "{label}: score of id {id} differs: wasm={w} core={c}"
         );
     }
 }
 
-#[test]
-fn test_sq8_epsilon_regression_range_matches_core_degenerate_fallback() {
-    // Pinned regression case: range = 8e-8, strictly between the old WASM
-    // epsilon (1e-10) and core's threshold (f32::EPSILON). Before #1543's
-    // fix this vector quantized as "normal" in WASM (bytes derived from the
-    // per-element formula) but as "degenerate" in core (every byte = 128).
-    let vector = vec![0.0_f32, 5.0e-8, -3.0e-8, 2.0e-8, 1.0e-8];
-    let core_q = QuantizedVector::from_f32(&vector);
-    let (wasm_bytes, wasm_min, wasm_scale) = wasm_encode_sq8(&vector);
-
-    assert_eq!(
-        core_q.data,
-        vec![128u8; vector.len()],
-        "sanity: core takes the degenerate branch"
-    );
-    assert_eq!(
-        wasm_bytes,
-        vec![128u8; vector.len()],
-        "WASM must also take the degenerate branch"
-    );
-    assert_eq!(wasm_bytes, core_q.data);
-    assert_eq!(wasm_min, core_q.min);
-    assert_eq!(
-        wasm_scale, 0.0,
-        "degenerate range must encode the scale=0.0 sentinel"
-    );
-}
-
-#[test]
-fn test_binary_quantization_matches_core_byte_for_byte() {
-    for (name, vector) in parity_dataset() {
-        let core_b = BinaryQuantizedVector::from_f32(&vector);
-        let wasm_bytes = wasm_encode_binary(&vector);
-
-        assert_eq!(
-            wasm_bytes, core_b.data,
-            "Binary quantized bytes diverge from core for case `{name}` (vector={vector:?})"
-        );
-        assert_eq!(
-            wasm_bytes.len(),
-            vector.len().div_ceil(8),
-            "packed byte count mismatch for case `{name}`"
-        );
+/// Asserts the browser store and core agree on every query, in `mode`/`metric`.
+fn assert_parity(
+    vectors: &[Vec<f32>],
+    queries: &[Vec<f32>],
+    metric: DistanceMetric,
+    (mode, core_mode): (StorageMode, CoreStorageMode),
+    search: impl Fn(&VectorCollection, &[f32]) -> Vec<SearchResult>,
+) {
+    let store = wasm_store(vectors, metric, mode);
+    let core = core_results(vectors, metric, core_mode, queries, search);
+    for (query, core) in queries.iter().zip(&core) {
+        let wasm = store.search_scored(query, TOP_K);
+        assert_same_top_k(&format!("{mode:?}/{metric:?}"), &wasm, core);
     }
 }
 
+/// Every mode, every metric, against core's exact search on a collection big
+/// enough (1 200 points) for core's lazy SQ8/`RaBitQ` (1 000) and PQ (128)
+/// quantizers to have trained.
 #[test]
-fn test_sq8_restore_matches_core_within_float_tolerance() {
-    for (name, vector) in parity_dataset() {
-        let core_q = QuantizedVector::from_f32(&vector);
-        let core_restored = core_q.to_f32();
-
-        let mut store = create_store(vector.len(), DistanceMetric::Euclidean, StorageMode::SQ8);
-        insert_vector(&mut store, 1, &vector);
-        let wasm_restored = get_vector_at_index(&store, 0);
-
-        let range = (core_q.max - core_q.min).abs();
-        // Tolerance covers only the residual float-rounding-path difference
-        // between WASM's `q / encode_scale` and core's `q * decode_scale`
-        // (see module doc) — not quantization error, since both decode the
-        // same quantized byte.
-        let tol = (range * 1.0e-5).max(1.0e-4);
-
-        assert_eq!(
-            wasm_restored.len(),
-            core_restored.len(),
-            "restored dimension mismatch for case `{name}`"
-        );
-        for (i, (&w, &c)) in wasm_restored.iter().zip(core_restored.iter()).enumerate() {
-            assert!(
-                nan_aware_close(w, c, tol),
-                "restore diverges for case `{name}` dim {i}: wasm={w} core={c} tol={tol}"
-            );
+fn test_every_storage_mode_matches_core_exact_search() {
+    let vectors = dataset(1_200, 0x5EED_0001);
+    let queries = dataset(4, 0x5EED_0002);
+    for metric in METRICS {
+        for modes in MODES {
+            assert_parity(&vectors, &queries, metric, modes, |c, q| {
+                c.search_with_quality(q, TOP_K, SearchQuality::Perfect)
+                    .expect("core search")
+            });
         }
     }
 }
 
+/// Every mode against core's default `search()` entry point, on a collection
+/// core brute-forces (`<= 100` points).
 #[test]
-fn test_sq8_non_finite_range_matches_core_exactly() {
-    // Fable review follow-up on #1543: the `scale == 0.0` degenerate-range
-    // sentinel (see `store_insert::encode_sq8`) is not hermetic — a
-    // genuinely non-degenerate vector whose range overflows to `+Infinity`
-    // also computes `scale = 255.0 / range = 0.0` through the *normal*
-    // branch, colliding with the sentinel. Before the fix, WASM's decode
-    // then wrongly took the "degenerate" path and returned `min` for every
-    // dimension, where core actually returns `NaN` for every dimension
-    // (`to_f32`'s `q * (range/255.0) + min` with `range = +inf`).
-    for (name, vector) in [
-        (
-            "range_overflow_finite_minmax",
-            vec![-f32::MAX, f32::MAX, 0.0, 1.0],
-        ),
-        (
-            "range_infinite_literal_element",
-            vec![1.0, f32::INFINITY, -3.0, 2.0],
-        ),
-        (
-            "range_nan_all_inf_or_nan",
-            vec![f32::NAN, f32::INFINITY, f32::NAN, f32::INFINITY],
-        ),
-    ] {
-        let core_q = QuantizedVector::from_f32(&vector);
-        let core_restored = core_q.to_f32();
-        assert_eq!(
-            core_q.data,
-            vec![0u8; vector.len()],
-            "sanity: core's own encode is all-zero bytes for case `{name}`"
-        );
-        assert!(
-            core_restored.iter().all(|v| v.is_nan()),
-            "sanity: core's own restore is all-NaN for case `{name}`"
-        );
+fn test_every_storage_mode_matches_core_default_search() {
+    let vectors = dataset(100, 0x5EED_0003);
+    let queries = dataset(4, 0x5EED_0004);
+    for metric in METRICS {
+        for modes in MODES {
+            assert_parity(&vectors, &queries, metric, modes, |c, q| {
+                c.search(q, TOP_K).expect("core search")
+            });
+        }
+    }
+}
 
-        let (wasm_bytes, _wasm_min, _wasm_scale) = wasm_encode_sq8(&vector);
-        assert_eq!(
-            wasm_bytes, core_q.data,
-            "SQ8 encoded bytes diverge from core for non-finite-range case `{name}`"
-        );
-
-        let mut store = create_store(vector.len(), DistanceMetric::Euclidean, StorageMode::SQ8);
-        insert_vector(&mut store, 1, &vector);
-        let wasm_restored = get_vector_at_index(&store, 0);
-        assert!(
-            wasm_restored.iter().all(|v| v.is_nan()),
-            "WASM restore must be all-NaN (matching core) for case `{name}`, got {wasm_restored:?}"
-        );
+/// `get()` returns the inserted vector in every mode, as core does — not a
+/// lossy reconstruction.
+#[test]
+fn test_every_storage_mode_returns_the_inserted_vector() {
+    let vectors = dataset(3, 0x5EED_0005);
+    for (mode, _) in MODES {
+        let store = wasm_store(&vectors, DistanceMetric::Euclidean, mode);
+        for (idx, vector) in vectors.iter().enumerate() {
+            assert_eq!(
+                &get_vector_at_index(&store, idx),
+                vector,
+                "{mode:?}: get() must return the inserted f32 vector"
+            );
+        }
     }
 }

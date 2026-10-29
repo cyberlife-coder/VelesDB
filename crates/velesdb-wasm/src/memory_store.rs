@@ -22,7 +22,7 @@ use velesdb_memory::{
 };
 
 use crate::graph_store::WasmGraphStore;
-use crate::{vector_ops, DistanceMetric, StorageMode};
+use crate::{vector_ops, DistanceMetric};
 
 /// Reserved payload key for a fact's durable expiry (a millisecond Unix
 /// timestamp), mirroring `velesdb-core`'s `_veles_expires_at` naming so the
@@ -455,13 +455,8 @@ impl WasmStore {
             embedding,
             &ids,
             &data,
-            &[],
-            &[],
-            &[],
-            &[],
             inner.dimension,
             DistanceMetric::Cosine,
-            StorageMode::Full,
         );
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         Ok(scored

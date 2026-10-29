@@ -4,8 +4,9 @@
 //! Before the fix, ids/payloads used `swap_remove` (O(1)) while the
 //! per-mode data buffers used `drain` (O(n) shift-left). Removing a
 //! non-last index desynchronised id[idx] from the vector chunk at idx.
-//! These tests pin the corrected swap-remove semantics across Full, SQ8
-//! and Binary modes, plus the metadata-only (dimension = 0) edge case.
+//! These tests pin the corrected swap-remove semantics in every storage
+//! mode (all of which keep the f32 vectors), plus the metadata-only
+//! (dimension = 0) edge case.
 
 use crate::store_insert::{insert_batch_raw, insert_vector, insert_with_payload, remove_at_index};
 use crate::store_new::create_store;
@@ -13,14 +14,6 @@ use crate::{DistanceMetric, StorageMode};
 
 fn mk_full_store(dim: usize) -> crate::VectorStore {
     create_store(dim, DistanceMetric::Euclidean, StorageMode::Full)
-}
-
-fn mk_sq8_store(dim: usize) -> crate::VectorStore {
-    create_store(dim, DistanceMetric::Euclidean, StorageMode::SQ8)
-}
-
-fn mk_binary_store(dim: usize) -> crate::VectorStore {
-    create_store(dim, DistanceMetric::Hamming, StorageMode::Binary)
 }
 
 // -------------------------------------------------------------------------
@@ -82,94 +75,33 @@ fn test_remove_only_element_empties_buffers_full() {
 }
 
 // -------------------------------------------------------------------------
-// SQ8 mode: sq8_mins / sq8_scales stay aligned with data_sq8 after remove
+// Quantized modes: the f32 vectors stay aligned with the ids after remove
 // -------------------------------------------------------------------------
 
 #[test]
-fn test_remove_middle_index_keeps_sq8_buffers_synced() {
-    let mut store = mk_sq8_store(3);
-    // 4 distinctive vectors.
-    for i in 0..4u64 {
-        let f = i as f32 + 0.5;
-        insert_vector(&mut store, 10 + i, &[f, f * 2.0, f * 3.0]);
+fn test_remove_middle_index_keeps_vectors_synced_in_every_quantized_mode() {
+    for mode in [
+        StorageMode::SQ8,
+        StorageMode::Binary,
+        StorageMode::ProductQuantization,
+        StorageMode::RaBitQ,
+    ] {
+        let mut store = create_store(3, DistanceMetric::Euclidean, mode);
+        for i in 0..4u64 {
+            let f = i as f32 + 0.5;
+            insert_vector(&mut store, 10 + i, &[f, -f * 2.0, f * 3.0]);
+        }
+
+        // Remove index 1 (id = 11): the last row (id = 13) swaps into slot 1.
+        remove_at_index(&mut store, 1);
+
+        assert_eq!(store.ids, vec![10, 13, 12], "{mode:?}");
+        assert_eq!(
+            store.data,
+            vec![0.5, -1.0, 1.5, 3.5, -7.0, 10.5, 2.5, -5.0, 7.5],
+            "{mode:?}: the inserted f32 values follow their ids"
+        );
     }
-    assert_eq!(store.sq8_mins.len(), 4);
-    assert_eq!(store.sq8_scales.len(), 4);
-    assert_eq!(store.data_sq8.len(), 12);
-
-    let mins_before = store.sq8_mins.clone();
-    let scales_before = store.sq8_scales.clone();
-
-    // Remove index 1 (id = 11). Last (id = 13) should swap in for ids,
-    // mins, scales, AND the 3-byte data chunk.
-    remove_at_index(&mut store, 1);
-
-    assert_eq!(store.ids, vec![10, 13, 12]);
-    assert_eq!(store.sq8_mins.len(), 3);
-    assert_eq!(store.sq8_scales.len(), 3);
-    assert_eq!(store.data_sq8.len(), 9);
-
-    // mins[1] should now be the original mins[3] (id=13).
-    assert!((store.sq8_mins[1] - mins_before[3]).abs() < 1e-6);
-    assert!((store.sq8_scales[1] - scales_before[3]).abs() < 1e-6);
-    // Unchanged: mins[0] == original mins[0], mins[2] == original mins[2].
-    assert!((store.sq8_mins[0] - mins_before[0]).abs() < 1e-6);
-    assert!((store.sq8_mins[2] - mins_before[2]).abs() < 1e-6);
-}
-
-#[test]
-fn test_remove_last_index_sq8_truncates() {
-    let mut store = mk_sq8_store(2);
-    for i in 0..3u64 {
-        let f = i as f32;
-        insert_vector(&mut store, i, &[f, f + 1.0]);
-    }
-    remove_at_index(&mut store, 2);
-    assert_eq!(store.ids, vec![0, 1]);
-    assert_eq!(store.sq8_mins.len(), 2);
-    assert_eq!(store.data_sq8.len(), 4);
-}
-
-// -------------------------------------------------------------------------
-// Binary mode: byte chunks stay aligned
-// -------------------------------------------------------------------------
-
-#[test]
-fn test_remove_middle_index_keeps_binary_buffer_synced() {
-    // Dim 9 so each vector takes ceil(9/8) = 2 bytes — makes the chunk
-    // arithmetic non-trivial.
-    let mut store = mk_binary_store(9);
-    let v0 = vec![1.0; 9];
-    let v1 = vec![0.5; 9];
-    let v2 = vec![-1.0; 9];
-    let v3 = vec![1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
-    insert_vector(&mut store, 1, &v0);
-    insert_vector(&mut store, 2, &v1);
-    insert_vector(&mut store, 3, &v2);
-    insert_vector(&mut store, 4, &v3);
-    assert_eq!(store.data_binary.len(), 8);
-
-    let bytes_3 = store.data_binary[6..8].to_vec();
-
-    // Remove index 1 (id=2). With swap-remove: id=4 bytes move to slot 1.
-    remove_at_index(&mut store, 1);
-
-    assert_eq!(store.ids, vec![1, 4, 3]);
-    assert_eq!(store.data_binary.len(), 6);
-
-    // Slot 1 (bytes 2..4) should now equal the original bytes of id=4.
-    assert_eq!(store.data_binary[2..4], bytes_3[..]);
-}
-
-#[test]
-fn test_remove_last_index_binary_truncates() {
-    let mut store = mk_binary_store(8);
-    for i in 0..3u64 {
-        insert_vector(&mut store, i, &[1.0; 8]);
-    }
-    remove_at_index(&mut store, 2);
-    assert_eq!(store.ids, vec![0, 1]);
-    assert_eq!(store.data_binary.len(), 2);
 }
 
 // -------------------------------------------------------------------------
@@ -309,36 +241,22 @@ fn test_insert_batch_raw_overflow_errors() {
 }
 
 // -------------------------------------------------------------------------
-// RaBitQ mode: the scratch buffer must be allocated for dequantization.
+// RaBitQ mode: the first search must not abort.
 // -------------------------------------------------------------------------
 
 #[test]
-fn test_rabitq_search_does_not_panic_on_empty_scratch() {
-    // Regression: `ScratchBuffer::new` used to allocate `buf` only for
-    // SQ8/Binary/PQ, so a `rabitq` store — which decodes via `decode_sq8` —
-    // indexed into an empty `Vec` on the first score computation, an
-    // out-of-bounds panic (a module abort under `panic = "abort"`). A
-    // `rabitq` store is reachable from JS via `new_with_mode(.., "rabitq")`.
+fn test_rabitq_search_does_not_panic() {
+    // Regression: the old per-mode dequantization scratch buffer was allocated
+    // only for SQ8/Binary/PQ, so a `rabitq` store — reachable from JS via
+    // `new_with_mode(.., "rabitq")` — indexed into an empty `Vec` on its first
+    // search, a module abort under `panic = "abort"`.
     let mut store = create_store(4, DistanceMetric::Euclidean, StorageMode::RaBitQ);
     insert_vector(&mut store, 1, &[1.0, 2.0, 3.0, 4.0]);
     insert_vector(&mut store, 2, &[5.0, 6.0, 7.0, 8.0]);
 
-    // This is the exact call `store_search::search` makes; before the fix it
-    // panicked here rather than returning scores.
-    let scores = crate::vector_ops::compute_scores(
-        &[1.0, 2.0, 3.0, 4.0],
-        &store.ids,
-        &store.data,
-        &store.data_sq8,
-        &store.data_binary,
-        &store.sq8_mins,
-        &store.sq8_scales,
-        4,
-        DistanceMetric::Euclidean,
-        StorageMode::RaBitQ,
-    );
+    let scores = store.search_scored(&[1.0, 2.0, 3.0, 4.0], 10);
 
     assert_eq!(scores.len(), 2, "every stored id must be scored");
-    assert_eq!(scores[0].0, 1);
+    assert_eq!(scores[0], (1, 0.0));
     assert_eq!(scores[1].0, 2);
 }

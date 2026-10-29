@@ -66,7 +66,7 @@ serialization fail with an explicit error — keep ids under that bound.
 | Constructor | Purpose |
 |---|---|
 | `new VectorStore(dimension, metric)` | Default, full-precision store. |
-| `VectorStore.new_with_mode(dimension, metric, mode)` | Quantized store — `mode` is `'full'`, `'sq8'` or `'binary'`. |
+| `VectorStore.new_with_mode(dimension, metric, mode)` | Store with a declared storage mode — `'full'`, `'sq8'`, `'binary'`, `'pq'` or `'rabitq'` (see [storage modes](#storage-modes-and-memory)). |
 | `VectorStore.with_capacity(dimension, metric, capacity)` | Pre-allocates, avoids repeated reallocation during bulk load. |
 | `VectorStore.new_metadata_only()` | Payload-only store, no vectors. |
 
@@ -172,27 +172,33 @@ store.search_with_filter(query, 5, {
 ### Storage modes and memory
 
 ```javascript
-const full   = new VectorStore(768, 'cosine');                              // default
-const sq8    = VectorStore.new_with_mode(768, 'cosine', 'sq8');
-const binary = VectorStore.new_with_mode(768, 'hamming', 'binary');
+const full = new VectorStore(768, 'cosine');                     // default
+const sq8  = VectorStore.new_with_mode(768, 'cosine', 'sq8');
 
 console.log(sq8.storage_mode);   // "sq8"
-console.log(sq8.memory_usage()); // bytes actually held, per mode
+console.log(sq8.memory_usage()); // 3080 for one 768-D vector, as for "full"
 ```
 
-`memory_usage()` measured for a **single 768-dimension vector**, i.e. the
-per-vector cost including its 8-byte id (historical reference reproduced with
-the historical `@wiscale/velesdb-wasm@4.0.0` package):
+Every storage mode — `full`, `sq8`, `binary`, `pq`, `rabitq` — returns the
+same top-k, with the same scores, as a `velesdb-core` collection created with
+that mode on the same data. Core keeps the f32 vectors in every mode and its
+quantized paths re-rank their final top-k with exact f32 distances (its
+`binary` behaves as `full`), so the browser store keeps the f32 vectors too and
+scores them exactly; `get()` returns the inserted vector. The store searches by
+brute force over every vector, so quantized codes would have no candidate set
+to narrow, and it keeps none.
 
-| Mode | Bytes per 768-D vector | Compression | Trade-off |
-|---|---|---|---|
-| `full` | 3080 | 1× | Maximum precision, the default. |
-| `sq8` | 784 | ~4× | Scalar quantization, small recall loss. |
-| `binary` | 104 | ~30× | Edge / IoT / mobile PWA, larger recall loss. |
+**Memory cost:** the mode is accepted, persisted and reported, but saves no
+memory in the browser. `memory_usage()` is 8 bytes per id plus 4 bytes per
+dimension in every mode — 3080 bytes for one 768-dimension vector. Earlier
+builds (binary format v2) had `sq8`/`pq`/`rabitq` hold a per-vector
+SQ8 encoding (784 bytes per 768-D vector) and `binary` packed sign bits (104
+bytes), at the price of scoring a lossy reconstruction: different scores and
+orderings than core under the same mode name, and `binary` scoring vectors of
+`0`/`1`. Size the store for the f32 figure (the practical ceiling is about
+100 K vectors; see the README's known limits).
 
-`ProductQuantization` and `RaBitQ` exist in the storage-mode enum but are
-**not usable from WASM**: they need `rayon`/`ndarray`/`persistence`, which are
-compiled out for `wasm32-unknown-unknown`.
+`search_with_quality()` and `batch_search()` work in every mode.
 
 ## GraphStore — in-memory knowledge graph
 
