@@ -141,7 +141,7 @@ format. Environment variables (`VELESDB_*`) still layer on top of a loaded file.
 | `VelesDatabase.open(path)` | Core defaults |
 | `VelesDatabase.openWithConfig(path, configPath)` | Loads a TOML file, **engine sections only** (`[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`); fails fast, never falls back to defaults |
 | `VelesDatabase.openWithConfigToml(path, configToml)` | Same, from an in-memory string (bundled asset, remote config) |
-| `updateGuardrails(limits)` | Live-updates depth / cardinality / memory / timeout / rate-limit / circuit-breaker caps (`MobileQueryLimits`) |
+| `updateGuardrails(limits)` | Live-updates depth / cardinality / memory / timeout / rate-limit / circuit-breaker caps (`MobileQueryLimits`); throws for a rate limit or failure threshold of `0` |
 | `enableStreaming(config)` | Bounded ingestion channel; defaults `bufferSize=10000`, `batchSize=128`, `flushIntervalMs=50` |
 
 Field-by-field reference: [`velesdb.toml` guide](../../docs/guides/CONFIGURATION.md).

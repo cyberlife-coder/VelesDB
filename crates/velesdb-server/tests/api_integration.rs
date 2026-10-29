@@ -4415,6 +4415,24 @@ async fn test_put_guardrails_rate_limit_reaches_later_collections() {
     );
 }
 
+#[tokio::test]
+async fn test_put_guardrails_refuses_a_zero_rate_limit_and_changes_nothing() {
+    let temp_dir = TempDir::new().unwrap();
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let before = state.db.guardrail_limits();
+
+    let body = json!({ "timeout_ms": 1, "rate_limit_qps": 0 });
+    let status = send_json(&app, "PUT", "/guardrails", body).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let after = state.db.guardrail_limits();
+    assert_eq!(after.rate_limit_qps, before.rate_limit_qps);
+    assert_eq!(
+        after.timeout_ms, before.timeout_ms,
+        "a refused body changes no field"
+    );
+}
+
 // ============================================================================
 // Get point by ID
 // ============================================================================

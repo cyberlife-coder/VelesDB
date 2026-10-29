@@ -303,20 +303,28 @@ impl Database {
     ///
     /// Gauges rather than counters, recomputed per call: `/metrics` calls
     /// this before every export.
+    ///
+    /// The registries are read only to clone the collection handles: the
+    /// walk of every index runs with no registry lock held, so a scrape that
+    /// waits on an index being backfilled cannot hold a registry reader that
+    /// a collection create or delete — and every request queued behind that
+    /// writer — would then wait on.
     pub fn refresh_storage_gauges(&self, metrics: &crate::metrics::OperationalMetrics) {
+        // One registry guard at a time, each dropped at the end of its
+        // statement.
+        let mut collections: Vec<crate::collection::Collection> = self
+            .vector_colls
+            .read()
+            .values()
+            .map(|c| c.inner.clone())
+            .collect();
+        collections.extend(self.graph_colls.read().values().map(|c| c.inner.clone()));
+        collections.extend(self.metadata_colls.read().values().map(|c| c.inner.clone()));
         let mut points = 0usize;
         let mut index_bytes = 0usize;
-        for coll in self.vector_colls.read().values() {
-            points += coll.inner.len();
-            index_bytes += coll.inner.indexes_memory_usage();
-        }
-        for coll in self.graph_colls.read().values() {
-            points += coll.inner.len();
-            index_bytes += coll.inner.indexes_memory_usage();
-        }
-        for coll in self.metadata_colls.read().values() {
-            points += coll.inner.len();
-            index_bytes += coll.inner.indexes_memory_usage();
+        for coll in &collections {
+            points += coll.len();
+            index_bytes += coll.indexes_memory_usage();
         }
         metrics.set_documents(u64::try_from(points).unwrap_or(u64::MAX));
         metrics.set_index_size(u64::try_from(index_bytes).unwrap_or(u64::MAX));
@@ -462,33 +470,62 @@ impl Database {
     /// buckets and breaker state survive the update (see
     /// [`GuardRails::update_limits`](crate::guardrails::GuardRails::update_limits)).
     /// Not persisted: a reopened database starts from the defaults.
+    ///
+    /// Applies `limits` unchecked, as it always has. Prefer
+    /// [`Self::update_guardrails_with`], which refuses limits that fail
+    /// [`QueryLimits::validate`](crate::guardrails::QueryLimits::validate) —
+    /// `PUT /guardrails` and the Python, Mobile and Tauri bindings go through
+    /// it.
+    #[expect(clippy::significant_drop_tightening)] // Reason: the write guard must span the propagation, or a collection registered in between would start from the old limits
     pub fn update_guardrails(&self, limits: &crate::guardrails::QueryLimits) {
-        self.update_guardrails_with(|live| live.clone_from(limits));
+        let mut live = self.guardrail_limits.write();
+        live.clone_from(limits);
+        self.propagate_guardrails(&live);
     }
 
-    /// Edits the live query guard-rails in place and propagates the result
-    /// as one atomic step; returns the limits now in force.
+    /// Edits the live query guard-rails and propagates the result as one
+    /// atomic step; returns the limits now in force.
     ///
     /// The partial-update form of [`Self::update_guardrails`] (`PUT
     /// /guardrails` changes only the fields its body names): two concurrent
     /// edits of different fields both land, where a read-then-replace pair
-    /// would lose one.
+    /// would lose one. `edit` runs on a copy, which must pass
+    /// [`QueryLimits::validate`](crate::guardrails::QueryLimits::validate)
+    /// before anything changes. It runs under the guard-rail lock, so it must
+    /// not call back into this database (`parking_lot` locks are not
+    /// reentrant).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`] if the edited limits fail validation; the
+    /// live limits are then unchanged.
     pub fn update_guardrails_with(
         &self,
         edit: impl FnOnce(&mut crate::guardrails::QueryLimits),
-    ) -> crate::guardrails::QueryLimits {
+    ) -> Result<crate::guardrails::QueryLimits> {
         let mut live = self.guardrail_limits.write();
-        edit(&mut live);
+        let mut next = live.clone();
+        edit(&mut next);
+        next.validate()?;
+        *live = next;
+        self.propagate_guardrails(&live);
+        Ok(live.clone())
+    }
+
+    /// Pushes `limits` to every registered collection. Called with the
+    /// guard-rail write lock held, so a collection registered concurrently
+    /// (`admit_collection`, which reads that lock) either is visited here or
+    /// starts from `limits`.
+    fn propagate_guardrails(&self, limits: &crate::guardrails::QueryLimits) {
         for vc in self.vector_colls.read().values() {
-            vc.guard_rails().update_limits(&live);
+            vc.guard_rails().update_limits(limits);
         }
         for gc in self.graph_colls.read().values() {
-            gc.inner.guard_rails().update_limits(&live);
+            gc.inner.guard_rails().update_limits(limits);
         }
         for mc in self.metadata_colls.read().values() {
-            mc.inner.guard_rails().update_limits(&live);
+            mc.inner.guard_rails().update_limits(limits);
         }
-        live.clone()
     }
 
     /// Returns diagnostics for a named collection.

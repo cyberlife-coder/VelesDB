@@ -126,7 +126,9 @@ fn update_guardrails_with_merges_into_the_live_limits() {
         .unwrap();
     db.update_guardrails(&QueryLimits::default().with_max_depth(4));
 
-    let applied = db.update_guardrails_with(|limits| limits.timeout_ms = 9_000);
+    let applied = db
+        .update_guardrails_with(|limits| limits.timeout_ms = 9_000)
+        .unwrap();
 
     assert_eq!(
         applied.max_depth, 4,
@@ -136,4 +138,32 @@ fn update_guardrails_with_merges_into_the_live_limits() {
     let coll = db.get_vector_collection("docs").unwrap();
     assert_eq!(coll.guard_rails().limits().max_depth, 4);
     assert_eq!(coll.guard_rails().limits().timeout_ms, 9_000);
+}
+
+#[test]
+fn update_guardrails_with_refuses_limits_that_would_stop_every_query() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("docs", 4, DistanceMetric::Cosine)
+        .unwrap();
+    let before = db.guardrail_limits();
+
+    let zero_qps = db.update_guardrails_with(|limits| {
+        limits.timeout_ms = 9_000;
+        limits.rate_limit_qps = 0;
+    });
+    let zero_threshold = db.update_guardrails_with(|limits| limits.circuit_failure_threshold = 0);
+
+    assert!(matches!(zero_qps, Err(crate::Error::Config(ref m)) if m.contains("rate_limit_qps")));
+    assert!(
+        matches!(zero_threshold, Err(crate::Error::Config(ref m)) if m.contains("circuit_failure_threshold"))
+    );
+    let after = db.guardrail_limits();
+    assert_eq!(
+        after.timeout_ms, before.timeout_ms,
+        "a refused edit changes nothing"
+    );
+    assert_eq!(after.rate_limit_qps, before.rate_limit_qps);
+    let coll = db.get_vector_collection("docs").unwrap();
+    assert_eq!(coll.guard_rails().limits().timeout_ms, before.timeout_ms);
 }

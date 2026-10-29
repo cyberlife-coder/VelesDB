@@ -68,6 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CircuitBreaker::reconfigure` change a limiter or a breaker in place, keeping
   its buckets and its state. `velesdb_core::metrics::LimitType`, the argument
   of `GuardRailsMetrics::record_limit_exceeded`, is now exported.
+  `QueryLimits::validate` refuses a `rate_limit_qps` or a
+  `circuit_failure_threshold` of `0`, which would reject every query or open
+  the breaker on the first failure now that both take effect;
+  `update_guardrails_with` applies it to the edited limits and returns
+  `Error::Config` (`VELES-009`), changing nothing, when they fail. The
+  existing `update_guardrails` keeps its unchecked signature.
 - **`VectorCollection::pending_reopen` names the streaming settings not in
   force yet.** It returns the `PendingReopen` settings (`DeferredIndexing`,
   `AsyncIndexBuilder`, with `field_name()`) whose persisted value differs from
@@ -223,6 +229,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults. Every registration path now pushes the live limits, under a lock
   that keeps a concurrent update from missing a collection being registered.
   Python, Mobile and Tauri call the same core method and get the same reach.
+  Each refuses limits that fail `QueryLimits::validate` and changes nothing:
+  `PUT /guardrails` answers `400` (`VELES-009`), Python raises `ValueError`,
+  Tauri rejects with `VELES-009`, and **BREAKING (Mobile)**
+  `updateGuardrails` now throws `VelesError`.
 - **`apply_advanced_config` takes effect, or says when it will.** The deferred
   indexer and the async index builder were built only when a collection was
   opened, so setting either on an open collection, as `POST /collections`
@@ -242,7 +252,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb_active_connections` on the HTTP and HTTPS paths, and
   `velesdb_queries_by_type{type="graph"}` (and `velesdb_queries_total`) on
   `/graph/traverse`, `/graph/traverse/parallel`, `/graph/traverse/stream` and
-  `/match`. All of them read `0` forever before.
+  `/match`, once the read is admitted (collection found, request valid, read
+  authorized). All of them read `0` forever before. A scrape reads the
+  registries only to clone the collection handles, so walking the indexes for
+  `velesdb_index_size_bytes` holds no registry lock.
 - **`list_indexes` reports what each index is and holds.** `memory_bytes` was
   `0` for every index; it is now each index's heap estimate (key bytes plus each
   value's serialized id bitmap). A secondary payload index was labelled

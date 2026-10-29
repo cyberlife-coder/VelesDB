@@ -95,6 +95,33 @@ impl QueryLimits {
         self.timeout_ms = ms;
         self
     }
+
+    /// Refuses the limits no running database should enforce as given.
+    ///
+    /// A `rate_limit_qps` of `0` would reject every query and a
+    /// `circuit_failure_threshold` of `0` would open the breaker on the first
+    /// failure. [`Database::update_guardrails_with`](crate::Database::update_guardrails_with)
+    /// applies this before any limit takes effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`](crate::Error::Config) naming the first
+    /// refused field.
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.rate_limit_qps == 0 {
+            return Err(crate::Error::Config(
+                "rate_limit_qps must be at least 1: 0 would reject every query".to_string(),
+            ));
+        }
+        if self.circuit_failure_threshold == 0 {
+            return Err(crate::Error::Config(
+                "circuit_failure_threshold must be at least 1: 0 would open the circuit \
+                 breaker on the first failure"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Guard-rail violation error (EPIC-048).

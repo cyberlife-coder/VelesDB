@@ -149,7 +149,6 @@ fn run_match(
 
     let collection = resolve_match_collection(state, collection_name)
         .ok_or_else(|| Error::CollectionNotFound(collection_name.to_string()))?;
-    state.operational_metrics.record_graph_query();
 
     let match_clause = parse_match_clause(&request.query)?;
     validate_threshold(request.threshold)?;
@@ -171,6 +170,9 @@ fn run_match(
             "scope narrowing is not supported for MATCH queries".to_string(),
         ));
     }
+    // Counted once the read is admitted (parsed, validated, authorized), as
+    // on the traversal handlers.
+    state.operational_metrics.record_graph_query();
 
     let results = execute_match(&collection, &match_clause, request)?;
 

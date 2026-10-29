@@ -90,7 +90,7 @@ results.forEach { result ->
 | `VelesDatabase.openWithObserver(path, observer)` | Opens with a read-path `MobileObserver` attached (audit **and deny**) |
 | `VelesDatabase.openWithObserverAndConfig(path, observer, configPath)` | Observer + config file |
 | `VelesDatabase.openWithObserverAndConfigToml(path, observer, configToml)` | Observer + config string |
-| `updateGuardrails(limits)` | Live-updates query guardrail limits (`MobileQueryLimits`) |
+| `updateGuardrails(limits)` | Live-updates query guardrail limits (`MobileQueryLimits`); throws for a `rateLimitQps` or `circuitFailureThreshold` of `0` |
 | `createCollection(name, dimension, metric)` | Creates a vector collection |
 | `createCollectionWithStorage(name, dimension, metric, storageMode)` | Creates a collection with quantized storage |
 | `createMetadataCollection(name)` | Creates a metadata-only collection (no vectors) |
@@ -295,7 +295,10 @@ Guardrails are the other half of the control plane: `updateGuardrails(limits)` s
 `maxDepth`, `maxCardinality`, `memoryLimitBytes`, `timeoutMs` (0 disables),
 `rateLimitQps`, `circuitFailureThreshold`, and `circuitRecoverySeconds` on every
 collection — the rate limiter and circuit breaker included — and every collection
-opened afterwards starts from them. They are not persisted.
+opened afterwards starts from them. They are not persisted. It throws
+`VelesError` (`VELES-009`) and changes nothing for a `rateLimitQps` or a
+`circuitFailureThreshold` of `0`, which would reject every query or open the
+breaker on the first failure.
 
 ## Enums
 

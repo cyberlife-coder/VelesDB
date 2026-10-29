@@ -410,20 +410,24 @@ pub async fn get_guardrails(State(state): State<Arc<AppState>>) -> impl IntoResp
     request_body = GuardRailsConfigRequest,
     responses(
         (status = 200, description = "Updated guard-rails config", body = GuardRailsConfigResponse),
+        (status = 400, description = "Refused limits (`rate_limit_qps` or `circuit_failure_threshold` of 0); nothing changed", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     )
 )]
 pub async fn update_guardrails(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GuardRailsConfigRequest>,
-) -> impl IntoResponse {
-    // The edit and its propagation are one step in core, so two concurrent
-    // partial updates of different fields both land (EPIC-048).
-    let limits = state
+) -> axum::response::Response {
+    // The edit, its validation and its propagation are one step in core, so
+    // two concurrent partial updates of different fields both land and a
+    // refused one changes nothing (EPIC-048).
+    match state
         .db
-        .update_guardrails_with(|limits| apply_guardrails_update(limits, &req));
-
-    Json(limits_to_response(&limits))
+        .update_guardrails_with(|limits| apply_guardrails_update(limits, &req))
+    {
+        Ok(limits) => Json(limits_to_response(&limits)).into_response(),
+        Err(e) => auto_core_error_response(&e),
+    }
 }
 
 /// Convert `QueryLimits` to the REST response type.

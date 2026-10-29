@@ -502,13 +502,33 @@ fn test_collection_guardrails_update_and_read() {
         rate_limit_qps: 50,
         circuit_failure_threshold: 3,
         circuit_recovery_seconds: 30,
-    });
+    })
+    .unwrap();
 
     let read = col.guard_rails();
     assert_eq!(read.max_depth, 7);
     assert_eq!(read.timeout_ms, 5000);
     assert_eq!(read.rate_limit_qps, 50);
     assert_eq!(read.memory_limit_bytes, 1_048_576);
+}
+
+#[test]
+fn test_update_guardrails_refuses_a_zero_rate_limit_and_changes_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let db = VelesDatabase::open(tmp.path().to_str().unwrap().to_string()).unwrap();
+    db.create_collection("gr".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("gr".to_string()).unwrap().unwrap();
+    let before = col.guard_rails();
+
+    let refused = db.update_guardrails(MobileQueryLimits {
+        rate_limit_qps: 0,
+        timeout_ms: 1,
+        ..before.clone()
+    });
+
+    assert!(refused.is_err());
+    assert_eq!(col.guard_rails().timeout_ms, before.timeout_ms);
 }
 
 #[test]

@@ -2046,6 +2046,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GuardRailsConfigResponse"
+        "400":
+          description: Refused limits (`rate_limit_qps` or `circuit_failure_threshold` of 0); nothing changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "422":
           $ref: "#/components/responses/MalformedBody"
   /health:

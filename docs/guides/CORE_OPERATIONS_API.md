@@ -209,7 +209,13 @@ replaces all seven fields, and every one of them reaches every collection:
 `Database::guardrail_limits()` returns the limits in force, and
 `Database::update_guardrails_with(|limits| ...)` edits them in place and
 propagates the result as one step, so concurrent partial updates do not lose
-each other. The server's `PUT /guardrails` is that partial form, and
+each other. It first checks the edited limits with `QueryLimits::validate`,
+which refuses a `rate_limit_qps` or a `circuit_failure_threshold` of `0`
+(`Error::Config`; nothing changes), where `update_guardrails` applies its
+argument unchecked. The edit runs under the guard-rail lock, so it must not
+call back into the database. The server's `PUT /guardrails` is that partial
+form, the Python, Mobile and Tauri `update_guardrails` call it with the whole
+replacement, and
 `GET /guardrails` reads `guardrail_limits()`
 ([REST reference](../reference/api-reference.md#put-guardrails)).
 `RateLimiter` and `CircuitBreaker` are also usable on their own, and

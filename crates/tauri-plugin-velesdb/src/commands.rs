@@ -719,7 +719,10 @@ pub async fn compact_storage<R: Runtime>(
 
 /// Updates query guardrail limits for every collection in the database.
 ///
-/// This is a full replacement: all fields of `limits` are applied.
+/// This is a full replacement: all fields of `limits` are applied, once they
+/// pass core's `QueryLimits::validate` (a `rate_limit_qps` or
+/// `circuit_failure_threshold` of `0` is refused with `VELES-009` and nothing
+/// changes).
 #[command]
 pub async fn update_guardrails<R: Runtime>(
     _app: AppHandle<R>,
@@ -728,7 +731,8 @@ pub async fn update_guardrails<R: Runtime>(
 ) -> std::result::Result<(), CommandError> {
     state
         .run_db(move |db| {
-            db.update_guardrails(&limits.into());
+            let limits: velesdb_core::guardrails::QueryLimits = limits.into();
+            db.update_guardrails_with(|live| live.clone_from(&limits))?;
             Ok(())
         })
         .await

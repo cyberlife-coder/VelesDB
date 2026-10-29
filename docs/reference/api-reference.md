@@ -1337,6 +1337,11 @@ updates both land):
 - A collection created, or opened from disk, after the call starts from the
   updated limits. Nothing is persisted: a restart returns to the defaults.
 
+A body that would leave `rate_limit_qps` or `circuit_failure_threshold` at
+`0` — every query rejected, or the breaker opening on the first failure — is
+refused with `400` (`VELES-009`, core's `QueryLimits::validate`) and changes
+no field.
+
 `GET /guardrails` reads the limits in force from the database
 (`Database::guardrail_limits`).
 
@@ -1366,7 +1371,7 @@ The families, in the order they are written:
 | `velesdb_plan_cache_size` | gauge | — | cached plans (L1 + L2) |
 | `velesdb_plan_cache_hit_rate` | gauge | — | hits / (hits + misses) |
 | `velesdb_queries_total` | counter | `status` = `success` \| `error` \| `rate_limited` | REST search handlers, and the graph queries `velesdb_queries_by_type{type="graph"}` counts |
-| `velesdb_queries_by_type` | counter | `type` = `vector` \| `graph` \| `hybrid` | REST search handlers; `graph` counts `/graph/traverse`, `/graph/traverse/parallel`, `/graph/traverse/stream` and `/match` |
+| `velesdb_queries_by_type` | counter | `type` = `vector` \| `graph` \| `hybrid` | REST search handlers; `graph` counts `/graph/traverse`, `/graph/traverse/parallel`, `/graph/traverse/stream` and `/match` once the read is admitted (collection found, request valid, read authorized) |
 | `velesdb_documents_total` | gauge | — | points across every collection, read from the database at each scrape |
 | `velesdb_index_size_bytes` | gauge | — | estimated heap of every secondary, graph property and range index (`indexes_memory_usage` summed), read at each scrape; the HNSW graph and BM25 are not counted |
 | `velesdb_active_connections` | gauge | — | open client connections, HTTP and HTTPS, from accept to close |
