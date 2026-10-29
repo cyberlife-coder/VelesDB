@@ -3,14 +3,12 @@
 use wasm_bindgen::prelude::*;
 
 use crate::filter;
-use crate::hybrid_quantized;
 use crate::parsing;
 use crate::sparse;
 use crate::store_get;
 use crate::store_insert;
 use crate::store_new;
 use crate::store_search;
-use crate::vector_ops;
 use crate::{DistanceMetric, QueryResult, StorageMode};
 
 /// A vector store for in-memory vector search.
@@ -23,30 +21,22 @@ use crate::{DistanceMetric, QueryResult, StorageMode};
 ///
 /// # Storage Modes
 ///
-/// - `Full`: f32 precision, best recall
-/// - `SQ8`: 4x memory reduction, small recall loss
-/// - `Binary`: 32x memory reduction, larger recall loss
+/// Every mode keeps the f32 vectors and scores them exactly, returning the
+/// same results as a `velesdb-core` collection with that mode; the mode saves
+/// no memory in the browser (see [`StorageMode`]).
 #[wasm_bindgen]
 pub struct VectorStore {
     /// Vector IDs in insertion order
     pub(crate) ids: Vec<u64>,
-    /// Contiguous buffer for Full mode (f32)
+    /// Contiguous f32 vectors, `dimension` floats per id, in every storage mode
     pub(crate) data: Vec<f32>,
-    /// Contiguous buffer for SQ8 mode (u8)
-    pub(crate) data_sq8: Vec<u8>,
-    /// Contiguous buffer for Binary mode (packed bits)
-    pub(crate) data_binary: Vec<u8>,
-    /// Min values for SQ8 dequantization (per vector)
-    pub(crate) sq8_mins: Vec<f32>,
-    /// Scale values for SQ8 dequantization (per vector)
-    pub(crate) sq8_scales: Vec<f32>,
     /// Payloads (JSON metadata) for each vector
     pub(crate) payloads: Vec<Option<serde_json::Value>>,
     /// Number of dimensions per vector
     pub(crate) dimension: usize,
     /// Distance metric used for similarity computation
     pub(crate) metric: DistanceMetric,
-    /// Quantization / storage mode (Full, SQ8, Binary)
+    /// Declared storage mode (accepted, persisted and reported; see [`StorageMode`])
     pub(crate) storage_mode: StorageMode,
     /// Optional sparse index for sparse/hybrid search
     pub(crate) sparse_index: Option<sparse::SparseIndex>,
@@ -89,7 +79,10 @@ impl VectorStore {
         self.dimension == 0
     }
 
-    /// Creates store with mode: full (4B/dim), sq8 (4x compression), binary (32x compression).
+    /// Creates store with a storage mode: full, sq8, binary, pq or rabitq.
+    ///
+    /// Every mode keeps f32 vectors (4 bytes per dimension) and returns the
+    /// same results as `velesdb-core` with that mode.
     #[wasm_bindgen]
     pub fn new_with_mode(
         dimension: usize,
@@ -187,13 +180,8 @@ impl VectorStore {
             &self.ids,
             &self.payloads,
             &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
             self.dimension,
             self.metric,
-            self.storage_mode,
             k,
             |payload: &serde_json::Value| filter::matches_filter(payload, &filter_obj),
         )
@@ -208,19 +196,7 @@ impl VectorStore {
     #[wasm_bindgen]
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
         store_search::validate_dimension(query.len(), self.dimension)?;
-        store_search::search(
-            query,
-            &self.ids,
-            &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
-            self.dimension,
-            self.metric,
-            self.storage_mode,
-            k,
-        )
+        store_search::search(query, &self.ids, &self.data, self.dimension, self.metric, k)
     }
 
     /// k-NN search with a named quality mode (API parity with Server/Python/Mobile).
@@ -246,19 +222,7 @@ impl VectorStore {
         // Validate the quality string for API parity. The value is unused
         // because WASM search is brute-force (no HNSW graph).
         parsing::parse_search_quality(quality)?;
-        store_search::search(
-            query,
-            &self.ids,
-            &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
-            self.dimension,
-            self.metric,
-            self.storage_mode,
-            k,
-        )
+        store_search::search(query, &self.ids, &self.data, self.dimension, self.metric, k)
     }
 
     /// Similarity search with threshold. Operators: >, >=, <, <=, =, !=.
@@ -275,13 +239,8 @@ impl VectorStore {
             query,
             &self.ids,
             &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
             self.dimension,
             self.metric,
-            self.storage_mode,
             threshold,
             operator,
             k,
@@ -301,13 +260,8 @@ impl VectorStore {
 
     /// Hybrid search (vector + text). `vector_weight` 0-1 (default 0.5).
     ///
-    /// For `Full` storage mode, this computes per-vector distance and text
-    /// matching in a single pass. For quantized modes (`SQ8`, `Binary`,
-    /// `ProductQuantization`), a decomposed approach is used: vector scores
-    /// are obtained via the quantization-aware `compute_scores` path, text
-    /// matches are evaluated independently on payloads, and the two result
-    /// sets are fused with the requested weight. Quantized vector scores are
-    /// approximate, so recall may differ slightly from `Full` mode.
+    /// Computes the exact per-vector score and the text match in a single
+    /// pass, in every storage mode.
     ///
     /// Returns `[{id, score, payload}, ...]` sorted by combined score
     /// descending, truncated to `k` results.
@@ -320,34 +274,16 @@ impl VectorStore {
         vector_weight: Option<f32>,
     ) -> Result<JsValue, JsValue> {
         store_search::validate_dimension(query_vector.len(), self.dimension)?;
-        if self.storage_mode == StorageMode::Full {
-            return store_search::hybrid_search_impl(
-                query_vector,
-                text_query,
-                &self.ids,
-                &self.data,
-                &self.payloads,
-                self.dimension,
-                self.metric,
-                k,
-                vector_weight,
-            );
-        }
-        hybrid_quantized::hybrid_search_quantized(
+        store_search::hybrid_search_impl(
             query_vector,
             text_query,
-            k,
-            vector_weight,
             &self.ids,
             &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
             &self.payloads,
             self.dimension,
             self.metric,
-            self.storage_mode,
+            k,
+            vector_weight,
         )
     }
 
@@ -391,23 +327,7 @@ impl VectorStore {
     pub fn query(&self, query_vector: &[f32], k: usize) -> Result<JsValue, JsValue> {
         store_search::validate_dimension(query_vector.len(), self.dimension)?;
 
-        // Use compute_scores to get (id, score) pairs
-        let mut scores = vector_ops::compute_scores(
-            query_vector,
-            &self.ids,
-            &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
-            self.dimension,
-            self.metric,
-            self.storage_mode,
-        );
-
-        // Sort by score
-        vector_ops::sort_results(&mut scores, self.metric.higher_is_better());
-        scores.truncate(k);
+        let scores = self.search_scored(query_vector, k);
 
         // Build id->index map for payload lookup
         let id_to_idx: std::collections::HashMap<u64, usize> = self
@@ -466,13 +386,8 @@ impl VectorStore {
             num_vectors,
             &self.ids,
             &self.data,
-            &self.data_sq8,
-            &self.data_binary,
-            &self.sq8_mins,
-            &self.sq8_scales,
             self.dimension,
             self.metric,
-            self.storage_mode,
             k,
             strategy,
             rrf_k,
@@ -494,14 +409,8 @@ impl VectorStore {
         }
         store_search::validate_multi_vector_len(vectors.len(), num_vectors, self.dimension)
             .map_err(|e| JsValue::from_str(&e))?;
-        if self.storage_mode != StorageMode::Full {
-            return Err(JsValue::from_str(
-                "batch_search only supports Full storage mode",
-            ));
-        }
         store_search::batch_search_impl(
             vectors,
-            num_vectors,
             &self.ids,
             &self.data,
             self.dimension,
@@ -535,29 +444,16 @@ impl VectorStore {
     pub fn clear(&mut self) {
         self.ids.clear();
         self.data.clear();
-        self.data_sq8.clear();
-        self.data_binary.clear();
-        self.sq8_mins.clear();
-        self.sq8_scales.clear();
         self.payloads.clear();
         self.sparse_index = None;
     }
 
-    /// Returns memory usage estimate in bytes.
+    /// Returns memory usage estimate in bytes: ids plus the f32 vectors,
+    /// which every storage mode keeps (see [`StorageMode`]).
     #[wasm_bindgen]
     #[must_use]
     pub fn memory_usage(&self) -> usize {
-        let id_bytes = self.ids.len() * std::mem::size_of::<u64>();
-        match self.storage_mode {
-            StorageMode::Full => id_bytes + self.data.len() * 4,
-            StorageMode::SQ8 => {
-                id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
-            }
-            StorageMode::Binary => id_bytes + self.data_binary.len(),
-            StorageMode::ProductQuantization | StorageMode::RaBitQ => {
-                id_bytes + self.data_sq8.len() + (self.sq8_mins.len() + self.sq8_scales.len()) * 4
-            }
-        }
+        self.ids.len() * std::mem::size_of::<u64>() + std::mem::size_of_val(self.data.as_slice())
     }
 
     /// Creates store with pre-allocated capacity.
@@ -632,6 +528,12 @@ impl VectorStore {
 
 // Native-testable internals (not part of the wasm-bindgen surface).
 impl VectorStore {
+    /// Top-`k` `(id, score)` pairs for `query`, best first — the exact f32
+    /// scores behind [`search`](Self::search) in every storage mode.
+    pub(crate) fn search_scored(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
+        store_search::top_k(query, &self.ids, &self.data, self.dimension, self.metric, k)
+    }
+
     /// Scoring entry point behind [`search_sparse`](Self::search_sparse).
     ///
     /// Returns an error when no sparse index has been built (parity with the

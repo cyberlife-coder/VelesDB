@@ -7114,6 +7114,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "tempfile",
  "velesdb-core",
  "velesdb-memory",
  "wasm-bindgen",

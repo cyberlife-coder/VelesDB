@@ -65,6 +65,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `INVALID_CONFIG`, and so on for the other three; the guest-js `CommandError`
   type gains `recoverable: boolean`.
 
+- **BREAKING (behavior) — `velesdb-wasm` storage modes return core's results,
+  and no longer save memory.** A `VectorStore` created with `sq8`, `pq` or
+  `rabitq` kept only a per-vector SQ8 encoding, and one created with `binary`
+  only sign bits decoded to 0/1; searches scored that reconstruction, so the
+  same mode name returned different scores and a different order than a
+  `velesdb-core` collection, and `get()` returned the reconstruction. Core keeps
+  the f32 vectors in every mode and re-ranks its quantized paths with exact f32
+  (its `Binary` behaves as `Full`). The browser store now keeps the f32 vectors
+  in every mode and scores them exactly: same top-k and scores as core for the
+  same mode, pinned per mode and metric against a real core collection by
+  `quantization_parity_tests`. The cost is memory: every mode now takes 4 bytes
+  per dimension plus 8 per id (3080 bytes per 768-D vector, where `sq8` took
+  ~784 and `binary` ~104). `batch_search` now works in every mode, and
+  `hybrid_search` scores every mode in one exact pass. The `pq`/`rabitq`
+  `console.warn` about an SQ8 fallback is gone, since there is no fallback.
+  One core-side split is documented rather than copied: after a PQ collection
+  trains (128 inserts), core's default `search()` returns ADC-approximated
+  scores while `search_with_quality` stays exact; the browser store returns the
+  exact ones.
+- **`velesdb-wasm` binary format v3.** `export_to_bytes`/`save` write `VELS` v3:
+  the v2 layout without its four quantized blobs, the f32 vectors being kept in
+  every mode. v2 and v1 blobs still load; a v2 quantized store loads as the
+  reconstruction it was searching over (SQ8 decoded through core's
+  `QuantizedVector::to_f32`, sign bits as 0/1), since its f32 values were never
+  saved. An older build refuses a v3 blob with `Unsupported version: 3`.
+
 - **`velesdb_common` calls the binding instead of re-implementing core.** Its
   FNV-1a copy and its search-quality grammar (preset set, `custom:`/`adaptive:`
   regexes, a mirrored 16–4096 ef range) are gone. `stable_hash_id(value,
@@ -157,24 +183,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `executeQuery` answered `"N row(s) affected"` for a read; it now answers
   `"N row(s) returned"`, as WASM always did.
 
-- **The Python binding exposes three core contracts as module functions.**
-  `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
-  `u64` point id; `velesdb.metric_higher_is_better(metric)` is
-  `DistanceMetric::higher_is_better`, the order core sorts results by; and
-  `velesdb.validate_search_quality(mode)` runs core's `parse_search_mode`, the
-  parser `search_with_quality` uses, raising `ValueError` with its message. The
-  MIT integrations call them instead of carrying copies (below), so a change in
-  core reaches them with the next wheel.
-
-- **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
-  *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
-  among the distances and mapped its scores through `1 / (1 + s)`: the best
-  match got the lowest similarity, so `similarity_cutoff` and node
-  postprocessors dropped it first. The direction now comes from
-  `velesdb.metric_higher_is_better` through the new
-  `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
-  the binding by a drift test, for a wheel that predates the function. Euclidean
-  and Hamming keep their `1 / (1 + d)` mapping.
+- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
+  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
+  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
+  This includes a v2 quantized store filled through the old `insert_batch`,
+  which appended to the f32 buffer whatever the mode and left the codes short,
+  so its first search indexed out of bounds.
 
 ### Documentation
 

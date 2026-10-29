@@ -260,7 +260,7 @@ Create a vector collection.
 | `hnsw` | `{ m?: number, efConstruction?: number }` | - | HNSW index tuning |
 | `description` | `string` | - | Optional description |
 
-> **WASM backend:** `storageMode` takes `full`, `sq8` or `binary`, by those names. `pq` and `rabitq` are refused with `NOT_SUPPORTED`, since velesdb-wasm would store them as SQ8, and so is any `collectionType` other than `vector`. `hnsw`, `pqRescoreOversampling`, `deferredIndexing` and `asyncIndexBuilder` are refused too: WASM builds no HNSW graph and scans every stored vector, so they have nowhere to go. `db.capabilities()` lists what applies (`storageModes`, `collectionTypes`, `collectionConfig`).
+> **WASM backend:** `storageMode` takes `full`, `sq8` or `binary`, by those names. Each returns the same results as the same mode in velesdb-core, and none saves memory: velesdb-wasm keeps f32 vectors in every mode (3 KB per 768-D vector; the table below does not apply to it). `pq` and `rabitq` are refused with `NOT_SUPPORTED` by this SDK's WASM allowlist, and so is any `collectionType` other than `vector`. `hnsw`, `pqRescoreOversampling`, `deferredIndexing` and `asyncIndexBuilder` are refused too: WASM builds no HNSW graph and scans every stored vector, so they have nowhere to go. `db.capabilities()` lists what applies (`storageModes`, `collectionTypes`, `collectionConfig`).
 
 ##### Storage Modes
 

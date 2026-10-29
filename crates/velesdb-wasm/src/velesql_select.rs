@@ -271,13 +271,8 @@ pub(crate) fn score_all(
         query,
         &store.ids,
         &store.data,
-        &store.data_sq8,
-        &store.data_binary,
-        &store.sq8_mins,
-        &store.sq8_scales,
         store.dimension,
         store.metric,
-        store.storage_mode,
     );
     vector_ops::sort_results(&mut scored, store.metric.higher_is_better());
     scored

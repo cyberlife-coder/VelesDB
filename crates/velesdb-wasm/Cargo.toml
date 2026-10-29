@@ -81,6 +81,14 @@ version = "0.4"
 wasm-bindgen-test = "0.3"
 serde-wasm-bindgen = "0.6"
 
+# Host test builds only: `quantization_parity_tests` compares every storage
+# mode against a real core collection, which needs core's `persistence`
+# feature. Target-gated so it never reaches a wasm32 build (`wasm-pack test`),
+# where tokio/mmap do not compile; resolver 2 keeps the feature off there.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+velesdb-core = { workspace = true, features = ["persistence"] }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true
 

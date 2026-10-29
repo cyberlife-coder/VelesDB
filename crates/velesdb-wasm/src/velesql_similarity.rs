@@ -320,13 +320,8 @@ impl SimilarityEvaluator {
             &query,
             &borrowed.ids,
             &borrowed.data,
-            &borrowed.data_sq8,
-            &borrowed.data_binary,
-            &borrowed.sq8_mins,
-            &borrowed.sq8_scales,
             borrowed.dimension,
             borrowed.metric,
-            borrowed.storage_mode,
         );
         let scores = scored.into_iter().map(|(_, s)| s).collect();
         Ok(Self { scores })
