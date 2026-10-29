@@ -1,5 +1,6 @@
 //! Integration coverage for the Tauri `#[command]` handlers in `commands.rs`,
-//! `commands_graph.rs`, and the lifecycle `observer.rs`.
+//! `commands_graph.rs`, the semantic query of `commands_memory.rs`, and the
+//! lifecycle `observer.rs`.
 //!
 //! The handlers take `AppHandle<R>` + `State<'_, VelesDbState>` arguments that
 //! can only exist inside a Tauri `App`. These tests build a real
@@ -29,16 +30,17 @@ use tauri_plugin_velesdb::commands::{
     stream_insert, text_search, train_pq, traverse_graph, update_guardrails, upsert,
     upsert_metadata,
 };
+use tauri_plugin_velesdb::commands_memory::{semantic_query, semantic_store};
 use tauri_plugin_velesdb::observer::TauriObserver;
 use tauri_plugin_velesdb::types::{
     AddEdgeRequest, BatchSearchRequest, CreateCollectionRequest, CreateGraphCollectionRequest,
     CreateMetadataCollectionRequest, DeletePointsRequest, EnableStreamingRequest, GetEdgesRequest,
     GetNodeDegreeRequest, GetPointsRequest, GuardrailLimits, HybridSearchRequest,
     IndividualSearchRequest, MetadataPointInput, MultiQuerySearchRequest, PointInput, QueryRequest,
-    ScrollRequest, SearchRequest, StreamInsertRequest, TextSearchRequest, TrainPqRequest,
-    TraverseGraphRequest, UpsertMetadataRequest, UpsertRequest,
+    ScrollRequest, SearchRequest, SemanticQueryRequest, SemanticStoreRequest, StreamInsertRequest,
+    TextSearchRequest, TrainPqRequest, TraverseGraphRequest, UpsertMetadataRequest, UpsertRequest,
 };
-use tauri_plugin_velesdb::VelesDbState;
+use tauri_plugin_velesdb::{CommandError, VelesConfig, VelesDbState};
 
 const DIM: usize = 4;
 
@@ -1042,5 +1044,103 @@ fn tauri_observer_forwards_lifecycle_hooks_to_app() {
         deleted.load(Ordering::SeqCst),
         1,
         "TauriObserver did not emit collection-deleted"
+    );
+}
+
+/// A unit vector of the agent memory's dimension along `axis`.
+fn memory_axis(axis: usize) -> Vec<f32> {
+    let mut v = vec![0.0; velesdb_core::agent::DEFAULT_DIMENSION];
+    v[axis] = 1.0;
+    v
+}
+
+/// Stores facts 1 (on axis 0) and 2 (on axis 1) in `app`'s semantic memory.
+fn seed_semantic_memory(app: &App<tauri::test::MockRuntime>) {
+    for (id, axis) in [(1, 0), (2, 1)] {
+        run(semantic_store(
+            handle(app),
+            st(app),
+            SemanticStoreRequest {
+                id,
+                content: format!("fact {id}"),
+                embedding: memory_axis(axis),
+            },
+        ))
+        .expect("semantic store");
+    }
+}
+
+fn semantic_query_at(
+    app: &App<tauri::test::MockRuntime>,
+    quality: Option<&str>,
+) -> Result<Vec<u64>, CommandError> {
+    run(semantic_query(
+        handle(app),
+        st(app),
+        SemanticQueryRequest {
+            embedding: memory_axis(0),
+            top_k: 2,
+            quality: quality.map(str::to_string),
+        },
+    ))
+    .map(|results| results.into_iter().map(|r| r.id).collect())
+}
+
+#[test]
+fn semantic_query_at_an_explicit_quality_ranks_like_the_default() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    seed_semantic_memory(&app);
+
+    let default = semantic_query_at(&app, None).expect("default quality");
+    assert_eq!(default, vec![1, 2]);
+    for mode in [
+        "fast",
+        "accurate",
+        "perfect",
+        "custom:64",
+        "adaptive:32:512",
+    ] {
+        assert_eq!(
+            semantic_query_at(&app, Some(mode)).expect("explicit quality"),
+            default,
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn semantic_query_refuses_a_mode_core_refuses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    seed_semantic_memory(&app);
+
+    for mode in ["nonsense", "custom:8", "adaptive:512:32"] {
+        let err = semantic_query_at(&app, Some(mode)).expect_err("unusable mode");
+        assert_eq!(err.code, "VELES-009", "{mode}");
+    }
+}
+
+#[test]
+fn semantic_query_quality_reaches_core() {
+    // `perfect` meets core's exhaustive-scan cap: proof the mode is not dropped.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_builder()
+        .build(mock_context(noop_assets()))
+        .expect("build mock app");
+    let mut config = VelesConfig::default();
+    config.limits.max_perfect_mode_vectors = 1;
+    app.manage(VelesDbState::new_with_config(
+        dir.path().to_path_buf(),
+        config,
+    ));
+    seed_semantic_memory(&app);
+
+    assert_eq!(semantic_query_at(&app, None).expect("default"), vec![1, 2]);
+    let err = semantic_query_at(&app, Some("perfect")).expect_err("over the cap");
+    assert!(
+        err.message.contains("max_perfect_mode_vectors"),
+        "{}",
+        err.message
     );
 }

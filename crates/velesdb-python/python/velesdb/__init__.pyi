@@ -1430,7 +1430,7 @@ class StreamingConfig:
 
     Args:
         max_depth: Maximum traversal depth (default: 3)
-        max_visited: Maximum nodes to visit (default: 10000)
+        max_visited: Maximum number of results (default: 10000)
         relationship_types: Optional filter by relationship types
     """
 
@@ -1523,7 +1523,12 @@ class GraphStore:
         limit: int = 10000,
         relationship_types: Optional[List[str]] = None,
     ) -> List[TraversalResult]:
-        """Run a DFS traversal from ``source`` (keyword-only arguments)."""
+        """Run core's DFS from ``source`` (keyword-only arguments).
+
+        One result per node reached, in depth-first order, describing the
+        edge that reached it; ``limit`` caps the results, as for
+        :meth:`traverse_bfs`.
+        """
         ...
 
     def remove_edge(self, edge_id: int) -> None: ...
@@ -1986,11 +1991,30 @@ class PySemanticMemory:
         """
         ...
 
-    def query(self, embedding: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
+    def query(
+        self,
+        embedding: List[float],
+        top_k: int = 10,
+        quality: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Query semantic memory by similarity.
+
+        Args:
+            embedding: Query vector
+            top_k: Number of results to return (default: 10)
+            quality: Search quality for this query, as
+                :meth:`Collection.search_with_quality` takes it: ``"fast"``,
+                ``"balanced"``, ``"accurate"``, ``"perfect"``, ``"autotune"``,
+                ``"custom:<ef>"`` or ``"adaptive:<min_ef>:<max_ef>"``, each ef
+                in 16-4096. ``None`` (default) keeps the collection's own
+                quality.
 
         Returns:
             List of dicts with 'id', 'score', 'content' keys
+
+        Raises:
+            ValueError: If ``quality`` names no mode, or gives an ef outside
+                16-4096.
         """
         ...
 
@@ -2380,8 +2404,9 @@ class MemoryService:
             ollama_url: Ollama server URL (used when ``embedder="ollama"``).
             ollama_model: Ollama model name (used when ``embedder="ollama"``).
             search_quality: Recall quality: ``"fast"``, ``"balanced"``,
-                ``"accurate"``, ``"perfect"``, ``"autotune"`` or
-                ``"custom:<ef>"``. An explicit value wins over
+                ``"accurate"``, ``"perfect"``, ``"autotune"``,
+                ``"custom:<ef>"`` or ``"adaptive:<min_ef>:<max_ef>"``, each ef
+                in 16-4096. An explicit value wins over
                 ``VELESDB_MEMORY_SEARCH_QUALITY``; omitting both keeps the
                 collection's own quality.
 

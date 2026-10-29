@@ -400,6 +400,30 @@ mod tests {
         assert_eq!(results[0].target_id, 2);
     }
 
+    #[test]
+    fn test_traverse_dfs_config_is_the_edge_store_dfs() {
+        // A collection and a standalone `EdgeStore` holding the same edges
+        // answer a DFS identically: order, depths and paths.
+        let (collection, _temp) = create_test_collection();
+        let mut store = crate::collection::graph::EdgeStore::new();
+        for (id, source, target) in [(1, 1, 2), (2, 1, 3), (3, 2, 4), (4, 3, 4), (5, 4, 1)] {
+            add_edge_with_nodes(&collection, make_edge(id, source, target, "E")).unwrap();
+            store.add_edge(make_edge(id, source, target, "E")).unwrap();
+        }
+
+        let config = TraversalConfig::with_range(1, 5).with_limit(100);
+        let shape = |results: Vec<crate::collection::graph::TraversalResult>| {
+            results
+                .into_iter()
+                .map(|r| (r.target_id, r.depth, r.path))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            shape(collection.traverse_dfs_config(1, &config)),
+            shape(crate::collection::graph::dfs_traverse(&store, 1, &config)),
+        );
+    }
+
     // =========================================================================
     // Wall-clock deadline on config traversal + GraphMetrics wiring
     // =========================================================================
@@ -786,63 +810,6 @@ mod tests {
     }
 
     #[test]
-    fn test_expand_dfs_neighbors_bounds_push_growth() {
-        // Regression (#906): a single high-out-degree hub must not push more
-        // than `max_pending` neighbors into the stack / parent_map at PUSH time.
-        // The pop-time `visited.len()` guard in `traverse_dfs_config` does NOT
-        // cover this, because DFS records neighbors before they are popped.
-        use crate::collection::core::graph_traversal_helpers::{expand_dfs_neighbors, DfsFrontier};
-        use rustc_hash::{FxHashMap, FxHashSet};
-
-        let (collection, _temp) = create_graph_test_collection();
-        // Hub node 0 with 5_000 distinct out-edges. Bulk-create all endpoint
-        // payloads in one upsert (single fsync) rather than fanout individual
-        // store_node_payload calls (one WAL fsync each — a real hotspot at
-        // this scale, see test_dfs_hub_stays_bounded_and_terminates).
-        let fanout = 5_000u64;
-        let nodes: Vec<crate::point::Point> = (0..=fanout)
-            .map(|id| crate::point::Point::metadata_only(id, serde_json::json!({})))
-            .collect();
-        collection.upsert(nodes).expect("bulk-create nodes");
-        for t in 1..=fanout {
-            collection
-                .add_edge(make_edge(t, 0, t, "E"))
-                .expect("add edge");
-        }
-
-        let rel_filter: FxHashSet<&str> = FxHashSet::default();
-        let visited: FxHashSet<u64> = FxHashSet::default();
-        let mut stack: Vec<(u64, u32)> = Vec::new();
-        let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
-        let max_pending = 10usize;
-
-        let mut frontier = DfsFrontier {
-            stack: &mut stack,
-            parent_map: &mut parent_map,
-            max_pending,
-        };
-        expand_dfs_neighbors(
-            collection.graph.edge_store.as_ref(),
-            0,
-            0,
-            &rel_filter,
-            &visited,
-            &mut frontier,
-        );
-
-        assert!(
-            parent_map.len() <= max_pending,
-            "parent_map must be capped at max_pending, got {}",
-            parent_map.len()
-        );
-        assert!(
-            stack.len() <= max_pending,
-            "stack must be capped at max_pending, got {}",
-            stack.len()
-        );
-    }
-
-    #[test]
     fn test_dfs_hub_stays_bounded_and_terminates() {
         // Regression (#906): DFS from a single very-high-out-degree hub with
         // min_depth past the graph's reach yields an empty result but must
@@ -850,8 +817,8 @@ mod tests {
         // no depth-2 node, so with min_depth=2 the result is empty even though
         // the hub queues thousands of neighbors at push time.
         let (collection, _temp) = create_graph_test_collection();
-        // Bulk-create endpoint payloads in one upsert (see
-        // test_expand_dfs_neighbors_bounds_push_growth for why).
+        // Bulk-create endpoint payloads in one upsert: a single fsync, where
+        // one `store_node_payload` per node would pay a WAL fsync each.
         let fanout = 20_000u64;
         let nodes: Vec<crate::point::Point> = (0..=fanout)
             .map(|id| crate::point::Point::metadata_only(id, serde_json::json!({})))

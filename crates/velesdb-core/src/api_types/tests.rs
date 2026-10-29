@@ -1144,3 +1144,59 @@ fn weighted_fusion_defaults_are_the_canonical_constants() {
     assert!((default_max_weight() - 0.3).abs() < f32::EPSILON);
     assert!((default_hit_weight() - 0.1).abs() < f32::EPSILON);
 }
+
+#[test]
+fn validate_search_quality_accepts_a_typed_quality_exactly_when_its_string_form_parses() {
+    use super::{parse_search_mode, validate_search_quality};
+    use crate::SearchQuality;
+    let cases = [
+        (SearchQuality::Custom(64), "custom:64"),
+        (SearchQuality::Custom(0), "custom:0"),
+        (
+            SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: 512,
+            },
+            "adaptive:32:512",
+        ),
+        (
+            SearchQuality::Adaptive {
+                min_ef: 64,
+                max_ef: 64,
+            },
+            "adaptive:64:64",
+        ),
+        (
+            SearchQuality::Adaptive {
+                min_ef: 512,
+                max_ef: 32,
+            },
+            "adaptive:512:32",
+        ),
+        (
+            SearchQuality::Adaptive {
+                min_ef: 32,
+                max_ef: MAX_EF_SEARCH + 1,
+            },
+            &format!("adaptive:32:{}", MAX_EF_SEARCH + 1),
+        ),
+        (SearchQuality::Balanced, "balanced"),
+    ];
+    for (quality, mode) in cases {
+        assert_eq!(
+            validate_search_quality(&quality).is_ok(),
+            parse_search_mode(mode).is_ok(),
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn validate_search_quality_names_out_of_order_adaptive_bounds() {
+    let err = super::validate_search_quality(&crate::SearchQuality::Adaptive {
+        min_ef: 512,
+        max_ef: 32,
+    })
+    .unwrap_err();
+    assert!(err.contains("512") && err.contains("32"), "{err}");
+}
