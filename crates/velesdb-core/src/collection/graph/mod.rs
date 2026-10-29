@@ -68,6 +68,9 @@ mod streaming_tests;
 mod traversal;
 mod traversal_bidir;
 mod traversal_csr;
+mod traversal_dfs;
+#[cfg(test)]
+mod traversal_dfs_tests;
 #[cfg(test)]
 mod traversal_tests;
 
@@ -109,7 +112,8 @@ pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
     MAX_VISITED_SIZE,
 };
-pub(crate) use traversal::{deadline_reached, DEADLINE_CHECK_INTERVAL};
 pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
 pub use traversal_bidir::bfs_traverse_both;
 pub use traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};
+pub use traversal_dfs::dfs_traverse;
+pub(crate) use traversal_dfs::dfs_traverse_with;

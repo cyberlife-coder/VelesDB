@@ -589,6 +589,10 @@ pub struct SemanticQueryRequest {
     /// Number of results to return.
     #[serde(default = "default_top_k")]
     pub top_k: usize,
+    /// Search quality for this query, as [`SearchRequest::quality`] takes it.
+    /// Absent keeps the memory collection's own quality.
+    #[serde(default)]
+    pub quality: Option<String>,
 }
 
 /// Result from semantic memory query.

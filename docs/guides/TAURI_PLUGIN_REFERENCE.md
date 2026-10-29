@@ -201,6 +201,11 @@ only on the persistence path, and it is **ignored when a `filter` is also
 supplied** (known limitation #457). See the
 [search modes guide](./SEARCH_MODES.md).
 
+`semantic_query` takes the same optional `quality` string, parsed by the same
+core parser, and runs that one agent-memory query at it
+(`SemanticMemory::query_with_quality`); an unusable mode is refused as
+`VELES-009` and an absent one keeps the memory collection's own quality.
+
 ---
 
 ## Engine configuration
