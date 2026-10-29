@@ -100,6 +100,15 @@ let strategy = FusionStrategy::relative_score(0.7, 0.3)?;
 
 ## Fusion strategies, and where each one is reachable
 
+A surface that takes the strategy by name reads it with
+`FusionStrategy::from_name(name, FusionParams)`: `rrf`, `average` (`avg`),
+`maximum` (`max`), `weighted`, `relative_score` (`rsf`), case-insensitive, with
+core's defaults for any parameter left out (`DEFAULT_RRF_K`,
+`DEFAULT_WEIGHTED_*`, `DEFAULT_RELATIVE_SCORE_*`). REST, the CLI, Tauri, WASM and
+Python (`FusionStrategy.from_name`) all go through it, so a name means the same
+thing everywhere. VelesQL's `USING FUSION` clause has its own grammar, in the
+table below.
+
 `FusionStrategy` has six variants. Five of them are reachable from every
 surface this project ships. **`WeightedRRF` is reachable only from the Rust
 embedding API**, and that asymmetry is not a design decision anyone recorded —

@@ -51,6 +51,7 @@ use velesdb_core::velesql::Parser;   // parse a VelesQL statement
 ```rust
 use velesdb_core::sparse_index::SparseVector; // (index, weight) pairs
 use velesdb_core::FusionStrategy;             // RRF, RelativeScore, ...
+use velesdb_core::FusionParams;               // FusionStrategy::from_name(name, params): the name grammar
 ```
 
 ## Streaming ingestion
