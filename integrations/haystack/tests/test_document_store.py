@@ -123,14 +123,14 @@ class _FakeSearchOptions:
         vector: Any = None,
         *,
         sparse_vector: Any = None,
-        top_k: int = 10,
+        k: int = 10,
         filter: Any = None,  # pylint: disable=redefined-builtin
         sparse_index_name: Any = None,
         include_vectors: bool = False,
     ) -> None:
         self.vector = vector
         self.sparse_vector = sparse_vector
-        self.top_k = top_k
+        self.k = k
         self.filter = filter
         self.sparse_index_name = sparse_index_name
         self.include_vectors = include_vectors
@@ -165,7 +165,7 @@ class _FakeCollection:
 
     def search_request(self, opts: Any) -> list:
         """Canonical search entry point — delegate to the legacy `search`."""
-        return self.search(opts.vector, top_k=opts.top_k, filter=opts.filter)
+        return self.search(opts.vector, top_k=opts.k, filter=opts.filter)
 
     def multi_query_search(
         self,

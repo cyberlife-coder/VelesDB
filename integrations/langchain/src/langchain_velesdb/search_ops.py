@@ -208,7 +208,7 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
             return collection.search_with_ef(query_embedding, top_k=k, ef_search=ef_search)
         if filter is not None:
             return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-        return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+        return collection.search_request(_SearchOptions(vector=query_embedding, k=k))
 
     def _run_sparse_search(
         self,
@@ -242,7 +242,7 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         search_kwargs: dict[str, Any] = {
             "vector": query_embedding,
             "sparse_vector": sparse_vector,
-            "top_k": k,
+            "k": k,
         }
         if sparse_index_name is not None:
             search_kwargs["sparse_index_name"] = sparse_index_name
@@ -268,7 +268,7 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
             if filter is not None:
                 results = collection.search_with_filter(query_embedding, top_k=k, filter=filter)
             else:
-                results = collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+                results = collection.search_request(_SearchOptions(vector=query_embedding, k=k))
             return results, False
 
     def similarity_search(

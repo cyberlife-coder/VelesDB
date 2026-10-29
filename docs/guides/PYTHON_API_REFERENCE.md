@@ -25,13 +25,13 @@ which your IDE reads directly (`py.typed` is included in the wheel).
 ## Search API note
 
 `search_request(SearchOptions(...))` is the canonical search entry point and is
-used throughout the VelesDB Python documentation. The older multi-keyword
-`collection.search(vector=..., top_k=..., filter=...)` still works but is
-**deprecated since v1.15** — it emits a `DeprecationWarning`.
-`SearchOptions` accepts canonical `k`, plus `vector`, `sparse_vector`, `filter`,
-`sparse_index_name` and `include_vectors`, plus a fluent builder
-(`SearchOptions().with_vector(v).with_k(10)`). The deprecated `top_k` spelling
-remains accepted as an alias for one compatibility version. The `vector` argument
+used throughout the VelesDB Python documentation.
+`collection.search(vector, top_k=..., filter=...)` is the keyword shorthand
+over it, for the dense, sparse and hybrid cases without fusion or read-gate
+options. `SearchOptions` accepts `k`, plus `vector`, `sparse_vector`, `filter`,
+`sparse_index_name`, `include_vectors`, `fusion`, `principal` and `tenant`,
+plus a fluent builder (`SearchOptions().with_vector(v).with_k(10)`). The
+`top_k` alias of `SearchOptions` was removed in 8.0.0: use `k`. The `vector` argument
 accepts numpy arrays (`dtype=np.float32`) as well as Python lists.
 
 ## Database

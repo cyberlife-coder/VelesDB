@@ -403,7 +403,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         """Delete every node whose payload ``ref_doc_id`` matches."""
         # Parameter binding ($ref) keeps the user value out of the query text
         # entirely. It was a no-op on published wheels <= 1.18.0 (scalar-equality
-        # bug); the package now pins velesdb >= 3.8.0 where it works. The only
+        # bug); the velesdb floor in pyproject.toml is far above it. The only
         # interpolated token is collection_name, regex-validated at construction.
         query_str = (
             f"SELECT * FROM {self.collection_name} "  # nosec B608 — identifier regex-validated

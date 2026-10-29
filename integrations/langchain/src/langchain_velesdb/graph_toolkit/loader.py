@@ -1,16 +1,16 @@
 """Load extracted entities and relations into VelesDB.
 
-Handles conversion from extracted data to VelesDB graph storage format.
+Stores extracted entities as nodes and relations as edges of one persistent
+VelesDB graph collection.
 """
 
 from typing import List, Optional, Dict, TYPE_CHECKING
 import logging
-import velesdb
 
 from velesdb_common.ids import stable_hash_id
 
 if TYPE_CHECKING:
-    from velesdb import Database, Collection
+    from velesdb import Database, GraphCollection
     from langchain_velesdb.graph_toolkit.extractor import ExtractionResult
 
 from langchain_velesdb.graph_toolkit.extractor import Entity, Relation
@@ -28,14 +28,19 @@ def _generate_id(name: str, entity_type: str) -> int:
 
 
 class GraphLoader:
-    """Loads extracted entities and relations into VelesDB.
+    """Loads extracted entities and relations into a VelesDB graph collection.
 
-    Handles the conversion from extracted Entity/Relation objects
-    to VelesDB Points, Nodes, and Edges.
+    Entities become nodes (their type is the node's label, so VelesQL
+    ``MATCH (n:TYPE)`` finds them, and their embedding, when there is one, is
+    the node's vector) and relations become edges, all in one persistent
+    graph collection.
 
     Args:
         db: VelesDB Database instance.
-        collection_name: Name of the collection to use (default: "knowledge_graph").
+        collection_name: Name of the graph collection (default: "knowledge_graph").
+            An existing graph collection of that name is reused; otherwise one
+            is created on the first load, with the dimension of the first
+            embedding, or without embeddings when ``embedding_fn`` is not set.
         embedding_fn: Optional function to generate embeddings for entities.
 
     Example:
@@ -54,34 +59,21 @@ class GraphLoader:
         self.db = db
         self.collection_name = collection_name
         self.embedding_fn = embedding_fn
-        self._collection: Optional["Collection"] = None
-        self._graph_store = getattr(db, "graph_store", None)
-        if self._graph_store is None and hasattr(velesdb, "GraphStore"):
-            self._graph_store = velesdb.GraphStore()
-        self._metadata_only = False
+        self._graph: Optional["GraphCollection"] = None
 
-    def _get_or_create_collection(self, dimension: Optional[int] = None) -> "Collection":
-        """Get an existing collection or create one using real Python bindings."""
-        if self._collection is None:
-            existing = self.db.get_collection(self.collection_name)
-            if existing is not None:
-                self._collection = existing
-                info = existing.info()
-                self._metadata_only = bool(info.get("metadata_only", False))
-                return existing
+    def _graph_collection(self, dimension: Optional[int]) -> "GraphCollection":
+        """The graph collection the nodes and edges go to, created on first use.
 
-            if dimension is not None:
-                self._collection = self.db.create_collection(
-                    self.collection_name,
-                    dimension=dimension,
-                    metric="cosine",
-                    storage_mode="full",
-                )
-                self._metadata_only = False
-            else:
-                self._collection = self.db.create_metadata_collection(self.collection_name)
-                self._metadata_only = True
-        return self._collection
+        A failure to get or create it is raised, not logged: without it no
+        entity or relation can be stored.
+        """
+        if self._graph is None:
+            self._graph = self.db.get_graph_collection(self.collection_name)
+        if self._graph is None:
+            self._graph = self.db.create_graph_collection(
+                self.collection_name, dimension=dimension
+            )
+        return self._graph
 
     def load(
         self,
@@ -104,8 +96,8 @@ class GraphLoader:
 
         for entity in entities:
             entity_id = _generate_id(entity.name, entity.entity_type)
-            entity_map[entity.name] = entity_id
             if self._load_entity(entity, entity_id, generate_embeddings):
+                entity_map[entity.name] = entity_id
                 nodes_added += 1
 
         edges_added = self._load_edges(relations, entity_map)
@@ -114,23 +106,23 @@ class GraphLoader:
     def _load_entity(
         self, entity: Entity, entity_id: int, generate_embeddings: bool
     ) -> bool:
-        """Load a single entity into the collection. Returns True on success."""
-        metadata = {"name": entity.name, "type": entity.entity_type, **entity.properties}
-
+        """Load a single entity as a graph node. Returns True on success."""
         # embedding_fn errors (service down, OOM) propagate to caller intentionally.
         vector = None
         if generate_embeddings and self.embedding_fn:
             vector = self.embedding_fn(f"{entity.entity_type}: {entity.name}")
 
+        graph = self._graph_collection(len(vector) if vector is not None else None)
+        if not graph.has_embeddings:
+            vector = None
+        payload = {
+            "_labels": [entity.entity_type],
+            "name": entity.name,
+            "type": entity.entity_type,
+            **entity.properties,
+        }
         try:
-            collection = self._get_or_create_collection(
-                len(vector) if vector is not None else None
-            )
-            payload = {"label": entity.entity_type, **metadata}
-            if vector is not None and not self._metadata_only:
-                collection.upsert([{"id": entity_id, "vector": vector, "payload": payload}])
-            else:
-                collection.upsert_metadata([{"id": entity_id, "payload": payload}])
+            graph.upsert_node(entity_id, payload, vector)
             return True
         except Exception as exc:
             logger.warning("Failed to load entity '%s' into graph collection: %s", entity.name, exc)
@@ -139,16 +131,16 @@ class GraphLoader:
     def _load_edges(
         self, relations: List[Relation], entity_map: Dict[str, int]
     ) -> int:
-        """Load relations as edges into the graph store. Returns count added."""
+        """Load relations as edges between loaded nodes. Returns count added."""
         edges_added = 0
         for relation in relations:
             source_id = entity_map.get(relation.source)
             target_id = entity_map.get(relation.target)
-            if source_id is None or target_id is None or self._graph_store is None:
+            if source_id is None or target_id is None:
                 continue
             edge_id = _generate_id(f"{relation.source}->{relation.target}", relation.relation_type)
             try:
-                self._graph_store.add_edge({
+                self._graph_collection(None).add_edge({
                     "id": edge_id, "source": source_id, "target": target_id,
                     "label": relation.relation_type, "properties": relation.properties,
                 })

@@ -168,6 +168,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persistence format; the snapshot now has its own private form. Persist a
   store with `to_bytes`/`from_bytes` or `save_to_file`/`load_from_file`.
 
+- **BREAKING (behavior) — LangChain `GraphLoader` writes one persistent graph
+  collection.** Its relations went to an in-memory `velesdb.GraphStore`, lost
+  when the process ended, and its entities to a separate vector or metadata
+  collection under a `label` payload key. Entities are now the nodes of the
+  graph collection `collection_name` (created on the first load, with the
+  dimension of the first embedding, or without embeddings when there is no
+  `embedding_fn`), labelled with their type through `_labels` so
+  `MATCH (n:TYPE)` finds them, and relations are its edges. *Migration*: a
+  `collection_name` that names a collection the previous loader created is not
+  a graph collection, so the load fails; delete it or pass a new name.
+- **The LangChain, LlamaIndex and Haystack integrations require
+  `velesdb>=5.1.0`,** the first release whose `SearchOptions` takes `k`, which
+  they now pass instead of the `top_k` alias removed below.
+
 - **BREAKING (behavior) — LangChain relevance scores are higher-is-closer under
   every metric.** `similarity_search_with_relevance_scores` returned the raw
   score and kept `score >= score_threshold`; under `euclidean` and `hamming` the
@@ -399,6 +413,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenAPI spec) list the strategy aliases and core's weighted defaults. The
   `FusionRequest` field docs had kept the pre-#1545 0.5 / 0.3 / 0.2, and the
   `MultiQuerySearchRequest` examples 0.5 and 0.2.
+
+### Removed
+
+- **BREAKING — Python: the deprecated search entry points.** The native
+  `Collection.search(...)` keyword method (deprecated since 1.15.0, with a
+  `DeprecationWarning`) is gone; the `velesdb.Collection.search(vector, top_k,
+  filter, sparse_vector, sparse_index_name)` shorthand stays, no longer warns,
+  and goes through `search_request`. `SearchOptions(top_k=...)`, its `top_k`
+  property and `.with_top_k()` (aliases of `k` since 5.1.0, #1921) are
+  removed. *Migration*: `top_k=` becomes `k=` and `.with_top_k(` becomes
+  `.with_k(`.
+- **BREAKING — Python: `Collection.get_graph_store()`.** It returned a
+  standalone in-memory graph unrelated to the collection, with a
+  `DeprecationWarning` saying so. *Migration*: `Database.get_graph_collection()`
+  for a persistent graph, or `velesdb.GraphStore()` for an in-memory one.
+- `scripts/release.sh`, an unreferenced script that bumped every
+  `Cargo.toml` and pushed `main` and a tag itself, outside `bump_version.py`
+  and the `tag-release.yml` workflow that releases go through.
 
 ### Fixed
 

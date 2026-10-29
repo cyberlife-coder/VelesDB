@@ -207,7 +207,7 @@ class SearchOpsMixin:
             )
             return results, self._metric_higher_is_better()
 
-        results = collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+        results = collection.search_request(_SearchOptions(vector=query_embedding, k=k))
         return results, self._metric_higher_is_better()
 
     def _run_sparse_search(
@@ -236,7 +236,7 @@ class SearchOpsMixin:
         search_kwargs: dict[str, Any] = {
             "vector": query_embedding,
             "sparse_vector": sparse_vector,
-            "top_k": k,
+            "k": k,
         }
         if sparse_index_name is not None:
             search_kwargs["sparse_index_name"] = sparse_index_name
@@ -260,7 +260,7 @@ class SearchOpsMixin:
                 UserWarning,
                 stacklevel=2,
             )
-            results = collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+            results = collection.search_request(_SearchOptions(vector=query_embedding, k=k))
             return results, self._metric_higher_is_better()
 
     def query_with_score_threshold(
