@@ -27,11 +27,9 @@ impl Collection {
 
     /// Recursively walks the condition tree to find a `SparseVectorSearch` node.
     ///
-    /// **First-wins semantics**: when multiple `SparseVectorSearch` nodes exist
-    /// in a compound condition (e.g. `AND`), only the left-most one is
-    /// returned, and it is the only sparse branch the query runs. The VelesQL
-    /// spec defines one sparse branch per hybrid query but does not reject a
-    /// second `SPARSE_NEAR`, so nothing upstream refuses one either.
+    /// A query has at most one: `validate_similarity_query_structure` rejects
+    /// a second `SPARSE_NEAR` before this runs, so the left-most node it
+    /// returns is the only one.
     pub(crate) fn extract_sparse_vector_search(
         condition: &Condition,
     ) -> Option<&SparseVectorSearch> {

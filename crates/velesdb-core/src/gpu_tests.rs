@@ -14,3 +14,14 @@ fn test_gpu_accelerator_none_without_gpu() {
         );
     }
 }
+
+/// The availability probe is cached: repeated calls agree.
+#[cfg(feature = "gpu")]
+#[test]
+fn test_gpu_availability_is_stable() {
+    use super::gpu::GpuAccelerator;
+    assert_eq!(
+        GpuAccelerator::is_available(),
+        GpuAccelerator::is_available()
+    );
+}

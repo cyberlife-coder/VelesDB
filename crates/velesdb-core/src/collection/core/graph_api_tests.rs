@@ -852,18 +852,14 @@ mod tests {
     }
 
     #[test]
-    fn test_eager_bfs_frontier_bounded_on_dense_cyclic_graph() {
-        // BFS on a dense cyclic graph with high limit/depth must terminate
-        // and stay bounded.
+    fn test_bfs_on_a_dense_cyclic_graph_terminates_within_its_reachable_nodes() {
+        // BFS on a dense cyclic graph with unbounded limit and depth must
+        // terminate, visiting each reachable node at most once.
         let (collection, _temp) = create_graph_test_collection();
         build_dense_cyclic_graph(&collection, 200, 8);
 
         let results = collection.traverse_bfs_config(0, &hops(u32::MAX, None, usize::MAX));
 
-        assert!(
-            results.len() <= crate::collection::graph::MAX_VISITED_SIZE,
-            "BFS result must be bounded by the visited cap"
-        );
         assert!(
             results.len() <= 199,
             "cannot exceed distinct reachable nodes"

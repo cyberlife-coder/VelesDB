@@ -51,6 +51,43 @@ fn sort_results_by_metric_single_element() {
     assert_eq!(results[0].point.id, 1);
 }
 
+// --- sort_scored_by_metric ---
+
+#[test]
+fn sort_scored_by_metric_descending_when_higher_is_better() {
+    let mut results = vec![
+        ScoredResult::new(1, 0.2),
+        ScoredResult::new(2, 0.8),
+        ScoredResult::new(3, 0.5),
+    ];
+    sort_scored_by_metric(&mut results, true);
+
+    assert_eq!(results[0].id, 2);
+    assert_eq!(results[1].id, 3);
+    assert_eq!(results[2].id, 1);
+}
+
+#[test]
+fn sort_scored_by_metric_ascending_when_lower_is_better() {
+    let mut results = vec![
+        ScoredResult::new(1, 0.2),
+        ScoredResult::new(2, 0.8),
+        ScoredResult::new(3, 0.5),
+    ];
+    sort_scored_by_metric(&mut results, false);
+
+    assert_eq!(results[0].id, 1);
+    assert_eq!(results[1].id, 3);
+    assert_eq!(results[2].id, 2);
+}
+
+#[test]
+fn sort_scored_by_metric_empty_slice_is_noop() {
+    let mut results: Vec<ScoredResult> = vec![];
+    sort_scored_by_metric(&mut results, true);
+    assert!(results.is_empty());
+}
+
 // --- sparse_index_not_found ---
 
 #[test]

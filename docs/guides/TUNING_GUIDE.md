@@ -209,8 +209,6 @@ Both optimizations are automatic and require no configuration. Use `insert_batch
 
 7. **Lock-free entry-point promotion (v1.9.3)** — HNSW entry-point updates during batch insert use atomic CAS (`compare_exchange`) instead of a mutex, eliminating a serialization point for concurrent inserters.
 
-8. **WAL deferred sync (v1.9.3, removed)** — The `upsert_bulk_streaming()` entry point this item described, which skipped the `fsync` between streaming batches, no longer exists, and in 8.0.0 neither does the crate-private deferred-sync variant of `upsert_bulk()` that outlived it. Every `upsert_bulk()` batch pays one durability barrier per store.
-
 ---
 
 ## Search Quality Modes

@@ -55,7 +55,6 @@ impl FrozenSegment {
     /// layers that synthesise `FrozenSegment` values therefore exercise
     /// the assertion during local / CI test runs before shipping a release
     /// binary that relies on the invariant.
-    #[cfg_attr(not(feature = "persistence"), allow(dead_code))] // Reason: Used by sparse::persistence behind `feature = "persistence"`
     pub(crate) fn new(
         postings: FxHashMap<u32, (Vec<PostingEntry>, f32)>,
         doc_count: usize,
@@ -452,9 +451,9 @@ impl SparseInvertedIndex {
 
     /// Constructs an index from a single frozen segment (used by persistence layer).
     ///
-    /// Only called from `index::sparse::persistence` (feature = "persistence").
+    /// Only called from `index::sparse::persistence`, hence the same feature.
     #[must_use]
-    #[cfg_attr(not(feature = "persistence"), allow(dead_code))] // Reason: Called from sparse::persistence behind `feature = "persistence"`
+    #[cfg(feature = "persistence")]
     pub(crate) fn from_frozen_segment(segment: FrozenSegment) -> Self {
         let doc_count = segment.doc_count as u64;
         Self {

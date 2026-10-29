@@ -146,6 +146,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior) — a query with two `SPARSE_NEAR` clauses is
+  rejected.** A query runs one sparse search, and a second `SPARSE_NEAR`
+  (under `AND` or `OR`) was dropped without a word, the query answering for
+  the first sparse vector alone; with `USING FUSION` it even passed fusion
+  validation as a second branch. It now fails with a query error
+  (`VELES-010`) naming the count; the guard that existed for it was never
+  called. Run one query per sparse vector and fuse the results.
+
 - **BREAKING (behavior) — LangChain relevance scores are higher-is-closer under
   every metric.** `similarity_search_with_relevance_scores` returned the raw
   score and kept `score >= score_threshold`; under `euclidean` and `hamming` the
@@ -387,8 +395,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `OperationalMetrics::shared` (1.13.2): call `OperationalMetrics::new_arc`;
     both returned a fresh `Arc`, never a shared one.
   - `VelesConfig::effective_ef_search` (5.2.0): the engine resolves `[search]`
-    through `SearchConfig::resolved_quality` (#2087), which is what to read;
-    the removed helper returned `usize::MAX` for `perfect` (#2238).
+    through `SearchConfig::resolved_quality` (#2087, `persistence` feature),
+    which returns the `SearchQuality` to read rather than a `usize`; the
+    removed helper returned `usize::MAX` for `perfect` (#2238). Without the
+    `persistence` feature, the ef_search it computed is
+    `search.ef_search.unwrap_or_else(|| search.default_mode.ef_search())`.
   - `velesql::match_planner::CollectionStats` (5.2.0): the type is
     `velesql::match_planner::MatchGraphStats`, same fields.
   - The update-check entry points deprecated in 7.0.0: `check_for_updates`
@@ -399,6 +410,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `"library"`. `compute_instance_hash` has no replacement: the update check
     derives its install hash itself, and the helper only ever read a stored
     id, returning a fresh random hash when there was none.
+
+  `Database::notify_upsert` and `Database::notify_query` (deprecated in
+  3.9.0) stay in 8.0: the server's REST bulk upsert, NDJSON stream, search
+  pipeline, batch search and aggregation routes do not run through the core
+  layer that fires `on_upsert` / `on_query`, so these calls are their only
+  observer telemetry.
 - **BREAKING (Rust API) — `velesdb_core::TraversalMetrics`** (also
   `velesdb_core::metrics::TraversalMetrics`). Nothing in the engine fed it,
   and its `export_prometheus` still wrote the process-wide
@@ -418,8 +435,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second BFS / DFS implementation only tests called (the tests now run the
   `traverse_*_config` path every binding uses); the never-called
   deferred-sync bulk upsert and the `fsync` flag it alone set to `false`; the
-  `Collection` sparse-search wrappers, the multi-`SPARSE_NEAR` validator no
-  caller ran, `estimate_column_selectivity`, the trigram and generic GPU
+  `Collection` sparse-search wrappers, `estimate_column_selectivity`, the trigram and generic GPU
   backend selectors, two never-incremented HNSW safety counters, and other
   unreachable helpers. In `velesdb-server`, an unused query-type detector and
   the `reqwest` dev-dependency; in `velesdb-cli`, `LicenseInfo::has_feature`;

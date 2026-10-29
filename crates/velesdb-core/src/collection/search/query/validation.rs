@@ -53,6 +53,21 @@ impl Collection {
             ));
         }
 
+        Self::reject_more_than_one_sparse_search(condition)?;
+
+        Self::reject_unexecutable_fused_search(condition)?;
+
+        // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
+        // Only block when multiple similarity() are in OR (handled above)
+
+        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
+        // Warning: This requires scanning all documents - use with LIMIT for performance
+
+        Ok(())
+    }
+
+    /// Rejects a `NEAR_FUSED` the fusion executor cannot run as written.
+    fn reject_unexecutable_fused_search(condition: &Condition) -> Result<()> {
         // NEAR_FUSED routes to the multi-vector fusion executor, which can only
         // honor a single fused predicate optionally AND-ed with a metadata
         // filter. Reject shapes it cannot execute — more than one fused, a fused
@@ -77,13 +92,21 @@ impl Collection {
                     .to_string(),
             ));
         }
+        Ok(())
+    }
 
-        // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
-        // Only block when multiple similarity() are in OR (handled above)
-
-        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
-        // Warning: This requires scanning all documents - use with LIMIT for performance
-
+    /// Rejects a condition with more than one `SPARSE_NEAR`: a query runs a
+    /// single sparse branch (`extract_sparse_vector_search` takes the first),
+    /// so a second one would be dropped without a word.
+    fn reject_more_than_one_sparse_search(condition: &Condition) -> Result<()> {
+        let sparse_count =
+            count_matching_leaves(condition, |c| matches!(c, Condition::SparseVectorSearch(_)));
+        if sparse_count > 1 {
+            return Err(Error::Query(format!(
+                "the query has {sparse_count} SPARSE_NEAR clauses, and a query runs one \
+                 sparse search; run one query per sparse vector and fuse the results"
+            )));
+        }
         Ok(())
     }
 
