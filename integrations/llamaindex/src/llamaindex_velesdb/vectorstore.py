@@ -32,6 +32,7 @@ from llamaindex_velesdb.security import (
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
+from velesdb_common.scores import score_to_similarity
 from llamaindex_velesdb._common import open_database as _open_database
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.node_builder import (
@@ -65,11 +66,6 @@ logger = logging.getLogger(__name__)
 # Page size for the delete(ref_doc_id) payload scan (VelesQL SELECT
 # defaults to LIMIT 10, far too small for chunked documents).
 _REF_DOC_SCAN_BATCH = 1000
-
-# Metrics for which VelesDB returns a raw distance (lower = closer). LlamaIndex
-# treats `similarities` as higher-is-better, so these are mapped to a bounded,
-# monotonically-decreasing similarity; cosine/dot-product are already similarities.
-_DISTANCE_METRICS = frozenset({"euclidean", "hamming", "jaccard"})
 
 
 class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, BasePydanticVectorStore):
@@ -228,16 +224,14 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     def _score_to_similarity(self, score: float) -> float:
         """Map a raw VelesDB score to a LlamaIndex similarity (higher = closer).
 
-        VelesDB returns a raw *distance* for distance metrics (euclidean, hamming,
-        jaccard — lower is closer) and a *similarity* for cosine/dot-product
-        (higher is closer). LlamaIndex treats ``similarities`` as higher-is-better
-        (``similarity_cutoff``, node postprocessors), so distances are mapped to a
-        bounded, monotonically-decreasing similarity; similarity metrics pass
-        through unchanged.
+        LlamaIndex treats ``similarities`` as higher-is-better
+        (``similarity_cutoff``, node postprocessors). Whether this metric's
+        score already is one comes from velesdb-core through
+        :func:`velesdb_common.scores.score_to_similarity`: a distance
+        (euclidean, hamming) is mapped to a bounded, monotonically-decreasing
+        similarity, a similarity (cosine, dot, jaccard) passes through.
         """
-        if self.metric.lower() in _DISTANCE_METRICS:
-            return 1.0 / (1.0 + max(score, 0.0))
-        return score
+        return score_to_similarity(self.metric, score)
 
     def _build_query_result(self, results: list[dict]) -> VectorStoreQueryResult:
         """Build a VectorStoreQueryResult from raw VelesDB result dictionaries."""

@@ -30,6 +30,7 @@ mod agent;
 mod agent_memory_service;
 mod collection;
 mod collection_helpers;
+mod contracts;
 mod database;
 mod database_stats;
 mod exceptions;
@@ -138,6 +139,11 @@ fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "CONDITION_TYPES",
         PyTuple::new(m.py(), velesdb_core::CONDITION_TYPE_NAMES)?,
     )?;
+
+    // Core contracts the integrations call instead of copying: the
+    // canonical string -> u64 id, a metric's score direction, and the
+    // search quality grammar.
+    contracts::register_contracts(m)?;
 
     // Add version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
