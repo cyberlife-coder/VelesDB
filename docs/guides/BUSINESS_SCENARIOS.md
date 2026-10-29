@@ -178,7 +178,11 @@ LIMIT 10
 | **RRF** | `USING FUSION 'rrf' (k=60)` | Robust rank-based fusion (recommended) |
 | **Average** | `USING FUSION 'average'` | General purpose, balanced results |
 | **Maximum** | `USING FUSION 'maximum'` | Emphasize documents scoring high in ANY query |
-| **Weighted** | `USING FUSION 'weighted' (avg_weight=0.5, max_weight=0.3, hit_weight=0.2)` | Custom control over fusion factors |
+
+`weighted` and `rsf` are not `NEAR_FUSED` strategies: they weigh two different
+retrieval branches, which N query vectors against the same index are not, so
+the validator rejects them with `V012`. Use them in the query-level
+`USING FUSION(...)` clause of a vector + text or dense + sparse hybrid.
 
 **Real-World Use Cases:**
 
@@ -186,7 +190,7 @@ LIMIT 10
 -- E-commerce: "show me products like this photo that match 'wireless headphones'"
 SELECT * FROM products
 WHERE vector NEAR_FUSED [$image_vector, $text_vector]
-  USING FUSION 'weighted' (avg_weight=0.6, max_weight=0.3, hit_weight=0.1)
+  USING FUSION 'average'
 LIMIT 8
 
 -- RAG: Multi-perspective document retrieval

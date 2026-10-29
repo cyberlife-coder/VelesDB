@@ -69,9 +69,9 @@ SELECT * FROM documents
 WHERE vector NEAR_FUSED [$v1, $v2, $v3] USING FUSION 'rrf' (k = 60)
 LIMIT 10;
 
--- Weighted fusion
+-- Average fusion
 SELECT * FROM documents
-WHERE vector NEAR_FUSED [$query1, $query2] USING FUSION 'weighted'
+WHERE vector NEAR_FUSED [$query1, $query2] USING FUSION 'average'
 LIMIT 10;
 
 -- Maximum fusion
@@ -84,6 +84,11 @@ SELECT * FROM documents
 WHERE vector NEAR_FUSED [$v1, $v2]
 LIMIT 10;
 ```
+
+`NEAR_FUSED` takes `rrf`, `average` or `maximum` only. `weighted` and `rsf`
+weigh two *different* retrieval branches, which N query vectors against the
+same index are not, so the validator rejects them with `V012`; they stay
+available to the query-level `USING FUSION(...)` below.
 
 ## Hybrid search (USING FUSION)
 

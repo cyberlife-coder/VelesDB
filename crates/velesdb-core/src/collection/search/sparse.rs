@@ -153,8 +153,15 @@ impl Collection {
         )
     }
 
-    /// Shared implementation for hybrid dense+sparse search with optional filter.
-    fn hybrid_sparse_search_inner(
+    /// Shared implementation for hybrid dense+sparse search with optional
+    /// filter — also the body of `VectorCollection::hybrid_sparse_search_filtered`,
+    /// so every hybrid entry point fuses the same way.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either branch fails (a dense dimension mismatch,
+    /// an unknown sparse index) or fusion fails.
+    pub(crate) fn hybrid_sparse_search_inner(
         &self,
         dense_vector: &[f32],
         sparse_query: &SparseVector,
@@ -165,8 +172,13 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let candidate_k = k.saturating_mul(2).max(k.saturating_add(10));
 
-        let (dense_results, sparse_results) =
-            self.execute_both_branches(dense_vector, sparse_query, index_name, candidate_k, filter);
+        let (dense_results, sparse_results) = self.execute_both_branches(
+            dense_vector,
+            sparse_query,
+            index_name,
+            candidate_k,
+            filter,
+        )?;
 
         self.fuse_dense_sparse(dense_results, &sparse_results, k, strategy)
     }
