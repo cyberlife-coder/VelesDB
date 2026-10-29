@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-10-28 (v7.1.0; velesdb-memory 0.16.0)
+Last updated: 2026-10-29 (v7.1.0; velesdb-memory 0.16.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -294,3 +294,20 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
      `ttl_seconds: 0` as expire-now where the wedge refuses `Some(0)`
      (`ZeroTtl`).
 10. **Read-path gate (observer) parity (audit F-5.4).** The 3.10.0 read-path gate — `velesdb_core::observer` + `database::gated_search` / `authorize_read` (scope AND-composed with the caller filter, fail-closed on non-filterable paths) — is wired into **`velesdb-server`** (search/match/graph handlers) and **`velesdb-python`** (`.search()` gating). `tauri-plugin-velesdb` ships a **notify-only** observer (no deny). **`velesdb-mobile`** now ships a deny-capable observer (`open_with_observer` + `MobileObserver`/`MobileAccessDecision`, `crates/velesdb-mobile/src/lib.rs:145`). **`velesdb-node`** (memory-only, out of scope by design) and **`velesdb-wasm`** expose **no** observer, so the gate is inactive there. This is a **parity gap, not a vulnerability**: the core contract is fail-open *only when no observer is registered* (no policy ⇒ no denial to enforce), so an ungated binding simply has no governance layer to bypass. Governance-sensitive deployments must use the server or Python surface. Wiring an observer hook into mobile/wasm is a follow-up; node is intentionally excluded (it never touches the gated core `Collection`).
+11. ✅ **Done (2026-10-29). Bindings carry core's error taxonomy and result
+    kind instead of re-deriving them.** `tauri-plugin-velesdb` reports
+    core's `VELES-###` code and `Error::is_recoverable` for every condition core
+    codes, the ones the plugin detects itself included (`VELES-003`,
+    `VELES-004`, `VELES-009`, `VELES-010`, `VELES-012` replace `NOT_FOUND`,
+    `DIMENSION_MISMATCH`, `INVALID_CONFIG` and `SERIALIZATION_ERROR`;
+    `crates/tauri-plugin-velesdb/src/error.rs`), with `TASK_JOIN` the one
+    plugin-only code. `velesdb-mobile` maps a core error through core's code
+    and recoverability on `execute_query`, `query`, `train_pq` and the sparse
+    and multi-query leaves, which answered a codeless, always-recoverable
+    `Database` error (`VelesError::from_core`, `crates/velesdb-mobile/src/types.rs`).
+    The statement result kind is single-sourced in core as
+    `velesql::Query::result_kind`, which mobile and WASM both map from, so
+    mobile's `SELECT EDGES` is `Rows`, as WASM's was. `velesdb-server` was
+    checked and needed no change: its `VELES-004` and `VELES-027` literals
+    match core's taxonomy (`VELES-027` covers a timeout through
+    `GuardRailViolation::Timeout`).

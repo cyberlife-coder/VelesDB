@@ -37,19 +37,97 @@ fn test_command_error_from_error() {
     assert!(cmd_err.message.contains("docs"));
 }
 
+/// A plugin-local condition core already codes carries core's code and
+/// recoverability, read from the matching core variant rather than a copy.
 #[test]
-fn test_command_error_codes() {
-    // Arrange & Act & Assert
+fn test_command_error_codes_come_from_core() {
+    use velesdb_core::Error as Core;
+    let io = || std::io::Error::other("x");
     let cases = vec![
-        (Error::CollectionNotFound("x".to_string()), "VELES-002"),
-        (Error::InvalidConfig("x".to_string()), "INVALID_CONFIG"),
-        (Error::Serialization("x".to_string()), "SERIALIZATION_ERROR"),
+        (
+            Error::CollectionNotFound("x".to_string()),
+            Core::CollectionNotFound(String::new()),
+        ),
+        (Error::NotFound("x".to_string()), Core::PointNotFound(0)),
+        (
+            Error::DimensionMismatch {
+                expected: 4,
+                actual: 2,
+            },
+            Core::DimensionMismatch {
+                expected: 4,
+                actual: 2,
+            },
+        ),
+        (
+            Error::InvalidConfig("x".to_string()),
+            Core::Config(String::new()),
+        ),
+        (
+            Error::Serialization("x".to_string()),
+            Core::Serialization(String::new()),
+        ),
+        (Error::Io(io()), Core::Io(io())),
+    ];
+
+    for (err, core) in cases {
+        let label = format!("{err:?}");
+        let cmd_err: CommandError = err.into();
+        assert_eq!(cmd_err.code, core.code(), "{label}");
+        assert_eq!(cmd_err.recoverable, core.is_recoverable(), "{label}");
+    }
+}
+
+#[test]
+fn test_command_error_pins_the_taxonomy_codes() {
+    let cases = vec![
+        (Error::NotFound("x".to_string()), "VELES-003"),
+        (
+            Error::DimensionMismatch {
+                expected: 4,
+                actual: 2,
+            },
+            "VELES-004",
+        ),
+        (Error::InvalidConfig("x".to_string()), "VELES-009"),
+        (Error::Serialization("x".to_string()), "VELES-012"),
     ];
 
     for (err, expected_code) in cases {
         let cmd_err: CommandError = err.into();
         assert_eq!(cmd_err.code, expected_code);
     }
+}
+
+#[test]
+fn test_command_error_config_load_is_a_config_error() {
+    let err = Error::ConfigLoad {
+        path: "velesdb.toml".to_string(),
+        source: velesdb_core::config::ConfigError::FileNotFound("velesdb.toml".to_string()),
+    };
+
+    let cmd_err: CommandError = err.into();
+
+    assert_eq!(cmd_err.code, "VELES-009");
+    assert!(cmd_err.recoverable);
+}
+
+#[test]
+fn test_command_error_task_join_is_plugin_only_and_not_recoverable() {
+    let cmd_err: CommandError = Error::TaskJoin("panicked".to_string()).into();
+
+    assert_eq!(cmd_err.code, "TASK_JOIN");
+    assert!(!cmd_err.recoverable);
+}
+
+#[test]
+fn test_command_error_database_forwards_core_recoverability() {
+    let core_err = velesdb_core::Error::IndexCorrupted("bad header".to_string());
+
+    let cmd_err: CommandError = Error::Database(core_err).into();
+
+    assert_eq!(cmd_err.code, "VELES-008");
+    assert!(!cmd_err.recoverable);
 }
 
 #[test]
@@ -75,7 +153,7 @@ fn test_agent_error_preserves_not_found() {
     let cmd_err: CommandError = err.into();
 
     // Assert
-    assert_eq!(cmd_err.code, "NOT_FOUND");
+    assert_eq!(cmd_err.code, "VELES-003");
     assert!(cmd_err.message.contains("proc 7"));
 }
 
@@ -92,7 +170,7 @@ fn test_agent_error_preserves_dimension_mismatch() {
     let cmd_err: CommandError = err.into();
 
     // Assert
-    assert_eq!(cmd_err.code, "DIMENSION_MISMATCH");
+    assert_eq!(cmd_err.code, "VELES-004");
     assert!(cmd_err.message.contains("384"));
     assert!(cmd_err.message.contains("128"));
 }

@@ -319,34 +319,26 @@ pub(crate) fn build_message(kind: QueryResultKind, row_count: u32) -> String {
     }
 }
 
-/// Classifies a parsed query into its [`QueryResultKind`].
-///
-/// Inspects the AST flags on [`velesdb_core::velesql::Query`] in priority
-/// order (TRAIN > DDL > Admin > DML > default). MATCH is treated as row-
-/// returning for parity with Mobile, though WASM rejects MATCH before
-/// classification is consumed.
-pub(crate) fn classify_query(query: &velesdb_core::velesql::Query) -> QueryResultKind {
-    if query.is_train() {
-        QueryResultKind::Train
-    } else if query.is_ddl_query() {
-        QueryResultKind::Ddl
-    } else if query.is_admin_query() {
-        QueryResultKind::Admin
-    } else if query.is_dml_query() {
-        classify_dml(query)
-    } else {
-        QueryResultKind::Rows
+impl From<velesdb_core::velesql::QueryResultKind> for QueryResultKind {
+    fn from(kind: velesdb_core::velesql::QueryResultKind) -> Self {
+        use velesdb_core::velesql::QueryResultKind as Core;
+        match kind {
+            Core::Rows => Self::Rows,
+            Core::Mutation => Self::Mutation,
+            Core::Deletion => Self::Deletion,
+            Core::Ddl => Self::Ddl,
+            Core::Train => Self::Train,
+            Core::Admin => Self::Admin,
+        }
     }
 }
 
-/// Distinguishes DELETE / row-returning / row-affecting DML variants.
-fn classify_dml(query: &velesdb_core::velesql::Query) -> QueryResultKind {
-    use velesdb_core::velesql::DmlStatement;
-    match query.dml.as_ref() {
-        Some(DmlStatement::Delete(_) | DmlStatement::DeleteEdge(_)) => QueryResultKind::Deletion,
-        Some(DmlStatement::SelectEdges(_)) => QueryResultKind::Rows,
-        _ => QueryResultKind::Mutation,
-    }
+/// Classifies a parsed query into its [`QueryResultKind`], by core's rule
+/// ([`velesdb_core::velesql::Query::result_kind`]), which mobile shares.
+/// MATCH classifies as rows, though WASM rejects MATCH before the kind is
+/// consumed.
+pub(crate) fn classify_query(query: &velesdb_core::velesql::Query) -> QueryResultKind {
+    query.result_kind().into()
 }
 
 #[cfg(test)]

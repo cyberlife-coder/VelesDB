@@ -503,7 +503,7 @@ impl VelesDatabase {
         let empty_params = HashMap::new();
         self.inner
             .execute_query(&query, &empty_params)
-            .map_err(|e| VelesError::database(format!("PQ training failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("PQ training failed", e))?;
 
         Ok("PQ training complete".to_string())
     }
@@ -545,7 +545,7 @@ impl VelesDatabase {
         params_json: Option<String>,
     ) -> Result<QueryResult, VelesError> {
         let parsed = velesdb_core::velesql::Parser::parse(&sql)
-            .map_err(|e| VelesError::database(format!("VelesQL parse error: {}", e.message)))?;
+            .map_err(|e| VelesError::from_core("VelesQL parse error", e.into()))?;
 
         let params = query::parse_params(params_json)?;
         let kind = query::classify_query(&parsed);
@@ -553,7 +553,7 @@ impl VelesDatabase {
         let core_results = self
             .inner
             .execute_query(&parsed, &params)
-            .map_err(|e| VelesError::database(format!("Query execution failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("Query execution failed", e))?;
 
         let rows: Result<Vec<QueryResultRow>, VelesError> =
             core_results.iter().map(query::to_result_row).collect();

@@ -25,17 +25,18 @@ use tauri_plugin_velesdb::commands::{
     add_edge, batch_search, compact_storage, create_collection, create_graph_collection,
     create_metadata_collection, delete_collection, delete_points, enable_streaming, flush,
     get_collection, get_edges, get_guardrails, get_node_degree, get_points, hybrid_search,
-    is_empty, list_collections, multi_query_search, scroll_collection, search, search_ids,
-    stream_insert, text_search, traverse_graph, update_guardrails, upsert, upsert_metadata,
+    is_empty, list_collections, multi_query_search, query, scroll_collection, search, search_ids,
+    stream_insert, text_search, train_pq, traverse_graph, update_guardrails, upsert,
+    upsert_metadata,
 };
 use tauri_plugin_velesdb::observer::TauriObserver;
 use tauri_plugin_velesdb::types::{
     AddEdgeRequest, BatchSearchRequest, CreateCollectionRequest, CreateGraphCollectionRequest,
     CreateMetadataCollectionRequest, DeletePointsRequest, EnableStreamingRequest, GetEdgesRequest,
     GetNodeDegreeRequest, GetPointsRequest, GuardrailLimits, HybridSearchRequest,
-    IndividualSearchRequest, MetadataPointInput, MultiQuerySearchRequest, PointInput,
-    ScrollRequest, SearchRequest, StreamInsertRequest, TextSearchRequest, TraverseGraphRequest,
-    UpsertMetadataRequest, UpsertRequest,
+    IndividualSearchRequest, MetadataPointInput, MultiQuerySearchRequest, PointInput, QueryRequest,
+    ScrollRequest, SearchRequest, StreamInsertRequest, TextSearchRequest, TrainPqRequest,
+    TraverseGraphRequest, UpsertMetadataRequest, UpsertRequest,
 };
 use tauri_plugin_velesdb::VelesDbState;
 
@@ -210,7 +211,7 @@ fn create_collection_invalid_metric_errors() {
     let mut req = vector_collection_request("x");
     req.metric = "not_a_metric".to_string();
     let err = run(create_collection(handle(&app), st(&app), req)).expect_err("bad metric");
-    assert_eq!(err.code, "INVALID_CONFIG");
+    assert_eq!(err.code, "VELES-009");
 }
 
 #[test]
@@ -246,7 +247,7 @@ fn create_metadata_collection_and_upsert_metadata() {
         },
     ))
     .expect_err("metadata-only collection is not a vector collection");
-    assert_eq!(rejected.code, "INVALID_CONFIG");
+    assert_eq!(rejected.code, "VELES-009");
 
     // The success path: metadata-only points (no vector) into a vector
     // collection exercises the `coll.upsert_metadata` branch.
@@ -399,7 +400,7 @@ fn search_missing_collection_and_bad_quality_error() {
         },
     ))
     .expect_err("invalid quality mode");
-    assert_eq!(bad_quality.code, "INVALID_CONFIG");
+    assert_eq!(bad_quality.code, "VELES-009");
 }
 
 #[test]
@@ -622,7 +623,7 @@ fn multi_query_search_fuses_results() {
         },
     ))
     .expect_err("bad fusion");
-    assert_eq!(bad.code, "INVALID_CONFIG");
+    assert_eq!(bad.code, "VELES-009");
 }
 
 #[test]
@@ -920,6 +921,45 @@ fn graph_create_with_embeddings_and_missing_collection_error() {
     assert_eq!(err.code, "VELES-002");
 }
 
+/// A `VelesQL` parse error is core's query error (VELES-010), as on wasm and
+/// mobile, not a plugin-local configuration error.
+#[test]
+fn query_parse_error_carries_core_query_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    let err = run(query(
+        handle(&app),
+        st(&app),
+        QueryRequest {
+            query: "NOT VALID SQL AT ALL".to_string(),
+            params: std::collections::HashMap::new(),
+        },
+    ))
+    .expect_err("parse error");
+    assert_eq!(err.code, "VELES-010");
+    assert!(err.recoverable);
+}
+
+/// A core failure during TRAIN keeps core's code instead of being flattened
+/// into a configuration error.
+#[test]
+fn train_pq_failure_carries_core_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    let err = run(train_pq(
+        handle(&app),
+        st(&app),
+        TrainPqRequest {
+            collection: "ghost".to_string(),
+            m: Some(2),
+            k: Some(4),
+            opq: None,
+        },
+    ))
+    .expect_err("missing collection");
+    assert_eq!(err.code, "VELES-002");
+}
+
 #[test]
 fn create_graph_collection_invalid_schema_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -935,7 +975,7 @@ fn create_graph_collection_invalid_schema_errors() {
         },
     ))
     .expect_err("invalid schema");
-    assert_eq!(err.code, "INVALID_CONFIG");
+    assert_eq!(err.code, "VELES-009");
 }
 
 // ===========================================================================

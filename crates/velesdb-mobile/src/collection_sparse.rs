@@ -45,7 +45,7 @@ impl VelesCollection {
                 usize::try_from(limit).unwrap_or(usize::MAX),
                 &idx_name,
             )
-            .map_err(|e| VelesError::database(format!("Sparse search failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("Sparse search failed", e))?;
 
         Ok(to_mobile_results(results))
     }
@@ -92,7 +92,7 @@ impl VelesCollection {
                 &idx_name,
                 &strategy,
             )
-            .map_err(|e| VelesError::database(format!("Hybrid sparse search failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("Hybrid sparse search failed", e))?;
 
         Ok(to_mobile_results(results))
     }
@@ -129,7 +129,7 @@ impl VelesCollection {
                 core_strategy,
                 effective.as_ref(),
             )
-            .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
 
         Ok(to_mobile_results(results))
     }
@@ -168,7 +168,7 @@ impl VelesCollection {
                 usize::try_from(limit).unwrap_or(usize::MAX),
                 core_strategy,
             )
-            .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
 
         Ok(results
             .into_iter()
@@ -215,7 +215,7 @@ impl VelesCollection {
                 core_strategy,
                 effective.as_ref(),
             )
-            .map_err(|e| VelesError::database(format!("Multi-query search failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("Multi-query search failed", e))?;
 
         Ok(to_mobile_results(results))
     }

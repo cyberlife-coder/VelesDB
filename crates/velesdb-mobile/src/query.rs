@@ -66,29 +66,24 @@ pub struct QueryResult {
 // Conversion helpers
 // ============================================================================
 
-/// Classifies a parsed query into its [`QueryResultKind`].
-pub(crate) fn classify_query(query: &velesdb_core::velesql::Query) -> QueryResultKind {
-    if query.is_train() {
-        QueryResultKind::Train
-    } else if query.is_ddl_query() {
-        QueryResultKind::Ddl
-    } else if query.is_admin_query() {
-        QueryResultKind::Admin
-    } else if query.is_dml_query() {
-        classify_dml(query)
-    } else {
-        // SELECT, MATCH, introspection (SHOW/DESCRIBE/EXPLAIN)
-        QueryResultKind::Rows
+impl From<velesdb_core::velesql::QueryResultKind> for QueryResultKind {
+    fn from(kind: velesdb_core::velesql::QueryResultKind) -> Self {
+        use velesdb_core::velesql::QueryResultKind as Core;
+        match kind {
+            Core::Rows => Self::Rows,
+            Core::Mutation => Self::Mutation,
+            Core::Deletion => Self::Deletion,
+            Core::Ddl => Self::Ddl,
+            Core::Train => Self::Train,
+            Core::Admin => Self::Admin,
+        }
     }
 }
 
-/// Distinguishes DELETE from other DML (INSERT/UPSERT/UPDATE).
-fn classify_dml(query: &velesdb_core::velesql::Query) -> QueryResultKind {
-    use velesdb_core::velesql::DmlStatement;
-    match query.dml.as_ref() {
-        Some(DmlStatement::Delete(_) | DmlStatement::DeleteEdge(_)) => QueryResultKind::Deletion,
-        _ => QueryResultKind::Mutation,
-    }
+/// Classifies a parsed query into its [`QueryResultKind`], by core's rule
+/// ([`velesdb_core::velesql::Query::result_kind`]).
+pub(crate) fn classify_query(query: &velesdb_core::velesql::Query) -> QueryResultKind {
+    query.result_kind().into()
 }
 
 /// Converts a core `SearchResult` into a [`QueryResultRow`].

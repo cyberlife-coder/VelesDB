@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`velesql::Query::result_kind()` classifies a statement by the result it
+  produces.** It returns the new `velesql::QueryResultKind` (`Rows`, `Mutation`,
+  `Deletion`, `Ddl`, `Train`, `Admin`), with `SELECT EDGES` as `Rows`. The
+  mobile and WASM bindings each carried their own copy of this rule, and the
+  copies disagreed; both now map from this one, and the enum is exhaustive so
+  that a new kind fails to compile in every binding that reports it.
+
+### Changed
+
+- **BREAKING (Tauri plugin) — every rejection carries core's `VELES-###` code
+  and a new `recoverable` field.** The plugin coded the conditions it detects
+  itself apart from core, so one app could receive two codes for a dimension
+  mismatch depending on which layer caught it. The plugin-local codes are
+  replaced by the code core gives the same condition, read from the core
+  variant rather than copied: `NOT_FOUND` becomes `VELES-003`,
+  `DIMENSION_MISMATCH` `VELES-004`, `INVALID_CONFIG` `VELES-009` and
+  `SERIALIZATION_ERROR` `VELES-012`. A VelesQL parse error is core's query
+  error, `VELES-010`, instead of `INVALID_CONFIG`, as on WASM and mobile, and a
+  core failure during `train_pq` or an aggregation query keeps its own code
+  instead of being flattened into `INVALID_CONFIG`; their messages are now core's
+  (`Database error: [VELES-0xx] ...`) rather than `VelesQL parse error: ...`,
+  `PQ training failed: ...` or `Aggregation error: ...`. `recoverable` is core's
+  `Error::is_recoverable` for the condition. `TASK_JOIN`, a blocking task that
+  panicked or was cancelled, has no core equivalent: it keeps its code and
+  reports `recoverable: false`. Migration: match `VELES-009` where you matched
+  `INVALID_CONFIG`, and so on for the other three; the guest-js `CommandError`
+  type gains `recoverable: boolean`.
+
+### Fixed
+
+- **Mobile: a core error keeps its code and recoverability on every VelesQL,
+  training and sparse or multi-query call.** `executeQuery`, `query`,
+  `trainPq`, `sparseSearch`, `hybridSparseSearch` and the three
+  `multiQuerySearch` variants wrapped core's error in a `Database` error with an
+  empty `code` and `recoverable: true`, so a non-recoverable `IndexCorrupted`
+  (`VELES-008`) reached Swift and Kotlin as retryable. They now map it as every
+  other call does, keeping the call's context in the message: a VelesQL parse
+  error is `VELES-010`, a missing collection is the `Collection` variant and a
+  dimension mismatch the `DimensionMismatch` variant, where these calls used to
+  answer `Database` for both.
+- **Mobile: `SELECT EDGES` reports kind `Rows`, not `Mutation`.**
+  `executeQuery` answered `"N row(s) affected"` for a read; it now answers
+  `"N row(s) returned"`, as WASM always did.
+
 ## [7.1.0] - 2026-10-28
 
 > **MINOR release.** Additive: no breaking change to the public API, the on-disk
