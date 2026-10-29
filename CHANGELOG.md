@@ -90,6 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     endpoint used to say `Invalid strategy: ...`;
   - **WASM** `fuse_results`: the name grammar is core's. The N-branch `rsf`
     aggregation stays WASM-local by design (fixture divergence D005).
+  - **MIT integrations** (`velesdb_common.fusion.build_fusion_strategy`, used
+    by LangChain and LlamaIndex): the name goes to the binding's
+    `FusionStrategy.from_name`, so they accept core's aliases and casing and
+    report core's errors. A wheel older than the export (velesdb < 7.2.0)
+    keeps the previous literal dispatch, as the other `velesdb_common` helpers
+    do.
 - **`velesdb-wasm` validates search modes with core's `parse_search_mode`.**
   `search_with_quality` accepts and refuses exactly what every other surface
   does, and its refusals now carry core's messages (`Unknown search mode
