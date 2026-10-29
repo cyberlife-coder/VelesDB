@@ -782,7 +782,10 @@ impl Collection {
     /// independent per-start-node BFS traversals across CPU cores. Below the
     /// threshold, falls back to sequential execution.
     ///
-    /// Results are deduplicated by path signature and truncated to `config.limit`.
+    /// Results are deduplicated by path signature, filtered to
+    /// `config.min_depth`, then truncated to `config.limit`, so `limit` counts
+    /// results only: the traverser also emits each start node at depth 0, and
+    /// is given one extra slot per start node for them.
     #[must_use]
     pub fn traverse_bfs_parallel(
         &self,
@@ -795,7 +798,7 @@ impl Collection {
 
         let par_config = ParallelConfig::new()
             .with_max_depth(config.max_depth)
-            .with_limit(config.limit);
+            .with_limit(config.limit.saturating_add(start_nodes.len()));
 
         let traverser = ParallelTraverser::with_config(par_config);
         let edge_store = &self.graph.edge_store;
@@ -815,6 +818,7 @@ impl Collection {
         results
             .into_iter()
             .filter(|r| r.depth >= config.min_depth)
+            .take(config.limit)
             .map(|r| TraversalResult::new(r.end_node, r.path, r.depth))
             .collect()
     }

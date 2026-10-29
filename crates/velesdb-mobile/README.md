@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-VelesDB%20Core%20License%201.0-blue.svg)](./LICENSE)
 
 > **Maturity — read before shipping.** The Rust binding layer is production-grade:
-> 135 tests pass on the host (`cargo test -p velesdb-mobile`), CI re-runs them on every
+> 158 tests pass on the host (`cargo test -p velesdb-mobile`), CI re-runs them on every
 > pull request via `cargo test --workspace`, a parity test fails the build when
 > `velesdb-core` grows an enum variant the binding has not mirrored, and the crate is
 > published to crates.io by the release workflow.
@@ -159,6 +159,48 @@ plain Rust.
 Swift and Kotlin snippets for every API group live in the
 [Mobile API guide](../../docs/guides/MOBILE_API.md).
 
+## Knowledge graph
+
+`MobileGraphStore` is the graph of a graph collection, stored and traversed by
+`velesdb-core`: BFS, DFS and multi-source BFS are core's, the graph is durable
+with no save step, and its nodes are the ones VelesQL `MATCH` sees through
+`executeQuery` (a node's `label` is stored as core's node label).
+
+```swift
+try db.createGraphCollection(name: "kg")
+let graph = try db.getGraphStore(name: "kg")!
+try graph.addNode(node: MobileGraphNode(id: 1, label: "Person", propertiesJson: nil, vector: nil))
+try graph.addNode(node: MobileGraphNode(id: 2, label: "Person", propertiesJson: nil, vector: nil))
+try graph.addEdge(edge: MobileGraphEdge(id: 100, source: 1, target: 2, label: "KNOWS", propertiesJson: nil))
+let reached = try graph.bfsTraverse(sourceId: 1, maxDepth: 2, limit: 100)
+```
+
+Every read passes the database's read gate, so a `MobileObserver` can deny it.
+An edge needs both of its nodes added first. `removeEdge` returns whether it
+removed an edge (`false` for an absent one, a no-op), and throws core's storage
+error (`VELES-006`) when the edge write-ahead log refuses the removal, the edge
+left in place; `clear` runs core's `TRUNCATE` rule: it attempts every edge,
+then removes the nodes only if no edge removal was refused, so a refused one
+leaves the removable edges gone, the nodes in place, and throws.
+
+### Migrating a graph saved by an earlier release
+
+Before this change the store was a separate in-memory engine persisted with
+`save(path)` / `MobileGraphStore.load(path)`; both are gone. Load such a file
+once into the new store, after which core keeps it:
+
+```kotlin
+db.createGraphCollection("kg")
+val graph = db.getGraphStore("kg")!!
+graph.importSnapshot(oldGraphPath)   // the JSON file `save` wrote
+```
+
+`importSnapshot` upserts the file's nodes and adds its edges. It refuses, before
+writing anything, an edge ID the store already holds and an edge whose endpoint
+is in neither the file nor the store (the old store accepted such edges; core
+does not): add that node with `addNode`, then import again. The full list of
+changes is in the [CHANGELOG](../../CHANGELOG.md).
+
 ## API / commands
 
 Full method tables, the `filterJson` shape, storage modes, fusion strategies, and the
@@ -186,9 +228,6 @@ Two naming traps worth knowing before your first build:
 - **Agent memory is semantic-only.** `VelesSemanticMemory` covers store/query/delete;
   episodic and procedural memory, TTL setters, and snapshots are not exposed
   (see [ecosystem parity](../../docs/reference/ECOSYSTEM_PARITY.md)).
-- **`MobileGraphStore` is a deliberate in-memory fork** of core's graph engine, not a
-  delegate: RAM-only, no WAL, no on-disk payloads (it has explicit `save`/`load`).
-  Rationale in [known limitations §14](../../docs/reference/KNOWN_LIMITATIONS.md).
 - **Bulk paths are chunked, not raw.** The zero-copy raw-bulk insert available on
   core, server, CLI, WASM, and the TS SDK is not exposed here; use `upsertBatch` or
   streaming ingestion.
@@ -215,11 +254,17 @@ dispatched at runtime) and its NEON prefetching (`simd_neon_prefetch`).
 
 ## Troubleshooting
 
+Every `VelesError` variant (`Database`, `Collection`, `DimensionMismatch`)
+carries `code`, core's `VELES-###` code for the condition (empty only for a
+`Database` error raised by the binding itself), and `recoverable`, core's
+answer to whether retrying can succeed. The
+[Mobile API guide](../../docs/guides/MOBILE_API.md#errors) lists them.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Database` error, message `Invalid JSON payload: ...` | `VelesPoint.payload` is a JSON *string*, not free text | Serialize the payload: `"{\"title\":\"Hello\"}"`. Nothing is committed when this fires |
 | `Database` error, message `Stream insert failed (buffer full or not configured): ...` | `streamInsert` called before `enableStreaming`, or the bounded channel is saturated | Call `enableStreaming(config)` first; on saturation slow the producer or raise `bufferSize` |
-| `DimensionMismatch { expected, actual }` | The vector length differs from the collection's `dimension` | Create the collection with your embedding model's dimension (384 for all-MiniLM-L6-v2, 768 for MiniLM base) |
+| `DimensionMismatch { expected, actual, code: "VELES-004", recoverable }` | The vector length differs from the collection's `dimension` | Create the collection with your embedding model's dimension (384 for all-MiniLM-L6-v2, 768 for MiniLM base) |
 | Compile error: no initializer for `VelesDatabase` | Looking for a default constructor | `open` is a named constructor: `VelesDatabase.open(path:)` (Swift), `VelesDatabase.open(path)` (Kotlin) |
 | `UnsatisfiedLinkError` on Android | JNA cannot find `libvelesdb_mobile.so` for the running ABI | Ship the `.so` for that ABI under `jniLibs/<abi>/`; see [Mobile build guide](../../docs/guides/MOBILE_BUILD.md) |
 

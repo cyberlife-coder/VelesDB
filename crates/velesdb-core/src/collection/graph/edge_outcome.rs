@@ -16,8 +16,10 @@
 //! path reports this enum instead of re-deriving the answer afterwards.
 //!
 //! The public `remove_edge -> bool` API is unchanged and keeps folding this
-//! down to `matches!(.., Removed)`; this type stays `pub(crate)` so the folding
-//! happens at the crate boundary.
+//! down to `matches!(.., Removed)`; `GraphCollection::try_remove_edge` folds it
+//! into core's taxonomy instead (`Ok(true)`, `Ok(false)`, or a `VELES-006`
+//! storage error carrying the reason). This type stays `pub(crate)` so the
+//! folding happens at the crate boundary.
 
 /// What a single `remove_edge` attempt actually did.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -90,7 +90,7 @@ velesdb-core/
 │   │   └── src/
 │   │       ├── lib.rs         # VelesDatabase + UniFFI exports
 │   │       ├── collection.rs  # VelesCollection (full search API)
-│   │       └── graph.rs       # MobileGraphStore (BFS/DFS/parallel)
+│   │       └── graph.rs       # MobileGraphStore (core GraphCollection handle)
 │   │
 │   ├── velesdb-migrate/       # Data migration from 12 sources
 │   │   ├── Cargo.toml
@@ -194,7 +194,7 @@ iOS and Android bindings via UniFFI:
 - Swift bindings for iOS
 - Kotlin bindings for Android
 - `VelesCollection` (extracted to `collection.rs`) with full search API
-- `MobileGraphStore` with BFS, DFS, and parallel multi-source BFS
+- `MobileGraphStore`, the graph of a core graph collection (`get_graph_store`): core's storage, BFS, DFS and multi-source BFS
 - StorageMode support (Full, SQ8, Binary) for IoT/Edge
 
 ### `velesdb-migrate`

@@ -199,6 +199,7 @@ const results = await invoke('plugin:velesdb|traverse_graph_parallel', {
 ### Mobile (UniFFI)
 
 ```swift
+let graphStore = try db.getGraphStore(name: "kg")!
 let results = try graphStore.bfsTraverseParallel(sourceIds: [1, 5, 10], maxDepth: 3, limit: 100)
 ```
 

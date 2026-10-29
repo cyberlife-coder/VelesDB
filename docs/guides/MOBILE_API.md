@@ -97,6 +97,7 @@ results.forEach { result ->
 | `createGraphCollection(name)` | Creates a schemaless graph collection |
 | `createGraphCollectionWithEmbeddings(name, dimension, metric)` | Graph collection whose nodes carry embeddings |
 | `getCollection(name)` | Returns the collection, or nil/null when absent |
+| `getGraphStore(name)` | Returns a graph collection's `MobileGraphStore`, nil/null when absent; throws for a non-graph collection |
 | `listCollections()` | All collection names |
 | `deleteCollection(name)` | Deletes a collection |
 | `trainPq(collectionName, config)` | Trains Product Quantization (`PqTrainConfig`) |
@@ -249,15 +250,21 @@ TTL setters, and snapshots — available in Python/WASM/MCP — are not bridged 
 
 ## MobileGraphStore
 
-A RAM-only knowledge graph, deliberately independent from core's persistent graph
-engine (rationale: [known limitations §14](../reference/KNOWN_LIMITATIONS.md)).
+The knowledge graph of one graph collection, stored and traversed by core: nodes
+are the collection's node payloads (the `label` is core's node label, so VelesQL
+`MATCH (n:Label)` finds them through `executeQuery`), edges live in its edge
+store, and BFS, DFS and multi-source BFS are core's `GraphCollection`
+traversals. Writes are durable as core makes them; there is no save step.
+
+Get one with `db.getGraphStore(name)` after `createGraphCollection(name)` (or
+`createGraphCollectionWithEmbeddings` for nodes carrying a `vector`). Every
+method throws; every read passes the read gate below as a `GraphTraversal`, and
+fails closed on a scope filter.
 
 | Method | Description |
 |--------|-------------|
-| `MobileGraphStore()` | New empty store (constructor) |
-| `save(path)` / `MobileGraphStore.load(path)` | Explicit persistence to/from a file |
-| `addNode(node)` | Adds a `MobileGraphNode` |
-| `addEdge(edge)` | Adds a `MobileGraphEdge`; errors on a duplicate edge ID |
+| `addNode(node)` | Adds or updates a `MobileGraphNode`: label and properties are replaced, a `vector` replaces the embedding and `nil` keeps it (core's `upsert_node`); `propertiesJson` must be a JSON object without the reserved `_labels` key |
+| `addEdge(edge)` | Adds a `MobileGraphEdge`; throws on a duplicate edge ID, an empty label, or an endpoint node never added |
 | `getNode(id)` / `getEdge(id)` | Lookup, nil/null when absent |
 | `hasNode(id)` / `hasEdge(id)` | Existence checks |
 | `nodeCount()` / `edgeCount()` | Sizes |
@@ -266,22 +273,33 @@ engine (rationale: [known limitations §14](../reference/KNOWN_LIMITATIONS.md)).
 | `getNeighbors(nodeId)` | 1-hop neighbour IDs |
 | `getNodesByLabel(label)` / `getEdgesByLabel(label)` | Label scans |
 | `outDegree(nodeId)` / `inDegree(nodeId)` | Degrees |
-| `bfsTraverse(sourceId, maxDepth, limit)` | Breadth-first traversal |
-| `bfsTraverseParallel(sourceIds, maxDepth, limit)` | Multi-source BFS with deduplication |
-| `dfsTraverse(sourceId, maxDepth, limit)` | Depth-first traversal |
+| `bfsTraverse(sourceId, maxDepth, limit)` | Core's breadth-first traversal |
+| `bfsTraverseParallel(sourceIds, maxDepth, limit)` | Core's multi-source BFS, deduplicated by path |
+| `dfsTraverse(sourceId, maxDepth, limit)` | Core's depth-first traversal |
 | `removeNode(nodeId)` | Removes the node and every connected edge |
-| `removeEdge(edgeId)` | Removes one edge |
-| `clear()` | Empties the store |
+| `removeEdge(edgeId)` | Removes one edge and returns `true`; `false` (a no-op) when absent. Throws core's storage error (`VELES-006`), the edge left in place, when the edge write-ahead log refuses the removal |
+| `clear()` | Removes every edge, then every node, as core's `TRUNCATE`; throws the first refused edge removal with the nodes left in place |
+| `flush()` | Flushes pending graph writes to disk |
+| `importSnapshot(path)` | Migrates a JSON file written by the removed `save(path)` into this store |
 
-Traversal semantics (pinned by `tests/coverage_native.rs`): the source node is never
-emitted, each `TraversalResult.path` lists the **edge IDs** taken from the source, and
-a node reachable by several paths is emitted exactly once.
+Traversal semantics are core's (pinned by `traversals_are_cores` in
+`src/graph_tests.rs` and by `tests/coverage_native.rs`): the source node is
+never emitted, each `TraversalResult.path` lists the **edge IDs** taken from the
+source, a single-source traversal emits each node once, and
+`bfsTraverseParallel` emits a node once per path, so once per source that
+reaches it.
+
+Migrating from the in-memory store of earlier releases (`MobileGraphStore()`,
+`save(path)`, `MobileGraphStore.load(path)`, all removed): create the graph
+collection, get its store, and call `importSnapshot(path)` once on the old file.
+It refuses, before writing, an edge ID the store already holds and an edge whose
+endpoint is in neither the file nor the store; add that node, then import again.
 
 ## Read gate: MobileObserver
 
 `openWithObserver` attaches a Swift/Kotlin callback consulted before **every** governed
 read (dense / text / hybrid / sparse / multi-query search, VelesQL `SELECT` and
-`MATCH`).
+`MATCH`, and every `MobileGraphStore` read).
 
 - `onQueryRequest(context) -> MobileAccessDecision` — return `Allow`, or
   `Deny { reason }` to abort the read with zero results.
@@ -401,15 +419,16 @@ The Swift memberwise initializers are explicit and take **every** field: pass
 | Variant | Fields | Raised when |
 |---|---|---|
 | `Database` | `message`, `code`, `recoverable` | Any engine failure, plus binding-level failures (JSON parsing, runtime setup). `code` carries the core taxonomy code (`"VELES-006"`, …) or is **empty** for binding-level errors |
-| `Collection` | `message` | Collection-level failure |
-| `DimensionMismatch` | `expected`, `actual` | Vector length differs from the collection dimension |
+| `Collection` | `message`, `code`, `recoverable` | The collection is missing (`VELES-002`), already exists (`VELES-001`), or is not of the kind the call needs (`VELES-002`, the code core's own lookups give it, with the kind in the message) |
+| `DimensionMismatch` | `expected`, `actual`, `code`, `recoverable` | Vector length differs from the collection dimension (`VELES-004`) |
 
 `recoverable` mirrors core's `Error::is_recoverable`, so a retry policy can be driven
 from the FFI boundary without string matching. Every call that reaches core keeps
 core's code and recoverability, `executeQuery`, `query`, `trainPq` and the sparse
 and multi-query searches included; a VelesQL parse error is core's query error,
 `VELES-010`. A core `DimensionMismatch` or a missing or duplicate collection
-surfaces as the typed `DimensionMismatch` or `Collection` variant instead.
+surfaces as the typed `DimensionMismatch` or `Collection` variant instead, with
+the same `code` and `recoverable` core gives it.
 
 ## Performance notes
 

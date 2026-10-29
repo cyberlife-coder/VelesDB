@@ -166,6 +166,126 @@ fn test_has_edge_and_remove_edge() {
 }
 
 #[test]
+fn test_try_remove_edge_tells_a_removal_from_an_absent_edge() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(7, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+
+    assert!(
+        col.try_remove_edge(7).unwrap(),
+        "an existing edge is removed"
+    );
+    assert!(!col.has_edge(7), "edge gone after remove");
+    assert!(
+        !col.try_remove_edge(7).unwrap(),
+        "removing an absent edge is a no-op, not an error"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_try_remove_edge_reports_a_refused_wal_append_as_a_storage_error() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(7, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+    col.break_edge_wal_for_test().unwrap();
+
+    let err = col
+        .try_remove_edge(7)
+        .expect_err("a refused WAL append is an error, not an absent edge");
+    assert_eq!(err.code(), "VELES-006", "core codes it as storage: {err}");
+    assert!(
+        err.to_string().contains("write-ahead log refused"),
+        "the reason reaches the caller: {err}"
+    );
+    assert!(col.has_edge(7), "the edge is left in place");
+    assert!(
+        !col.remove_edge(7),
+        "the bool API folds the same failure into `false`"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_truncate_removes_edges_then_nodes_and_counts_them() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20, 30] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(1, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+    col.add_edge(GraphEdge::new(2, 20, 30, "KNOWS").unwrap())
+        .unwrap();
+
+    assert_eq!(col.truncate().unwrap(), (2, 3));
+    assert_eq!(col.edge_count(), 0);
+    assert!(col.all_node_ids().is_empty());
+    assert_eq!(
+        col.truncate().unwrap(),
+        (0, 0),
+        "an empty graph truncates to nothing"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_truncate_keeps_the_nodes_when_an_edge_removal_is_refused() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(7, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+    col.break_edge_wal_for_test().unwrap();
+
+    let err = col
+        .truncate()
+        .expect_err("a refused edge removal fails the truncate");
+    assert_eq!(err.code(), "VELES-006", "{err}");
+    assert!(err.to_string().contains("failed on edge 7"), "{err}");
+    assert!(col.has_edge(7), "the edge is left in place");
+    assert_eq!(
+        col.all_node_ids().len(),
+        2,
+        "no node is deleted under a surviving edge"
+    );
+}
+
+#[test]
+fn test_get_edge_returns_the_edge_by_id() {
+    let (_dir, col) = make_test_collection(None);
+    assert!(col.get_edge(7).is_none(), "unknown edge id is absent");
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+
+    let mut props = HashMap::new();
+    props.insert("since".to_string(), serde_json::json!(2020));
+    col.add_edge(
+        GraphEdge::new(7, 10, 20, "KNOWS")
+            .unwrap()
+            .with_properties(props),
+    )
+    .unwrap();
+
+    let edge = col.get_edge(7).expect("edge present after add");
+    assert_eq!(
+        (edge.id(), edge.source(), edge.target(), edge.label()),
+        (7, 10, 20, "KNOWS")
+    );
+    assert_eq!(edge.property("since"), Some(&serde_json::json!(2020)));
+
+    assert!(col.remove_edge(7));
+    assert!(col.get_edge(7).is_none(), "edge gone after remove");
+}
+
+#[test]
 fn test_upsert_node_without_vector_stores_payload_only() {
     // No embeddings: the `None`-vector branch delegates to upsert_node_payload.
     let (_dir, col) = make_test_collection(None);

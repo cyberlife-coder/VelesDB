@@ -1147,14 +1147,6 @@ behavior or data inconsistency can occur:
 - `rabitq_store` serializes writes via `RwLock::write()`, and each write
   holds the lock for a single `Vec::push`, minimizing contention.
 
-### Lock Ordering (MobileGraphStore)
-
-**Rule**: `edges → outgoing → incoming → nodes`
-
-The lock-order contract is documented per write method in
-`crates/velesdb-mobile/src/graph.rs` (each `# Lock Order` doc section); every
-write path acquires the four locks in this fixed order so no cycle can form.
-
 ---
 
 ## FFI Boundaries

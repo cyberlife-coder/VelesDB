@@ -1,11 +1,21 @@
 //! Graph bindings for VelesDB Mobile (UniFFI).
 //!
-//! Provides UniFFI bindings for graph operations on iOS and Android.
+//! [`MobileGraphStore`] is a handle on a core [`GraphCollection`]: nodes are
+//! that collection's node payloads, edges live in its edge store, and every
+//! traversal is core's own. The binding implements no graph storage and no
+//! traversal; it maps the UniFFI records to and from core's types
+//! (`graph_payload.rs`) and routes each read through the owning database's
+//! read gate.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use parking_lot::RwLock;
+use velesdb_core::{
+    Database as CoreDatabase, GraphCollection, QueryOperationKind, TraversalConfig,
+};
+
+use crate::collection::deny_if_scoped;
+use crate::graph_payload::{edge_to_core, node_from_payload, node_has_label, node_payload};
+use crate::VelesError;
 
 /// A graph node for knowledge graph construction.
 #[derive(Debug, Clone, uniffi::Record, serde::Serialize, serde::Deserialize)]
@@ -99,199 +109,214 @@ impl From<velesdb_core::TraversalResult> for TraversalResult {
     }
 }
 
-/// In-memory graph store for mobile knowledge graphs.
-///
-/// Nodes and edges are held in RAM for fast in-session traversal and are not
-/// written automatically. Call [`save`](Self::save) to persist a snapshot to
-/// disk and [`load`](Self::load) to restore it across app restarts.
-#[derive(uniffi::Object)]
-pub struct MobileGraphStore {
-    nodes: RwLock<HashMap<u64, MobileGraphNode>>,
-    edges: RwLock<HashMap<u64, MobileGraphEdge>>,
-    outgoing: RwLock<HashMap<u64, Vec<u64>>>,
-    incoming: RwLock<HashMap<u64, Vec<u64>>>,
+/// Maps a batch of core edges to their UniFFI records.
+fn to_mobile_edges(edges: Vec<velesdb_core::GraphEdge>) -> Vec<MobileGraphEdge> {
+    edges.into_iter().map(MobileGraphEdge::from).collect()
 }
 
-/// On-disk snapshot of a [`MobileGraphStore`] (JSON). The outgoing/incoming
-/// adjacency is rebuilt from `edges` on load, so it is not stored.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct GraphSnapshot {
-    nodes: Vec<MobileGraphNode>,
-    edges: Vec<MobileGraphEdge>,
+/// Maps a batch of core traversal results to their UniFFI records.
+fn to_mobile_results(results: Vec<velesdb_core::TraversalResult>) -> Vec<TraversalResult> {
+    results.into_iter().map(TraversalResult::from).collect()
+}
+
+/// Saturates a core count to the `u32` the FFI surface exposes.
+fn saturating_u32(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// The knowledge graph of one graph collection.
+///
+/// Obtained from [`VelesDatabase::get_graph_store`](crate::VelesDatabase::get_graph_store)
+/// after [`create_graph_collection`](crate::VelesDatabase::create_graph_collection).
+/// Storage is core's: writes are durable as core makes them (edge WAL, node
+/// payload log), so the graph survives an app restart with no explicit save,
+/// and a node written here is the node VelesQL `MATCH` sees through
+/// [`execute_query`](crate::VelesDatabase::execute_query). BFS, DFS and
+/// multi-source BFS are core's [`GraphCollection`] traversals.
+///
+/// Every read consults the database's read gate as a `GraphTraversal` and
+/// fails closed on an observer scope filter, which no graph read can apply.
+#[derive(uniffi::Object)]
+pub struct MobileGraphStore {
+    inner: GraphCollection,
+    /// Shared handle to the owning database, carrying the read gate.
+    db: Arc<CoreDatabase>,
+    /// Collection name, used to address the gate.
+    name: String,
+}
+
+impl MobileGraphStore {
+    /// Wraps a core graph collection owned by `db` under `name`.
+    pub(crate) fn new(inner: GraphCollection, db: Arc<CoreDatabase>, name: String) -> Self {
+        Self { inner, db, name }
+    }
+
+    /// Routes a read through the database's read gate. A scope filter fails
+    /// closed: no graph read has a metadata-filtered leaf to narrow.
+    fn authorize(&self, context: &str) -> Result<(), VelesError> {
+        let scope =
+            self.db
+                .authorize_read(&self.name, QueryOperationKind::GraphTraversal, None, None)?;
+        deny_if_scoped(scope, context)
+    }
+
+    /// Core traversal settings for one mobile `(max_depth, limit)` pair. The
+    /// source itself (depth 0) is never emitted, as in core's default.
+    fn traversal_config(max_depth: u32, limit: u32) -> TraversalConfig {
+        TraversalConfig::with_range(1, max_depth)
+            .with_limit(usize::try_from(limit).unwrap_or(usize::MAX))
+    }
+
+    /// Reads node `id`.
+    fn read_node(&self, id: u64) -> Result<Option<MobileGraphNode>, VelesError> {
+        Ok(self
+            .inner
+            .get_node_payload(id)?
+            .map(|payload| self.assemble_node(id, payload)))
+    }
+
+    /// Builds node `id` from its payload, with its embedding when the
+    /// collection stores them.
+    fn assemble_node(&self, id: u64, payload: serde_json::Value) -> MobileGraphNode {
+        let vector = if self.inner.has_embeddings() {
+            self.inner
+                .get(&[id])
+                .into_iter()
+                .flatten()
+                .next()
+                .map(|point| point.vector)
+        } else {
+            None
+        };
+        node_from_payload(id, payload, vector)
+    }
 }
 
 #[uniffi::export]
 impl MobileGraphStore {
-    /// Creates a new empty graph store.
-    #[uniffi::constructor]
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            nodes: RwLock::new(HashMap::new()),
-            edges: RwLock::new(HashMap::new()),
-            outgoing: RwLock::new(HashMap::new()),
-            incoming: RwLock::new(HashMap::new()),
-        })
+    /// Adds a node, or updates the node with the same ID.
+    ///
+    /// The label and properties are replaced. A `vector` replaces the node's
+    /// embedding; `nil` keeps the one it has, as core's
+    /// `GraphCollection::upsert_node` does. The label is stored as core's node
+    /// label, so VelesQL `MATCH (n:Label)` finds the node. `properties_json`
+    /// must be a JSON object and must not carry the reserved `_labels` key. A
+    /// `vector` requires a collection created with embeddings, of the
+    /// matching dimension.
+    pub fn add_node(&self, node: MobileGraphNode) -> Result<(), VelesError> {
+        let payload = node_payload(&node)?;
+        self.inner.upsert_node(node.id, &payload, node.vector)?;
+        Ok(())
     }
 
-    /// Persists the current nodes and edges to `path` as JSON so the graph
-    /// survives an app restart (the store is otherwise in-memory only).
+    /// Adds an edge.
     ///
-    /// # Lock Order
-    ///
-    /// Acquires and RELEASES each read guard in turn — `edges` first, then
-    /// `nodes` — so no two of this store's locks are ever held at once. The
-    /// earlier form built the snapshot in one struct literal, whose temporary
-    /// guards both lived to the end of the statement, taking `nodes` then
-    /// `edges` — the exact reverse of the `edges → outgoing → incoming → nodes`
-    /// order every mutator uses (`add_edge`, `remove_node`, `clear`). A
-    /// concurrent `save`/`remove_node` from two UniFFI-called threads was a
-    /// textbook ABBA deadlock; holding at most one lock here cannot deadlock
-    /// against any acquisition order.
-    pub fn save(&self, path: String) -> Result<(), crate::VelesError> {
-        let edges: Vec<MobileGraphEdge> = self.edges.read().values().cloned().collect();
-        let nodes: Vec<MobileGraphNode> = self.nodes.read().values().cloned().collect();
-        let snapshot = GraphSnapshot { nodes, edges };
-        let bytes = serde_json::to_vec(&snapshot)
-            .map_err(|e| crate::VelesError::database(format!("Graph serialize failed: {e}")))?;
-        std::fs::write(&path, bytes)
-            .map_err(|e| crate::VelesError::database(format!("Graph save to '{path}' failed: {e}")))
+    /// Fails when the edge ID is taken, when the label is empty, or when the
+    /// source or target node has not been added (core's referential check).
+    pub fn add_edge(&self, edge: MobileGraphEdge) -> Result<(), VelesError> {
+        self.inner.add_edge(edge_to_core(&edge)?)?;
+        Ok(())
     }
 
-    /// Loads a graph previously written by [`save`](Self::save) from `path`,
-    /// rebuilding the adjacency from the stored edges.
-    #[uniffi::constructor]
-    pub fn load(path: String) -> Result<Arc<Self>, crate::VelesError> {
-        let bytes = std::fs::read(&path).map_err(|e| {
-            crate::VelesError::database(format!("Graph load from '{path}' failed: {e}"))
-        })?;
-        let snapshot: GraphSnapshot = serde_json::from_slice(&bytes)
-            .map_err(|e| crate::VelesError::database(format!("Graph deserialize failed: {e}")))?;
-        let store = Self::new();
-        for node in snapshot.nodes {
-            store.add_node(node);
-        }
-        for edge in snapshot.edges {
-            store.add_edge(edge)?;
-        }
-        Ok(store)
+    /// Imports a JSON snapshot written by the removed `MobileGraphStore.save`.
+    ///
+    /// The migration path from the in-memory store of earlier releases: load
+    /// the file once into this store, after which core persists it. Nodes
+    /// are upserted; an edge whose ID this store already holds is refused
+    /// rather than overwritten, as is an edge whose endpoint node is in
+    /// neither the snapshot nor this store (core requires both endpoints;
+    /// the old store did not), so add such nodes first, then import. These
+    /// refusals happen before the first write.
+    pub fn import_snapshot(&self, path: String) -> Result<(), VelesError> {
+        crate::graph_payload::import_snapshot(&self.inner, &path)
     }
 
-    /// Adds a node to the graph.
-    pub fn add_node(&self, node: MobileGraphNode) {
-        let mut nodes = self.nodes.write();
-        nodes.insert(node.id, node);
-    }
-
-    /// Adds an edge to the graph.
-    ///
-    /// # Lock Order
-    ///
-    /// Acquires locks in consistent order: edges → outgoing → incoming
-    /// WITHOUT dropping between operations to ensure atomicity.
-    /// This prevents race conditions with concurrent remove_node() calls.
-    pub fn add_edge(&self, edge: MobileGraphEdge) -> Result<(), crate::VelesError> {
-        // CRITICAL FIX: Acquire all locks BEFORE any mutation
-        // and hold them until the operation is complete.
-        // Lock order: edges → outgoing → incoming (consistent with remove_node)
-        let mut edges = self.edges.write();
-        let mut outgoing = self.outgoing.write();
-        let mut incoming = self.incoming.write();
-
-        if edges.contains_key(&edge.id) {
-            return Err(crate::VelesError::database(format!(
-                "Edge with ID {} already exists",
-                edge.id
-            )));
-        }
-
-        let source = edge.source;
-        let target = edge.target;
-        let id = edge.id;
-
-        // All mutations happen while holding all locks
-        edges.insert(id, edge);
-        outgoing.entry(source).or_default().push(id);
-        incoming.entry(target).or_default().push(id);
-
-        // Locks are released here (all at once) when guards go out of scope
+    /// Flushes the graph's pending writes to disk.
+    pub fn flush(&self) -> Result<(), VelesError> {
+        self.inner.flush()?;
         Ok(())
     }
 
     /// Gets a node by ID.
-    pub fn get_node(&self, id: u64) -> Option<MobileGraphNode> {
-        let nodes = self.nodes.read();
-        nodes.get(&id).cloned()
+    pub fn get_node(&self, id: u64) -> Result<Option<MobileGraphNode>, VelesError> {
+        self.authorize("get_node")?;
+        self.read_node(id)
     }
 
     /// Gets an edge by ID.
-    pub fn get_edge(&self, id: u64) -> Option<MobileGraphEdge> {
-        let edges = self.edges.read();
-        edges.get(&id).cloned()
+    pub fn get_edge(&self, id: u64) -> Result<Option<MobileGraphEdge>, VelesError> {
+        self.authorize("get_edge")?;
+        Ok(self.inner.get_edge(id).map(MobileGraphEdge::from))
     }
 
     /// Returns the number of nodes.
-    pub fn node_count(&self) -> u64 {
-        let nodes = self.nodes.read();
-        nodes.len() as u64
+    pub fn node_count(&self) -> Result<u64, VelesError> {
+        self.authorize("node_count")?;
+        Ok(self.inner.all_node_ids().len() as u64)
     }
 
     /// Returns the number of edges.
-    pub fn edge_count(&self) -> u64 {
-        let edges = self.edges.read();
-        edges.len() as u64
+    pub fn edge_count(&self) -> Result<u64, VelesError> {
+        self.authorize("edge_count")?;
+        Ok(self.inner.edge_count() as u64)
     }
 
     /// Gets outgoing edges from a node.
-    ///
-    /// # Lock Order
-    ///
-    /// Acquires locks in consistent order: edges → outgoing
-    /// to prevent ABBA deadlock with write operations.
-    pub fn get_outgoing(&self, node_id: u64) -> Vec<MobileGraphEdge> {
-        self.get_edges_from_index(node_id, &self.outgoing)
+    pub fn get_outgoing(&self, node_id: u64) -> Result<Vec<MobileGraphEdge>, VelesError> {
+        self.authorize("get_outgoing")?;
+        Ok(to_mobile_edges(self.inner.get_outgoing(node_id)))
     }
 
     /// Gets incoming edges to a node.
-    ///
-    /// # Lock Order
-    ///
-    /// Acquires locks in consistent order: edges → incoming
-    /// to prevent ABBA deadlock with write operations.
-    pub fn get_incoming(&self, node_id: u64) -> Vec<MobileGraphEdge> {
-        self.get_edges_from_index(node_id, &self.incoming)
+    pub fn get_incoming(&self, node_id: u64) -> Result<Vec<MobileGraphEdge>, VelesError> {
+        self.authorize("get_incoming")?;
+        Ok(to_mobile_edges(self.inner.get_incoming(node_id)))
     }
 
     /// Gets outgoing edges filtered by label.
-    pub fn get_outgoing_by_label(&self, node_id: u64, label: String) -> Vec<MobileGraphEdge> {
-        self.get_outgoing(node_id)
-            .into_iter()
-            .filter(|e| e.label == label)
-            .collect()
+    pub fn get_outgoing_by_label(
+        &self,
+        node_id: u64,
+        label: String,
+    ) -> Result<Vec<MobileGraphEdge>, VelesError> {
+        let mut edges = self.get_outgoing(node_id)?;
+        edges.retain(|e| e.label == label);
+        Ok(edges)
     }
 
     /// Gets neighbors reachable from a node (1-hop).
-    pub fn get_neighbors(&self, node_id: u64) -> Vec<u64> {
-        self.get_outgoing(node_id)
+    pub fn get_neighbors(&self, node_id: u64) -> Result<Vec<u64>, VelesError> {
+        Ok(self
+            .get_outgoing(node_id)?
             .into_iter()
             .map(|e| e.target)
-            .collect()
+            .collect())
     }
 
-    /// Performs BFS traversal from a source node.
+    /// Performs core's BFS from a source node.
     ///
     /// # Arguments
     ///
     /// * `source_id` - Starting node ID
     /// * `max_depth` - Maximum traversal depth
     /// * `limit` - Maximum number of results
-    pub fn bfs_traverse(&self, source_id: u64, max_depth: u32, limit: u32) -> Vec<TraversalResult> {
-        self.bfs_traverse_parallel(vec![source_id], max_depth, limit)
+    pub fn bfs_traverse(
+        &self,
+        source_id: u64,
+        max_depth: u32,
+        limit: u32,
+    ) -> Result<Vec<TraversalResult>, VelesError> {
+        self.authorize("bfs_traverse")?;
+        let config = Self::traversal_config(max_depth, limit);
+        Ok(to_mobile_results(
+            self.inner.traverse_bfs(source_id, &config),
+        ))
     }
 
-    /// Performs multi-source BFS traversal with deduplication.
+    /// Performs core's multi-source BFS.
     ///
-    /// Starts BFS from multiple source nodes simultaneously and deduplicates
-    /// results by target node ID (first-seen wins).
+    /// Each source is traversed independently; results are deduplicated by
+    /// path, so a node reached from two sources is reported once per source.
     ///
     /// # Arguments
     ///
@@ -303,269 +328,105 @@ impl MobileGraphStore {
         source_ids: Vec<u64>,
         max_depth: u32,
         limit: u32,
-    ) -> Vec<TraversalResult> {
-        use std::collections::{HashSet, VecDeque};
-
-        let mut results: Vec<TraversalResult> = Vec::new();
-        let mut visited: HashSet<u64> = HashSet::new();
-        let mut queue: VecDeque<(u64, u32, Vec<u64>)> = VecDeque::new();
-
-        for &source_id in &source_ids {
-            if visited.insert(source_id) {
-                queue.push_back((source_id, 0, Vec::new()));
-            }
-        }
-
-        while let Some((node_id, depth, path)) = queue.pop_front() {
-            if results.len() >= limit as usize {
-                break;
-            }
-
-            if depth > 0 {
-                results.push(TraversalResult {
-                    node_id,
-                    path: path.clone(),
-                    depth,
-                });
-            }
-
-            self.enqueue_neighbors(node_id, depth, max_depth, &path, &mut visited, &mut queue);
-        }
-
-        results
+    ) -> Result<Vec<TraversalResult>, VelesError> {
+        self.authorize("bfs_traverse_parallel")?;
+        let config = Self::traversal_config(max_depth, limit);
+        Ok(to_mobile_results(
+            self.inner.traverse_bfs_parallel(&source_ids, &config),
+        ))
     }
 
-    /// Removes a node and all connected edges.
-    ///
-    /// # Lock Order
-    ///
-    /// Acquires locks in consistent order: edges → outgoing → incoming → nodes
-    /// to prevent deadlock with concurrent add_edge() calls.
-    pub fn remove_node(&self, node_id: u64) {
-        // CRITICAL: Acquire locks in consistent order (edges → outgoing → incoming → nodes)
-        // to prevent deadlock with add_edge() which uses (edges → outgoing → incoming)
-        let mut edges = self.edges.write();
-        let mut outgoing = self.outgoing.write();
-        let mut incoming = self.incoming.write();
-        let mut nodes = self.nodes.write();
-
-        nodes.remove(&node_id);
-
-        let outgoing_ids: Vec<u64> = outgoing.remove(&node_id).unwrap_or_default();
-        for edge_id in outgoing_ids {
-            if let Some(edge) = edges.remove(&edge_id) {
-                if let Some(ids) = incoming.get_mut(&edge.target) {
-                    ids.retain(|&id| id != edge_id);
-                }
-            }
-        }
-
-        let incoming_ids: Vec<u64> = incoming.remove(&node_id).unwrap_or_default();
-        for edge_id in incoming_ids {
-            if let Some(edge) = edges.remove(&edge_id) {
-                if let Some(ids) = outgoing.get_mut(&edge.source) {
-                    ids.retain(|&id| id != edge_id);
-                }
-            }
-        }
-    }
-
-    /// Removes an edge by ID.
-    ///
-    /// # Lock Order
-    ///
-    /// Acquires locks in consistent order: edges → outgoing → incoming
-    /// WITHOUT dropping between operations to ensure atomicity.
-    pub fn remove_edge(&self, edge_id: u64) {
-        // CRITICAL FIX: Acquire all locks BEFORE any mutation
-        let mut edges = self.edges.write();
-        let mut outgoing = self.outgoing.write();
-        let mut incoming = self.incoming.write();
-
-        if let Some(edge) = edges.remove(&edge_id) {
-            if let Some(ids) = outgoing.get_mut(&edge.source) {
-                ids.retain(|&id| id != edge_id);
-            }
-            if let Some(ids) = incoming.get_mut(&edge.target) {
-                ids.retain(|&id| id != edge_id);
-            }
-        }
-        // All locks released here
-    }
-
-    /// Clears all nodes and edges.
-    ///
-    /// # Lock Order
-    ///
-    /// Acquires locks in consistent order: edges → outgoing → incoming → nodes
-    pub fn clear(&self) {
-        // Consistent lock order: edges → outgoing → incoming → nodes
-        let mut edges = self.edges.write();
-        let mut outgoing = self.outgoing.write();
-        let mut incoming = self.incoming.write();
-        let mut nodes = self.nodes.write();
-
-        edges.clear();
-        outgoing.clear();
-        incoming.clear();
-        nodes.clear();
-    }
-
-    /// Performs DFS traversal from a source node.
+    /// Performs core's DFS from a source node.
     ///
     /// # Arguments
     ///
     /// * `source_id` - Starting node ID
     /// * `max_depth` - Maximum traversal depth
     /// * `limit` - Maximum number of results
-    pub fn dfs_traverse(&self, source_id: u64, max_depth: u32, limit: u32) -> Vec<TraversalResult> {
-        use std::collections::HashSet;
+    pub fn dfs_traverse(
+        &self,
+        source_id: u64,
+        max_depth: u32,
+        limit: u32,
+    ) -> Result<Vec<TraversalResult>, VelesError> {
+        self.authorize("dfs_traverse")?;
+        let config = Self::traversal_config(max_depth, limit);
+        Ok(to_mobile_results(
+            self.inner.traverse_dfs(source_id, &config),
+        ))
+    }
 
-        let mut results: Vec<TraversalResult> = Vec::new();
-        let mut visited: HashSet<u64> = HashSet::new();
-        let mut stack: Vec<(u64, u32, Vec<u64>)> = vec![(source_id, 0, Vec::new())];
+    /// Removes a node and every edge connected to it.
+    pub fn remove_node(&self, node_id: u64) -> Result<(), VelesError> {
+        self.inner.delete(&[node_id])?;
+        Ok(())
+    }
 
-        while let Some((node_id, depth, path)) = stack.pop() {
-            if results.len() >= limit as usize {
-                break;
-            }
+    /// Removes an edge by ID, returning whether there was one to remove.
+    ///
+    /// Removing an absent edge is a no-op that returns `false`. A removal the
+    /// edge write-ahead log refuses leaves the edge in place and throws core's
+    /// storage error (`VELES-006`), as does an index found out of sync with
+    /// the edge's source shard.
+    pub fn remove_edge(&self, edge_id: u64) -> Result<bool, VelesError> {
+        Ok(self.inner.try_remove_edge(edge_id)?)
+    }
 
-            if visited.contains(&node_id) {
-                continue;
-            }
-            visited.insert(node_id);
-
-            if depth > 0 {
-                results.push(TraversalResult {
-                    node_id,
-                    path: path.clone(),
-                    depth,
-                });
-            }
-
-            if depth < max_depth {
-                let neighbors: Vec<_> = self
-                    .get_outgoing(node_id)
-                    .into_iter()
-                    .filter(|e| !visited.contains(&e.target))
-                    .collect();
-
-                for edge in neighbors.into_iter().rev() {
-                    let mut next_path = path.clone();
-                    next_path.push(edge.id);
-                    stack.push((edge.target, depth + 1, next_path));
-                }
-            }
-        }
-
-        results
+    /// Removes every node and edge, through core's
+    /// `GraphCollection::truncate`, the rule VelesQL `TRUNCATE` follows.
+    ///
+    /// Every edge is attempted, then the nodes are removed only if no edge
+    /// removal failed: deleting the nodes of a surviving edge would leave it
+    /// dangling. On a failure the edges that could be removed are gone, the
+    /// nodes stay, and the error (`VELES-006`) names the first failed edge.
+    pub fn clear(&self) -> Result<(), VelesError> {
+        self.inner.truncate()?;
+        Ok(())
     }
 
     /// Checks if a node exists.
-    pub fn has_node(&self, id: u64) -> bool {
-        let nodes = self.nodes.read();
-        nodes.contains_key(&id)
+    pub fn has_node(&self, id: u64) -> Result<bool, VelesError> {
+        self.authorize("has_node")?;
+        Ok(self.inner.get_node_payload(id)?.is_some())
     }
 
     /// Checks if an edge exists.
-    pub fn has_edge(&self, id: u64) -> bool {
-        let edges = self.edges.read();
-        edges.contains_key(&id)
+    pub fn has_edge(&self, id: u64) -> Result<bool, VelesError> {
+        self.authorize("has_edge")?;
+        Ok(self.inner.has_edge(id))
     }
 
     /// Gets the out-degree (number of outgoing edges) of a node.
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn out_degree(&self, node_id: u64) -> u32 {
-        let outgoing = self.outgoing.read();
-        // Safe: graph degree unlikely to exceed u32::MAX (4 billion edges from one node)
-        outgoing.get(&node_id).map_or(0, |v| v.len() as u32)
+    pub fn out_degree(&self, node_id: u64) -> Result<u32, VelesError> {
+        self.authorize("out_degree")?;
+        Ok(saturating_u32(self.inner.node_degree(node_id).1))
     }
 
     /// Gets the in-degree (number of incoming edges) of a node.
-    #[allow(clippy::cast_possible_truncation)]
-    pub fn in_degree(&self, node_id: u64) -> u32 {
-        let incoming = self.incoming.read();
-        // Safe: graph degree unlikely to exceed u32::MAX (4 billion edges to one node)
-        incoming.get(&node_id).map_or(0, |v| v.len() as u32)
+    pub fn in_degree(&self, node_id: u64) -> Result<u32, VelesError> {
+        self.authorize("in_degree")?;
+        Ok(saturating_u32(self.inner.node_degree(node_id).0))
     }
 
-    /// Gets all nodes with a specific label.
-    pub fn get_nodes_by_label(&self, label: String) -> Vec<MobileGraphNode> {
-        let nodes = self.nodes.read();
-        nodes
-            .values()
-            .filter(|n| n.label == label)
-            .cloned()
-            .collect()
+    /// Gets all nodes carrying `label`.
+    pub fn get_nodes_by_label(&self, label: String) -> Result<Vec<MobileGraphNode>, VelesError> {
+        self.authorize("get_nodes_by_label")?;
+        let mut nodes = Vec::new();
+        for id in self.inner.all_node_ids() {
+            let Some(payload) = self.inner.get_node_payload(id)? else {
+                continue;
+            };
+            if node_has_label(&payload, &label) {
+                nodes.push(self.assemble_node(id, payload));
+            }
+        }
+        Ok(nodes)
     }
 
     /// Gets all edges with a specific label.
-    pub fn get_edges_by_label(&self, label: String) -> Vec<MobileGraphEdge> {
-        let edges = self.edges.read();
-        edges
-            .values()
-            .filter(|e| e.label == label)
-            .cloned()
-            .collect()
-    }
-}
-
-/// Internal helpers (not exposed via UniFFI).
-impl MobileGraphStore {
-    /// Resolves edge IDs from an adjacency index to full edge objects.
-    ///
-    /// # Lock Order
-    ///
-    /// Acquires `edges` read-lock first, then the `index` read-lock, matching
-    /// the write-side lock order (edges -> outgoing -> incoming).
-    fn get_edges_from_index(
-        &self,
-        node_id: u64,
-        index: &RwLock<HashMap<u64, Vec<u64>>>,
-    ) -> Vec<MobileGraphEdge> {
-        let edges = self.edges.read();
-        let idx = index.read();
-        idx.get(&node_id)
-            .map(|ids| ids.iter().filter_map(|id| edges.get(id).cloned()).collect())
-            .unwrap_or_default()
-    }
-
-    /// Enqueues unvisited outgoing neighbors of `node_id` for further traversal.
-    ///
-    /// Each enqueued entry carries the edge-ID path taken to reach the neighbor
-    /// (`path` so far plus the traversed edge), mirroring core's
-    /// `TraversalResult::path`. No-op when `depth` has already reached
-    /// `max_depth`.
-    fn enqueue_neighbors(
-        &self,
-        node_id: u64,
-        depth: u32,
-        max_depth: u32,
-        path: &[u64],
-        visited: &mut std::collections::HashSet<u64>,
-        queue: &mut std::collections::VecDeque<(u64, u32, Vec<u64>)>,
-    ) {
-        if depth >= max_depth {
-            return;
-        }
-        for edge in self.get_outgoing(node_id) {
-            if visited.insert(edge.target) {
-                let mut next_path = path.to_vec();
-                next_path.push(edge.id);
-                queue.push_back((edge.target, depth + 1, next_path));
-            }
-        }
-    }
-}
-
-impl Default for MobileGraphStore {
-    fn default() -> Self {
-        Self {
-            nodes: RwLock::new(HashMap::new()),
-            edges: RwLock::new(HashMap::new()),
-            outgoing: RwLock::new(HashMap::new()),
-            incoming: RwLock::new(HashMap::new()),
-        }
+    pub fn get_edges_by_label(&self, label: String) -> Result<Vec<MobileGraphEdge>, VelesError> {
+        self.authorize("get_edges_by_label")?;
+        Ok(to_mobile_edges(self.inner.get_edges(Some(&label))))
     }
 }
 

@@ -25,13 +25,28 @@ pub enum VelesError {
         recoverable: bool,
     },
 
-    /// Collection operation failed.
-    #[error("Collection error: {message}")]
-    Collection { message: String },
+    /// Collection operation failed: the collection is missing, already
+    /// exists, or is not of the kind the call needs.
+    ///
+    /// `code` and `recoverable` are core's for the condition, as on
+    /// `Database`: `"VELES-002"` for a missing collection or one of the wrong
+    /// kind, `"VELES-001"` for a duplicate.
+    #[error("[{code}] Collection error: {message}")]
+    Collection {
+        message: String,
+        code: String,
+        recoverable: bool,
+    },
 
-    /// Vector dimension mismatch.
-    #[error("Dimension mismatch: expected {expected}, got {actual}")]
-    DimensionMismatch { expected: u32, actual: u32 },
+    /// Vector dimension mismatch. `code` is core's `"VELES-004"` and
+    /// `recoverable` core's answer for it.
+    #[error("[{code}] Dimension mismatch: expected {expected}, got {actual}")]
+    DimensionMismatch {
+        expected: u32,
+        actual: u32,
+        code: String,
+        recoverable: bool,
+    },
 }
 
 impl VelesError {
@@ -46,6 +61,23 @@ impl VelesError {
             message,
             code: String::new(),
             recoverable: true,
+        }
+    }
+
+    /// A collection that exists but is not of the kind the call needs.
+    ///
+    /// Coded as core codes the same condition: its own graph lookup
+    /// (`resolve_graph_collection`) and the server's vector lookup
+    /// (`get_vector_collection_or_404`) answer `VELES-002` for a collection
+    /// that is not of the kind asked, so the code and recoverability are read
+    /// from that core variant rather than copied; the kind is in the message.
+    #[must_use]
+    pub(crate) fn wrong_collection_kind(name: &str, message: String) -> Self {
+        let core = velesdb_core::Error::CollectionNotFound(name.to_string());
+        VelesError::Collection {
+            message,
+            code: core.code().to_string(),
+            recoverable: core.is_recoverable(),
         }
     }
 
@@ -80,13 +112,19 @@ impl From<velesdb_core::Error> for VelesError {
                 VelesError::DimensionMismatch {
                     expected: expected as u32,
                     actual: actual as u32,
+                    code,
+                    recoverable,
                 }
             }
             velesdb_core::Error::CollectionNotFound(name) => VelesError::Collection {
                 message: format!("Collection not found: {name}"),
+                code,
+                recoverable,
             },
             velesdb_core::Error::CollectionExists(name) => VelesError::Collection {
                 message: format!("Collection already exists: {name}"),
+                code,
+                recoverable,
             },
             other => VelesError::Database {
                 message: other.to_string(),

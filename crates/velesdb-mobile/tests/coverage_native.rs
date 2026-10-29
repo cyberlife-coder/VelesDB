@@ -2,7 +2,7 @@
 //!
 //! These exercise the uniffi-exported methods directly as plain Rust:
 //! - `MobileGraphStore::dfs_traverse` (visited dedup, path tracking, depth/limit
-//!   cutoffs) — previously only `bfs_traverse` was tested.
+//!   cutoffs) — core's DFS, reached through the binding.
 //! - `VelesCollection::stream_insert` not-configured error branch.
 //! - `parse_point` invalid-JSON error branch (via `upsert`).
 //! - `MobileCollectionDiagnostics` `From` `NeedsRebuild` arm.
@@ -15,16 +15,30 @@ use velesdb_mobile::{
 
 /// Builds a graph store with nodes 1..=`count` and the given KNOWS edges.
 ///
-/// Each edge tuple is `(edge_id, source, target)`.
-fn graph_with(count: u64, edges: &[(u64, u64, u64)]) -> std::sync::Arc<MobileGraphStore> {
-    let store = MobileGraphStore::new();
+/// Each edge tuple is `(edge_id, source, target)`. The store is a graph
+/// collection of a database in the returned temp dir, which must outlive it.
+fn graph_with(
+    count: u64,
+    edges: &[(u64, u64, u64)],
+) -> (TempDir, std::sync::Arc<MobileGraphStore>) {
+    let tmp = TempDir::new().expect("tempdir");
+    let db =
+        VelesDatabase::open(tmp.path().to_str().expect("path utf8").to_string()).expect("open db");
+    db.create_graph_collection("kg".to_string())
+        .expect("create graph collection");
+    let store = db
+        .get_graph_store("kg".to_string())
+        .expect("get graph store")
+        .expect("graph store present");
     for id in 1..=count {
-        store.add_node(MobileGraphNode {
-            id,
-            label: "Person".to_string(),
-            properties_json: None,
-            vector: None,
-        });
+        store
+            .add_node(MobileGraphNode {
+                id,
+                label: "Person".to_string(),
+                properties_json: None,
+                vector: None,
+            })
+            .expect("node insert should succeed");
     }
     for &(id, source, target) in edges {
         store
@@ -37,15 +51,15 @@ fn graph_with(count: u64, edges: &[(u64, u64, u64)]) -> std::sync::Arc<MobileGra
             })
             .expect("edge insert should succeed");
     }
-    store
+    (tmp, store)
 }
 
 #[test]
 fn dfs_traverse_chain_tracks_depth_and_path() {
     // Chain 1 -> 2 -> 3 -> 4 via edges 100, 101, 102.
-    let store = graph_with(4, &[(100, 1, 2), (101, 2, 3), (102, 3, 4)]);
+    let (_tmp, store) = graph_with(4, &[(100, 1, 2), (101, 2, 3), (102, 3, 4)]);
 
-    let results = store.dfs_traverse(1, 3, 100);
+    let results = store.dfs_traverse(1, 3, 100).expect("dfs");
 
     // Source itself is not emitted (depth 0 skipped); 2/3/4 each carry the
     // accumulated edge-ID path mirroring core's TraversalResult::path.
@@ -64,9 +78,9 @@ fn dfs_traverse_chain_tracks_depth_and_path() {
 #[test]
 fn dfs_traverse_respects_max_depth() {
     // Chain 1 -> 2 -> 3 -> 4, but cap depth at 2: node 4 must not be reached.
-    let store = graph_with(4, &[(100, 1, 2), (101, 2, 3), (102, 3, 4)]);
+    let (_tmp, store) = graph_with(4, &[(100, 1, 2), (101, 2, 3), (102, 3, 4)]);
 
-    let results = store.dfs_traverse(1, 2, 100);
+    let results = store.dfs_traverse(1, 2, 100).expect("dfs");
 
     assert_eq!(results.len(), 2);
     assert!(results.iter().all(|r| r.depth <= 2));
@@ -76,21 +90,20 @@ fn dfs_traverse_respects_max_depth() {
 #[test]
 fn dfs_traverse_respects_limit() {
     // Star: 1 -> {2,3,4,5}. Limit to 2 results.
-    let store = graph_with(5, &[(100, 1, 2), (101, 1, 3), (102, 1, 4), (103, 1, 5)]);
+    let (_tmp, store) = graph_with(5, &[(100, 1, 2), (101, 1, 3), (102, 1, 4), (103, 1, 5)]);
 
-    let results = store.dfs_traverse(1, 1, 2);
+    let results = store.dfs_traverse(1, 1, 2).expect("dfs");
 
     assert_eq!(results.len(), 2);
 }
 
 #[test]
 fn dfs_traverse_dedups_visited_in_diamond() {
-    // Diamond: 1 -> 2, 1 -> 3, 2 -> 4, 3 -> 4. Node 4 has two paths in but the
-    // visited-set must emit it exactly once (exercises the `visited.contains`
-    // skip branch).
-    let store = graph_with(4, &[(100, 1, 2), (101, 1, 3), (102, 2, 4), (103, 3, 4)]);
+    // Diamond: 1 -> 2, 1 -> 3, 2 -> 4, 3 -> 4. Node 4 has two paths in but
+    // core's DFS visits each node once, so it is emitted exactly once.
+    let (_tmp, store) = graph_with(4, &[(100, 1, 2), (101, 1, 3), (102, 2, 4), (103, 3, 4)]);
 
-    let results = store.dfs_traverse(1, 3, 100);
+    let results = store.dfs_traverse(1, 3, 100).expect("dfs");
 
     let node4_hits = results.iter().filter(|r| r.node_id == 4).count();
     assert_eq!(node4_hits, 1, "node 4 must be visited exactly once");
@@ -102,11 +115,11 @@ fn dfs_traverse_dedups_visited_in_diamond() {
 
 #[test]
 fn dfs_traverse_isolated_source_yields_nothing() {
-    // Source with no outgoing edges: the depth<max_depth neighbor block runs
-    // but finds nothing, so the result set is empty.
-    let store = graph_with(3, &[(100, 2, 3)]);
+    // Source with no outgoing edges: there is nothing to expand, so the
+    // result set is empty.
+    let (_tmp, store) = graph_with(3, &[(100, 2, 3)]);
 
-    let results = store.dfs_traverse(1, 3, 100);
+    let results = store.dfs_traverse(1, 3, 100).expect("dfs");
 
     assert!(results.is_empty());
 }

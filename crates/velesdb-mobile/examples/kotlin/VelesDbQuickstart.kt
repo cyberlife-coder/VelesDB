@@ -24,7 +24,6 @@ import org.json.JSONObject
 import uniffi.velesdb_mobile.DistanceMetric
 import uniffi.velesdb_mobile.MobileGraphEdge
 import uniffi.velesdb_mobile.MobileGraphNode
-import uniffi.velesdb_mobile.MobileGraphStore
 import uniffi.velesdb_mobile.SearchQuality
 import uniffi.velesdb_mobile.VelesDatabase
 import uniffi.velesdb_mobile.VelesPoint
@@ -155,9 +154,10 @@ fun runQuickstart(path: String) {
     }
 
     // ---- 8. Knowledge graph ------------------------------------------------
-    // MobileGraphStore is a deliberate in-memory fork of core's graph engine:
-    // RAM-only, no WAL, no on-disk payloads — hence the explicit save/load.
-    val graph = MobileGraphStore()
+    // A graph store is the graph of a graph collection: core stores it (no save
+    // step, it survives a restart) and core runs every traversal.
+    db.createGraphCollection("kg")
+    val graph = db.getGraphStore("kg") ?: return
     graph.addNode(MobileGraphNode(
         id = 1uL, label = "Person", propertiesJson = """{"name":"Ada"}""", vector = null,
     ))
@@ -183,11 +183,15 @@ fun runQuickstart(path: String) {
     // The source itself is never emitted (depth 0 is skipped) and every node is
     // visited at most once, so a diamond does not produce duplicates.
 
-    // Persist it explicitly — nothing about this store is automatic.
-    val graphPath = File(path, "graph.bin").absolutePath
-    graph.save(graphPath)
-    val reloaded = MobileGraphStore.load(graphPath)
-    println("reloaded graph: ${reloaded.nodeCount()} nodes")
+    // The same nodes answer VelesQL MATCH: a node's label is its core label.
+    val match = db.executeQuery(
+        "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        """{"_collection":"kg"}""",
+    )
+    println("MATCH Person-KNOWS->Person: ${match.rowCount} row(s)")
+
+    // A graph saved by the former in-memory store's save(path) is migrated once
+    // with importSnapshot(path); see the crate README.
 
     // ---- 9. Agent memory ---------------------------------------------------
     // VelesSemanticMemory keeps facts with their embeddings and reads the text

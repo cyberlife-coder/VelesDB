@@ -899,8 +899,10 @@ fn test_sparse_and_multi_query_leaves_keep_core_error_codes() {
             err,
             VelesError::DimensionMismatch {
                 expected: 4,
-                actual: 2
-            }
+                actual: 2,
+                code,
+                ..
+            } if code == "VELES-004"
         )
     };
     let err = col
