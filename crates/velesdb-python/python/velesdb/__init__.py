@@ -52,6 +52,9 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     VelesQLParameterError,
     VelesQLSyntaxError,
     __version__,
+    hash_id,
+    metric_higher_is_better,
+    validate_search_quality,
 )
 
 
@@ -942,6 +945,12 @@ __all__ = [
     "CONDITION_TYPES",
     "DISTANCE_METRICS",
     "STORAGE_MODES",
+    # Core contracts, each a call into velesdb-core: the canonical
+    # string -> u64 point id, a metric's score direction, and the search
+    # quality grammar.
+    "hash_id",
+    "metric_higher_is_better",
+    "validate_search_quality",
     "embed",
     "__version__",
 ]

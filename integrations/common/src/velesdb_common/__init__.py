@@ -46,6 +46,7 @@ from velesdb_common.security import (
     validate_weight,
 )
 from velesdb_common.fusion import build_fusion_strategy
+from velesdb_common.scores import metric_higher_is_better, score_to_similarity
 from velesdb_common.graph import (
     build_graph_rest_payload,
     is_timeout_exception,
@@ -97,6 +98,9 @@ __all__ = [
     "validate_timeout",
     "validate_url",
     "validate_weight",
+    # scores
+    "metric_higher_is_better",
+    "score_to_similarity",
     # graph
     "build_graph_rest_payload",
     "is_timeout_exception",

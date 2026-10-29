@@ -44,8 +44,37 @@ fn search_config_options_rejects_unknown_mode() {
         ..SearchConfigOptions::default()
     };
     init_python();
-    let err = opts.to_core().expect_err("unknown mode must fail");
-    assert!(err.to_string().contains("default_mode"));
+    let err = opts
+        .to_core()
+        .expect_err("unknown mode must fail")
+        .to_string();
+    assert!(err.contains("default_mode"), "got: {err}");
+    // The value given and the accepted names, as core's serde lists them.
+    assert!(
+        err.contains("warp") && err.contains("perfect"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn search_config_options_mode_names_are_cores_serde_names() {
+    // The `[search]` TOML section reads `default_mode` through `SearchMode`'s
+    // serde names; Python must accept and render exactly those.
+    for mode in [
+        SearchMode::Fast,
+        SearchMode::Balanced,
+        SearchMode::Accurate,
+        SearchMode::Perfect,
+    ] {
+        let name = serde_json::to_value(mode).expect("test: serialize SearchMode");
+        let core = CoreSearchConfig {
+            default_mode: mode,
+            ..CoreSearchConfig::default()
+        };
+        let opts = SearchConfigOptions::from_core(&core).expect("known mode renders");
+        assert_eq!(opts.default_mode.as_deref(), name.as_str(), "{mode:?}");
+        assert_eq!(opts.to_core().expect("round-trip").default_mode, mode);
+    }
 }
 
 #[test]

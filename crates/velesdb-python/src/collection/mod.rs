@@ -18,6 +18,9 @@ pub(crate) mod scroll;
 mod search;
 pub(crate) mod search_options;
 
+// The search quality parser, shared with `velesdb.validate_search_quality`.
+pub(crate) use search::parse_search_quality;
+
 use std::sync::Arc;
 
 use pyo3::prelude::*;
