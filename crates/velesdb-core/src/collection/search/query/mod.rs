@@ -64,6 +64,8 @@ mod metadata_query;
 mod multi_vector;
 #[cfg(test)]
 mod multi_vector_tests;
+#[cfg(test)]
+mod near_disjunction_tests;
 mod options;
 mod ordered_index_scan;
 mod ordering;

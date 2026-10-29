@@ -133,13 +133,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
-  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
-  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
-  This includes a v2 quantized store filled through the old `insert_batch`,
-  which appended to the f32 buffer whatever the mode and left the codes short,
-  so its first search indexed out of bounds.
-
+- **`vector NEAR $v OR <metadata>` keeps the NEAR hits.** The shape was routed
+  to the `similarity()` union executor, which has no NEAR leg: every NEAR hit
+  was dropped and only the metadata side came back, each row scored 1.0
+  (`... WHERE vector NEAR $v OR category = 'other' LIMIT 5` returned two rows
+  instead of five). A `NEAR` leaf is TRUE in a boolean context, as the WHERE
+  evaluator and the planner already read it, so the disjunction now runs as the
+  NEAR search with the rest of the WHERE read that way: the rows the NEAR
+  search ranks, with their NEAR scores, and `(NEAR OR x) AND y` filtered by `y`.
+  Core now returns what the WASM executor did; the shared executor fixture pins
+  both (X015, X016). A `similarity()` threshold under `OR` keeps the union
+  semantics. The extractor now also sees a NEAR vector under `OR`, so
+  `NEAR $d OR SPARSE_NEAR $s` runs the same dense + sparse fusion as its `AND`
+  form; it used to drop the dense vector and run a sparse-only search.
+- **A failing branch fails the hybrid dense + sparse search.** The dense branch
+  dropped its error, so a dense vector of the wrong dimension answered with the
+  sparse hits alone instead of `DimensionMismatch` (VELES-004), and an unknown
+  sparse index answered with the dense hits alone, or nothing, instead of the
+  `Sparse index '...' not found` error (VELES-009) the sparse-only search
+  returns. Both now fail the query — `NEAR ... AND SPARSE_NEAR ...` and every
+  binding's `hybrid_sparse_search`.
+- **`VectorCollection::hybrid_sparse_search` aligns distance polarity.** It
+  carried its own copy of the dense + sparse fusion, without the score-direction
+  alignment of #2102: on a Euclidean or Hamming collection a score-level
+  strategy (RSF, weighted, average, maximum) ranked the farthest dense point
+  first. It now delegates to the collection's fusion, so the server, CLI,
+  Python, mobile and Tauri hybrid searches rank like the VelesQL path. RRF was
+  never affected.
 - **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
   *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
   among the distances and mapped its scores through `1 / (1 + s)`: the best
@@ -149,6 +169,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
   the binding by a drift test, for a wheel that predates the function. Euclidean
   and Hamming keep their `1 / (1 + d)` mapping.
+
+- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
+  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
+  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
+  This includes a v2 quantized store filled through the old `insert_batch`,
+  which appended to the f32 buffer whatever the mode and left the codes short,
+  so its first search indexed out of bounds.
 
 ### Documentation
 
@@ -179,6 +206,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reaches: the depth, cardinality, memory and timeout limits of the
   collections open at the time, not the rate limiter, the circuit breaker, or a
   collection opened afterwards.
+- **No guide shows `NEAR_FUSED ... USING FUSION 'weighted'` as working.** The
+  validator has rejected `weighted` and `rsf` on `NEAR_FUSED` with `V012` since
+  3.3.0, as the spec says, but the CLI cookbook, the business scenarios and the
+  graph-patterns guide still offered them. Their examples now use `average`, and
+  each says where `weighted`/`rsf` do apply: the query-level `USING FUSION(...)`
+  of a two-branch hybrid. The spec's `NEAR_FUSED` section said both that other
+  strategies fall back to RRF and that any other name is rejected; it now says
+  what the engine does — `weighted`/`rsf` rejected, a name outside the five
+  known strategies run as `rrf`. It also documents `NEAR` under `OR`.
 
 ## [7.1.0] - 2026-10-28
 

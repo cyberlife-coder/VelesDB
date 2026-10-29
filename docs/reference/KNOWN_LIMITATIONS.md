@@ -410,6 +410,9 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `cases` X011–X014: WHERE-expression evaluation (`BETWEEN`, parenthesized
   `AND`/`OR`, `NOT`, `IN`) — safe for CLI's strict-order comparison, so these
   run on all three executors.
+- `cases` X015–X016: `vector NEAR` under `OR`, alone and inside an `AND`. The
+  NEAR leaf is TRUE in a boolean context and its ranking orders the rows, on
+  all three executors.
 - `join_cases` J001–J005: `JOIN ... ON` (both condition-side orders on both
   engines — J005 locks the joined-table-first order, issue #1555) and
   `JOIN ... USING (col)`.

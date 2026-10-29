@@ -340,40 +340,14 @@ impl VectorCollection {
         strategy: &crate::fusion::FusionStrategy,
         filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
-        let candidate_k = k.saturating_mul(2).max(k + 10);
-
-        let (dense_results, sparse_results) = self.inner.execute_both_branches(
+        self.inner.hybrid_sparse_search_inner(
             dense_vector,
             sparse_query,
-            index_name,
-            candidate_k,
+            k,
+            strategy,
             filter,
-        );
-
-        if dense_results.is_empty() && sparse_results.is_empty() {
-            return Ok(Vec::new());
-        }
-        if dense_results.is_empty() {
-            let scored: Vec<(u64, f32)> = sparse_results
-                .iter()
-                .map(|sd| (sd.doc_id, sd.score))
-                .collect();
-            return Ok(self.inner.resolve_fused_results(&scored, k));
-        }
-        if sparse_results.is_empty() {
-            return Ok(self.inner.resolve_fused_results(&dense_results, k));
-        }
-
-        let sparse_tuples: Vec<(u64, f32)> = sparse_results
-            .iter()
-            .map(|sd| (sd.doc_id, sd.score))
-            .collect();
-
-        let fused = strategy
-            .fuse(vec![dense_results, sparse_tuples])
-            .map_err(|e| crate::error::Error::Config(format!("Fusion error: {e}")))?;
-
-        Ok(self.inner.resolve_fused_results(&fused, k))
+            index_name,
+        )
     }
 
     /// Executes a graph MATCH query against the collection's edge store.

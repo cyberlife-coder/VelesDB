@@ -185,6 +185,84 @@ fn test_hybrid_empty_sparse_branch() {
     );
 }
 
+/// `NEAR $dense AND SPARSE_NEAR $sparse` with a dense vector of the wrong
+/// dimension fails the query: the dense branch's error used to be dropped,
+/// and the query answered with the sparse hits alone.
+#[test]
+fn test_hybrid_dense_dimension_mismatch_fails_the_query() {
+    let (_dir, col) = setup_hybrid_collection();
+    let svs = crate::velesql::SparseVectorSearch {
+        vector: crate::velesql::SparseVectorExpr::Literal(SparseVector::new(vec![(1, 1.0)])),
+        index_name: None,
+    };
+
+    let err = col
+        .execute_hybrid_search(&[0.9, 0.5], &svs, &HashMap::new(), None, 5)
+        .expect_err("a 2-dim dense vector on a 4-dim collection must fail");
+
+    assert!(
+        matches!(
+            err,
+            crate::error::Error::DimensionMismatch {
+                expected: 4,
+                actual: 2
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+/// `SPARSE_NEAR ... USING 'missing'` names no sparse index: the hybrid query
+/// fails exactly like the sparse-only one, instead of fusing an empty branch.
+#[test]
+fn test_hybrid_unknown_sparse_index_fails_like_sparse_only() {
+    let (_dir, col) = setup_hybrid_collection();
+    let svs = crate::velesql::SparseVectorSearch {
+        vector: crate::velesql::SparseVectorExpr::Literal(SparseVector::new(vec![(1, 1.0)])),
+        index_name: Some("missing".to_string()),
+    };
+
+    let hybrid = col
+        .execute_hybrid_search(&[0.9, 0.5, 0.3, 0.1], &svs, &HashMap::new(), None, 5)
+        .expect_err("an unknown sparse index must fail the hybrid query");
+    let sparse_only = col
+        .execute_sparse_search(&svs, &HashMap::new(), None, 5)
+        .expect_err("precondition: the sparse-only query fails");
+
+    assert_eq!(hybrid.to_string(), sparse_only.to_string());
+}
+
+/// Both leaves rank and both are TRUE as booleans, so `NEAR OR SPARSE_NEAR`
+/// is the same hybrid fusion as `NEAR AND SPARSE_NEAR`. The dense vector under
+/// the `OR` used to go unseen, leaving a sparse-only search.
+#[test]
+fn test_near_or_sparse_near_is_the_hybrid_fusion() {
+    let (_dir, col) = setup_hybrid_collection();
+    // Dense ranks the low ids first, sparse the high ids: the fusion differs
+    // from either ranking alone.
+    let params = HashMap::from([("d".to_string(), serde_json::json!([0.0, 0.5, 0.3, 0.1]))]);
+    let ids = |sql: &str| -> Vec<u64> {
+        let query = crate::velesql::Parser::parse(sql).expect("parse");
+        col.execute_query(&query, &params)
+            .expect("execute")
+            .iter()
+            .map(|r| r.point.id)
+            .collect()
+    };
+
+    let conjunction =
+        ids("SELECT * FROM docs WHERE vector NEAR $d AND vector SPARSE_NEAR {1: 1.0} LIMIT 6");
+    let disjunction =
+        ids("SELECT * FROM docs WHERE vector NEAR $d OR vector SPARSE_NEAR {1: 1.0} LIMIT 6");
+    let sparse_only = ids("SELECT * FROM docs WHERE vector SPARSE_NEAR {1: 1.0} LIMIT 6");
+
+    assert_ne!(
+        conjunction, sparse_only,
+        "precondition: fusion is observable"
+    );
+    assert_eq!(disjunction, conjunction);
+}
+
 // -----------------------------------------------------------------------
 // ORDER BY sparse_score on a SPARSE_NEAR query (backlog #20)
 // -----------------------------------------------------------------------
