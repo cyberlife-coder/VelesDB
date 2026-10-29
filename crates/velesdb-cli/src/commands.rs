@@ -390,7 +390,7 @@ pub enum QueryCommands {
         #[arg(short = 'k', long, default_value = "10")]
         top_k: usize,
 
-        /// Fusion strategy (average, maximum, rrf, weighted)
+        /// Fusion strategy (average/avg, maximum/max, rrf, weighted, relative_score/rsf)
         #[arg(short, long, default_value = "rrf")]
         strategy: String,
 

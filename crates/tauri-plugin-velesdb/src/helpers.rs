@@ -41,59 +41,51 @@ pub fn storage_mode_to_string(mode: velesdb_core::StorageMode) -> &'static str {
     mode.canonical_name()
 }
 
-/// Extracts a named f64 param from JSON, accepting both `camelCase` and `snake_case` keys.
+/// Extracts a named f64 param from JSON, accepting both `camelCase` and
+/// `snake_case` keys; `None` when absent, so core supplies the default.
 #[allow(clippy::cast_possible_truncation)]
 // Reason: JSON f64 → f32 for weights; values are small config numbers (0.0-1.0).
-fn extract_weight(
-    params: Option<&serde_json::Value>,
-    camel: &str,
-    snake: &str,
-    default: f64,
-) -> f32 {
+fn extract_weight(params: Option<&serde_json::Value>, camel: &str, snake: &str) -> Option<f32> {
     params
         .and_then(|p| p.get(camel).or_else(|| p.get(snake)))
         .and_then(serde_json::Value::as_f64)
-        .unwrap_or(default) as f32
+        .map(|weight| weight as f32)
 }
 
 /// Parses fusion strategy from string and optional params.
 ///
+/// The name, its aliases, the case rule and the default of every parameter
+/// `params` leaves out are core's grammar
+/// ([`velesdb_core::FusionStrategy::from_name`]), so a strategy reads the same
+/// here as on every other surface, and its weights are validated when it is
+/// built.
+///
 /// # Errors
 ///
-/// Returns [`Error::InvalidConfig`] if the fusion strategy is unknown or if
-/// the RRF `k` parameter exceeds `u32::MAX`.
+/// Returns [`Error::InvalidConfig`] if the fusion strategy is unknown, if its
+/// weights are refused, or if the RRF `k` parameter exceeds `u32::MAX`.
 pub fn parse_fusion_strategy(
     fusion: &str,
     params: Option<&serde_json::Value>,
 ) -> Result<velesdb_core::fusion::FusionStrategy> {
-    use velesdb_core::fusion::FusionStrategy;
-    match fusion.to_lowercase().as_str() {
-        "rrf" => {
-            let raw_k = params
-                .and_then(|p| p.get("k"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(60);
-            let k = u32::try_from(raw_k).map_err(|_| {
-                Error::InvalidConfig(format!("RRF k value {raw_k} exceeds u32 range"))
-            })?;
-            Ok(FusionStrategy::RRF { k })
-        }
-        "average" => Ok(FusionStrategy::Average),
-        "maximum" => Ok(FusionStrategy::Maximum),
-        "weighted" => Ok(FusionStrategy::Weighted {
-            avg_weight: extract_weight(params, "avgWeight", "avg_weight", 0.6),
-            max_weight: extract_weight(params, "maxWeight", "max_weight", 0.3),
-            hit_weight: extract_weight(params, "hitWeight", "hit_weight", 0.1),
-        }),
-        "relative_score" | "rsf" => Ok(FusionStrategy::RelativeScore {
-            dense_weight: extract_weight(params, "denseWeight", "dense_weight", 0.5),
-            sparse_weight: extract_weight(params, "sparseWeight", "sparse_weight", 0.5),
-        }),
-        unknown => Err(Error::InvalidConfig(format!(
-            "Unknown fusion strategy: '{unknown}'. \
-             Valid strategies: rrf, average, maximum, weighted, relative_score, rsf"
-        ))),
-    }
+    let raw_k = params
+        .and_then(|p| p.get("k"))
+        .and_then(serde_json::Value::as_u64);
+    let rrf_k = raw_k
+        .map(|raw| {
+            u32::try_from(raw)
+                .map_err(|_| Error::InvalidConfig(format!("RRF k value {raw} exceeds u32 range")))
+        })
+        .transpose()?;
+    let fusion_params = velesdb_core::FusionParams::default()
+        .with_rrf_k(rrf_k)
+        .with_avg_weight(extract_weight(params, "avgWeight", "avg_weight"))
+        .with_max_weight(extract_weight(params, "maxWeight", "max_weight"))
+        .with_hit_weight(extract_weight(params, "hitWeight", "hit_weight"))
+        .with_dense_weight(extract_weight(params, "denseWeight", "dense_weight"))
+        .with_sparse_weight(extract_weight(params, "sparseWeight", "sparse_weight"));
+    velesdb_core::FusionStrategy::from_name(fusion, fusion_params)
+        .map_err(|e| Error::InvalidConfig(e.to_string()))
 }
 
 /// Parses a sparse vector from JSON string-keyed map to core `SparseVector`.

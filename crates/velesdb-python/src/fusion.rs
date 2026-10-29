@@ -4,7 +4,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use velesdb_core::FusionStrategy as CoreFusionStrategy;
+use velesdb_core::{FusionParams, FusionStrategy as CoreFusionStrategy};
 
 /// Fusion strategy for combining results from multiple vector searches.
 ///
@@ -146,6 +146,64 @@ impl FusionStrategy {
     #[pyo3(signature = (dense_weight = 0.5, sparse_weight = 0.5))]
     fn rsf(dense_weight: f32, sparse_weight: f32) -> PyResult<Self> {
         Self::relative_score(dense_weight, sparse_weight)
+    }
+
+    /// Create the fusion strategy a name stands for.
+    ///
+    /// The name grammar is velesdb-core's, the one the REST server, the CLI,
+    /// the Tauri plugin and the WASM build read: ``rrf``, ``average``
+    /// (alias ``avg``), ``maximum`` (alias ``max``), ``weighted`` and
+    /// ``relative_score`` (alias ``rsf``), case-insensitive. A parameter left
+    /// out takes core's default; one the named strategy does not read is
+    /// ignored. A single ``relative_score`` weight implies the other.
+    ///
+    /// Args:
+    ///     name: Strategy name or alias
+    ///     k: RRF ranking constant (default: 60)
+    ///     avg_weight, max_weight, hit_weight: ``weighted`` weights
+    ///         (default: 0.6 / 0.3 / 0.1)
+    ///     dense_weight, sparse_weight: ``relative_score`` weights
+    ///         (default: 0.5 / 0.5)
+    ///
+    /// Returns:
+    ///     FusionStrategy: The named strategy
+    ///
+    /// Raises:
+    ///     ValueError: If the name is unknown or the weights are invalid
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.from_name("avg")
+    ///     >>> strategy = FusionStrategy.from_name("rsf", dense_weight=0.7)
+    #[staticmethod]
+    #[pyo3(signature = (
+        name,
+        *,
+        k = None,
+        avg_weight = None,
+        max_weight = None,
+        hit_weight = None,
+        dense_weight = None,
+        sparse_weight = None
+    ))]
+    fn from_name(
+        name: &str,
+        k: Option<u32>,
+        avg_weight: Option<f32>,
+        max_weight: Option<f32>,
+        hit_weight: Option<f32>,
+        dense_weight: Option<f32>,
+        sparse_weight: Option<f32>,
+    ) -> PyResult<Self> {
+        let params = FusionParams::default()
+            .with_rrf_k(k)
+            .with_avg_weight(avg_weight)
+            .with_max_weight(max_weight)
+            .with_hit_weight(hit_weight)
+            .with_dense_weight(dense_weight)
+            .with_sparse_weight(sparse_weight);
+        CoreFusionStrategy::from_name(name, params)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(format!("{e}")))
     }
 
     fn __repr__(&self) -> String {
