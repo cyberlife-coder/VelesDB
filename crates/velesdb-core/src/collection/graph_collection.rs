@@ -332,10 +332,32 @@ impl GraphCollection {
     /// Returns `true` if the edge existed and was removed, `false` otherwise —
     /// including on the genuine failure paths: a refused WAL append (logged at
     /// `error`, the store left unmutated) and an index desynchronisation inside
-    /// the store. This signature cannot tell those from "already gone".
+    /// the store. This signature cannot tell those from "already gone"; use
+    /// [`try_remove_edge`](Self::try_remove_edge) when the caller must.
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
         self.inner.remove_edge(edge_id)
+    }
+
+    /// Removes an edge from the graph by ID, failing when the removal was
+    /// attempted and did not happen.
+    ///
+    /// Returns `Ok(true)` if the edge existed and was removed, and `Ok(false)`
+    /// if there was no such edge — removing an absent edge stays a no-op, as
+    /// with [`remove_edge`](Self::remove_edge).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Storage`](crate::Error::Storage) (`VELES-006`) when the
+    /// write-ahead log refuses the removal, which leaves the edge in place, or
+    /// when the store finds the edge in its index but not in its source shard.
+    /// `TRUNCATE` codes the same two failures the same way.
+    pub fn try_remove_edge(&self, edge_id: u64) -> Result<bool> {
+        match self.remove_edge_detailed(edge_id) {
+            EdgeRemoval::Removed => Ok(true),
+            EdgeRemoval::Absent => Ok(false),
+            EdgeRemoval::Failed(reason) => Err(crate::Error::Storage(reason)),
+        }
     }
 
     /// Removes an edge from the graph by ID, reporting WHY when it does not

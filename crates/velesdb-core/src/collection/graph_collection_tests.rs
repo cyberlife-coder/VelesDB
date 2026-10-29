@@ -166,6 +166,52 @@ fn test_has_edge_and_remove_edge() {
 }
 
 #[test]
+fn test_try_remove_edge_tells_a_removal_from_an_absent_edge() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(7, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+
+    assert!(
+        col.try_remove_edge(7).unwrap(),
+        "an existing edge is removed"
+    );
+    assert!(!col.has_edge(7), "edge gone after remove");
+    assert!(
+        !col.try_remove_edge(7).unwrap(),
+        "removing an absent edge is a no-op, not an error"
+    );
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_try_remove_edge_reports_a_refused_wal_append_as_a_storage_error() {
+    let (_dir, col) = make_test_collection(None);
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(7, 10, 20, "KNOWS").unwrap())
+        .unwrap();
+    col.break_edge_wal_for_test().unwrap();
+
+    let err = col
+        .try_remove_edge(7)
+        .expect_err("a refused WAL append is an error, not an absent edge");
+    assert_eq!(err.code(), "VELES-006", "core codes it as storage: {err}");
+    assert!(
+        err.to_string().contains("write-ahead log refused"),
+        "the reason reaches the caller: {err}"
+    );
+    assert!(col.has_edge(7), "the edge is left in place");
+    assert!(
+        !col.remove_edge(7),
+        "the bool API folds the same failure into `false`"
+    );
+}
+
+#[test]
 fn test_get_edge_returns_the_edge_by_id() {
     let (_dir, col) = make_test_collection(None);
     assert!(col.get_edge(7).is_none(), "unknown edge id is absent");

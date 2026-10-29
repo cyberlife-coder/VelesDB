@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edge took `get_edges(None)` and a filter, which clones every edge in the
   graph; this clones only the one asked for. The mobile graph store's
   `getEdge` uses it.
+- **`GraphCollection::try_remove_edge(edge_id)` reports a removal that did not
+  happen.** `remove_edge` answers `false` both for an absent edge and for a
+  removal the edge write-ahead log refused (or an index found out of sync with
+  the edge's source shard), so a caller could not tell "already gone" from "left
+  in place". `try_remove_edge` returns `Ok(true)` for a removal, `Ok(false)` for
+  an absent edge, and core's storage error (`VELES-006`) carrying the reason
+  otherwise, the code `TRUNCATE` already gives the same failures.
+  `remove_edge` is unchanged. The mobile graph store's `removeEdge` and `clear`
+  use it.
 
 - **The Python binding exposes three core contracts as module functions.**
   `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
