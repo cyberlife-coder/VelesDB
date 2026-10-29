@@ -651,3 +651,41 @@ fn hybrid_sparse_search_aligns_distance_polarity_like_the_collection() {
     );
     assert_eq!(public, inner);
 }
+
+/// A sparse term no point carries leaves the sparse branch empty. The result
+/// is still fused, so its scores have the direction the strategy states
+/// (`fused_direction` of a distance branch and a relevance branch: higher is
+/// better) instead of the dense branch's raw distances, which a caller
+/// reading them as fused would rank backwards.
+#[test]
+fn hybrid_sparse_search_with_an_empty_sparse_branch_still_returns_fused_scores() {
+    let dir = TempDir::new().unwrap();
+    let coll = VectorCollection::create(
+        dir.path().join("euclid_empty_sparse"),
+        "euclid_empty_sparse",
+        4,
+        DistanceMetric::Euclidean,
+        StorageMode::Full,
+    )
+    .unwrap();
+    seed_sparse_points(&coll);
+    let absent_term = crate::index::sparse::SparseVector::new(vec![(99_999, 1.0)]);
+    let dense_q = [0.0, 0.5, 0.3, 0.1]; // point 0's vector, distance 0
+
+    for strategy in [
+        crate::fusion::FusionStrategy::rrf_default(),
+        crate::fusion::FusionStrategy::relative_score(0.5, 0.5).unwrap(),
+        crate::fusion::FusionStrategy::Average,
+    ] {
+        let results = coll
+            .hybrid_sparse_search(&dense_q, &absent_term, 3, "", &strategy)
+            .unwrap();
+
+        assert_eq!(results.first().map(|r| r.point.id), Some(0), "{strategy:?}");
+        assert!(
+            results.windows(2).all(|w| w[0].score >= w[1].score),
+            "{strategy:?}: fused scores are higher-is-better, best first: {:?}",
+            results.iter().map(|r| r.score).collect::<Vec<_>>()
+        );
+    }
+}

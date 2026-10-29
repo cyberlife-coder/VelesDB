@@ -13,6 +13,7 @@ import logging
 from typing import Any, List, Optional, Tuple
 
 from langchain_core.documents import Document
+from langchain_core.runnables.config import run_in_executor
 from velesdb_common.scores import metric_higher_is_better, to_similarity
 
 from langchain_velesdb._common import (
@@ -400,6 +401,24 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         if score_threshold is not None:
             results = [(doc, score) for doc, score in results if score >= score_threshold]
         return results
+
+    async def asimilarity_search_with_relevance_scores(
+        self,
+        query: str,
+        k: int = 4,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Async :meth:`similarity_search_with_relevance_scores`.
+
+        LangChain's default async path maps raw scores through
+        ``_select_relevance_score_fn``, which knows neither the metric's
+        direction nor whether a result is fused; the async retriever with
+        ``search_type="similarity_score_threshold"`` reaches it too. Running
+        the sync method keeps one relevance rule for both.
+        """
+        return await run_in_executor(
+            None, self.similarity_search_with_relevance_scores, query, k, **kwargs
+        )
 
     def similarity_search_with_filter(
         self,

@@ -136,3 +136,13 @@ def test_score_space_fusions_keep_the_metric_direction_without_the_binding(monke
     monkeypatch.setattr(scores, "_core_higher_is_better", None)
     assert fused_higher_is_better(_OldStrategy(), name, "euclidean") is False
     assert fused_higher_is_better(_OldStrategy(), name, "jaccard") is True
+
+
+def test_a_negative_lower_is_better_score_keeps_its_order():
+    """Weighted fusion over distances can go below 0; the order must survive."""
+    ranked = [-0.3, -0.05, 0.0, 0.4, 3.0]  # best first, lower is better
+    similarities = [to_similarity(s, higher_is_better=False) for s in ranked]
+    assert similarities == sorted(similarities, reverse=True)
+    assert len(set(similarities)) == len(similarities)
+    assert all(0.0 < s < 2.0 for s in similarities)
+    assert to_similarity(0.0, higher_is_better=False) == 1.0

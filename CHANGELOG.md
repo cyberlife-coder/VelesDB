@@ -114,7 +114,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search that falls back to dense-only is now scored as the dense search it
   ran, so its cosine scores are normalised too. Migration: a threshold written
   as a maximum distance `d` on a `euclidean` or `hamming` store becomes
-  `1 / (1 + d)`.
+  `1 / (1 + d)`. The async `asimilarity_search_with_relevance_scores`, and the
+  async `similarity_score_threshold` retriever that calls it, run the same
+  method; they raised `NotImplementedError` from LangChain's default
+  `_select_relevance_score_fn`.
+- **BREAKING (behavior) — Haystack `Document.score` is higher-is-closer under
+  every metric when `scale_score=True` (the default).** A `euclidean` or
+  `hamming` score was the raw distance, so `DocumentJoiner` and rankers, which
+  sort descending, put the farthest document first. A distance `d` is now
+  `1 / (1 + d)`; cosine keeps its `[0, 1]` rescaling, dot and Jaccard their raw
+  similarity, and `scale_score=False` still returns raw scores. A fused score
+  (`fusion=...`) that is still a distance (`average`, `maximum` or `weighted`
+  over a distance metric, as core's `fused_direction` states) is mapped the
+  same way whatever `scale_score` says.
+- **LlamaIndex similarities on a `euclidean` or `hamming` store change range
+  for fused, hybrid and text scores.** They pass through as core returns them
+  (see Fixed): RRF scores near `1 / 60`, BM25 scores that can exceed `1`, `1.0`
+  for a `contains_text_search` match, where they were all squeezed through
+  `1 / (1 + s)`. A `similarity_cutoff` tuned on those paths needs re-tuning.
+- **`velesdb_common.scores.to_similarity` keeps the order of negative
+  lower-is-better scores.** `weighted` fusion over distances subtracts a hit
+  bonus, so a very close match can score below `0`; it was clamped to `1.0`,
+  which tied every such match. A negative score `d` is now `2 - 1 / (1 - d)`,
+  in `(1, 2)`; a distance `d >= 0` is still `1 / (1 + d)`.
 - **The TypeScript SDK's WASM backend creates `pq` and `rabitq` collections.**
   `WASM_CAPABILITIES.storageModes` lists all five core storage modes: velesdb-wasm
   keeps f32 vectors in every mode and returns core's results for it (#2544), so
@@ -360,6 +382,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before, and `average`, `maximum` and `weighted` fusion, which keep the
   metric's units, take their direction from core through
   `velesdb_common.scores.fused_higher_is_better`.
+- **A dense + sparse search whose sparse (or dense) branch comes back empty
+  still returns fused scores.** `fuse_dense_sparse` skipped fusion and returned
+  the other branch's raw scores, so on a `euclidean` or `hamming` collection a
+  sparse term no point carries returned ascending distances where every other
+  hybrid search returns higher-is-better fused scores; a caller reading them as
+  fused, as LangChain and LlamaIndex do, ranked the closest documents last. The
+  empty branch is now fused as an empty list, so the scores always have the
+  direction `FusionStrategy::fused_direction` states for a dense and a sparse
+  branch (higher-is-better). The ranking of the non-empty branch is unchanged.
 
 - **Mobile: a core error keeps its code and recoverability on every VelesQL,
   training and sparse or multi-query call.** `executeQuery`, `query`,

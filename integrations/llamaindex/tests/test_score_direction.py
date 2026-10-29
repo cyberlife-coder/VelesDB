@@ -124,6 +124,13 @@ def test_hybrid_dense_and_sparse_scores_pass_through(store):
     _assert_closest_first(result)
 
 
+def test_a_sparse_term_no_node_carries_still_yields_fused_scores(store):
+    """An empty sparse branch is fused too (core), so its scores stay higher-is-better."""
+    query = VectorStoreQuery(query_embedding=QUERY, similarity_top_k=3)
+    result = store.query(query, sparse_vector={99: 1.0})
+    _assert_closest_first(result)
+
+
 def test_a_sparse_query_that_falls_back_to_dense_maps_the_distances(dense_only_store):
     query = VectorStoreQuery(query_embedding=QUERY, similarity_top_k=2)
     with warnings.catch_warnings():

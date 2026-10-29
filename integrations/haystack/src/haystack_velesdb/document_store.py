@@ -17,6 +17,11 @@ import velesdb
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.fusion import build_fusion_strategy
 from velesdb_common.ids import stable_hash_id
+from velesdb_common.scores import (
+    fused_higher_is_better,
+    score_to_similarity,
+    to_similarity,
+)
 from velesdb_common.security import (
     validate_collection_name,
     validate_metric,
@@ -225,8 +230,38 @@ def _doc_to_point(doc: Document, sparse_vector: Optional[dict] = None) -> dict:
     return point
 
 
+def _doc_score(
+    raw: Optional[float],
+    *,
+    scale_score: bool,
+    metric: str,
+    higher_is_better: Optional[bool],
+) -> Optional[float]:
+    """The ``Document.score`` of a VelesDB result score.
+
+    A fused score (``higher_is_better`` given, as core states it for the
+    strategy and metric) is always made higher-is-closer: Haystack ranks and
+    joins documents by descending score. A plain search score is scaled when
+    *scale_score* is set: cosine from ``[-1, 1]`` to ``[0, 1]``, a euclidean
+    or hamming distance ``d`` to ``1 / (1 + d)``, dot and Jaccard unchanged.
+    """
+    if raw is None:
+        return None
+    if higher_is_better is not None:
+        return to_similarity(raw, higher_is_better)
+    if not scale_score:
+        return raw
+    if metric == "cosine":
+        return (raw + 1.0) / 2.0
+    return score_to_similarity(metric, raw)
+
+
 def _result_to_doc(
-    result: dict, *, scale_score: bool = False, metric: str = "cosine"
+    result: dict,
+    *,
+    scale_score: bool = False,
+    metric: str = "cosine",
+    higher_is_better: Optional[bool] = None,
 ) -> Document:
     """Convert a VelesDB search or scroll result to a Haystack Document.
 
@@ -256,13 +291,12 @@ def _result_to_doc(
         )
     content = payload.get("content")
     meta = {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS}
-    raw_score: Optional[float] = result.get("score")
-    if scale_score and raw_score is not None and metric == "cosine":
-        # Normalise cosine similarity from [-1, 1] to [0, 1].
-        # Only meaningful for cosine; l2 and dot scores have different ranges.
-        score: Optional[float] = (raw_score + 1.0) / 2.0
-    else:
-        score = raw_score
+    score = _doc_score(
+        result.get("score"),
+        scale_score=scale_score,
+        metric=metric,
+        higher_is_better=higher_is_better,
+    )
     return Document(id=doc_id, content=content, meta=meta, score=score)
 
 
@@ -705,11 +739,13 @@ class VelesDBDocumentStore(CollectionAdminMixin):
             filters: Optional Haystack 2.x filter dict to restrict the search
                 space. Translated to VelesDB native shape before being
                 forwarded; ``meta.<key>`` is stripped to ``<key>``.
-            scale_score: When ``True`` and ``metric="cosine"``, scores are
-                normalised from ``[-1, 1]`` to ``[0, 1]``. Ignored for other
-                metrics, where raw scores are returned unchanged. Score
-                scaling does not apply to fused (``fusion``) results, whose
-                scores come from the fusion strategy rather than the metric.
+            scale_score: When ``True``, scores are higher-is-closer: cosine
+                normalised from ``[-1, 1]`` to ``[0, 1]``, a ``euclidean`` or
+                ``hamming`` distance ``d`` mapped to ``1 / (1 + d)``, dot and
+                Jaccard unchanged. When ``False``, raw scores are returned. A
+                fused (``fusion``) score is never rescaled, but a distance it
+                keeps (``average``, ``maximum`` or ``weighted`` over a distance
+                metric) is mapped to ``1 / (1 + d)`` either way.
             fusion: Optional fusion strategy name applied to the ranking —
                 one of ``"average"``, ``"maximum"``, ``"rrf"``,
                 ``"weighted"``, ``"relative_score"`` / ``"rsf"``. When set,
@@ -766,9 +802,14 @@ class VelesDBDocumentStore(CollectionAdminMixin):
             top_k=top_k,
             fusion=strategy,
         )
-        # Fused scores are strategy-derived, not metric similarities, so the
-        # cosine [-1, 1] -> [0, 1] rescaling is intentionally not applied.
-        return [_result_to_doc(r, metric=self._metric) for r in results]
+        # Fused scores are strategy-derived, not metric similarities: no
+        # cosine rescaling, but a score-space strategy over a distance metric
+        # still returns distances, which are made higher-is-closer.
+        higher_is_better = fused_higher_is_better(strategy, fusion, self._metric)
+        return [
+            _result_to_doc(r, metric=self._metric, higher_is_better=higher_is_better)
+            for r in results
+        ]
 
     # ------------------------------------------------------------------
     # Haystack pipeline serialisation

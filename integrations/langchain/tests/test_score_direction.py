@@ -15,6 +15,7 @@ relevance scores.
 under euclidean/hamming), as LangChain's contract for that method allows.
 """
 
+import asyncio
 import shutil
 import tempfile
 import warnings
@@ -136,3 +137,30 @@ def test_graph_retriever_threshold_keeps_the_closest_seeds(db_dir):
     docs = retriever.invoke(QUERY)
     assert [doc.page_content for doc in docs] == ["near", "mid"]
     assert docs[0].metadata["relevance_score"] == 1.0
+
+
+def test_async_relevance_scores_match_the_sync_ones(db_dir):
+    store = _store(db_dir, "euclidean")
+    assert asyncio.run(
+        store.asimilarity_search_with_relevance_scores(QUERY, k=3, score_threshold=0.4)
+    ) == store.similarity_search_with_relevance_scores(QUERY, k=3, score_threshold=0.4)
+
+
+def test_async_threshold_retriever_keeps_the_closest_documents(db_dir):
+    retriever = _store(db_dir, "euclidean").as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={"k": 3, "score_threshold": 0.4},
+    )
+    docs = asyncio.run(retriever.ainvoke(QUERY))
+    assert [doc.page_content for doc in docs] == ["near", "mid"]
+
+
+def test_a_sparse_term_no_document_carries_still_yields_fused_scores(db_dir):
+    """An empty sparse branch is fused too, so its scores stay higher-is-better."""
+    store = _store(db_dir, "euclidean", sparse=True)
+    results = store.similarity_search_with_relevance_scores(
+        QUERY, k=3, sparse_vector={99: 1.0}
+    )
+    assert _texts(results)[0] == "near"
+    scores = [score for _, score in results]
+    assert scores == sorted(scores, reverse=True)

@@ -71,13 +71,18 @@ def fused_higher_is_better(strategy: Any, fusion: str, metric: str) -> bool:
 def to_similarity(score: float, higher_is_better: bool) -> float:
     """A VelesDB score of known direction as a higher-is-closer similarity.
 
-    A higher-is-better score passes through unchanged; a lower-is-better one
-    (a distance) is mapped to the bounded, monotonically decreasing
-    ``1 / (1 + d)``, so the closest match keeps the highest value.
+    A higher-is-better score passes through unchanged. A lower-is-better one
+    is mapped through a strictly decreasing function, so the order of the
+    results is kept: a distance ``d >= 0`` becomes ``1 / (1 + d)``, in
+    ``(0, 1]``; a negative score, which ``weighted`` fusion over distances
+    produces for very close matches (it subtracts a hit bonus), becomes
+    ``2 - 1 / (1 - d)``, in ``(1, 2)``, instead of collapsing to ``1.0``.
     """
     if higher_is_better:
         return score
-    return 1.0 / (1.0 + max(score, 0.0))
+    if score >= 0.0:
+        return 1.0 / (1.0 + score)
+    return 2.0 - 1.0 / (1.0 - score)
 
 
 def score_to_similarity(metric: str, score: float) -> float:

@@ -289,8 +289,10 @@ impl FusionStrategy {
     /// higher-is-better space — so every strategy combines and ranks them
     /// correctly. When **all** branches are lower-is-better and the strategy
     /// preserves the input score space (`Average`, `Maximum`, `Weighted`),
-    /// the fused scores are negated back so the output stays in the metric's
-    /// own units (best first, ascending). Rank-based strategies (`RRF`,
+    /// the fused scores are negated back so the output is lower-is-better
+    /// again (best first, ascending): in the metric's own units for
+    /// `Average` and `Maximum`; for `Weighted`, its `hit_weight` bonus is
+    /// subtracted, so a very close match can score below `0`. Rank-based strategies (`RRF`,
     /// `WeightedRRF`) only consume the best-first order, and `RelativeScore`
     /// outputs normalized `[0, 1]` similarities; neither is negated back.
     ///
