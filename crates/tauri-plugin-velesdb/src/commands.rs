@@ -1,5 +1,5 @@
 //! Tauri commands for `VelesDB` operations exposed via IPC.
-#![allow(clippy::missing_errors_doc, deprecated)]
+#![allow(clippy::missing_errors_doc)]
 
 use crate::error::CommandError;
 use crate::events::emit_collection_updated;
