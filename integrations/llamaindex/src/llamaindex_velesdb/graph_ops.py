@@ -36,7 +36,10 @@ class GraphOpsMixin(GraphOpsBase):
             **kwargs: Additional arguments.
 
         Returns:
-            Query result with nodes and similarities.
+            Query result with nodes and similarities. Scores are read in the
+            collection metric's direction, the direction of a ``NEAR`` score;
+            the score of a ``USING FUSION`` / ``NEAR_FUSED`` statement is not
+            told apart from it.
 
         Raises:
             SecurityError: If query fails validation.
@@ -45,7 +48,9 @@ class GraphOpsMixin(GraphOpsBase):
         if self._collection is None:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
         results = self._collection.query(query_str, params)
-        return self._build_query_result(results)
+        return self._build_query_result(
+            results, higher_is_better=self._metric_higher_is_better()
+        )
 
     def match_query(
         self,

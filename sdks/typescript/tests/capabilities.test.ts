@@ -141,7 +141,9 @@ describe('WASM_CAPABILITIES — focused subset', () => {
 
   it('filters dense search only, and lists the fusion params its binding takes', () => {
     expect([...WASM_CAPABILITIES.filteredSearch]).toEqual(['search', 'searchBatch']);
-    expect([...WASM_CAPABILITIES.storageModes]).toEqual(['full', 'sq8', 'binary']);
+    // Every core storage mode: velesdb-wasm keeps f32 in each and returns
+    // core's results for it (#2544).
+    expect(WASM_CAPABILITIES.storageModes).toEqual(CAPABILITY_LIST_UNIVERSES.storageModes);
     expect([...WASM_CAPABILITIES.collectionTypes]).toEqual(['vector']);
     expect([...WASM_CAPABILITIES.collectionConfig]).toEqual([
       'dimension',

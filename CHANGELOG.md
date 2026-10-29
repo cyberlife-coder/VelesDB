@@ -84,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT` and `DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT`
   (0.5 each), beside the existing `DEFAULT_WEIGHTED_*` ones. Python gets the same
   grammar as `FusionStrategy.from_name(name, *, k=..., avg_weight=..., ...)`.
+- **`FusionStrategy::fused_direction`: the direction of fused scores, in core.**
+  `velesdb_core::FusionStrategy::fused_direction(&[ScoreDirection])` returns the
+  polarity of what `fuse_with_directions` produces: `LowerIsBetter` only when
+  every branch is a distance and the strategy keeps the input score space
+  (`Average`, `Maximum`, `Weighted`), `HigherIsBetter` for `RRF`, `WeightedRRF`,
+  `RelativeScore` and any mixed or empty set of branches.
+  `fuse_with_directions` reads it instead of repeating the rule. Python exposes
+  it as `FusionStrategy.fused_higher_is_better(metric)`, the direction of the
+  scores `multi_query_search` returns with that strategy; `velesdb_common.scores`
+  gains `fused_higher_is_better(strategy, fusion, metric)`, which calls it and
+  falls back to a literal set pinned to it by a drift test for a wheel older
+  than 7.2.0, and `to_similarity(score, higher_is_better)`.
 - **`parse_search_mode` and `SearchQuality` no longer need `persistence`.**
   `SearchQuality` moved from `index::hnsw::params` to its own ungated module.
   It is re-exported at `velesdb_core::SearchQuality` and at its old path.
@@ -133,6 +145,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database; `/metrics` calls it before every export.
 
 ### Changed
+
+- **BREAKING (behavior) — LangChain relevance scores are higher-is-closer under
+  every metric.** `similarity_search_with_relevance_scores` returned the raw
+  score and kept `score >= score_threshold`; under `euclidean` and `hamming` the
+  raw score is a distance, so a threshold kept the farthest documents and
+  dropped the closest. A distance `d` is now returned as `1 / (1 + d)` (the
+  metric's direction comes from velesdb-core through `velesdb_common.scores`),
+  so the threshold, and `as_retriever(search_type="similarity_score_threshold")`
+  which calls it, keep the closest documents. Cosine keeps its `[0, 1]`
+  rescaling, dot and Jaccard their raw similarity, and fused dense + sparse
+  scores pass through. `GraphRetriever.score_threshold` now filters seeds on
+  these relevance scores, and the seeds' `relevance_score` metadata carries
+  them. `similarity_search_with_score` still returns the raw distance; a sparse
+  search that falls back to dense-only is now scored as the dense search it
+  ran, so its cosine scores are normalised too. Migration: a threshold written
+  as a maximum distance `d` on a `euclidean` or `hamming` store becomes
+  `1 / (1 + d)`. The async `asimilarity_search_with_relevance_scores`, and the
+  async `similarity_score_threshold` retriever that calls it, run the same
+  method; they raised `NotImplementedError` from LangChain's default
+  `_select_relevance_score_fn`.
+- **BREAKING (behavior) — Haystack `Document.score` is higher-is-closer under
+  every metric when `scale_score=True` (the default).** A `euclidean` or
+  `hamming` score was the raw distance, so `DocumentJoiner` and rankers, which
+  sort descending, put the farthest document first. A distance `d` is now
+  `1 / (1 + d)`; cosine keeps its `[0, 1]` rescaling, dot and Jaccard their raw
+  similarity, and `scale_score=False` still returns raw scores. A fused score
+  (`fusion=...`) that is still a distance (`average`, `maximum` or `weighted`
+  over a distance metric, as core's `fused_direction` states) is mapped the
+  same way whatever `scale_score` says.
+- **LlamaIndex similarities on a `euclidean` or `hamming` store change range
+  for fused, hybrid and text scores.** They pass through as core returns them
+  (see Fixed): RRF scores near `1 / 60`, BM25 scores that can exceed `1`, `1.0`
+  for a `contains_text_search` match, where they were all squeezed through
+  `1 / (1 + s)`. A `similarity_cutoff` tuned on those paths needs re-tuning.
+- **`velesdb_common.scores.to_similarity` keeps the order of negative
+  lower-is-better scores.** `weighted` fusion over distances subtracts a hit
+  bonus, so a very close match can score below `0`; it was clamped to `1.0`,
+  which tied every such match. A negative score `d` is now `2 - 1 / (1 - d)`,
+  in `(1, 2)`; a distance `d >= 0` is still `1 / (1 + d)`.
+- **The TypeScript SDK's WASM backend creates `pq` and `rabitq` collections.**
+  `WASM_CAPABILITIES.storageModes` lists all five core storage modes: velesdb-wasm
+  keeps f32 vectors in every mode and returns core's results for it (#2544), so
+  the reason for refusing `pq` and `rabitq` with `NOT_SUPPORTED` (the browser
+  stored both as SQ8) is gone. No mode saves memory in the browser.
 
 - **BREAKING (behavior) — the `velesdb-wasm` VelesQL executor validates queries
   with core's `QueryValidator`.** A query core refuses is now refused in the
@@ -446,6 +502,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This includes a v2 quantized store filled through the old `insert_batch`,
   which appended to the f32 buffer whatever the mode and left the codes short,
   so its first search indexed out of bounds.
+
+- **LlamaIndex no longer reverses fused, hybrid and BM25 rankings on a distance
+  metric.** Every search path mapped its scores through `1 / (1 + s)` on a
+  `euclidean` or `hamming` store, including scores that are already
+  higher-is-better: `multi_query_search` with `rrf` or `relative_score`,
+  `hybrid_query` (RRF of vector and BM25 ranks), `text_query` (BM25), a dense +
+  sparse `query(..., sparse_vector=...)` and `contains_text_search` (a match
+  scores 1.0). The best match came out least similar, the first one
+  `similarity_cutoff` dropped. Each path now states the direction of its
+  scores: those pass through unchanged, a raw single-metric score is mapped as
+  before, and `average`, `maximum` and `weighted` fusion, which keep the
+  metric's units, take their direction from core through
+  `velesdb_common.scores.fused_higher_is_better`.
+- **A dense + sparse search whose sparse (or dense) branch comes back empty
+  still returns fused scores.** `fuse_dense_sparse` skipped fusion and returned
+  the other branch's raw scores, so on a `euclidean` or `hamming` collection a
+  sparse term no point carries returned ascending distances where every other
+  hybrid search returns higher-is-better fused scores; a caller reading them as
+  fused, as LangChain and LlamaIndex do, ranked the closest documents last. The
+  empty branch is now fused as an empty list, so the scores always have the
+  direction `FusionStrategy::fused_direction` states for a dense and a sparse
+  branch (higher-is-better). The ranking of the non-empty branch is unchanged.
 
 - **Mobile: a core error keeps its code and recoverability on every VelesQL,
   training and sparse or multi-query call.** `executeQuery`, `query`,

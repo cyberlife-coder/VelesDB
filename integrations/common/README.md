@@ -49,7 +49,9 @@ direct use by end users.
 | Export | Type | Description |
 |--------|------|-------------|
 | `metric_higher_is_better` | function | Whether a higher score is a closer match under a metric (cosine, dot, jaccard: yes; euclidean, hamming: no), read from `velesdb.metric_higher_is_better`, with a literal fallback for a wheel older than 7.2.0 |
-| `score_to_similarity` | function | A raw score as a higher-is-closer similarity: similarities pass through, a distance `d` becomes `1 / (1 + d)` |
+| `score_to_similarity` | function | A raw single-metric score as a higher-is-closer similarity: similarities pass through, a distance `d` becomes `1 / (1 + d)` |
+| `fused_higher_is_better` | function | Whether a `multi_query_search` score fused by a strategy is higher-is-closer under a metric (RRF, relative score: always; average, maximum, weighted: only under a similarity metric), read from `FusionStrategy.fused_higher_is_better`, with a literal fallback for a wheel older than 7.2.0 |
+| `to_similarity` | function | A score of known direction as a higher-is-closer similarity: a higher-is-better score passes through, a lower-is-better `d` becomes `1 / (1 + d)` |
 
 **Memory helpers**
 

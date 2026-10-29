@@ -680,20 +680,14 @@ describe('WasmBackend — createCollection applies or refuses each option (#2095
     await backend.init();
   });
 
-  it.each(['sq8', 'binary'] as const)('creates the store in storageMode %s', async (mode) => {
-    await backend.createCollection('c', { dimension: 4, storageMode: mode });
-
-    expect(storeOf(backend, 'c').storage_mode).toBe(mode);
-  });
-
-  it.each(['pq', 'rabitq'] as const)(
-    'refuses storageMode %s, which velesdb-wasm would store as SQ8',
+  // velesdb-wasm keeps f32 in every storage mode and returns core's results
+  // for it (#2544), so `pq` and `rabitq` are created like the others.
+  it.each(['sq8', 'binary', 'pq', 'rabitq'] as const)(
+    'creates the store in storageMode %s',
     async (mode) => {
-      expectRefusal(
-        await settle(backend.createCollection('c', { dimension: 4, storageMode: mode })),
-        'storageModes'
-      );
-      expect(await backend.getCollection('c')).toBeNull();
+      await backend.createCollection('c', { dimension: 4, storageMode: mode });
+
+      expect(storeOf(backend, 'c').storage_mode).toBe(mode);
     }
   );
 

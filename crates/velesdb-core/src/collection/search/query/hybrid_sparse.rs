@@ -459,9 +459,12 @@ impl Collection {
 
     /// Fuse dense and sparse branch results into ranked `SearchResult`s.
     ///
-    /// Gracefully degrades when either branch is empty by resolving the
-    /// other branch directly, skipping fusion entirely. Shared by the
-    /// VelesQL hybrid path and the raw `SparseVector` SDK entry points.
+    /// A branch that came back empty is still fused, as an empty list: the
+    /// scores returned always have the direction
+    /// [`FusionStrategy::fused_direction`] states for a dense and a sparse
+    /// branch, so a caller reading them as fused scores never meets the dense
+    /// branch's raw distances instead. Shared by the VelesQL hybrid path and
+    /// the raw `SparseVector` SDK entry points.
     ///
     /// # Errors
     ///
@@ -475,16 +478,6 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         if dense_results.is_empty() && sparse_results.is_empty() {
             return Ok(Vec::new());
-        }
-        if dense_results.is_empty() {
-            let scored: Vec<(u64, f32)> = sparse_results
-                .iter()
-                .map(|sd| (sd.doc_id, sd.score))
-                .collect();
-            return Ok(self.resolve_fused_results(&scored, limit));
-        }
-        if sparse_results.is_empty() {
-            return Ok(self.resolve_fused_results(&dense_results, limit));
         }
 
         let sparse_tuples: Vec<(u64, f32)> = sparse_results

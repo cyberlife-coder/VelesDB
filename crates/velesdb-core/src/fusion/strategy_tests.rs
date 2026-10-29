@@ -129,6 +129,76 @@ fn test_directed_direction_count_mismatch_rejected() {
 }
 
 // =============================================================================
+// `fused_direction`: the polarity of what `fuse_with_directions` returns, so a
+// caller (the Python integrations' similarity mapping) reads it from core
+// instead of keeping its own list of score-space strategies.
+// =============================================================================
+
+fn every_strategy() -> Vec<FusionStrategy> {
+    vec![
+        FusionStrategy::Average,
+        FusionStrategy::Maximum,
+        FusionStrategy::rrf_default(),
+        FusionStrategy::weighted(0.6, 0.3, 0.1).expect("weights"),
+        FusionStrategy::relative_score(0.5, 0.5).expect("weights"),
+        FusionStrategy::weighted_rrf(vec![1.0, 1.0], 60.0).expect("weights"),
+    ]
+}
+
+#[test]
+fn test_fused_direction_keeps_metric_units_only_for_score_space_strategies_over_distances() {
+    for strategy in every_strategy() {
+        let keeps_units = matches!(
+            strategy,
+            FusionStrategy::Average | FusionStrategy::Maximum | FusionStrategy::Weighted { .. }
+        );
+        let expected = if keeps_units {
+            ScoreDirection::LowerIsBetter
+        } else {
+            ScoreDirection::HigherIsBetter
+        };
+        assert_eq!(
+            strategy.fused_direction(&all_lower(2)),
+            expected,
+            "{strategy:?}"
+        );
+    }
+}
+
+#[test]
+fn test_fused_direction_is_higher_is_better_unless_every_branch_is_a_distance() {
+    let mixed = [
+        ScoreDirection::LowerIsBetter,
+        ScoreDirection::HigherIsBetter,
+    ];
+    for strategy in every_strategy() {
+        for directions in [&[ScoreDirection::HigherIsBetter; 2][..], &mixed, &[]] {
+            assert_eq!(
+                strategy.fused_direction(directions),
+                ScoreDirection::HigherIsBetter,
+                "{strategy:?} over {directions:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_fused_direction_describes_the_fused_output() {
+    // The declared direction is the order the fused list is sorted in:
+    // best-first ascending for a distance, descending otherwise.
+    for strategy in every_strategy() {
+        let fused = strategy
+            .fuse_with_directions(distance_branches(), &all_lower(2))
+            .expect("fuse");
+        assert_eq!(fused[0].0, 1, "{strategy:?}: nearest document first");
+        let ascending = fused[0].1 <= fused[1].1;
+        let lower_is_better =
+            strategy.fused_direction(&all_lower(2)) == ScoreDirection::LowerIsBetter;
+        assert_eq!(ascending, lower_is_better, "{strategy:?}: {fused:?}");
+    }
+}
+
+// =============================================================================
 // Canonical `Weighted` default constants (issue #1545: single-source the
 // default weights so WASM and velesdb_common cannot drift from core).
 // =============================================================================

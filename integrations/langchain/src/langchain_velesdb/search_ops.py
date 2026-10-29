@@ -13,6 +13,8 @@ import logging
 from typing import Any, List, Optional, Tuple
 
 from langchain_core.documents import Document
+from langchain_core.runnables.config import run_in_executor
+from velesdb_common.scores import metric_higher_is_better, to_similarity
 
 from langchain_velesdb._common import (
     payload_to_doc_parts,
@@ -67,6 +69,20 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         self,
         query_embedding: List[float],
         k: int,
+        **options: Any,
+    ) -> List[dict]:
+        """Run the appropriate core vector search variant and return its results.
+
+        Takes the keyword options of :meth:`_run_scored_vector_search`, which
+        also says whether the scores are fused.
+        """
+        results, _fused = self._run_scored_vector_search(query_embedding, k, **options)
+        return results
+
+    def _run_scored_vector_search(
+        self,
+        query_embedding: List[float],
+        k: int,
         *,
         filter: Optional[dict] = None,
         ef_search: Optional[int] = None,
@@ -74,7 +90,7 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         sparse_vector: Optional[dict] = None,
         sparse_index_name: Optional[str] = None,
         search_quality: Optional[str] = None,
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], bool]:
         """Run the appropriate core vector search variant.
 
         Dispatch order: sparse → ids_only → quality → ef_search → filtered
@@ -89,6 +105,11 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
             sparse_vector: Optional sparse vector dict for hybrid search.
             sparse_index_name: Optional name of the sparse index to query.
             search_quality: Optional quality preset string.
+
+        Returns:
+            The result dicts, and whether their scores are fused dense+sparse
+            scores (higher-is-better under every metric) rather than the
+            metric's own.
 
         Raises:
             ValueError: If ``search_quality`` is combined with ``filter``, or
@@ -106,6 +127,25 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
                 filter=filter, sparse_index_name=sparse_index_name,
             )
 
+        results = self._run_unfused_search(
+            collection, query_embedding, k,
+            filter=filter, ef_search=ef_search, ids_only=ids_only,
+            search_quality=search_quality,
+        )
+        return results, False
+
+    def _run_unfused_search(
+        self,
+        collection: Any,
+        query_embedding: List[float],
+        k: int,
+        *,
+        filter: Optional[dict],
+        ef_search: Optional[int],
+        ids_only: bool,
+        search_quality: Optional[str],
+    ) -> List[dict]:
+        """The dense-only variants of :meth:`_run_scored_vector_search`."""
         if ids_only:
             return self._run_ids_search(collection, query_embedding, k, filter)
 
@@ -179,7 +219,7 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         *,
         filter: Optional[dict] = None,
         sparse_index_name: Optional[str] = None,
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], bool]:
         """Run hybrid dense+sparse search, degrading to dense-only on failure.
 
         The PyO3 ``search()`` method accepts ``sparse_vector`` and
@@ -195,7 +235,9 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
                 BGE-M3 multi-model embeddings). ``None`` uses the default index.
 
         Returns:
-            List of search result dicts.
+            The search result dicts, and whether they are fused: ``True`` for
+            the hybrid results, ``False`` for the dense-only fallback, whose
+            scores are the metric's own.
         """
         search_kwargs: dict[str, Any] = {
             "vector": query_embedding,
@@ -208,7 +250,10 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
             search_kwargs["filter"] = filter
 
         try:
-            return collection.search_request(_SearchOptions(**search_kwargs))
+            # A sparse branch is higher-is-better, so the fused scores never
+            # stay in a distance metric's units (core's
+            # FusionStrategy::fused_direction over mixed branches).
+            return collection.search_request(_SearchOptions(**search_kwargs)), True
         except (RuntimeError, TypeError, ValueError, _VelesDBError) as exc:
             # Since Wave 3 Commit 2, `VELES-015 SearchNotSupported` is
             # routed to `ValueError`, and other sparse-search failures
@@ -221,8 +266,10 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
                 exc,
             )
             if filter is not None:
-                return collection.search_with_filter(query_embedding, top_k=k, filter=filter)
-            return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+                results = collection.search_with_filter(query_embedding, top_k=k, filter=filter)
+            else:
+                results = collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+            return results, False
 
     def similarity_search(
         self,
@@ -274,9 +321,23 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         Returns:
             List of (Document, score) tuples. For the cosine metric, dense
             scores are normalised from ``[-1, 1]`` to ``[0, 1]`` (higher is
-            more similar). Hybrid dense+sparse results keep their raw fused
-            scores.
+            more similar); a hybrid search that fell back to dense-only is
+            normalised too. Under ``euclidean`` and ``hamming`` the score is
+            the raw distance (lower is closer); use
+            :meth:`similarity_search_with_relevance_scores` for scores that
+            are higher-is-closer under every metric. Hybrid dense+sparse
+            results keep their raw fused scores.
         """
+        docs_with_scores, _fused = self._scored_search_with_score(query, k, **kwargs)
+        return docs_with_scores
+
+    def _scored_search_with_score(
+        self,
+        query: str,
+        k: int,
+        **kwargs: Any,
+    ) -> Tuple[List[Tuple[Document, float]], bool]:
+        """:meth:`similarity_search_with_score`'s results, and whether they are fused."""
         validate_text(query)
         validate_k(k)
         sparse_vector = kwargs.get("sparse_vector")
@@ -287,7 +348,7 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         if quality is not None:
             quality = validate_search_quality(quality)
         query_embedding = self._embedding.embed_query(query)
-        results = self._run_vector_search(
+        results, fused = self._run_scored_vector_search(
             query_embedding, k,
             sparse_vector=sparse_vector,
             sparse_index_name=sparse_index_name,
@@ -295,13 +356,13 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
         )
         docs_with_scores = _results_to_docs_with_score(results)
         # Cosine similarity is in [-1, 1]; normalise to [0, 1] so scores are
-        # directly usable as relevance scores. Hybrid (sparse) results carry
-        # RRF-fused scores, which are not cosine values — leave them as-is.
-        if self._metric == "cosine" and sparse_vector is None:
+        # directly usable as relevance scores. Fused hybrid results carry
+        # RRF scores, which are not cosine values — leave them as-is.
+        if self._metric == "cosine" and not fused:
             docs_with_scores = [
                 (doc, (score + 1.0) / 2.0) for doc, score in docs_with_scores
             ]
-        return docs_with_scores
+        return docs_with_scores, fused
 
     def similarity_search_with_relevance_scores(
         self,
@@ -312,20 +373,52 @@ class SearchOpsMixin(MMRSearchMixin, MultiQueryOpsMixin):
     ) -> List[Tuple[Document, float]]:
         """Search for documents with relevance scores and optional threshold.
 
+        Relevance scores are higher-is-closer under every metric: cosine
+        scores as :meth:`similarity_search_with_score` normalises them, dot
+        and Jaccard similarities unchanged, a ``euclidean`` or ``hamming``
+        distance ``d`` mapped to ``1 / (1 + d)`` (the metric's direction
+        comes from velesdb-core through :mod:`velesdb_common.scores`), and
+        fused hybrid scores unchanged.
+
         Args:
             query: Query string to search for.
             k: Number of results to return. Defaults to 4.
-            score_threshold: Minimum similarity score (0.0-1.0 for cosine).
-                Only return documents with score >= threshold.
-            **kwargs: Additional arguments.
+            score_threshold: Minimum relevance score. Only documents with
+                relevance >= threshold are returned, so a threshold keeps the
+                closest documents under every metric (under a distance
+                metric, ``t`` keeps those within distance ``1 / t - 1``).
+            **kwargs: Additional arguments, as for
+                :meth:`similarity_search_with_score`.
 
         Returns:
-            List of (Document, score) tuples above threshold.
+            List of (Document, relevance) tuples above threshold.
         """
-        results = self.similarity_search_with_score(query, k=k, **kwargs)
+        docs_with_scores, fused = self._scored_search_with_score(query, k, **kwargs)
+        higher_is_better = fused or metric_higher_is_better(self._metric)
+        results = [
+            (doc, to_similarity(score, higher_is_better)) for doc, score in docs_with_scores
+        ]
         if score_threshold is not None:
             results = [(doc, score) for doc, score in results if score >= score_threshold]
         return results
+
+    async def asimilarity_search_with_relevance_scores(
+        self,
+        query: str,
+        k: int = 4,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """Async :meth:`similarity_search_with_relevance_scores`.
+
+        LangChain's default async path maps raw scores through
+        ``_select_relevance_score_fn``, which knows neither the metric's
+        direction nor whether a result is fused; the async retriever with
+        ``search_type="similarity_score_threshold"`` reaches it too. Running
+        the sync method keeps one relevance rule for both.
+        """
+        return await run_in_executor(
+            None, self.similarity_search_with_relevance_scores, query, k, **kwargs
+        )
 
     def similarity_search_with_filter(
         self,

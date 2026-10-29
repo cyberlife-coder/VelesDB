@@ -89,7 +89,8 @@ VelesDBVectorStore(
 
 **Search:**
 - `similarity_search(query, k=4)` - Search for similar documents
-- `similarity_search_with_score(query, k=4)` - Search with similarity scores (cosine scores normalized to [0, 1])
+- `similarity_search_with_score(query, k=4)` - Search with raw scores (cosine scores normalized to [0, 1]; a raw distance, lower is closer, under `euclidean` and `hamming`)
+- `similarity_search_with_relevance_scores(query, k=4, score_threshold=None)` - Search with relevance scores, higher-is-closer under every metric: a `euclidean`/`hamming` distance `d` becomes `1 / (1 + d)`, so `score_threshold` (and `as_retriever(search_type="similarity_score_threshold")`) keeps the closest documents
 - `similarity_search_by_vector(embedding, k=4, filter=None)` - Search with a pre-computed query vector
 - `max_marginal_relevance_search(query, k=4, fetch_k=20, lambda_mult=0.5)` - MMR search balancing relevance and diversity
 - `max_marginal_relevance_search_by_vector(embedding, k=4, fetch_k=20, lambda_mult=0.5)` - MMR search with a pre-computed query vector
