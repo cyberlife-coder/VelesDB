@@ -425,3 +425,222 @@ fn test_reopen_recovers_edges_and_payloads() {
         Some(serde_json::json!({"name": "A"}))
     );
 }
+
+/// An edge's properties survive a snapshot: `flush` writes `edge_store.bin`
+/// and truncates the edge WAL, so the reopened collection reads the edge back
+/// from the snapshot alone. Properties were `serde_json::Value`s that postcard
+/// cannot deserialize, so such a snapshot failed to load and the collection
+/// reopened with no edge at all.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_edge_properties_survive_a_flushed_snapshot_and_reopen() {
+    let (dir, col) = make_test_collection(Some(4));
+    for id in [1, 2] {
+        col.upsert_node(
+            id,
+            &serde_json::json!({"_labels": ["N"]}),
+            Some(vec![1.0, 0.0, 0.0, 0.0]),
+        )
+        .unwrap();
+    }
+    let properties = HashMap::from([
+        ("since".to_string(), serde_json::json!("2024")),
+        ("weight".to_string(), serde_json::json!(0.5)),
+        (
+            "tags".to_string(),
+            serde_json::json!(["a", {"nested": null}]),
+        ),
+    ]);
+    col.add_edge(
+        GraphEdge::new(7, 1, 2, "KNOWS")
+            .unwrap()
+            .with_properties(properties.clone()),
+    )
+    .unwrap();
+    col.add_edge(GraphEdge::new(8, 2, 1, "PLAIN").unwrap())
+        .unwrap();
+    col.flush().unwrap();
+    drop(col);
+
+    let reopened = GraphCollection::open(dir.path().to_path_buf()).unwrap();
+
+    assert_eq!(reopened.edge_count(), 2);
+    let edge = reopened
+        .get_edge(7)
+        .expect("the edge with properties is back");
+    assert_eq!(edge.properties(), &properties);
+    assert!(reopened.get_edge(8).is_some());
+    let reindexed = reopened
+        .inner
+        .graph
+        .edge_range_indexes
+        .read()
+        .contains_key("KNOWS.since");
+    assert!(
+        reindexed,
+        "edge properties are re-indexed from the snapshot"
+    );
+}
+
+/// The files of `dir` that an open moved aside as unreadable edge snapshots.
+#[cfg(feature = "persistence")]
+fn quarantined_edge_snapshots(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("edge_store.bin.unreadable-"))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// An `edge_store.bin` that cannot be decoded is moved aside, bytes intact,
+/// and the collection opens with the edges its WAL still holds: left in
+/// place, the file would be overwritten by the next flush.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_an_undecodable_edge_snapshot_is_quarantined_and_the_wal_replayed() {
+    const GARBAGE: &[u8] = b"\xff\xff\xff\xffnot postcard";
+    let (dir, col) = make_test_collection(None);
+    for id in [1, 2] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    col.add_edge(GraphEdge::new(7, 1, 2, "IN_SNAPSHOT").unwrap())
+        .unwrap();
+    col.flush().unwrap();
+    col.add_edge(GraphEdge::new(8, 2, 1, "IN_WAL").unwrap())
+        .unwrap();
+    drop(col);
+    std::fs::write(dir.path().join("edge_store.bin"), GARBAGE).unwrap();
+
+    let reopened = GraphCollection::open(dir.path().to_path_buf()).unwrap();
+
+    assert!(
+        reopened.get_edge(7).is_none(),
+        "the snapshot's edges are not invented"
+    );
+    assert!(
+        reopened.get_edge(8).is_some(),
+        "the WAL's edges are replayed"
+    );
+    assert!(!dir.path().join("edge_store.bin").exists());
+    let quarantined = quarantined_edge_snapshots(dir.path());
+    assert_eq!(quarantined.len(), 1, "{quarantined:?}");
+    assert_eq!(std::fs::read(&quarantined[0]).unwrap(), GARBAGE);
+
+    reopened.flush().unwrap();
+    drop(reopened);
+    let again = GraphCollection::open(dir.path().to_path_buf()).unwrap();
+    assert!(again.get_edge(8).is_some());
+    assert_eq!(
+        std::fs::read(&quarantined[0]).unwrap(),
+        GARBAGE,
+        "a flush keeps it"
+    );
+}
+
+/// A snapshot that 7.1.0 wrote with an edge property (the properties as a
+/// postcard map) is quarantined on the first 8.0 open, bytes intact.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_a_snapshot_written_with_properties_by_7_1_is_quarantined_intact() {
+    /// The 7.1.0 layout of `edge_store.bin`, one edge with a property.
+    #[derive(serde::Serialize)]
+    struct Edge71 {
+        id: u64,
+        source: u64,
+        target: u64,
+        label: String,
+        properties: HashMap<String, serde_json::Value>,
+    }
+    #[derive(serde::Serialize)]
+    struct Store71 {
+        edges: HashMap<u64, Edge71>,
+        outgoing: HashMap<u64, Vec<u64>>,
+        incoming: HashMap<u64, Vec<u64>>,
+    }
+    let edge = Edge71 {
+        id: 7,
+        source: 1,
+        target: 2,
+        label: "KNOWS".to_string(),
+        properties: HashMap::from([("since".to_string(), serde_json::json!("2024"))]),
+    };
+    let bytes = postcard::to_allocvec(&Store71 {
+        edges: HashMap::from([(7, edge)]),
+        outgoing: HashMap::from([(1, vec![7])]),
+        incoming: HashMap::from([(2, vec![7])]),
+    })
+    .unwrap();
+    let (dir, col) = make_test_collection(None);
+    drop(col);
+    std::fs::write(dir.path().join("edge_store.bin"), &bytes).unwrap();
+
+    let reopened = GraphCollection::open(dir.path().to_path_buf()).unwrap();
+
+    assert_eq!(reopened.edge_count(), 0);
+    let quarantined = quarantined_edge_snapshots(dir.path());
+    assert_eq!(quarantined.len(), 1, "{quarantined:?}");
+    assert_eq!(std::fs::read(&quarantined[0]).unwrap(), bytes);
+}
+
+/// A snapshot that cannot be read at all (here a directory in its place) is
+/// an I/O error: nothing is known about its content, so nothing is moved.
+#[cfg(feature = "persistence")]
+#[test]
+fn test_an_unreadable_edge_snapshot_path_fails_the_open() {
+    let (dir, col) = make_test_collection(None);
+    drop(col);
+    std::fs::create_dir(dir.path().join("edge_store.bin")).unwrap();
+
+    let err = GraphCollection::open(dir.path().to_path_buf())
+        .err()
+        .expect("an unreadable snapshot path is an error");
+
+    assert!(matches!(err, crate::Error::Io(_)), "{err}");
+    assert!(dir.path().join("edge_store.bin").is_dir());
+    assert!(quarantined_edge_snapshots(dir.path()).is_empty());
+}
+
+/// Properties too deep to be read back are refused before anything is
+/// written, one edge or a batch.
+#[test]
+fn test_edges_with_properties_too_deep_to_read_back_are_refused() {
+    let (dir, col) = make_test_collection(None);
+    for id in [1, 2] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+    let mut deep = serde_json::json!(1);
+    for _ in 0..crate::validation::MAX_VALUE_DEPTH {
+        deep = serde_json::json!([deep]);
+    }
+    let too_deep = GraphEdge::new(7, 1, 2, "DEEP")
+        .unwrap()
+        .with_properties(HashMap::from([("k".to_string(), deep)]));
+    let fine = GraphEdge::new(8, 1, 2, "FINE").unwrap();
+
+    let single = col.add_edge(too_deep.clone()).unwrap_err();
+    let batch = col.add_edges_batch(vec![fine, too_deep]).unwrap_err();
+
+    assert!(
+        matches!(single, crate::Error::SchemaValidation(_)),
+        "{single}"
+    );
+    assert!(
+        matches!(batch, crate::Error::SchemaValidation(_)),
+        "{batch}"
+    );
+    assert_eq!(col.edge_count(), 0, "the batch writes nothing");
+    #[cfg(feature = "persistence")]
+    {
+        let wal = crate::collection::graph::edge_wal::wal_path_for_edges(dir.path());
+        let logged = std::fs::metadata(wal).map_or(0, |m| m.len());
+        assert_eq!(logged, 0, "nothing reaches the edge WAL");
+    }
+    #[cfg(not(feature = "persistence"))]
+    drop(dir);
+}

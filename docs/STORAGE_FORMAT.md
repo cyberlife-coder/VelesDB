@@ -270,6 +270,54 @@ and the headerless WAL is replayed as before. The first manifested compaction
 uses the hidden slot so loss of that first manifest still leaves the legacy
 slot and WAL available.
 
+## Graph Edge Snapshot (edge_store.bin)
+
+Every edge of the collection, written whole by `flush()` as a postcard
+encoding of the edge store, atomically (fsynced `*.tmp` renamed over the
+file). The edge WAL (`edges.wal`) records each mutation before it is applied
+(an added edge as its JSON object, a removal as an 8-byte little-endian id);
+`flush()` writes the snapshot, then truncates the WAL, and `open()` loads the
+snapshot and replays the WAL on top of it. The snapshot carries no checksum:
+a damaged byte makes the whole file undecodable (see below).
+
+The snapshot holds the `edges`, `outgoing` and `incoming` maps, in that
+order. Each edge is its id, source, target and label, then its properties.
+Those are written as **one JSON string** (the empty string when there are
+none), because a `serde_json::Value` cannot be decoded from postcard, a
+format that does not describe itself. An empty string and an empty map have
+the same postcard bytes, so a snapshot of edges without properties has the
+same bytes as the one 7.1.0 and earlier wrote, in both directions; one that
+7.1.0 or earlier wrote with properties cannot be decoded, and 7.x cannot
+decode one 8.0 wrote with properties either. The form is private to the
+snapshot: `GraphEdge`'s serde form, in the WAL and the API, keeps the
+properties as a JSON object, and `EdgeStore` has no serde form.
+
+Properties may nest at most `MAX_VALUE_DEPTH` (124) levels of arrays and
+objects, the properties map counting as the first: `serde_json` reads back
+127 (`MAX_JSON_NESTING`), and the deepest JSON document core writes an edge
+into, the agent-memory snapshot, holds it three levels down. `add_edge`
+refuses deeper ones with `VELES-017`. The snapshot itself refuses only
+properties past 127 levels, which it could not read back, so an edge a 7.x
+edge WAL replays at 125 or 126 levels still snapshots.
+
+A missing `edge_store.bin` opens as an empty edge store (a collection that
+never had edges, or one from before edges were persisted). One that cannot
+be decoded is **quarantined**: `open()` logs the decode error, renames the
+file to `edge_store.bin.unreadable-<unix milliseconds>` (the name is
+reserved exclusively first, with a `-<n>` suffix while it is taken, so an
+earlier quarantine is never replaced; the rename is synced to disk, and a
+failed sync is logged, never undone), and opens the collection with the
+edges the WAL still holds. An empty `.unreadable-*` file is a reservation a
+crash left unused. Left in place, the file
+would be overwritten by the next flush; moved aside, it keeps every byte for
+a manual recovery. Edge ids allocated afterwards (the server picks the
+highest id + 1) may reuse ids the quarantined file holds, which a recovery
+that merges it back must resolve. A snapshot that cannot be read at all
+(permissions, I/O), or cannot be moved aside, fails the collection's open
+with an I/O error (`VELES-011`) and is left untouched; `Database::open` then
+leaves that collection out with a warning, as it does for any collection
+that fails to open.
+
 ## Endianness
 
 All multi-byte integers are stored in **little-endian** format.
@@ -435,6 +483,7 @@ VelesDB handles corruption gracefully:
 | Missing files | Return explicit error |
 | Bitflip in vector data (`vectors.dat`) | **Not detected** — the raw vector file carries no checksum; CRC32 protection covers WAL records and snapshots only |
 | Out-of-range length/count field | Rejected at load (`InvalidData`); never used to size an allocation |
+| Undecodable `edge_store.bin` | Renamed to `edge_store.bin.unreadable-<ms>`, error logged, collection opened with the edges `edges.wal` holds |
 
 See `tests/crash_recovery/corruption.rs` for comprehensive corruption tests.
 

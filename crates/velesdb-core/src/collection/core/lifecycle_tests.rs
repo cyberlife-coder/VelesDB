@@ -384,9 +384,9 @@ fn test_flush_with_inactive_delta_buffer_is_noop() {
 /// `edge_store.bin` does not exist on disk.
 ///
 /// Collections created before the BUG-1 persistence fix never had an
-/// `edge_store.bin` file. When such a collection is reopened, the
-/// `load_or_default` pattern in `load_edge_store()` must fall back to an
-/// empty `ConcurrentEdgeStore`, and graph operations must work immediately.
+/// `edge_store.bin` file. When such a collection is reopened,
+/// `load_edge_store()` must fall back to an empty `ConcurrentEdgeStore`, and
+/// graph operations must work immediately.
 #[test]
 fn test_open_without_edge_store_bin_recovers_gracefully() {
     use crate::collection::graph::{GraphEdge, GraphSchema};

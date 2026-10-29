@@ -65,6 +65,17 @@ impl CollectionParts {
     }
 }
 
+/// The vector and payload stores, shared by every handle on a collection.
+type Storages = (Arc<RwLock<MmapStorage>>, Arc<RwLock<LogPayloadStorage>>);
+
+/// The graph-dimension state [`Collection::open`] loads from disk.
+struct GraphParts {
+    property_index: PropertyIndex,
+    label_index: LabelIndex,
+    range_index: RangeIndex,
+    edge_store: ConcurrentEdgeStore,
+}
+
 impl Collection {
     /// Assembles a `Collection` from pre-built components and default caches.
     ///
@@ -214,8 +225,7 @@ impl Collection {
         config: CollectionConfig,
         hnsw_params: Option<crate::index::hnsw::HnswParams>,
     ) -> Result<CollectionParts> {
-        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
-        let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
+        let (vector_storage, payload_storage) = Self::open_storages(&path, config.dimension)?;
         // Arena files from a run that never got to drop them are pure waste
         // and unreadable to anyone — sweep before handing the directory out.
         // Safe here because the database holds an exclusive lock on its data
@@ -344,17 +354,18 @@ impl Collection {
     pub fn open(path: PathBuf) -> Result<Self> {
         let mut config = super::recovery::load_config(&path)?;
 
-        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
-        let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
+        let (vector_storage, payload_storage) = Self::open_storages(&path, config.dimension)?;
         let index = Self::load_or_create_hnsw(&path, &config)?;
         // Issue #389: try snapshot + WAL first, fall back to payload
         // rebuild if no snapshot exists (backward-compat).
         let text_index = Self::load_bm25_index(&path, &payload_storage)?;
 
-        let property_index = Self::load_property_index(&path);
-        let label_index = Self::rebuild_label_index(&payload_storage);
-        let range_index = Self::load_range_index(&path);
-        let edge_store = Self::load_edge_store(&path);
+        let GraphParts {
+            property_index,
+            label_index,
+            range_index,
+            edge_store,
+        } = Self::load_graph_parts(&path, &payload_storage)?;
         let sparse_indexes = Self::load_named_sparse_indexes(&path);
 
         config.point_count =
@@ -604,7 +615,9 @@ impl Collection {
     /// file or deserialization error.
     ///
     /// This is the single implementation for the load-or-default pattern shared
-    /// by `PropertyIndex`, `RangeIndex`, and `EdgeStore`.
+    /// by the indexes a collection can rebuild as empty (`PropertyIndex`,
+    /// `RangeIndex`); the edge snapshot has its own loader, `load_edge_store`,
+    /// which refuses an unreadable file.
     fn load_or_default<T>(
         path: &std::path::Path,
         file_name: &str,
@@ -626,13 +639,81 @@ impl Collection {
         default()
     }
 
-    fn load_edge_store(path: &std::path::Path) -> ConcurrentEdgeStore {
-        Self::load_or_default(
-            path,
-            "edge_store.bin",
-            ConcurrentEdgeStore::load_from_file,
-            ConcurrentEdgeStore::new,
-        )
+    /// Opens the vector and payload stores of the collection at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of either store's open.
+    fn open_storages(path: &std::path::Path, dimension: usize) -> Result<Storages> {
+        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(path, dimension)?));
+        let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(path)?));
+        Ok((vector_storage, payload_storage))
+    }
+
+    /// Loads the graph dimension: the property and range indexes, the label
+    /// index rebuilt from the payloads, and the edge store.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of [`Self::load_edge_store`].
+    fn load_graph_parts(
+        path: &std::path::Path,
+        payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+    ) -> Result<GraphParts> {
+        Ok(GraphParts {
+            property_index: Self::load_property_index(path),
+            label_index: Self::rebuild_label_index(payload_storage),
+            range_index: Self::load_range_index(path),
+            edge_store: Self::load_edge_store(path)?,
+        })
+    }
+
+    /// Loads the `edge_store.bin` snapshot, or an empty store when the
+    /// collection has none (one created before edges were persisted).
+    ///
+    /// Unlike the property and range indexes, which `load_or_default`
+    /// rebuilds as empty, the edges are primary data, and the edge WAL is
+    /// truncated once a snapshot is written: an undecodable snapshot left in
+    /// place would be overwritten at the next flush. It is therefore moved
+    /// aside (see `quarantine_edge_snapshot`), and the collection opens with
+    /// the edges the WAL still holds; the moved file keeps every byte for a
+    /// manual recovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`](crate::Error::Io) when the snapshot cannot be
+    /// read for another reason than its content (permissions, I/O), or
+    /// cannot be moved aside (a read-only directory): the collection is not
+    /// opened without its edges while their file is still in the way of the
+    /// next flush.
+    fn load_edge_store(path: &std::path::Path) -> Result<ConcurrentEdgeStore> {
+        let snapshot = path.join("edge_store.bin");
+        match ConcurrentEdgeStore::load_from_file(&snapshot) {
+            Ok(store) => Ok(store),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConcurrentEdgeStore::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                tracing::error!(
+                    snapshot = %snapshot.display(),
+                    error = %e,
+                    "the edge snapshot cannot be decoded; moving it aside"
+                );
+                let quarantined = quarantine_edge_snapshot(&snapshot).inspect_err(|rename| {
+                    tracing::error!(
+                        snapshot = %snapshot.display(),
+                        error = %rename,
+                        "the undecodable edge snapshot cannot be moved aside; \
+                         the collection is not opened"
+                    );
+                })?;
+                tracing::error!(
+                    quarantined = %quarantined.display(),
+                    "the undecodable edge snapshot was moved aside, bytes intact: \
+                     the collection opens with only the edges its WAL holds"
+                );
+                Ok(ConcurrentEdgeStore::new())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn load_property_index(path: &std::path::Path) -> PropertyIndex {
@@ -722,3 +803,71 @@ impl Collection {
         self.storage.pq_quantizer.read()
     }
 }
+
+/// Moves an undecodable `edge_store.bin` aside, to
+/// `edge_store.bin.unreadable-<unix milliseconds>` in the same directory, so
+/// the next flush cannot overwrite it, and returns the new path.
+///
+/// # Errors
+///
+/// Returns the I/O error of the name reservation, the rename, or the
+/// directory sync.
+fn quarantine_edge_snapshot(snapshot: &std::path::Path) -> std::io::Result<PathBuf> {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis());
+    quarantine_edge_snapshot_at(snapshot, millis)
+}
+
+/// [`quarantine_edge_snapshot`] at a given time, for tests.
+///
+/// The name is reserved by creating it exclusively (`create_new`), with a
+/// `-<n>` suffix while it is taken, then the snapshot is renamed over the
+/// reserved, empty file: an earlier quarantine is never replaced, even by a
+/// concurrent open. The rename is made durable (written through on Windows,
+/// the directory synced on Unix); a failed directory sync is logged and the
+/// quarantine kept, never undone. A crash between the reservation and the
+/// rename leaves an empty `.unreadable-*` file: an unused reservation.
+fn quarantine_edge_snapshot_at(
+    snapshot: &std::path::Path,
+    millis: u128,
+) -> std::io::Result<PathBuf> {
+    let base = format!("edge_store.bin.unreadable-{millis}");
+    let mut target = snapshot.with_file_name(&base);
+    let mut taken: u64 = 0;
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                taken += 1;
+                target = snapshot.with_file_name(format!("{base}-{taken}"));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    if let Err(e) = crate::storage::atomic_write::replace_file(snapshot, &target) {
+        // The snapshot was not moved: the reservation is empty and would
+        // only mislead. Best effort.
+        let _ = std::fs::remove_file(&target);
+        return Err(e);
+    }
+    // From here `target` holds the snapshot's bytes, whatever happens.
+    if let Err(e) = crate::storage::atomic_write::sync_parent_directory(&target) {
+        // The rename may not survive a crash; the next open would then find
+        // `edge_store.bin` again and move it aside again. Nothing is lost.
+        tracing::warn!(
+            quarantined = %target.display(),
+            error = %e,
+            "the edge snapshot quarantine is not synced to disk yet"
+        );
+    }
+    Ok(target)
+}
+
+#[cfg(test)]
+#[path = "lifecycle_quarantine_tests.rs"]
+mod quarantine_tests;
