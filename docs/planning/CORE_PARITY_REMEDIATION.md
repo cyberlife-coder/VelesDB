@@ -26,7 +26,7 @@ the residual gaps are core-internal/ops plumbing (by design) or already tracked 
 ### Explicitly NOT doing (kept relevant)
 - Do **not** expose core-internal metrics / durability / ColumnStore-batch / registry-introspection over bindings just to fill the matrix — by-design internal surface.
 - Do **not** change migrate's `stable_point_id` algorithm — it would break existing resumable checkpoints (see `KNOWN_LIMITATIONS.md` #4). Document the intentional difference instead.
-- Do **not** rewrite `MobileGraphStore`'s in-memory engine — only fix the type shadowing (T4).
+- Do **not** rewrite `MobileGraphStore`'s in-memory engine — only fix the type shadowing (T4). *(Superseded 2026-10-29: the engine was retired in favour of core's `GraphCollection`; see KNOWN_LIMITATIONS §14.)*
 - Pre-existing tracked parity gaps (RSF in Haystack, named-sparse-index *creation* in LangChain/LlamaIndex, `@collection` MATCH propagation) stay in `ECOSYSTEM_PARITY.md` "Remaining Gaps" / roadmap.
 
 ## Waves (each item = a feature branch off `develop` → PR, per Git Flow)

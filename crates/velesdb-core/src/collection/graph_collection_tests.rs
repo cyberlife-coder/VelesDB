@@ -166,6 +166,34 @@ fn test_has_edge_and_remove_edge() {
 }
 
 #[test]
+fn test_get_edge_returns_the_edge_by_id() {
+    let (_dir, col) = make_test_collection(None);
+    assert!(col.get_edge(7).is_none(), "unknown edge id is absent");
+    for id in [10, 20] {
+        col.upsert_node_payload(id, &serde_json::json!({})).unwrap();
+    }
+
+    let mut props = HashMap::new();
+    props.insert("since".to_string(), serde_json::json!(2020));
+    col.add_edge(
+        GraphEdge::new(7, 10, 20, "KNOWS")
+            .unwrap()
+            .with_properties(props),
+    )
+    .unwrap();
+
+    let edge = col.get_edge(7).expect("edge present after add");
+    assert_eq!(
+        (edge.id(), edge.source(), edge.target(), edge.label()),
+        (7, 10, 20, "KNOWS")
+    );
+    assert_eq!(edge.property("since"), Some(&serde_json::json!(2020)));
+
+    assert!(col.remove_edge(7));
+    assert!(col.get_edge(7).is_none(), "edge gone after remove");
+}
+
+#[test]
 fn test_upsert_node_without_vector_stores_payload_only() {
     // No embeddings: the `None`-vector branch delegates to upsert_node_payload.
     let (_dir, col) = make_test_collection(None);

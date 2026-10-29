@@ -520,32 +520,26 @@ The rule of thumb when adding a large file: only list it under `engines.lizard.e
 
 ## Bindings / SDK architecture
 
-### 14. `MobileGraphStore` is a deliberate in-memory graph fork
+### 14. `MobileGraphStore` delegates to core's graph collection (resolved)
 
-**Status**: documented (by design). Source: `crates/velesdb-mobile/src/graph.rs` (`MobileGraphStore`); core counterparts `crates/velesdb-core/src/collection/graph/edge.rs` (`EdgeStore`) and `crates/velesdb-core/src/collection/graph_collection.rs` (`GraphCollection`). Decision recorded in `docs/planning/CORE_PARITY_REMEDIATION.md` (T4).
+**Status**: resolved. Source: `crates/velesdb-mobile/src/graph.rs` (`MobileGraphStore`, a handle on `velesdb_core::GraphCollection`) and `crates/velesdb-mobile/src/graph_payload.rs` (record ↔ node payload mapping, legacy snapshot import).
 
-The mobile SDK's `MobileGraphStore` is a self-contained, purely in-memory graph
-engine (node/edge maps plus BFS/DFS/degree/label helpers) rather than a delegate
-to `velesdb-core`'s graph runtime. This is an intentional design decision, **not**
-an accidental rewrite: mobile needs a RAM-only graph with no filesystem path,
-WAL, or on-disk payloads, whereas core's `GraphCollection` persists nodes as JSON
-payloads and requires a path. Core today exposes an in-memory `EdgeStore` (edges
-+ traversal) but has **no in-memory `GraphNode`-object store** (label + properties
-+ vector CRUD), so the node half of `MobileGraphStore` has no core API to delegate
-to.
+The mobile SDK's `MobileGraphStore` used to be a self-contained in-memory graph
+engine (node/edge maps, its own BFS/DFS, a JSON `save`/`load`), kept apart from
+core on the grounds that mobile needed a graph with no filesystem path. That
+reasoning did not hold: every mobile app already opens a `VelesDatabase` at a
+path, and the fork's semantics drifted from core's (multi-source BFS
+deduplicated by node instead of by path; edges to unknown nodes were accepted).
+The store is now obtained with `VelesDatabase::get_graph_store(name)` and is the
+graph of a core graph collection: storage, BFS, DFS and multi-source BFS are
+core's, nodes are stored as payloads carrying core's `_labels` so VelesQL
+`MATCH` sees them, and every read passes the observer read gate.
 
-What *is* single-sourced is the record types: `MobileGraphStore` is pinned to
-core via `From<velesdb_core::GraphNode / GraphEdge / TraversalResult>` conversions
-(`graph.rs`), so any field drift in the core types is a compile error in mobile —
-the type-shadowing risk (the in-scope half of T4) is closed.
-
-**User impact**: none functionally — the mobile graph API behaves as documented.
-The architectural caveat is that mobile graph semantics are maintained
-independently of core's graph engine. Full delegation is gated on core first
-shipping an in-memory `GraphStore` API (node + edge CRUD, label query, cascade
-remove, BFS/DFS); until then, copying core's graph engine into the MIT-licensed
-mobile crate would violate the Core License boundary, so the fork is the correct
-boundary-preserving choice.
+**User impact**: a breaking change for Swift/Kotlin callers, listed in the
+CHANGELOG with its migration path; a graph saved by the old `save(path)` is
+loaded once with `importSnapshot(path)`. The record types stay pinned to core
+through the `From<velesdb_core::GraphNode / GraphEdge / TraversalResult>`
+conversions in `graph.rs`.
 
 ---
 

@@ -357,6 +357,15 @@ impl GraphCollection {
         self.inner.edge_exists(edge_id)
     }
 
+    /// Returns the edge with `edge_id`, if any.
+    ///
+    /// A point lookup: unlike filtering [`get_edges`](Self::get_edges), it
+    /// clones only the one edge asked for.
+    #[must_use]
+    pub fn get_edge(&self, edge_id: u64) -> Option<GraphEdge> {
+        self.inner.get_edge(edge_id)
+    }
+
     /// Performs BFS traversal from a source node.
     ///
     /// # Examples

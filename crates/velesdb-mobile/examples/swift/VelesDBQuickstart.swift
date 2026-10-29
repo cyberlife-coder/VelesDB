@@ -147,16 +147,17 @@ func runQuickstart(at path: String) throws {
     }
 
     // ---- 8. Knowledge graph -------------------------------------------------
-    // MobileGraphStore is a deliberate in-memory fork of core's graph engine:
-    // RAM-only, no WAL, no on-disk payloads — hence the explicit save/load.
-    let graph = MobileGraphStore()
-    graph.addNode(node: MobileGraphNode(
+    // A graph store is the graph of a graph collection: core stores it (no save
+    // step, it survives a restart) and core runs every traversal.
+    try db.createGraphCollection(name: "kg")
+    guard let graph = try db.getGraphStore(name: "kg") else { return }
+    try graph.addNode(node: MobileGraphNode(
         id: 1, label: "Person", propertiesJson: #"{"name":"Ada"}"#, vector: nil
     ))
-    graph.addNode(node: MobileGraphNode(
+    try graph.addNode(node: MobileGraphNode(
         id: 2, label: "Person", propertiesJson: #"{"name":"Grace"}"#, vector: nil
     ))
-    graph.addNode(node: MobileGraphNode(
+    try graph.addNode(node: MobileGraphNode(
         id: 3, label: "Project", propertiesJson: #"{"name":"Sync"}"#, vector: nil
     ))
     // addEdge throws when an endpoint has no stored node.
@@ -167,19 +168,25 @@ func runQuickstart(at path: String) throws {
         id: 101, source: 2, target: 3, label: "WORKS_ON", propertiesJson: nil
     ))
 
-    print("\ngraph: \(graph.nodeCount()) nodes, \(graph.edgeCount()) edges")
+    let nodes = try graph.nodeCount()
+    let edges = try graph.edgeCount()
+    print("\ngraph: \(nodes) nodes, \(edges) edges")
     print("BFS from node 1, depth <= 2:")
-    for step in graph.bfsTraverse(sourceId: 1, maxDepth: 2, limit: 100) {
+    for step in try graph.bfsTraverse(sourceId: 1, maxDepth: 2, limit: 100) {
         print("  node \(step.nodeId) at depth \(step.depth) via \(step.path)")
     }
     // The source itself is never emitted (depth 0 is skipped) and every node is
     // visited at most once, so a diamond does not produce duplicates.
 
-    // Persist it explicitly — nothing about this store is automatic.
-    let graphPath = (path as NSString).appendingPathComponent("graph.bin")
-    try graph.save(path: graphPath)
-    let reloaded = try MobileGraphStore.load(path: graphPath)
-    print("reloaded graph: \(reloaded.nodeCount()) nodes")
+    // The same nodes answer VelesQL MATCH: a node's label is its core label.
+    let match = try db.executeQuery(
+        sql: "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b",
+        paramsJson: #"{"_collection":"kg"}"#
+    )
+    print("MATCH Person-KNOWS->Person: \(match.rowCount) row(s)")
+
+    // A graph saved by the former in-memory store's save(path) is migrated once
+    // with importSnapshot(path); see the crate README.
 
     // ---- 9. Agent memory ----------------------------------------------------
     // VelesSemanticMemory keeps facts with their embeddings and reads the text

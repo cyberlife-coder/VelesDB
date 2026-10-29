@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mobile and WASM bindings each carried their own copy of this rule, and the
   copies disagreed; both now map from this one, and the enum is exhaustive so
   that a new kind fails to compile in every binding that reports it.
+- **`GraphCollection::get_edge(edge_id)` returns one edge by ID.** Finding one
+  edge took `get_edges(None)` and a filter, which clones every edge in the
+  graph; this clones only the one asked for. The mobile graph store's
+  `getEdge` uses it.
 
 - **The Python binding exposes three core contracts as module functions.**
   `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
@@ -116,6 +120,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports `recoverable: false`. Migration: match `VELES-009` where you matched
   `INVALID_CONFIG`, and so on for the other three; the guest-js `CommandError`
   type gains `recoverable: boolean`.
+- **BREAKING (mobile) — `MobileGraphStore` is a graph collection, stored and
+  traversed by core.** The store was a second graph engine of its own: hash
+  maps in RAM, its own BFS and DFS, and a JSON file written by `save` and read
+  by `load`. Its multi-source BFS kept one result per node where core keeps one
+  per path, and it accepted edges to nodes it had never been given. It is now a
+  handle on a core `GraphCollection`, so every traversal is core's and the graph
+  is durable with no save step: it survives an app restart, and its nodes are
+  the ones VelesQL `MATCH` sees through `executeQuery`. Changes for Swift and
+  Kotlin:
+  - The `MobileGraphStore()` constructor, `save(path)` and
+    `MobileGraphStore.load(path)` are gone. Create the collection with
+    `createGraphCollection(name)` (or `createGraphCollectionWithEmbeddings` for
+    nodes with vectors) and get its store with the new
+    `VelesDatabase.getGraphStore(name)`, which returns nil/null for a missing
+    collection and throws for one that is not a graph collection. `flush()` is
+    new.
+  - Every method now throws except `removeEdge`. Reads pass the database's
+    read gate as `GraphTraversal`, so an observer registered with
+    `openWithObserver` can deny them, and a scope filter is refused since no
+    graph read can apply one; writes and storage can fail now that they reach
+    disk.
+  - Core's rules apply. `addEdge` refuses an edge whose source or target was
+    never added, and an empty edge label; edge labels are trimmed.
+    `properties_json` must be a JSON object and must not contain the reserved
+    `_labels` key, which is where core keeps the node's label.
+    `bfsTraverseParallel` reports a node reached from two sources once per
+    source. A node's `vector` needs a collection created with embeddings.
+
+  Migration: an app holding a graph saved by the old `save(path)` creates the
+  graph collection, gets its store, and calls `importSnapshot(path)` once. It
+  reads that JSON file as written, upserts its nodes and adds its edges, and
+  refuses, before writing anything, an edge ID the store already holds or an
+  edge whose endpoint is in neither the file nor the store; add any such node
+  with `addNode`, then import again. The old file can be deleted afterwards.
 
 - **BREAKING (behavior) — `velesdb-wasm` storage modes return core's results,
   and no longer save memory.** A `VectorStore` created with `sq8`, `pq` or

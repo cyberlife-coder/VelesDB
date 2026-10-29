@@ -261,7 +261,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 | Server | ✅ | |
 | Python | ✅ | |
 | WASM | ✅ | |
-| Mobile | ✅ | `create_graph_collection` / `create_graph_collection_with_embeddings` exposed via `#[uniffi::export]` |
+| Mobile | ✅ | `create_graph_collection` / `create_graph_collection_with_embeddings` exposed via `#[uniffi::export]`; `get_graph_store` hands back the collection's graph as a `MobileGraphStore` |
 | CLI | ✅ | |
 | TS SDK | ✅ | |
 | Tauri | ✅ | |
@@ -325,9 +325,9 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
      tool (plus `list_working_contexts`, tracked above). Presumed by-design
      toolkit scoping — to be confirmed and recorded, not inferred.
    - **Mobile**: `velesdb-mobile` ships only a thin semantic-memory slice
-     (`VelesSemanticMemory`) plus its own RAM-only `MobileGraphStore`; no doc
-     records whether full memory-wedge parity on mobile is wanted or
-     declined. Open decision.
+     (`VelesSemanticMemory`); its `MobileGraphStore` is a core graph
+     collection (item 13), not a memory surface. No doc records whether full
+     memory-wedge parity on mobile is wanted or declined. Open decision.
    - **REST relation/TTL divergences from the memory wedge**
      (documented pending a decision, not silently): REST `relate`
      (`POST /collections/{name}/relations`,
@@ -368,3 +368,22 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     checked and needed no change: its `VELES-004` and `VELES-027` literals
     match core's taxonomy (`VELES-027` covers a timeout through
     `GuardRailViolation::Timeout`).
+13. ✅ **Done (2026-10-29) for mobile. Graph traversal is core's on mobile.**
+    `velesdb-mobile` carried a second graph engine (`MobileGraphStore`: hash
+    maps, its own BFS and DFS, a JSON `save`/`load`) whose multi-source BFS
+    deduplicated by node where core deduplicates by path, and which accepted
+    edges to unknown nodes. It is now a handle on a core `GraphCollection`
+    obtained with `VelesDatabase::get_graph_store`: storage, BFS, DFS and
+    multi-source BFS are core's, nodes carry core's `_labels` so VelesQL
+    `MATCH` sees them, and every read passes the read gate as
+    `GraphTraversal` (`crates/velesdb-mobile/src/graph.rs`;
+    `traversals_are_cores` and `velesql_match_sees_store_nodes` in
+    `graph_tests.rs` pin both). `import_snapshot` migrates a file the old
+    `save` wrote. Still forked: `velesdb-wasm` keeps its own `GraphStore`
+    (`crates/velesdb-wasm/src/graph.rs`) because core's graph module is gated
+    behind `persistence`, which wasm does not build; and `velesdb-python`'s
+    in-memory `GraphStore.traverse_dfs` (`crates/velesdb-python/src/graph_store.rs`,
+    `dfs_collect`) is its own DFS returning edges, capped on visited nodes and
+    filtered by relationship type, while its BFS already delegates to core.
+    Core exposes DFS only on a collection, so closing either needs a free
+    `dfs_traverse(&EdgeStore, …)` in core first.

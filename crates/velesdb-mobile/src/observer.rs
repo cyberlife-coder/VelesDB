@@ -65,7 +65,7 @@ pub enum MobileQueryOperationKind {
     TextSearch,
     /// Hybrid (dense + text/sparse) fused search.
     HybridSearch,
-    /// Graph traversal (`VelesQL` MATCH).
+    /// Graph traversal (`VelesQL` MATCH, and every `MobileGraphStore` read).
     GraphTraversal,
     /// Relational-style `VelesQL` SELECT (incl. JOIN / aggregation).
     Select,
@@ -128,7 +128,8 @@ pub enum MobileAccessDecision {
 /// A Kotlin/Swift class implements this trait and registers it via
 /// [`VelesDatabase::open_with_observer`](crate::VelesDatabase::open_with_observer).
 /// Every governed read routed through the database (dense / text / hybrid /
-/// sparse / multi-query search, `VelesQL` `SELECT` / `MATCH`) consults it before
+/// sparse / multi-query search, `VelesQL` `SELECT` / `MATCH`, and every
+/// [`MobileGraphStore`](crate::MobileGraphStore) read) consults it before
 /// touching the store.
 #[uniffi::export(with_foreign)]
 pub trait MobileObserver: Send + Sync {

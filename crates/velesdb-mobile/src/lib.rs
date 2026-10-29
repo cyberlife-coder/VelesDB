@@ -51,6 +51,7 @@ mod agent;
 mod collection;
 mod collection_sparse;
 mod graph;
+mod graph_payload;
 mod observer;
 mod query;
 mod streaming_runtime;
@@ -160,7 +161,8 @@ impl VelesDatabase {
     /// Opens or creates a database with a read-path [`MobileObserver`] attached.
     ///
     /// The observer is consulted before every governed read (dense / text /
-    /// hybrid / sparse / multi-query search and `VelesQL` `SELECT` / `MATCH`):
+    /// hybrid / sparse / multi-query search, `VelesQL` `SELECT` / `MATCH`, and
+    /// every [`MobileGraphStore`] read):
     /// returning [`MobileAccessDecision::Deny`] aborts the read with that
     /// message and zero results, [`MobileAccessDecision::Allow`] runs it
     /// unmodified. This is the mobile counterpart of the observer gate already
@@ -459,6 +461,34 @@ impl VelesDatabase {
                     message: format!(
                         "Collection '{name}' is not a vector collection. \
                          Query graph collections through execute_query() (VelesQL)."
+                    ),
+                }),
+            },
+            None => Ok(None),
+        }
+    }
+
+    /// Gets the knowledge graph of a graph collection by name.
+    ///
+    /// Returns `None` if the collection does not exist, and an error if it
+    /// exists but is not a graph collection. Create one with
+    /// [`create_graph_collection`](Self::create_graph_collection) (or its
+    /// `_with_embeddings` variant for nodes carrying vectors).
+    pub fn get_graph_store(
+        &self,
+        name: String,
+    ) -> Result<Option<Arc<MobileGraphStore>>, VelesError> {
+        match self.inner.get_any_collection(&name) {
+            Some(any_coll) => match any_coll.into_graph() {
+                Ok(graph) => Ok(Some(Arc::new(MobileGraphStore::new(
+                    graph,
+                    self.inner.clone(),
+                    name,
+                )))),
+                Err(_other_variant) => Err(VelesError::Collection {
+                    message: format!(
+                        "Collection '{name}' is not a graph collection. \
+                         Create one with create_graph_collection()."
                     ),
                 }),
             },
