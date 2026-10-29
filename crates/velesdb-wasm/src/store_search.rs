@@ -3,7 +3,7 @@
 //! Provides search functionality extracted from the main store.
 
 use crate::wasm_error::WasmError;
-use crate::{fusion, text_search, vector_ops, DistanceMetric, StorageMode};
+use crate::{fusion, text_search, vector_ops, DistanceMetric};
 use serde::Serialize;
 use wasm_bindgen::JsValue;
 
@@ -18,8 +18,7 @@ fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
 
 /// Converts scored triples `(id, score, payload)` to a JSON array of objects.
 ///
-/// Shared by `hybrid_search_impl`, `search_with_filter_impl`, and
-/// `hybrid_search_quantized` in `hybrid_quantized.rs`.
+/// Shared by `hybrid_search_impl` and `search_with_filter_impl`.
 pub(crate) fn scored_triples_to_js(
     results: Vec<(u64, f32, Option<&serde_json::Value>)>,
 ) -> Result<JsValue, JsValue> {
@@ -91,38 +90,31 @@ pub fn validate_multi_vector_len(
     Ok(expected)
 }
 
+/// Top-`k` `(id, score)` pairs for `query`, best first.
+pub fn top_k(
+    query: &[f32],
+    ids: &[u64],
+    data: &[f32],
+    dimension: usize,
+    metric: DistanceMetric,
+    k: usize,
+) -> Vec<(u64, f32)> {
+    let mut results = vector_ops::compute_scores(query, ids, data, dimension, metric);
+    vector_ops::sort_results(&mut results, metric.higher_is_better());
+    results.truncate(k);
+    results
+}
+
 /// Basic vector search.
-#[allow(clippy::too_many_arguments)]
 pub fn search(
     query: &[f32],
     ids: &[u64],
     data: &[f32],
-    data_sq8: &[u8],
-    data_binary: &[u8],
-    sq8_mins: &[f32],
-    sq8_scales: &[f32],
     dimension: usize,
     metric: DistanceMetric,
-    storage_mode: StorageMode,
     k: usize,
 ) -> Result<JsValue, JsValue> {
-    let mut results = vector_ops::compute_scores(
-        query,
-        ids,
-        data,
-        data_sq8,
-        data_binary,
-        sq8_mins,
-        sq8_scales,
-        dimension,
-        metric,
-        storage_mode,
-    );
-
-    vector_ops::sort_results(&mut results, metric.higher_is_better());
-    results.truncate(k);
-
-    to_js(&results)
+    to_js(&top_k(query, ids, data, dimension, metric, k))
 }
 
 /// Text search in payloads.
@@ -236,13 +228,8 @@ pub fn multi_query_search_impl(
     num_vectors: usize,
     ids: &[u64],
     data: &[f32],
-    data_sq8: &[u8],
-    data_binary: &[u8],
-    sq8_mins: &[f32],
-    sq8_scales: &[f32],
     dimension: usize,
     metric: DistanceMetric,
-    storage_mode: StorageMode,
     k: usize,
     strategy: &str,
     rrf_k: Option<u32>,
@@ -255,22 +242,7 @@ pub fn multi_query_search_impl(
     let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
 
     for query in vectors.chunks_exact(dimension) {
-        let mut results = vector_ops::compute_scores(
-            query,
-            ids,
-            data,
-            data_sq8,
-            data_binary,
-            sq8_mins,
-            sq8_scales,
-            dimension,
-            metric,
-            storage_mode,
-        );
-
-        vector_ops::sort_results(&mut results, metric.higher_is_better());
-        results.truncate(k * 2);
-        all_results.push(results);
+        all_results.push(top_k(query, ids, data, dimension, metric, k * 2));
     }
 
     let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60), weights)
@@ -287,13 +259,8 @@ pub fn search_with_filter_impl<F>(
     ids: &[u64],
     payloads: &[Option<serde_json::Value>],
     data: &[f32],
-    data_sq8: &[u8],
-    data_binary: &[u8],
-    sq8_mins: &[f32],
-    sq8_scales: &[f32],
     dimension: usize,
     metric: crate::DistanceMetric,
-    storage_mode: crate::StorageMode,
     k: usize,
     filter_fn: F,
 ) -> Result<JsValue, JsValue>
@@ -301,18 +268,7 @@ where
     F: Fn(&serde_json::Value) -> bool,
 {
     let mut results = crate::vector_ops::compute_filtered_scores(
-        query,
-        ids,
-        payloads,
-        data,
-        data_sq8,
-        data_binary,
-        sq8_mins,
-        sq8_scales,
-        dimension,
-        metric,
-        storage_mode,
-        filter_fn,
+        query, ids, payloads, data, dimension, metric, filter_fn,
     );
 
     sort_scored_triples(&mut results, metric.higher_is_better());
@@ -327,13 +283,8 @@ pub fn similarity_search_impl(
     query: &[f32],
     ids: &[u64],
     data: &[f32],
-    data_sq8: &[u8],
-    data_binary: &[u8],
-    sq8_mins: &[f32],
-    sq8_scales: &[f32],
     dimension: usize,
     metric: crate::DistanceMetric,
-    storage_mode: crate::StorageMode,
     threshold: f32,
     operator: &str,
     k: usize,
@@ -357,18 +308,7 @@ pub fn similarity_search_impl(
         }
     };
 
-    let all_scores = vector_ops::compute_scores(
-        query,
-        ids,
-        data,
-        data_sq8,
-        data_binary,
-        sq8_mins,
-        sq8_scales,
-        dimension,
-        metric,
-        storage_mode,
-    );
+    let all_scores = vector_ops::compute_scores(query, ids, data, dimension, metric);
 
     let mut results: Vec<(u64, f32)> = all_scores
         .into_iter()
@@ -381,34 +321,18 @@ pub fn similarity_search_impl(
     to_js(&results)
 }
 
-/// Batch search for multiple vectors (Full storage mode only).
-#[allow(clippy::too_many_arguments)]
+/// Batch search for multiple vectors.
 pub fn batch_search_impl(
     vectors: &[f32],
-    num_vectors: usize,
     ids: &[u64],
     data: &[f32],
     dimension: usize,
     metric: crate::DistanceMetric,
     k: usize,
 ) -> Result<JsValue, JsValue> {
-    let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
-
-    for query in vectors.chunks_exact(dimension) {
-        let mut results: Vec<(u64, f32)> = ids
-            .iter()
-            .enumerate()
-            .map(|(idx, &id)| {
-                let v_start = idx * dimension;
-                let v_data = &data[v_start..v_start + dimension];
-                (id, metric.calculate(query, v_data))
-            })
-            .collect();
-
-        vector_ops::sort_results(&mut results, metric.higher_is_better());
-        results.truncate(k);
-        all_results.push(results);
-    }
-
+    let all_results: Vec<Vec<(u64, f32)>> = vectors
+        .chunks_exact(dimension)
+        .map(|query| top_k(query, ids, data, dimension, metric, k))
+        .collect();
     to_js(&all_results)
 }

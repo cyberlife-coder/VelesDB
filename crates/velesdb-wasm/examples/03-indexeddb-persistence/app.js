@@ -48,7 +48,7 @@ async function main() {
   log(out, '');
 
   // ---- 3. The same bytes, without IndexedDB -------------------------------
-  // export_to_bytes() is synchronous and returns a Uint8Array in the VELS v2
+  // export_to_bytes() is synchronous and returns a Uint8Array in the VELS v3
   // format. Store it wherever you like; import_from_bytes() rebuilds the store.
   const bytes = store.export_to_bytes();
   log(out, `export_to_bytes(): ${bytes.length} bytes, magic "${String.fromCharCode(...bytes.slice(0, 4))}"`);

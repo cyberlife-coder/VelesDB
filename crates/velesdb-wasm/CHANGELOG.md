@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **BREAKING (behavior) — every storage mode returns `velesdb-core`'s results
+  and keeps f32 vectors.** `sq8`, `pq` and `rabitq` stores kept a per-vector
+  SQ8 encoding and `binary` stores packed sign bits, and every search scored
+  that lossy reconstruction (`binary` as vectors of 0/1): different scores and
+  orderings than a core collection with the same mode, and `get()` returned the
+  reconstruction. Core keeps f32 in every mode and re-ranks with exact f32, so
+  the store now keeps the inserted f32 vectors in every mode and scores them
+  exactly. `quantization_parity_tests` checks top-k ids and scores against a
+  real core collection for each mode and for cosine, euclidean and dot, through
+  core's exact `search_with_quality(Perfect)` (1 200 points, so core's lazy
+  SQ8/RaBitQ/PQ quantizers have trained) and its default `search()`.
+  **Memory cost:** `memory_usage()` is now 8 bytes per id plus 4 per dimension
+  in every mode — 3080 bytes per 768-D vector, where `sq8` took ~784 and
+  `binary` ~104. The quantized encoders and decoders (`encode_sq8`,
+  `encode_binary`, two copies of the SQ8 decode, `hybrid_quantized.rs`) are
+  gone; `batch_search` no longer refuses non-`full` stores; the `pq`/`rabitq`
+  "falls back to SQ8" `console.warn` is gone, there being no fallback.
+- **Binary format v3.** `export_to_bytes`/`save` write `VELS` v3, the v2 layout
+  minus the `data_sq8`/`data_binary`/`sq8_mins`/`sq8_scales` blobs (55 bytes for
+  one 3-D vector, was 87). v2 and v1 still load: a v2 quantized store is rebuilt
+  as the reconstruction it was searching over, decoded through core's
+  `QuantizedVector::to_f32` and `BinaryQuantizedVector`, so its scores match
+  the old build to float rounding (frozen v2 exports in `serialization_tests`
+  pin this per mode). Its original f32 values were never saved; re-insert them
+  for exact scores. An older build refuses a v3 blob (`Unsupported version: 3`)
+  instead of loading a quantized store with no codes.
 - **BREAKING (behavior) — `weighted` fusion default weights**: the default
   weights used by `multi_query_search(..., strategy: "weighted")` when no
   explicit weights are supplied changed from the WASM-local, non-overridable
@@ -27,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-sourcing; output is unchanged. (Issue #1545.)
 
 ### Fixed
+- **A corrupt store is rejected at load instead of aborting at search.**
+  `import_from_bytes`/`load` now check that the vector buffer (and, for a v2
+  quantized store, the code buffers) hold exactly one row per id. A v2 `sq8`
+  store filled through the old `insert_batch` — which appended to the f32
+  buffer whatever the mode and left the codes short — loaded, then indexed out
+  of bounds on its first search; it now fails with `Invalid data: ...`.
+  `insert_batch` itself is correct in every mode now that every mode stores f32.
 - **`import_from_bytes` (v1) rejects a size-overflowing blob instead of
   aborting.** `import_v1` computed `count * dimension` and `count * vector_size`
   unchecked. On `wasm32` (32-bit `usize`, `overflow-checks` off in release) a

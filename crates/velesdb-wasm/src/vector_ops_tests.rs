@@ -7,18 +7,7 @@ fn test_compute_scores_full() {
     let data = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
     let metric = DistanceMetric::Cosine;
 
-    let scores = compute_scores(
-        &query,
-        &ids,
-        &data,
-        &[],
-        &[],
-        &[],
-        &[],
-        4,
-        metric,
-        StorageMode::Full,
-    );
+    let scores = compute_scores(&query, &ids, &data, 4, metric);
 
     assert_eq!(scores.len(), 2);
     assert_eq!(scores[0].0, 1);
