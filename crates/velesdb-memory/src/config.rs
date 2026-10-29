@@ -121,7 +121,8 @@ pub struct ConfigFile {
 #[serde(deny_unknown_fields)]
 pub struct SearchConfig {
     /// Recall quality (`VELESDB_MEMORY_SEARCH_QUALITY`): `fast`, `balanced`,
-    /// `accurate`, `perfect`, `autotune`, or `custom:<ef>`. Absent keeps the
+    /// `accurate`, `perfect`, `autotune`, `custom:<ef>` or
+    /// `adaptive:<min_ef>:<max_ef>`. Absent keeps the
     /// collection's own quality.
     pub quality: Option<String>,
 }

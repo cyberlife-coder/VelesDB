@@ -236,6 +236,7 @@ Agent memory for on-device AI: knowledge facts stored as vectors in a dedicated
 | `VelesSemanticMemory(db, dimension)` | Constructor; binds to the database and the embedding dimension |
 | `store(id, content, embedding)` | Stores a fact; `content` is kept in the point payload |
 | `query(embedding, topK)` | Similarity query, returns `SemanticResult` (id, score, content) |
+| `queryWithQuality(embedding, topK, quality)` | `query` at an explicit `SearchQuality`, the enum `searchWithQuality` takes; a `custom`/`adaptive` ef outside 16–4096 is refused, and `perfect` past `limits.max_perfect_mode_vectors` is an error |
 | `delete(id)` | Deletes a fact |
 | `remove(id)` | Deprecated alias for `delete` |
 | `clear()` | Removes every fact |
