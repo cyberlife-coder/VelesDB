@@ -32,7 +32,7 @@ from llamaindex_velesdb.security import (
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
-from velesdb_common.scores import score_to_similarity
+from velesdb_common.scores import metric_higher_is_better, to_similarity
 from llamaindex_velesdb._common import open_database as _open_database
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.node_builder import (
@@ -221,20 +221,32 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         node = cls._node_from_result(result)
         return node, result.get("score", 0.0), node.node_id
 
-    def _score_to_similarity(self, score: float) -> float:
-        """Map a raw VelesDB score to a LlamaIndex similarity (higher = closer).
+    def _metric_higher_is_better(self) -> bool:
+        """Whether a raw single-metric score on this store is higher-is-closer.
+
+        Read from velesdb-core through
+        :func:`velesdb_common.scores.metric_higher_is_better`: ``True`` for
+        cosine, dot and jaccard, ``False`` for the distances (euclidean,
+        hamming).
+        """
+        return metric_higher_is_better(self.metric)
+
+    def _build_query_result(
+        self, results: list[dict], *, higher_is_better: bool
+    ) -> VectorStoreQueryResult:
+        """Build a VectorStoreQueryResult from raw VelesDB result dictionaries.
 
         LlamaIndex treats ``similarities`` as higher-is-better
-        (``similarity_cutoff``, node postprocessors). Whether this metric's
-        score already is one comes from velesdb-core through
-        :func:`velesdb_common.scores.score_to_similarity`: a distance
-        (euclidean, hamming) is mapped to a bounded, monotonically-decreasing
-        similarity, a similarity (cosine, dot, jaccard) passes through.
+        (``similarity_cutoff``, node postprocessors). Each caller states the
+        direction of the scores it hands in, since it depends on the search
+        that produced them, not only on the metric: the metric's own
+        (:meth:`_metric_higher_is_better`) for a raw single-metric search, the
+        strategy's for multi-query fusion, ``True`` for BM25 and rank-fused
+        hybrid scores. A lower-is-better score is mapped to a bounded,
+        monotonically decreasing similarity
+        (:func:`velesdb_common.scores.to_similarity`); a higher-is-better one
+        passes through unchanged.
         """
-        return score_to_similarity(self.metric, score)
-
-    def _build_query_result(self, results: list[dict]) -> VectorStoreQueryResult:
-        """Build a VectorStoreQueryResult from raw VelesDB result dictionaries."""
         nodes: List[TextNode] = []
         similarities: List[float] = []
         ids: List[str] = []
@@ -242,7 +254,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         for result in results:
             node, score, node_id = self._result_to_parts(result)
             nodes.append(node)
-            similarities.append(self._score_to_similarity(score))
+            similarities.append(to_similarity(score, higher_is_better))
             ids.append(node_id)
 
         return VectorStoreQueryResult(nodes=nodes, similarities=similarities, ids=ids)

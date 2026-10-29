@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT` and `DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT`
   (0.5 each), beside the existing `DEFAULT_WEIGHTED_*` ones. Python gets the same
   grammar as `FusionStrategy.from_name(name, *, k=..., avg_weight=..., ...)`.
+- **`FusionStrategy::fused_direction`: the direction of fused scores, in core.**
+  `velesdb_core::FusionStrategy::fused_direction(&[ScoreDirection])` returns the
+  polarity of what `fuse_with_directions` produces: `LowerIsBetter` only when
+  every branch is a distance and the strategy keeps the input score space
+  (`Average`, `Maximum`, `Weighted`), `HigherIsBetter` for `RRF`, `WeightedRRF`,
+  `RelativeScore` and any mixed or empty set of branches.
+  `fuse_with_directions` reads it instead of repeating the rule. Python exposes
+  it as `FusionStrategy.fused_higher_is_better(metric)`, the direction of the
+  scores `multi_query_search` returns with that strategy; `velesdb_common.scores`
+  gains `fused_higher_is_better(strategy, fusion, metric)`, which calls it and
+  falls back to a literal set pinned to it by a drift test for a wheel older
+  than 7.2.0, and `to_similarity(score, higher_is_better)`.
 - **`parse_search_mode` and `SearchQuality` no longer need `persistence`.**
   `SearchQuality` moved from `index::hnsw::params` to its own ungated module.
   It is re-exported at `velesdb_core::SearchQuality` and at its old path.
@@ -86,6 +98,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database; `/metrics` calls it before every export.
 
 ### Changed
+
+- **BREAKING (behavior) — LangChain relevance scores are higher-is-closer under
+  every metric.** `similarity_search_with_relevance_scores` returned the raw
+  score and kept `score >= score_threshold`; under `euclidean` and `hamming` the
+  raw score is a distance, so a threshold kept the farthest documents and
+  dropped the closest. A distance `d` is now returned as `1 / (1 + d)` (the
+  metric's direction comes from velesdb-core through `velesdb_common.scores`),
+  so the threshold, and `as_retriever(search_type="similarity_score_threshold")`
+  which calls it, keep the closest documents. Cosine keeps its `[0, 1]`
+  rescaling, dot and Jaccard their raw similarity, and fused dense + sparse
+  scores pass through. `GraphRetriever.score_threshold` now filters seeds on
+  these relevance scores, and the seeds' `relevance_score` metadata carries
+  them. `similarity_search_with_score` still returns the raw distance; a sparse
+  search that falls back to dense-only is now scored as the dense search it
+  ran, so its cosine scores are normalised too. Migration: a threshold written
+  as a maximum distance `d` on a `euclidean` or `hamming` store becomes
+  `1 / (1 + d)`.
 
 - **BREAKING (behavior) — the `velesdb-wasm` VelesQL executor validates queries
   with core's `QueryValidator`.** A query core refuses is now refused in the
@@ -313,6 +342,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This includes a v2 quantized store filled through the old `insert_batch`,
   which appended to the f32 buffer whatever the mode and left the codes short,
   so its first search indexed out of bounds.
+
+- **LlamaIndex no longer reverses fused, hybrid and BM25 rankings on a distance
+  metric.** Every search path mapped its scores through `1 / (1 + s)` on a
+  `euclidean` or `hamming` store, including scores that are already
+  higher-is-better: `multi_query_search` with `rrf` or `relative_score`,
+  `hybrid_query` (RRF of vector and BM25 ranks), `text_query` (BM25), a dense +
+  sparse `query(..., sparse_vector=...)` and `contains_text_search` (a match
+  scores 1.0). The best match came out least similar, the first one
+  `similarity_cutoff` dropped. Each path now states the direction of its
+  scores: those pass through unchanged, a raw single-metric score is mapped as
+  before, and `average`, `maximum` and `weighted` fusion, which keep the
+  metric's units, take their direction from core through
+  `velesdb_common.scores.fused_higher_is_better`.
 
 - **Mobile: a core error keeps its code and recoverability on every VelesQL,
   training and sparse or multi-query call.** `executeQuery`, `query`,
