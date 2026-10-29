@@ -37,6 +37,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `INVALID_CONFIG`, and so on for the other three; the guest-js `CommandError`
   type gains `recoverable: boolean`.
 
+- **`velesdb_common` calls the binding instead of re-implementing core.** Its
+  FNV-1a copy and its search-quality grammar (preset set, `custom:`/`adaptive:`
+  regexes, a mirrored 16–4096 ef range) are gone. `stable_hash_id(value,
+  algorithm="fnv1a")` is `velesdb.hash_id` and raises `ImportError` naming
+  velesdb 7.2.0 with an older wheel; its SHA-256 default is unchanged, needs no
+  binding, and still differs from core's FNV-1a by design (KNOWN_LIMITATIONS
+  #12). `validate_search_quality` accepts exactly what core accepts (now
+  `custom:+256` too) and its `SecurityError` carries core's message; with a
+  wheel older than 7.2.0 it checks only the type and leaves the mode to the
+  binding, which refuses an invalid one at search time. The connectors' declared
+  `velesdb` floors stay where they are, since every new call is
+  feature-detected.
+- **`SearchConfigOptions.default_mode` reads core's own mode names.** The
+  binding parsed and rendered `fast`/`balanced`/`accurate`/`perfect` from a
+  hand-written table; it now goes through `SearchMode`'s serde names, the ones
+  the `[search]` TOML section is read with, so a mode core adds is accepted
+  without a binding change. An unknown mode still raises `ValueError` naming
+  `default_mode`, now worded `invalid search.default_mode: unknown variant
+  ..., expected one of ...`.
+
 ### Fixed
 
 - **Mobile: a core error keeps its code and recoverability on every VelesQL,
@@ -62,8 +82,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MIT integrations call them instead of carrying copies (below), so a change in
   core reaches them with the next wheel.
 
-### Fixed
-
 - **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
   *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
   among the distances and mapped its scores through `1 / (1 + s)`: the best
@@ -73,28 +91,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
   the binding by a drift test, for a wheel that predates the function. Euclidean
   and Hamming keep their `1 / (1 + d)` mapping.
-
-### Changed
-
-- **`velesdb_common` calls the binding instead of re-implementing core.** Its
-  FNV-1a copy and its search-quality grammar (preset set, `custom:`/`adaptive:`
-  regexes, a mirrored 16–4096 ef range) are gone. `stable_hash_id(value,
-  algorithm="fnv1a")` is `velesdb.hash_id` and raises `ImportError` naming
-  velesdb 7.2.0 with an older wheel; its SHA-256 default is unchanged, needs no
-  binding, and still differs from core's FNV-1a by design (KNOWN_LIMITATIONS
-  #12). `validate_search_quality` accepts exactly what core accepts (now
-  `custom:+256` too) and its `SecurityError` carries core's message; with a
-  wheel older than 7.2.0 it checks only the type and leaves the mode to the
-  binding, which refuses an invalid one at search time. The connectors' declared
-  `velesdb` floors stay where they are, since every new call is
-  feature-detected.
-- **`SearchConfigOptions.default_mode` reads core's own mode names.** The
-  binding parsed and rendered `fast`/`balanced`/`accurate`/`perfect` from a
-  hand-written table; it now goes through `SearchMode`'s serde names, the ones
-  the `[search]` TOML section is read with, so a mode core adds is accepted
-  without a binding change. An unknown mode still raises `ValueError` naming
-  `default_mode`, now worded `invalid search.default_mode: unknown variant
-  ..., expected one of ...`.
 
 ### Documentation
 
