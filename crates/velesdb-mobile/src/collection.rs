@@ -487,7 +487,7 @@ impl VelesCollection {
     ) -> Result<Vec<SearchResult>, VelesError> {
         // Parse the VelesQL query
         let parsed = velesdb_core::velesql::Parser::parse(&query_str)
-            .map_err(|e| VelesError::database(format!("VelesQL parse error: {}", e.message)))?;
+            .map_err(|e| VelesError::from_core("VelesQL parse error", e.into()))?;
 
         // Parse params from JSON if provided
         let params: std::collections::HashMap<String, serde_json::Value> = params_json
@@ -503,7 +503,7 @@ impl VelesCollection {
         let results = self
             .db
             .execute_query(&parsed, &params)
-            .map_err(|e| VelesError::database(format!("Query execution failed: {e}")))?;
+            .map_err(|e| VelesError::from_core("Query execution failed", e))?;
 
         Ok(results
             .into_iter()

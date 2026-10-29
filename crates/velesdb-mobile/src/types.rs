@@ -48,6 +48,25 @@ impl VelesError {
             recoverable: true,
         }
     }
+
+    /// Maps a core error through [`From`], keeping core's code and
+    /// recoverability, and prefixes `context` to a `Database` message so the
+    /// caller still sees which call failed.
+    #[must_use]
+    pub(crate) fn from_core(context: &str, err: velesdb_core::Error) -> Self {
+        match Self::from(err) {
+            VelesError::Database {
+                message,
+                code,
+                recoverable,
+            } => VelesError::Database {
+                message: format!("{context}: {message}"),
+                code,
+                recoverable,
+            },
+            typed => typed,
+        }
+    }
 }
 
 impl From<velesdb_core::Error> for VelesError {

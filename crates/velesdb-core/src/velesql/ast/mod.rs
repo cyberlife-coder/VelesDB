@@ -10,6 +10,7 @@ mod dml;
 mod fusion;
 mod introspection;
 mod join;
+mod result_kind;
 mod select;
 mod train;
 mod values;
@@ -43,6 +44,7 @@ pub use dml::{
 pub use fusion::{FusionClause, FusionConfig, FusionStrategyType};
 pub use introspection::{DescribeCollectionStatement, IntrospectionStatement};
 pub use join::{ColumnRef, JoinClause, JoinCondition, JoinType};
+pub use result_kind::QueryResultKind;
 pub use select::{
     ArithmeticExpr, ArithmeticOp, Column, DistinctMode, LetBinding, OrderByExpr, SelectColumns,
     SelectOrderBy, SelectStatement, SimilarityOrderBy, SimilarityScoreExpr, DEFAULT_SELECT_LIMIT,

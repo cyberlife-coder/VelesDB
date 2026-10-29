@@ -54,7 +54,7 @@ pub async fn query<R: Runtime>(
 
     // Parse the VelesQL query
     let parsed = velesdb_core::velesql::Parser::parse(&request.query)
-        .map_err(|e| Error::InvalidConfig(format!("VelesQL parse error: {}", e.message)))?;
+        .map_err(|e| Error::Database(e.into()))?;
 
     let results = dispatch_tauri_query(&state, parsed, request).await?;
 
@@ -96,7 +96,7 @@ async fn execute_tauri_aggregation(
         .run_db(move |db| {
             let coll = require_collection(&db, &parsed.select.from)?;
             coll.execute_aggregate(&parsed, &request.params)
-                .map_err(|e| Error::InvalidConfig(format!("Aggregation error: {e}")))
+                .map_err(Error::from)
         })
         .await
         .map_err(CommandError::from)?;
