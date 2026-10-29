@@ -51,6 +51,40 @@ class TestSemanticMemory:
         assert len(results) == 3
         assert results[0]["id"] == 1  # most similar first
 
+    @pytest.mark.parametrize(
+        "quality",
+        ["fast", "balanced", "accurate", "perfect", "autotune", "custom:64",
+         "adaptive:32:512"],
+    )
+    def test_query_at_explicit_quality_ranks_the_same(self, memory, quality):
+        """Every mode core's parser reads ranks the same facts as ``query``."""
+        memory.semantic.store(1, "nearest", [1.0, 0.0, 0.0, 0.0])
+        memory.semantic.store(2, "middle", [0.8, 0.6, 0.0, 0.0])
+        memory.semantic.store(3, "farthest", [0.0, 1.0, 0.0, 0.0])
+
+        results = memory.semantic.query([1.0, 0.0, 0.0, 0.0], top_k=3, quality=quality)
+
+        assert [r["id"] for r in results] == [1, 2, 3]
+
+    @pytest.mark.parametrize("quality", ["warp", "custom:8", "adaptive:512:32"])
+    def test_query_refuses_a_mode_core_refuses(self, memory, quality):
+        """An unusable mode is a ValueError, never a silent default."""
+        with pytest.raises(ValueError):
+            memory.semantic.query([1.0, 0.0, 0.0, 0.0], top_k=1, quality=quality)
+
+    def test_query_quality_reaches_core(self, tmp_path):
+        """``perfect`` meets core's exhaustive-scan cap: proof it is not dropped."""
+        from velesdb import Database, LimitsOptions, VelesConfigOptions
+
+        cfg = VelesConfigOptions(limits=LimitsOptions(max_perfect_mode_vectors=1))
+        mem = Database(str(tmp_path / "db"), config=cfg).agent_memory(dimension=4)
+        mem.semantic.store(1, "a", [1.0, 0.0, 0.0, 0.0])
+        mem.semantic.store(2, "b", [0.0, 1.0, 0.0, 0.0])
+
+        assert len(mem.semantic.query([1.0, 0.0, 0.0, 0.0], top_k=2)) == 2
+        with pytest.raises(RuntimeError, match="max_perfect_mode_vectors"):
+            mem.semantic.query([1.0, 0.0, 0.0, 0.0], top_k=2, quality="perfect")
+
     def test_upsert_overwrites(self, memory):
         """Storing with the same ID overwrites the previous fact."""
         memory.semantic.store(1, "original", [0.1, 0.2, 0.3, 0.4])

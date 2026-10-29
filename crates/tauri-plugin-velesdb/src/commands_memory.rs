@@ -14,6 +14,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
+use crate::helpers::parse_search_quality;
 use crate::state::VelesDbState;
 use crate::types::{
     EpisodicDeleteRequest, EpisodicOlderThanRequest, EpisodicRecallSimilarRequest,
@@ -68,16 +69,25 @@ pub async fn semantic_store_with_ttl<R: Runtime>(
         .map_err(CommandError::from)
 }
 
-/// Queries semantic memory by similarity search.
+/// Queries semantic memory by similarity search, at `request.quality` when
+/// given (parsed by core's `parse_search_mode`, so an unusable mode is
+/// refused as `VELES-009` before the search runs).
 #[command]
 pub async fn semantic_query<R: Runtime>(
     _app: AppHandle<R>,
     state: State<'_, VelesDbState>,
     request: SemanticQueryRequest,
 ) -> std::result::Result<Vec<SemanticQueryResult>, CommandError> {
+    let quality = parse_search_quality(&request.quality).map_err(CommandError::from)?;
     state
         .run_memory(move |mem| {
-            let results = mem.semantic().query(&request.embedding, request.top_k)?;
+            let semantic = mem.semantic();
+            let results = match quality {
+                Some(quality) => {
+                    semantic.query_with_quality(&request.embedding, request.top_k, quality)?
+                }
+                None => semantic.query(&request.embedding, request.top_k)?,
+            };
             Ok(results
                 .into_iter()
                 .map(|(id, score, content)| SemanticQueryResult { id, score, content })
