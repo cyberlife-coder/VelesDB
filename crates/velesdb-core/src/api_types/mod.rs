@@ -184,8 +184,39 @@ fn parse_advanced_quality(mode: &str) -> Result<Option<crate::SearchQuality>, St
     let (Some(min_ef), Some(max_ef)) = (parse_mode_ef(min_ef), parse_mode_ef(max_ef)) else {
         return Ok(None);
     };
-    let (min_ef, max_ef) = (min_ef?, max_ef?);
-    Ok((min_ef <= max_ef).then_some(crate::SearchQuality::Adaptive { min_ef, max_ef }))
+    let quality = crate::SearchQuality::Adaptive {
+        min_ef: min_ef?,
+        max_ef: max_ef?,
+    };
+    Ok(validate_search_quality(&quality).is_ok().then_some(quality))
+}
+
+/// Checks a [`crate::SearchQuality`] built outside [`parse_search_mode`] —
+/// a binding's typed enum — against the rules that parser enforces: every
+/// `Custom` / `Adaptive` ef in the `ef_search` range ([`validate_ef_search`]),
+/// and `min_ef <= max_ef` for `Adaptive`, so a typed quality is accepted
+/// exactly when its `custom:` / `adaptive:` string form would be.
+///
+/// # Errors
+///
+/// Returns a message naming the out-of-range ef, or the out-of-order
+/// adaptive bounds.
+pub fn validate_search_quality(quality: &crate::SearchQuality) -> Result<(), String> {
+    match *quality {
+        crate::SearchQuality::Custom(ef) => validate_ef_search(ef),
+        crate::SearchQuality::Adaptive { min_ef, max_ef } => {
+            validate_ef_search(min_ef)?;
+            validate_ef_search(max_ef)?;
+            if min_ef <= max_ef {
+                Ok(())
+            } else {
+                Err(format!(
+                    "adaptive search min_ef ({min_ef}) must not exceed max_ef ({max_ef})"
+                ))
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Reads one ef of an advanced search mode: `None` when `raw` is not an

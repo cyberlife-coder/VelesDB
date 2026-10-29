@@ -34,7 +34,8 @@ pub struct StreamingConfig {
     /// Maximum traversal depth (default: 3).
     #[pyo3(get, set)]
     pub max_depth: usize,
-    /// Maximum nodes to visit (memory bound, default: 10000).
+    /// Maximum number of results (default: 10000). The memory bound of a
+    /// traversal is core's own visited-set cap, `MAX_VISITED_SIZE`.
     #[pyo3(get, set)]
     pub max_visited: usize,
     /// Optional filter by relationship types.
@@ -378,7 +379,7 @@ fn to_py_result(
         .map_or((start_node, String::new()), |e| {
             (e.source(), e.label().to_string())
         });
-    // Reason: depth is bounded by SAFETY_MAX_DEPTH (100), always fits in usize.
+    // Reason: depth is a u32, which fits in usize on every supported target.
     #[allow(clippy::cast_possible_truncation)]
     Some(TraversalResult {
         depth: r.depth as usize,

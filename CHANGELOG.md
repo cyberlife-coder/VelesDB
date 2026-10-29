@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on that gated collection search rather than core's `SemanticMemory`, which
   reads the collection leaf without the observer read gate every mobile read
   passes (#1392). Omitting the quality keeps the collection's own everywhere.
+- **`api_types::validate_search_quality` checks a typed `SearchQuality` by
+  the rules of `parse_search_mode`.** Every `Custom`/`Adaptive` ef must be in
+  the `ef_search` range and an `Adaptive` `min_ef` must not exceed `max_ef`,
+  so a binding's enum is accepted exactly when its `custom:`/`adaptive:`
+  string would be. Mobile's `SearchQuality` conversion goes through it, and
+  now refuses `Adaptive { min_ef: 512, max_ef: 32 }`, which core's parser
+  already refused and which ran as a search that never escalated.
 - **`collection::graph::dfs_traverse(&EdgeStore, source, &TraversalConfig)`:
   core's DFS over a standalone edge store.** It is the loop a collection's
   `traverse_dfs_config` runs (moved, not copied, into
@@ -240,7 +247,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dfs_traverse`, as `traverse_bfs` already called core's `bfs_stream`: one
   result per node reached, in depth-first order, describing the edge that
   reached it, with `limit` (`StreamingConfig.max_visited`) capping the results
-  as it does for BFS. The `TraversalResult` shape is unchanged.
+  as it does for BFS. The `TraversalResult` shape is unchanged. An empty
+  `relationship_types` list now follows every edge, as BFS and core read it;
+  the old DFS followed none and returned no result.
 
 - **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
   *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`

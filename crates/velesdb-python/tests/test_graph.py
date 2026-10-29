@@ -313,3 +313,12 @@ class TestDfsTraversal:
 
         assert [r.target for r in results] == [1, 3]
         assert all(r.label == "KNOWS" for r in results)
+
+    def test_dfs_empty_relationship_list_means_no_filter_like_bfs(self):
+        """An empty ``relationship_types`` follows every edge, as BFS does."""
+        store = self._store([(1, 0, 1, "KNOWS"), (2, 0, 2, "BLOCKED")])
+
+        dfs = store.traverse_dfs(source=0, max_depth=3, relationship_types=[])
+        bfs = store.traverse_bfs(source=0, max_depth=3, relationship_types=[])
+
+        assert sorted(r.target for r in dfs) == sorted(r.target for r in bfs) == [1, 2]

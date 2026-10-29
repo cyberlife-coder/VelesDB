@@ -105,6 +105,19 @@ fn test_search_quality_adaptive_conversion() {
 }
 
 #[test]
+fn test_search_quality_adaptive_out_of_order_is_rejected() {
+    let q = SearchQuality::Adaptive {
+        min_ef: 512,
+        max_ef: 32,
+    };
+    let err: Result<CoreSearchQuality, _> = q.try_into();
+    assert!(
+        err.is_err(),
+        "core's parser refuses adaptive:512:32; the typed form must too"
+    );
+}
+
+#[test]
 fn test_search_quality_adaptive_out_of_range_is_rejected() {
     let q = SearchQuality::Adaptive {
         min_ef: 32,

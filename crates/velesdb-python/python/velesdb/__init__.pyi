@@ -1430,7 +1430,7 @@ class StreamingConfig:
 
     Args:
         max_depth: Maximum traversal depth (default: 3)
-        max_visited: Maximum nodes to visit (default: 10000)
+        max_visited: Maximum number of results (default: 10000)
         relationship_types: Optional filter by relationship types
     """
 
