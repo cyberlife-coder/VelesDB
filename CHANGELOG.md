@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **The core surfaces the 7.1.0 parity audit found undocumented now have usage
+  docs.** `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and
+  `query_excluding_with_quality` are shown in `docs/guides/AGENT_MEMORY.md`, with
+  incoming and bounded relations and the relation methods of episodic and
+  procedural memory; the per-store quality of the memory wedge
+  (`MemoryService(..., search_quality=...)`, `VELESDB_MEMORY_SEARCH_QUALITY`) in
+  the Python guide and READMEs. A new `docs/guides/CORE_OPERATIONS_API.md`
+  covers the observer port and governed reads (`open_with_observer`,
+  `gated_search`, `authorize_read`), guard-rails (`QueryLimits`,
+  `update_guardrails`, `CircuitBreaker`, `RateLimiter`), validation and stable
+  ids, index introspection and the `ORDER BY` advisor, `apply_advanced_config`,
+  auto-reindex detection, the filter-strategy decision, the standalone
+  `ColumnStore`, and the metrics types; `AnyCollection` and the `api_types` mode
+  parser are documented where those topics already live. Every snippet was
+  compiled and run against this tree.
+- **`/metrics` is documented family by family**, the `velesdb_graph_*` (per
+  graph collection) and `velesdb_match_*` (process-wide) series included, and
+  says which declared families the server never feeds, so they read `0`.
+- **The REST reference no longer misstates `/search` and `/guardrails`.** The
+  `/search` table gains `mode`, `ef_search`, `timeout_ms` and the sparse and
+  fusion fields `openapi.yaml` already listed, and `/search/batch` says its
+  entries' `mode` and `ef_search` are validated but not applied. The
+  `GET /guardrails` example showed a 1 GiB memory limit and 100 queries per
+  second; the defaults are 100 MiB and 100 000. `PUT /guardrails` now says what
+  it reaches: the depth, cardinality, memory and timeout limits of the
+  collections open at the time, not the rate limiter, the circuit breaker, or a
+  collection opened afterwards.
+
 ## [7.1.0] - 2026-10-28
 
 > **MINOR release.** Additive: no breaking change to the public API, the on-disk

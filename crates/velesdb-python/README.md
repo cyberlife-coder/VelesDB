@@ -111,7 +111,10 @@ mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason
 
 `why()` returns the best-matching memory **plus the connected subgraph** reached
 through typed links — context that shares no words with the question, which a
-plain vector recall cannot find. See
+plain vector recall cannot find. Recall runs at the collection's own search
+quality unless you pick one: `MemoryService(path, search_quality="accurate")`
+(any REST/VelesQL mode name; an explicit value wins over
+`VELESDB_MEMORY_SEARCH_QUALITY`, an unknown one raises `ValueError`). See
 [PYTHON_AGENT_MEMORY.md](../../docs/guides/PYTHON_AGENT_MEMORY.md).
 
 ## Configuration
@@ -221,4 +224,4 @@ so `except velesdb.VelesDBError` is a safe catch-all.
 
 ---
 
-`velesdb-python v7.1.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 7.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-python v7.1.0` · Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
