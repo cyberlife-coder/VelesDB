@@ -115,6 +115,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ran, so its cosine scores are normalised too. Migration: a threshold written
   as a maximum distance `d` on a `euclidean` or `hamming` store becomes
   `1 / (1 + d)`.
+- **The TypeScript SDK's WASM backend creates `pq` and `rabitq` collections.**
+  `WASM_CAPABILITIES.storageModes` lists all five core storage modes: velesdb-wasm
+  keeps f32 vectors in every mode and returns core's results for it (#2544), so
+  the reason for refusing `pq` and `rabitq` with `NOT_SUPPORTED` (the browser
+  stored both as SQ8) is gone. No mode saves memory in the browser.
 
 - **BREAKING (behavior) — the `velesdb-wasm` VelesQL executor validates queries
   with core's `QueryValidator`.** A query core refuses is now refused in the
