@@ -129,7 +129,6 @@ if you need a subset.
 source:
   type: pinecone
   api_key: your-pinecone-api-key
-  environment: us-east-1-aws     # deprecated since 1.12.0, kept for old configs
   index: your-index-name
   namespace: production          # optional
 
@@ -144,9 +143,9 @@ options:
   workers: 2
 ```
 
-`environment` is ignored by Pinecone serverless (2024+): the host is discovered
-through `GET /indexes/{name}`. The field is retained only so pre-1.12 configs
-keep parsing.
+There is no `environment` key: Pinecone serverless (2024+) discovers the host
+through `GET /indexes/{name}`. The field was removed in 8.0.0; a config that
+still sets it loads unchanged, the key ignored like any unknown key.
 
 ## Weaviate
 

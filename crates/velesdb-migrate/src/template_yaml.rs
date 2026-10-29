@@ -25,7 +25,6 @@ pub(super) const PINECONE_TEMPLATE: &str = r#"# VelesDB Migration Configuration 
 source:
   type: pinecone
   api_key: your-pinecone-api-key
-  environment: us-east-1-aws
   index: your-index-name
   # namespace: optional-namespace
 

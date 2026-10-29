@@ -31,12 +31,10 @@ pub(crate) fn build_qdrant(params: &SourceParams<'_>) -> SourceConfig {
     })
 }
 
-#[allow(deprecated)]
 pub(crate) fn build_pinecone(params: &SourceParams<'_>) -> Result<SourceConfig> {
     let api_key = require_api_key(params, "Pinecone")?;
     Ok(SourceConfig::Pinecone(crate::config::PineconeConfig {
         api_key,
-        environment: String::new(),
         index: params.collection.to_string(),
         namespace: None,
         base_url: None,

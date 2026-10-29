@@ -20,9 +20,9 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-#[allow(deprecated)]
-use velesdb_migrate::config::PineconeConfig;
-use velesdb_migrate::config::{MilvusConfig, QdrantConfig, SourceConfig, WeaviateConfig};
+use velesdb_migrate::config::{
+    MilvusConfig, PineconeConfig, QdrantConfig, SourceConfig, WeaviateConfig,
+};
 use velesdb_migrate::connectors::create_connector;
 use velesdb_migrate::connectors::elasticsearch::ElasticsearchConfig;
 use wiremock::matchers::{method, path, query_param};
@@ -313,11 +313,9 @@ async fn mount_pinecone_routes(mock: &MockServer, describe_fixture: &str) {
         .await;
 }
 
-#[allow(deprecated)]
 fn pinecone_config(base_url: String) -> PineconeConfig {
     PineconeConfig {
         api_key: "test-api-key".to_string(),
-        environment: String::new(),
         index: "test-index".to_string(),
         namespace: None,
         base_url: Some(base_url),
