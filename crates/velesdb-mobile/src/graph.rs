@@ -359,29 +359,33 @@ impl MobileGraphStore {
         Ok(())
     }
 
-    /// Removes an edge by ID. Removing an absent edge is a no-op.
-    pub fn remove_edge(&self, edge_id: u64) {
-        // Core's `bool` cannot tell "absent" from a refused WAL append (which
-        // core logs and leaves the edge in place); the earlier surface had no
-        // result either, so none is invented here.
-        let _ = self.inner.remove_edge(edge_id);
+    /// Removes an edge by ID, returning whether there was one to remove.
+    ///
+    /// Removing an absent edge is a no-op that returns `false`. A removal the
+    /// edge write-ahead log refuses leaves the edge in place and throws core's
+    /// storage error (`VELES-006`), as does an index found out of sync with
+    /// the edge's source shard.
+    pub fn remove_edge(&self, edge_id: u64) -> Result<bool, VelesError> {
+        Ok(self.inner.try_remove_edge(edge_id)?)
     }
 
     /// Removes every node and edge.
+    ///
+    /// The edges go first and the nodes only once none is left, the order
+    /// core's `TRUNCATE` follows: deleting the nodes of an edge whose removal
+    /// failed would leave that edge dangling. Every edge is attempted, and the
+    /// first failure is the one reported.
     pub fn clear(&self) -> Result<(), VelesError> {
-        // Deleting a node cascades to its edges; an edge whose endpoints
-        // carry no stored node is not reached by that cascade, so whatever
-        // remains is removed by ID.
-        self.inner.delete(&self.inner.all_node_ids())?;
+        let mut first_failure = None;
         for edge in self.inner.get_edges(None) {
-            let _ = self.inner.remove_edge(edge.id());
+            if let Err(err) = self.inner.try_remove_edge(edge.id()) {
+                first_failure.get_or_insert(err);
+            }
         }
-        let left = self.inner.edge_count();
-        if left > 0 {
-            return Err(VelesError::database(format!(
-                "clear left {left} edge(s) in place: the edge write-ahead log refused their removal"
-            )));
+        if let Some(err) = first_failure {
+            return Err(err.into());
         }
+        self.inner.delete(&self.inner.all_node_ids())?;
         Ok(())
     }
 

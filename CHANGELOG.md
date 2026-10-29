@@ -145,11 +145,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `VelesDatabase.getGraphStore(name)`, which returns nil/null for a missing
     collection and throws for one that is not a graph collection. `flush()` is
     new.
-  - Every method now throws except `removeEdge`. Reads pass the database's
-    read gate as `GraphTraversal`, so an observer registered with
-    `openWithObserver` can deny them, and a scope filter is refused since no
-    graph read can apply one; writes and storage can fail now that they reach
-    disk.
+  - Every method now throws. Reads pass the database's read gate as
+    `GraphTraversal`, so an observer registered with `openWithObserver` can
+    deny them, and a scope filter is refused since no graph read can apply
+    one; writes and storage can fail now that they reach disk.
+  - `removeEdge(edgeId)` returns a `Bool`: `true` when it removed the edge,
+    `false` when there was none, which stays a no-op. A removal the edge
+    write-ahead log refuses leaves the edge in place and throws core's storage
+    error (`Database`, code `VELES-006`) instead of passing silently. `clear()`
+    removes the edges before the nodes, as core's `TRUNCATE` does, and throws
+    the first refused edge removal with the nodes left in place, so no edge is
+    left pointing at a deleted node.
   - Core's rules apply. `addEdge` refuses an edge whose source or target was
     never added, and an empty edge label; edge labels are trimmed.
     `properties_json` must be a JSON object and must not contain the reserved
@@ -163,6 +169,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses, before writing anything, an edge ID the store already holds or an
   edge whose endpoint is in neither the file nor the store; add any such node
   with `addNode`, then import again. The old file can be deleted afterwards.
+
+- **BREAKING (mobile) — the `Collection` and `DimensionMismatch` errors carry
+  core's `code` and `recoverable`, as `Database` does.** A missing or
+  duplicate collection and a dimension mismatch reached Swift and Kotlin as
+  typed variants with no code, so a retry policy or a log keyed on `VELES-###`
+  had to special-case them. Both variants gain `code` and `recoverable`, read
+  from core's error for the condition: `VELES-002` for a missing collection,
+  `VELES-001` for a duplicate, `VELES-004` for a dimension mismatch, all
+  recoverable. `getCollection` and `getGraphStore` on a collection of the wrong
+  kind answer `VELES-002`, the code core's own lookups give it, with the kind in
+  the message. Their messages now lead with the code
+  (`[VELES-004] Dimension mismatch: expected 384, got 2`). Migration: a Swift
+  pattern or a Kotlin destructuring that binds every field of either variant
+  binds the two new ones too; code reading the fields by name is unaffected.
 
 - **BREAKING (behavior) — `velesdb-wasm` storage modes return core's results,
   and no longer save memory.** A `VectorStore` created with `sq8`, `pq` or

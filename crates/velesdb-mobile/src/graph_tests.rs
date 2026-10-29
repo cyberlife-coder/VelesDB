@@ -76,7 +76,8 @@ fn get_graph_store_rejects_a_vector_collection() {
         .unwrap();
     let err = db.get_graph_store("vectors".to_string()).err();
     assert!(
-        matches!(err, Some(VelesError::Collection { ref message }) if message.contains("not a graph collection")),
+        matches!(err, Some(VelesError::Collection { ref message, ref code, .. })
+            if message.contains("not a graph collection") && code == "VELES-002"),
         "got {err:?}"
     );
 }
@@ -376,12 +377,77 @@ fn test_mobile_graph_store_remove_edge() {
 
     assert_eq!(store.edge_count().unwrap(), 1);
 
-    store.remove_edge(100);
-    store.remove_edge(100); // absent: no-op
+    assert!(
+        store.remove_edge(100).unwrap(),
+        "an existing edge is removed"
+    );
+    assert!(
+        !store.remove_edge(100).unwrap(),
+        "removing an absent edge is a no-op that reports `false`"
+    );
 
     assert_eq!(store.edge_count().unwrap(), 0);
     assert!(store.get_outgoing(1).unwrap().is_empty());
     assert!(store.get_incoming(2).unwrap().is_empty());
+}
+
+/// Makes the `kg` collection's edge write-ahead log unwritable, the way a full
+/// disk or a revoked permission would: a directory takes the file's place, so
+/// opening it for append fails on every Unix, as root too. Core's own tests
+/// break it the same way (`break_edge_wal_for_test`, which is `cfg(test)` in
+/// core and so out of reach here); the CLI's tests address the same file.
+fn break_edge_wal(dir: &TempDir) {
+    let wal = dir.path().join("kg").join("edges.wal");
+    if wal.is_file() {
+        std::fs::remove_file(&wal).unwrap();
+    }
+    std::fs::create_dir_all(&wal).unwrap();
+}
+
+/// Asserts that `err` is core's storage error, `VELES-006`, carried as is.
+fn assert_refused_by_the_wal(err: &VelesError) {
+    let VelesError::Database {
+        message,
+        code,
+        recoverable,
+    } = err
+    else {
+        panic!("expected core's storage error, got {err:?}");
+    };
+    assert_eq!(code, "VELES-006", "{message}");
+    assert!(*recoverable, "core reports a storage error as recoverable");
+    assert!(message.contains("write-ahead log refused"), "{message}");
+}
+
+#[test]
+fn remove_edge_surfaces_a_refused_wal_append() {
+    let (dir, _db, store) = store_with_nodes(2);
+    store.add_edge(knows_edge(100, 1, 2)).unwrap();
+    break_edge_wal(&dir);
+
+    let err = store
+        .remove_edge(100)
+        .expect_err("a refused WAL append is an error, not an absent edge");
+    assert_refused_by_the_wal(&err);
+    assert!(store.has_edge(100).unwrap(), "the edge is left in place");
+}
+
+#[test]
+fn clear_surfaces_a_refused_wal_append_and_keeps_the_nodes() {
+    let (dir, _db, store) = store_with_nodes(2);
+    store.add_edge(knows_edge(100, 1, 2)).unwrap();
+    break_edge_wal(&dir);
+
+    let err = store
+        .clear()
+        .expect_err("clear cannot succeed while an edge stays");
+    assert_refused_by_the_wal(&err);
+    assert_eq!(store.edge_count().unwrap(), 1, "the edge is left in place");
+    assert_eq!(
+        store.node_count().unwrap(),
+        2,
+        "as core's TRUNCATE, the nodes stay rather than leave a dangling edge"
+    );
 }
 
 #[test]

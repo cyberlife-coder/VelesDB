@@ -257,8 +257,8 @@ traversals. Writes are durable as core makes them; there is no save step.
 
 Get one with `db.getGraphStore(name)` after `createGraphCollection(name)` (or
 `createGraphCollectionWithEmbeddings` for nodes carrying a `vector`). Every
-method throws except `removeEdge`; every read passes the read gate below as a
-`GraphTraversal`, and fails closed on a scope filter.
+method throws; every read passes the read gate below as a `GraphTraversal`, and
+fails closed on a scope filter.
 
 | Method | Description |
 |--------|-------------|
@@ -276,8 +276,8 @@ method throws except `removeEdge`; every read passes the read gate below as a
 | `bfsTraverseParallel(sourceIds, maxDepth, limit)` | Core's multi-source BFS, deduplicated by path |
 | `dfsTraverse(sourceId, maxDepth, limit)` | Core's depth-first traversal |
 | `removeNode(nodeId)` | Removes the node and every connected edge |
-| `removeEdge(edgeId)` | Removes one edge; no-op when absent |
-| `clear()` | Removes every node and edge |
+| `removeEdge(edgeId)` | Removes one edge and returns `true`; `false` (a no-op) when absent. Throws core's storage error (`VELES-006`), the edge left in place, when the edge write-ahead log refuses the removal |
+| `clear()` | Removes every edge, then every node, as core's `TRUNCATE`; throws the first refused edge removal with the nodes left in place |
 | `flush()` | Flushes pending graph writes to disk |
 | `importSnapshot(path)` | Migrates a JSON file written by the removed `save(path)` into this store |
 
@@ -418,15 +418,16 @@ The Swift memberwise initializers are explicit and take **every** field: pass
 | Variant | Fields | Raised when |
 |---|---|---|
 | `Database` | `message`, `code`, `recoverable` | Any engine failure, plus binding-level failures (JSON parsing, runtime setup). `code` carries the core taxonomy code (`"VELES-006"`, …) or is **empty** for binding-level errors |
-| `Collection` | `message` | Collection-level failure |
-| `DimensionMismatch` | `expected`, `actual` | Vector length differs from the collection dimension |
+| `Collection` | `message`, `code`, `recoverable` | The collection is missing (`VELES-002`), already exists (`VELES-001`), or is not of the kind the call needs (`VELES-002`, the code core's own lookups give it, with the kind in the message) |
+| `DimensionMismatch` | `expected`, `actual`, `code`, `recoverable` | Vector length differs from the collection dimension (`VELES-004`) |
 
 `recoverable` mirrors core's `Error::is_recoverable`, so a retry policy can be driven
 from the FFI boundary without string matching. Every call that reaches core keeps
 core's code and recoverability, `executeQuery`, `query`, `trainPq` and the sparse
 and multi-query searches included; a VelesQL parse error is core's query error,
 `VELES-010`. A core `DimensionMismatch` or a missing or duplicate collection
-surfaces as the typed `DimensionMismatch` or `Collection` variant instead.
+surfaces as the typed `DimensionMismatch` or `Collection` variant instead, with
+the same `code` and `recoverable` core gives it.
 
 ## Performance notes
 

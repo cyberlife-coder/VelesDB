@@ -457,12 +457,13 @@ impl VelesDatabase {
                     db: self.inner.clone(),
                     name,
                 }))),
-                Err(_other_variant) => Err(VelesError::Collection {
-                    message: format!(
+                Err(_other_variant) => Err(VelesError::wrong_collection_kind(
+                    &name,
+                    format!(
                         "Collection '{name}' is not a vector collection. \
                          Query graph collections through execute_query() (VelesQL)."
                     ),
-                }),
+                )),
             },
             None => Ok(None),
         }
@@ -485,12 +486,13 @@ impl VelesDatabase {
                     self.inner.clone(),
                     name,
                 )))),
-                Err(_other_variant) => Err(VelesError::Collection {
-                    message: format!(
+                Err(_other_variant) => Err(VelesError::wrong_collection_kind(
+                    &name,
+                    format!(
                         "Collection '{name}' is not a graph collection. \
                          Create one with create_graph_collection()."
                     ),
-                }),
+                )),
             },
             None => Ok(None),
         }

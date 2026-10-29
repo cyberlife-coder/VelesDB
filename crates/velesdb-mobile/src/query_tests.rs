@@ -349,7 +349,8 @@ fn test_execute_query_missing_collection_keeps_core_mapping() {
         .expect_err("query on nonexistent collection should fail");
 
     assert!(
-        matches!(&err, VelesError::Collection { message } if message.contains("ghost")),
+        matches!(&err, VelesError::Collection { message, code, .. }
+            if message.contains("ghost") && code == "VELES-002"),
         "{err:?}"
     );
 }

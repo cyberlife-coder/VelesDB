@@ -176,7 +176,11 @@ let reached = try graph.bfsTraverse(sourceId: 1, maxDepth: 2, limit: 100)
 ```
 
 Every read passes the database's read gate, so a `MobileObserver` can deny it.
-An edge needs both of its nodes added first.
+An edge needs both of its nodes added first. `removeEdge` returns whether it
+removed an edge (`false` for an absent one, a no-op), and throws core's storage
+error (`VELES-006`) when the edge write-ahead log refuses the removal, the edge
+left in place; `clear` removes the edges before the nodes and stops there on
+such a refusal, as core's `TRUNCATE` does.
 
 ### Migrating a graph saved by an earlier release
 
@@ -249,11 +253,17 @@ dispatched at runtime) and its NEON prefetching (`simd_neon_prefetch`).
 
 ## Troubleshooting
 
+Every `VelesError` variant (`Database`, `Collection`, `DimensionMismatch`)
+carries `code`, core's `VELES-###` code for the condition (empty only for a
+`Database` error raised by the binding itself), and `recoverable`, core's
+answer to whether retrying can succeed. The
+[Mobile API guide](../../docs/guides/MOBILE_API.md#errors) lists them.
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Database` error, message `Invalid JSON payload: ...` | `VelesPoint.payload` is a JSON *string*, not free text | Serialize the payload: `"{\"title\":\"Hello\"}"`. Nothing is committed when this fires |
 | `Database` error, message `Stream insert failed (buffer full or not configured): ...` | `streamInsert` called before `enableStreaming`, or the bounded channel is saturated | Call `enableStreaming(config)` first; on saturation slow the producer or raise `bufferSize` |
-| `DimensionMismatch { expected, actual }` | The vector length differs from the collection's `dimension` | Create the collection with your embedding model's dimension (384 for all-MiniLM-L6-v2, 768 for MiniLM base) |
+| `DimensionMismatch { expected, actual, code: "VELES-004", recoverable }` | The vector length differs from the collection's `dimension` | Create the collection with your embedding model's dimension (384 for all-MiniLM-L6-v2, 768 for MiniLM base) |
 | Compile error: no initializer for `VelesDatabase` | Looking for a default constructor | `open` is a named constructor: `VelesDatabase.open(path:)` (Swift), `VelesDatabase.open(path)` (Kotlin) |
 | `UnsatisfiedLinkError` on Android | JNA cannot find `libvelesdb_mobile.so` for the running ABI | Ship the `.so` for that ABI under `jniLibs/<abi>/`; see [Mobile build guide](../../docs/guides/MOBILE_BUILD.md) |
 

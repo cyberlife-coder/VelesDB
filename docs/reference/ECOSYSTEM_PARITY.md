@@ -362,6 +362,10 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     and recoverability on `execute_query`, `query`, `train_pq` and the sparse
     and multi-query leaves, which answered a codeless, always-recoverable
     `Database` error (`VelesError::from_core`, `crates/velesdb-mobile/src/types.rs`).
+    Its typed `Collection` and `DimensionMismatch` variants carry the same
+    `code` and `recoverable` as `Database`, read from core's error, and a
+    collection of the wrong kind is coded as core's own lookups code it,
+    `VELES-002` (`VelesError::wrong_collection_kind`).
     The statement result kind is single-sourced in core as
     `velesql::Query::result_kind`, which mobile and WASM both map from, so
     mobile's `SELECT EDGES` is `Rows`, as WASM's was. `velesdb-server` was
@@ -379,9 +383,12 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     `GraphTraversal` (`crates/velesdb-mobile/src/graph.rs`;
     `traversals_are_cores` and `velesql_match_sees_store_nodes` in
     `graph_tests.rs` pin both). `import_snapshot` migrates a file the old
-    `save` wrote. Still forked: `velesdb-wasm` keeps its own `GraphStore`
-    (`crates/velesdb-wasm/src/graph.rs`) because core's graph module is gated
-    behind `persistence`, which wasm does not build; and `velesdb-python`'s
+    `save` wrote. `remove_edge` returns whether it removed an edge and
+    surfaces a refused write-ahead-log append as core's `VELES-006`, through
+    the new `GraphCollection::try_remove_edge`; `clear` removes edges before
+    nodes, as core's `TRUNCATE` does. Still forked: `velesdb-wasm` keeps its
+    own `GraphStore` (`crates/velesdb-wasm/src/graph.rs`) because core's
+    graph module is gated behind `persistence`, which wasm does not build; and `velesdb-python`'s
     in-memory `GraphStore.traverse_dfs` (`crates/velesdb-python/src/graph_store.rs`,
     `dfs_collect`) is its own DFS returning edges, capped on visited nodes and
     filtered by relationship type, while its BFS already delegates to core.
