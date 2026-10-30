@@ -114,6 +114,7 @@ requests.
 | `TraversalMetrics` (crate root and `metrics::`) | `GraphCollection::metrics()`, `Database::graph_metrics_prometheus()` |
 | `velesdb-migrate` `PineconeConfig::environment` | drop the field |
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
+| `velesql::match_clause` (`parse_match_clause`, `parse_node_pattern`, `parse_relationship_pattern`) | `velesql::Parser::parse` on the whole `MATCH` statement, then `Query::match_clause` |
 | `AsyncIndexBuilder::{search_buffer, drain_buffer, buffer_len, is_building, trigger_build_async}` | search the collection; `VectorCollection::flush` indexes what the builder holds |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a

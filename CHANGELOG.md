@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `enqueue`, `flush_sync` and `merge_threshold` stay.
   *Migration*: `VectorCollection::flush` indexes what the builder holds;
   searching the collection already finds it (see Fixed).
+- **BREAKING — `velesql::match_clause`, a second MATCH parser no query used.**
+  `parse_match_clause`, `parse_node_pattern` and `parse_relationship_pattern`
+  scanned strings beside the pest grammar that every query goes through; only
+  their own tests and a benchmark called them, and they had drifted from it
+  (they read a named path `p = (a)-->(b)`, which the grammar refuses, and an
+  unbounded `[*]`, which validation refuses). The behaviours their tests
+  checked that the grammar shares are now tested against `Parser::parse`, and
+  `match_parser_benchmark` times whole statements under new ids.
+  *Migration*: `velesql::Parser::parse("MATCH ...")?.match_clause`.
 
 ### Fixed
 

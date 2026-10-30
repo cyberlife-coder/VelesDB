@@ -287,7 +287,6 @@ pub use explain::{
     DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD, EXACT_FULL_SCAN_MAX_SELECTIVITY,
     EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
-pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{
     Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,
