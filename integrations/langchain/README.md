@@ -286,7 +286,6 @@ for row in results:
 - **Hybrid Search**: Combine vector similarity with BM25 text matching
 - **Full-Text Search**: BM25 ranking for keyword queries
 - **Metadata Filtering**: Filter results by document attributes
-- **Typed Column Store**: Schema-aware metadata collections with ColumnStore-backed range / equality predicates
 - **Simple Setup**: Self-contained single binary, no external services required
 - **LangChain VectorStore API**: implements `add_texts`, `add_documents`,
   `similarity_search`, `similarity_search_with_score`,
