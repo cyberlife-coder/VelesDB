@@ -168,7 +168,8 @@ async fn test_an_explicit_wildcard_turns_the_check_off() {
 }
 
 /// Liveness and readiness probes come from orchestrators that address the
-/// pod by IP; they reveal nothing but up/down, so the probes stay open.
+/// pod by IP; they reveal the status and the server version, nothing about
+/// the data, so the probes stay open.
 #[tokio::test]
 async fn test_health_probes_answer_any_host() {
     let temp_dir = TempDir::new().expect("test: tempdir");
@@ -254,4 +255,124 @@ async fn test_the_refusal_names_the_host_and_every_way_to_allow_it() {
             "{needle:?} missing from {message}"
         );
     }
+}
+
+/// An IPv6 entry matches however it is spelt: it is compared as an address.
+#[tokio::test]
+async fn test_ip_entries_are_compared_as_addresses() {
+    let temp_dir = TempDir::new().expect("test: tempdir");
+    let config = ServerConfig {
+        allowed_hosts: vec!["FE80:0:0::1".to_string()],
+        ..ServerConfig::default()
+    };
+    let app = app(&temp_dir, &config);
+
+    assert_eq!(list(&app, "[fe80::1]:8080").await, StatusCode::OK);
+    assert_eq!(list(&app, "[FE80:0::1]").await, StatusCode::OK);
+}
+
+/// A `Host` that is not `name[:digits]` (or `[v6][:digits]`) is refused, not
+/// read as the loopback name it starts with.
+#[tokio::test]
+async fn test_malformed_hosts_are_refused_not_trimmed_into_loopback() {
+    let temp_dir = TempDir::new().expect("test: tempdir");
+    let app = default_app(&temp_dir);
+
+    for host in [
+        "[::1]junk",
+        "localhost:evil",
+        "[::1]:80:80",
+        "::1",
+        "localhost:",
+    ] {
+        assert_eq!(
+            list(&app, host).await,
+            StatusCode::MISDIRECTED_REQUEST,
+            "{host}"
+        );
+    }
+}
+
+/// A `Host` header that is present but not text fails closed.
+#[tokio::test]
+async fn test_an_unreadable_host_header_is_refused() {
+    let temp_dir = TempDir::new().expect("test: tempdir");
+    let app = default_app(&temp_dir);
+    let value = axum::http::HeaderValue::from_bytes(b"local\xffhost").expect("test: opaque");
+    let mut request = Request::builder()
+        .uri("/collections")
+        .body(Body::empty())
+        .expect("test: build");
+    request.headers_mut().insert("host", value);
+    let status = app.oneshot(request).await.expect("test: request").status();
+    assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+}
+
+/// The probes are exempt under both prefixes the binary serves, and only
+/// those exact paths.
+#[tokio::test]
+async fn test_only_the_exact_probe_paths_are_exempt() {
+    let temp_dir = TempDir::new().expect("test: tempdir");
+    let (_, state) = common::create_test_app_with_state(&temp_dir);
+    let routes = velesdb_server::routes::api_routes();
+    let app = apply_browser_policy(
+        Router::new()
+            .nest("/v1", routes.clone())
+            .merge(routes)
+            .with_state(state),
+        &ServerConfig::default(),
+    );
+
+    for probe in ["/v1/health", "/v1/ready"] {
+        let status = call(&app, "GET", probe, &[("host", REBOUND)]).await;
+        assert_eq!(status, StatusCode::OK, "{probe}");
+    }
+    for not_a_probe in ["/v1/collections", "/collections"] {
+        let status = call(&app, "GET", not_a_probe, &[("host", REBOUND)]).await;
+        assert_eq!(status, StatusCode::MISDIRECTED_REQUEST, "{not_a_probe}");
+    }
+}
+
+/// A port is part of the origin: `http://localhost` is port 80, not the
+/// server on `localhost:8080`.
+#[tokio::test]
+async fn test_same_host_on_another_port_is_another_origin() {
+    let temp_dir = TempDir::new().expect("test: tempdir");
+    let app = default_app(&temp_dir);
+
+    let status = call(
+        &app,
+        "POST",
+        "/collections/missing/flush",
+        &[("host", "localhost:8080"), ("origin", "http://localhost")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// The `Host` check runs before CORS answers anything, preflights included.
+#[tokio::test]
+async fn test_a_preflight_to_a_rebound_host_is_refused() {
+    let temp_dir = TempDir::new().expect("test: tempdir");
+    let config = ServerConfig {
+        cors: velesdb_server::config::CorsConfig {
+            allowed_origins: vec!["*".to_string()],
+            ..velesdb_server::config::CorsConfig::default()
+        },
+        ..ServerConfig::default()
+    };
+    let app = app(&temp_dir, &config);
+
+    let status = call(
+        &app,
+        "OPTIONS",
+        "/collections/c/flush",
+        &[
+            ("host", REBOUND),
+            ("origin", "http://evil.example.com:8080"),
+            ("access-control-request-method", "POST"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
 }

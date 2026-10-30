@@ -361,7 +361,17 @@ fn test_allowed_hosts_cli_or_env_beats_the_file() {
 
 #[test]
 fn test_allowed_hosts_entries_must_be_bare_hosts() {
-    for good in [&["db.example.com", "10.0.0.5", "fe80::1"][..], &["*"][..]] {
+    for good in [
+        &[
+            "db.example.com",
+            "10.0.0.5",
+            "fe80::1",
+            "[::1]",
+            "FE80:0:0::1",
+            "my_db-1",
+        ][..],
+        &["*"][..],
+    ] {
         let cfg = ServerConfig {
             allowed_hosts: good.iter().map(ToString::to_string).collect(),
             ..ServerConfig::default()
@@ -373,6 +383,15 @@ fn test_allowed_hosts_entries_must_be_bare_hosts() {
         &["db.example.com/"][..],
         &[""][..],
         &["*", "db.example.com"][..],
+        // A port: matching ignores it, so the entry would admit more than it says.
+        &["db.example.com:8080"][..],
+        &["[::1]:8080"][..],
+        // Patterns, a trailing dot, junk around an IPv6 literal, spaces.
+        &["*.example.com"][..],
+        &["example.com."][..],
+        &["[zz::1]"][..],
+        &["[::1]junk"][..],
+        &["db example"][..],
     ] {
         let cfg = ServerConfig {
             allowed_hosts: bad.iter().map(ToString::to_string).collect(),
@@ -380,6 +399,18 @@ fn test_allowed_hosts_entries_must_be_bare_hosts() {
         };
         assert!(cfg.validate().is_err(), "{bad:?} must be refused");
     }
+}
+
+#[test]
+fn test_list_args_are_trimmed_and_an_empty_one_is_unset() {
+    let list = |items: &[&str]| Some(items.iter().map(ToString::to_string).collect::<Vec<_>>());
+    assert_eq!(
+        normalize_list_arg(list(&[" a", "", "b ", " "])),
+        Some(vec!["a".to_string(), "b".to_string()])
+    );
+    assert_eq!(normalize_list_arg(list(&[""])), None);
+    assert_eq!(normalize_list_arg(list(&[" ", ""])), None);
+    assert_eq!(normalize_list_arg(None), None);
 }
 
 #[test]

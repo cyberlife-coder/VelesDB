@@ -74,7 +74,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read. The origin guard's same-origin comparison now normalises default
   ports and is trusted only after the `Host` check. One function,
   `config::apply_browser_policy`, installs the `Host` check, the origin guard
-  and the CORS layer. The `421` body names the refused host and the three
+  and the CORS layer — the only public way to install the origin guard, whose
+  same-origin rule relies on the `Host` check. An `allowed_hosts` entry must
+  be a bare name or address (a port, scheme, path, `*.` pattern or trailing
+  dot is refused at startup) and IP entries are compared as addresses;
+  `--allowed-hosts` / `VELESDB_ALLOWED_HOSTS` trim items, drop empty ones and
+  treat an empty value as unset; a malformed or unreadable `Host` is refused;
+  `allowed_hosts = ["*"]` is warned about at startup. The `421` body names the refused host and the three
   ways to allow it, and a server bound to `0.0.0.0`/`::` with no
   `allowed_hosts` says at startup that it answers only loopback names. A
   container reached by its service name needs that name listed:

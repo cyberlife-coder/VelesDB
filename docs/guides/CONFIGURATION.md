@@ -657,8 +657,13 @@ unaffected.
 does not answer to is refused with `421 Misdirected Request`, whatever its
 method. Answered without configuration: `localhost`, any `127.0.0.0/8`
 address, `[::1]`, and the bind `host` unless it is a wildcard (`0.0.0.0`,
-`::`). `allowed_hosts` adds names or addresses (no port, no scheme; matched
-case-insensitively, port ignored); `["*"]` turns the check off. `/health` and
+`::`). `allowed_hosts` adds names or addresses — bare: a port, a scheme, a path, a
+`*.` pattern or a trailing dot is refused at startup; names match
+case-insensitively, IP addresses as addresses (`FE80:0:0::1` = `[fe80::1]`),
+and the request's port is ignored. `["*"]` alone turns the check off (with a
+startup warning). In `--allowed-hosts` and `VELESDB_ALLOWED_HOSTS`, items are
+comma-separated, trimmed, empty ones dropped, and an empty variable counts as
+unset. `/health` and
 `/ready` answer any `Host`, so orchestrator probes that address the server by
 IP keep working. `X-Forwarded-Host` is never read. A server bound to `0.0.0.0`
 and reached under any other name — a DNS name, a LAN address, a reverse proxy

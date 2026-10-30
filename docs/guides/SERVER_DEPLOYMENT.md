@@ -98,17 +98,30 @@ readinessProbe:
   periodSeconds: 5
 ```
 
-Clients inside the cluster address the server by its Service name, which
-must be in `allowed_hosts`; Prometheus scrapes `/metrics` by pod IP, which is
-dynamic, so pass it through the downward API:
+Clients inside the cluster address the server by its Service name, in any of
+its forms (`velesdb`, `velesdb.<namespace>`, `velesdb.<namespace>.svc`,
+`velesdb.<namespace>.svc.cluster.local`), and a StatefulSet pod also by its
+own DNS name (`velesdb-0.velesdb.<namespace>.svc.cluster.local`). Each name
+clients use must be in `allowed_hosts`. Prometheus scrapes `/metrics` by pod
+IP, which is dynamic. The downward API supplies the namespace, the pod name
+and the IP:
 
 ```yaml
 env:
   - name: POD_IP
     valueFrom: { fieldRef: { fieldPath: status.podIP } }
+  - name: POD_NAME
+    valueFrom: { fieldRef: { fieldPath: metadata.name } }
+  - name: POD_NAMESPACE
+    valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
   - name: VELESDB_ALLOWED_HOSTS
-    value: "velesdb,velesdb.default.svc.cluster.local,$(POD_IP)"
+    value: >-
+      velesdb,velesdb.$(POD_NAMESPACE),velesdb.$(POD_NAMESPACE).svc,
+      velesdb.$(POD_NAMESPACE).svc.cluster.local,
+      $(POD_NAME).velesdb.$(POD_NAMESPACE).svc.cluster.local,$(POD_IP)
 ```
+
+(Spaces and line breaks after the commas are ignored.)
 
 Because the engine takes an exclusive OS-level lock on its data directory
 (`<data_dir>/velesdb.lock`), **one process owns one data directory**. Deploy as

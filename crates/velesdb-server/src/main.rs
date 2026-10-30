@@ -137,6 +137,13 @@ fn log_startup(cfg: &ServerConfig) {
 /// Says when the `Host` check will refuse clients that a wildcard bind lets
 /// in: the usual cause of a `421` in a compose or Kubernetes deployment.
 fn log_host_policy(cfg: &ServerConfig) {
+    if cfg.allowed_hosts.iter().any(|h| h == "*") {
+        tracing::warn!(
+            "allowed_hosts = [\"*\"]: the Host check is off, so a DNS-rebinding page can \
+             reach this server as if it were same-origin. List the names clients use \
+             instead (see docs/guides/SERVER_SECURITY.md)."
+        );
+    }
     if cfg.answers_only_loopback_names_on_a_wildcard_bind() {
         tracing::warn!(
             "Bound to {} with no allowed_hosts: only requests addressed to localhost, \
@@ -486,7 +493,7 @@ fn build_cli_overrides(args: Args) -> CliOverrides {
         tls_key: args.tls_key,
         rate_limit: args.rate_limit,
         log_level: velesdb_server::logging::level_from_env(),
-        allowed_hosts: args.allowed_hosts,
+        allowed_hosts: velesdb_server::config::normalize_list_arg(args.allowed_hosts),
     }
 }
 

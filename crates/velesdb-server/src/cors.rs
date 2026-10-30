@@ -212,7 +212,7 @@ pub(crate) fn resolve_cors(
 ///   answer;
 /// - the CORS layer, when [`CorsConfig::is_active`]; otherwise no CORS
 ///   header is sent, and browsers refuse every cross-origin read.
-pub fn apply_cors<S>(router: axum::Router<S>, cors: &CorsConfig) -> axum::Router<S>
+pub(crate) fn apply_cors<S>(router: axum::Router<S>, cors: &CorsConfig) -> axum::Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {

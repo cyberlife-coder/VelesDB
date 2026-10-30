@@ -52,11 +52,13 @@ Every request whose `Host` is not `localhost`, a `127.0.0.0/8` address,
 `[::1]`, the bind host (unless `0.0.0.0`/`::`) or an entry of
 `[server] allowed_hosts` is refused with `421 Misdirected Request`, whatever
 its method; `/health` and `/ready` are exempt, and `X-Forwarded-Host` is never
-read.
+read. The `421` carries no CORS header.
 
 On every route, a request whose method is not `GET`, `HEAD` or `OPTIONS` and
 that carries an `Origin` header is refused with `403` unless that origin is
-the server's own (its `host[:port]` equals the request's `Host`) or allowed by
+the server's own (its host and port equal the request's `Host`, the scheme's
+default port — 80 for `http`, 443 for `https` — filled in where either side
+leaves it out) or allowed by
 `[server] cors_origins` (`["*"]`: any). Requests without `Origin` — curl, the
 SDKs, other servers — are not affected. No CORS header is sent unless
 `cors_origins` is configured. This `403` is not repeated in each operation of

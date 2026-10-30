@@ -14,7 +14,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub use crate::cors::{apply_cors, build_cors_layer, CorsConfig};
+pub use crate::cors::{build_cors_layer, CorsConfig};
 use crate::cors::{resolve_cors, CorsSection};
 pub use crate::host_guard::apply_browser_policy;
 use crate::logging::{LoggingConfig, LoggingSection};
@@ -482,19 +482,32 @@ fn validate_allowed_hosts(hosts: &[String]) -> anyhow::Result<()> {
              be combined with names"
         );
     }
+    // One definition of a valid entry: the one the guard canonicalises with.
     for host in hosts.iter().filter(|h| *h != "*") {
-        let bare = !host.is_empty()
-            && !host.contains("://")
-            && !host.contains('/')
-            && !host.chars().any(char::is_whitespace);
-        if !bare {
+        if crate::host_guard::canonical_entry(host).is_none() {
             anyhow::bail!(
-                "server.allowed_hosts: '{host}' is not a host name or address \
-                 (no scheme, no path, e.g. \"db.example.com\")"
+                "server.allowed_hosts: '{host}' is not a bare host name or address — no \
+                 port, scheme, path, '*.' pattern or trailing dot (e.g. \"db.example.com\", \
+                 \"10.0.0.5\", \"fe80::1\"; [\"*\"] alone turns the check off)"
             );
         }
     }
     Ok(())
+}
+
+/// A list given on the command line or in an environment variable
+/// (`--allowed-hosts`, `VELESDB_ALLOWED_HOSTS`) as shells and Compose files
+/// write it: each item trimmed, empty items dropped (`"a, b,"`), and no item
+/// at all — an empty variable, `${X:-}` — meaning the option was not given.
+#[must_use]
+pub fn normalize_list_arg(values: Option<Vec<String>>) -> Option<Vec<String>> {
+    let items: Vec<String> = values?
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect();
+    (!items.is_empty()).then_some(items)
 }
 
 // ============================================================================

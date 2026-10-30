@@ -473,17 +473,27 @@ the `Host` header, which still says `evil.example.com`. Hence the check:
   the bind host unless it is `0.0.0.0` or `::`. A loopback server needs no
   setting.
 - `[server] allowed_hosts` (`--allowed-hosts`, `VELESDB_ALLOWED_HOSTS`) adds
-  names or addresses, matched case-insensitively with the port ignored;
-  `["*"]` turns the check off, which brings the rebinding exposure back.
-- `/health` and `/ready` answer any `Host`: orchestrator probes address the
-  server by IP, and those two reveal only up or down.
+  names or addresses, matched case-insensitively with the port ignored. An
+  entry is a bare name or address: a port, a scheme, a path, a `*.` pattern or
+  a trailing dot is refused at startup, and an IP address is compared as an
+  address (`FE80:0:0::1` matches `[fe80::1]`). `["*"]` turns the check off,
+  which brings the rebinding exposure back; the server warns at startup when
+  it does. In the variable and the flag, spaces around commas and empty items
+  are ignored, and an empty variable counts as unset.
+- A `Host` that is not `name[:port]` or `[IPv6][:port]` with a numeric port
+  (`localhost:evil`, `[::1]junk`), or that is not readable text, is refused
+  rather than read as the loopback name it starts with.
+- `/health` and `/ready` (and their `/v1/` forms, exactly) answer any `Host`:
+  orchestrator probes address the server by IP. They reveal the status and
+  the server version, nothing about the data.
 - `X-Forwarded-Host` is never read — any client can send it. Behind a reverse
   proxy, forward the original `Host` (nginx `proxy_set_header Host $host;`) and
   list the public name in `allowed_hosts`.
 - Refused requests get `421 Misdirected Request`, RFC 9110's code for a request
   sent to a server that does not answer for its authority. A distinct status
   from the origin guard's `403` tells an operator which check fired, and a
-  browser does not cache it.
+  browser does not cache it. The `421` carries no CORS header — the check runs
+  before CORS — so a page on another origin cannot read it either.
 
 ### Allowing a browser front end
 

@@ -9,8 +9,9 @@
 //! `Origin` the effective CORS policy does not allow. Requests without
 //! `Origin` (curl, the SDKs, server to server) never meet it.
 //!
-//! Driven through `routes::api_routes()` and `config::apply_cors`, exactly
-//! the pair `main.rs` assembles.
+//! Driven through `routes::api_routes()` and `config::apply_browser_policy`,
+//! exactly the pair `main.rs` assembles — the origin guard is only ever
+//! installed behind the `Host` check, which its same-origin rule relies on.
 
 mod common;
 
@@ -21,7 +22,7 @@ use axum::{
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
-use velesdb_server::config::{apply_cors, CorsConfig};
+use velesdb_server::config::{apply_browser_policy, CorsConfig, ServerConfig};
 
 const FOREIGN: &str = "https://evil.example.com";
 const FRONT_END: &str = "https://app.example.com";
@@ -32,10 +33,20 @@ fn app(temp_dir: &TempDir, origins: &[&str]) -> Router {
         allowed_origins: origins.iter().map(ToString::to_string).collect(),
         ..CorsConfig::default()
     };
-    apply_cors(
+    apply_browser_policy(
         velesdb_server::routes::api_routes().with_state(state),
-        &cors,
+        &policy(cors),
     )
+}
+
+/// The server config these tests run under: `cors`, and `db.internal` as a
+/// host the server answers to, so the `Host` check stays out of the way.
+fn policy(cors: CorsConfig) -> ServerConfig {
+    ServerConfig {
+        cors,
+        allowed_hosts: vec!["db.internal".to_string()],
+        ..ServerConfig::default()
+    }
 }
 
 /// `POST /collections/missing/flush`: a `404` means the request reached the
@@ -142,9 +153,9 @@ async fn test_cors_disabled_refuses_even_a_listed_origin() {
         allowed_origins: vec![FRONT_END.to_string()],
         ..CorsConfig::default()
     };
-    let app = apply_cors(
+    let app = apply_browser_policy(
         velesdb_server::routes::api_routes().with_state(state),
-        &cors,
+        &policy(cors),
     );
 
     assert_eq!(

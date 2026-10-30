@@ -410,3 +410,30 @@ fn test_the_host_allowlist_is_installed_and_reads_its_variable() {
     );
     assert_eq!(status_of(&listed), "200", "{listed}");
 }
+
+/// `VELESDB_ALLOWED_HOSTS` as Compose and shells write it: spaces after
+/// commas, empty items, a trailing comma — and empty altogether
+/// (`${X:-}`), which means unset rather than one empty, invalid entry.
+#[test]
+fn test_allowed_hosts_variable_tolerates_shell_spelling() {
+    let home = TempDir::new().expect("tempdir");
+    let server = start(
+        &home,
+        "[server]\n",
+        &[(
+            "VELESDB_ALLOWED_HOSTS",
+            " db.example.com, ,other.example.com,",
+        )],
+    );
+    for host in ["db.example.com:8080", "other.example.com"] {
+        let header = format!("host: {host}");
+        let response = send(&server, "GET", "/collections", &[&header], b"");
+        assert_eq!(status_of(&response), "200", "{host}: {response}");
+    }
+    drop(server);
+
+    let home = TempDir::new().expect("tempdir");
+    let server = start(&home, "[server]\n", &[("VELESDB_ALLOWED_HOSTS", "")]);
+    let response = send(&server, "GET", "/collections", &[], b"");
+    assert_eq!(status_of(&response), "200", "{response}");
+}

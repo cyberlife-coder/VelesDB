@@ -16,11 +16,15 @@
 //! - an entry of `[server] allowed_hosts`, or anything when that list is
 //!   `["*"]`.
 //!
-//! Matching ignores case and the port. `X-Forwarded-Host` is never read: any
-//! client can send it. `/health` and `/ready` are exempt — orchestrator probes
-//! address the server by IP, and those two say only "up". A request without
-//! any host (no `Host` header, no URI authority) comes from no browser and
-//! passes.
+//! Names and addresses are compared in canonical form: case-insensitively,
+//! port ignored, an IP address as an address (`[FE80:0::1]` is `[fe80::1]`).
+//! A `Host` that is not `name[:digits]` or `[IPv6][:digits]`, or not readable
+//! text, is refused — never trimmed into the loopback name it starts with.
+//! `X-Forwarded-Host` is never read: any client can send it. `/health` and
+//! `/ready` (and their `/v1/` forms, exactly) are exempt — orchestrator
+//! probes address the server by IP, and those two reveal the status and the
+//! version, nothing about the data. A request without any host (no `Host`
+//! header, no URI authority) comes from no browser and passes.
 //!
 //! The refusal is `421 Misdirected Request`, RFC 9110's status for a request
 //! sent to a server that does not answer for its authority; it also tells an
@@ -38,9 +42,11 @@ use axum::{
 
 use crate::config::ServerConfig;
 
-/// Wraps `router` in the browser-facing policy `config` describes, outermost
-/// first: the `Host` check, then the origin guard and the CORS layer
-/// ([`crate::config::apply_cors`]). The binary calls this; an embedder of
+/// Wraps `router` in the browser-facing policy `config` describes. In the
+/// order a request meets them: the `Host` check, then the CORS layer (which
+/// answers preflights), then the origin guard. The origin guard's same-origin
+/// rule is sound only behind the `Host` check, which is why this is the one
+/// public way to install either. The binary calls it; an embedder of
 /// [`crate::routes::api_routes`] should too.
 pub fn apply_browser_policy<S>(router: axum::Router<S>, config: &ServerConfig) -> axum::Router<S>
 where
@@ -57,7 +63,7 @@ where
 pub(crate) enum HostAllowlist {
     /// `allowed_hosts = ["*"]`: the check is off.
     Any,
-    /// The loopback names, plus these (lower case, brackets kept for IPv6).
+    /// The loopback names, plus these (canonical, see [`canonical_entry`]).
     Names(Arc<[String]>),
 }
 
@@ -66,35 +72,34 @@ impl HostAllowlist {
         if config.allowed_hosts.iter().any(|h| h == "*") {
             return Self::Any;
         }
-        let bind = Some(as_host_header(&config.host)).filter(|h| !is_wildcard(h));
+        let bind = canonical_entry(&config.host).filter(|h| !is_wildcard(h));
         let names = config
             .allowed_hosts
             .iter()
-            .map(|h| as_host_header(h))
+            .filter_map(|h| canonical_entry(h))
             .chain(bind)
             .collect::<Vec<_>>();
         Self::Names(names.into())
     }
 
-    fn admits(&self, host: &str) -> bool {
+    /// `name` is canonical (see [`parse_host`]).
+    fn admits(&self, name: &str) -> bool {
         match self {
             Self::Any => true,
-            Self::Names(names) => {
-                let name = host_name(host);
-                is_loopback(&name) || names.contains(&name)
-            }
+            Self::Names(names) => is_loopback(name) || names.iter().any(|n| n == name),
         }
     }
 }
 
-/// A configured host (the bind host, an `allowed_hosts` entry) as it
-/// appears in a `Host` header: lower case, an IPv6 address in brackets.
-fn as_host_header(host: &str) -> String {
-    let host = host.trim().to_ascii_lowercase();
-    if host.parse::<Ipv6Addr>().is_ok() {
-        format!("[{host}]")
-    } else {
-        host
+/// A configured host — an `allowed_hosts` entry or the bind host — in the
+/// canonical form [`parse_host`] gives a `Host` header, or `None` when it is
+/// not a bare name or address: a port, a scheme, a path, a pattern, a
+/// trailing dot. An IPv6 address may come with or without brackets.
+/// [`crate::config::ServerConfig::validate`] refuses an entry this rejects.
+pub(crate) fn canonical_entry(entry: &str) -> Option<String> {
+    match entry.parse::<Ipv6Addr>() {
+        Ok(ip) => Some(format!("[{ip}]")),
+        Err(_) => canonical_name(entry),
     }
 }
 
@@ -102,23 +107,53 @@ fn as_host_header(host: &str) -> String {
 /// host: a server bound to it answers only the loopback names and
 /// `allowed_hosts`.
 pub(crate) fn binds_wildcard(host: &str) -> bool {
-    is_wildcard(&as_host_header(host))
+    canonical_entry(host).is_some_and(|name| is_wildcard(&name))
 }
 
 fn is_wildcard(name: &str) -> bool {
     matches!(name, "0.0.0.0" | "[::]")
 }
 
-/// `Host` without its port, lower case: `[::1]:8080` → `[::1]`,
-/// `LocalHost:80` → `localhost`.
-fn host_name(host: &str) -> String {
-    let host = host.trim();
-    let name = if let Some(end) = host.find(']') {
-        &host[..=end]
-    } else {
-        host.rsplit_once(':').map_or(host, |(name, _)| name)
+/// A `Host` value's name in canonical form — `[::1]:8080` → `[::1]`,
+/// `LocalHost:80` → `localhost`, `[FE80:0::1]` → `[fe80::1]` — or `None`
+/// when it is not `name[:digits]` or `[IPv6][:digits]`.
+fn parse_host(host: &str) -> Option<String> {
+    let (name, port) = match host.strip_prefix('[') {
+        Some(rest) => {
+            let end = rest.find(']')?;
+            let after = &rest[end + 1..];
+            let port = if after.is_empty() {
+                None
+            } else {
+                Some(after.strip_prefix(':')?)
+            };
+            (&host[..end + 2], port)
+        }
+        None => match host.split_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (host, None),
+        },
     };
-    name.to_ascii_lowercase()
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    port_ok.then(|| canonical_name(name)).flatten()
+}
+
+/// `[IPv6]`, an IPv4 address or a DNS-style name, canonical; `None` for
+/// anything else (including a trailing dot or a `*`).
+fn canonical_name(name: &str) -> Option<String> {
+    if let Some(v6) = name.strip_prefix('[').and_then(|n| n.strip_suffix(']')) {
+        return v6.parse::<Ipv6Addr>().ok().map(|ip| format!("[{ip}]"));
+    }
+    if let Ok(ip) = name.parse::<Ipv4Addr>() {
+        return Some(ip.to_string());
+    }
+    let valid = !name.is_empty()
+        && !name.starts_with('.')
+        && !name.ends_with('.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_'));
+    valid.then(|| name.to_ascii_lowercase())
 }
 
 fn is_loopback(name: &str) -> bool {
@@ -142,40 +177,78 @@ async fn host_guard(
     request: Request,
     next: Next,
 ) -> Response {
-    let host = request
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .map(str::to_owned)
-        .or_else(|| request.uri().authority().map(|a| a.as_str().to_owned()));
+    // Outer `None`: no host at all. Inner `None`: present but malformed or
+    // not text, which fails closed.
+    let host: Option<Option<String>> = match request.headers().get(header::HOST) {
+        Some(value) => Some(value.to_str().ok().and_then(parse_host)),
+        None => request.uri().authority().map(|a| parse_host(a.as_str())),
+    };
     match host {
-        Some(host) if !is_probe(request.uri().path()) && !allowlist.admits(&host) => {
-            let name = host_name(&host);
-            crate::handlers::helpers::error_response(
-                StatusCode::MISDIRECTED_REQUEST,
-                format!(
-                    "this server does not answer to host '{name}' (DNS-rebinding \
-                     protection). If clients reach it under that name, allow it with \
-                     [server] allowed_hosts = [\"{name}\"], --allowed-hosts {name} or \
-                     VELESDB_ALLOWED_HOSTS={name} \
-                     (see docs/guides/SERVER_SECURITY.md#dns-rebinding-and-the-host-check)"
-                ),
-            )
+        Some(name)
+            if !is_probe(request.uri().path())
+                && !name.as_deref().is_some_and(|n| allowlist.admits(n)) =>
+        {
+            refusal(name.as_deref())
         }
         _ => next.run(request).await,
     }
 }
 
+/// The `421`, naming the refused host and every way to allow it.
+fn refusal(name: Option<&str>) -> Response {
+    let message = match name {
+        Some(name) => format!(
+            "this server does not answer to host '{name}' (DNS-rebinding protection). \
+             If clients reach it under that name, allow it with [server] allowed_hosts = \
+             [\"{name}\"], --allowed-hosts {name} or VELESDB_ALLOWED_HOSTS={name} \
+             (see docs/guides/SERVER_SECURITY.md#dns-rebinding-and-the-host-check)"
+        ),
+        None => "the Host header is not a host name, an address or [IPv6], with an \
+                 optional numeric port (DNS-rebinding protection)"
+            .to_string(),
+    };
+    crate::handlers::helpers::error_response(StatusCode::MISDIRECTED_REQUEST, message)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{as_host_header, host_name, is_loopback};
+    use super::{canonical_entry, is_loopback, parse_host};
 
     #[test]
-    fn test_host_name_drops_the_port_and_the_case() {
-        assert_eq!(host_name("LocalHost:8080"), "localhost");
-        assert_eq!(host_name("[::1]:8080"), "[::1]");
-        assert_eq!(host_name("[::1]"), "[::1]");
-        assert_eq!(host_name("db.example.com"), "db.example.com");
+    fn test_only_the_exact_probe_paths_are_probes() {
+        for probe in ["/health", "/ready", "/v1/health", "/v1/ready"] {
+            assert!(super::is_probe(probe), "{probe}");
+        }
+        for other in [
+            "/healthz",
+            "/health/x",
+            "/v1/healthz",
+            "/readyz",
+            "/v2/health",
+        ] {
+            assert!(!super::is_probe(other), "{other}");
+        }
+    }
+
+    #[test]
+    fn test_parse_host_drops_the_port_and_canonicalises() {
+        assert_eq!(parse_host("LocalHost:8080").as_deref(), Some("localhost"));
+        assert_eq!(parse_host("[::1]:8080").as_deref(), Some("[::1]"));
+        assert_eq!(parse_host("[FE80:0::1]").as_deref(), Some("[fe80::1]"));
+        assert_eq!(
+            parse_host("db.example.com").as_deref(),
+            Some("db.example.com")
+        );
+        for bad in [
+            "[::1]junk",
+            "localhost:evil",
+            "localhost:",
+            "::1",
+            "a b",
+            "evil.com.",
+        ] {
+            assert_eq!(parse_host(bad), None, "{bad}");
+        }
     }
 
     #[test]
@@ -190,8 +263,21 @@ mod tests {
 
     #[test]
     fn test_configured_hosts_are_spelt_as_a_host_header_would() {
-        assert_eq!(as_host_header("::"), "[::]");
-        assert_eq!(as_host_header("fe80::1"), "[fe80::1]");
-        assert_eq!(as_host_header("My-Box.local"), "my-box.local");
+        assert_eq!(canonical_entry("::").as_deref(), Some("[::]"));
+        assert_eq!(canonical_entry("FE80:0:0::1").as_deref(), Some("[fe80::1]"));
+        assert_eq!(canonical_entry("[::1]").as_deref(), Some("[::1]"));
+        assert_eq!(
+            canonical_entry("My-Box.local").as_deref(),
+            Some("my-box.local")
+        );
+        for bad in [
+            "db:8080",
+            "[::1]:80",
+            "*.example.com",
+            "example.com.",
+            "https://x",
+        ] {
+            assert_eq!(canonical_entry(bad), None, "{bad}");
+        }
     }
 }
