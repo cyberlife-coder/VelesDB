@@ -338,8 +338,14 @@ impl Collection {
         }
 
         // Label index: when populated, old payloads may contain `_labels`
-        // that need cleanup. Phase 2 must run to call `apply_label_updates`.
+        // that need cleanup. Phase 2 must run to call
+        // `apply_payload_index_updates`. The range indexes are asked on their
+        // own: the label index skips ids above `u32::MAX`, so it can be empty
+        // while they are not.
         if !self.graph.label_index.read().is_empty() {
+            return false;
+        }
+        if !self.graph.graph_range_indexes.read().is_empty() {
             return false;
         }
 
@@ -423,7 +429,7 @@ impl Collection {
             seen_payloads.insert(point.id, point.payload.as_ref());
         }
 
-        Self::apply_label_updates(&self.graph.label_index, &label_updates);
+        self.apply_payload_index_updates(&label_updates);
         Ok(sparse_batch)
     }
 
@@ -453,10 +459,18 @@ impl Collection {
         // so the old value is decremented exactly once.
         let old_payloads_for_hist = Self::collect_old_payloads(&points, &payload_storage);
 
-        self.apply_metadata_point_writes(&points, &mut payload_storage, &mut label_idx)?;
+        let effective_olds =
+            self.apply_metadata_point_writes(&points, &mut payload_storage, &mut label_idx)?;
 
-        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12).
+        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12),
+        // and before graph_range_indexes(7), which shares its rank.
         drop(label_idx);
+        self.apply_range_index_changes(
+            points
+                .iter()
+                .zip(&effective_olds)
+                .map(|(point, old)| (point.id, old.as_ref(), point.payload.as_ref())),
+        );
 
         // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
         let point_count = payload_storage.ids().len();
@@ -486,12 +500,15 @@ impl Collection {
     /// Extracted from [`Self::upsert_metadata`] so each function stays within
     /// the complexity budget. Both write guards are passed in by the caller,
     /// which holds them across the whole batch in lock order (3 → 7).
+    ///
+    /// Returns the effective old payload of each point, in order, for the
+    /// caller's graph range index update once `label_idx` is released.
     fn apply_metadata_point_writes(
         &self,
         points: &[Point],
         payload_storage: &mut LogPayloadStorage,
         label_idx: &mut crate::collection::graph::LabelIndex,
-    ) -> Result<()> {
+    ) -> Result<Vec<Option<serde_json::Value>>> {
         // Pass 1: resolve the old payload each occurrence would have seen in
         // the sequential loop. Intra-batch duplicates observe the previous
         // occurrence's payload (via `seen`), not the pre-batch value, exactly
@@ -532,6 +549,6 @@ impl Collection {
                 label_idx.index_from_payload(point.id, payload);
             }
         }
-        Ok(())
+        Ok(effective_olds)
     }
 }

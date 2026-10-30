@@ -776,8 +776,9 @@ ensure no data is lost.
 │  4. load_bm25_index()                                                  │
 │     └─ bm25.snapshot + bm25.wal replay; payload rebuild if no snapshot │
 │                                                                        │
-│  5. Property index, label index (rebuilt from payloads), range index,  │
-│     edge_store.bin, named sparse indexes                               │
+│  5. Property index, label index + graph range indexes (both rebuilt    │
+│     from the payloads in one scan), range index, edge_store.bin,       │
+│     named sparse indexes                                               │
 │     └─ each sparse snapshot, then its WAL replayed over it             │
 │                                                                        │
 │  6. reconcile_point_count()                                            │

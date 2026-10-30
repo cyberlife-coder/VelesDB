@@ -319,12 +319,15 @@ impl Collection {
         // per_point_updates for the single-upsert path). Without this,
         // MATCH queries with label patterns (e.g., `(d:Doc)`) return
         // empty results for points inserted via upsert_bulk / REST API.
-        self.update_label_index_bulk(points, old_payloads);
+        // The graph range indexes ride along for the same reason: a MATCH
+        // range predicate reads them as its candidate set.
+        self.update_payload_indexes_bulk(points, old_payloads);
 
         Ok(())
     }
 
-    /// Batch-updates the label index for bulk-upserted points.
+    /// Batch-updates the label index and the graph range indexes for
+    /// bulk-upserted points.
     ///
     /// This used to index the incoming payloads and nothing else, justified by
     /// "for the bulk path, points are always new inserts (no old payload to
@@ -346,12 +349,14 @@ impl Collection {
     /// - [`resolve_effective_old`](Self::resolve_effective_old) resolves the
     ///   old payload for a duplicate id within one batch to the previous
     ///   occurrence rather than the pre-batch value.
-    /// - [`apply_label_updates`](Self::apply_label_updates) removes before it
-    ///   indexes, which is what keeps a label carried on *both* sides of the
-    ///   update from being added and then taken straight back out.
+    /// - [`apply_payload_index_updates`](Self::apply_payload_index_updates)
+    ///   removes before it indexes, which is what keeps a label carried on
+    ///   *both* sides of the update from being added and then taken straight
+    ///   back out.
     ///
-    /// LOCK ORDER: label_index(7) — after payload_storage(3).
-    fn update_label_index_bulk(
+    /// LOCK ORDER: label_index(7), then graph_range_indexes(7), never both —
+    /// after payload_storage(3).
+    fn update_payload_indexes_bulk(
         &self,
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
@@ -368,7 +373,7 @@ impl Collection {
             label_updates.push((point.id, effective_old.cloned(), point.payload.clone()));
             seen.insert(point.id, point.payload.as_ref());
         }
-        Self::apply_label_updates(&self.graph.label_index, &label_updates);
+        self.apply_payload_index_updates(&label_updates);
     }
 
     /// Applies sparse batch with WAL-before-apply for bulk insert.

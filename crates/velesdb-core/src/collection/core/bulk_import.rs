@@ -4,6 +4,7 @@
 //! These methods accept flat contiguous slices (zero-copy from numpy / FFI)
 //! instead of `Point` structs, avoiding per-row `Vec<f32>` allocation.
 
+use super::graph_property_index_wiring::NodePayloadChange;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -37,7 +38,8 @@ impl Collection {
     ) -> Result<usize> {
         // LOCK ORDER: config(1, read) → payload_storage(3, read) →
         //   store_vectors_and_payload_entries (vector_storage(2) ‖ payload_storage(3)) →
-        //   secondary_indexes(6, read) → label_index(7, write) → HNSW index (internal) →
+        //   secondary_indexes(6, read) → label_index(7, write), released →
+        //   graph_range_indexes(7, write) → HNSW index (internal) →
         //   config(1, write).
         let n = ids.len();
         if n == 0 {
@@ -89,7 +91,7 @@ impl Collection {
         self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
 
         self.update_text_index_from_raw(ids, payloads, &old_payloads)?;
-        self.update_label_index_from_raw(ids, payloads, &old_payloads);
+        self.update_payload_indexes_from_raw(ids, payloads, &old_payloads);
         self.update_secondary_indexes_from_raw(ids, payloads, &old_payloads);
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
@@ -346,9 +348,11 @@ impl Collection {
         Ok(())
     }
 
-    /// Batch-updates the label index from raw payload slices.
+    /// Batch-updates the label index and the graph range indexes from raw
+    /// payload slices.
     ///
-    /// Mirrors `update_text_index_from_raw` but for the label index.
+    /// Mirrors `update_text_index_from_raw` but for the indexes derived from
+    /// node payloads.
     ///
     /// This indexed the incoming payloads only, so a raw bulk *upsert* that
     /// changed a point's `_labels` left it listed under the old ones too.
@@ -362,12 +366,11 @@ impl Collection {
     /// not the pre-batch ones (which `old_payloads` already reports as `None`
     /// for duplicates).
     ///
-    /// LOCK ORDER: label_index(7) -- after payload_storage(3).
-    // The label_index guard spans the whole un-index/re-index batch on purpose,
-    // the same design as store_node_payloads: releasing it mid-batch would let
-    // a reader see labels from a half-applied bulk import.
-    #[expect(clippy::significant_drop_tightening)]
-    fn update_label_index_from_raw(
+    /// LOCK ORDER: label_index(7), then graph_range_indexes(7), never both --
+    /// after payload_storage(3). Each guard spans its whole un-index/re-index
+    /// batch on purpose, the same design as store_node_payloads: releasing it
+    /// mid-batch would let a reader see labels from a half-applied bulk import.
+    fn update_payload_indexes_from_raw(
         &self,
         ids: &[u64],
         payloads: Option<&[Option<serde_json::Value>]>,
@@ -383,23 +386,27 @@ impl Collection {
         if !ps.iter().any(carries_labels) && !old_payloads.iter().any(carries_labels) {
             return;
         }
-        let mut seen: std::collections::HashMap<u64, Option<&serde_json::Value>> =
-            std::collections::HashMap::with_capacity(ids.len());
-        let mut label_idx = self.graph.label_index.write();
-        for (i, &id) in ids.iter().enumerate() {
-            let pre_batch_old = old_payloads.get(i).and_then(Option::as_ref);
-            let effective_old = match seen.get(&id) {
-                Some(&previous) => previous,
-                None => pre_batch_old,
-            };
-            if let Some(old) = effective_old {
-                label_idx.remove_from_payload(id, old);
-            }
-            let new_payload = ps.get(i).and_then(Option::as_ref);
-            if let Some(payload) = new_payload {
-                label_idx.index_from_payload(id, payload);
-            }
-            seen.insert(id, new_payload);
-        }
+        let changes = raw_payload_changes(ids, ps, old_payloads);
+        self.apply_payload_index_changes(changes.iter().copied());
     }
+}
+
+/// Pairs each raw entry with the payload it replaces: the previous occurrence
+/// of a repeated id within the batch, else its pre-batch payload.
+fn raw_payload_changes<'a>(
+    ids: &[u64],
+    payloads: &'a [Option<serde_json::Value>],
+    old_payloads: &'a [Option<serde_json::Value>],
+) -> Vec<NodePayloadChange<'a>> {
+    let mut seen: HashMap<u64, Option<&serde_json::Value>> = HashMap::with_capacity(ids.len());
+    ids.iter()
+        .enumerate()
+        .map(|(i, &id)| {
+            let pre_batch_old = old_payloads.get(i).and_then(Option::as_ref);
+            let effective_old = seen.get(&id).copied().unwrap_or(pre_batch_old);
+            let new_payload = payloads.get(i).and_then(Option::as_ref);
+            seen.insert(id, new_payload);
+            (id, effective_old, new_payload)
+        })
+        .collect()
 }

@@ -73,7 +73,7 @@ impl Collection {
         // write did not do between its store and its property indexing. The
         // window it closes matters more here: with the guard dropped, another
         // writer could store and index a newer payload for one of these nodes
-        // before this call's `index_node_properties` runs, and this call would
+        // before this call's `index_node_payload_batch` runs, and this call would
         // then index the payload it just superseded.
         let mut storage = self.storage.payload_storage.write();
 
@@ -135,31 +135,29 @@ impl Collection {
             }
         }
 
-        {
-            let mut label_idx = self.graph.label_index.write();
-            for (node_id, old_payload) in &superseded {
-                label_idx.remove_from_payload(*node_id, old_payload);
-            }
-        }
-
-        // `label_index` released before the graph property indexes: both sit at
-        // lock order 7, with no ordering between them.
+        // One guard each for the label index and the range indexes, released
+        // between the two: both sit at lock order 7, with no ordering between
+        // them.
+        self.apply_payload_index_changes(
+            superseded
+                .iter()
+                .map(|(node_id, old_payload)| (*node_id, Some(old_payload), None)),
+        );
         for (node_id, old_payload) in &superseded {
-            self.deindex_node_properties(*node_id, old_payload);
+            self.deindex_node_composites(*node_id, old_payload);
         }
     }
 
     /// Indexes the batch's new payloads, mirroring
     /// [`Self::unindex_superseded_payloads`] and holding `label_index` once.
     fn index_node_payload_batch(&self, deduped: &[(u64, &Value)]) {
-        {
-            let mut label_idx = self.graph.label_index.write();
-            for &(node_id, payload) in deduped {
-                label_idx.index_from_payload(node_id, payload);
-            }
-        }
+        self.apply_payload_index_changes(
+            deduped
+                .iter()
+                .map(|&(node_id, payload)| (node_id, None, Some(payload))),
+        );
         for &(node_id, payload) in deduped {
-            self.index_node_properties(node_id, payload);
+            self.index_node_composites(node_id, payload);
         }
     }
 

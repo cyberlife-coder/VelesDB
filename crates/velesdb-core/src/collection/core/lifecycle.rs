@@ -11,6 +11,8 @@ use crate::index::{Bm25Index, HnswIndex};
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 
+use super::graph_property_index_wiring::{index_payload_ranges, GraphRangeIndexes};
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use parking_lot::{Mutex, RwLock};
@@ -30,6 +32,7 @@ pub(super) struct CollectionParts {
     pub(super) text_index: Arc<Bm25Index>,
     pub(super) property_index: PropertyIndex,
     pub(super) label_index: LabelIndex,
+    pub(super) graph_range_indexes: GraphRangeIndexes,
     pub(super) range_index: RangeIndex,
     pub(super) edge_store: ConcurrentEdgeStore,
     pub(super) sparse_indexes: BTreeMap<String, SparseInvertedIndex>,
@@ -58,6 +61,7 @@ impl CollectionParts {
             text_index,
             property_index: PropertyIndex::new(),
             label_index: LabelIndex::new(),
+            graph_range_indexes: GraphRangeIndexes::new(),
             range_index: RangeIndex::new(),
             edge_store: ConcurrentEdgeStore::new(),
             sparse_indexes: BTreeMap::new(),
@@ -68,10 +72,12 @@ impl CollectionParts {
 /// The vector and payload stores, shared by every handle on a collection.
 type Storages = (Arc<RwLock<MmapStorage>>, Arc<RwLock<LogPayloadStorage>>);
 
-/// The graph-dimension state [`Collection::open`] loads from disk.
+/// The graph-dimension state a `Collection` is assembled from:
+/// [`Collection::open`] loads it from disk, a new collection starts empty.
 struct GraphParts {
     property_index: PropertyIndex,
     label_index: LabelIndex,
+    graph_range_indexes: GraphRangeIndexes,
     range_index: RangeIndex,
     edge_store: ConcurrentEdgeStore,
 }
@@ -97,12 +103,13 @@ impl Collection {
                 parts.index,
                 parts.text_index,
             ),
-            graph: Self::build_graph_store(
-                parts.property_index,
-                parts.label_index,
-                parts.range_index,
-                parts.edge_store,
-            ),
+            graph: Self::build_graph_store(GraphParts {
+                property_index: parts.property_index,
+                label_index: parts.label_index,
+                graph_range_indexes: parts.graph_range_indexes,
+                range_index: parts.range_index,
+                edge_store: parts.edge_store,
+            }),
             query: crate::collection::types::QueryState {
                 sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
                 secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
@@ -157,14 +164,17 @@ impl Collection {
         }
     }
 
-    /// Builds the graph half of a `Collection` from its persisted indexes;
-    /// derived/query-tracking indexes always start empty.
-    fn build_graph_store(
-        property_index: PropertyIndex,
-        label_index: LabelIndex,
-        range_index: RangeIndex,
-        edge_store: ConcurrentEdgeStore,
-    ) -> Arc<crate::collection::types::GraphStore> {
+    /// Builds the graph half of a `Collection` from its persisted indexes and
+    /// the ones rebuilt from the payloads; the edge property, composite and
+    /// query-tracking indexes start empty.
+    fn build_graph_store(parts: GraphParts) -> Arc<crate::collection::types::GraphStore> {
+        let GraphParts {
+            property_index,
+            label_index,
+            graph_range_indexes,
+            range_index,
+            edge_store,
+        } = parts;
         Arc::new(crate::collection::types::GraphStore {
             property_index: Arc::new(RwLock::new(property_index)),
             // Dirty at open: the first flush persists the baseline once,
@@ -173,7 +183,7 @@ impl Collection {
             label_index: Arc::new(RwLock::new(label_index)),
             range_index: Arc::new(RwLock::new(range_index)),
             range_index_dirty: std::sync::atomic::AtomicBool::new(true),
-            graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+            graph_range_indexes: Arc::new(RwLock::new(graph_range_indexes)),
             edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
             composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
             query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
@@ -363,6 +373,7 @@ impl Collection {
         let GraphParts {
             property_index,
             label_index,
+            graph_range_indexes,
             range_index,
             edge_store,
         } = Self::load_graph_parts(&path, &payload_storage)?;
@@ -382,6 +393,7 @@ impl Collection {
             text_index,
             property_index,
             label_index,
+            graph_range_indexes,
             range_index,
             edge_store,
             sparse_indexes,
@@ -651,7 +663,7 @@ impl Collection {
     }
 
     /// Loads the graph dimension: the property and range indexes, the label
-    /// index rebuilt from the payloads, and the edge store.
+    /// and graph range indexes rebuilt from the payloads, and the edge store.
     ///
     /// # Errors
     ///
@@ -660,9 +672,11 @@ impl Collection {
         path: &std::path::Path,
         payload_storage: &Arc<RwLock<LogPayloadStorage>>,
     ) -> Result<GraphParts> {
+        let (label_index, graph_range_indexes) = Self::rebuild_payload_indexes(payload_storage);
         Ok(GraphParts {
             property_index: Self::load_property_index(path),
-            label_index: Self::rebuild_label_index(payload_storage),
+            label_index,
+            graph_range_indexes,
             range_index: Self::load_range_index(path),
             edge_store: Self::load_edge_store(path)?,
         })
@@ -725,18 +739,27 @@ impl Collection {
         )
     }
 
-    /// Rebuilds the label index from payload storage on collection open.
+    /// Rebuilds the two indexes derived from node payloads — the label index
+    /// and the graph range indexes — from payload storage on collection open.
     ///
-    /// Scans all stored payloads and extracts `_labels` arrays to populate
-    /// the in-memory `LabelIndex`. This is cheap for typical graph workloads
-    /// (label arrays are small) and avoids requiring a separate persistence
-    /// file for the label index.
-    fn rebuild_label_index(payload_storage: &Arc<RwLock<LogPayloadStorage>>) -> LabelIndex {
+    /// One scan of the stored payloads (the WAL already replayed by
+    /// `LogPayloadStorage::new`) feeds both, through the same insertion steps
+    /// the write paths use, so a reopened collection holds the entries its
+    /// writes had made. Neither index has a persistence file. The range
+    /// indexes used to start empty here instead: a MATCH range predicate then
+    /// fell back to a full scan until the first node-payload write created the
+    /// index, from which point it served that write's nodes as the whole
+    /// candidate set and hid every node written before the reopen.
+    fn rebuild_payload_indexes(
+        payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+    ) -> (LabelIndex, GraphRangeIndexes) {
         let storage = payload_storage.read();
         let mut index = LabelIndex::new();
+        let mut range_indexes = GraphRangeIndexes::new();
         for id in storage.ids() {
             if let Ok(Some(payload)) = storage.retrieve(id) {
                 index.index_from_payload(id, &payload);
+                index_payload_ranges(&mut range_indexes, id, &payload);
             }
         }
         // ONE aggregated line for the whole rebuild, not one per node: on a
@@ -752,7 +775,7 @@ impl Collection {
                  indexed — label lookups fall back to a full scan"
             );
         }
-        index
+        (index, range_indexes)
     }
 
     fn load_range_index(path: &std::path::Path) -> RangeIndex {

@@ -2,6 +2,7 @@
 //!
 //! Extracted from `crud.rs` to reduce NLOC.
 
+use super::graph_property_index_wiring::NodePayloadChange;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
@@ -66,23 +67,47 @@ impl Collection {
         }
     }
 
-    /// Applies buffered label index updates in a single write lock scope.
-    pub(super) fn apply_label_updates(
-        label_index: &parking_lot::RwLock<crate::collection::graph::LabelIndex>,
+    /// [`Self::apply_payload_index_changes`] over a buffer of owned
+    /// `(id, old, new)` payloads.
+    pub(super) fn apply_payload_index_updates(
+        &self,
         label_updates: &[(u64, Option<serde_json::Value>, Option<serde_json::Value>)],
     ) {
-        if label_updates.is_empty() {
+        self.apply_payload_index_changes(
+            label_updates
+                .iter()
+                .map(|(id, old, new)| (*id, old.as_ref(), new.as_ref())),
+        );
+    }
+
+    /// Applies node payload changes to the two indexes derived from node
+    /// payloads: the label index, then the graph range indexes, each in a
+    /// single write lock scope. Each change removes the old payload's entries
+    /// before indexing the new one's.
+    ///
+    /// LOCK ORDER: label_index(7), released, then graph_range_indexes(7) —
+    /// the two share a rank with no order between them, so never both held.
+    pub(super) fn apply_payload_index_changes<'a, I>(&self, changes: I)
+    where
+        I: IntoIterator<Item = NodePayloadChange<'a>>,
+        I::IntoIter: Clone,
+    {
+        let changes = changes.into_iter();
+        if changes.clone().next().is_none() {
             return;
         }
-        let mut label_idx = label_index.write();
-        for (id, old, new) in label_updates {
-            if let Some(old_val) = old {
-                label_idx.remove_from_payload(*id, old_val);
-            }
-            if let Some(new_val) = new {
-                label_idx.index_from_payload(*id, new_val);
+        {
+            let mut label_idx = self.graph.label_index.write();
+            for (id, old, new) in changes.clone() {
+                if let Some(old_val) = old {
+                    label_idx.remove_from_payload(id, old_val);
+                }
+                if let Some(new_val) = new {
+                    label_idx.index_from_payload(id, new_val);
+                }
             }
         }
+        self.apply_range_index_changes(changes);
     }
 
     /// Collects sparse vectors from a point into the batch buffer.

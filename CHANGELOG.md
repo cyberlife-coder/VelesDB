@@ -434,6 +434,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7.x cannot decode the 8.0 snapshot either, opens the collection without
   its edges, and its next flush with a non-empty edge WAL overwrites them.
 
+- **A MATCH range predicate no longer hides nodes the graph range index
+  missed.** `MATCH (n:P) WHERE n.age > 10` takes its candidates from the
+  in-memory `P.age` range index whenever that index exists, but only the
+  node-payload write (`upsert_node_payload` / `upsert_node_payloads`) fed it,
+  and every open started it empty. A node written through
+  `upsert_node(id, payload, Some(vector))`, `upsert`, `upsert_metadata`,
+  `upsert_bulk` or `upsert_bulk_from_raw`, or any node written before a
+  reopen, was then left out of the result, with no error, as soon as one
+  node-payload write had created the index — after a reopen, the query
+  returned only the nodes written since. Deletes also left their entries
+  behind. The range indexes are now derived from the payloads exactly like the
+  label index: every write and delete path that maintains the label index
+  maintains them too, through one shared remove-then-index step, and the open
+  rebuilds both from the stored payloads, WAL replay included, in the same
+  scan.
+
 - **`GraphCollection::traverse_bfs_parallel` counts only results against
   `limit`.** The traverser emitted each start node at depth 0, which took a
   slot of `limit` before the `min_depth` filter dropped it, so

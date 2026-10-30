@@ -314,8 +314,13 @@ pub(crate) struct GraphStore {
 
     /// Graph node property range indexes keyed by `"label.property"` (EPIC-047).
     ///
-    /// Populated automatically when nodes are stored via `store_node_payload`.
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    /// Derived from the node payloads like `label_index`: maintained on every
+    /// payload write and delete path that maintains the label index, and
+    /// rebuilt from the stored payloads on open
+    /// (`core/graph_property_index_wiring.rs`). A MATCH range predicate uses
+    /// an existing index as its whole candidate set.
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`;
+    /// never held together with `label_index`).
     pub(crate) graph_range_indexes: Arc<RwLock<HashMap<String, CompositeRangeIndex>>>,
 
     /// Edge property indexes keyed by `"rel_type.property"` (EPIC-047).

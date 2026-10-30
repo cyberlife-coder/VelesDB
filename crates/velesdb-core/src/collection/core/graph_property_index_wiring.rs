@@ -2,6 +2,18 @@
 //!
 //! Populates `CompositeRangeIndex`, `EdgePropertyIndex`, `CompositeIndexManager`,
 //! and `QueryPatternTracker` when nodes and edges are mutated.
+//!
+//! # The node range indexes are derived from the payloads
+//!
+//! A MATCH range predicate takes its candidate nodes from the
+//! `"label.property"` range index whenever that index exists, so an index
+//! missing a node hides the node from the result. The range indexes are
+//! therefore maintained exactly like the label index, from the same payloads
+//! and at the same points: [`Collection::apply_range_index_changes`] runs
+//! wherever a write or delete path updates the label index, and the open
+//! rebuilds both from the stored payloads in one scan
+//! (`lifecycle.rs`, `rebuild_payload_indexes`), through the same
+//! [`index_payload_ranges`].
 
 use crate::collection::graph::property_index::{
     CompositeRangeIndex, EdgePropertyIndex, IndexSuggestion,
@@ -9,6 +21,14 @@ use crate::collection::graph::property_index::{
 use crate::collection::types::Collection;
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// The node range indexes, keyed by `"label.property"`.
+pub(crate) type GraphRangeIndexes = HashMap<String, CompositeRangeIndex>;
+
+/// One node's payload change, as the derived indexes see it: the node id,
+/// the payload it carried before the write (`None` for a new node), and the
+/// one it carries after (`None` for a delete).
+pub(crate) type NodePayloadChange<'a> = (u64, Option<&'a Value>, Option<&'a Value>);
 
 /// Key format for graph range indexes: `"label.property"`.
 fn range_index_key(label: &str, property: &str) -> String {
@@ -48,9 +68,87 @@ fn indexable_properties(payload: &Value) -> Vec<(&str, &Value)> {
         .unwrap_or_default()
 }
 
+/// Adds every labelled property of `payload` to `indexes` for `node_id`,
+/// creating the `"label.property"` index on first sight.
+///
+/// The one insertion step shared by the write paths
+/// ([`Collection::apply_range_index_changes`]) and the open-time rebuild, so a
+/// reopened collection holds exactly the entries the writes had made.
+pub(crate) fn index_payload_ranges(indexes: &mut GraphRangeIndexes, node_id: u64, payload: &Value) {
+    let properties = indexable_properties(payload);
+    for label in extract_labels(payload) {
+        for &(prop_name, prop_value) in &properties {
+            indexes
+                .entry(range_index_key(&label, prop_name))
+                .or_insert_with(|| CompositeRangeIndex::new(label.clone(), prop_name))
+                .insert(node_id, prop_value);
+        }
+    }
+}
+
+/// Removes the entries [`index_payload_ranges`] made for `node_id` from
+/// `payload`, the payload the node carried until now.
+fn unindex_payload_ranges(indexes: &mut GraphRangeIndexes, node_id: u64, payload: &Value) {
+    let properties = indexable_properties(payload);
+    for label in extract_labels(payload) {
+        for &(prop_name, prop_value) in &properties {
+            if let Some(index) = indexes.get_mut(&range_index_key(&label, prop_name)) {
+                let _removed = index.remove(node_id, prop_value);
+            }
+        }
+    }
+}
+
+/// Whether `payload` exists and carries `_labels`: a payload without labels
+/// has no range-index entry to add or remove.
+fn carries_labels(payload: Option<&Value>) -> bool {
+    payload.is_some_and(|value| value.get("_labels").is_some())
+}
+
 impl Collection {
-    /// Populates graph property indexes after a node payload is stored.
-    pub(crate) fn index_node_properties(&self, node_id: u64, payload: &Value) {
+    /// Applies node payload changes to the graph range indexes, taking their
+    /// write lock once for the whole batch.
+    ///
+    /// Each change removes what the old payload indexed before indexing the
+    /// new one — the sequence every path runs on the label index — so a property carried on both sides of an update is not added and then
+    /// taken straight back out. Callers pass the effective old payload of a
+    /// duplicate id within one batch (the previous occurrence, not the
+    /// pre-batch value), exactly as they do for the label index.
+    ///
+    /// LOCK ORDER: graph_range_indexes(7). `label_index` is also rank 7, with
+    /// no order between the two, so callers release it before calling this.
+    pub(crate) fn apply_range_index_changes<'a>(
+        &self,
+        changes: impl IntoIterator<Item = NodePayloadChange<'a>>,
+    ) {
+        let mut changes = changes
+            .into_iter()
+            .filter(|&(_, old, new)| carries_labels(old) || carries_labels(new))
+            .peekable();
+        // Unlabelled batches (every plain vector upsert) never take the lock.
+        if changes.peek().is_none() {
+            return;
+        }
+        let mut indexes = self.graph.graph_range_indexes.write();
+        for (node_id, old, new) in changes {
+            if let Some(old) = old {
+                unindex_payload_ranges(&mut indexes, node_id, old);
+            }
+            if let Some(new) = new {
+                index_payload_ranges(&mut indexes, node_id, new);
+            }
+        }
+    }
+
+    /// Adds a stored node payload to the composite indexes.
+    ///
+    /// Unlike the range indexes, the composite indexes are fed by the
+    /// node-payload path only and start empty on open. That is harmless only
+    /// because no production path creates one: `CompositeIndexManager::create_index`
+    /// has no caller outside its unit tests, so the manager stays empty and
+    /// the emptiness check below returns. A path that creates one must first
+    /// derive them from every payload write, as `apply_range_index_changes` does.
+    pub(crate) fn index_node_composites(&self, node_id: u64, payload: &Value) {
         let labels = extract_labels(payload);
         let properties = indexable_properties(payload);
 
@@ -58,43 +156,24 @@ impl Collection {
             return;
         }
 
-        // Populate range indexes
-        {
-            let mut range_indexes = self.graph.graph_range_indexes.write();
+        let mut composite_mgr = self.graph.composite_index_manager.write();
+        // Composite indexes are DDL-created and usually absent; the owned
+        // props map (String key + Value clone per property) is only worth
+        // building when at least one index exists — and once, not once
+        // per label.
+        if !composite_mgr.is_empty() {
+            let props_map: HashMap<String, Value> = properties
+                .iter()
+                .map(|&(k, v)| (k.to_string(), v.clone()))
+                .collect();
             for label in &labels {
-                for &(prop_name, prop_value) in &properties {
-                    let key = range_index_key(label, prop_name);
-                    range_indexes
-                        .entry(key)
-                        .or_insert_with(|| {
-                            CompositeRangeIndex::new(label.clone(), prop_name.to_string())
-                        })
-                        .insert(node_id, prop_value);
-                }
-            }
-        }
-
-        // Populate composite indexes
-        {
-            let mut composite_mgr = self.graph.composite_index_manager.write();
-            // Composite indexes are DDL-created and usually absent; the owned
-            // props map (String key + Value clone per property) is only worth
-            // building when at least one index exists — and once, not once
-            // per label.
-            if !composite_mgr.is_empty() {
-                let props_map: HashMap<String, Value> = properties
-                    .iter()
-                    .map(|&(k, v)| (k.to_string(), v.clone()))
-                    .collect();
-                for label in &labels {
-                    composite_mgr.on_add_node(label, node_id, &props_map);
-                }
+                composite_mgr.on_add_node(label, node_id, &props_map);
             }
         }
     }
 
-    /// Removes a node from graph property indexes before an update.
-    pub(crate) fn deindex_node_properties(&self, node_id: u64, old_payload: &Value) {
+    /// Removes a node's superseded payload from the composite indexes.
+    pub(crate) fn deindex_node_composites(&self, node_id: u64, old_payload: &Value) {
         let labels = extract_labels(old_payload);
         let properties = indexable_properties(old_payload);
 
@@ -102,29 +181,15 @@ impl Collection {
             return;
         }
 
-        {
-            let mut range_indexes = self.graph.graph_range_indexes.write();
+        let mut composite_mgr = self.graph.composite_index_manager.write();
+        // Same guard as the add path: no composite index, no owned map.
+        if !composite_mgr.is_empty() {
+            let props_map: HashMap<String, Value> = properties
+                .iter()
+                .map(|&(k, v)| (k.to_string(), v.clone()))
+                .collect();
             for label in &labels {
-                for &(prop_name, prop_value) in &properties {
-                    let key = range_index_key(label, prop_name);
-                    if let Some(idx) = range_indexes.get_mut(&key) {
-                        let _removed = idx.remove(node_id, prop_value);
-                    }
-                }
-            }
-        }
-
-        {
-            let mut composite_mgr = self.graph.composite_index_manager.write();
-            // Same guard as the add path: no composite index, no owned map.
-            if !composite_mgr.is_empty() {
-                let props_map: HashMap<String, Value> = properties
-                    .iter()
-                    .map(|&(k, v)| (k.to_string(), v.clone()))
-                    .collect();
-                for label in &labels {
-                    composite_mgr.on_remove_node(label, node_id, &props_map);
-                }
+                composite_mgr.on_remove_node(label, node_id, &props_map);
             }
         }
     }

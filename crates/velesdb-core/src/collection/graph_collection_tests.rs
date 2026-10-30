@@ -644,3 +644,202 @@ fn test_edges_with_properties_too_deep_to_read_back_are_refused() {
     #[cfg(not(feature = "persistence"))]
     drop(dir);
 }
+
+// -------------------------------------------------------------------------
+// Graph range indexes: derived from every node payload, like the label index
+// -------------------------------------------------------------------------
+//
+// A MATCH range predicate (`n.age > 10`) takes its candidates from the
+// `label.property` range index whenever that index exists, so an index that
+// misses a node hides it from the result with no error. Each test asserts both
+// what MATCH returns and what the index itself holds: a stale entry only
+// widens the candidate set, which the WHERE re-check then narrows, so the
+// index read is what tells a correct index from a merely harmless one.
+
+/// The ids `MATCH (n:P) WHERE n.age > {floor}` returns, sorted.
+fn matched_older_than(collection: &Collection, floor: i64) -> Vec<u64> {
+    let sql = format!("MATCH (n:P) WHERE n.age > {floor} RETURN n LIMIT 100");
+    let mut ids: Vec<u64> = collection
+        .execute_query_str(&sql, &HashMap::new())
+        .unwrap()
+        .iter()
+        .map(|result| result.point.id)
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+/// The ids the `P.age` range index resolves `> floor` to, sorted: the
+/// candidate set the MATCH prefilter reads. Empty when no such index exists.
+fn indexed_older_than(collection: &Collection, floor: i64) -> Vec<u64> {
+    let mut ids = collection
+        .graph_range_lookup_gt("P", "age", &serde_json::json!(floor))
+        .unwrap_or_default();
+    ids.sort_unstable();
+    ids
+}
+
+fn assert_older_than(collection: &Collection, floor: i64, expected: &[u64]) {
+    assert_eq!(
+        matched_older_than(collection, floor),
+        expected,
+        "MATCH (n:P) WHERE n.age > {floor}"
+    );
+    assert_eq!(
+        indexed_older_than(collection, floor),
+        expected,
+        "the P.age range index above {floor}"
+    );
+}
+
+fn aged(age: i64) -> serde_json::Value {
+    serde_json::json!({ "_labels": ["P"], "age": age })
+}
+
+#[test]
+fn a_node_written_after_a_flushed_reopen_leaves_the_earlier_nodes_matchable() {
+    let dir = tempdir().unwrap();
+    {
+        let col = GraphCollection::create(
+            dir.path().to_path_buf(),
+            "kg",
+            None,
+            DistanceMetric::Cosine,
+            GraphSchema::schemaless(),
+        )
+        .unwrap();
+        col.upsert_node_payload(1, &aged(30)).unwrap();
+        col.flush().unwrap();
+    }
+    let col = GraphCollection::open(dir.path().to_path_buf()).unwrap();
+    assert_older_than(&col.inner, 10, &[1]);
+
+    col.upsert_node_payload(2, &aged(40)).unwrap();
+
+    assert_older_than(&col.inner, 10, &[1, 2]);
+}
+
+#[test]
+fn a_node_written_after_an_unflushed_reopen_leaves_the_replayed_nodes_matchable() {
+    let dir = tempdir().unwrap();
+    {
+        let col = GraphCollection::create(
+            dir.path().to_path_buf(),
+            "kg",
+            Some(4),
+            DistanceMetric::Cosine,
+            GraphSchema::schemaless(),
+        )
+        .unwrap();
+        col.upsert_node_payload(1, &aged(30)).unwrap();
+        col.upsert_node(2, &aged(40), Some(vec![1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        // Dropped without a flush: both payloads come back from the WAL.
+    }
+    let col = GraphCollection::open(dir.path().to_path_buf()).unwrap();
+    assert_older_than(&col.inner, 10, &[1, 2]);
+
+    col.upsert_node_payload(3, &aged(50)).unwrap();
+
+    assert_older_than(&col.inner, 10, &[1, 2, 3]);
+}
+
+#[test]
+fn a_node_upserted_with_a_vector_is_matched_by_a_range_predicate() {
+    let (_dir, col) = make_test_collection(Some(4));
+    col.upsert_node_payload(1, &aged(30)).unwrap();
+
+    col.upsert_node(2, &aged(40), Some(vec![1.0, 0.0, 0.0, 0.0]))
+        .unwrap();
+
+    assert_older_than(&col.inner, 10, &[1, 2]);
+}
+
+#[test]
+fn points_upserted_in_a_batch_are_matched_by_a_range_predicate() {
+    let (_dir, col) = make_test_collection(Some(4));
+    col.inner
+        .upsert([
+            Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(aged(30))),
+            Point::new(2, vec![0.0, 1.0, 0.0, 0.0], Some(aged(40))),
+        ])
+        .unwrap();
+
+    col.upsert_node_payload(3, &aged(50)).unwrap();
+
+    assert_older_than(&col.inner, 10, &[1, 2, 3]);
+}
+
+#[test]
+fn a_node_upserted_as_metadata_is_matched_by_a_range_predicate() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(1, &aged(30)).unwrap();
+
+    col.inner
+        .upsert_metadata([Point::metadata_only(2, aged(40))])
+        .unwrap();
+
+    assert_older_than(&col.inner, 10, &[1, 2]);
+}
+
+#[test]
+fn a_node_bulk_upserted_is_matched_by_a_range_predicate() {
+    let (_dir, col) = make_test_collection(Some(4));
+    col.upsert_node_payload(1, &aged(30)).unwrap();
+
+    col.inner
+        .upsert_bulk(&[Point::new(2, vec![1.0, 0.0, 0.0, 0.0], Some(aged(40)))])
+        .unwrap();
+
+    assert_older_than(&col.inner, 10, &[1, 2]);
+}
+
+#[test]
+fn a_node_bulk_upserted_from_raw_vectors_is_matched_by_a_range_predicate() {
+    let (_dir, col) = make_test_collection(Some(4));
+    col.upsert_node_payload(1, &aged(30)).unwrap();
+
+    col.inner
+        .upsert_bulk_from_raw(&[1.0, 0.0, 0.0, 0.0], &[2], 4, Some(&[Some(aged(40))]))
+        .unwrap();
+
+    assert_older_than(&col.inner, 10, &[1, 2]);
+}
+
+#[test]
+fn an_update_moves_one_node_out_of_the_range_and_another_into_it() {
+    let (_dir, col) = make_test_collection(Some(4));
+    col.upsert_node_payload(1, &aged(30)).unwrap();
+    col.upsert_node_payload(2, &aged(50)).unwrap();
+    col.upsert_node_payload(3, &aged(5)).unwrap();
+
+    col.upsert_node(1, &aged(5), Some(vec![1.0, 0.0, 0.0, 0.0]))
+        .unwrap();
+    col.upsert_node(3, &aged(70), Some(vec![0.0, 1.0, 0.0, 0.0]))
+        .unwrap();
+
+    assert_older_than(&col.inner, 10, &[2, 3]);
+}
+
+#[test]
+fn a_deleted_node_leaves_the_range_index() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(1, &aged(30)).unwrap();
+    col.upsert_node_payload(2, &aged(40)).unwrap();
+
+    col.delete(&[1]).unwrap();
+
+    assert_older_than(&col.inner, 10, &[2]);
+}
+
+#[test]
+fn a_node_deleted_from_a_metadata_only_collection_leaves_the_range_index() {
+    let dir = tempdir().unwrap();
+    let collection = Collection::create_metadata_only(dir.path().to_path_buf(), "meta").unwrap();
+    collection.store_node_payload(1, &aged(30)).unwrap();
+    collection.store_node_payload(2, &aged(40)).unwrap();
+
+    collection.delete(&[1]).unwrap();
+
+    assert_older_than(&collection, 10, &[2]);
+}
