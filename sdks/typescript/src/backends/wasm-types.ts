@@ -52,7 +52,7 @@ export interface WasmSparseResult {
 
 /** Filtered search result returned by VectorStore.search_with_filter(). */
 export interface WasmFilteredResult {
-  id: bigint;
+  id: number;
   score: number;
   payload?: Record<string, unknown> | null;
 }

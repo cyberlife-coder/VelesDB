@@ -75,8 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (TypeScript SDK types) — `textSearch` returns
   `TextSearchResult[]`, whose `score` is `number | null`.** velesdb-wasm's
   text search is an unranked, case-insensitive substring match, so its
-  records carry `score: null` (it returned no `score` at all in 7.1.0, which
-  the SDK passed on as `undefined` under a `number` type). REST still
+  records carry `score: null` (in 7.1.0 the SDK's `textSearch` threw on any
+  match instead, see Fixed). REST still
   returns the BM25 score. A caller that sorts or thresholds on it must handle
   `null`.
 

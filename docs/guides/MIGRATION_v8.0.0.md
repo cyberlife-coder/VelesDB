@@ -375,5 +375,10 @@ the npm package ships.
   edge label/endpoint types against them;
   declare them, or drop `schemaMode: 'strict'` to keep the old schemaless
   behaviour. Types on a schemaless graph throw `ValidationError`.
+- **`textSearch` returns `TextSearchResult[]`, whose `score` is
+  `number | null`.** On WASM it is always `null` (an unranked substring
+  match); REST still returns the BM25 score. Handle `null` before sorting or
+  thresholding on it. On WASM, 7.1.0's `textSearch` threw on any match, and
+  every record now arrives as a plain object (see [§7](#7-velesdb-wasm)).
 - **Node.js 22 or later** (`engines.node`). CI builds and tests the SDK on 22;
   18 and 20 are end-of-life.
