@@ -46,7 +46,7 @@ docs.upsert(
 # 4. Embed a text query with the same model, then search its nearest neighbour.
 query_vector = embedder.embed([QUERY])[0]
 results = docs.search_request(
-    velesdb.SearchOptions(vector=query_vector, top_k=1)
+    velesdb.SearchOptions(vector=query_vector, k=1)
 )
 
 print(f'Query: "{QUERY}"')

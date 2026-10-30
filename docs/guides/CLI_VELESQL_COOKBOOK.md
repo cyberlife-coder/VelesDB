@@ -108,17 +108,17 @@ LIMIT 10 USING FUSION(strategy = 'rsf', dense_w = 0.7, sparse_w = 0.3);
 
 -- Weighted fusion
 SELECT * FROM docs
-WHERE vector NEAR $v
+WHERE vector NEAR $v AND content MATCH 'rust programming'
 LIMIT 10 USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3);
 
 -- Maximum fusion (take best score)
 SELECT * FROM docs
-WHERE vector NEAR $v
+WHERE vector NEAR $v AND content MATCH 'rust programming'
 LIMIT 10 USING FUSION(strategy = 'maximum');
 
 -- Default USING FUSION (defaults to RRF)
 SELECT * FROM docs
-WHERE vector NEAR $v
+WHERE vector NEAR $v AND content MATCH 'rust programming'
 LIMIT 10 USING FUSION;
 ```
 
