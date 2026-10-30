@@ -10,7 +10,6 @@ services:
     volumes:
       - velesdb_data:/data
     environment:
-      - RUST_LOG=info
       - VELESDB_DATA_DIR=/data
     restart: unless-stopped
     healthcheck:

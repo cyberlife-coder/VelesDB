@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The guide's environment examples used `VELESDB_SERVER_PORT` /
     `VELESDB_SERVER_HOST`, which the server never read; they now use
     `VELESDB_PORT` / `VELESDB_HOST`.
+  - The Docker image and `docker-compose.yml` no longer set `RUST_LOG=info`,
+    which outranked `[logging] level` and `VELESDB_LOGGING_LEVEL` in every
+    container. Unset, the image logs at the server default: `info`, plus
+    `tower_http`'s per-request debug lines.
 
 - **`POST /collections` with `collection_type: "graph"` honours `dimension`
   and `metric`.** The handler created every graph collection without

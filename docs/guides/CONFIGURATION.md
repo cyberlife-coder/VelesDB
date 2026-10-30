@@ -884,9 +884,9 @@ level = "info"
 format = "json"  # Pour collecteurs de logs
 ```
 
-The repository's Docker image sets `RUST_LOG=info`, which outranks
-`[logging] level`; run it with `-e RUST_LOG=` to let the file's level apply.
-`format` and `file` are not affected by `RUST_LOG`.
+The repository's Docker image sets no `RUST_LOG`, so this `level` applies;
+a `RUST_LOG` passed to the container would override it (`format` and `file`
+are not affected by `RUST_LOG`).
 
 ---
 

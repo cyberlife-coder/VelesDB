@@ -111,7 +111,7 @@ The short version:
 |---|---|---|
 | API keys | `VELESDB_API_KEYS`, or `api_keys` in `velesdb.toml` | none — the server runs in local dev mode and accepts every request |
 | TLS | `VELESDB_TLS_CERT` / `VELESDB_TLS_KEY`, or `--tls-cert` / `--tls-key` | off (plain HTTP) |
-| Data directory | `VELESDB_DATA_DIR` | `./data` |
+| Data directory | `VELESDB_DATA_DIR` | `./velesdb_data` |
 | Bind address | `VELESDB_HOST` / `VELESDB_PORT` | `127.0.0.1:8080` |
 | Config file | `VELESDB_CONFIG` or `--config` | `./velesdb.toml` if present |
 | Worker threads | `[server] workers` | one per CPU |

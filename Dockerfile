@@ -66,7 +66,9 @@ EXPOSE 8080
 ENV VELESDB_DATA_DIR=/data
 ENV VELESDB_HOST=0.0.0.0
 ENV VELESDB_PORT=8080
-ENV RUST_LOG=info
+# No RUST_LOG here: it outranks VELESDB_LOGGING_LEVEL and a mounted
+# velesdb.toml's [logging] level. Unset, the server logs at its default
+# (info, plus tower_http's per-request debug lines).
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

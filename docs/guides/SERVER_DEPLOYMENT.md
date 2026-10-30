@@ -29,12 +29,13 @@ The image sets these defaults (see the `Dockerfile`):
 | `VELESDB_DATA_DIR` | `/data` |
 | `VELESDB_HOST` | `0.0.0.0` |
 | `VELESDB_PORT` | `8080` |
-| `RUST_LOG` | `info` |
 
-`RUST_LOG` outranks the `[logging] level` of a mounted `velesdb.toml` and
-`VELESDB_LOGGING_LEVEL`; pass `-e RUST_LOG=` (empty counts as unset) to hand
-the level back to them. Log format and destination are `[logging] format` /
-`file` — see [CONFIGURATION.md](CONFIGURATION.md#section-logging).
+The image sets no `RUST_LOG`, so the log level comes from
+`VELESDB_LOGGING_LEVEL` or a mounted `velesdb.toml`'s `[logging] level`, and
+defaults to `info` plus `tower_http`'s per-request debug lines. Setting
+`RUST_LOG` (e.g. `-e RUST_LOG=info,velesdb_core=debug`) overrides both. Log
+format and destination are `[logging] format` / `file` — see
+[CONFIGURATION.md](CONFIGURATION.md#section-logging).
 
 It runs as the non-root `velesdb` user, exposes port 8080, and declares a
 `HEALTHCHECK` that curls `/health` every 30 s.
