@@ -161,13 +161,20 @@ impl Collection {
                 )
             })
             .min(super::MAX_LIMIT);
-        let index_results = self.storage.index.search_with_quality_and_bitmap(
-            vector,
-            candidates_k,
-            self.runtime_search_quality(),
-            &bitmap,
-        )?;
-        let index_results = self.merge_delta(index_results, vector, candidates_k, metric);
+        // The pending points get the same restriction as the index: the
+        // anchors (narrowed by the indexed metadata), and the residual
+        // metadata filter `filter_and_hydrate` applies below.
+        let restriction = crate::collection::search::pending::PendingRestriction::within(&bitmap)
+            .post_filtered_if(metadata_filter.is_some());
+        let index_results =
+            self.search_merging_pending(vector, candidates_k, metric, restriction, || {
+                self.storage.index.search_with_quality_and_bitmap(
+                    vector,
+                    candidates_k,
+                    self.runtime_search_quality(),
+                    &bitmap,
+                )
+            })?;
 
         let pass_all =
             crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] });

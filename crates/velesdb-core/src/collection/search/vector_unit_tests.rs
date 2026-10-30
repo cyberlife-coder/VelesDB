@@ -63,12 +63,21 @@ fn an_index_search_error_is_returned_not_read_as_no_match() {
         .expect("test: upsert");
 
     let control = collection
-        .search_ids_with_adc_if_pq(&[1.0, 0.0, 0.0, 0.0], 1, crate::SearchQuality::Balanced)
+        .search_ids_with_adc_if_pq(
+            &[1.0, 0.0, 0.0, 0.0],
+            1,
+            crate::SearchQuality::Balanced,
+            super::super::pending::PendingRestriction::NONE,
+        )
         .expect("CONTROL: a well-formed query succeeds");
     assert_eq!(control.len(), 1, "CONTROL: the fixture's point is found");
 
-    let outcome =
-        collection.search_ids_with_adc_if_pq(&[1.0, 0.0], 1, crate::SearchQuality::Balanced);
+    let outcome = collection.search_ids_with_adc_if_pq(
+        &[1.0, 0.0],
+        1,
+        crate::SearchQuality::Balanced,
+        super::super::pending::PendingRestriction::NONE,
+    );
     assert!(
         outcome.is_err(),
         "a query the index refuses must be an error, got {outcome:?}"

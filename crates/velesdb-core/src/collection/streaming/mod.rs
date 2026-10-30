@@ -19,6 +19,7 @@ pub mod deferred;
 #[cfg(feature = "persistence")]
 mod ingester;
 
+pub(crate) use async_index_builder::PendingIds;
 pub use async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
 
 #[cfg(feature = "persistence")]

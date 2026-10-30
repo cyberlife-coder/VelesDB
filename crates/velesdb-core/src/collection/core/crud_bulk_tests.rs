@@ -337,3 +337,43 @@ fn direct_written_slots_hold_their_own_vectors_while_the_builder_holds_them() {
         &lost[..lost.len().min(8)]
     );
 }
+
+/// A V2 collection whose index has its exact-distance features off, loaded
+/// from disk as a collection meets one: `upsert_bulk` then buffers vectors.
+fn fast_insert_v2_collection() -> (tempfile::TempDir, Collection) {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let path = dir.path().join("v2");
+    drop(v2_collection(path.clone(), HOLD_ALL));
+    crate::index::HnswIndex::new_fast_insert(DIM, DistanceMetric::Euclidean)
+        .expect("test: fast-insert index")
+        .save(&path)
+        .expect("test: save it over the collection's index");
+    let coll = Collection::open(path).expect("test: reopen the collection");
+    assert!(!coll.storage.index.has_vector_storage(), "premise");
+    (dir, coll)
+}
+
+/// A buffered point deleted or overwritten after its bulk load is scored on
+/// what storage holds now, not on the copy the builder queued.
+#[test]
+fn a_buffered_point_is_found_as_it_is_now() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+
+    coll.delete(&[150]).expect("test: delete");
+    assert_ne!(
+        first_hit(&coll, 150),
+        Some(150),
+        "a deleted point is returned"
+    );
+
+    coll.upsert([Point::without_payload(151, vector(10_000))])
+        .expect("test: upsert");
+    assert_ne!(
+        first_hit(&coll, 151),
+        Some(151),
+        "151 is found on the vector it was bulk-loaded with"
+    );
+    assert_eq!(first_hit(&coll, 10_000), Some(151), "151 on its new vector");
+}

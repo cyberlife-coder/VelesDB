@@ -410,15 +410,23 @@ a payload storage no longer holds. BM25, the secondary indexes and the
 histograms are still updated after that guard is released.
 
 **Async index builder queues.** `buffer` and `placed` (position 11) are taken
-on the search path as well as the write path: every vector search scores what
-the builder still holds (`AsyncIndexBuilder::search_pending`, merged by
-`Collection::merge_delta` as the delta buffer and the deferred indexer are),
-so a point `upsert_bulk`'s V2 path has returned for is found before a flush
-links it. A queue's lock is held only to copy the queue out; scoring the
-placed ids then takes the HNSW index guard with no queue lock held. A flush
-removes from a queue only what it has already indexed, so a search racing it
-finds each point in the graph, in the queue, or in both (deduplicated by id),
-never in neither.
+on the search path as well as the write path: every vector search scores the
+points the builder still holds and merges them with the index's results
+(`collection/search/pending.rs`), so a point `upsert_bulk`'s V2 path has
+returned for is found before a flush links it. A search takes each queue's
+lock only to copy its ids out (`AsyncIndexBuilder::pending_ids`), with no
+other lock held; it scores them afterwards with no queue lock held — a placed
+id under the HNSW index guard, from its arena slot, a buffered id from a copy
+of its vector read under the `vector_storage` (2) read guard and released
+before scoring. A batch search scores them before it takes the storage
+guards it resolves results under.
+
+The ids are copied **before** the index search, and a flush drops an id from
+its queue only after linking or inserting it. Every point the walk can miss
+is therefore in the copy: if the flush's drop came before the copy, the link
+came before the walk, and the walk can reach the point; otherwise the copy
+holds it. Copied after the walk instead, the queue could have lost a point
+the walk had already missed. A point found both ways is returned once.
 
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 

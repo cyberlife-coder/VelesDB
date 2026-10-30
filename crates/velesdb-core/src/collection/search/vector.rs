@@ -11,6 +11,8 @@ use crate::quantization::{
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
 
+use super::pending::PendingRestriction;
+
 /// Estimates the real selectivity from a pre-filter bitmap.
 ///
 /// Returns the ratio `bitmap.len() / collection_len` as an `f64` in
@@ -42,6 +44,7 @@ impl Collection {
         query: &[f32],
         k: usize,
         quality: crate::SearchQuality,
+        restriction: PendingRestriction<'_>,
     ) -> Result<Vec<ScoredResult>> {
         let config = self.storage.config.read();
         let is_pq = matches!(config.storage_mode, StorageMode::ProductQuantization);
@@ -58,18 +61,19 @@ impl Collection {
         // error read as an empty answer is the one failure a caller cannot tell
         // from a correct result, and every caller here returns a `Result`.
         if !is_pq || oversampling == 0 {
-            let results = self.storage.index.search_with_quality(query, k, quality)?;
-            return Ok(self.merge_delta(results, query, k, metric));
+            return self.search_merging_pending(query, k, metric, restriction, || {
+                self.storage.index.search_with_quality(query, k, quality)
+            });
         }
 
         let candidates_k = k.saturating_mul(oversampling).max(k + 32);
-        let index_results = self
-            .storage
-            .index
-            .search_with_quality(query, candidates_k, quality)?;
-        let rescored =
-            self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results);
-        Ok(self.merge_delta(rescored, query, k, metric))
+        self.search_merging_pending(query, k, metric, restriction, || {
+            let index_results =
+                self.storage
+                    .index
+                    .search_with_quality(query, candidates_k, quality)?;
+            Ok(self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results))
+        })
     }
 
     /// Rescores PQ candidates using the product quantizer cache.
@@ -108,18 +112,22 @@ impl Collection {
 
     /// Merges HNSW results with what is written but not indexed yet: the
     /// delta buffer, the deferred indexer and the async index builder's
-    /// queues (each if active).
+    /// pending points (each if active). Each returns `results` unchanged
+    /// when it holds nothing.
     ///
-    /// When all three hold nothing, this is a no-op that returns results
-    /// unchanged.
+    /// `pending` must be read before the index search that produced
+    /// `results`, and `restriction` is what that search admits; see
+    /// [`super::pending`].
     #[cfg(feature = "persistence")]
     #[inline]
     pub(crate) fn merge_delta(
         &self,
         results: Vec<ScoredResult>,
+        pending: &super::pending::PendingSnapshot,
         query: &[f32],
         k: usize,
         metric: DistanceMetric,
+        restriction: super::pending::PendingRestriction<'_>,
     ) -> Vec<ScoredResult> {
         let after_delta = crate::collection::streaming::merge_with_delta_scored(
             results,
@@ -129,28 +137,7 @@ impl Collection {
             metric,
         );
         let after_deferred = self.merge_deferred_search(after_delta, query, k, metric);
-        self.merge_async_pending(after_deferred, query, k, metric)
-    }
-
-    /// Merges search results with what the async index builder still holds:
-    /// `upsert_bulk`'s V2 path returns before the graph links its points, and
-    /// a graph walk cannot reach them until a flush does.
-    ///
-    /// No-op when no async index builder is configured or it holds nothing.
-    #[cfg(feature = "persistence")]
-    fn merge_async_pending(
-        &self,
-        results: Vec<ScoredResult>,
-        query: &[f32],
-        k: usize,
-        metric: DistanceMetric,
-    ) -> Vec<ScoredResult> {
-        let slot = self.streaming.async_index_builder.load();
-        let Some(aib) = slot.as_ref() else {
-            return results;
-        };
-        let pending = aib.search_pending(&self.storage.index, query, k, metric);
-        crate::collection::streaming::merge_pending_scored(results, pending, k, metric)
+        self.merge_pending(after_deferred, pending, query, k, metric, restriction)
     }
 
     /// Merges search results with the deferred indexer buffer.
@@ -174,18 +161,6 @@ impl Collection {
         let hnsw_tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
         let merged = di.merge_with_hnsw(hnsw_tuples, query, k, metric);
         merged.into_iter().map(ScoredResult::from).collect()
-    }
-
-    #[cfg(not(feature = "persistence"))]
-    #[inline]
-    pub(crate) fn merge_delta(
-        &self,
-        results: Vec<ScoredResult>,
-        _query: &[f32],
-        _k: usize,
-        _metric: DistanceMetric,
-    ) -> Vec<ScoredResult> {
-        results
     }
 }
 
@@ -308,8 +283,9 @@ impl Collection {
         Ok(config.metric)
     }
 
-    /// Shared search-pipeline epilogue: merges delta buffer, hydrates points and
-    /// payloads, then tags each result with its `vector_score` component.
+    /// Shared search-pipeline epilogue: hydrates points and payloads, then tags
+    /// each result with its `vector_score` component. The caller has merged
+    /// the pending points already (`search_merging_pending`).
     ///
     /// Factored from `search_with_ef` / `search_with_quality` /
     /// `search_with_forced_rerank` / `search_with_quality_no_rerank` for #452.
@@ -318,18 +294,13 @@ impl Collection {
     #[inline]
     pub(super) fn finalize_search_results(
         &self,
-        query: &[f32],
-        k: usize,
-        metric: DistanceMetric,
-        index_results: Vec<ScoredResult>,
+        index_results: &[ScoredResult],
     ) -> Vec<SearchResult> {
-        let index_results = self.merge_delta(index_results, query, k, metric);
-
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
 
         let mut results =
-            resolve::resolve_scored_results(&index_results, &*vector_storage, &*payload_storage);
+            resolve::resolve_scored_results(index_results, &*vector_storage, &*payload_storage);
         // Resolution is both guards' last use; tagging reads only `results`.
         drop(payload_storage);
         drop(vector_storage);
@@ -364,8 +335,12 @@ impl Collection {
         crate::validation::validate_vector_is_finite(query)?;
 
         // Use HNSW index for fast ANN search
-        let index_results =
-            self.search_ids_with_adc_if_pq(query, k, self.runtime_search_quality())?;
+        let index_results = self.search_ids_with_adc_if_pq(
+            query,
+            k,
+            self.runtime_search_quality(),
+            PendingRestriction::NONE,
+        )?;
 
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
@@ -398,8 +373,11 @@ impl Collection {
         // Convert ef_search to a value-preserving SearchQuality.
         let quality = super::vector_filter::ef_to_quality(ef_search);
 
-        let index_results = self.storage.index.search_with_quality(query, k, quality)?;
-        Ok(self.finalize_search_results(query, k, metric, index_results))
+        let index_results =
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
+                self.storage.index.search_with_quality(query, k, quality)
+            })?;
+        Ok(self.finalize_search_results(&index_results))
     }
 
     /// Rejects a Perfect (brute-force) search on a collection larger than the
@@ -452,8 +430,11 @@ impl Collection {
         let metric = self.validate_query_and_read_metric(query)?;
         self.enforce_perfect_mode_limit(quality)?;
 
-        let index_results = self.storage.index.search_with_quality(query, k, quality)?;
-        Ok(self.finalize_search_results(query, k, metric, index_results))
+        let index_results =
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
+                self.storage.index.search_with_quality(query, k, quality)
+            })?;
+        Ok(self.finalize_search_results(&index_results))
     }
 
     /// Routes vector search through `QuerySearchOptions` from a WITH clause.
@@ -502,11 +483,13 @@ impl Collection {
         let metric = self.validate_query_and_read_metric(query)?;
 
         let rerank_k = k.saturating_mul(4).max(k + 32);
-        let index_results = self
-            .storage
-            .index
-            .search_with_rerank_quality(query, k, rerank_k, quality)?;
-        Ok(self.finalize_search_results(query, k, metric, index_results))
+        let index_results =
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
+                self.storage
+                    .index
+                    .search_with_rerank_quality(query, k, rerank_k, quality)
+            })?;
+        Ok(self.finalize_search_results(&index_results))
     }
 
     /// Searches with a quality profile but suppresses two-stage reranking.
@@ -527,8 +510,11 @@ impl Collection {
         // implicit contract that "no rerank" only suppresses reranking, not the
         // candidate-pool sizing.
         let ef_search = quality.ef_search_for_scale(k, self.storage.index.len());
-        let index_results = self.storage.index.search_hnsw_only(query, k, ef_search);
-        Ok(self.finalize_search_results(query, k, metric, index_results))
+        let index_results =
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
+                Ok(self.storage.index.search_hnsw_only(query, k, ef_search))
+            })?;
+        Ok(self.finalize_search_results(&index_results))
     }
 
     /// Performs fast vector similarity search returning only IDs and scores.
@@ -556,7 +542,12 @@ impl Collection {
         let _metric = self.validate_query_and_read_metric(query)?;
 
         // Perf: Direct HNSW search without vector/payload retrieval
-        self.search_ids_with_adc_if_pq(query, k, self.runtime_search_quality())
+        self.search_ids_with_adc_if_pq(
+            query,
+            k,
+            self.runtime_search_quality(),
+            PendingRestriction::NONE,
+        )
     }
 
     /// Searches for the k nearest neighbors with metadata filtering.
@@ -632,13 +623,15 @@ impl Collection {
                 opts.record_executed_strategy(crate::velesql::FilterStrategy::PreFilter);
             }
             let ef_search = candidates_k.max(k * 10);
-            let results = self.storage.index.search_hnsw_only_filtered(
-                query,
-                candidates_k,
-                ef_search,
-                &bitmap,
-            );
-            return Ok(self.merge_delta(results, query, candidates_k, metric));
+            let restriction = PendingRestriction::within(&bitmap).and_post_filtered();
+            return self.search_merging_pending(query, candidates_k, metric, restriction, || {
+                Ok(self.storage.index.search_hnsw_only_filtered(
+                    query,
+                    candidates_k,
+                    ef_search,
+                    &bitmap,
+                ))
+            });
         }
         if let Some(opts) = opts {
             opts.record_executed_strategy(crate::velesql::FilterStrategy::PostFilter);
@@ -648,7 +641,12 @@ impl Collection {
         // its own `ef` in the same way -- and this change does not start. With
         // a default config it resolves to `Balanced`, exactly what the previous
         // `index.search` hard-coded.
-        self.search_ids_with_adc_if_pq(query, candidates_k, self.runtime_search_quality())
+        self.search_ids_with_adc_if_pq(
+            query,
+            candidates_k,
+            self.runtime_search_quality(),
+            PendingRestriction::post_filtered(),
+        )
     }
 }
 

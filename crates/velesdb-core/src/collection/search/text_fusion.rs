@@ -10,6 +10,7 @@
 //! - `maximum` / `average` / `rsf` -> score-level fusion of the raw vector
 //!   similarity and BM25 score streams via [`FusionStrategy`].
 
+use crate::collection::search::pending::PendingRestriction;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::fusion::FusionStrategy;
@@ -148,8 +149,9 @@ impl Collection {
         filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
         let candidate_k = k.saturating_mul(2).max(k + 10);
+        let restriction = PendingRestriction::NONE.post_filtered_if(filter.is_some());
         let (vector_stream, text_stream) =
-            self.hybrid_score_streams(vector_query, text_query, candidate_k)?;
+            self.hybrid_score_streams(vector_query, text_query, candidate_k, restriction)?;
         let direction = self.storage.config.read().metric.score_direction();
         let fused = fuse_streams(strategy, vector_stream, direction, text_stream)?;
         let resolved = self.resolve_fused_results(&fused, fused.len());
@@ -163,6 +165,7 @@ impl Collection {
         vector_query: &[f32],
         text_query: &str,
         candidate_k: usize,
+        restriction: PendingRestriction<'_>,
     ) -> Result<(ScoreStream, ScoreStream)> {
         let metric = {
             let config = self.storage.config.read();
@@ -170,12 +173,14 @@ impl Collection {
             config.metric
         };
         // Not `search`, which pins `Balanced` and ignores `[search]` (#2430).
-        let raw = self.storage.index.search_with_quality(
-            vector_query,
-            candidate_k,
-            self.runtime_search_quality(),
-        )?;
-        let vec_res = self.merge_delta(raw, vector_query, candidate_k, metric);
+        let vec_res =
+            self.search_merging_pending(vector_query, candidate_k, metric, restriction, || {
+                self.storage.index.search_with_quality(
+                    vector_query,
+                    candidate_k,
+                    self.runtime_search_quality(),
+                )
+            })?;
         let vector_stream: Vec<(u64, f32)> = vec_res.iter().map(|sr| (sr.id, sr.score)).collect();
         let text_stream = self.storage.text_index.search(text_query, candidate_k);
         Ok((vector_stream, text_stream))

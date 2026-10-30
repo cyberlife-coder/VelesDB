@@ -1,5 +1,6 @@
 //! Text and hybrid search methods for Collection.
 
+use super::pending::PendingRestriction;
 use super::resolve;
 use super::OrderedFloat;
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
@@ -62,15 +63,23 @@ fn compute_hybrid_scored(
     weight: f32,
     text_weight: f32,
     rrf_constant: f32,
+    restriction: PendingRestriction<'_>,
 ) -> Result<HybridScored> {
     // `search_with_quality`, not `search`: the latter pins `Balanced` and so
     // ignores the configured `[search]` quality (#2430).
-    let raw = collection.storage.index.search_with_quality(
+    let vec_res = collection.search_merging_pending(
         vector_query,
         overfetch_k,
-        collection.runtime_search_quality(),
+        metric,
+        restriction,
+        || {
+            collection.storage.index.search_with_quality(
+                vector_query,
+                overfetch_k,
+                collection.runtime_search_quality(),
+            )
+        },
     )?;
-    let vec_res = collection.merge_delta(raw, vector_query, overfetch_k, metric);
     let text_res = collection
         .storage
         .text_index
@@ -245,6 +254,7 @@ impl Collection {
             weight,
             text_weight,
             rrf_constant,
+            PendingRestriction::NONE,
         )?;
 
         let scored_ids = Self::top_k_from_scores(fused_scores, k);
@@ -409,6 +419,7 @@ impl Collection {
             weight,
             text_weight,
             rrf_constant,
+            PendingRestriction::post_filtered(),
         )?;
 
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();

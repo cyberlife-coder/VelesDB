@@ -12,6 +12,7 @@ mod batch;
 mod batch_tests;
 #[cfg(test)]
 mod distance_semantics_tests;
+pub(crate) mod pending;
 pub mod query;
 #[cfg(test)]
 mod query_validation_tests;

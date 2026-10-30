@@ -33,9 +33,7 @@ fn basis_vectors(count: usize, dim: usize) -> Vec<(u64, Vec<f32>)> {
 fn test_new_creates_empty_builder() {
     let builder = AsyncIndexBuilder::new(default_config());
     assert_eq!(builder.pending_len(), 0);
-    let index = make_index(2);
-    let results = builder.search_pending(&index, &[1.0, 0.0], 5, DistanceMetric::Cosine);
-    assert!(results.is_empty());
+    assert!(builder.pending_ids().is_empty());
 }
 
 #[test]
@@ -60,52 +58,18 @@ fn test_enqueue_returns_true_at_threshold() {
     assert!(builder.enqueue(vec![(3, vec![3.0])]));
 }
 
+/// Each pending id once, sorted: an id queued twice, and an id both placed
+/// and buffered, are one pending point.
 #[test]
-fn search_pending_finds_buffered_vectors() {
+fn pending_ids_names_each_waiting_id_once() {
     let builder = AsyncIndexBuilder::new(default_config());
-    builder.enqueue(vec![
-        (1, vec![1.0, 0.0, 0.0]),
-        (2, vec![0.0, 1.0, 0.0]),
-        (3, vec![0.0, 0.0, 1.0]),
-    ]);
-    let index = make_index(3);
+    builder.enqueue_placed([7, 3, 7]);
+    builder.enqueue_placed([3]);
+    builder.enqueue(vec![(9, vec![1.0]), (3, vec![1.0]), (9, vec![2.0])]);
 
-    let results = builder.search_pending(&index, &[1.0, 0.0, 0.0], 2, DistanceMetric::Cosine);
-    assert_eq!(results.len(), 2, "truncated to k");
-    // For cosine, the identical vector should be first
-    assert_eq!(results[0].0, 1);
-}
-
-/// Places `ids`' vectors in `index`'s arena and maps them, as `upsert_bulk`'s
-/// direct writer does, without linking them.
-fn place(index: &HnswIndex, vectors: &[(u64, Vec<f32>)]) {
-    let refs: Vec<(u64, &[f32])> = vectors.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-    crate::index::hnsw::direct_writer::DirectVectorWriter::new(index)
-        .write_batch_direct(&refs)
-        .expect("test: direct write")
-        .expect("test: an index with exact-distance features on places");
-}
-
-/// A placed id is scored from the slot it is mapped to, merged with the
-/// buffer, and a deleted one is skipped: the graph cannot reach either yet.
-#[test]
-fn search_pending_scores_placed_ids_from_the_arena() {
-    let dim = 4;
-    let index = make_index(dim);
-    let builder = AsyncIndexBuilder::new(default_config());
-    place(&index, &basis_vectors(4, dim));
-    builder.enqueue_placed([0, 1, 2, 3]);
-    builder.enqueue(vec![(9, vec![0.9, 0.1, 0.0, 0.0])]);
-    index.remove(1);
-
-    let results = builder.search_pending(&index, &[1.0, 0.0, 0.0, 0.0], 3, DistanceMetric::Cosine);
-    let ids: Vec<u64> = results.iter().map(|&(id, _)| id).collect();
-    assert_eq!(
-        ids[..2],
-        [0, 9],
-        "the placed and the buffered match, best first"
-    );
-    assert!(!ids.contains(&1), "a deleted id is not scored: {ids:?}");
+    let ids = builder.pending_ids();
+    assert_eq!(ids.placed, vec![3, 7]);
+    assert_eq!(ids.buffered, vec![9], "3 is placed already, 9 is once");
 }
 
 #[test]
@@ -132,7 +96,7 @@ fn test_flush_sync_empty_buffer() {
 }
 
 /// A flush that finds another in progress indexes nothing and leaves both
-/// queues — and so what `search_pending` finds — as they were.
+/// queues — and so what `pending_ids` names — as they were.
 #[test]
 fn flush_sync_skips_while_another_flush_runs() {
     let dim = 4;

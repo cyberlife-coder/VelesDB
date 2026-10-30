@@ -10,6 +10,7 @@
 #![allow(clippy::cast_sign_loss)]
 
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
+use crate::collection::search::pending::PendingRestriction;
 use crate::collection::search::resolve;
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -88,13 +89,17 @@ impl Collection {
 
         let strategy = decide_filter_strategy(selectivity, FilterDecisionMode::Exact, None);
         opts.record_executed_strategy(strategy);
+        // `filter_and_hydrate` re-matches every result: the bitmap can be a
+        // superset of the matches.
+        let restriction = PendingRestriction::within(bitmap).and_post_filtered();
         match strategy {
             FilterStrategy::PostFilter => {
                 self.search_post_filter(query, k, filter, quality, metric)
             }
             FilterStrategy::PreFilterExact => {
-                let results = self.storage.index.full_scan_with_bitmap(query, k, bitmap)?;
-                Ok(self.merge_delta(results, query, k, metric))
+                self.search_merging_pending(query, k, metric, restriction, || {
+                    self.storage.index.full_scan_with_bitmap(query, k, bitmap)
+                })
             }
             // Exact mode never emits `None`; if it ever did, the bitmap
             // path below is the shape that ran. Spelled out (no wildcard)
@@ -102,13 +107,14 @@ impl Collection {
             // and forces an explicit dispatch choice.
             FilterStrategy::PreFilter | FilterStrategy::None => {
                 let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
-                let results = self.storage.index.search_with_quality_and_bitmap(
-                    query,
-                    candidates_k,
-                    quality,
-                    bitmap,
-                )?;
-                Ok(self.merge_delta(results, query, candidates_k, metric))
+                self.search_merging_pending(query, candidates_k, metric, restriction, || {
+                    self.storage.index.search_with_quality_and_bitmap(
+                        query,
+                        candidates_k,
+                        quality,
+                        bitmap,
+                    )
+                })
             }
         }
     }
@@ -123,11 +129,17 @@ impl Collection {
         metric: crate::DistanceMetric,
     ) -> Result<Vec<ScoredResult>> {
         let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
-        let index_results = self
-            .storage
-            .index
-            .search_with_quality(query, candidates_k, quality)?;
-        Ok(self.merge_delta(index_results, query, candidates_k, metric))
+        self.search_merging_pending(
+            query,
+            candidates_k,
+            metric,
+            PendingRestriction::post_filtered(),
+            || {
+                self.storage
+                    .index
+                    .search_with_quality(query, candidates_k, quality)
+            },
+        )
     }
 
     /// Filters scored results by metadata and hydrates matching points.

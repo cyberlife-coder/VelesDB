@@ -71,16 +71,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   brute-force scan", but that scan had no caller — so dense, filtered, VelesQL
   `NEAR` and hybrid search all missed such a point (on a collection over the
   100-point exhaustive shortcut) until the next flush. Every vector search now
-  scores what the builder holds exactly and merges it with the index's
-  results, through the seam that already merges the delta buffer and the
-  deferred indexer: by id, the pending score winning, in the metric's order,
-  truncated to `k`. A flush keeps what it indexes in its queue until it is
-  indexed, so a search racing it never finds a point in neither place, and a
-  failed link leaves its points queued for the next flush. The cost is an exact scan
-  of the held points on each search, up to `merge_threshold` (default 10 000)
-  of them: 3.08 ms per search at 10 000 pending 768-d points
-  (`bulk_insert_v2_benchmark`'s `search_with_10k_pending_768d`, on a shared
-  4-vCPU cloud sandbox, not the reference machine), paid only until a flush
+  reads the builder's pending ids before its index search, scores them
+  exactly on what the collection holds for each now (a point deleted or
+  overwritten since is skipped or scored on its new vector, an id queued
+  twice is scored once) and merges them with the index's results. The
+  search's own restriction applies to them before they compete for its `k`:
+  a filter's bitmap or a graph anchor set admits only its ids, and a search
+  that post-filters keeps every admitted pending point, so pending points
+  outside a filter or anchor set neither appear nor take the place of a
+  match. A flush drops what it indexes from its queue only once indexed, so a
+  search racing it finds every point. The cost is an exact scan of the
+  pending points on each search, up to `merge_threshold` (default 10 000) of
+  them, more while a flush that failed or found another running leaves its
+  queue behind (the next `upsert_bulk` over the threshold flushes again and
+  returns a failing link's error). A post-filtered search scans and keeps
+  all admitted pending points rather than its `k`, and a batch or
+  multi-query search pays the scan once per query. Measured at 10 000
+  pending 768-d points (`bulk_insert_v2_benchmark`'s
+  `search_with_10k_pending_768d`, on a shared 4-vCPU cloud sandbox, not the
+  reference machine): see `docs/BENCHMARKS.md`. It lasts only until a flush
   or the threshold links them.
 
 ### Documentation

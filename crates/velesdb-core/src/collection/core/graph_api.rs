@@ -715,11 +715,17 @@ impl Collection {
         // the HNSW has dimension 0 and the guard above already rejected the call.
         let metric = self.storage.config.read().metric;
         // Not `VectorIndex::search`: it pins `Balanced` and so ignores `[search]` (#2430).
-        let ids =
-            self.storage
-                .index
-                .search_with_quality(query, k, self.runtime_search_quality())?;
-        let ids = self.merge_delta(ids, query, k, metric);
+        let ids = self.search_merging_pending(
+            query,
+            k,
+            metric,
+            crate::collection::search::pending::PendingRestriction::NONE,
+            || {
+                self.storage
+                    .index
+                    .search_with_quality(query, k, self.runtime_search_quality())
+            },
+        )?;
 
         // Acquire each lock once: collect vector data, then collect payload data.
         // This avoids holding vector_storage while locking payload_storage per item.

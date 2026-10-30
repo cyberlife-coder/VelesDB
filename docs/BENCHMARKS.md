@@ -306,13 +306,16 @@ every search scores exactly until a flush links it.
 
 | Operation | Latency |
 |-----------|---------|
-| **Search, 10K × 768-d points pending (Cosine, k=10)** | 3.08 ms (95% CI 2.93–3.23 ms) |
+| **Search, 10K × 768-d points pending (Cosine, k=10)** | 2.68 ms (95% CI 2.59–2.76 ms) |
 
 *Measured 2026-10-30 on a shared 4-vCPU cloud sandbox (Intel Xeon @ 2.10 GHz)
 while other builds ran, criterion with 50 samples: an order-of-magnitude
 figure, not the reference machine. The scan is single-threaded and linear in
 both the pending count and the dimension; it stops once a flush, or the
-`merge_threshold`-th pending point, links them into the graph.*
+`merge_threshold`-th pending point, links them into the graph. An unfiltered
+search keeps the best `k` of them; a search that post-filters keeps every
+pending point its bitmap admits and resolves them against its filter, and a
+batch or multi-query search pays the scan once per query.*
 
 ---
 

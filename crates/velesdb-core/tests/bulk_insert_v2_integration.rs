@@ -470,3 +470,180 @@ fn a_bulk_point_the_builder_holds_is_found_by_hybrid_search() {
         .expect("hybrid search");
     assert!(ids(&hits).contains(&PENDING_TARGET), "got {:?}", ids(&hits));
 }
+
+// ── Restricted searches and the points the builder holds ────────────────
+
+/// The query of the restricted-search tests: every pending point lies next
+/// to it, every linked point far from it.
+fn restricted_query() -> Vec<f32> {
+    dispersed(1_000_000)
+}
+
+/// A pending point near `restricted_query`: the query with one coordinate
+/// nudged, so each is distinct and all are closer than any linked point.
+fn near_query(id: u64) -> Vec<f32> {
+    let mut v = restricted_query();
+    let len = v.len();
+    let i = usize::try_from(id).expect("test: id fits a usize") % len;
+    v[i] += 1e-3 * (1.0 + (id % 7) as f32);
+    v
+}
+
+/// `VISIBILITY_BATCH` linked points — `cat` `"rare"` for ids 0..3, `"linked"`
+/// otherwise, text "zebra" — then `VISIBILITY_BATCH` pending points, all
+/// nearer the query than any linked one, `cat` `"pending"`, text "okapi".
+fn collection_with_close_pending(dir: &std::path::Path, indexed: bool) -> VectorCollection {
+    let config = AsyncIndexBuilderConfig {
+        merge_threshold: 10_000,
+        segment_count: None,
+    };
+    let coll = VectorCollection::create_with_async_builder(
+        dir.join("restricted"),
+        16,
+        DistanceMetric::Euclidean,
+        config,
+    )
+    .expect("create collection with async builder");
+    if indexed {
+        coll.create_index("cat").expect("secondary index on cat");
+    }
+    let linked: Vec<Point> = (0..VISIBILITY_BATCH)
+        .map(|id| {
+            let cat = if id < 3 { "rare" } else { "linked" };
+            let payload = serde_json::json!({ "cat": cat, "title": "zebra" });
+            Point::new(id, dispersed(id), Some(payload))
+        })
+        .collect();
+    coll.upsert_bulk(&linked).expect("linked upsert_bulk");
+    coll.flush().expect("flush links the first batch");
+    let pending: Vec<Point> = (VISIBILITY_BATCH..2 * VISIBILITY_BATCH)
+        .map(|id| {
+            let payload = serde_json::json!({ "cat": "pending", "title": "okapi" });
+            Point::new(id, near_query(id), Some(payload))
+        })
+        .collect();
+    coll.upsert_bulk(&pending).expect("pending upsert_bulk");
+    coll
+}
+
+fn cats(results: &[velesdb_core::SearchResult]) -> Vec<String> {
+    results
+        .iter()
+        .map(|r| {
+            r.point
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("cat"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("?")
+                .to_string()
+        })
+        .collect()
+}
+
+fn assert_k_linked(label: &str, results: &[velesdb_core::SearchResult], k: usize) {
+    let cats = cats(results);
+    assert_eq!(cats.len(), k, "{label}: got {cats:?}");
+    assert!(
+        cats.iter().all(|c| c == "linked"),
+        "{label}: a result outside the filter, {cats:?}"
+    );
+}
+
+/// A filter that selects against the pending points must still return `k`
+/// linked matches: pending points nearer the query must not take their
+/// places before the filter runs.
+#[test]
+fn a_filter_against_the_pending_points_still_returns_k_matches() {
+    let k = 5;
+    for indexed in [false, true] {
+        let tmp = TempDir::new().expect("temp dir");
+        let coll = collection_with_close_pending(tmp.path(), indexed);
+        let q = restricted_query();
+        let filter = velesdb_core::Filter::new(velesdb_core::Condition::eq("cat", "linked"));
+        let label = |what: &str| format!("{what} (secondary index: {indexed})");
+
+        let hits = coll.search_with_filter(&q, k, &filter).expect("filtered");
+        assert_k_linked(&label("search_with_filter"), &hits, k);
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("v".to_string(), serde_json::json!(q));
+        for sql in [
+            "SELECT * FROM restricted WHERE vector NEAR $v AND cat = 'linked' LIMIT 5",
+            "SELECT * FROM restricted WHERE vector NEAR $v AND cat = 'linked' LIMIT 5 \
+             WITH (mode='balanced')",
+        ] {
+            let hits = coll.execute_query_str(sql, &params).expect("VelesQL");
+            assert_k_linked(&label(sql), &hits, k);
+        }
+
+        let batch = coll
+            .search_batch_with_filters(&[q.as_slice()], k, &[Some(filter.clone())])
+            .expect("batch");
+        assert_k_linked(&label("search_batch_with_filters"), &batch[0], k);
+
+        let multi = coll
+            .multi_query_search(
+                &[q.as_slice()],
+                k,
+                velesdb_core::fusion::FusionStrategy::Average,
+                Some(&filter),
+            )
+            .expect("multi-query");
+        assert_k_linked(&label("multi_query_search"), &multi, k);
+
+        let hybrid = coll
+            .hybrid_search_with_filter(&q, "zebra okapi", k, Some(0.5), &filter)
+            .expect("hybrid");
+        assert_k_linked(&label("hybrid_search_with_filter"), &hybrid, k);
+    }
+}
+
+/// A selective filter answered by an exact bitmap scan returns every match,
+/// however many pending points lie nearer the query.
+#[test]
+fn an_exact_prefilter_returns_every_match_past_the_pending_points() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_close_pending(tmp.path(), true);
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!(restricted_query()));
+    let hits = coll
+        .execute_query_str(
+            "SELECT * FROM restricted WHERE vector NEAR $v AND cat = 'rare' LIMIT 3 \
+             WITH (mode='balanced')",
+            &params,
+        )
+        .expect("VelesQL");
+    let mut got = ids(&hits);
+    got.sort_unstable();
+    assert_eq!(got, vec![0, 1, 2]);
+}
+
+/// An id `upsert_bulk` wrote twice while the builder held it is one point.
+#[test]
+fn an_id_bulk_loaded_twice_while_pending_is_returned_once() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_close_pending(tmp.path(), false);
+    let again = [Point::new(
+        VISIBILITY_BATCH,
+        near_query(VISIBILITY_BATCH),
+        None,
+    )];
+    coll.upsert_bulk(&again)
+        .expect("second upsert_bulk of one id");
+    let hits = coll
+        .search(&near_query(VISIBILITY_BATCH), 20)
+        .expect("search");
+    // `near_query` repeats every 112 ids, so 300 ties with 412 at distance 0.
+    assert!(ids(&hits).contains(&VISIBILITY_BATCH), "premise");
+    let mut got = ids(&hits);
+    let returned = got.len();
+    got.sort_unstable();
+    got.dedup();
+    assert_eq!(
+        got.len(),
+        returned,
+        "an id was returned twice: {:?}",
+        ids(&hits)
+    );
+}
