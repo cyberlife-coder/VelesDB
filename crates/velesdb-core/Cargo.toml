@@ -327,6 +327,10 @@ name = "edge_store_benchmark"
 harness = false
 
 [[bench]]
+name = "json_float_parse_benchmark"
+harness = false
+
+[[bench]]
 name = "match_parser_benchmark"
 harness = false
 

@@ -528,7 +528,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   768-dimension query body (15.5 KB, release build), parsing went from
   38-40 µs to 56-63 µs into a typed `Vec<f32>` (about +20 µs per vector,
   +200 ms per 10 000-vector batch) and from 44-47 µs to 57-61 µs into a
-  `serde_json::Value`. An `f32` is now parsed directly and correctly rounded
+  `serde_json::Value` (`benches/json_float_parse_benchmark.rs` runs the same
+  parse). An `f32` is now parsed directly and correctly rounded
   instead of through `f64`, so a vector component can differ from before by
   one `f32` ULP, toward the exact value.
 - **Graph edges with properties survive a flush and a reopen.** `flush()`
