@@ -151,54 +151,6 @@ impl GpuTrigramAccelerator {
     }
 }
 
-/// Compute backend selection for trigram operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)] // Used only when `gpu` feature is active
-pub(crate) enum TrigramComputeBackend {
-    /// CPU SIMD (default, always available)
-    #[default]
-    CpuSimd,
-    /// GPU via wgpu (requires `gpu` feature)
-    #[cfg(feature = "gpu")]
-    Gpu,
-}
-
-#[allow(dead_code)] // Used only when `gpu` feature is active
-impl TrigramComputeBackend {
-    /// Select best available backend based on workload size.
-    #[must_use]
-    pub fn auto_select(doc_count: usize, pattern_count: usize) -> Self {
-        #[cfg(not(feature = "gpu"))]
-        let _ = (doc_count, pattern_count);
-
-        #[cfg(feature = "gpu")]
-        {
-            // GPU is better for large workloads
-            if doc_count > 500_000 || (doc_count > 100_000 && pattern_count > 10) {
-                if crate::gpu::ComputeBackend::gpu_available() {
-                    return Self::Gpu;
-                }
-            }
-        }
-
-        Self::CpuSimd
-    }
-
-    /// Get backend name for logging.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::CpuSimd => "CPU SIMD",
-            #[cfg(feature = "gpu")]
-            Self::Gpu => "GPU (wgpu)",
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "gpu_tests.rs"]
-mod tests;
-
 #[cfg(all(test, feature = "gpu"))]
 #[path = "gpu_feature_tests.rs"]
 mod gpu_tests;

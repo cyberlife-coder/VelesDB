@@ -192,7 +192,6 @@ in-place vector normalization using `_mm256_mul_ps`.
 **Functions**:
 - `hsum_avx256()` - Horizontal sum of AVX2 `__m256` register
 - `hsum_avx512()` - Horizontal sum of AVX-512 `__m512` register
-- `reduce_4acc_avx256()` / `reduce_4acc_avx512()` - 4-accumulator reduction
 
 **Macros** (expand inside `unsafe` contexts at call sites):
 - `simd_4acc_dot_loop!` / `simd_4acc_l2_loop!` - 4-accumulator unrolled loops
@@ -463,31 +462,33 @@ This is sound because:
 **Struct**: `ContiguousVectors` (impl block — extends `perf_optimizations.rs`)
 
 **Critical Operations**:
-1. `reorder_copy()` - Out-of-place vector reordering with `dealloc` + `copy_nonoverlapping`
-2. `Drop for ContiguousVectors` - Deallocates the raw buffer via `dealloc`
+1. `reorder()` - In-place permutation of the live vectors through
+   `live_flat_mut()`, one `slice::from_raw_parts_mut` over the arena; nothing
+   is allocated or copied out of place
+2. `Drop for ContiguousVectors` - Deallocates a heap-backed buffer via
+   `dealloc`
 
 **Invariants**:
-1. `old_idx < self.count` is bounds-checked before `copy_nonoverlapping`
-2. `new_idx < new_order.len() == self.count` ensures destination is in bounds
-3. Source and destination buffers are distinct (non-overlapping) allocations
-4. `AllocGuard` provides panic-safety: if `copy_permuted_vectors` panics,
-   the guard deallocates the new buffer; the old buffer remains valid
-5. `Drop::drop` uses `NonNull` invariant (pointer is always non-null)
+1. `new_order` is validated as a bijection on `0..count`
+   (`validate_permutation`) before any vector moves, so the permutation only
+   swaps slots that exist and loses none
+2. `live_flat_mut()` spans `count * dimension` f32s, and
+   `count <= capacity`, so the slice stays inside the allocation; `&mut self`
+   excludes any other live reference to those bytes
+3. `Drop::drop` returns before touching the allocator unless the backing is
+   the heap: a file-mapped arena's bytes belong to the mapping and are released
+   by dropping `backing` (#2112)
+4. `Drop::drop` uses the `NonNull` invariant (pointer is always non-null) and
+   recomputes the layout the buffer was allocated with
 
 **Why It's Sound**:
 ```rust
-// SAFETY: src is within the current allocation (old_idx < count, count <= capacity).
-// dst is within the new allocation (new_idx < new_order.len() == count).
-// Both buffers are distinct (non-overlapping) allocations.
-unsafe {
-    ptr::copy_nonoverlapping(
-        self.data.as_ptr().add(old_idx * dim),
-        dst.add(new_idx * dim),
-        dim,
-    );
-}
+// SAFETY: `data` addresses `capacity * dimension` initialized f32s;
+// `total = count * dimension <= capacity * dimension`; `&mut self` excludes
+// any other live reference to these bytes for the slice's lifetime.
+unsafe { std::slice::from_raw_parts_mut(self.data.as_ptr(), total) }
 
-// Drop: SAFETY: data was allocated with this layout, is non-null (NonNull invariant)
+// Drop (heap backing only): data was allocated with this layout, is non-null.
 unsafe { dealloc(self.data.as_ptr().cast::<u8>(), layout); }
 ```
 
@@ -526,7 +527,7 @@ unsafe { dealloc(self.data.as_ptr().cast::<u8>(), layout); }
    *backstop* against pathological/attacker-controlled or arithmetic-wrapped
    sizes — far above any single contiguous buffer VelesDB legitimately
    allocates, so it never rejects a real index. It is threaded through the
-   `ContiguousVectors` construct / resize / reorder allocation paths plus the
+   `ContiguousVectors` construct / resize allocation paths plus the
    `check_alloc_bound` pre-check. It does not affect soundness of the RAII
    guarantee; it only narrows which requests reach the system allocator.
    Primary defense against untrusted sizes remains the per-artifact load-time
@@ -558,7 +559,8 @@ unsafe impl Send for AllocGuard {}
 **Critical Operations**:
 1. `MmapMut::map_mut()` - Creates memory mapping
 2. `ensure_capacity()` - Resizes the mmap (remap)
-3. `get_vector()` - Returns a guarded slice into mmap
+3. `retrieve_ref()` - Returns a `VectorSliceGuard`, a guarded slice into the
+   mmap
 
 **Invariants**:
 1. File is always `set_len()` before mapping
@@ -1230,7 +1232,8 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 ---
 
-*Last updated: 2026-08-09 · Applies to: velesdb-core 8.0.0 (this stamp tracks
-the document revision; this revision adds the `parking_lot`-features invariant to
-the `VectorSliceGuard` entry. The underlying unsafe audit was last run in full on
+*Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0 (this stamp tracks
+the document revision; this revision describes the in-place
+`ContiguousVectors::reorder` and `retrieve_ref`, and drops the removed
+`reduce_4acc_*` helpers. The underlying unsafe audit was last run in full on
 2026-06-12, as stated at the top of this page)*

@@ -13,10 +13,6 @@ use std::time::Duration;
 /// Delay between two heartbeats of a long-running process.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Entry reported by the deprecated entry points, which cannot say which
-/// binary they run in.
-const LEGACY_ENTRY: &str = "library";
-
 /// Telemetry payload. What it contains is listed in
 /// `docs/guides/CONFIGURATION.md`; adding a field is a privacy decision.
 #[derive(Debug, Clone, Serialize)]
@@ -208,17 +204,6 @@ pub async fn check_for_updates_with(config: &UpdateCheckConfig, context: &Update
     run(config, context, Cadence::Once).await;
 }
 
-/// Deprecated form of [`check_for_updates_with`]: it cannot say which binary
-/// it runs in, so the check is reported with the entry `"library"`.
-#[deprecated(
-    since = "7.0.0",
-    note = "use `check_for_updates_with`, which reports the calling binary"
-)]
-pub async fn check_for_updates(config: &UpdateCheckConfig, data_dir: &Path, edition: &str) {
-    let context = UpdateCheckContext::new(LEGACY_ENTRY, edition).with_data_dir(data_dir);
-    check_for_updates_with(config, &context).await;
-}
-
 async fn send_update_check(
     endpoint: &str,
     payload: &UpdateCheckPayload,
@@ -283,17 +268,6 @@ pub fn spawn_update_check_with(config: UpdateCheckConfig, context: UpdateCheckCo
 /// ends with the process and never delays shutdown.
 pub fn spawn_update_heartbeat(config: UpdateCheckConfig, context: UpdateCheckContext) {
     spawn(config, context, Cadence::Every(HEARTBEAT_INTERVAL));
-}
-
-/// Deprecated form of [`spawn_update_check_with`]: it cannot say which
-/// binary it runs in, so the check is reported with the entry `"library"`.
-#[deprecated(
-    since = "7.0.0",
-    note = "use `spawn_update_check_with`, which reports the calling binary"
-)]
-pub fn spawn_update_check(config: UpdateCheckConfig, data_dir: PathBuf, edition: String) {
-    let context = UpdateCheckContext::new(LEGACY_ENTRY, edition).with_data_dir(data_dir);
-    spawn_update_check_with(config, context);
 }
 
 #[cfg(test)]

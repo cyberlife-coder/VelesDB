@@ -156,7 +156,6 @@ impl QueryResultRow {
 
     /// Returns the JSON payload of this row (for native-target tests).
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn data_json_ref(&self) -> &str {
         &self.data_json
     }
@@ -292,16 +291,8 @@ impl QueryResult {
         }
     }
 
-    /// Returns the kind for native tests.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn kind_enum(&self) -> QueryResultKind {
-        self.kind
-    }
-
     /// Returns the raw row slice for native tests.
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn rows_ref(&self) -> &[QueryResultRow] {
         &self.rows
     }

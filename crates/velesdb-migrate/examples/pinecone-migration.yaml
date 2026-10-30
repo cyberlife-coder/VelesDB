@@ -4,7 +4,6 @@
 source:
   type: pinecone
   api_key: ${PINECONE_API_KEY}
-  environment: us-east-1-aws
   index: my-index
   # namespace: production  # Optional
 

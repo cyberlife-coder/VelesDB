@@ -36,14 +36,10 @@ mod instance_id;
 mod check;
 
 pub use config::UpdateCheckConfig;
-#[allow(deprecated)] // Reason: re-exports the deprecated hash helper until the next major
-pub use instance_id::compute_instance_hash;
 
 #[cfg(feature = "update-check")]
-#[allow(deprecated)] // Reason: re-exports the deprecated entry points until the next major
 pub use check::{
-    check_for_updates, check_for_updates_with, spawn_update_check, spawn_update_check_with,
-    spawn_update_heartbeat, UpdateCheckContext,
+    check_for_updates_with, spawn_update_check_with, spawn_update_heartbeat, UpdateCheckContext,
 };
 
 #[cfg(test)]

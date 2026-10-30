@@ -16,8 +16,6 @@
 //! - `velesdb_match_*`: MATCH query throughput, latency histogram and
 //!   guard-rail hits (process-wide, not per collection)
 
-#![allow(dead_code)] // Functions exposed via feature flag, used when prometheus feature enabled
-
 use axum::{
     extract::State,
     http::StatusCode,

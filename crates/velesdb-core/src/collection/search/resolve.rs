@@ -118,25 +118,6 @@ pub(crate) fn sort_scored_by_metric(results: &mut [ScoredResult], higher_is_bett
     results.sort_unstable_by(|a, b| metric_score_order(a.score, b.score, higher_is_better));
 }
 
-/// Sorts `SearchResult` values by score descending (higher scores first).
-///
-/// Used for BM25 text search, sparse search, and fusion results where
-/// higher scores always indicate better matches.
-///
-/// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
-#[allow(dead_code)] // Reason: BM25/sparse search utility — callers exist in test suite; future SDK wiring pending
-pub(crate) fn sort_results_descending(results: &mut [SearchResult]) {
-    results.sort_unstable_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or_else(|| {
-            match (a.score.is_nan(), b.score.is_nan()) {
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => std::cmp::Ordering::Equal,
-            }
-        })
-    });
-}
-
 /// Creates a "sparse index not found" error with consistent formatting.
 ///
 /// Displays `<default>` for empty index names to aid debugging.

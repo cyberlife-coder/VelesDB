@@ -86,34 +86,6 @@ impl FileMutator {
     pub fn corrupt_header(&self, header_size: usize) -> std::io::Result<()> {
         self.bitflip_at(0, header_size.min(16))
     }
-
-    /// Creates an empty file (simulates failed creation).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if file operations fail.
-    #[allow(dead_code)]
-    pub fn make_empty(&self) -> std::io::Result<()> {
-        File::create(&self.path)?;
-        Ok(())
-    }
-
-    /// Overwrites file with zeros at given offset.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if file operations fail.
-    #[allow(dead_code)]
-    pub fn zero_out(&self, offset: u64, count: usize) -> std::io::Result<()> {
-        let mut file = OpenOptions::new().read(true).write(true).open(&self.path)?;
-
-        file.seek(SeekFrom::Start(offset))?;
-        let zeros = vec![0u8; count];
-        file.write_all(&zeros)?;
-        file.sync_all()?;
-
-        Ok(())
-    }
 }
 
 /// Helper to create a test collection with data.

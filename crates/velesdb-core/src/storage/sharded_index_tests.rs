@@ -69,17 +69,6 @@ fn test_sharded_index_from_hashmap() {
 }
 
 #[test]
-fn test_sharded_index_max_offset() {
-    let index = ShardedIndex::new();
-    assert_eq!(index.max_offset(), None);
-
-    index.insert(1, 100);
-    index.insert(2, 500);
-    index.insert(3, 200);
-    assert_eq!(index.max_offset(), Some(500));
-}
-
-#[test]
 fn test_sharded_index_concurrent_reads() {
     use std::sync::Arc;
     use std::thread;

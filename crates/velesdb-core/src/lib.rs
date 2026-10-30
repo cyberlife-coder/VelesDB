@@ -201,14 +201,10 @@ pub mod velesql;
 pub mod wire;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
-#[allow(deprecated)] // Reason: re-exports the deprecated entry points until the next major
 pub use update_check::{
-    check_for_updates, check_for_updates_with, spawn_update_check, spawn_update_check_with,
-    spawn_update_heartbeat, UpdateCheckContext,
+    check_for_updates_with, spawn_update_check_with, spawn_update_heartbeat, UpdateCheckConfig,
+    UpdateCheckContext,
 };
-#[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
-#[allow(deprecated)] // Reason: re-exports the deprecated hash helper until the next major
-pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 
 #[cfg(feature = "persistence")]
 pub use index::{HnswIndex, HnswParams, VectorIndex};
@@ -301,9 +297,7 @@ pub use metrics::{
     average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,
     precision_at_k, recall_at_k, LatencyStats,
 };
-pub use metrics::{
-    DurationHistogram, GuardRailsMetrics, OperationalMetrics, QueryStats, TraversalMetrics,
-};
+pub use metrics::{DurationHistogram, GuardRailsMetrics, OperationalMetrics, QueryStats};
 
 #[cfg(feature = "persistence")]
 mod database;
