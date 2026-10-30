@@ -1139,4 +1139,4 @@ following it under the index read guard — see
 
 ---
 
-*Last updated: 2026-08-09 · Applies to: velesdb-core 7.1.0 (this revision: corrected the lock-order enforcement section — `assert_lock_order` is unwired in production, the HNSW tracker is debug-only, warn-only and partial, the collection tier is convention-only — and the CSR snapshot thread-safety section to describe the lock-free `ArcSwap` + dirty-flag protocol; previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*
+*Last updated: 2026-08-09 · Applies to: velesdb-core 8.0.0 (this revision: corrected the lock-order enforcement section — `assert_lock_order` is unwired in production, the HNSW tracker is debug-only, warn-only and partial, the collection tier is convention-only — and the CSR snapshot thread-safety section to describe the lock-free `ArcSwap` + dirty-flag protocol; previous revision noted: HNSW persisted-graph reload at open; storage compaction concurrency)*

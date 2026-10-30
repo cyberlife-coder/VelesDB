@@ -275,4 +275,4 @@ the VelesDB engine and are governed by that license.
 
 ---
 
-`velesdb-mobile v7.1.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 7.1.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
+`velesdb-mobile v8.0.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 8.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

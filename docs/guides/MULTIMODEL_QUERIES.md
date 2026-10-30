@@ -210,5 +210,5 @@ When combining vector and graph results:
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 8.0.0
 

@@ -18,4 +18,4 @@ resumption. The store is on disk, so memory persists across agent runs.
 from langgraph_velesdb.tools import make_memory_tools
 
 __all__ = ["make_memory_tools"]
-__version__ = "7.1.0"
+__version__ = "8.0.0"

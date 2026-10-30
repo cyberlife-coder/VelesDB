@@ -245,4 +245,4 @@ the platforms and toolchains the project builds and tests on.
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
