@@ -180,6 +180,44 @@ fn is_windows_reserved(name: &str) -> bool {
     )
 }
 
+/// The most arrays and objects `serde_json` reads back nested in one document.
+///
+/// Its parser stops at the 128th level, so a value written inside a deeper
+/// JSON document is written, and then fails to decode.
+pub const MAX_JSON_NESTING: usize = 127;
+
+/// The deepest nesting of arrays and objects an edge's properties may have,
+/// the properties map counting as the first level.
+///
+/// Three levels below [`MAX_JSON_NESTING`], for the deepest JSON document
+/// core writes an edge into: the agent-memory snapshot, whose envelope, edge
+/// list and edge hold the properties. Every shallower one (an edge WAL
+/// record, the edge snapshot's JSON property strings) fits.
+pub const MAX_VALUE_DEPTH: usize = MAX_JSON_NESTING - 3;
+
+/// Whether any of `values`, each held `depth` arrays or objects deep, nests
+/// past `limit` levels in all. Iterative, so a hostile depth cannot overflow
+/// the stack, and it stops at the first container past the limit.
+#[cfg(feature = "persistence")] // Its caller, the graph store, is.
+pub(crate) fn nests_deeper_than<'a>(
+    values: impl IntoIterator<Item = &'a serde_json::Value>,
+    depth: usize,
+    limit: usize,
+) -> bool {
+    use serde_json::Value;
+
+    let mut pending: Vec<(&Value, usize)> = values.into_iter().map(|v| (v, depth + 1)).collect();
+    while let Some((value, depth)) = pending.pop() {
+        match value {
+            Value::Array(_) | Value::Object(_) if depth > limit => return true,
+            Value::Array(items) => pending.extend(items.iter().map(|c| (c, depth + 1))),
+            Value::Object(map) => pending.extend(map.values().map(|c| (c, depth + 1))),
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Convenience constructor for [`Error::InvalidCollectionName`].
 fn invalid_name(name: &str, reason: &str) -> Error {
     Error::InvalidCollectionName {

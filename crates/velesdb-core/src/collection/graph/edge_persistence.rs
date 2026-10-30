@@ -1,10 +1,11 @@
 //! `EdgeStore` persistence (serialization/deserialization) methods.
 //!
-//! Extracted from `edge.rs` to reduce NLOC below the 500 threshold.
+//! Extracted from `edge.rs` to reduce NLOC below the 500 threshold. The
+//! snapshot form itself is `edge::snapshot_wire`.
 
 use super::csr_snapshot::{CsrSnapshot, SnapshotBuilder};
+use super::edge::snapshot_wire;
 use super::edge::EdgeStore;
-use super::helpers::PostcardPersistence;
 
 // ---------------------------------------------------------------------------
 // CSR snapshot methods (G1: zero-copy BFS)
@@ -76,28 +77,30 @@ impl EdgeStore {
     }
 }
 
-impl PostcardPersistence for EdgeStore {}
-
-// Inherent persistence methods that delegate to `PostcardPersistence`.
+// Persistence through the private snapshot form (`edge::snapshot_wire`):
+// `EdgeStore` has no serde representation of its own.
 impl EdgeStore {
-    /// Serializes the edge store to bytes using `postcard`.
+    /// Serializes the edge store to its `edge_store.bin` snapshot bytes.
     ///
     /// # Errors
-    /// Returns an error if serialization fails.
+    /// Returns an error if serialization fails, including when an edge's
+    /// properties nest deeper than
+    /// [`MAX_JSON_NESTING`](crate::validation::MAX_JSON_NESTING), which the
+    /// snapshot could not read back.
     pub fn to_bytes(&self) -> std::result::Result<Vec<u8>, postcard::Error> {
-        <Self as PostcardPersistence>::to_bytes(self)
+        snapshot_wire::to_bytes(self)
     }
 
-    /// Deserializes an edge store from bytes.
+    /// Deserializes an edge store from snapshot bytes.
     ///
     /// Rebuilds the (unserialized) label table and label indices, so by-label
     /// queries work on the returned store exactly as on the one serialized —
-    /// `serde(skip)` fields would otherwise come back empty (#2089).
+    /// they would otherwise come back empty (#2089).
     ///
     /// # Errors
     /// Returns an error if deserialization fails (e.g., corrupted data).
     pub fn from_bytes(bytes: &[u8]) -> std::result::Result<Self, postcard::Error> {
-        let mut store = <Self as PostcardPersistence>::from_bytes(bytes)?;
+        let mut store = snapshot_wire::from_bytes(bytes)?;
         store
             .rebuild_label_indexes()
             // Unreachable in practice (u32::MAX distinct labels); surfaced as
@@ -106,12 +109,15 @@ impl EdgeStore {
         Ok(store)
     }
 
-    /// Saves the edge store to a file.
+    /// Saves the edge store to a file **atomically** (see
+    /// `storage::atomic_write`): a crash mid-write leaves the previous
+    /// snapshot intact.
     ///
     /// # Errors
     /// Returns an error if serialization or file I/O fails.
     pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
-        <Self as PostcardPersistence>::save_to_file(self, path)
+        let bytes = self.to_bytes().map_err(invalid_data)?;
+        crate::storage::atomic_write::atomic_write(path, &bytes)
     }
 
     /// Loads an edge store from a file.
@@ -120,13 +126,17 @@ impl EdgeStore {
     /// builds a CSR snapshot for zero-copy BFS traversal (G1).
     ///
     /// # Errors
-    /// Returns an error if file I/O or deserialization fails.
+    /// Returns the I/O error of the read, or an
+    /// [`InvalidData`](std::io::ErrorKind::InvalidData) error for every
+    /// content the snapshot cannot be decoded from.
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
-        let mut store = <Self as PostcardPersistence>::load_from_file(path)?;
-        store
-            .rebuild_label_indexes()
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let bytes = std::fs::read(path)?;
+        let mut store = Self::from_bytes(&bytes).map_err(invalid_data)?;
         store.build_read_snapshot();
         Ok(store)
     }
+}
+
+fn invalid_data(e: postcard::Error) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, e)
 }

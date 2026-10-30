@@ -82,16 +82,20 @@ fn sync_temporary_file(file: &std::fs::File) -> io::Result<()> {
     file.sync_all()
 }
 
+/// Renames `from` over `to`, replacing it if it exists; on Windows, written
+/// through. On Unix, the rename is durable only once
+/// [`sync_parent_directory`] has run.
 #[cfg(windows)]
-fn replace_file(tmp_path: &Path, final_path: &Path) -> io::Result<()> {
+pub(crate) fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
     check_fault(AtomicWriteBoundary::Replacement)?;
-    atomicwrites::replace_atomic(tmp_path, final_path)
+    atomicwrites::replace_atomic(from, to)
 }
 
+/// See the Windows variant.
 #[cfg(not(windows))]
-fn replace_file(tmp_path: &Path, final_path: &Path) -> io::Result<()> {
+pub(crate) fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
     check_fault(AtomicWriteBoundary::Replacement)?;
-    std::fs::rename(tmp_path, final_path)
+    std::fs::rename(from, to)
 }
 
 #[cfg(unix)]

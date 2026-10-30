@@ -207,6 +207,8 @@ impl GraphCollection {
     /// # Errors
     ///
     /// - Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    /// - Returns `Error::SchemaValidation` if the properties nest deeper than
+    ///   [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
     ///
     /// # Examples
     ///
@@ -233,7 +235,10 @@ impl GraphCollection {
     /// # Errors
     ///
     /// Returns an error if WAL durability logging fails for graph
-    /// collections (fail-closed: the in-memory store is not mutated).
+    /// collections (fail-closed: the in-memory store is not mutated), and
+    /// `Error::SchemaValidation`, before anything is written, if any edge's
+    /// properties nest deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
     pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> Result<usize> {
         self.inner.add_edges_batch(edges)
     }
