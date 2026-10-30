@@ -629,9 +629,11 @@ const combined = await db.query('users',
   'SELECT * FROM active_users UNION SELECT * FROM archived_users'
 );
 
-// Fusion strategy
+// Fusion strategy: USING FUSION needs at least two branches to fuse
+// (here vector NEAR + MATCH), or a NEAR_FUSED predicate
 const fused = await db.query('docs',
-  "SELECT * FROM docs LIMIT 20 USING FUSION(strategy = 'rrf', k = 60)"
+  "SELECT * FROM docs WHERE VECTOR NEAR $v AND content MATCH 'rust' LIMIT 20 USING FUSION(strategy = 'rrf', k = 60)",
+  { v: queryVector }
 );
 ```
 

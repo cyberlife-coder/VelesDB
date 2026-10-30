@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Python quickstart and examples run on 8.0.0.** The root README's
+  "three commands that work" ran `examples/python/hello_velesdb.py`, which
+  passed `SearchOptions(top_k=...)`: 8.0.0 removed that alias, so the script
+  stopped with `TypeError`, as did 29 other samples in `examples/`,
+  `tutorials/`, `demos/rag-pdf-demo` and the Python API reference. They pass
+  `k=`. The VelesQL tutorial ran the direct search methods on a graph
+  collection, which 8.0.0 refuses, and now runs them on a vector collection.
+  CI used to compile the examples only; it now runs every example that needs
+  no network, server or API key against the wheel it builds
+  (`scripts/run-python-examples.py`, with a deterministic stand-in encoder).
+  The examples and the RAG demo require `velesdb>=8.0.0`.
+- **LangChain, LlamaIndex and Haystack require the velesdb-common they
+  import.** They import `velesdb_common.scores`, first shipped in
+  velesdb-common 8.0.0, but declared `>=4.0.0` (`>=3.8.0` for Haystack): pip
+  kept an installed 7.x and the integration failed at import. The floor now
+  equals the workspace version, policed by `check-version-sync.py` and moved
+  by `bump_version.py`.
+- **VelesQL samples that core refuses.** The TypeScript SDK README and the
+  architecture reference ran `USING FUSION` with no branch to fuse, and the
+  CLI cookbook's weighted, maximum and default fusion samples with a single
+  `NEAR`: each fails with `V012`. They fuse `NEAR` with a `MATCH`.
+- **Docs that named a missing API or a wrong version.**
+  - The concurrency guide configured a collection with
+    `CollectionConfig::new(..).with_durability(..)`, which does not exist: a
+    collection always opens its storage with `DurabilityMode::Fsync`. The
+    guide now batches with `upsert_bulk` and calls `flush()`.
+  - The API correspondence table kept `SearchOptions.top_k` as an accepted
+    alias, and the WASM bundle guide still recommended `sq8` for a 4x memory
+    saving that 8.0.0 removed.
+  - The Tauri tutorial pinned `tauri-plugin-velesdb = "4.3.0"` beside
+    `velesdb-core = "8.0.0"` and could not compile; the server README named
+    velesdb-core 5.0.0 and the migrate README a 4.3.0 destination format.
+    The doc version guard now checks every crate that versions with the
+    workspace, and a version one table cell away from its crate name.
+- **`@wiscale/tauri-plugin-velesdb` ships a README.** Its package listed
+  `README.md` in `files`, but none existed, so the npm page was empty.
+- The committed Playwright report of the e-commerce example is removed.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

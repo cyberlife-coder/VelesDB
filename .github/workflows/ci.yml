@@ -1606,6 +1606,11 @@ jobs:
         working-directory: crates/velesdb-python
         run: python -m pytest tests/ -m "not slow" -p no:cacheprovider -q -W ignore::DeprecationWarning
 
+      # The examples were only compiled, so the root README's quickstart shipped
+      # calling an argument the wheel had removed. Run them against this wheel.
+      - name: Run the Python examples against the built wheel
+        run: python scripts/run-python-examples.py
+
   # Builds the napi addon and runs its Node test suite on PRs (gates CI Success)
   # so binding regressions are caught before merge. velesdb-node is a cdylib
   # excluded from `cargo test --workspace`, so this is its ONLY functional gate.
