@@ -39,8 +39,9 @@ const { results } = await search({ collection: 'demo', vector: [1, 0, 0, 0], top
 console.log(results[0].payload); // { title: 'north' }
 ```
 
-A rejected command rejects with a `CommandError`: core's `VELES-###` code, a
-message and a `recoverable` flag (see the
+A rejected command rejects with a `CommandError`: a `code` (core's `VELES-###`,
+or `TASK_JOIN` when the plugin's task could not be joined), a `message` and a
+`recoverable` flag (see the
 [plugin reference](https://github.com/cyberlife-coder/VelesDB/blob/main/docs/guides/TAURI_PLUGIN_REFERENCE.md)).
 
 ## API

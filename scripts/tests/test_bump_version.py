@@ -239,8 +239,6 @@ class GuardedClaimParityTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "workspace 7.0.0\n")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class IntegrationCommonFloorTests(unittest.TestCase):
@@ -311,3 +309,7 @@ class SiblingCratePinTests(unittest.TestCase):
         self.assertIn('velesdb-core = { version = "8.0.0"', out)
         self.assertIn('velesdb-memory = "0.16.0"', out)
         self.assertIn('serde = "1.0.200"', out)
+
+
+if __name__ == "__main__":
+    unittest.main()

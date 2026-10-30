@@ -200,8 +200,8 @@ print(f"Inserted {len(points)} articles\n")
 # The direct search methods (search_with_quality, multi_query_search) run on a
 # vector collection; a graph collection answers vector queries through VelesQL.
 # The same articles go into one for the last two sections.
-vectors = db.create_collection("support_kb_vectors", dimension=384, metric="cosine")
-vectors.upsert(points)
+kb_vectors = db.create_collection("support_kb_vectors", dimension=384, metric="cosine")
+kb_vectors.upsert(points)
 
 # ============================================================
 # Step 2: Semantic search with NEAR
@@ -379,7 +379,7 @@ print("Adaptive search quality")
 print("=" * 60)
 query_vec = model.encode("help with my account settings").tolist()
 for mode in ["fast", "balanced", "accurate", "perfect", "autotune"]:
-    results = vectors.search_with_quality(query_vec, mode, top_k=3)
+    results = kb_vectors.search_with_quality(query_vec, mode, top_k=3)
     titles = [r["payload"]["title"][:40] for r in results]
     print(f"  {mode:10s} => {titles}")
 
@@ -396,7 +396,7 @@ strategies = {
     "weighted": velesdb.FusionStrategy.weighted(0.5, 0.3, 0.2),
 }
 for name, strategy in strategies.items():
-    results = vectors.multi_query_search(vectors=[q1, q2], top_k=3, fusion=strategy)
+    results = kb_vectors.multi_query_search(vectors=[q1, q2], top_k=3, fusion=strategy)
     titles = [r.get("payload", r.get("bindings", {})).get("title", "N/A") for r in results]
     print(f"  {name:20s} => {titles}")
 
