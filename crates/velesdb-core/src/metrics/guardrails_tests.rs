@@ -1,46 +1,6 @@
 use super::*;
 
 #[test]
-fn test_traversal_metrics_record() {
-    let metrics = TraversalMetrics::new();
-
-    metrics.record_traversal(100, 3, 250);
-    metrics.record_traversal(50, 2, 100);
-
-    assert_eq!(metrics.traversal_count.load(Ordering::Relaxed), 2);
-    assert_eq!(metrics.nodes_visited_total.load(Ordering::Relaxed), 150);
-    assert_eq!(metrics.edges_scanned_total.load(Ordering::Relaxed), 350);
-    assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 3);
-}
-
-#[test]
-fn test_traversal_metrics_max_depth_updates() {
-    let metrics = TraversalMetrics::new();
-
-    metrics.record_traversal(10, 2, 20);
-    assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 2);
-
-    metrics.record_traversal(10, 5, 20);
-    assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 5);
-
-    // Smaller depth doesn't decrease max
-    metrics.record_traversal(10, 3, 20);
-    assert_eq!(metrics.max_depth_reached.load(Ordering::Relaxed), 5);
-}
-
-#[test]
-fn test_traversal_metrics_prometheus_export() {
-    let metrics = TraversalMetrics::new();
-    metrics.record_traversal(100, 5, 200);
-
-    let output = metrics.export_prometheus();
-
-    assert!(output.contains("velesdb_traversal_nodes_visited_total 100"));
-    assert!(output.contains("velesdb_traversal_max_depth 5"));
-    assert!(output.contains("velesdb_traversal_edges_scanned_total 200"));
-}
-
-#[test]
 fn test_guardrails_record_limits() {
     let metrics = GuardRailsMetrics::new();
 

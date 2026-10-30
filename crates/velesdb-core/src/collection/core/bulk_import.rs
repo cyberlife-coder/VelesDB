@@ -133,7 +133,7 @@ impl Collection {
         if let Some(ps) = payloads {
             for (i, opt) in ps.iter().enumerate() {
                 if let Some(payload) = opt {
-                    Self::enforce_payload_value_size(ids[i], payload, limits.max_payload_size)?;
+                    Self::enforce_payload_limits(ids[i], payload, limits.max_payload_size)?;
                 }
             }
         }
@@ -189,7 +189,7 @@ impl Collection {
         {
             let (vec_result, pay_result) = rayon::join(
                 || self.bulk_store_vectors(vector_refs),
-                || self.store_payload_entries(payload_entries, true),
+                || self.store_payload_entries(payload_entries),
             );
             vec_result?;
             pay_result
@@ -198,7 +198,7 @@ impl Collection {
         #[cfg(not(feature = "persistence"))]
         {
             self.bulk_store_vectors(vector_refs)?;
-            self.store_payload_entries(payload_entries, true)
+            self.store_payload_entries(payload_entries)
         }
     }
 

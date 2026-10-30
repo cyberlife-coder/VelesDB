@@ -189,7 +189,7 @@ use velesdb_core::{
 // Latency and operational counters, Prometheus text export.
 use velesdb_core::{
     compute_latency_percentiles, LatencyStats,
-    OperationalMetrics, DurationHistogram, TraversalMetrics, GuardRailsMetrics,
+    OperationalMetrics, DurationHistogram, GuardRailsMetrics,
 };
 use velesdb_core::metrics::global_guardrails_metrics;
 // Database::graph_metrics_prometheus(), Database::match_metrics_prometheus(),
@@ -207,4 +207,4 @@ server's `/metrics` families: [REST reference](../reference/api-reference.md#get
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

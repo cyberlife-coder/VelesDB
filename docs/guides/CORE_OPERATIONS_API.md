@@ -526,9 +526,11 @@ println!("p50 {:?}  p95 {:?}  p99 {:?}", stats.p50, stats.p95, stats.p99);
   `velesdb_documents_total` (points across every collection) and
   `velesdb_index_size_bytes` (the summed `indexes_memory_usage`) from the
   database as it is; call it before each export.
-- The query counters of `OperationalMetrics`, `TraversalMetrics` and
-  `DurationHistogram` are for the caller to feed; the engine does not update
-  them.
+- The query counters of `OperationalMetrics` and `DurationHistogram` are for
+  the caller to feed; the engine does not update them. Graph traversal counts
+  are fed by core per collection (`GraphCollection::metrics()`,
+  `Database::graph_metrics_prometheus()`); the process-wide `TraversalMetrics`,
+  which nothing fed, was removed in 8.0.0.
 
 The complete list of families the server writes to `GET /metrics` is in the
 [REST reference](../reference/api-reference.md#get-metrics).
@@ -573,4 +575,4 @@ None of these truncates to `k`: they score exactly the slices they are given.
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

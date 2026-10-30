@@ -51,34 +51,6 @@ fn sort_results_by_metric_single_element() {
     assert_eq!(results[0].point.id, 1);
 }
 
-// --- sort_results_descending ---
-
-#[test]
-fn sort_results_descending_always_highest_first() {
-    let mut results = vec![
-        make_search_result(10, 0.1),
-        make_search_result(20, 0.8),
-        make_search_result(30, 0.5),
-        make_search_result(40, 1.0),
-    ];
-    sort_results_descending(&mut results);
-
-    assert_eq!(results[0].point.id, 40);
-    assert_eq!(results[1].point.id, 20);
-    assert_eq!(results[2].point.id, 30);
-    assert_eq!(results[3].point.id, 10);
-}
-
-#[test]
-fn sort_results_descending_equal_scores_stable_enough() {
-    let mut results = vec![make_search_result(1, 0.5), make_search_result(2, 0.5)];
-    sort_results_descending(&mut results);
-    // Both have the same score; we just verify no panic and both are present.
-    let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
-    assert!(ids.contains(&1));
-    assert!(ids.contains(&2));
-}
-
 // --- sort_scored_by_metric ---
 
 #[test]

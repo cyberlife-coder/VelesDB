@@ -1,8 +1,9 @@
-//! Tests for public sparse and hybrid dense+sparse search API methods.
+//! Tests for the public sparse and hybrid dense+sparse search API, driven
+//! through `VectorCollection` — the entry point every binding calls.
 
 #![cfg(all(test, feature = "persistence"))]
 
-use crate::collection::types::Collection;
+use crate::collection::VectorCollection;
 use crate::fusion::FusionStrategy;
 use crate::index::sparse::SparseVector;
 use crate::point::Point;
@@ -10,7 +11,7 @@ use crate::test_fixtures::fixtures::setup_collection;
 use std::collections::BTreeMap;
 
 /// Helper: create a collection with both dense and sparse vectors.
-fn setup_sparse_collection() -> (tempfile::TempDir, Collection) {
+fn setup_sparse_collection() -> (tempfile::TempDir, VectorCollection) {
     let (dir, col) = setup_collection(4);
 
     let mut points = Vec::new();
@@ -36,7 +37,7 @@ fn setup_sparse_collection() -> (tempfile::TempDir, Collection) {
         });
     }
     col.upsert(points).expect("test: upsert");
-    (dir, col)
+    (dir, VectorCollection { inner: col })
 }
 
 // -----------------------------------------------------------------------
@@ -44,11 +45,11 @@ fn setup_sparse_collection() -> (tempfile::TempDir, Collection) {
 // -----------------------------------------------------------------------
 
 #[test]
-fn test_sparse_search_default_returns_scored_results() {
+fn test_sparse_search_on_the_default_index_returns_scored_results() {
     let (_dir, col) = setup_sparse_collection();
 
     let query = SparseVector::new(vec![(10, 1.0), (20, 1.0)]);
-    let results = col.sparse_search_default(&query, 5).expect("sparse search");
+    let results = col.sparse_search(&query, 5, "").expect("sparse search");
 
     assert!(!results.is_empty(), "should find sparse results");
     assert!(results.len() <= 5, "should respect k limit");
@@ -65,11 +66,11 @@ fn test_sparse_search_default_returns_scored_results() {
 }
 
 #[test]
-fn test_sparse_search_named_missing_index_errors() {
+fn test_sparse_search_on_a_missing_index_errors() {
     let (_dir, col) = setup_sparse_collection();
 
     let query = SparseVector::new(vec![(10, 1.0)]);
-    let result = col.sparse_search_named(&query, 5, "nonexistent_index");
+    let result = col.sparse_search(&query, 5, "nonexistent_index");
     assert!(result.is_err(), "missing sparse index should error");
 }
 
@@ -87,7 +88,7 @@ fn test_hybrid_sparse_search_fuses_both_branches() {
     let strategy = FusionStrategy::rrf_default();
 
     let results = col
-        .hybrid_sparse_search(&dense_query, &sparse_query, 5, &strategy)
+        .hybrid_sparse_search(&dense_query, &sparse_query, 5, "", &strategy)
         .expect("hybrid sparse search");
 
     assert!(!results.is_empty(), "hybrid should return results");
@@ -110,7 +111,7 @@ fn test_hybrid_sparse_search_empty_sparse_falls_back_to_dense() {
     let strategy = FusionStrategy::rrf_default();
 
     let results = col
-        .hybrid_sparse_search(&dense_query, &sparse_query, 5, &strategy)
+        .hybrid_sparse_search(&dense_query, &sparse_query, 5, "", &strategy)
         .expect("hybrid with empty sparse");
 
     assert!(

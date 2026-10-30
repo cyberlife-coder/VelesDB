@@ -161,15 +161,6 @@ pub(crate) fn record_lock_release(rank: LockRank) {
     let _ = rank;
 }
 
-/// Returns the current depth of the lock rank stack for this thread.
-///
-/// Useful for assertions in tests. Requires debug_assertions (always true in test builds).
-#[allow(dead_code)] // Reason: Debug introspection — available for lock-ordering tests
-#[cfg(all(test, debug_assertions))]
-pub(crate) fn lock_depth() -> usize {
-    LOCK_RANK_STACK.with(|stack| stack.borrow().len())
-}
-
 /// Returns `true` if the current thread is currently holding a lock at `rank`.
 ///
 /// Debug-builds only: callers guarded by `debug_assert!` will compile to

@@ -4,8 +4,7 @@
 //! the sibling `collection_config` module.
 
 use crate::collection::graph::property_index::{
-    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex, IndexAdvisor,
-    QueryPatternTracker,
+    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex,
 };
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
@@ -334,16 +333,6 @@ pub(crate) struct GraphStore {
     /// Lock order position: **7** (same tier as `property_index` / `range_index`).
     pub(crate) composite_index_manager: Arc<RwLock<CompositeIndexManager>>,
 
-    /// Query pattern tracker for auto-index suggestion (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) query_pattern_tracker: Arc<RwLock<QueryPatternTracker>>,
-
-    /// Index advisor that suggests indexes based on tracked patterns (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) index_advisor: Arc<RwLock<IndexAdvisor>>,
-
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
     /// Uses sharded internal locking (256 shards) — no outer `RwLock` needed.
@@ -655,7 +644,7 @@ impl Collection {
     /// the whole batch, then `max_payload_size` per point.
     ///
     /// Shared by [`Self::upsert`](crate::collection::Collection) and
-    /// `upsert_bulk_inner` so both ingest paths apply identical limits with
+    /// `upsert_bulk` so both ingest paths apply identical limits with
     /// no duplicated logic. Runs before any storage lock or WAL write, so a
     /// violation rejects the batch without leaving partial state.
     ///
@@ -674,7 +663,10 @@ impl Collection {
     ///
     /// Returns [`Error::GuardRail`](crate::error::Error::GuardRail) when the
     /// batch would push the collection past `max_vectors_per_collection`, or
-    /// when any point's serialized payload exceeds `max_payload_size`.
+    /// when any point's serialized payload exceeds `max_payload_size`, and
+    /// [`Error::SchemaValidation`](crate::error::Error::SchemaValidation) when
+    /// a payload nests deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
     pub(crate) fn enforce_upsert_limits(
         &self,
         points: &[crate::point::Point],
@@ -683,7 +675,7 @@ impl Collection {
         self.enforce_vector_count(points.len(), limits.max_vectors_per_collection)?;
         for point in points {
             if let Some(payload) = point.payload.as_ref() {
-                Self::enforce_payload_value_size(point.id, payload, limits.max_payload_size)?;
+                Self::enforce_payload_limits(point.id, payload, limits.max_payload_size)?;
             }
         }
         Ok(())
@@ -710,20 +702,24 @@ impl Collection {
         Ok(())
     }
 
-    /// Rejects a JSON payload whose serialized size exceeds the cap.
+    /// Rejects a JSON payload that nests deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH), which
+    /// could not be read back from storage, or whose serialized size exceeds
+    /// the cap.
     ///
-    /// The single shared payload-size gate, reused by every ingest path
+    /// The single shared payload gate, reused by every ingest path
     /// (`Point` upsert, raw bulk, and graph node writes). Measures the
     /// serialized length with a bounded counting writer that stops as soon
     /// as the running total passes `cap`, so it never materializes a throwaway
     /// `Vec` and never serializes more than `cap + 1` bytes. Payloads that
     /// fail to serialize (the JSON value is in-memory and infallible in
     /// practice) are accepted.
-    pub(crate) fn enforce_payload_value_size(
+    pub(crate) fn enforce_payload_limits(
         id: u64,
         payload: &serde_json::Value,
         cap: usize,
     ) -> crate::error::Result<()> {
+        crate::validation::validate_payload_depth(id, payload)?;
         let mut counter = crate::collection::payload_size::BoundedCounter::new(cap);
         if serde_json::to_writer(&mut counter, payload).is_err() && !counter.exceeded() {
             // A real I/O error from the counter only ever signals "over cap"

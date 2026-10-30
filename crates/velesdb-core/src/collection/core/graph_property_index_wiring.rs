@@ -1,7 +1,7 @@
 //! Wiring logic for graph property indexes (EPIC-047 Wave 7).
 //!
-//! Populates `CompositeRangeIndex`, `EdgePropertyIndex`, `CompositeIndexManager`,
-//! and `QueryPatternTracker` when nodes and edges are mutated.
+//! Populates `CompositeRangeIndex`, `EdgePropertyIndex` and
+//! `CompositeIndexManager` when nodes and edges are mutated.
 //!
 //! # The node range indexes are derived from the payloads
 //!
@@ -15,9 +15,7 @@
 //! (`lifecycle.rs`, `rebuild_payload_indexes`), through the same
 //! [`index_payload_ranges`].
 
-use crate::collection::graph::property_index::{
-    CompositeRangeIndex, EdgePropertyIndex, IndexSuggestion,
-};
+use crate::collection::graph::property_index::{CompositeRangeIndex, EdgePropertyIndex};
 use crate::collection::types::Collection;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -259,40 +257,6 @@ impl Collection {
                 .or_insert_with(|| EdgePropertyIndex::new(rel_type.to_string(), prop_name.clone()))
                 .insert(edge_id, prop_value);
         }
-    }
-
-    /// Records a query pattern for the index advisor.
-    pub(crate) fn record_query_pattern(
-        &self,
-        labels: Vec<String>,
-        properties: Vec<String>,
-        predicates: Vec<crate::collection::graph::property_index::PredicateType>,
-        execution_time_ms: u64,
-    ) {
-        use crate::collection::graph::property_index::QueryPattern;
-
-        if labels.is_empty() || properties.is_empty() {
-            return;
-        }
-
-        let pattern = QueryPattern {
-            labels,
-            properties,
-            predicates,
-        };
-
-        self.graph
-            .query_pattern_tracker
-            .write()
-            .record(pattern, execution_time_ms);
-    }
-
-    /// Returns index suggestions based on tracked query patterns.
-    #[must_use]
-    #[allow(dead_code)] // Reason: Public API for query evaluator — called when MATCH pipeline integrates auto-suggestion
-    pub(crate) fn index_suggestions(&self) -> Vec<IndexSuggestion> {
-        let tracker = self.graph.query_pattern_tracker.read();
-        self.graph.index_advisor.read().suggest(&tracker)
     }
 
     /// Looks up the range index for `label.property` and, if present, runs

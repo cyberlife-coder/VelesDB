@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-09-23 · Applies to: velesdb-core 7.1.0
+**Version**: 3.10.0 | Last updated: 2026-09-23 · Applies to: velesdb-core 8.0.0
 
 ---
 
@@ -795,6 +795,10 @@ SELECT * FROM docs
 WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
 LIMIT 10
 ```
+
+A query has at most one `SPARSE_NEAR`: it runs a single sparse search, so
+a second clause (under `AND` or `OR`) is rejected with a query error rather
+than ignored. Run one query per sparse vector and fuse the results.
 
 Sparse vectors use `{index: weight}` format where `index` is a non-negative
 integer (dimension) and `weight` is a float value. Scoring uses inner product

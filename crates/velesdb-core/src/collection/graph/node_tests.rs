@@ -1,4 +1,4 @@
-//! Tests for GraphNode and Element types.
+//! Tests for the GraphNode type.
 //!
 //! TDD: Tests written BEFORE implementation (RED phase).
 
@@ -52,85 +52,6 @@ fn test_graph_node_builder_pattern() {
 }
 
 // =============================================================================
-// AC-2: Element enum - distinction Point/Node
-// =============================================================================
-
-#[test]
-fn test_element_from_point() {
-    let point = crate::Point::new(1, vec![0.1, 0.2, 0.3], Some(json!({"text": "hello"})));
-    let element = Element::Point(point);
-
-    assert!(element.is_point());
-    assert!(!element.is_node());
-    assert_eq!(element.id(), 1);
-}
-
-#[test]
-fn test_element_from_node() {
-    let node = GraphNode::new(2, "Person");
-    let element = Element::Node(node);
-
-    assert!(!element.is_point());
-    assert!(element.is_node());
-    assert_eq!(element.id(), 2);
-}
-
-#[test]
-fn test_element_as_point() {
-    let point = crate::Point::new(1, vec![0.1, 0.2], None);
-    let element = Element::Point(point);
-
-    let retrieved = element.as_point();
-    assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap().id, 1);
-
-    assert!(element.as_node().is_none());
-}
-
-#[test]
-fn test_element_as_node() {
-    let node = GraphNode::new(2, "Company");
-    let element = Element::Node(node);
-
-    let retrieved = element.as_node();
-    assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap().label(), "Company");
-
-    assert!(element.as_point().is_none());
-}
-
-#[test]
-fn test_element_has_vector() {
-    // Point always has vector
-    let point = crate::Point::new(1, vec![0.1, 0.2], None);
-    let elem_point = Element::Point(point);
-    assert!(elem_point.has_vector());
-
-    // Node without vector
-    let node_no_vec = GraphNode::new(2, "Person");
-    let elem_no_vec = Element::Node(node_no_vec);
-    assert!(!elem_no_vec.has_vector());
-
-    // Node with vector
-    let node_with_vec = GraphNode::new(3, "Document").with_vector(vec![0.5; 64]);
-    let elem_with_vec = Element::Node(node_with_vec);
-    assert!(elem_with_vec.has_vector());
-}
-
-#[test]
-fn test_element_get_vector() {
-    let point = crate::Point::new(1, vec![0.1, 0.2, 0.3], None);
-    let elem = Element::Point(point);
-    let vec = elem.vector();
-    assert!(vec.is_some());
-    assert_eq!(vec.unwrap().len(), 3);
-
-    let node = GraphNode::new(2, "Entity");
-    let elem_node = Element::Node(node);
-    assert!(elem_node.vector().is_none());
-}
-
-// =============================================================================
 // Serialization tests
 // =============================================================================
 
@@ -150,18 +71,6 @@ fn test_graph_node_serialization_roundtrip() {
     assert_eq!(node.label(), deserialized.label());
     assert_eq!(node.properties().len(), deserialized.properties().len());
     assert_eq!(node.vector(), deserialized.vector());
-}
-
-#[test]
-fn test_element_serialization_roundtrip() {
-    let node = GraphNode::new(1, "Person");
-    let element = Element::Node(node);
-
-    let json = serde_json::to_string(&element).expect("serialization failed");
-    let deserialized: Element = serde_json::from_str(&json).expect("deserialization failed");
-
-    assert!(deserialized.is_node());
-    assert_eq!(element.id(), deserialized.id());
 }
 
 // =============================================================================

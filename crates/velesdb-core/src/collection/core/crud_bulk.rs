@@ -33,38 +33,6 @@ impl Collection {
     ///
     /// Returns an error if any point has a mismatched dimension.
     pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
-        self.upsert_bulk_inner(points, true)
-    }
-
-    /// Bulk insert without forcing WAL fsync at the end.
-    ///
-    /// Identical to [`upsert_bulk`](Self::upsert_bulk) except the WAL
-    /// buffer is flushed to the OS kernel (ensuring data is out of the
-    /// process) but **not** fsynced to disk. This eliminates the 1-5ms
-    /// per-batch fsync overhead on Windows.
-    ///
-    /// # Safety Contract
-    ///
-    /// The caller **must** call [`flush()`](Self::flush) after the final
-    /// batch to establish a durability barrier. Without that final fsync,
-    /// data since the last sync point may be lost on power failure.
-    ///
-    /// # When to Use
-    ///
-    /// Use this for intermediate batches in a streaming bulk import.
-    /// The final batch should use [`upsert_bulk`](Self::upsert_bulk) or be
-    /// followed by an explicit [`flush()`](Self::flush).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any point has a mismatched dimension.
-    #[allow(dead_code)] // Reserved for future streaming ingestion surface.
-    pub(crate) fn upsert_bulk_deferred_sync(&self, points: &[Point]) -> Result<usize> {
-        self.upsert_bulk_inner(points, false)
-    }
-
-    /// Shared implementation for bulk insert with configurable fsync.
-    fn upsert_bulk_inner(&self, points: &[Point], fsync: bool) -> Result<usize> {
         if points.is_empty() {
             return Ok(0);
         }
@@ -90,9 +58,9 @@ impl Collection {
             .load_full()
             .filter(|_| !self.storage.index.is_quantized_backend());
         let count = if let Some(aib) = builder {
-            self.upsert_bulk_v2_path(&aib, &vector_refs, points, &sparse_batch, fsync)?
+            self.upsert_bulk_v2_path(&aib, &vector_refs, points, &sparse_batch)?
         } else {
-            self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch, fsync)?
+            self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch)?
         };
 
         // Wave 3 Commit 9 — wire `AutoReindexManager` into the bulk hot
@@ -116,11 +84,10 @@ impl Collection {
         vector_refs: &[(u64, &[f32])],
         points: &[Point],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
-        fsync: bool,
     ) -> Result<usize> {
         // WAL + payload write (same durability guarantees as standard path).
         let entries = Self::payload_entries(points);
-        let old_payloads = self.store_vectors_and_payloads_inner(vector_refs, &entries, fsync)?;
+        let old_payloads = self.store_vectors_and_payloads(vector_refs, &entries)?;
 
         // Place each vector in the graph's ContiguousVectors, where rerank and
         // brute force see it at once, and queue its id for the builder to link
@@ -159,10 +126,9 @@ impl Collection {
         vector_refs: &[(u64, &[f32])],
         points: &[Point],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
-        fsync: bool,
     ) -> Result<usize> {
         let entries = Self::payload_entries(points);
-        let old_payloads = self.store_vectors_and_payloads_inner(vector_refs, &entries, fsync)?;
+        let old_payloads = self.store_vectors_and_payloads(vector_refs, &entries)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);
         self.finalize_bulk_upsert(points, &entries, &old_payloads, sparse_batch)?;
@@ -202,26 +168,21 @@ impl Collection {
         Ok(())
     }
 
-    /// Writes vectors and payloads with configurable fsync behavior.
-    ///
-    /// When `fsync` is `false`, WAL data is written and the buffer is
-    /// flushed to the OS kernel, but `sync_all()` is skipped. This
-    /// eliminates the 1-5ms per-batch overhead on Windows for
-    /// intermediate streaming batches.
+    /// Writes vectors and payloads, each store paying one durability barrier
+    /// for the whole batch.
     ///
     /// Returns the pre-batch payloads of `entries`, positionally (see
     /// [`Self::store_payload_entries`]).
-    fn store_vectors_and_payloads_inner(
+    fn store_vectors_and_payloads(
         &self,
         vector_refs: &[(u64, &[f32])],
         entries: &[(u64, &serde_json::Value)],
-        fsync: bool,
     ) -> Result<Vec<Option<serde_json::Value>>> {
         #[cfg(feature = "persistence")]
         let old_payloads = {
             let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors_inner(vector_refs, fsync),
-                || self.store_payload_entries(entries, fsync),
+                || self.bulk_store_vectors(vector_refs),
+                || self.store_payload_entries(entries),
             );
             vec_result?;
             pay_result?
@@ -229,8 +190,8 @@ impl Collection {
 
         #[cfg(not(feature = "persistence"))]
         let old_payloads = {
-            self.bulk_store_vectors_inner(vector_refs, fsync)?;
-            self.store_payload_entries(entries, fsync)?
+            self.bulk_store_vectors(vector_refs)?;
+            self.store_payload_entries(entries)?
         };
 
         // Issue #1797: one BM25 WAL barrier for the whole batch, after the
@@ -274,20 +235,9 @@ impl Collection {
 
     /// Stores vectors in bulk via batch WAL + mmap write.
     pub(super) fn bulk_store_vectors(&self, vectors: &[(u64, &[f32])]) -> Result<()> {
-        self.bulk_store_vectors_inner(vectors, true)
-    }
-
-    /// Stores vectors with configurable fsync behavior.
-    ///
-    /// When `fsync` is `false`, `store_batch()` writes WAL entries to the
-    /// `BufWriter` but `flush()` is skipped entirely. The mmap write is
-    /// still performed so the data is immediately readable in-process.
-    fn bulk_store_vectors_inner(&self, vectors: &[(u64, &[f32])], fsync: bool) -> Result<()> {
         let mut storage = self.storage.vector_storage.write();
         storage.store_batch(vectors)?;
-        if fsync {
-            storage.flush()?;
-        }
+        storage.flush()?;
         drop(storage);
         Ok(())
     }
@@ -301,9 +251,7 @@ impl Collection {
     /// so it keeps its payload and every index entry derived from it.
     ///
     /// Uses `LogPayloadStorage::store_batch()` for a single WAL sync instead
-    /// of per-point fsync: a batch pays one sync, not one per point. When
-    /// `fsync` is `false`, WAL entries are written and the buffer is flushed
-    /// to the OS kernel, but `sync_all()` is skipped.
+    /// of per-point fsync: a batch pays one sync, not one per point.
     ///
     /// One `payload_storage` write guard spans the old-payload read, the write
     /// and the index update, so a concurrent writer cannot store a payload for
@@ -317,7 +265,6 @@ impl Collection {
     pub(super) fn store_payload_entries(
         &self,
         entries: &[(u64, &serde_json::Value)],
-        fsync: bool,
     ) -> Result<Vec<Option<serde_json::Value>>> {
         if entries.is_empty() {
             return Ok(Vec::new());
@@ -325,12 +272,7 @@ impl Collection {
         let mut storage = self.storage.payload_storage.write();
         let old_payloads =
             Self::collect_old_payloads_by_id(entries.iter().map(|&(id, _)| id), &storage);
-        let stored = if fsync {
-            storage.store_batch(entries)
-        } else {
-            storage.store_batch_deferred(entries)
-        };
-        if let Err(error) = stored {
+        if let Err(error) = storage.store_batch(entries) {
             // A failed batch is not all-or-nothing: the records written before
             // the error, or all of them when only the sync failed, are readable.
             let ids: Vec<u64> = entries.iter().map(|&(id, _)| id).collect();

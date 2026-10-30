@@ -11,18 +11,13 @@ pub use explain::{__path_explain, explain};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 use velesdb_core::collection::search::query::projection;
-#[cfg(test)]
-use velesdb_core::velesql;
 use velesdb_core::velesql::{DmlStatement, Query, SelectColumns};
 
-use crate::types::{
-    QueryRequest, QueryResponse, QueryResponseMeta, QueryType, VELESQL_CONTRACT_VERSION,
-};
+use crate::types::{QueryRequest, QueryResponse, QueryResponseMeta, VELESQL_CONTRACT_VERSION};
 use crate::AppState;
 
 use crate::handlers::helpers::run_blocking;
 use aggregation::execute_aggregation_query;
-use explain::condition_has_vector_search;
 use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
 
 /// Returns `true` when the query should bypass collection resolution and go
@@ -269,48 +264,3 @@ fn build_query_response(
     })
     .into_response()
 }
-
-/// Detect query type from parsed AST (EPIC-052 US-006).
-///
-/// Priority order:
-/// 1. DDL (CREATE/DROP COLLECTION) -> Ddl
-/// 2. DML (INSERT/UPDATE/DELETE) -> Dml
-/// 3. MATCH clause -> Graph
-/// 4. GROUP BY or aggregates -> Aggregation
-/// 5. Vector search -> Search
-/// 6. Default -> Rows
-#[allow(dead_code)] // Used in tests, will be used in unified handler
-pub fn detect_query_type(query: &Query) -> QueryType {
-    if query.is_ddl_query() {
-        return QueryType::Ddl;
-    }
-
-    if query.is_dml_query() {
-        return QueryType::Dml;
-    }
-
-    if query.is_match_query() {
-        return QueryType::Graph;
-    }
-
-    if query.select.is_aggregation_query() {
-        return QueryType::Aggregation;
-    }
-
-    let has_vector = query
-        .select
-        .where_clause
-        .as_ref()
-        .map(condition_has_vector_search)
-        .unwrap_or(false);
-
-    if has_vector {
-        return QueryType::Search;
-    }
-
-    QueryType::Rows
-}
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

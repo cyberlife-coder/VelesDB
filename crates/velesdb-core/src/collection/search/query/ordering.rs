@@ -521,7 +521,6 @@ impl<'a> ScoreContext<'a> {
     /// Creates a new score context without component scores (backward compat).
     ///
     /// Used by tests and simple code paths where component scores are not available.
-    #[allow(dead_code)] // Used by ordering_tests and component_scores_tests.
     pub(crate) fn new(search_score: f32, payload: Option<&'a serde_json::Value>) -> Self {
         Self {
             search_score,
@@ -532,7 +531,7 @@ impl<'a> ScoreContext<'a> {
     }
 
     /// Creates a score context with per-component score breakdown.
-    #[allow(dead_code)] // Used by component_scores_tests.
+    #[cfg(test)]
     pub(crate) fn with_components(
         search_score: f32,
         payload: Option<&'a serde_json::Value>,

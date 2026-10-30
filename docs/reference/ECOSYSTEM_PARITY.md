@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-10-29 (v7.1.0 + unreleased fusion/search-mode grammar and fused score direction; velesdb-memory 0.16.0)
+Last updated: 2026-10-29 (v8.0.0 + unreleased fusion/search-mode grammar and fused score direction; velesdb-memory 0.16.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -90,7 +90,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
   | Durable TTL set/refresh | ✅ `PATCH .../points/{id}/ttl` | ✅ `client.setTtlDurable()` | ❌ (throws `NOT_SUPPORTED`) | ✅ `set_semantic/episodic/procedural_ttl_durable`, `store_with_ttl`, `record_with_ttl`, `learn_with_ttl` |
   | Temporal recall facades | n/a (use `/query`) | ✅ `recallRecent` / `recallOlderThan` | ❌ (throws `NOT_SUPPORTED`) | ✅ `episodic.recent` / `episodic.older_than` |
 - **Agent Memory (WASM / Mobile)**: WASM now ships the high-level `MemoryService` wedge (remember — incl. per-fact `ttlSeconds` — /recall/recallWhere/recallFused/relate/unrelate/forget/entity/why/rememberExtracted; in-memory only, no persistence under WASM, #1310) alongside the primitive `SemanticMemory`. `rememberExtracted` on WASM (and on the TS SDK wrapping it) runs the deterministic, network-free `outline` extractor ONLY — a generative backend (`"ollama"`) is refused by name rather than silently substituted, because it would put a network call in the bundle (`crates/velesdb-wasm/src/memory_service.rs`, `sdks/typescript/src/memory.ts` `rememberExtracted`). `feedback` remains deliberately absent on WASM (it sits behind the `persistence` feature; a durable learned confidence is meaningless for a store that disappears on page reload). Mobile remains ⚠️ semantic-only (`VelesSemanticMemory`). Episodic/procedural memory, the standalone TTL setters (`setTtlDurable`-style), and snapshots are not exposed on these bindings.
-- **Agent Memory — search quality per call (velesdb-core 7.1.0)**: `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and `query_excluding_with_quality` run one semantic search at an explicit `SearchQuality`; `query`, `query_filtered` and `query_excluding` keep the collection's runtime quality. Usage: [AGENT_MEMORY.md](../guides/AGENT_MEMORY.md#semantic-search-at-an-explicit-quality). Where the choice reaches a caller:
+- **Agent Memory — search quality per call (velesdb-core 8.0.0)**: `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and `query_excluding_with_quality` run one semantic search at an explicit `SearchQuality`; `query`, `query_filtered` and `query_excluding` keep the collection's runtime quality. Usage: [AGENT_MEMORY.md](../guides/AGENT_MEMORY.md#semantic-search-at-an-explicit-quality). Where the choice reaches a caller:
 
   | Surface | Per-call quality | Per-store quality |
   |---|---|---|
@@ -355,7 +355,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     Writing them down surfaced behaviour that did less than its name, since fixed in core (unreleased) and documented as fixed:
     - **Guard-rails reach every limit.** `Database::update_guardrails` (and `PUT /guardrails`, now `update_guardrails_with`) reconfigures each collection's `RateLimiter` and `CircuitBreaker` in place, and every collection created or opened afterwards starts from the updated limits; `Database::guardrail_limits` is the single source `GET /guardrails` reads. The server's own `AppState.query_limits` copy is gone. Python, Mobile and Tauri call the same `update_guardrails`, so they get the same reach with no binding change.
     - **Advanced config takes effect or says it will not yet.** `apply_advanced_config` installs a deferred indexer or an async index builder at once into a collection that runs none (which covers `POST /collections`); a change to a live one is persisted for the next open and named by the new `VectorCollection::pending_reopen` (`PendingReopen`). Python `Collection.pending_reopen()` and Mobile `pending_reopen()` relay it as field names. REST has no endpoint that changes these settings after creation, so it needs none.
-    - **Every `/metrics` family is fed.** Core feeds `velesdb_limits_exceeded_total` (`QueryContext` checks), `velesdb_rate_limit_requests_total` (`RateLimiter::check`), `velesdb_cache_collision_fallback_total` (query-cache bucket collisions), `velesdb_match_guardrail_hits_total` and `velesdb_match_similarity_queries_total`, and `velesdb_match_latency_seconds` has `_sum` / `_count`; `Database::refresh_storage_gauges` sets `velesdb_documents_total` and `velesdb_index_size_bytes` at each scrape; the server counts `velesdb_active_connections` on both serving paths and `velesdb_queries_by_type{type="graph"}` on its traversal and `/match` handlers. The never-fed `velesdb_traversal_*` families are removed in favour of the per-collection `velesdb_graph_traversal*` core already feeds.
+    - **Every `/metrics` family is fed.** Core feeds `velesdb_limits_exceeded_total` (`QueryContext` checks), `velesdb_rate_limit_requests_total` (`RateLimiter::check`), `velesdb_cache_collision_fallback_total` (query-cache bucket collisions), `velesdb_match_guardrail_hits_total` and `velesdb_match_similarity_queries_total`, and `velesdb_match_latency_seconds` has `_sum` / `_count`; `Database::refresh_storage_gauges` sets `velesdb_documents_total` and `velesdb_index_size_bytes` at each scrape; the server counts `velesdb_active_connections` on both serving paths and `velesdb_queries_by_type{type="graph"}` on its traversal and `/match` handlers. The never-fed `velesdb_traversal_*` families are removed in favour of the per-collection `velesdb_graph_traversal*` core already feeds, and in 8.0.0 so is `velesdb_core::TraversalMetrics`, the never-fed type whose `export_prometheus` still wrote them.
     - **`list_indexes` reports real figures.** `memory_bytes` is each index's heap estimate, a secondary index is labelled `btree` (it was `hash`), range indexes report their cardinality, and `indexes_memory_usage` includes secondary indexes.
 12. ✅ **Done (2026-10-29). Bindings carry core's error taxonomy and result
     kind instead of re-deriving them.** `tauri-plugin-velesdb` reports
@@ -394,9 +394,8 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     the new `GraphCollection::try_remove_edge`; `clear` removes edges before
     nodes, as core's `TRUNCATE` does. Still forked: `velesdb-wasm` keeps its
     own `GraphStore` (`crates/velesdb-wasm/src/graph.rs`) because core's
-    graph module is gated behind `persistence`, which wasm does not build; and `velesdb-python`'s
-    in-memory `GraphStore.traverse_dfs` (`crates/velesdb-python/src/graph_store.rs`,
-    `dfs_collect`) is its own DFS returning edges, capped on visited nodes and
-    filtered by relationship type, while its BFS already delegates to core.
-    Core exposes DFS only on a collection, so closing either needs a free
-    `dfs_traverse(&EdgeStore, …)` in core first.
+    graph module is gated behind `persistence`, which wasm does not build.
+    `velesdb-python`'s in-memory `GraphStore` is no longer forked: its BFS and,
+    since #2549, its DFS run core's over a standalone `EdgeStore`
+    (`bfs_stream` and the free `collection::graph::dfs_traverse`,
+    `crates/velesdb-python/src/graph_store.rs`).

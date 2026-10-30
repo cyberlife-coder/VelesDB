@@ -22,7 +22,6 @@ fn observability_types_are_root_exported() {
     // through the crate root proves the Facade is intact.
     let _ = velesdb_core::DurationHistogram::new();
     let _ = velesdb_core::OperationalMetrics::new();
-    let _ = velesdb_core::TraversalMetrics::new();
     let _ = velesdb_core::QueryStats {
         collection: String::from("facade"),
         ..Default::default()
