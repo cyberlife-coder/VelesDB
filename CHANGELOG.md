@@ -101,6 +101,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under the same restriction: only the ids the search's bitmap admits, and
   every admitted point when the search post-filters.
 
+- **The MATCH pre-filter gave up when one predicate had no index.** A
+  `WHERE` of `AND`-ed comparisons on a single-node pattern narrows the nodes
+  it scans with the property indexes; one comparison on a property no node
+  carries discarded what the others had found, and every node was scanned.
+  Such a comparison is now skipped: `WHERE` re-checks every node the
+  pre-filter lets through, so results are unchanged and fewer nodes are
+  scanned.
+
 ### Documentation
 
 - **`segment_count` is documented as inert in Python, Mobile and TypeScript.**

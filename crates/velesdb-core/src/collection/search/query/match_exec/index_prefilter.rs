@@ -63,9 +63,16 @@ pub(super) fn compute_index_prefilter(
 
     let mut result_set: Option<HashSet<u64>> = None;
 
+    // A predicate no index covers narrows nothing here: WHERE re-checks every
+    // candidate, so it is skipped rather than discarding what the indexed
+    // predicates found.
     for pred in &predicates {
-        let label = resolve_label(&pred.alias, &alias_to_labels)?;
-        let ids = execute_single_lookup(collection, label, &pred.property, &pred.kind)?;
+        let Some(label) = resolve_label(&pred.alias, &alias_to_labels) else {
+            continue;
+        };
+        let Some(ids) = execute_single_lookup(collection, label, &pred.property, &pred.kind) else {
+            continue;
+        };
         let id_set: HashSet<u64> = ids.into_iter().collect();
         result_set = Some(intersect_sets(result_set, id_set));
     }
