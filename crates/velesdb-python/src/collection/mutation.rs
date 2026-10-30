@@ -325,8 +325,7 @@ impl Collection {
         // streaming runtime so the task is scheduled on it and survives this call.
         let runtime = crate::streaming_runtime::stream_runtime()?;
         let _guard = runtime.enter();
-        self.inner.enable_streaming(core_config);
-        Ok(())
+        self.inner.enable_streaming(core_config).map_err(core_err)
     }
 
     #[pyo3(signature = (points))]

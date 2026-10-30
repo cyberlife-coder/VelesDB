@@ -141,20 +141,22 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             // and merge results (matching CPU search_multi_entry pattern).
             let entry_points = self.diversified_entry_points(current_ep, num_probes, count);
 
-            let mut all_results: Vec<(usize, f32)> = Vec::with_capacity(k * num_probes);
-            for &ep_node in &entry_points {
-                let results = ctx.search_layer0(
-                    &csr,
-                    vectors_flat,
-                    &prepared,
-                    ep_node,
-                    k,
-                    ef_search,
-                    dimension,
-                    metric,
-                );
-                all_results.extend(results);
-            }
+            // Sized by what the probes return, not by `k`.
+            let all_results: Vec<(usize, f32)> = entry_points
+                .iter()
+                .flat_map(|&ep_node| {
+                    ctx.search_layer0(
+                        &csr,
+                        vectors_flat,
+                        &prepared,
+                        ep_node,
+                        k,
+                        ef_search,
+                        dimension,
+                        metric,
+                    )
+                })
+                .collect();
 
             Self::merge_gpu_probe_results(all_results, k)
         }

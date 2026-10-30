@@ -85,36 +85,29 @@ impl Collection {
         let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
-        let mut points = Vec::with_capacity(batch_size);
-        for &id in candidate_ids {
-            if points.len() >= batch_size {
-                break;
-            }
-            if let Some(point) =
-                Self::build_point(id, is_metadata_only, &*payload_storage, &*vector_storage)
-            {
-                // TTL-expired points are invisible; the scan keeps going until
-                // `batch_size` live points are collected (or ids run out).
-                if is_payload_expired(point.payload.as_ref(), now_secs) {
-                    continue;
-                }
-                if Self::passes_filter(&point, filter) {
-                    points.push(point);
-                }
-            }
-        }
-        points
+        // TTL-expired points are invisible; the scan keeps going until
+        // `batch_size` live points are collected (or ids run out). The vector
+        // grows with the points found, not with `batch_size`: a caller's
+        // `usize::MAX` used to be reserved up front and abort the process.
+        candidate_ids
+            .iter()
+            .map(|&id| Self::build_point(id, is_metadata_only, &*payload_storage, &*vector_storage))
+            .filter(|point| {
+                !is_payload_expired(point.payload.as_ref(), now_secs)
+                    && Self::passes_filter(point, filter)
+            })
+            .take(batch_size)
+            .collect()
     }
 
-    /// Builds a `Point` from storage. Always returns `Some`; points without a
-    /// stored vector get an empty vector slice.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Option return used by caller's if-let pattern
+    /// Builds a `Point` from storage; a point without a stored vector gets an
+    /// empty vector.
     fn build_point(
         id: u64,
         is_metadata_only: bool,
         payload_storage: &dyn PayloadStorage,
         vector_storage: &dyn VectorStorage,
-    ) -> Option<Point> {
+    ) -> Point {
         let payload = payload_storage.retrieve(id).ok().flatten();
         // Graph nodes inserted via upsert_node_payload() have no vector in storage.
         // Use unwrap_or_default() so payload-only nodes are included, not silently skipped.
@@ -127,12 +120,12 @@ impl Collection {
                 .flatten()
                 .unwrap_or_default()
         };
-        Some(Point {
+        Point {
             id,
             vector,
             payload,
             sparse_vectors: None,
-        })
+        }
     }
 
     /// Returns `true` if the point passes the optional filter.

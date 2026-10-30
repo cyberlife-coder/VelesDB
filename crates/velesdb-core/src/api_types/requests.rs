@@ -201,18 +201,20 @@ impl SparseVectorInput {
                 map.len()
             ));
         }
-        let mut pairs = Vec::with_capacity(map.len());
-        for (key, value) in map {
-            if !value.is_finite() {
-                return Err(format!(
-                    "Sparse vector value for key '{key}' is not finite: {value}"
-                ));
-            }
-            let idx: u32 = key
-                .parse()
-                .map_err(|_| format!("Sparse vector key '{key}' is not a valid u32 term ID"))?;
-            pairs.push((idx, value));
-        }
+        let pairs = map
+            .into_iter()
+            .map(|(key, value)| {
+                if !value.is_finite() {
+                    return Err(format!(
+                        "Sparse vector value for key '{key}' is not finite: {value}"
+                    ));
+                }
+                let idx: u32 = key
+                    .parse()
+                    .map_err(|_| format!("Sparse vector key '{key}' is not a valid u32 term ID"))?;
+                Ok((idx, value))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         Ok(crate::sparse_index::SparseVector::new(pairs))
     }
 }

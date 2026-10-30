@@ -477,15 +477,17 @@ fields fall back to the server defaults.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| buffer_size | integer | No | 10000 | Bounded ingestion channel capacity |
+| buffer_size | integer | No | 10000 | Bounded ingestion channel capacity, at least 1 |
 | batch_size | integer | No | 128 | Points flushed to the index per batch |
-| flush_interval_ms | integer | No | 50 | Max milliseconds before a partial batch is flushed |
+| flush_interval_ms | integer | No | 50 | Max milliseconds before a partial batch is flushed, at least 1 |
 
 ```json
 { "buffer_size": 4096, "batch_size": 64, "flush_interval_ms": 25 }
 ```
 
-**Status codes:** `200` enabled (response `{ "message", "collection" }`); `404`
+**Status codes:** `200` enabled (response `{ "message", "collection" }`); `400`
+(`VELES-009`) a `buffer_size` of 0 or past the channel's limit, or a
+`flush_interval_ms` of 0, with the current ingester left running; `404`
 collection not found.
 
 TypeScript SDK: `await db.enableStreaming('docs', { bufferSize: 4096 })` (REST
