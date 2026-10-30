@@ -70,8 +70,8 @@ impl TrigramSimdLevel {
     }
 
     /// Get the name of the SIMD level
+    #[cfg(test)]
     #[must_use]
-    #[allow(dead_code)] // Reserved for diagnostic/logging use
     pub const fn name(self) -> &'static str {
         match self {
             #[cfg(target_arch = "x86_64")]

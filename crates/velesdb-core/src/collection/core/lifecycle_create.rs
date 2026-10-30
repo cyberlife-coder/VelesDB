@@ -17,7 +17,7 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
-    #[allow(dead_code)] // Reason: Called in velesql tests and test_fixtures
+    #[cfg(test)]
     pub fn create(path: PathBuf, dimension: usize, metric: DistanceMetric) -> Result<Self> {
         Self::create_with_options(path, dimension, metric, StorageMode::default())
     }
@@ -121,11 +121,10 @@ impl Collection {
     /// # Errors
     ///
     /// Returns an error if the directory cannot be created or the config cannot be saved.
-    #[allow(dead_code)] // Reason: kept as a convenience shortcut for lifecycle tests; the
-                        // canonical constructor is `create_with_full_config`, which is used by all production
-                        // call-sites since Wave 3 Commit 5. Deleting this wrapper would force every test to
-                        // restate `Some(4)` for `pq_rescore_oversampling`, spreading the engine default across
-                        // the test suite.
+    // A convenience for the lifecycle tests: production call sites use
+    // `create_with_full_config`. Without it every test would restate `Some(4)`
+    // for `pq_rescore_oversampling`.
+    #[cfg(test)]
     pub fn create_with_hnsw_params(
         path: PathBuf,
         dimension: usize,

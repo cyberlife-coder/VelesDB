@@ -39,8 +39,6 @@ pub struct NativeHnswIndex {
     pub(crate) inner: RwLock<NativeHnswInner>,
     pub(crate) mappings: ShardedMappings,
     pub(crate) enable_vector_storage: bool,
-    #[allow(dead_code)] // Retained for future vacuum/rebuild operations
-    pub(crate) params: HnswParams,
     /// Serializes saves of this index (#2262), as `HnswIndex::saving` does
     /// for the other one. A save rewrites its vectors and graph files in
     /// place and stamps every file with the generation after the one it read
@@ -87,7 +85,6 @@ impl NativeHnswIndex {
             inner: RwLock::new(inner),
             mappings: ShardedMappings::new(),
             enable_vector_storage: true,
-            params,
             saving: Mutex::new(()),
         })
     }

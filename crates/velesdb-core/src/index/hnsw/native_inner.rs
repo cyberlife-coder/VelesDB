@@ -12,7 +12,7 @@
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
 use super::native::sq8_precision::Sq8PrecisionHnsw;
-use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour, ResumableSearch};
+use super::native::{CachedSimdDistance, NativeHnsw, ResumableSearch};
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
@@ -59,7 +59,6 @@ pub struct NativeHnswInner {
     /// The underlying HNSW backend (Standard, `RaBitQ`, or SQ8).
     backend: HnswBackend,
     /// The distance metric used.
-    #[allow(dead_code)] // Reason: Exposed via `metric()` accessor — API surface for callers
     metric: DistanceMetric,
 }
 
@@ -554,29 +553,6 @@ impl NativeHnswInner {
 
         hnsw.search_gpu(query, k, ef_search, self.metric)
     }
-
-    /// Searches the HNSW graph and returns results as `NativeNeighbour` structs.
-    #[allow(dead_code)] // Reason: API surface — used by callers needing typed neighbour results
-    #[inline]
-    #[must_use]
-    pub fn search_neighbours(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef_search: usize,
-    ) -> Vec<NativeNeighbour> {
-        match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.search_neighbours(query, k, ef_search),
-            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => self
-                .search(query, k, ef_search)
-                .into_iter()
-                .map(|(id, dist)| NativeNeighbour {
-                    d_id: id,
-                    distance: dist,
-                })
-                .collect(),
-        }
-    }
 }
 
 // ============================================================================
@@ -757,26 +733,6 @@ impl NativeHnswInner {
             HnswBackend::RaBitQ(rabitq) => rabitq.len(),
             HnswBackend::Sq8(sq8) => sq8.len(),
         }
-    }
-
-    /// Returns true if the index is empty.
-    #[allow(dead_code)] // Reason: API surface — emptiness check paired with `len()`
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.is_empty(),
-            HnswBackend::RaBitQ(rabitq) => rabitq.is_empty(),
-            HnswBackend::Sq8(sq8) => sq8.is_empty(),
-        }
-    }
-
-    /// Returns the distance metric used by this index.
-    #[allow(dead_code)] // Reason: API surface — metric accessor for callers
-    #[inline]
-    #[must_use]
-    pub fn metric(&self) -> DistanceMetric {
-        self.metric
     }
 
     /// Computes the raw distance between two vectors.

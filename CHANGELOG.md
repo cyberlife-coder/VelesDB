@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no call returned or built one: every search returns dicts (`SearchResultDict`
   in the stub). It is no longer importable, listed in `__all__`, or stubbed.
   *Migration*: drop the import; read results as dicts.
+- **Crate-private code that `#[allow(dead_code)]` kept alive.** With the
+  allows lifted, the compiler named what nothing called:
+  `NativeHnswInner::{search_neighbours, is_empty, metric}`,
+  `ShardedIndex::{clear, reserve}`, `EdgePropertyIndex::remove` and
+  `NativeHnswIndex`'s unread `params` field are removed; helpers only tests
+  call (`Collection::create`, `create_with_hnsw_params`, `sparse_indexes`,
+  the range indexes' accessors and the edge index's lookups, the HNSW
+  safety-counter snapshot, `BitVecVisited::contains`, `ShardedIndex::is_empty`,
+  the trigram SIMD level's `name`, and `Layer::get_neighbors` outside `gpu`)
+  are now `#[cfg(test)]`, so a production build no longer compiles them. Two allows
+  were stale — `SnapshotBuilder::empty` and `merge_batch_postings` have
+  production callers — and are dropped. No public API changes.
 
 ### Fixed
 

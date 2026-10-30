@@ -106,8 +106,8 @@ impl Layer {
         }
     }
 
-    /// Gets the neighbors of a node.
-    #[allow(dead_code)] // Reason: Used in tests (layer_tests, graph_tests) for adjacency verification
+    /// Gets the neighbors of a node (a copy, for the GPU CSR export and tests).
+    #[cfg(any(test, feature = "gpu"))]
     #[inline]
     pub(crate) fn get_neighbors(&self, node_id: NodeId) -> Vec<NodeId> {
         if node_id < self.neighbors.len() {

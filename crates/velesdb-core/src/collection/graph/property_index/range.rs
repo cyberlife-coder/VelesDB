@@ -174,14 +174,14 @@ impl CompositeRangeIndex {
 
     /// Returns the label.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn label(&self) -> &str {
         &self.label
     }
 
     /// Returns the property.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn property(&self) -> &str {
         &self.property
     }
@@ -246,14 +246,14 @@ impl EdgePropertyIndex {
 
     /// Returns the relationship type.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn rel_type(&self) -> &str {
         &self.rel_type
     }
 
     /// Returns the property.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn property(&self) -> &str {
         &self.property
     }
@@ -263,21 +263,15 @@ impl EdgePropertyIndex {
         self.index.insert(edge_id, value);
     }
 
-    /// Removes an edge from the index.
-    #[allow(dead_code)] // Reason: Public API — used by tests and future edge removal wiring
-    pub fn remove(&mut self, edge_id: u64, value: &Value) -> bool {
-        self.index.remove(edge_id, value)
-    }
-
     /// Looks up edges by exact value.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn lookup_exact(&self, value: &Value) -> &[u64] {
         self.index.lookup_exact(value)
     }
 
     /// Range lookup for edges.
-    #[allow(dead_code)] // Reason: Public API — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn lookup_range(&self, lower: Option<&Value>, upper: Option<&Value>) -> Vec<u64> {
         self.index.lookup_range(lower, upper)
     }

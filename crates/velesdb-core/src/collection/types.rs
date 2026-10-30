@@ -602,7 +602,7 @@ pub(crate) struct Collection {
 
 impl Collection {
     /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
-    #[allow(dead_code)] // Reason: Used in tests for sparse index verification
+    #[cfg(test)]
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
         &self.query.sparse_indexes
     }
