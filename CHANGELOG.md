@@ -43,15 +43,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Crate-private code that `#[allow(dead_code)]` kept alive.** With the
   allows lifted, the compiler named what nothing called:
   `NativeHnswInner::{search_neighbours, is_empty, metric}`,
-  `ShardedIndex::{clear, reserve}`, `EdgePropertyIndex::remove` and
-  `NativeHnswIndex`'s unread `params` field are removed; helpers only tests
-  call (`Collection::create`, `create_with_hnsw_params`, `sparse_indexes`,
-  the range indexes' accessors and the edge index's lookups, the HNSW
+  `ShardedIndex::{clear, reserve}` and `NativeHnswIndex`'s unread `params`
+  field are removed; helpers only tests call (`Collection::create`,
+  `create_with_hnsw_params`, `sparse_indexes`, the range index's accessors, the HNSW
   safety-counter snapshot, `BitVecVisited::contains`, `ShardedIndex::is_empty`,
   the trigram SIMD level's `name`, and `Layer::get_neighbors` outside `gpu`)
   are now `#[cfg(test)]`, so a production build no longer compiles them. Two allows
   were stale — `SnapshotBuilder::empty` and `merge_batch_postings` have
-  production callers — and are dropped. No public API changes.
+  production callers — and are dropped. `RaBitQVectorStore`, unused without
+  `persistence`, is now compiled only with it instead of carrying two
+  `allow`s, and `velesdb-wasm`'s `delete_edges_where` loses a stale one (the
+  memory store calls it). No public API changes.
+- **The edge property index (`EdgePropertyIndex`).** Every edge write fed it
+  (and cloned the edge's properties to do so), every open rebuilt it from the
+  edge snapshot and again from the edge WAL replay, and nothing ever read it
+  or removed an entry from it when an edge went away. It, its rebuilds and
+  the edge WAL replay's per-entry callback that only it used are removed.
+  Crate-private and never persisted; no public API or format changes.
 
 ### Fixed
 

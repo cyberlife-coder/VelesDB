@@ -162,8 +162,8 @@ impl Collection {
     }
 
     /// Builds the graph half of a `Collection` from its persisted indexes and
-    /// the ones rebuilt from the payloads; the edge property and
-    /// query-tracking indexes start empty.
+    /// the ones rebuilt from the payloads; the query-tracking indexes start
+    /// empty.
     fn build_graph_store(parts: GraphParts) -> Arc<crate::collection::types::GraphStore> {
         let GraphParts {
             property_index,
@@ -181,7 +181,6 @@ impl Collection {
             range_index: Arc::new(RwLock::new(range_index)),
             range_index_dirty: std::sync::atomic::AtomicBool::new(true),
             graph_range_indexes: Arc::new(RwLock::new(graph_range_indexes)),
-            edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
             edge_store: Arc::new(edge_store),
             edge_wal_lock: Arc::new(Mutex::new(())),
         })
@@ -521,18 +520,14 @@ impl Collection {
 
     /// Post-open hooks that need a fully assembled collection.
     ///
-    /// 1. Edge property indexes: snapshot-loaded edges must re-enter the
-    ///    property indexes BEFORE the WAL replays (replay indexes its own
-    ///    ADDs — a full pass after it would double-index replayed edges).
-    /// 2. Edge crash durability: replay the edge WAL on top of the loaded
+    /// 1. Edge crash durability: replay the edge WAL on top of the loaded
     ///    `edge_store` snapshot so edge mutations since the last flush
     ///    survive a crash. No-op when `edges.wal` is absent.
-    /// 3. Quantizer restore: reload persisted PQ codebook / `RaBitQ` index
+    /// 2. Quantizer restore: reload persisted PQ codebook / `RaBitQ` index
     ///    AFTER crash recovery so every recovered vector is re-encoded.
     ///    O(n) over stored vectors — same cost class as gap recovery.
     #[cfg(feature = "persistence")]
     fn run_post_open_hooks(&self) -> Result<()> {
-        self.reindex_edge_properties_from_store();
         self.replay_edge_wal()?;
         self.restore_persisted_quantizers()
     }

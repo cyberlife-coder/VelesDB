@@ -1,6 +1,6 @@
 //! Tests for PropertyIndex and the property range indexes.
 
-use super::property_index::{CompositeRangeIndex, EdgePropertyIndex, PropertyIndex};
+use super::property_index::{CompositeRangeIndex, PropertyIndex};
 use serde_json::json;
 
 #[test]
@@ -587,39 +587,4 @@ fn test_range_index_gt_lt() {
 
     let lt_result = index.lookup_lt(&json!(35));
     assert_eq!(lt_result.len(), 2);
-}
-
-// =============================================================================
-// EPIC-047 US-003: Edge Property Index Tests
-// =============================================================================
-
-#[test]
-fn test_edge_index_create() {
-    let index = EdgePropertyIndex::new("KNOWS", "since");
-    assert_eq!(index.rel_type(), "KNOWS");
-    assert_eq!(index.property(), "since");
-}
-
-#[test]
-fn test_edge_index_insert_and_lookup() {
-    let mut index = EdgePropertyIndex::new("KNOWS", "since");
-
-    index.insert(100, &json!(2020));
-    index.insert(101, &json!(2021));
-    index.insert(102, &json!(2020));
-
-    assert_eq!(index.lookup_exact(&json!(2020)).len(), 2);
-    assert_eq!(index.lookup_exact(&json!(2021)), &[101]);
-}
-
-#[test]
-fn test_edge_index_range() {
-    let mut index = EdgePropertyIndex::new("KNOWS", "since");
-
-    index.insert(1, &json!(2018));
-    index.insert(2, &json!(2020));
-    index.insert(3, &json!(2022));
-
-    let result = index.lookup_range(Some(&json!(2019)), Some(&json!(2021)));
-    assert_eq!(result, vec![2]);
 }

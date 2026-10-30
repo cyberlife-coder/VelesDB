@@ -61,6 +61,7 @@ pub(crate) mod pq_opq;
 #[cfg(feature = "persistence")]
 mod pq_persistence;
 mod rabitq;
+#[cfg(feature = "persistence")]
 pub(crate) mod rabitq_store;
 mod scalar;
 

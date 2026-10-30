@@ -60,10 +60,6 @@ impl Collection {
         let payload_guard = self.storage.payload_storage.read();
         Self::validate_edge_referential_integrity(&payload_guard, schema.as_ref(), &edge)?;
 
-        let edge_id = edge.id();
-        let rel_type = edge.label().to_string();
-        let properties = edge.properties().clone();
-
         // WAL-before-apply (crash durability): log the edge to the edge WAL
         // before mutating the in-memory store, so a crash between the two
         // replays the edge on the next open. Unconditional: the append only
@@ -85,9 +81,6 @@ impl Collection {
 
         self.graph.edge_store.add_edge(edge)?;
 
-        // Populate edge property indexes (EPIC-047).
-        self.index_edge_properties(edge_id, &rel_type, &properties);
-
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).
         self.generations
@@ -102,8 +95,7 @@ impl Collection {
     /// Adds multiple edges in batch with crash-durable WAL logging.
     ///
     /// Appends one ADD record per edge to the edge WAL (single open +
-    /// fsync) BEFORE applying the batch to the in-memory store, then
-    /// populates edge property indexes for the successfully added edges.
+    /// fsync) BEFORE applying the batch to the in-memory store.
     ///
     /// # Returns
     ///
@@ -148,18 +140,7 @@ impl Collection {
             &edges,
         )?;
 
-        // Capture property metadata before the edges are moved into the store.
-        let index_meta: Vec<(u64, String, _)> = edges
-            .iter()
-            .filter(|e| !e.properties().is_empty())
-            .map(|e| (e.id(), e.label().to_string(), e.properties().clone()))
-            .collect();
-
         let count = self.graph.edge_store.add_edges_batch(edges);
-
-        for (edge_id, rel_type, properties) in &index_meta {
-            self.index_edge_properties(*edge_id, rel_type, properties);
-        }
 
         if count > 0 {
             self.generations
@@ -169,29 +150,21 @@ impl Collection {
         Ok(count)
     }
 
-    /// Replays the edge WAL on top of the loaded `edge_store` snapshot,
-    /// re-running edge-property indexing for replayed ADD entries.
+    /// Replays the edge WAL on top of the loaded `edge_store` snapshot.
     ///
     /// Called from `Collection::open` AFTER `assemble`, so the snapshot is
     /// already loaded into `self.graph.edge_store`. A missing WAL file is a cheap
     /// no-op (legacy DBs predate this feature). The edge store is mutated
-    /// in place via its `&self` methods; the closure indexes edge
-    /// properties into `self.graph.edge_range_indexes`.
+    /// in place via its `&self` methods.
     ///
     /// # Errors
     ///
     /// Returns an error if the WAL file exists but cannot be read.
     #[cfg(feature = "persistence")]
     pub(crate) fn replay_edge_wal(&self) -> Result<u64> {
-        use crate::collection::graph::edge_wal::{wal_path_for_edges, wal_replay, ReplayOp};
+        use crate::collection::graph::edge_wal::{wal_path_for_edges, wal_replay};
         let wal_path = wal_path_for_edges(&self.storage.path);
-        let replayed = wal_replay(&wal_path, &self.graph.edge_store, |op| {
-            if let ReplayOp::Add(edge) = op {
-                if !edge.properties().is_empty() {
-                    self.index_edge_properties(edge.id(), edge.label(), edge.properties());
-                }
-            }
-        })?;
+        let replayed = wal_replay(&wal_path, &self.graph.edge_store)?;
         if replayed > 0 {
             // Refresh the CSR read snapshot so traversals see replayed edges.
             self.graph.edge_store.build_read_snapshot();
@@ -534,21 +507,6 @@ impl Collection {
     /// the two apart.
     pub(crate) fn get_edge(&self, edge_id: u64) -> Option<GraphEdge> {
         self.graph.edge_store.get_edge(edge_id)
-    }
-
-    /// Rebuilds edge property indexes from edges already in the store.
-    ///
-    /// Called on open AFTER the edge snapshot is loaded and BEFORE the edge
-    /// WAL replays (replay indexes its own ADDs), so snapshot-loaded edge
-    /// properties become queryable again — previously they were only ever
-    /// indexed at write time and silently lost once the WAL was truncated
-    /// into the snapshot.
-    pub(crate) fn reindex_edge_properties_from_store(&self) {
-        for edge in self.graph.edge_store.all_edges() {
-            if !edge.properties().is_empty() {
-                self.index_edge_properties(edge.id(), edge.label(), edge.properties());
-            }
-        }
     }
 
     // -------------------------------------------------------------------------

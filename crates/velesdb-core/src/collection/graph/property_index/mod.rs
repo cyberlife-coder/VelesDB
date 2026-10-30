@@ -1,7 +1,7 @@
 //! Property index for fast graph node lookups.
 //!
 //! Provides O(1) lookups on (label, property_name, value) instead of O(n) scans.
-//! Also holds the ordered range indexes for node and edge properties.
+//! Also holds the ordered range indexes for node properties.
 
 // Reason: Numeric casts in property indexing are intentional:
 // - u128->u64 for millisecond timestamps: values fit within u64 range
@@ -13,7 +13,7 @@
 
 mod range;
 
-pub use range::{CompositeRangeIndex, EdgePropertyIndex};
+pub use range::CompositeRangeIndex;
 
 use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};
 use roaring::RoaringBitmap;

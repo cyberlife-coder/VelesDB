@@ -823,7 +823,6 @@ ensure no data is lost.
 │     restore_secondary_indexes_from_config()                            │
 │                                                                        │
 │  9. run_post_open_hooks()                                              │
-│     ├─ reindex edge properties from edge_store.bin                     │
 │     ├─ replay edges.wal over edge_store.bin                            │
 │     └─ restore_persisted_quantizers(): trained quantizer artifacts     │
 └────────────────────────────────────────────────────────────────────────┘

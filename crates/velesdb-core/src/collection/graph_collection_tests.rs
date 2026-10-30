@@ -470,16 +470,6 @@ fn test_edge_properties_survive_a_flushed_snapshot_and_reopen() {
         .expect("the edge with properties is back");
     assert_eq!(edge.properties(), &properties);
     assert!(reopened.get_edge(8).is_some());
-    let reindexed = reopened
-        .inner
-        .graph
-        .edge_range_indexes
-        .read()
-        .contains_key("KNOWS.since");
-    assert!(
-        reindexed,
-        "edge properties are re-indexed from the snapshot"
-    );
 }
 
 /// The files of `dir` that an open moved aside as unreadable edge snapshots.

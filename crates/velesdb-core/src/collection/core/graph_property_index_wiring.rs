@@ -1,7 +1,7 @@
 //! Wiring logic for graph property indexes (EPIC-047 Wave 7).
 //!
-//! Populates `CompositeRangeIndex` and `EdgePropertyIndex` when nodes and
-//! edges are mutated.
+//! Populates the node range indexes (`CompositeRangeIndex`) when node payloads
+//! change.
 //!
 //! # The node range indexes are derived from the payloads
 //!
@@ -15,7 +15,7 @@
 //! (`lifecycle.rs`, `rebuild_payload_indexes`), through the same
 //! [`index_payload_ranges`].
 
-use crate::collection::graph::property_index::{CompositeRangeIndex, EdgePropertyIndex};
+use crate::collection::graph::property_index::CompositeRangeIndex;
 use crate::collection::types::Collection;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -31,11 +31,6 @@ pub(crate) type NodePayloadChange<'a> = (u64, Option<&'a Value>, Option<&'a Valu
 /// Key format for graph range indexes: `"label.property"`.
 fn range_index_key(label: &str, property: &str) -> String {
     format!("{label}.{property}")
-}
-
-/// Key format for edge range indexes: `"rel_type.property"`.
-fn edge_index_key(rel_type: &str, property: &str) -> String {
-    format!("{rel_type}.{property}")
 }
 
 /// Extracts the `_labels` array from a node payload.
@@ -167,27 +162,6 @@ impl Collection {
             if let Some(new) = new {
                 index_payload_ranges(&mut indexes, node_id, new);
             }
-        }
-    }
-
-    /// Populates edge property indexes after an edge is added.
-    pub(crate) fn index_edge_properties(
-        &self,
-        edge_id: u64,
-        rel_type: &str,
-        properties: &HashMap<String, Value>,
-    ) {
-        if properties.is_empty() {
-            return;
-        }
-
-        let mut edge_indexes = self.graph.edge_range_indexes.write();
-        for (prop_name, prop_value) in properties {
-            let key = edge_index_key(rel_type, prop_name);
-            edge_indexes
-                .entry(key)
-                .or_insert_with(|| EdgePropertyIndex::new(rel_type.to_string(), prop_name.clone()))
-                .insert(edge_id, prop_value);
         }
     }
 

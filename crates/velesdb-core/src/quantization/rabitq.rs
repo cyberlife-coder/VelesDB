@@ -78,6 +78,8 @@ pub(crate) fn signs_to_bits(values: &[f32], dim: usize) -> Vec<u64> {
 /// Returns `u64::MAX` when `dim` is a multiple of 64 (the last word is fully
 /// used) or when `dim == 0`. Otherwise returns a mask with the low `dim % 64`
 /// bits set, so a bitwise-AND on the last word zeroes the high padding bits.
+/// Only `RaBitQVectorStore` (persistence) masks its words.
+#[cfg(any(test, feature = "persistence"))]
 #[must_use]
 pub(crate) const fn last_word_mask(dim: usize) -> u64 {
     let rem = dim % 64;
