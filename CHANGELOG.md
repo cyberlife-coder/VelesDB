@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `search_with_10k_pending_768d`, on a shared 4-vCPU cloud sandbox, not the
   reference machine): see `docs/BENCHMARKS.md`. It lasts only until a flush
   or the threshold links them.
+- **A restricted search could return the deferred indexer's and the delta
+  buffer's points outside its restriction, or lose its matches to them.**
+  Both merged their unrestricted top `k` into every search: a filter applied
+  after the merge could find its places taken by buffered points it rejects
+  and return fewer matches or none, and a graph-anchored `NEAR` over more
+  than 10 000 anchors could return buffered points outside the anchor set.
+  They now go through the same merge as the async index builder's points,
+  under the same restriction: only the ids the search's bitmap admits, and
+  every admitted point when the search post-filters.
 
 ### Documentation
 

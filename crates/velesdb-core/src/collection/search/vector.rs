@@ -109,59 +109,6 @@ impl Collection {
         rescored.truncate(k);
         rescored
     }
-
-    /// Merges HNSW results with what is written but not indexed yet: the
-    /// delta buffer, the deferred indexer and the async index builder's
-    /// pending points (each if active). Each returns `results` unchanged
-    /// when it holds nothing.
-    ///
-    /// `pending` must be read before the index search that produced
-    /// `results`, and `restriction` is what that search admits; see
-    /// [`super::pending`].
-    #[cfg(feature = "persistence")]
-    #[inline]
-    pub(crate) fn merge_delta(
-        &self,
-        results: Vec<ScoredResult>,
-        pending: &super::pending::PendingSnapshot,
-        query: &[f32],
-        k: usize,
-        metric: DistanceMetric,
-        restriction: super::pending::PendingRestriction<'_>,
-    ) -> Vec<ScoredResult> {
-        let after_delta = crate::collection::streaming::merge_with_delta_scored(
-            results,
-            &self.streaming.delta_buffer,
-            query,
-            k,
-            metric,
-        );
-        let after_deferred = self.merge_deferred_search(after_delta, query, k, metric);
-        self.merge_pending(after_deferred, pending, query, k, metric, restriction)
-    }
-
-    /// Merges search results with the deferred indexer buffer.
-    ///
-    /// No-op when deferred indexing is not configured or has no searchable data.
-    #[cfg(feature = "persistence")]
-    fn merge_deferred_search(
-        &self,
-        results: Vec<ScoredResult>,
-        query: &[f32],
-        k: usize,
-        metric: DistanceMetric,
-    ) -> Vec<ScoredResult> {
-        let slot = self.streaming.deferred_indexer.load();
-        let Some(di) = slot.as_ref() else {
-            return results;
-        };
-        if !di.is_searchable() {
-            return results;
-        }
-        let hnsw_tuples: Vec<(u64, f32)> = results.into_iter().map(Into::into).collect();
-        let merged = di.merge_with_hnsw(hnsw_tuples, query, k, metric);
-        merged.into_iter().map(ScoredResult::from).collect()
-    }
 }
 
 fn rescore_with_metric(

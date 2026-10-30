@@ -426,7 +426,10 @@ its queue only after linking or inserting it. Every point the walk can miss
 is therefore in the copy: if the flush's drop came before the copy, the link
 came before the walk, and the walk can reach the point; otherwise the copy
 holds it. Copied after the walk instead, the queue could have lost a point
-the walk had already missed. A point found both ways is returned once.
+the walk had already missed. A point found both ways is returned once. The
+deferred indexer's and the delta buffer's points go through the same merge
+(and the same search restriction), read after the index search under their
+own locks, as before.
 
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 

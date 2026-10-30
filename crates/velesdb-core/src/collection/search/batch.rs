@@ -65,7 +65,7 @@ impl Collection {
             .zip(filters)
             .map(|((qr, query), filter)| {
                 let restriction = PendingRestriction::NONE.post_filtered_if(filter.is_some());
-                self.merge_delta(qr, &pending, query, candidates_k, metric, restriction)
+                self.merge_pending(qr, &pending, query, candidates_k, metric, restriction)
             })
             .collect();
 
@@ -170,7 +170,7 @@ impl Collection {
             .into_iter()
             .zip(queries.iter())
             .map(|(qr, query)| {
-                self.merge_delta(qr, &pending, query, k, metric, PendingRestriction::NONE)
+                self.merge_pending(qr, &pending, query, k, metric, PendingRestriction::NONE)
             })
             .collect();
 
@@ -303,7 +303,7 @@ impl Collection {
             .into_iter()
             .zip(vectors)
             .map(|(query_results, query)| {
-                self.merge_delta(
+                self.merge_pending(
                     query_results,
                     &pending,
                     query,

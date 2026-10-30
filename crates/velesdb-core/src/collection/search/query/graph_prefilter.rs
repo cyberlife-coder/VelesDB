@@ -128,7 +128,7 @@ impl Collection {
 
     /// Bitmap-filtered HNSW search over a large anchor set (adaptive retry
     /// in `search_with_quality_and_bitmap` compensates the post-hoc filter).
-    fn search_anchors_bitmap(
+    pub(in crate::collection::search) fn search_anchors_bitmap(
         &self,
         vector: &[f32],
         anchor_ids: &HashSet<u64>,

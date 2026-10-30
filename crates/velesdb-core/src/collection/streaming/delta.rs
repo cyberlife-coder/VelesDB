@@ -257,6 +257,19 @@ impl DeltaBuffer {
     /// lock is released.
     #[must_use]
     pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
+        self.search_admitted(query, k, metric, |_| true)
+    }
+
+    /// [`Self::search`] over only the ids `admits` accepts: a restricted
+    /// search drops the others before they compete for its `k`.
+    #[must_use]
+    pub(crate) fn search_admitted(
+        &self,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+        admits: impl Fn(u64) -> bool,
+    ) -> Vec<(u64, f32)> {
         let current_state = self.state.load(Ordering::Acquire);
         if current_state != ACTIVE && current_state != DRAINING {
             return Vec::new();
@@ -271,6 +284,7 @@ impl DeltaBuffer {
             }
             points
                 .iter()
+                .filter(|(id, _)| admits(*id))
                 .map(|(id, vec)| (*id, metric.calculate(query, vec)))
                 .collect()
         };
