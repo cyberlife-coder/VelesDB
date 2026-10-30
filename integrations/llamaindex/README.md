@@ -284,8 +284,11 @@ Three graph helpers ship with the package: `GraphLoader` (build a knowledge
 graph over stored nodes), `GraphRetriever` (vector seed + graph expansion)
 and `GraphQARetriever` (adds depth-based re-ranking). Native mode talks to
 the VelesDB graph layer directly — no server required. Create the graph
-collection once with the core API, then link the **VelesDB point IDs** of
-stored nodes (the hash of each LlamaIndex node id, via
+collection once with the core API; the loader then writes nodes and edges
+into it. Core refuses an edge whose source or target is not a node of that
+graph collection, so add both endpoints first. For `GraphRetriever` to
+expand from a stored LlamaIndex node, its graph node id must be that node's
+**VelesDB point ID** (the hash of its LlamaIndex node id, via
 `velesdb_common.ids.stable_hash_id`):
 
 ```python
@@ -295,9 +298,59 @@ vector_store = VelesDBVectorStore(path="./velesdb_data", collection_name="docs")
 vector_store._get_db().create_graph_collection("kg")  # once
 
 loader = GraphLoader(vector_store, graph_collection_name="kg")
+loader.add_node(node_id=source_id, label="DOCUMENT")
+loader.add_node(node_id=target_id, label="DOCUMENT")
 loader.add_edge(edge_id=1, source=source_id, target=target_id, label="RELATES_TO")
 edges = loader.get_edges(label="RELATES_TO")
 ```
+
+`load_from_nodes` loads LlamaIndex nodes as graph nodes in one call, labelled
+`node_label` (stored in `_labels`, so `MATCH (n:DOCUMENT)` finds them). In
+native mode each graph node's id is the node's VelesDB point ID,
+`stable_hash_id(node.node_id)`, so `GraphRetriever` expands from a vector hit
+straight into the loaded graph. With `extract_relations=True` it also writes
+each node's `relationships` as edges, labelled with the relationship kind:
+`SOURCE`, `PREVIOUS`, `NEXT`, `PARENT`, `CHILD` (one edge per child):
+
+```python
+vector_store.add(nodes)  # the vector-store side: what GraphRetriever seeds from
+counts = loader.load_from_nodes(nodes, extract_relations=True)
+# e.g. {"nodes": 4, "edges": 6, "skipped_relations": 1}
+```
+
+- A relationship is linked when its target is in the graph: loaded by the same
+  call or, in native mode, by an earlier one. Any other target (typically
+  `SOURCE`, when the source document is never loaded) is counted in
+  `skipped_relations` and not written: no dangling edge.
+- Edge ids are deterministic, so loading the same nodes again writes nothing
+  new and returns the same counts. `edges` counts the distinct relationship
+  edges the graph holds for the call, written now or by an earlier load; an
+  edge that fails to write is logged and not counted.
+- With `extract_relations=False` (the default) no edge is written and both
+  `edges` and `skipped_relations` are 0.
+- Without a graph collection, nodes go to the vector store's own collection
+  and edges to an in-memory graph store. There the id stays
+  `stable_hash_id(f"{node_label}:{node.node_id}")`, because the point ID would
+  overwrite the stored node, and only same-call targets are linked.
+
+> **Upgrading from 7.1.0:** with a graph collection, the 7.1.0 loader wrote
+> its nodes into the vector store's collection, as metadata-only points at
+> `stable_hash_id(f"{node_label}:{node.node_id}")` (or at the id given to
+> `add_node`). 8.0.0 writes them into the graph collection and no longer reads
+> those points; search and `get` never return them, but they stay stored and
+> counted. Delete them with the nodes you loaded and the `node_label` you
+> passed:
+>
+> ```python
+> from velesdb_common.ids import stable_hash_id
+>
+> node_label = "DOCUMENT"  # the node_label passed to load_from_nodes
+> collection = vector_store.client.get_collection(vector_store.collection_name)
+> collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])
+> ```
+>
+> Only do this for a store that used `graph_collection_name`: without one,
+> those points are still the loader's nodes.
 
 `GraphRetriever` finds seed nodes by vector search, then expands the context
 through the graph:
@@ -317,6 +370,14 @@ retriever = GraphRetriever(
 )
 nodes = retriever.retrieve("What is VelesDB?")
 ```
+
+The result holds the `seed_k` vector hits first, best score first, then the
+nodes the graph reaches from them, seed by seed in traversal order, until
+`expand_k` nodes in all. A node already returned, or one the vector store
+cannot return, is skipped and takes no slot. Seeds carry `graph_depth=0`;
+a neighbour carries its hops from the nearest seed as `graph_depth`, and
+`score=None`: it was reached through the graph, not scored, so a score
+threshold downstream should let `None` through or drop it deliberately.
 
 `GraphQARetriever` re-ranks results by graph depth (seeds first) for Q&A:
 

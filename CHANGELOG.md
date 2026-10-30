@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
+  node relationships as edges.** The option was documented but never read, and
+  the call always returned `"edges": 0`. Each `SOURCE`, `PREVIOUS`, `NEXT`,
+  `PARENT` and `CHILD` relationship whose target is in the graph — loaded by
+  the same call or, with a native graph collection, by an earlier one —
+  becomes an edge labelled with the kind's name, with a deterministic id, so a
+  reload writes nothing new and returns the same counts. Any other
+  relationship is skipped, never written as a dangling edge, and counted in
+  the new `skipped_relations` key of the result.
+
 ### Changed
 
 - **BREAKING (behavior) — the TypeScript SDK refuses a filter that is not
@@ -80,6 +92,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns the BM25 score. A caller that sorts or thresholds on it must handle
   `null`.
 
+- **BREAKING (behavior) — LlamaIndex `GraphLoader` with a graph collection
+  writes its nodes there, at VelesDB point ids.** In 7.1.0 `add_node` and
+  `load_from_nodes` wrote every node into the vector store's collection — a
+  metadata-only point, or a vector point when `add_node` got a vector — at the
+  given id, or at `stable_hash_id(f"{node_label}:{node.node_id}")` for
+  `load_from_nodes`, while its edges never persisted (see Fixed). In 8.0.0,
+  with a graph collection, a node is upserted into that graph collection only,
+  labelled through `_labels` (from `label`, which a `_labels` key in the
+  node's metadata no longer overrides); a vector is dropped when the graph
+  collection has no embeddings. `load_from_nodes` gives it the id
+  `VelesDBVectorStore` stores the node under, `stable_hash_id(node.node_id)`,
+  so `GraphRetriever` expands from a vector hit straight into the loaded
+  graph, as LangChain's retriever expands from the point id (`_int_id`).
+  Without a graph collection nothing changes. *Migration*: the points the
+  7.1.0 loader wrote into the vector store's collection are no longer read.
+  They are metadata-only, so search and `get` never return them, but they
+  stay stored and counted; delete them with the snippet in
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md) (section 4).
+- **BREAKING (behavior) — LangChain and LlamaIndex `GraphRetriever` search
+  `seed_k` seeds.** In 7.1.0 they searched `expand_k` (default 10); in 8.0.0
+  they search `seed_k` (default 3), as documented, and fill the rest of
+  `expand_k` with graph neighbours (see Fixed). A query whose seeds have no
+  neighbour now returns at most `seed_k` documents where it returned up to
+  `expand_k`. *Migration*: raise `seed_k` to get more vector hits.
+- **BREAKING (behavior) — LlamaIndex `GraphRetriever` neighbours carry
+  `score=None`.** In 7.1.0 a node reached through the graph had `score=0.5`,
+  a value no search produced, which a downstream score threshold or re-ranker
+  read as a similarity. `NodeWithScore.score` is optional, and `None` now says
+  the node was not scored, as LangChain's neighbours carry no
+  `relevance_score`. `GraphQARetriever` sorts unscored nodes after the scored
+  ones of the same depth. *Migration*: a postprocessor that compares scores
+  must handle `None` (keep or drop graph-reached nodes on purpose).
+- **BREAKING (behavior) — LlamaIndex `GraphRetriever` expands a seed from its
+  point id only.** In 7.1.0 it took the seed's id from an `id`, `doc_id` or
+  `node_id` key of its metadata when one held an integer, else `int()` of a
+  numeric node id, else the hash — while `VelesDBVectorStore` always stores a
+  node under the hash, so a node id like `"1"` (or such a metadata key)
+  expanded from a point that does not exist and found nothing. Store, loader
+  and retriever now share one derivation, `point_id(node_id)` =
+  `stable_hash_id(node_id)`. *Migration*: edges added by hand must use
+  `stable_hash_id(node.node_id)` as `source` / `target`.
+
 ### Removed
 
 - **BREAKING — `CollectionConfig.description` (TypeScript SDK).** Core has no
@@ -148,6 +202,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by earlier versions still load: the deserializer reads both shapes. The SDK
   gains a suite that runs its search family over a real velesdb-wasm build
   instead of a fake store, run by the `wasm-check` CI job.
+
+- **LlamaIndex `GraphLoader` reaches its graph collection.** It opened a
+  second `velesdb.Database` on the vector store's path, which core refuses
+  once the store holds it open (`VELES-031`), and silently fell back to an
+  in-memory graph store, so in 7.1.0 no edge persisted. It now reuses the
+  store's own handle, as `GraphRetriever` does.
+- **LangChain and LlamaIndex `GraphRetriever` return graph neighbours.** In
+  7.1.0 every result slot went to a vector hit on a store holding at least
+  `expand_k` documents, so graph expansion never added one. The order is now
+  defined and the same in both: seeds by score, then neighbours seed by seed
+  in traversal order, where the set they were kept in made it arbitrary. A
+  neighbour that is a seed or that the vector store cannot return takes no
+  slot.
+- **LangChain and LlamaIndex `GraphRetriever` report a neighbour's real
+  `graph_depth`.** In 7.1.0 every neighbour was marked `1`, also one reached
+  at depth 2, so `GraphQARetriever`'s depth re-ranking could not tell them
+  apart. It is now the hops from the nearest seed, as the traversal reports
+  it, in native and REST mode alike. REST mode also turns `target_id`, which
+  the server serialises as a string, into an integer: LlamaIndex passed the
+  string to the collection, which raised `TypeError` out of `retrieve()`. The
+  new `velesdb_common.graph.parse_graph_traverse_results` returns
+  `(target_id, depth)` pairs, and `parse_graph_traverse_response` now returns
+  integer ids.
+- **The GraphRAG examples run.** `examples/python/graphrag_langchain.py` and
+  `graphrag_llamaindex.py` imported a store class that does not exist and
+  called REST routes the server does not have. They now use the integrations
+  natively (`VelesDBVectorStore`, `GraphLoader`, `GraphRetriever`), with no
+  server, and run offline with the frameworks' fake embeddings and LLM when no
+  OpenAI key is set or with `--offline`; each integration's test suite runs
+  its example that way.
 
 - **The Python quickstart and examples run on 8.0.0.** The root README's
   "three commands that work" ran `examples/python/hello_velesdb.py`, which

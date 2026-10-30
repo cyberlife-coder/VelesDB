@@ -15,7 +15,7 @@ from llama_index.core.vector_stores.types import (
 
 try:
     from llamaindex_velesdb import VelesDBVectorStore
-    from llamaindex_velesdb.vectorstore import _stable_hash_id
+    from llamaindex_velesdb._common import point_id
 except ImportError:
     pytest.skip("Dependencies not installed", allow_module_level=True)
 
@@ -137,11 +137,11 @@ class TestVelesDBVectorStore:
         # Lazy-init contract: the same _db instance is reused across accesses.
         assert vector_store.client is client
 
-    def test_stable_hash_id_is_deterministic_and_63bit(self):
+    def test_point_id_is_deterministic_and_63bit(self):
         """Stable IDs must remain deterministic with a wide collision space."""
-        first = _stable_hash_id("node://alpha")
-        second = _stable_hash_id("node://alpha")
-        other = _stable_hash_id("node://beta")
+        first = point_id("node://alpha")
+        second = point_id("node://alpha")
+        other = point_id("node://beta")
 
         assert first == second
         assert first != other

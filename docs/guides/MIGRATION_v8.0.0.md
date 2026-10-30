@@ -185,6 +185,36 @@ under `validation`.
 
   Those scores now pass through as core returns them.
 
+- **LlamaIndex `GraphLoader` with a `graph_collection_name`** writes its nodes
+  into that graph collection, at `stable_hash_id(node.node_id)` (the id
+  `VelesDBVectorStore` stores the node under), labelled through `_labels`; a
+  vector is dropped when the graph collection has no embeddings. The 7.1.0
+  loader wrote them into the vector store's collection as metadata-only points
+  at `stable_hash_id(f"{node_label}:{node.node_id}")` (or at the id given to
+  `add_node`). Nothing reads those points any more; they stay stored and
+  counted until deleted:
+
+  ```python
+  from velesdb_common.ids import stable_hash_id
+
+  node_label = "DOCUMENT"  # the node_label passed to load_from_nodes
+  collection = vector_store.client.get_collection(vector_store.collection_name)
+  collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])
+  ```
+
+  Without a graph collection the loader is unchanged, and those points are
+  still its nodes: do not delete them.
+- **LangChain and LlamaIndex `GraphRetriever` search `seed_k` seeds**
+  (default 3), not `expand_k` (default 10), then fill up to `expand_k` with
+  graph neighbours. A query whose seeds have no neighbour returns at most
+  `seed_k` documents: raise `seed_k` for more vector hits.
+- **LlamaIndex `GraphRetriever`:**
+  - a graph-reached node has `score=None` instead of `0.5`; a postprocessor
+    that compares scores must handle `None`;
+  - a seed expands from `stable_hash_id(node.node_id)` only, never from an
+    `id`/`doc_id`/`node_id` metadata key or `int()` of a numeric node id;
+    edges added by hand must use that id as `source` / `target`.
+
 ## 5. Tauri plugin
 
 Rejections carry core's codes and a new `recoverable` field:
