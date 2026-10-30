@@ -240,7 +240,6 @@ class SearchOptions:
         vector: Dense query vector (list or numpy array).
         sparse_vector: Sparse query as dict[int, float] or scipy sparse.
         k: Max results to return (default: 10).
-        top_k: Deprecated alias for ``k``.
         filter: Metadata pre-filter dict. Shape: ``{"condition": <cond>}`` where
             ``<cond>`` is ``{"type": <op>, "field": ..., ...}``. Operators:
             ``eq``/``neq``/``gt``/``gte``/``lt``/``lte`` (``field``+``value``),
@@ -266,7 +265,6 @@ class SearchOptions:
     vector: Optional[Union[List[float], "np.ndarray"]]
     sparse_vector: Optional[Dict[int, float]]
     k: int
-    top_k: int
     filter: Optional[Dict[str, Any]]
     sparse_index_name: Optional[str]
     include_vectors: bool
@@ -279,8 +277,7 @@ class SearchOptions:
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
         *,
         sparse_vector: Optional[Dict[int, float]] = None,
-        k: Optional[int] = None,
-        top_k: Optional[int] = None,
+        k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
         sparse_index_name: Optional[str] = None,
         include_vectors: bool = False,
@@ -295,7 +292,6 @@ class SearchOptions:
         self, sparse_vector: Optional[Dict[int, float]]
     ) -> "SearchOptions": ...
     def with_k(self, k: int) -> "SearchOptions": ...
-    def with_top_k(self, top_k: int) -> "SearchOptions": ...
     def with_filter(self, filter: Optional[Dict[str, Any]]) -> "SearchOptions": ...
     def with_sparse_index_name(self, name: Optional[str]) -> "SearchOptions": ...
     def with_include_vectors(self, include: bool) -> "SearchOptions": ...
@@ -526,19 +522,15 @@ class Collection:
     def search(
         self,
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
-        *,
-        sparse_vector: Optional[Dict[int, float]] = None,
         top_k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        sparse_vector: Optional[Dict[int, float]] = None,
         sparse_index_name: Optional[str] = None,
-        principal: Optional[str] = None,
-        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors (dense, sparse, or hybrid).
 
-        .. deprecated:: 1.15.0
-            Use :py:meth:`search_request` with a :py:class:`SearchOptions` object.
-            This method will be removed in v2.0.0.
+        The keyword shorthand over :py:meth:`search_request`; use that with a
+        :py:class:`SearchOptions` for fusion and read-gate options.
 
         Modes:
         - Dense only: ``search(vector, top_k=10)``
@@ -562,8 +554,8 @@ class Collection:
     def search_request(self, opts: "SearchOptions") -> List[Dict[str, Any]]:
         """Search for similar vectors using a :py:class:`SearchOptions` builder (v1.15+).
 
-        Preferred over :py:meth:`search` for new code; avoids the long
-        parameter list warning and is the sole canonical entry point from v2.0.
+        Takes every search parameter :py:meth:`search` takes, plus fusion,
+        ``include_vectors`` and the read-gate ``principal`` / ``tenant``.
 
         Args:
             opts: A populated :py:class:`SearchOptions` instance.
@@ -827,10 +819,6 @@ class Collection:
             ValueError: If ``quality`` names no mode, or gives an ef outside
                 16-4096.
         """
-        ...
-
-    def get_graph_store(self) -> "GraphStore":
-        """Get a graph store adapter for edge/traversal operations."""
         ...
 
     # Index Management

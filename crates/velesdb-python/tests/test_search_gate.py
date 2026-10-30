@@ -14,7 +14,7 @@ module proves three properties for those paths:
 * **Scope narrows** — an observer returning a scope ``dict`` narrows results
   versus the ungated run.
 * **Backward compatible** — with no observer, results are unchanged and the
-  ``.search()`` deprecation warning still fires (zero-overhead allow).
+  ``.search()`` shorthand still works (zero-overhead allow).
 """
 
 import shutil
@@ -125,9 +125,7 @@ def test_search_deny_fails_closed():
     with _Db(observer=_deny_reads) as db:
         collection = _seed(db)
         with pytest.raises(Exception):
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                collection.search(QUERY, top_k=2)
+            collection.search(QUERY, top_k=2)
 
 
 def test_search_request_deny_fails_closed():
@@ -430,7 +428,7 @@ def test_graph_search_by_embedding_scope_narrows():
 
 
 # ---------------------------------------------------------------------------
-# Backward compatibility: no observer ⇒ unchanged results + deprecation warning.
+# Backward compatibility: no observer ⇒ unchanged results.
 # ---------------------------------------------------------------------------
 
 
@@ -443,10 +441,11 @@ def test_no_observer_returns_all_results():
     assert results[0]["id"] == 1
 
 
-def test_deprecated_search_still_warns_and_works():
+def test_search_shorthand_works_without_warning():
     with _Db() as db:
         collection = _seed(db)
-        with pytest.warns(DeprecationWarning):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
             results = collection.search(QUERY, top_k=10)
     assert _ids(results) == {1, 2}
 

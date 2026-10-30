@@ -1091,7 +1091,7 @@ class TestSearchQualityLangChain:
                 return [{"payload": {"text": "world"}, "score": 0.8}]
 
             def search_request(self, opts):
-                return self.search(opts.vector, top_k=opts.top_k)
+                return self.search(opts.vector, top_k=opts.k)
 
         store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
         results = store.similarity_search("test query", k=3)

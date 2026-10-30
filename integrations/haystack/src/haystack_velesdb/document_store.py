@@ -770,7 +770,7 @@ class VelesDBDocumentStore(CollectionAdminMixin):
         results: List[dict] = self._get_collection().search_request(
             velesdb.SearchOptions(
                 vector=query_embedding,
-                top_k=top_k,
+                k=top_k,
                 filter=veles_filter,
             )
         )

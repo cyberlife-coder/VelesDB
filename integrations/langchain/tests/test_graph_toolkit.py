@@ -1,5 +1,7 @@
 """Tests for VelesDB Graph Toolkit."""
 
+import gc
+
 import pytest
 from unittest.mock import Mock
 
@@ -183,17 +185,17 @@ class TestGraphLoader:
         custom = GraphLoader(mock_db, collection_name="custom_graph")
         assert custom.collection_name == "custom_graph"
 
-    def test_load_entities_and_relations(self):
-        mock_collection = Mock()
-        mock_collection.upsert = Mock()
-        mock_collection.upsert_metadata = Mock()
-        mock_collection.info = Mock(return_value={"metadata_only": True})
-
+    @staticmethod
+    def _db_with_graph(graph):
         mock_db = Mock()
-        mock_db.get_collection = Mock(return_value=None)
-        mock_db.create_metadata_collection = Mock(return_value=mock_collection)
-        mock_graph_store = Mock()
-        mock_db.graph_store = mock_graph_store
+        mock_db.get_graph_collection = Mock(return_value=None)
+        mock_db.create_graph_collection = Mock(return_value=graph)
+        return mock_db
+
+    def test_load_entities_and_relations(self):
+        graph = Mock()
+        graph.has_embeddings = False
+        mock_db = self._db_with_graph(graph)
 
         loader = GraphLoader(mock_db)
 
@@ -209,22 +211,16 @@ class TestGraphLoader:
 
         assert result["nodes"] == 2
         assert result["edges"] == 1
-        assert mock_collection.upsert_metadata.call_count == 2
-        assert mock_graph_store.add_edge.call_count == 1
+        mock_db.create_graph_collection.assert_called_once_with(
+            "knowledge_graph", dimension=None
+        )
+        assert graph.upsert_node.call_count == 2
+        assert graph.add_edge.call_count == 1
 
     def test_load_skips_invalid_relations(self):
-        mock_collection = Mock()
-        mock_collection.upsert = Mock()
-        mock_collection.upsert_metadata = Mock()
-        mock_collection.info = Mock(return_value={"metadata_only": True})
-
-        mock_db = Mock()
-        mock_db.get_collection = Mock(return_value=None)
-        mock_db.create_metadata_collection = Mock(return_value=mock_collection)
-        mock_graph_store = Mock()
-        mock_db.graph_store = mock_graph_store
-
-        loader = GraphLoader(mock_db)
+        graph = Mock()
+        graph.has_embeddings = False
+        loader = GraphLoader(self._db_with_graph(graph))
 
         entities = [Entity("John", "PERSON")]
         relations = [Relation("John", "Unknown", "KNOWS")]
@@ -233,31 +229,51 @@ class TestGraphLoader:
 
         assert result["nodes"] == 1
         assert result["edges"] == 0
-        assert mock_graph_store.add_edge.call_count == 0
+        assert graph.add_edge.call_count == 0
 
     def test_load_relation_uses_properties_key_not_metadata(self):
-        """Contract parity: GraphStore edges must use `properties` key."""
-        mock_collection = Mock()
-        mock_collection.upsert = Mock()
-        mock_collection.upsert_metadata = Mock()
-        mock_collection.info = Mock(return_value={"metadata_only": True})
-
-        mock_db = Mock()
-        mock_db.get_collection = Mock(return_value=None)
-        mock_db.create_metadata_collection = Mock(return_value=mock_collection)
-        mock_graph_store = Mock()
-        mock_db.graph_store = mock_graph_store
-
-        loader = GraphLoader(mock_db)
+        """Contract parity: graph edges carry a `properties` key."""
+        graph = Mock()
+        graph.has_embeddings = False
+        loader = GraphLoader(self._db_with_graph(graph))
         entities = [Entity("Alice", "PERSON"), Entity("Acme", "ORGANIZATION")]
         relations = [Relation("Alice", "Acme", "WORKS_AT", {"since": "2024"})]
 
         loader.load(entities, relations, generate_embeddings=False)
 
-        call_arg = mock_graph_store.add_edge.call_args[0][0]
+        call_arg = graph.add_edge.call_args[0][0]
         assert "properties" in call_arg
         assert "metadata" not in call_arg
         assert call_arg["properties"] == {"since": "2024"}
+
+    def test_loaded_graph_survives_reopening_the_database(self, tmp_path):
+        """Nodes, labels and edges reach one persistent graph collection.
+
+        The loader used to put the nodes in a vector collection and the edges
+        in a standalone in-memory GraphStore, so every relation was lost when
+        the process exited.
+        """
+        velesdb = pytest.importorskip("velesdb")
+        db = velesdb.Database(str(tmp_path))
+        loader = GraphLoader(db, embedding_fn=lambda text: [1.0, 0.0, 0.0, 0.5])
+        result = loader.load(
+            [Entity("John", "PERSON"), Entity("Acme", "ORGANIZATION")],
+            [Relation("John", "Acme", "WORKS_AT", {"since": "2024"})],
+        )
+        assert result == {"nodes": 2, "edges": 1}
+        db.get_graph_collection("knowledge_graph").flush()
+        del loader, db
+        gc.collect()
+
+        reopened = velesdb.Database(str(tmp_path))
+        graph = reopened.get_graph_collection("knowledge_graph")
+        assert graph is not None
+        assert graph.edge_count() == 1
+        edge = graph.get_edges("WORKS_AT")[0]
+        assert edge["properties"] == {"since": "2024"}
+        assert graph.match_query(
+            "MATCH (p:PERSON)-[:WORKS_AT]->(o:ORGANIZATION) RETURN p, o LIMIT 10"
+        ), "labels are core's node labels, so MATCH sees them"
 
 
 if __name__ == "__main__":
