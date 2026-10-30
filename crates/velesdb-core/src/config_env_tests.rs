@@ -178,3 +178,20 @@ fn test_engine_only_env_filter_keeps_removed_sections() {
         assert!(VelesConfig::is_engine_path(&path_of(&name)), "{name}");
     }
 }
+
+#[test]
+fn test_is_engine_table_names_engine_and_removed_tables_only() {
+    for engine in [
+        "search",
+        "hnsw",
+        "storage",
+        "limits",
+        "quantization",
+        "wal_batch",
+    ] {
+        assert!(VelesConfig::is_engine_table(engine), "{engine}");
+    }
+    for other in ["server", "logging", "auth", "update_check", "sever"] {
+        assert!(!VelesConfig::is_engine_table(other), "{other}");
+    }
+}

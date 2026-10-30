@@ -42,51 +42,34 @@ pub(crate) struct LoggingSection {
     pub(crate) unknown: crate::config::UnknownKeys,
 }
 
-/// One of the five levels `[logging] level` accepts — the same five, spelt
-/// the same way, that `velesdb_core::config::VelesConfig` validates for its
-/// own `logging.level`, which `VELESDB_LOGGING_LEVEL` also reaches.
+/// One of the levels `[logging] level` accepts: exactly
+/// [`velesdb_core::config::LOG_LEVELS`], the list the engine validates its
+/// own `logging.level` against — one definition, so the two cannot drift.
+/// Each name is also the one `tracing`'s filter syntax uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
-}
+pub struct LogLevel(&'static str);
 
 impl LogLevel {
-    const NAMES: [&'static str; 5] = ["error", "warn", "info", "debug", "trace"];
-
     /// Parses `value` for the setting named `source` (used in the error).
     ///
     /// # Errors
     ///
-    /// Returns an error naming `source` when `value` is not one of the five
-    /// lower-case level names.
+    /// Returns an error naming `source` when `value` is not one of
+    /// [`velesdb_core::config::LOG_LEVELS`], spelt as there.
     pub fn parse(value: &str, source: &str) -> anyhow::Result<Self> {
-        Ok(match value {
-            "error" => Self::Error,
-            "warn" => Self::Warn,
-            "info" => Self::Info,
-            "debug" => Self::Debug,
-            "trace" => Self::Trace,
-            _ => anyhow::bail!(
-                "{source}: value '{value}' is invalid, expected one of: {:?}",
-                Self::NAMES
-            ),
-        })
+        let levels = velesdb_core::config::LOG_LEVELS;
+        match levels.iter().find(|level| **level == value) {
+            Some(level) => Ok(Self(level)),
+            None => {
+                anyhow::bail!("{source}: value '{value}' is invalid, expected one of: {levels:?}")
+            }
+        }
     }
 
-    /// The name `tracing`'s filter syntax uses for this level.
+    /// The level's name, as `tracing`'s filter syntax spells it.
     #[must_use]
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Error => "error",
-            Self::Warn => "warn",
-            Self::Info => "info",
-            Self::Debug => "debug",
-            Self::Trace => "trace",
-        }
+        self.0
     }
 }
 

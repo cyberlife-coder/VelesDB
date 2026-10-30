@@ -409,6 +409,32 @@ and that default is why this one changed:
 Allow-all is still available, written explicitly (`cors_origins = ["*"]`); the
 server logs a warning at startup when it is on.
 
+### What the closed default protects, exactly
+
+A page from another origin can still make the browser *send* a request: CORS
+decides what the page may read and which requests need the server's consent
+first (a preflight), not what leaves the browser. Without a CORS header:
+
+- **No response can be read** by a page from another origin.
+- **No request with a body gets through.** A request without a preflight — the
+  only kind the default lets through — can carry only `text/plain`,
+  `application/x-www-form-urlencoded` or `multipart/form-data`. Every route
+  that takes a body refuses those: the JSON routes require
+  `application/json`, `POST .../points/stream` requires `application/x-ndjson`
+  and `POST .../points/raw` requires `application/octet-stream`, each with
+  `415` otherwise. Anything else, including any `DELETE`, `PUT` or `PATCH`,
+  needs a preflight, which the server does not answer.
+- **Still reachable blind:** the `POST` routes that take no body —
+  `.../flush`, `.../analyze`, `.../index/rebuild`, `.../vacuum`,
+  `.../compact`, `.../locality/reorder` — and every `GET`. None of them
+  adds, changes or removes a point, and the page never sees the answer, but it
+  can make the server do the work (an index rebuild or a compaction is
+  expensive).
+
+CORS is not access control. If anything but you can reach the port — another
+user on the machine, the network, a container neighbour — set
+`VELESDB_API_KEYS`.
+
 ### Allowing a browser front end
 
 ```toml
@@ -428,12 +454,14 @@ also holds methods, headers, credentials and the preflight cache
 ([SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md#4-cors)).
 
 `cors_enabled = false` is a master switch: no CORS header is sent whatever the
-list says. With no CORS header, the default, a page from another origin can
-still *send* a "simple" cross-origin request without reading the
-answer; the endpoints that take JSON refuse those, since they require
-`Content-Type: application/json`, which a simple request cannot set — but treat
-that as a side effect, not a control. Exposed beyond `127.0.0.1`, set
-`VELESDB_API_KEYS` whatever the CORS setting.
+list says, which gives the same protection as the default (see
+[What the closed default protects](#what-the-closed-default-protects-exactly)).
+Exposed beyond `127.0.0.1`, set `VELESDB_API_KEYS` whatever the CORS setting.
+
+`"*"` must stand alone, and the permissive policy it selects allows every
+method and header and never credentials: `[cors] allow_credentials = true`, or
+methods, headers or a preflight cache set next to it, are refused at startup
+rather than silently ignored.
 
 ---
 

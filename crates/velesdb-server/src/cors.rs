@@ -83,16 +83,11 @@ impl CorsConfig {
 
     /// Rejects what [`build_cors_layer`] would otherwise have to drop in
     /// silence: an origin a browser can never send, `"*"` mixed into an
-    /// explicit list (which would quietly allow everything), and a method or
+    /// explicit list (which would quietly allow everything), a setting the
+    /// `"*"` policy ignores (see [`Self::validate_wildcard`]), and a method or
     /// header name that does not parse.
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
-        if self.is_permissive() && self.allowed_origins.len() > 1 {
-            anyhow::bail!(
-                "CORS origins {:?}: \"*\" allows every origin and cannot be combined \
-                 with an explicit list",
-                self.allowed_origins
-            );
-        }
+        self.validate_wildcard()?;
         for origin in self.allowed_origins.iter().filter(|o| *o != "*") {
             validate_origin(origin)?;
         }
@@ -105,6 +100,54 @@ impl CorsConfig {
             header
                 .parse::<axum::http::HeaderName>()
                 .map_err(|e| anyhow::anyhow!("cors.allowed_headers: '{header}': {e}"))?;
+        }
+        Ok(())
+    }
+}
+
+impl CorsConfig {
+    /// `"*"` must stand alone, and nothing may be set that the permissive
+    /// policy it selects ([`tower_http::cors::CorsLayer::permissive`]) would
+    /// ignore: it allows every method and header, has no preflight cache
+    /// setting, and never allows credentials — a browser refuses
+    /// `Access-Control-Allow-Credentials` next to a wildcard origin anyway.
+    /// A setting left at its default value is not an instruction, so it
+    /// passes.
+    fn validate_wildcard(&self) -> anyhow::Result<()> {
+        if !self.is_permissive() {
+            return Ok(());
+        }
+        if self.allowed_origins.len() > 1 {
+            anyhow::bail!(
+                "CORS origins {:?}: \"*\" allows every origin and cannot be combined \
+                 with an explicit list",
+                self.allowed_origins
+            );
+        }
+        let defaults = Self::default();
+        let ignored: Vec<&str> = [
+            ("allow_credentials", self.allow_credentials),
+            (
+                "allowed_methods",
+                self.allowed_methods != defaults.allowed_methods,
+            ),
+            (
+                "allowed_headers",
+                self.allowed_headers != defaults.allowed_headers,
+            ),
+            ("max_age_secs", self.max_age_secs != defaults.max_age_secs),
+        ]
+        .into_iter()
+        .filter_map(|(key, set)| set.then_some(key))
+        .collect();
+        if !ignored.is_empty() {
+            anyhow::bail!(
+                "CORS origins [\"*\"] select the permissive policy, which allows every \
+                 method and header and never credentials, so [cors] {} would be \
+                 ignored: remove {}, or list the allowed origins explicitly",
+                ignored.join(", "),
+                if ignored.len() == 1 { "it" } else { "them" }
+            );
         }
         Ok(())
     }

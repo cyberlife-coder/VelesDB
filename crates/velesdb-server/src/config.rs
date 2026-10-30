@@ -4,9 +4,11 @@
 //! CLI flags > environment variables > velesdb.toml > defaults.
 //!
 //! The file sections this module owns are `[server]`, `[auth]`, `[tls]`,
-//! `[cors]` and `[logging]`. A key in one of them that no field below names
-//! is not dropped in silence: [`ServerConfig::ignored_entries`] lists it and
-//! the binary warns about it at startup.
+//! `[cors]` and `[logging]`. A key in one of them that no field below names,
+//! or a top-level table that neither this module nor the engine nor the
+//! update check reads, is not dropped in silence:
+//! [`ServerConfig::ignored_entries`] lists it and the binary warns about it
+//! at startup.
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -73,7 +75,9 @@ pub fn load_core_config(
         None => {
             let default_path = PathBuf::from("velesdb.toml");
             if !default_path.exists() {
-                return Ok(velesdb_core::config::VelesConfig::default());
+                // No file, but the `VELESDB_*` engine variables still apply.
+                return velesdb_core::config::VelesConfig::load_engine_only_from_env()
+                    .map_err(|e| anyhow::anyhow!("failed to load VelesDB core config: {e}"));
             }
             default_path
         }
@@ -96,9 +100,8 @@ pub fn load_core_config(
 /// there is no second list to keep in step with it.
 pub(crate) type UnknownKeys = BTreeMap<String, toml::Value>;
 
-/// Root structure for `velesdb.toml`. Top-level tables not named here belong
-/// to the engine (`[search]`, `[hnsw]`, ...) or to other readers
-/// (`[update_check]`) and are not this module's to report.
+/// Root structure for `velesdb.toml`. Every other top-level table lands in
+/// `other`; [`FileConfig::unknown_entries`] reports those nobody reads.
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
     server: Option<ServerSection>,
@@ -106,6 +109,16 @@ struct FileConfig {
     tls: Option<TlsSection>,
     cors: Option<CorsSection>,
     logging: Option<LoggingSection>,
+    #[serde(flatten)]
+    other: UnknownKeys,
+}
+
+/// Whether a top-level table outside this module's five is read by someone
+/// else: the engine (its sections, and removed tables it warns about
+/// itself), or the update check when this build has it.
+fn read_elsewhere(table: &str) -> bool {
+    velesdb_core::config::VelesConfig::is_engine_table(table)
+        || (cfg!(feature = "update-check") && table == "update_check")
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -140,8 +153,26 @@ struct TlsSection {
 
 impl FileConfig {
     /// Every key of a server-owned section that no field reads, as
-    /// `section.key`, sorted within each section.
+    /// `section.key`, sorted within each section, then every top-level table
+    /// nobody reads, as `[table]`.
     fn unknown_entries(&self) -> Vec<String> {
+        let mut entries = self.unknown_section_keys();
+        entries.extend(
+            self.other
+                .iter()
+                .filter(|(name, _)| !read_elsewhere(name))
+                .map(|(name, value)| {
+                    if value.is_table() {
+                        format!("[{name}]")
+                    } else {
+                        name.clone()
+                    }
+                }),
+        );
+        entries
+    }
+
+    fn unknown_section_keys(&self) -> Vec<String> {
         let sections: [(&str, Option<&UnknownKeys>); 5] = [
             ("server", self.server.as_ref().map(|s| &s.unknown)),
             ("auth", self.auth.as_ref().map(|s| &s.unknown)),
@@ -251,10 +282,9 @@ impl Default for ServerConfig {
     }
 }
 
-/// Ceiling for `[server] workers`, the same one `velesdb_core`'s own
-/// `server.workers` validation applies: high enough for any real machine,
-/// low enough that a typo cannot ask for millions of threads.
-pub const WORKERS_CAP: usize = 4_096;
+/// Ceiling for `[server] workers`: the engine's own `server.workers` rule,
+/// imported rather than copied.
+pub use velesdb_core::config::WORKERS_CAP;
 
 /// Ceiling for `[server] max_body_size`: 1 GiB. A point-upload body is
 /// buffered whole before it is parsed, so this bounds one request's memory.

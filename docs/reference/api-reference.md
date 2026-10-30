@@ -367,8 +367,8 @@ queryable via VelesQL over its payload, but is not added to any HNSW index.
 
 ### POST /collections/:name/points/raw
 
-Bulk-upsert points via a compact binary wire format (`application/octet-stream`)
-for zero-copy, high-throughput ingestion. This avoids the per-point JSON
+Bulk-upsert points via a compact binary wire format (`application/octet-stream`;
+any other `Content-Type` is refused with `415`) for zero-copy, high-throughput ingestion. This avoids the per-point JSON
 overhead of `POST /collections/:name/points`. **Payloads are not carried on this
 path** — use the JSON endpoint when you need them.
 
@@ -469,6 +469,7 @@ cursor) are serialized as strings (see the Point ID encoding note in
 ### POST /collections/:name/points/stream
 
 Stream-upsert points as NDJSON (`application/x-ndjson`, one JSON point per line).
+Any other `Content-Type` is refused with `415`.
 Points are accumulated into micro-batches and flushed via bulk upsert. The
 response includes a `network_errors` count: a non-zero value means the HTTP body
 stream was truncated and fewer points than sent may have been received.

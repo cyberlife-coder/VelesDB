@@ -1927,7 +1927,7 @@
           "points"
         ],
         "summary": "Bulk upsert points via the binary wire format.",
-        "description": "Accepts an `application/octet-stream` body in the VRB1 raw-bulk format\n(a 16-byte header — magic, count, dim, id_width — followed by tightly-packed\n`u64` ids and `f32` vectors). The vectors are forwarded to\n`Collection::upsert_bulk_from_raw` (zero per-point `Point` allocation).\nPayloads are not supported on this path.",
+        "description": "Accepts an `application/octet-stream` body in the VRB1 raw-bulk format\n(a 16-byte header — magic, count, dim, id_width — followed by tightly-packed\n`u64` ids and `f32` vectors); any other `Content-Type` is refused with\n`415`. The vectors are forwarded to\n`Collection::upsert_bulk_from_raw` (zero per-point `Point` allocation).\nPayloads are not supported on this path.",
         "operationId": "upsert_points_raw",
         "parameters": [
           {
@@ -1974,6 +1974,16 @@
           },
           "404": {
             "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not application/octet-stream",
             "content": {
               "application/json": {
                 "schema": {
@@ -2056,7 +2066,7 @@
           "points"
         ],
         "summary": "Stream upsert points using NDJSON.",
-        "description": "Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,\nwhose `id` is an unsigned 64-bit integer: a line that is not blank and does\nnot parse as one, a string `id` included, is counted in the response's\n`malformed` field.\nPoints are accumulated into micro-batches and flushed via `upsert_bulk`.\n\nThe response body includes a `network_errors` field: a non-zero value means\nthe HTTP body stream was truncated (e.g., client disconnect or proxy error),\nand the server may have received fewer points than the client sent (M-7).",
+        "description": "Accepts an `application/x-ndjson` body, and refuses any other\n`Content-Type` with `415`. Each line is one JSON-encoded point,\nwhose `id` is an unsigned 64-bit integer: a line that is not blank and does\nnot parse as one, a string `id` included, is counted in the response's\n`malformed` field.\nPoints are accumulated into micro-batches and flushed via `upsert_bulk`.\n\nThe response body includes a `network_errors` field: a non-zero value means\nthe HTTP body stream was truncated (e.g., client disconnect or proxy error),\nand the server may have received fewer points than the client sent (M-7).",
         "operationId": "stream_upsert_points",
         "parameters": [
           {
@@ -2093,6 +2103,16 @@
           },
           "404": {
             "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content-Type is not application/x-ndjson",
             "content": {
               "application/json": {
                 "schema": {

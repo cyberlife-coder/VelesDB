@@ -193,7 +193,7 @@ format = "json"
 file = "/var/log/velesdb/velesdb.log"
 "#,
     );
-    assert_eq!(cfg.logging.level, Some(LogLevel::Debug));
+    assert_eq!(cfg.logging.level.map(LogLevel::as_str), Some("debug"));
     assert_eq!(cfg.logging.format, LogFormat::Json);
     assert_eq!(
         cfg.logging.file,
@@ -214,7 +214,7 @@ fn test_velesdb_logging_level_overrides_the_file_level() {
         ..CliOverrides::default()
     };
     let cfg = merged("[logging]\nlevel = \"debug\"\n", cli).expect("test: merge");
-    assert_eq!(cfg.logging.level, Some(LogLevel::Warn));
+    assert_eq!(cfg.logging.level.map(LogLevel::as_str), Some("warn"));
 }
 
 #[test]
@@ -277,4 +277,68 @@ not_ours_to_report = 1
         cfg.port, 9090,
         "known keys still apply next to unknown ones"
     );
+}
+
+// ---------------------------------------------------------------------------
+// "*" and the settings the permissive policy ignores
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_wildcard_with_settings_it_would_ignore_is_refused() {
+    for (setting, expected) in [
+        ("allow_credentials = true", "allow_credentials"),
+        ("allowed_methods = [\"GET\"]", "allowed_methods"),
+        ("allowed_headers = [\"content-type\"]", "allowed_headers"),
+        ("max_age_secs = 60", "max_age_secs"),
+    ] {
+        let cfg = from_file(&format!(
+            "[server]\ncors_origins = [\"*\"]\n\n[cors]\n{setting}\n"
+        ));
+        let err = cfg.validate().expect_err("test: ignored setting");
+        assert!(err.to_string().contains(expected), "{setting}: {err}");
+    }
+}
+
+#[test]
+fn test_settings_the_wildcard_ignores_are_fine_with_an_explicit_list() {
+    let cfg = from_file(
+        "[server]\ncors_origins = [\"https://app.example.com\"]\n\n\
+         [cors]\nallow_credentials = true\nallowed_methods = [\"GET\"]\nmax_age_secs = 60\n",
+    );
+    cfg.validate()
+        .expect("test: every setting applies to an explicit list");
+}
+
+// ---------------------------------------------------------------------------
+// Top-level tables nothing reads
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_unknown_top_level_tables_are_reported() {
+    let cfg = from_file(
+        r#"
+[sever]
+port = 9090
+
+[search]
+default_mode = "fast"
+
+[update_check]
+enabled = false
+
+[premium]
+hot_reload = false
+
+[wal_batch]
+max_size = 1
+"#,
+    );
+    // `[search]` is the engine's and a removed table such as `[wal_batch]` is
+    // named by the engine's own removal warning; `[update_check]` is read
+    // when the feature is built. Nothing in this build reads `[premium]`.
+    let mut expected = vec!["[premium]", "[sever]"];
+    if !cfg!(feature = "update-check") {
+        expected.push("[update_check]");
+    }
+    assert_eq!(cfg.ignored_entries, expected);
 }

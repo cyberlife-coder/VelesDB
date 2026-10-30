@@ -90,7 +90,10 @@ on. Every other top-level table is silently dropped before
 own config. `velesdb-server` reads those five itself, and a key in one of
 them that it does not read is not dropped silently: the server names it in a
 startup warning (`these config entries are not read by velesdb-server and
-have no effect`), so a typo such as `[server] worker = 4` is visible. This matters because `VelesConfig` *also* has its own same-named
+have no effect`), so a typo such as `[server] worker = 4` is visible. So is a
+top-level table nobody reads (`[sever]`, or `[premium]`, which nothing in this
+build reads); the engine's tables, `[update_check]`, and removed tables (which
+the engine names in its own warning) are not reported. This matters because `VelesConfig` *also* has its own same-named
 `[server]`/`[logging]` fields (for standalone/embedded use), which don't
 mean the same thing: a perfectly legitimate `velesdb-server --config`
 value like `[server] port = 443` (its HTTP bind port, e.g. behind
@@ -101,7 +104,8 @@ file down to the engine sections before parsing it as `VelesConfig`, so
 this can't happen.
 
 `VELESDB_*` environment variables still layer on top of the (filtered)
-file, same as `VelesConfig::load`/`load_from_path` — e.g.
+file — and on the defaults when there is no file at all — same as
+`VelesConfig::load`/`load_from_path` — e.g.
 `VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a `[limits] max_collections`
 value from the file, and `velesdb-server`'s own `VELESDB_PORT`/
 `VELESDB_HOST`/... env vars (mapped to its transport `Args`, not to

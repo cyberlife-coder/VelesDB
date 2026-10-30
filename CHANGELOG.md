@@ -18,8 +18,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   another origin needs its exact origin in `[server] cors_origins` (or
   `[cors] allowed_origins`); `cors_origins = ["*"]`, written explicitly,
   restores allow-all, with the startup warning it always had. Non-browser
-  clients are unaffected. Migration: `docs/guides/MIGRATION_v8.0.0.md`,
-  section 2.
+  clients are unaffected. What the closed default protects is spelt out in
+  `docs/guides/SERVER_SECURITY.md` §6: no cross-origin read, and no
+  cross-origin request with a body — which needed the next entry to be true.
+  Migration: `docs/guides/MIGRATION_v8.0.0.md`, section 2.
+
+- **BREAKING (behaviour): `POST /collections/{name}/points/stream` and
+  `.../points/raw` refuse a `Content-Type` other than the one they document**
+  (`application/x-ndjson`, `application/octet-stream`) with `415`. In 7.1.0
+  they read any body, so a page on another site could write points with a
+  `text/plain` request a browser sends without a CORS preflight, whatever the
+  CORS policy. One shared extractor (`handlers::content_type`) guards both;
+  every other route that takes a body is a JSON route, which axum already
+  restricts to `application/json`. The TypeScript SDK sends both types.
+
+- **`VelesConfig::load_from_path_engine_only` reads only the environment
+  variables of engine sections** (and of removed sections, so their warning
+  still fires). In 7.1.0 a `VELESDB_SERVER_*` or `VELESDB_LOGGING_*` variable
+  reached `VelesConfig`'s own `server` / `logging` fields and was validated
+  there, so an unrelated variable could fail every caller of this loader —
+  `velesdb-server` and the `velesdb` CLI, and any Rust caller that loads a
+  shared config file this way: `VELESDB_SERVER_PORT=80` stopped
+  `velesdb-server` (whose port is `VELESDB_PORT`) with `server.port must be
+  >= 1024`. A caller that relied on such a variable reaching those fields
+  through this loader no longer gets it; `load_from_path` is unchanged.
+  `velesdb_core::config::WORKERS_CAP` and `LOG_LEVELS` are now public, so a
+  hosting shell validates `[server] workers` and log levels by the engine's
+  own rules instead of a copy.
 
 ### Fixed
 
@@ -61,13 +86,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The guide's environment examples used `VELESDB_SERVER_PORT` /
     `VELESDB_SERVER_HOST`, which the server never read; they now use
     `VELESDB_PORT` / `VELESDB_HOST`.
-  - `VelesConfig::load_from_path_engine_only` reads only the environment
-    variables of engine sections. In 7.1.0 a `VELESDB_SERVER_*` or
-    `VELESDB_LOGGING_*` variable reached `VelesConfig`'s own `server` /
-    `logging` fields and was validated there, so `VELESDB_SERVER_PORT=80`
-    stopped `velesdb-server` (whose port is `VELESDB_PORT`) with
-    `server.port must be >= 1024` whenever a config file was loaded. Those
-    variables now have one owner, the hosting shell.
+  - Engine variables (`VELESDB_LIMITS_MAX_COLLECTIONS`, ...) apply when
+    `velesdb-server` starts with no config file at all, as CONFIGURATION.md
+    says. In 7.1.0, without `--config` and without `./velesdb.toml`, the
+    server started from `VelesConfig::default()` and skipped the environment
+    (new `VelesConfig::load_engine_only_from_env`).
+  - An unknown top-level table (`[sever]`) is named in the same startup
+    warning as an unread key. Tables the engine or the update check read, and
+    removed tables the engine already warns about, are not.
+  - `cors_origins = ["*"]` next to a `[cors]` setting the permissive policy
+    ignores (`allow_credentials = true`, methods, headers, `max_age_secs`) is
+    refused at startup instead of being ignored.
   - The Docker image and `docker-compose.yml` no longer set `RUST_LOG=info`
     (7.1.0 did),
     which outranked `[logging] level` and `VELESDB_LOGGING_LEVEL` in every

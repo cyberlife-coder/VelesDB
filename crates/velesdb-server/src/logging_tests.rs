@@ -1,6 +1,10 @@
 use super::*;
 use tracing_subscriber::Registry;
 
+fn warn() -> LogLevel {
+    LogLevel::parse("warn", "test").expect("test: valid level")
+}
+
 // ---------------------------------------------------------------------------
 // Precedence: RUST_LOG > VELESDB_LOGGING_LEVEL / [logging] level > default
 // ---------------------------------------------------------------------------
@@ -8,14 +12,14 @@ use tracing_subscriber::Registry;
 #[test]
 fn test_rust_log_wins_over_a_configured_level() {
     assert_eq!(
-        filter_directives(Some("velesdb_core=trace"), Some(LogLevel::Warn)),
+        filter_directives(Some("velesdb_core=trace"), Some(warn())),
         "velesdb_core=trace"
     );
 }
 
 #[test]
 fn test_configured_level_applies_without_rust_log() {
-    assert_eq!(filter_directives(None, Some(LogLevel::Warn)), "warn");
+    assert_eq!(filter_directives(None, Some(warn())), "warn");
 }
 
 #[test]
@@ -25,7 +29,7 @@ fn test_nothing_configured_keeps_the_historical_filter() {
 
 #[test]
 fn test_level_names_round_trip() {
-    for name in LogLevel::NAMES {
+    for name in velesdb_core::config::LOG_LEVELS {
         let level = LogLevel::parse(name, "test").expect("test: valid level");
         assert_eq!(level.as_str(), name);
     }

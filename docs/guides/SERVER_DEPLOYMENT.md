@@ -215,7 +215,8 @@ file = "/var/log/velesdb/velesdb.log"   # appended to; directory must exist
   2 MiB (lower `max_body_size` lowers them too); the NDJSON stream route is
   not buffered and has no body limit. An oversized request gets `413`.
 - A key the server does not read in `[server]`, `[auth]`, `[tls]`, `[cors]` or
-  `[logging]` is named in a startup warning instead of being ignored silently.
+  `[logging]`, and a top-level table nobody reads, is named in a startup
+  warning instead of being ignored silently.
 
 Every key, its range and its precedence: [CONFIGURATION.md](CONFIGURATION.md#section-server).
 

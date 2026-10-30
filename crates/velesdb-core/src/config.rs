@@ -336,6 +336,18 @@ pub mod server {
 // Backward-compatible re-exports at module level.
 pub use server::{LoggingConfig, ServerConfig, StorageConfig};
 
+/// Ceiling for `server.workers`. `0` means "auto" (one per CPU) and is
+/// allowed; a positive value above this is refused, so a typo cannot ask for
+/// an absurd thread count. Public so a hosting shell that sizes a runtime
+/// from its own `workers` setting (`velesdb-server`) applies this rule
+/// rather than a copy of it.
+pub const WORKERS_CAP: usize = 4_096;
+
+/// The values `logging.level` accepts, exactly as spelt here (lower case).
+/// Public for the same reason as [`WORKERS_CAP`]: `velesdb-server` validates
+/// its `[logging] level` and `VELESDB_LOGGING_LEVEL` against this list.
+pub const LOG_LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
+
 /// Limits configuration section.
 ///
 /// `#[non_exhaustive]`: build from [`LimitsConfig::default`] and adjust fields
@@ -575,9 +587,42 @@ impl VelesConfig {
         let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(&filtered))
-            .merge(Self::env_provider().filter(|path| Self::is_engine_path(path.as_str())));
+            .merge(Self::engine_env_provider());
 
         Self::finish(&figment)
+    }
+
+    /// [`Self::load_from_path_engine_only`] with no file: the defaults, with
+    /// the engine sections' `VELESDB_*` variables on top. What a hosting
+    /// shell loads when it was given no config file and finds no
+    /// `./velesdb.toml` — the environment still applies, as
+    /// `docs/guides/CONFIGURATION.md` says it does.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a variable does not parse or fails validation.
+    pub fn load_engine_only_from_env() -> Result<Self, ConfigError> {
+        let figment = Figment::new()
+            .merge(Serialized::defaults(Self::default()))
+            .merge(Self::engine_env_provider());
+        Self::finish(&figment)
+    }
+
+    /// The `VELESDB_*` layer of the engine-only loaders: only the variables
+    /// [`Self::is_engine_path`] accepts.
+    fn engine_env_provider() -> Env {
+        Self::env_provider().filter(|path| Self::is_engine_path(path.as_str()))
+    }
+
+    /// Whether a top-level TOML table belongs to the engine: one of the
+    /// engine sections the engine-only loaders read, or a table a release
+    /// removed, which they keep so its removal warning fires. A hosting shell
+    /// sharing the file uses this to tell the engine's tables from the ones
+    /// nobody reads.
+    #[must_use]
+    pub fn is_engine_table(name: &str) -> bool {
+        Self::ENGINE_SECTIONS.contains(&name)
+            || crate::config_removed::removed_sections().any(|removed| removed == name)
     }
 
     /// Whether a mapped config path (`section.field`, as
@@ -587,10 +632,8 @@ impl VelesConfig {
     /// fires. Everything else, including a name that maps to no section at
     /// all, is the hosting shell's.
     pub(crate) fn is_engine_path(path: &str) -> bool {
-        path.split_once('.').is_some_and(|(section, _)| {
-            Self::ENGINE_SECTIONS.contains(&section)
-                || crate::config_removed::removed_sections().any(|removed| removed == section)
-        })
+        path.split_once('.')
+            .is_some_and(|(section, _)| Self::is_engine_table(section))
     }
 
     /// Extracts a [`Self`] from an assembled [`Figment`] and validates it.

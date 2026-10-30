@@ -593,7 +593,16 @@ async fn post_status(router: &axum::Router, uri: &str, size: usize) -> axum::htt
     let req = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
-        .header("content-type", "application/json")
+        // The type each route documents: the raw route refuses any other
+        // with 415 before it reads a byte (`handlers::content_type`).
+        .header(
+            "content-type",
+            if uri.ends_with("/raw") {
+                "application/octet-stream"
+            } else {
+                "application/json"
+            },
+        )
         .body(axum::body::Body::from(vec![b' '; size]))
         .expect("test: build request");
     tower::ServiceExt::oneshot(router.clone(), req)

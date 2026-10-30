@@ -108,11 +108,37 @@ requests.
   `[cors] allowed_origins`), or write `cors_origins = ["*"]` to restore
   allow-all. Clients outside a browser are unaffected
   ([SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors)).
+- **`POST .../points/stream` and `POST .../points/raw` check `Content-Type`.**
+  Anything but `application/x-ndjson` (stream) or `application/octet-stream`
+  (raw) is refused with `415`; 7.1.0 accepted any type, including the
+  `text/plain` a page on another site can send without a preflight. The
+  TypeScript SDK already sends both. **Fix:** set the header in a hand-written
+  client.
+- **`[server]` and `[logging]` keys 7.1.0 ignored now take effect.**
+  `[server] workers`, `max_body_size`, `cors_enabled`, `cors_origins` and
+  `[logging] level` / `format` / `file` (and `VELESDB_LOGGING_LEVEL`) were
+  documented but never read; a file that sets them now changes the worker
+  count, the body limit, CORS and the logs. Two combinations from the full
+  example `velesdb.toml` that 7.1.0's CONFIGURATION.md shipped need a look:
+  - `cors_enabled = false` with `cors_origins = ["*"]` (that template's
+    values) now turns CORS **off**: 7.1.0 ignored both lines and allowed every
+    origin. **Fix:** keep it if no browser page on another origin calls the
+    server; otherwise set `cors_enabled = true` and list the page's origins in
+    `cors_origins`.
+  - That template's `[server] cors_origins = ["*"]` next to a `[cors]
+    allowed_origins = [...]` table now **refuses to start** ("both [server]
+    cors_origins and [cors] allowed_origins are set"): 7.1.0 read only the
+    second. **Fix:** delete the `cors_origins` line and keep
+    `[cors] allowed_origins`.
+  A key the server still does not read, or an unknown top-level table, is
+  named in a startup warning.
 - **Configuration the server used to drop now stops it at startup:** a CORS
   origin that cannot match a browser's `Origin` (a path, a trailing `/`, no
   scheme), `"*"` inside an origin list, an unparseable CORS method or header,
   both `[server] cors_origins` and `[cors] allowed_origins`, and a `[logging]`
-  `level` / `format` or `VELESDB_LOGGING_LEVEL` outside the documented values.
+  `level` / `format` or `VELESDB_LOGGING_LEVEL` outside the documented values,
+  and `cors_origins = ["*"]` next to a `[cors]` setting the permissive policy
+  would ignore (`allow_credentials = true`, methods, headers, `max_age_secs`).
   **Fix:** correct the value the error names.
 
 ## 3. Rust API

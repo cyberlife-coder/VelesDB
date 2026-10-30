@@ -53,6 +53,12 @@ fn write_config(home: &Path, toml: &str) -> PathBuf {
 /// update check is off so nothing leaves the machine.
 fn start(home: &TempDir, config: &str, env: &[(&str, &str)]) -> Server {
     let config_path = write_config(home.path(), config);
+    start_with(home, Some(config_path.as_path()), env)
+}
+
+/// [`start`] without writing a file; with `config_path: None` the server
+/// gets no `--config` and its working directory holds no `velesdb.toml`.
+fn start_with(home: &TempDir, config_path: Option<&Path>, env: &[(&str, &str)]) -> Server {
     let port = free_port();
     let mut command = Command::new(env!("CARGO_BIN_EXE_velesdb-server"));
     command
@@ -64,7 +70,11 @@ fn start(home: &TempDir, config: &str, env: &[(&str, &str)]) -> Server {
         .env_remove("VELESDB_CONFIG")
         .env_remove("VELESDB_API_KEYS")
         .envs(env.iter().copied())
-        .args(["--config", &config_path.to_string_lossy()])
+        .args(
+            config_path
+                .map(|path| vec!["--config".to_string(), path.to_string_lossy().into_owned()])
+                .unwrap_or_default(),
+        )
         .args(["--host", "127.0.0.1", "--port", &port.to_string()])
         .args(["--data-dir", &home.path().join("data").to_string_lossy()])
         .current_dir(home.path())
@@ -340,4 +350,28 @@ fn test_a_shell_owned_variable_does_not_reach_the_engine_loader() {
 
     let response = send(&server, "GET", "/health", &[], b"");
     assert_eq!(status_of(&response), "200", "{response}");
+}
+
+/// CONFIGURATION.md: `VELESDB_*` engine variables apply on top of the file —
+/// and with no file at all. Without `--config` and without `./velesdb.toml`
+/// the server used to start from `VelesConfig::default()` and skip the
+/// environment, so `VELESDB_LIMITS_MAX_COLLECTIONS=1` did nothing.
+#[test]
+fn test_engine_variables_apply_without_any_config_file() {
+    let home = TempDir::new().expect("tempdir");
+    let server = start_with(&home, None, &[("VELESDB_LIMITS_MAX_COLLECTIONS", "1")]);
+
+    let create = |name: &str| {
+        let body = format!("{{\"name\":\"{name}\",\"dimension\":2,\"metric\":\"cosine\"}}");
+        send(&server, "POST", "/collections", &[], body.as_bytes())
+    };
+    let first = create("first");
+    assert_eq!(status_of(&first), "201", "{first}");
+    let second = create("second");
+    assert_ne!(
+        status_of(&second),
+        "201",
+        "the limit from the environment: {second}"
+    );
+    assert!(second.contains("max_collections"), "{second}");
 }
