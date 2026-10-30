@@ -964,3 +964,178 @@ fn only_scalar_properties_are_range_indexed() {
     assert!(matched_where(&col.inner, Some("n.tags = 1")).is_empty());
     assert_eq!(matched_where(&col.inner, Some("n.age = 30")), vec![1]);
 }
+
+// -------------------------------------------------------------------------
+// Bulk upserts: a point without a payload leaves the stored payload alone
+// -------------------------------------------------------------------------
+//
+// Both bulk paths store nothing for such a point, so every index derived
+// from the payload must also be left as it is.
+
+fn bio_node(age: i64) -> serde_json::Value {
+    serde_json::json!({ "_labels": ["P"], "age": age, "bio": "zebra crossing" })
+}
+
+/// Persists an ANALYZE, so the write paths maintain the `age` histogram.
+fn analyze_and_persist(collection: &Collection) {
+    let stats = collection.analyze().unwrap();
+    collection.write_stats_guarded(&stats).unwrap();
+}
+
+/// How many values the persisted `age` histogram counts.
+fn age_histogram_count(dir: &std::path::Path) -> u64 {
+    let bytes = std::fs::read(dir.join("collection.stats.json")).unwrap();
+    let stats: crate::collection::stats::CollectionStats = serde_json::from_slice(&bytes).unwrap();
+    stats
+        .get_column_histogram("age")
+        .expect("ANALYZE built an age histogram")
+        .buckets
+        .iter()
+        .map(|bucket| bucket.count)
+        .sum()
+}
+
+/// Asserts that nodes 1 and 2, both older than 10 and both carrying
+/// "zebra", are in the label index, the range index, BM25 and the histogram.
+fn assert_both_nodes_indexed(collection: &Collection, dir: &std::path::Path) {
+    assert_eq!(matched_where(collection, None), vec![1, 2], "label index");
+    assert_older_than(collection, 10, &[1, 2]);
+    let mut text: Vec<u64> = collection
+        .text_search("zebra", 10)
+        .unwrap()
+        .iter()
+        .map(|result| result.point.id)
+        .collect();
+    text.sort_unstable();
+    assert_eq!(text, vec![1, 2], "BM25");
+    assert_eq!(age_histogram_count(dir), 2, "age histogram");
+}
+
+fn two_embedded_bio_nodes() -> (TempDir, GraphCollection) {
+    let (dir, col) = make_test_collection(Some(4));
+    col.upsert_node(1, &bio_node(30), Some(vec![1.0, 0.0, 0.0, 0.0]))
+        .unwrap();
+    col.upsert_node(2, &bio_node(40), Some(vec![0.0, 1.0, 0.0, 0.0]))
+        .unwrap();
+    analyze_and_persist(&col.inner);
+    (dir, col)
+}
+
+#[test]
+fn re_embedding_a_node_through_upsert_bulk_keeps_its_payload_indexed() {
+    let (dir, col) = two_embedded_bio_nodes();
+
+    col.inner
+        .upsert_bulk(&[Point::new(1, vec![0.0, 0.0, 1.0, 0.0], None)])
+        .unwrap();
+
+    assert_eq!(col.get_node_payload(1).unwrap(), Some(bio_node(30)));
+    assert_both_nodes_indexed(&col.inner, dir.path());
+}
+
+#[test]
+fn re_embedding_a_node_through_upsert_bulk_from_raw_keeps_its_payload_indexed() {
+    let (dir, col) = two_embedded_bio_nodes();
+
+    col.inner
+        .upsert_bulk_from_raw(&[0.0, 0.0, 1.0, 0.0], &[1], 4, Some(&[None]))
+        .unwrap();
+
+    assert_eq!(col.get_node_payload(1).unwrap(), Some(bio_node(30)));
+    assert_both_nodes_indexed(&col.inner, dir.path());
+}
+
+#[test]
+fn a_payload_then_none_for_one_id_in_upsert_bulk_indexes_the_payload() {
+    let (dir, col) = two_embedded_bio_nodes();
+
+    col.inner
+        .upsert_bulk(&[
+            Point::new(1, vec![0.0, 0.0, 1.0, 0.0], Some(bio_node(35))),
+            Point::new(1, vec![0.0, 0.0, 0.0, 1.0], None),
+        ])
+        .unwrap();
+
+    assert_eq!(col.get_node_payload(1).unwrap(), Some(bio_node(35)));
+    assert_both_nodes_indexed(&col.inner, dir.path());
+    assert_older_than(&col.inner, 32, &[1, 2]);
+}
+
+#[test]
+fn none_then_a_payload_for_one_id_in_upsert_bulk_from_raw_replaces_the_old_one() {
+    let (dir, col) = two_embedded_bio_nodes();
+    col.inner.create_index("age").unwrap();
+
+    col.inner
+        .upsert_bulk_from_raw(
+            &[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            &[1, 1],
+            4,
+            Some(&[None, Some(bio_node(35))]),
+        )
+        .unwrap();
+
+    assert_eq!(col.get_node_payload(1).unwrap(), Some(bio_node(35)));
+    assert_both_nodes_indexed(&col.inner, dir.path());
+    assert_older_than(&col.inner, 32, &[1, 2]);
+    assert_eq!(
+        col.inner
+            .secondary_index_lookup(
+                "age",
+                &crate::index::JsonValue::from_json(&serde_json::json!(30)).unwrap(),
+            )
+            .unwrap_or_default(),
+        Vec::<u64>::new(),
+        "the superseded age must leave the secondary index"
+    );
+}
+
+#[test]
+fn a_node_bulk_upserted_is_found_through_a_secondary_index() {
+    let (_dir, col) = make_test_collection(Some(4));
+    col.inner.create_index("age").unwrap();
+
+    col.inner
+        .upsert_bulk(&[Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(aged(30)))])
+        .unwrap();
+
+    let thirty = crate::index::JsonValue::from_json(&serde_json::json!(30)).unwrap();
+    assert_eq!(
+        col.inner.secondary_index_lookup("age", &thirty),
+        Some(vec![1])
+    );
+}
+
+#[test]
+fn a_duplicate_id_in_one_upsert_resolves_to_its_last_payload() {
+    let (_dir, col) = make_test_collection(Some(4));
+    col.upsert_node_payload(2, &aged(40)).unwrap();
+
+    col.inner
+        .upsert([
+            Point::new(1, vec![1.0, 0.0, 0.0, 0.0], Some(aged(30))),
+            Point::new(1, vec![0.0, 1.0, 0.0, 0.0], Some(aged(5))),
+        ])
+        .unwrap();
+
+    assert_older_than(&col.inner, 10, &[2]);
+    assert_older_than(&col.inner, 0, &[1, 2]);
+}
+
+#[test]
+fn a_node_id_above_u32_max_follows_its_payload_in_the_range_index() {
+    let big = 1_u64 << 40;
+    let (_dir, col) = make_test_collection(Some(4));
+    col.upsert_node(big, &aged(30), Some(vec![1.0, 0.0, 0.0, 0.0]))
+        .unwrap();
+    col.upsert_node_payload(2, &aged(40)).unwrap();
+    assert_older_than(&col.inner, 10, &[2, big]);
+
+    // `Collection::upsert` with no payload deletes the stored one.
+    col.inner
+        .upsert([Point::new(big, vec![0.0, 1.0, 0.0, 0.0], None)])
+        .unwrap();
+
+    assert_eq!(col.get_node_payload(big).unwrap(), None);
+    assert_older_than(&col.inner, 10, &[2]);
+}

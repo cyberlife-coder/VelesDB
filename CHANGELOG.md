@@ -470,6 +470,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   170 MiB of RSS, against 20.9 s and 46 MiB without the range rebuild; the
   indexes cost about the size of the indexed strings.
 
+- **A bulk upsert of a point without a payload keeps that point's payload
+  indexed.** `upsert_bulk` and `upsert_bulk_from_raw` store nothing for a
+  point whose payload is `None`, so the point keeps its stored payload, but
+  the index maintenance treated it as a delete: re-embedding a node with
+  `upsert_bulk([Point::new(1, vector, None)])` removed it from the label and
+  range indexes (`MATCH (n:P)` no longer returned it), from BM25 (its text no
+  longer matched), from the persisted histograms and from the columnar payload
+  mirror. Both bulk paths now derive every payload index from the points that
+  carry a payload, with a repeated id resolved to its previous payload in the
+  batch, and invalidate the mirror when a point keeps its payload. `upsert`
+  keeps its documented behaviour: a point without a payload deletes it.
+  `upsert_bulk` also never maintained the secondary indexes, so an equality
+  lookup missed every point it wrote; it now does, as `upsert_bulk_from_raw`
+  did. The label and range indexes are now updated under the same payload
+  write lock as the write itself on `upsert` and both bulk paths, so a
+  concurrent write to the same ids can no longer leave them describing a
+  payload storage no longer holds.
+
 - **`GraphCollection::traverse_bfs_parallel` counts only results against
   `limit`.** The traverser emitted each start node at depth 0, which took a
   slot of `limit` before the `min_depth` filter dropped it, so
