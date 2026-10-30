@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and validates every `sql` block of the user-facing markdown; the fence
   convention it enforces (`postgresql`, `text`, `velesql-error`) is in
   `CONTRIBUTING.md`.
+
 - **Docs that named a missing API or a wrong version.**
   - The concurrency guide configured a collection with
     `CollectionConfig::new(..).with_durability(..)`, which does not exist: a
