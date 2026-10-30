@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 pub use crate::cors::{apply_cors, build_cors_layer, CorsConfig};
 use crate::cors::{resolve_cors, CorsSection};
+pub use crate::host_guard::apply_browser_policy;
 use crate::logging::{LoggingConfig, LoggingSection};
 
 // ============================================================================
@@ -132,6 +133,7 @@ struct ServerSection {
     max_body_size: Option<usize>,
     cors_enabled: Option<bool>,
     cors_origins: Option<Vec<String>>,
+    allowed_hosts: Option<Vec<String>>,
     #[serde(flatten)]
     unknown: UnknownKeys,
 }
@@ -254,6 +256,11 @@ pub struct ServerConfig {
     pub max_body_size: usize,
     /// The `[logging]` section, with `VELESDB_LOGGING_LEVEL` applied.
     pub logging: LoggingConfig,
+    /// Host names the server answers to besides the loopback names and its
+    /// bind host (`[server] allowed_hosts`, `--allowed-hosts`,
+    /// `VELESDB_ALLOWED_HOSTS`); `["*"]` turns the `Host` check off. See
+    /// `host_guard`.
+    pub allowed_hosts: Vec<String>,
     /// Keys of the server-owned sections that nothing reads, as
     /// `section.key` — a typo, or a setting this build does not have. The
     /// binary warns about them at startup instead of dropping them silently.
@@ -277,6 +284,7 @@ impl Default for ServerConfig {
             workers: 0,
             max_body_size: crate::routes::DEFAULT_MAX_BODY_SIZE,
             logging: LoggingConfig::default(),
+            allowed_hosts: Vec::new(),
             ignored_entries: Vec::new(),
         }
     }
@@ -379,6 +387,10 @@ impl ServerConfig {
             },
             shutdown_timeout_secs,
             rate_limit: cli.rate_limit.unwrap_or(rate_limit),
+            allowed_hosts: cli
+                .allowed_hosts
+                .or(server.allowed_hosts)
+                .unwrap_or(defaults.allowed_hosts),
             ..defaults
         }
     }
@@ -404,6 +416,7 @@ impl ServerConfig {
             );
         }
         self.tls.validate()?;
+        validate_allowed_hosts(&self.allowed_hosts)?;
         self.cors.validate()
     }
 
@@ -452,6 +465,30 @@ impl ServerConfig {
     }
 }
 
+/// Each `allowed_hosts` entry is a bare host name or address — what a
+/// `Host` header carries minus the port — or `"*"` on its own.
+fn validate_allowed_hosts(hosts: &[String]) -> anyhow::Result<()> {
+    if hosts.iter().any(|h| h == "*") && hosts.len() > 1 {
+        anyhow::bail!(
+            "server.allowed_hosts {hosts:?}: \"*\" turns the Host check off and cannot \
+             be combined with names"
+        );
+    }
+    for host in hosts.iter().filter(|h| *h != "*") {
+        let bare = !host.is_empty()
+            && !host.contains("://")
+            && !host.contains('/')
+            && !host.chars().any(char::is_whitespace);
+        if !bare {
+            anyhow::bail!(
+                "server.allowed_hosts: '{host}' is not a host name or address \
+                 (no scheme, no path, e.g. \"db.example.com\")"
+            );
+        }
+    }
+    Ok(())
+}
+
 // ============================================================================
 // CLI overrides (filled by clap in main.rs)
 // ============================================================================
@@ -470,6 +507,8 @@ pub struct CliOverrides {
     pub rate_limit: Option<u32>,
     /// `VELESDB_LOGGING_LEVEL` (see [`crate::logging::level_from_env`]).
     pub log_level: Option<String>,
+    /// `--allowed-hosts` / `VELESDB_ALLOWED_HOSTS` (comma-separated).
+    pub allowed_hosts: Option<Vec<String>>,
 }
 
 // ============================================================================

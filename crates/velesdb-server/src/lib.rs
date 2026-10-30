@@ -52,6 +52,7 @@ pub mod config;
 pub mod connections;
 mod cors;
 mod handlers;
+mod host_guard;
 pub mod logging;
 pub mod onboarding;
 mod origin_guard;

@@ -64,11 +64,38 @@ impl OriginPolicy {
     }
 }
 
-/// Whether `origin`'s authority is the `Host` the request was sent to.
+/// Whether `origin`'s host and port are the `Host` the request was sent to,
+/// the scheme's default port (80, 443) filled in where either leaves it out.
+/// Trusted only because the `Host` check (`host_guard`) runs first: without
+/// it, a DNS-rebinding page would pass as same-origin here.
 fn is_same_origin(origin: &str, headers: &HeaderMap) -> bool {
-    let authority = origin.split_once("://").map(|(_, rest)| rest);
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    matches!((authority, host), (Some(a), Some(h)) if a.eq_ignore_ascii_case(h))
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let default_port = match scheme.to_ascii_lowercase().as_str() {
+        "http" => "80",
+        "https" => "443",
+        _ => return false,
+    };
+    headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|host| {
+            with_port(authority, default_port).eq_ignore_ascii_case(&with_port(host, default_port))
+        })
+}
+
+/// `authority` with `default_port` appended when it names none.
+fn with_port(authority: &str, default_port: &str) -> String {
+    let has_port = match authority.rfind(']') {
+        Some(end) => authority[end + 1..].starts_with(':'),
+        None => authority.contains(':'),
+    };
+    if has_port {
+        authority.to_string()
+    } else {
+        format!("{authority}:{default_port}")
+    }
 }
 
 /// The middleware; see the module docs.
@@ -96,8 +123,10 @@ pub(crate) async fn origin_guard(
         Some(origin) => crate::handlers::helpers::error_response(
             StatusCode::FORBIDDEN,
             format!(
-                "requests that change state are refused from origin {origin}: it is not \
-                 in [server] cors_origins (see docs/guides/SERVER_SECURITY.md)"
+                "requests that change state are refused from origin {origin}: the CORS \
+                 policy does not allow it. List it in [server] cors_origins (or [cors] \
+                 allowed_origins) and leave cors_enabled true \
+                 (see docs/guides/SERVER_SECURITY.md)"
             ),
         ),
     }

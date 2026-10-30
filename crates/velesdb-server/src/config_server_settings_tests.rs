@@ -342,3 +342,42 @@ max_size = 1
     }
     assert_eq!(cfg.ignored_entries, expected);
 }
+
+// ---------------------------------------------------------------------------
+// [server] allowed_hosts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_allowed_hosts_cli_or_env_beats_the_file() {
+    let file = "[server]\nallowed_hosts = [\"file.example.com\"]\n";
+    assert_eq!(from_file(file).allowed_hosts, vec!["file.example.com"]);
+    let cli = CliOverrides {
+        allowed_hosts: Some(vec!["env.example.com".to_string()]),
+        ..CliOverrides::default()
+    };
+    let cfg = merged(file, cli).expect("test: merge");
+    assert_eq!(cfg.allowed_hosts, vec!["env.example.com"]);
+}
+
+#[test]
+fn test_allowed_hosts_entries_must_be_bare_hosts() {
+    for good in [&["db.example.com", "10.0.0.5", "fe80::1"][..], &["*"][..]] {
+        let cfg = ServerConfig {
+            allowed_hosts: good.iter().map(ToString::to_string).collect(),
+            ..ServerConfig::default()
+        };
+        cfg.validate().unwrap_or_else(|e| panic!("{good:?}: {e}"));
+    }
+    for bad in [
+        &["https://db.example.com"][..],
+        &["db.example.com/"][..],
+        &[""][..],
+        &["*", "db.example.com"][..],
+    ] {
+        let cfg = ServerConfig {
+            allowed_hosts: bad.iter().map(ToString::to_string).collect(),
+            ..ServerConfig::default()
+        };
+        assert!(cfg.validate().is_err(), "{bad:?} must be refused");
+    }
+}

@@ -23,7 +23,8 @@ use velesdb_server::ApiDoc;
 use velesdb_server::{
     auth::{auth_middleware, AuthState},
     config::{
-        apply_cors, load_core_config, parse_api_keys_env, CliOverrides, CorsConfig, ServerConfig,
+        apply_browser_policy, load_core_config, parse_api_keys_env, CliOverrides, CorsConfig,
+        ServerConfig,
     },
     routes::api_routes_with_body_limit,
     AppState, OnboardingMetrics,
@@ -68,6 +69,11 @@ struct Args {
     /// Rate limit: max requests per second per IP (0 = disabled)
     #[arg(long, env = "VELESDB_RATE_LIMIT")]
     rate_limit: Option<u32>,
+
+    /// Host names to answer to besides localhost, 127.0.0.0/8, [::1] and the
+    /// bind host (comma-separated; "*" disables the Host check)
+    #[arg(long, env = "VELESDB_ALLOWED_HOSTS", value_delimiter = ',')]
+    allowed_hosts: Option<Vec<String>>,
 }
 
 /// What the configuration asked for that will not happen, said once the
@@ -76,8 +82,8 @@ fn log_config_warnings(cfg: &ServerConfig, rust_log_overrides_level: bool) {
     if !cfg.ignored_entries.is_empty() {
         tracing::warn!(
             ignored = cfg.ignored_entries.join(", "),
-            "these config entries are not read by velesdb-server and have no effect; \
-             check them against docs/guides/CONFIGURATION.md"
+            "these config entries are not read by this velesdb-server build and have \
+             no effect; check them against docs/guides/CONFIGURATION.md"
         );
     }
     if rust_log_overrides_level {
@@ -217,7 +223,7 @@ fn build_router(
         auth_state,
         auth_middleware,
     ));
-    let router = apply_cors(router, &cfg.cors).layer(TraceLayer::new_for_http());
+    let router = apply_browser_policy(router, cfg).layer(TraceLayer::new_for_http());
 
     if cfg.rate_limit > 0 {
         let config = velesdb_server::rate_limit::build_rate_limit_config(cfg.rate_limit)?;
@@ -465,6 +471,7 @@ fn build_cli_overrides(args: Args) -> CliOverrides {
         tls_key: args.tls_key,
         rate_limit: args.rate_limit,
         log_level: velesdb_server::logging::level_from_env(),
+        allowed_hosts: args.allowed_hosts,
     }
 }
 

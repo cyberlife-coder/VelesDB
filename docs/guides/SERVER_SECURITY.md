@@ -15,7 +15,7 @@ This guide covers the server's operational features: authentication, TLS, gracef
 3. [TLS Setup](#3-tls-setup)
 4. [Graceful Shutdown](#4-graceful-shutdown)
 5. [Health Endpoints](#5-health-endpoints)
-6. [CORS](#6-cors)
+6. [CORS, origins and hosts](#6-cors-origins-and-hosts)
 
 ---
 
@@ -383,7 +383,7 @@ echo "VelesDB is ready!"
 
 ---
 
-## 6. CORS
+## 6. CORS, origins and hosts
 
 CORS decides whether a **web page served from another origin** may read the
 server's responses through a visitor's browser. It does not restrict `curl`,
@@ -414,13 +414,21 @@ server logs a warning at startup when it is on.
 A page from another origin can still make the browser *send* a request: CORS
 decides what the page may read and which requests need the server's consent
 first (a preflight), not what leaves the browser. The server therefore checks
-two things itself. With the default policy:
+three things itself. With the default policy:
 
+- **Only requests addressed to a host the server answers to are served.** Any
+  request, whatever its method, whose `Host` header is not `localhost`, a
+  `127.0.0.0/8` address, `[::1]`, the bind host (unless it is `0.0.0.0`/`::`)
+  or an entry of `[server] allowed_hosts` is refused with
+  `421 Misdirected Request` (see [DNS rebinding](#dns-rebinding-and-the-host-check)).
 - **No response can be read** by a page from another origin.
 - **No request that changes state runs.** The origin guard refuses with `403`
   every request whose method is not `GET`, `HEAD` or `OPTIONS` when its
   `Origin` header names an origin the policy does not allow — with the default,
-  any origin but the server's own. That covers every `POST`, `PUT`, `PATCH`
+  any origin but the server's own; `Origin: null` (a sandboxed frame, a
+  `file://` page) is never allowed except by `["*"]`. The guard checks the
+  origin only: the `[cors]` methods and headers shape the CORS answers a
+  browser reads, not what the guard lets through. That covers every `POST`, `PUT`, `PATCH`
   and `DELETE`, with or without a body, including the body-less maintenance
   routes (`.../flush`, `.../index/rebuild`, `.../compact`, ...).
 - **Defence in depth on bodies.** A request sent without a preflight can only
@@ -433,14 +441,16 @@ two things itself. With the default policy:
 What the guard does not look at:
 
 - **Requests without `Origin`** — curl, the SDKs, a backend calling the server.
-  Browsers always send `Origin` on a cross-origin request and on any `POST`,
-  so this exempts no page.
+  A browser attaches `Origin` to every request that is not `GET` or `HEAD`
+  (the Fetch standard), so no page can send a state-changing request without
+  one.
 - **`GET` requests**, which change nothing; a foreign page can send one but
   never read the answer.
-- **The server's own origin**, recognised by `Origin`'s `host[:port]` equalling
-  the request's `Host`, so Swagger UI and any page the server serves keep
-  working. A page that reaches the server under its own host name (DNS
-  rebinding) is same-origin for the browser too; only API keys stop that.
+- **The server's own origin**, recognised by `Origin`'s host and port
+  equalling the request's `Host` (the scheme's default port, 80 or 443, is
+  assumed where either leaves it out), so Swagger UI and any page the server
+  serves keep working. That comparison is trusted only because the `Host`
+  check ran first.
 
 With `cors_origins` listing origins, those origins pass the guard as well;
 with `["*"]`, every origin does.
@@ -448,6 +458,31 @@ with `["*"]`, every origin does.
 CORS is not access control. If anything but you can reach the port — another
 user on the machine, the network, a container neighbour — set
 `VELESDB_API_KEYS`.
+
+### DNS rebinding and the Host check
+
+A page on `evil.example.com` can make that name resolve to `127.0.0.1` after
+it has loaded. Its requests then reach a server on the loopback while the
+browser still treats them as same-origin, so neither CORS nor the origin guard
+stops them — and the default server, on `127.0.0.1:8080` without API keys,
+would answer reads and writes alike. The one thing the page cannot change is
+the `Host` header, which still says `evil.example.com`. Hence the check:
+
+- Answered with no configuration: `localhost`, `127.0.0.0/8`, `[::1]`, and
+  the bind host unless it is `0.0.0.0` or `::`. A loopback server needs no
+  setting.
+- `[server] allowed_hosts` (`--allowed-hosts`, `VELESDB_ALLOWED_HOSTS`) adds
+  names or addresses, matched case-insensitively with the port ignored;
+  `["*"]` turns the check off, which brings the rebinding exposure back.
+- `/health` and `/ready` answer any `Host`: orchestrator probes address the
+  server by IP, and those two reveal only up or down.
+- `X-Forwarded-Host` is never read — any client can send it. Behind a reverse
+  proxy, forward the original `Host` (nginx `proxy_set_header Host $host;`) and
+  list the public name in `allowed_hosts`.
+- Refused requests get `421 Misdirected Request`, RFC 9110's code for a request
+  sent to a server that does not answer for its authority. A distinct status
+  from the origin guard's `403` tells an operator which check fired, and a
+  browser does not cache it.
 
 ### Allowing a browser front end
 
@@ -466,6 +501,8 @@ rather than quietly allowing nothing or everything. `[cors] allowed_origins` is
 the same list under its older name — set one of the two; the `[cors]` table
 also holds methods, headers, credentials and the preflight cache
 ([SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md#4-cors)).
+A front end served through a reverse proxy on another origin needs that public
+origin in `cors_origins`, and the proxy's public host in `allowed_hosts`.
 
 `cors_enabled = false` is a master switch: no CORS header is sent whatever the
 list says, which gives the same protection as the default (see

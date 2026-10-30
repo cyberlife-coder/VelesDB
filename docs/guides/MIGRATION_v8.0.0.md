@@ -107,7 +107,7 @@ requests.
   **Fix:** list the front end's exact origins in `[server] cors_origins` (or
   `[cors] allowed_origins`), or write `cors_origins = ["*"]` to restore
   allow-all. Clients outside a browser are unaffected
-  ([SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors)).
+  ([SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors-origins-and-hosts)).
 - **`POST .../points/stream` and `POST .../points/raw` check `Content-Type`.**
   Anything but `application/x-ndjson` (stream) or `application/octet-stream`
   (raw) is refused with `415`; 7.1.0 accepted any type, including the
@@ -119,6 +119,22 @@ requests.
   `cors_origins` is refused with `403`; 7.1.0 ran it. Requests without an
   `Origin` header (curl, the SDKs, backends) are unaffected. **Fix:** list the
   front end's origin in `cors_origins`.
+- **BREAKING: a request with an unlisted `Host` is refused with `421`.** The
+  server answers only `localhost`, `127.0.0.0/8`, `[::1]`, its bind host
+  (unless `0.0.0.0`/`::`) and `[server] allowed_hosts`; 7.1.0 answered any
+  `Host`, which let a DNS-rebinding page read and write a loopback server.
+  `/health` and `/ready` are exempt. A server bound to `0.0.0.0` (the Docker
+  image) and reached under a DNS name or a LAN address now refuses those
+  clients. **Fix:** list every name clients use in `allowed_hosts` (or
+  `VELESDB_ALLOWED_HOSTS=a,b`); behind a reverse proxy, forward the original
+  `Host` and list the public name. `X-Forwarded-Host` is not read.
+- **Engine variables apply with no config file** (server and CLI). 7.1.0
+  ignored every `VELESDB_LIMITS_*`, `VELESDB_HNSW_*`, `VELESDB_SEARCH_*`, ...
+  variable unless a config file was loaded; now a stray one changes the
+  engine's limits or index parameters, and an invalid one stops startup (or
+  the CLI command) with the variable named. **Fix:** unset the variables you
+  did not mean to apply (`env | grep VELESDB_`), or correct the value the
+  error names.
 - **`[server]` and `[logging]` keys 7.1.0 ignored now take effect.**
   `[server] workers`, `max_body_size`, `cors_enabled`, `cors_origins` and
   `[logging] level` / `format` / `file` (and `VELESDB_LOGGING_LEVEL`) were

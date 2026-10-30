@@ -82,6 +82,7 @@ async fn test_stream_route_refuses_types_a_page_can_send_without_preflight() {
     for accepted in [
         "application/x-ndjson",
         "application/x-ndjson; charset=utf-8",
+        "APPLICATION/X-NDJSON",
     ] {
         assert_eq!(
             post(&app, uri, Some(accepted), NDJSON).await,

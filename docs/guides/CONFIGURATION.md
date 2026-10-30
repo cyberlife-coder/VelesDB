@@ -89,11 +89,12 @@ on. Every other top-level table is silently dropped before
 `[tls]`, `[cors]` and `[logging]`, which stay exclusively `velesdb-server`'s
 own config. `velesdb-server` reads those five itself, and a key in one of
 them that it does not read is not dropped silently: the server names it in a
-startup warning (`these config entries are not read by velesdb-server and
-have no effect`), so a typo such as `[server] worker = 4` is visible. So is a
-top-level table nobody reads (`[sever]`, or `[premium]`, which nothing in this
-build reads); the engine's tables, `[update_check]`, and removed tables (which
-the engine names in its own warning) are not reported. This matters because `VelesConfig` *also* has its own same-named
+startup warning (`these config entries are not read by this velesdb-server
+build and have no effect`), so a typo such as `[server] worker = 4` is visible. So is a
+top-level table nobody reads (`[sever]`, or `[premium]`, which this build does
+not read); the engine's tables, removed tables (which the engine names in its
+own warning) and — in a build with the default `update-check` feature —
+`[update_check]` are not reported. This matters because `VelesConfig` *also* has its own same-named
 `[server]`/`[logging]` fields (for standalone/embedded use), which don't
 mean the same thing: a perfectly legitimate `velesdb-server --config`
 value like `[server] port = 443` (its HTTP bind port, e.g. behind
@@ -273,6 +274,13 @@ shutdown_timeout_secs = 30
 # Default: 100
 rate_limit = 100
 
+# Noms d'hôte (en-tête Host) auxquels le serveur répond, en plus de localhost,
+# 127.0.0.0/8, [::1] et de `host` s'il n'est pas 0.0.0.0/::. Les autres
+# requêtes reçoivent 421 (protection contre le DNS rebinding).
+# ["*"] désactive la vérification. Env: VELESDB_ALLOWED_HOSTS (a,b,c).
+# Default: []
+# allowed_hosts = ["db.example.com"]
+
 # Nombre de threads workers du runtime Tokio
 # Range: 0 - 4096 (0 = un par CPU, comme Tokio par défaut)
 # Default: 0
@@ -379,22 +387,6 @@ enabled = true
 
 # Timeout in milliseconds (default: 2000)
 # timeout_ms = 2000
-
-# -----------------------------------------------------------------------------
-# PREMIUM FEATURES (nécessite velesdb-premium)
-# -----------------------------------------------------------------------------
-[premium]
-# Clé de licence (ou utiliser VELESDB_LICENSE_KEY env var)
-# license_key = "VELES-XXXX-XXXX-XXXX-XXXX"
-
-# Activer le hot-reload de la configuration (Premium)
-# Default: false
-hot_reload = false
-
-# Profil de recherche prédéfini (Premium)
-# Valeurs: "default" | "low_latency" | "accurate" | "memory_optimized"
-# Default: "default"
-# profile = "default"
 ```
 
 ---
@@ -446,6 +438,7 @@ They have no effect on an embedded engine:
 | `VELESDB_PORT` | Bind port | `8080` |
 | `VELESDB_DATA_DIR` | Server data directory | `/var/lib/velesdb` |
 | `VELESDB_RATE_LIMIT` | Requests per window | `100` |
+| `VELESDB_ALLOWED_HOSTS` | Extra `Host` names to answer to (comma-separated) | `db.example.com,10.0.0.5` |
 | `VELESDB_LOGGING_LEVEL` | Log level; overrides `[logging] level`, and `RUST_LOG` overrides it | `debug` |
 | `RUST_LOG` | Full `tracing` filter (`info,velesdb_core=debug`); overrides both of the above | `info` |
 | `VELESDB_API_KEYS` | API keys | `key1,key2,key3` (comma-separated) |
@@ -458,10 +451,11 @@ They have no effect on an embedded engine:
 `[server] workers`, `max_body_size`, `cors_enabled`, `cors_origins` and
 `[logging] format` / `file` have no variable: set them in the file.
 `VELESDB_SERVER_*` names (`VELESDB_SERVER_PORT`, ...) are **not** read by
-`velesdb-server`, and the engine loader both binaries use
-(`VelesConfig::load_from_path_engine_only`) ignores every variable outside the
-engine sections, so they do nothing — and, unlike up to 7.1.0, they can no
-longer fail the engine's validation either. Each `[server]`/`[logging]`
+`velesdb-server`, and the engine loaders both binaries use
+(`VelesConfig::load_from_path_engine_only` with a file,
+`VelesConfig::load_engine_only_from_env` without one) ignore every variable
+outside the engine sections, so they do nothing — and, unlike up to 7.1.0,
+they can no longer fail the engine's validation either. Each `[server]`/`[logging]`
 setting is read and validated once, by the server.
 
 ### Name Mapping
@@ -510,7 +504,7 @@ Configuration follows this priority order (from lowest to highest):
    ↓
 3. VELESDB_* environment variables
    ↓
-4. CLI parameters (--host, --port, --data-dir, --tls-cert, --tls-key)
+4. CLI parameters (--host, --port, --data-dir, --tls-cert, --tls-key, --rate-limit, --allowed-hosts)
    ↓
 5. Runtime override (REPL \set, VelesQL WITH, API params)
 ```
@@ -655,8 +649,21 @@ unaffected.
 | `workers` | int | — | — | `0` | Tokio worker threads; `0` = one per CPU. Range `0`–`4096` |
 | `max_body_size` | int | — | — | `104857600` | Largest request body, in bytes (see below). Range `1`–`1073741824` |
 | `rate_limit` | int | `VELESDB_RATE_LIMIT` | `--rate-limit` | `100` | Max req/s per IP (0=disabled) |
+| `allowed_hosts` | array | `VELESDB_ALLOWED_HOSTS` | `--allowed-hosts` | `[]` | `Host` names answered besides loopback and the bind host; `["*"]` = any (see below) |
 | `cors_enabled` | bool | — | — | `true` | Master switch; `false` sends no CORS header whatever the origins |
 | `cors_origins` | array | — | — | `[]` | Allowed origins, matched exactly; `["*"]` = any; empty = no CORS header (same list as `[cors] allowed_origins`) |
+
+**`allowed_hosts`.** Every request whose `Host` header names a host the server
+does not answer to is refused with `421 Misdirected Request`, whatever its
+method. Answered without configuration: `localhost`, any `127.0.0.0/8`
+address, `[::1]`, and the bind `host` unless it is a wildcard (`0.0.0.0`,
+`::`). `allowed_hosts` adds names or addresses (no port, no scheme; matched
+case-insensitively, port ignored); `["*"]` turns the check off. `/health` and
+`/ready` answer any `Host`, so orchestrator probes that address the server by
+IP keep working. `X-Forwarded-Host` is never read. A server bound to `0.0.0.0`
+and reached under any other name — a DNS name, a LAN address, a reverse proxy
+that rewrites `Host` — needs that name here. The reason is DNS rebinding; see
+[SERVER_SECURITY.md](SERVER_SECURITY.md#dns-rebinding-and-the-host-check).
 
 **`workers`** sizes the Tokio runtime the server runs on. With `0` (or the key
 absent) Tokio picks one worker per CPU, which is what the server always did;
@@ -688,7 +695,7 @@ sent and browsers refuse every cross-origin read. Non-browser clients are
 unaffected either way. The
 methods, headers, credentials and preflight cache are set in the `[cors]`
 table, described in [SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md#4-cors); the
-security trade-off is in [SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors).
+security trade-off is in [SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors-origins-and-hosts).
 
 ### Section [auth]
 
@@ -790,6 +797,11 @@ The environment variables win over the configuration file. A config file that ex
 - an `[update_check]` table that cannot be understood in an otherwise valid file: `velesdb-server` logs a warning and sends nothing; `velesdb-cli` gives no signal at all, it simply sends nothing.
 
 ### Section [premium]
+
+Read only by premium distributions of VelesDB. The open-source
+`velesdb-server` does not read it: a `[premium]` table in its config file is
+ignored and named in the startup warning (`not read by this velesdb-server
+build`).
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -918,7 +930,6 @@ Some configurations generate warnings without blocking startup:
 ```
 WARN: search.ef_search=2048 is very high, may cause slow queries
 WARN: limits.max_perfect_mode_vectors=5000000 allows slow bruteforce on large datasets
-WARN: premium.hot_reload=true but no valid license key found
 ```
 
 ### Validating a Config File

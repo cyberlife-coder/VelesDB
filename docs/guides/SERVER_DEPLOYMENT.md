@@ -46,6 +46,27 @@ It runs as the non-root `velesdb` user, exposes port 8080, and declares a
 > container. Set `VELESDB_API_KEYS` before exposing it; see
 > [SERVER_SECURITY.md](SERVER_SECURITY.md).
 
+> **Bound to `0.0.0.0`, list the names clients use.** The server answers only
+> requests whose `Host` is `localhost`, a `127.0.0.0/8` address, `[::1]` or an
+> entry of `allowed_hosts`; anything else gets `421` (DNS-rebinding
+> protection). `curl localhost:8080` from the Docker host and the image's
+> `HEALTHCHECK` work as they are; a client using a DNS name or a LAN address
+> needs it listed: `-e VELESDB_ALLOWED_HOSTS=velesdb.example.com,192.168.1.20`.
+> `/health` and `/ready` answer any `Host`, so Kubernetes probes need nothing.
+
+### Behind a reverse proxy
+
+Two settings follow from where the browser and the proxy stand:
+
+- **`Host`:** forward the client's original `Host` (nginx:
+  `proxy_set_header Host $host;`, which Traefik and Caddy do by default) and
+  list the public name in `allowed_hosts`. `X-Forwarded-Host` is never read,
+  so a proxy that rewrites `Host` to its upstream name must have *that* name
+  listed instead.
+- **`Origin`:** a browser front end served from another origin needs that
+  public origin (`https://app.example.com`) in `cors_origins`, both for its
+  reads and for the origin guard to let its writes through.
+
 `docker compose up` uses the same image with the `velesdb_data` volume and the
 health check pre-wired.
 
@@ -166,7 +187,7 @@ or a method or header name that does not parse stops the server at startup.
 | `cors_enabled` | `true` | Master switch: `false` installs no CORS layer whatever the list says |
 
 Why the default is closed, and what allow-all exposes, is in
-[SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors).
+[SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors-origins-and-hosts).
 
 ---
 

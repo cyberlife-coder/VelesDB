@@ -117,6 +117,7 @@ The short version:
 | Worker threads | `[server] workers` | one per CPU |
 | Largest request body | `[server] max_body_size` (bytes) | 100 MiB on point upload, 2 MiB elsewhere |
 | CORS | `[server] cors_origins` (or `[cors] allowed_origins`); `cors_enabled` switches it off | no CORS header: same origin only |
+| Accepted `Host` names | `[server] allowed_hosts`, `--allowed-hosts`, `VELESDB_ALLOWED_HOSTS` | loopback names and the bind host; others get `421` |
 | Logs | `[logging] level` / `format` / `file`; `VELESDB_LOGGING_LEVEL`; `RUST_LOG` overrides both levels | `info,tower_http=debug`, text, stdout |
 
 Configuration priority, highest first: **CLI flags > environment variables >
@@ -157,9 +158,10 @@ unversioned `/…` form is kept for backward compatibility — its responses car
 - **One process per data directory.** The engine takes an exclusive OS-level lock on `<data_dir>/velesdb.lock`. There is no built-in clustering, replication, or sharding: scale vertically, or shard at the application level. See [CONCURRENCY_LOCKING.md](../../docs/guides/CONCURRENCY_LOCKING.md).
 - **Authentication is a flat list of API keys.** No users, no roles, no per-collection scoping. Keys are read at startup, so rotation requires a restart (both old and new key can be active during the transition).
 - **Rate limiting is per process and in memory.** Replicas do not share a budget; put a shared limiter in front if you need a global one.
-- **CORS is off by default**: no CORS header is sent, so a browser front end on another origin needs its exact origin in `[server] cors_origins`; `["*"]` restores allow-all, with a startup warning. A request that would change state (any method but `GET`/`HEAD`/`OPTIONS`) from a browser origin that is neither the server's own nor listed is refused with `403`; requests without an `Origin` header are unaffected ([why](../../docs/guides/SERVER_SECURITY.md#6-cors)).
+- **CORS is off by default**: no CORS header is sent, so a browser front end on another origin needs its exact origin in `[server] cors_origins`; `["*"]` restores allow-all, with a startup warning. A request that would change state (any method but `GET`/`HEAD`/`OPTIONS`) from a browser origin that is neither the server's own nor listed is refused with `403`; requests without an `Origin` header are unaffected ([why](../../docs/guides/SERVER_SECURITY.md#6-cors-origins-and-hosts)).
 - **Swagger UI is opt-in at build time** (`--features swagger-ui`); the released default build does not serve `/swagger-ui` or `/api-docs/openapi.json`. Building with that feature needs network access: `utoipa-swagger-ui`'s build script downloads the Swagger UI distribution, so it fails in air-gapped builds. Offline, skip the feature and point any OpenAPI viewer at [docs/openapi.json](../../docs/openapi.json) instead.
 - **The `/v1` prefix is added by the binary.** Embedding `velesdb_server::routes::api_routes()` in your own Axum application gives you the unversioned routes; nest them yourself if you want the versioned form.
+- **`api_routes()` carries no browser guards.** The `Host` check, the origin guard and the CORS layer are installed by `velesdb_server::config::apply_browser_policy(router, &server_config)`, which the binary calls; an embedder that serves `api_routes()` without it has none of them and must add it (or equivalent protection) itself.
 - Engine-level limits (query length caps, GROUP BY ceilings, scan caps) are listed in [docs/reference/KNOWN_LIMITATIONS.md](../../docs/reference/KNOWN_LIMITATIONS.md).
 
 ## Compatibility

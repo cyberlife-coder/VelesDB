@@ -58,7 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignored `VELESDB_LIMITS_MAX_COLLECTIONS` and every other engine variable.
   `velesdb_core::config::WORKERS_CAP` and `LOG_LEVELS` are now public, so a
   hosting shell validates `[server] workers` and log levels by the engine's
-  own rules instead of a copy.
+  own rules instead of a copy, and so is `VelesConfig::is_engine_table`, which
+  tells such a shell which top-level tables of a shared file the engine reads.
+
+- **BREAKING (behaviour): `velesdb-server` answers only the `Host` names it
+  is configured for, with `421 Misdirected Request` otherwise.** A
+  DNS-rebinding page (a name that resolves to `127.0.0.1` after the page
+  loads) is same-origin for the browser, so neither CORS nor the origin guard
+  stopped it reading and writing a loopback server — 7.1.0's default
+  deployment. Answered with no configuration: `localhost`, `127.0.0.0/8`,
+  `[::1]` and the bind host unless it is `0.0.0.0`/`::`; new
+  `[server] allowed_hosts` (`--allowed-hosts`, `VELESDB_ALLOWED_HOSTS`) adds
+  names, `["*"]` turns the check off. All methods are checked; `/health` and
+  `/ready` are exempt for orchestrator probes; `X-Forwarded-Host` is never
+  read. The origin guard's same-origin comparison now normalises default
+  ports and is trusted only after the `Host` check. One function,
+  `config::apply_browser_policy`, installs the `Host` check, the origin guard
+  and the CORS layer.
 
 ### Fixed
 
@@ -105,8 +121,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     says (see the `load_from_path_engine_only` entry above; the CLI is fixed
     the same way).
   - An unknown top-level table (`[sever]`) is named in the same startup
-    warning as an unread key. Tables the engine or the update check read, and
-    removed tables the engine already warns about, are not.
+    warning as an unread key ("not read by this velesdb-server build"). Tables
+    the engine reads, removed tables the engine already warns about, and
+    `[update_check]` in a build with that feature are not; `[premium]`, read
+    only by premium distributions, is.
   - `cors_origins = ["*"]` next to a `[cors]` setting the permissive policy
     ignores (`allow_credentials = true`, methods, headers, `max_age_secs`) is
     refused at startup instead of being ignored.

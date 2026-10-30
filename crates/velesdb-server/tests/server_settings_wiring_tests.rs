@@ -100,8 +100,14 @@ fn send(server: &Server, method: &str, path: &str, headers: &[&str], body: &[u8]
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("read timeout");
+    // `host: localhost` unless the caller names its own.
+    let host = if headers.iter().any(|h| h.starts_with("host:")) {
+        ""
+    } else {
+        "host: localhost\r\n"
+    };
     let mut head = format!(
-        "{method} {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\
+        "{method} {path} HTTP/1.1\r\n{host}connection: close\r\n\
          content-type: application/json\r\ncontent-length: {}\r\n",
         body.len()
     );
@@ -374,4 +380,33 @@ fn test_engine_variables_apply_without_any_config_file() {
         "the limit from the environment: {second}"
     );
     assert!(second.contains("max_collections"), "{second}");
+}
+
+/// The binary installs the `Host` allowlist: a rebound name is refused, and
+/// `VELESDB_ALLOWED_HOSTS` reaches it.
+#[test]
+fn test_the_host_allowlist_is_installed_and_reads_its_variable() {
+    let home = TempDir::new().expect("tempdir");
+    let server = start(
+        &home,
+        "[server]\n",
+        &[("VELESDB_ALLOWED_HOSTS", "db.example.com")],
+    );
+
+    let rebound = send(
+        &server,
+        "GET",
+        "/collections",
+        &["host: evil.example.com:8080"],
+        b"",
+    );
+    assert_eq!(status_of(&rebound), "421", "{rebound}");
+    let listed = send(
+        &server,
+        "GET",
+        "/collections",
+        &["host: db.example.com:8080"],
+        b"",
+    );
+    assert_eq!(status_of(&listed), "200", "{listed}");
 }

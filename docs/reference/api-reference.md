@@ -46,7 +46,13 @@ Per-IP rate limiting is enabled by default (100 requests/second per IP). When a 
 
 **Configuration**: See [CONFIGURATION.md](../guides/CONFIGURATION.md#rate-limiting) for CLI, environment variable, and TOML options.
 
-### Browser origins (CORS and the origin guard)
+### Browser origins and hosts (CORS, the origin guard, the Host check)
+
+Every request whose `Host` is not `localhost`, a `127.0.0.0/8` address,
+`[::1]`, the bind host (unless `0.0.0.0`/`::`) or an entry of
+`[server] allowed_hosts` is refused with `421 Misdirected Request`, whatever
+its method; `/health` and `/ready` are exempt, and `X-Forwarded-Host` is never
+read.
 
 On every route, a request whose method is not `GET`, `HEAD` or `OPTIONS` and
 that carries an `Origin` header is refused with `403` unless that origin is
@@ -54,7 +60,7 @@ the server's own (its `host[:port]` equals the request's `Host`) or allowed by
 `[server] cors_origins` (`["*"]`: any). Requests without `Origin` — curl, the
 SDKs, other servers — are not affected. No CORS header is sent unless
 `cors_origins` is configured. This `403` is not repeated in each operation of
-`openapi.yaml`. See [SERVER_SECURITY.md](../guides/SERVER_SECURITY.md#6-cors).
+`openapi.yaml`, nor is the `421`. See [SERVER_SECURITY.md](../guides/SERVER_SECURITY.md#6-cors-origins-and-hosts).
 
 ---
 
