@@ -159,6 +159,10 @@ under `validation`.
 - **`Collection.get_graph_store()` is removed.** Use
   `Database.get_graph_collection()` for a persistent graph, or
   `velesdb.GraphStore()` for an in-memory one.
+- **`velesdb.SearchResult` is removed.** No call ever returned one: every
+  search returns dicts (`result["id"]`, `result["score"]`,
+  `result["payload"]`). Drop the import; to annotate, the stub's
+  `SearchResultDict` is importable under `typing.TYPE_CHECKING`.
 - **`GraphStore.traverse_dfs` runs core's DFS.**
   - It returns one result per node reached, in depth-first order.
   - An empty `relationship_types` list now follows every edge; it followed none

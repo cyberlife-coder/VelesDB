@@ -300,31 +300,6 @@ class SearchOptions:
     def with_tenant(self, tenant: Optional[str]) -> "SearchOptions": ...
 
 
-class SearchResult:
-    """A single search result from a vector search.
-
-    Attributes:
-        id: Unique integer identifier of the vector
-        score: Similarity score
-        payload: Optional metadata associated with the vector
-    """
-
-    @property
-    def id(self) -> int:
-        """Unique integer identifier of the vector."""
-        ...
-
-    @property
-    def score(self) -> float:
-        """Similarity score."""
-        ...
-
-    @property
-    def payload(self) -> Optional[Dict[str, Any]]:
-        """Optional metadata payload."""
-        ...
-
-
 class Collection:
     """A collection of vectors in VelesDB.
 

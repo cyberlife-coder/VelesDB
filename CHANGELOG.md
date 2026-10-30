@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MATCH pre-filter now intersects every indexed predicate rather than skipping
   the equality ones a composite lookup was assumed to cover. Crate-private;
   no public API changes.
+- **BREAKING — Python: `velesdb.SearchResult`.** The class had no methods and
+  no call returned or built one: every search returns dicts (`SearchResultDict`
+  in the stub). It is no longer importable, listed in `__all__`, or stubbed.
+  *Migration*: drop the import; read results as dicts.
 
 ### Fixed
 
