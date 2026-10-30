@@ -49,6 +49,30 @@ pub struct AggregateFunction {
     pub alias: Option<String>,
 }
 
+impl AggregateFunction {
+    /// The field core's aggregation rows store this aggregate under: its
+    /// alias, else a default name — `count` for `COUNT(*)`, `sum_price` for
+    /// `SUM(price)`, `avg_score` for `AVG(score)`.
+    pub(crate) fn result_key(&self) -> String {
+        if let Some(alias) = &self.alias {
+            return alias.clone();
+        }
+        let prefix = match self.function_type {
+            AggregateType::Count => "count",
+            AggregateType::Sum => "sum",
+            AggregateType::Avg => "avg",
+            AggregateType::Min => "min",
+            AggregateType::Max => "max",
+            AggregateType::First => "first",
+        };
+        match &self.argument {
+            AggregateArg::Wildcard => prefix.to_string(),
+            AggregateArg::Score => format!("{prefix}_score"),
+            AggregateArg::Column(col) => format!("{prefix}_{col}"),
+        }
+    }
+}
+
 /// GROUP BY clause for aggregation queries.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GroupByClause {

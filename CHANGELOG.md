@@ -43,6 +43,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     velesdb-core 5.0.0 and the migrate README a 4.3.0 destination format.
     The doc version guard now checks every crate that versions with the
     workspace, and a version one table cell away from its crate name.
+- **`GROUP BY ... ORDER BY COUNT(*)` sorts the groups when the SELECT
+  aliases the aggregate.** In 7.1.0, `SELECT category, COUNT(*) AS cnt ...
+  GROUP BY category ORDER BY COUNT(*) DESC LIMIT 10` returned the groups
+  unsorted, and LIMIT kept whichever came first: the ORDER BY looked each row
+  up under the aggregate's default name (`count` in core, `count(*)` in WASM)
+  while the row held it under `cnt`, so every comparison was equal. The same
+  held for every aggregate (`AVG(price) AS avg_price ... ORDER BY AVG(price)`),
+  on core, WASM and vector `GROUP BY` (`ORDER BY MAX(score)` beside
+  `MAX(score) AS relevance`). In 8.0.0 an ORDER BY aggregate sorts on the
+  SELECT item computing it, whatever its alias, through one resolution
+  (`SelectStatement::grouped_sort_keys`) shared by core and WASM.
+  - An ORDER BY that names no column of the grouped rows (an aggregate the
+    SELECT does not list, a column outside `GROUP BY`, `similarity()` or an
+    arithmetic expression) used to leave the groups unsorted with no error;
+    it now fails with the new validation code `V015` (`OrderByNotInResult`).
+    Migration: add the aggregate to the SELECT list, or order by a
+    `GROUP BY` column.
+  - `HAVING` on an aggregate the SELECT does not list
+    (`SELECT category, COUNT(*) ... HAVING SUM(amount) > 100`, or
+    `HAVING COUNT(*) > 3` beside `SUM(amount)`) dropped every group in core
+    7.1.0, which only accumulated the SELECT's aggregates. Core now computes
+    the HAVING aggregates too, as WASM already did.
 - **`@wiscale/tauri-plugin-velesdb` ships a README.** Its package listed
   `README.md` in `files`, but none existed, so the npm page was empty.
 - The committed Playwright report of the e-commerce example is removed.

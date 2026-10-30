@@ -33,30 +33,18 @@ pub(super) const DEFAULT_MAX_GROUPS: usize = 10_000;
 pub(super) const SERVER_MAX_GROUPS_CEILING: usize = 1_000_000;
 
 impl Collection {
-    /// BUG-3 FIX: Sort aggregation results by ORDER BY clause.
+    /// Sorts grouped rows by `(field, descending)` keys, in order — the row
+    /// fields [`crate::velesql::SelectStatement::grouped_sort_keys`] resolved
+    /// the ORDER BY to.
     pub(crate) fn sort_aggregation_results(
         results: &mut [serde_json::Value],
-        order_by: &[crate::velesql::SelectOrderBy],
+        sort_columns: &[(String, bool)],
     ) {
-        use crate::velesql::OrderByExpr;
-
-        let sort_columns: Vec<(String, bool)> = order_by
-            .iter()
-            .filter_map(|clause| {
-                let column = match &clause.expr {
-                    OrderByExpr::Field(name) => name.clone(),
-                    OrderByExpr::Aggregate(agg) => Self::aggregation_result_key(agg),
-                    // Similarity/Arithmetic ordering not applicable to grouped aggregate rows.
-                    OrderByExpr::Similarity(_)
-                    | OrderByExpr::SimilarityBare
-                    | OrderByExpr::Arithmetic(_) => return None,
-                };
-                Some((column, clause.descending))
-            })
-            .collect();
-
+        if sort_columns.is_empty() {
+            return;
+        }
         results.sort_unstable_by(|a, b| {
-            for (column, descending) in &sort_columns {
+            for (column, descending) in sort_columns {
                 let val_a = a.get(column);
                 let val_b = b.get(column);
 

@@ -2,7 +2,6 @@
 
 use super::having::{DEFAULT_MAX_GROUPS, SERVER_MAX_GROUPS_CEILING};
 use super::*;
-use crate::velesql::{AggregateArg, AggregateFunction, AggregateType, OrderByExpr, SelectOrderBy};
 
 #[test]
 fn test_sort_aggregation_results_order_by_count_desc_sorts_rows() {
@@ -12,17 +11,10 @@ fn test_sort_aggregation_results_order_by_count_desc_sorts_rows() {
         serde_json::json!({"category": "tech", "count": 5}),
         serde_json::json!({"category": "history", "count": 3}),
     ];
-    let order_by = vec![SelectOrderBy {
-        expr: OrderByExpr::Aggregate(AggregateFunction {
-            function_type: AggregateType::Count,
-            argument: AggregateArg::Wildcard,
-            alias: None,
-        }),
-        descending: true,
-    }];
+    let sort_columns = vec![("count".to_string(), true)];
 
     // ACT
-    Collection::sort_aggregation_results(&mut rows, &order_by);
+    Collection::sort_aggregation_results(&mut rows, &sort_columns);
 
     // ASSERT
     let ordered_categories: Vec<&str> = rows

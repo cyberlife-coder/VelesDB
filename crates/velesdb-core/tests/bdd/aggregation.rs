@@ -573,3 +573,151 @@ fn test_having_with_gte_operator() {
         groups.len()
     );
 }
+
+// =========================================================================
+// Scenario 16: ORDER BY an aggregate expression sorts groups even when the
+// SELECT stores that aggregate under an alias
+// =========================================================================
+
+/// Category of every group, in result order.
+fn group_categories(result: &serde_json::Value) -> Vec<&str> {
+    result
+        .as_array()
+        .expect("test: aggregation should return array")
+        .iter()
+        .map(|group| {
+            group
+                .get("category")
+                .and_then(serde_json::Value::as_str)
+                .expect("test: group should have category")
+        })
+        .collect()
+}
+
+#[test]
+fn test_order_by_count_expression_sorts_groups_selected_under_an_alias() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    // clothing has 4 orders, books and electronics 3 each. Were COUNT(*)
+    // ignored, the tie-breaker alone would order books, clothing.
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) AS cnt FROM orders GROUP BY category \
+         ORDER BY COUNT(*) DESC, category ASC LIMIT 2",
+    )
+    .expect("test: ORDER BY COUNT(*) with aliased COUNT(*)");
+
+    assert_eq!(group_categories(&result), vec!["clothing", "books"]);
+}
+
+#[test]
+fn test_order_by_avg_expression_sorts_groups_selected_under_an_alias() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    // Average amount: electronics 166.66, clothing 49.99, books 19.99.
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, AVG(amount) AS mean_amount FROM orders GROUP BY category \
+         ORDER BY AVG(amount) DESC, category ASC",
+    )
+    .expect("test: ORDER BY AVG(amount) with aliased AVG(amount)");
+
+    assert_eq!(
+        group_categories(&result),
+        vec!["electronics", "clothing", "books"]
+    );
+}
+
+// =========================================================================
+// Scenario 17: ORDER BY the default name of an unaliased aggregate
+// =========================================================================
+
+#[test]
+fn test_order_by_default_name_of_unaliased_count_sorts_groups() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) FROM orders GROUP BY category \
+         ORDER BY count DESC, category ASC",
+    )
+    .expect("test: ORDER BY count");
+
+    assert_eq!(
+        group_categories(&result),
+        vec!["clothing", "books", "electronics"]
+    );
+}
+
+// =========================================================================
+// Scenario 18: an ORDER BY that names no column of the grouped rows is
+// rejected instead of leaving the groups unsorted
+// =========================================================================
+
+#[test]
+fn test_order_by_aggregate_missing_from_select_is_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let err = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) AS cnt FROM orders GROUP BY category \
+         ORDER BY SUM(amount) DESC LIMIT 2",
+    )
+    .expect_err("test: ORDER BY an aggregate the rows do not carry must fail");
+
+    assert!(err.to_string().contains("V015"), "got: {err}");
+}
+
+#[test]
+fn test_order_by_ungrouped_column_on_grouped_rows_is_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let err = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) AS cnt FROM orders GROUP BY category \
+         ORDER BY amount DESC",
+    )
+    .expect_err("test: ORDER BY a column the grouped rows do not carry must fail");
+
+    assert!(err.to_string().contains("V015"), "got: {err}");
+}
+
+// =========================================================================
+// Scenario 19: HAVING on an aggregate the SELECT does not list
+// =========================================================================
+
+#[test]
+fn test_having_on_sum_missing_from_select_filters_by_its_value() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    // SUM(amount): electronics 499.97, clothing 199.96, books 59.97.
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, COUNT(*) AS cnt FROM orders GROUP BY category \
+         HAVING SUM(amount) > 100 ORDER BY category ASC",
+    )
+    .expect("test: HAVING SUM(amount) without SUM(amount) in SELECT");
+
+    assert_eq!(group_categories(&result), vec!["clothing", "electronics"]);
+}
+
+#[test]
+fn test_having_on_count_missing_from_select_filters_by_its_value() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(
+        &db,
+        "SELECT category, SUM(amount) AS total FROM orders GROUP BY category \
+         HAVING COUNT(*) > 3",
+    )
+    .expect("test: HAVING COUNT(*) without COUNT(*) in SELECT");
+
+    assert_eq!(group_categories(&result), vec!["clothing"]);
+}

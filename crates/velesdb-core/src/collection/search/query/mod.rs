@@ -329,15 +329,19 @@ impl Collection {
             self.dispatch_main_select(stmt, params, args.extracted, args.fetch_limit, args.ctx)?;
 
         // Vector GROUP BY post-processing: group results by parent field
-        // before ORDER BY / LIMIT / OFFSET are applied.
-        if args.is_vgb {
+        // before ORDER BY / LIMIT / OFFSET are applied, which then sort the
+        // groups on the payload fields their aggregates landed in.
+        let stmt = if args.is_vgb {
             results = self.apply_vector_group_by(stmt, &results);
-        }
+            vector_group_by::order_by_on_group_fields(stmt)?
+        } else {
+            std::borrow::Cow::Borrowed(stmt)
+        };
 
         self.finalize_query_results(
             &mut results,
             &QueryFinalizationContext {
-                stmt,
+                stmt: &stmt,
                 params,
                 limit: args.limit,
                 extracted: args.extracted,

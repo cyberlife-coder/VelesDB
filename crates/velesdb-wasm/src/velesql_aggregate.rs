@@ -24,8 +24,8 @@
 use std::collections::BTreeMap;
 
 use velesdb_core::velesql::{
-    AggregateArg, AggregateFunction, AggregateType, CompareOp, HavingClause, HavingCondition,
-    LogicalOp, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement, Value,
+    AggregateArg, AggregateFunction, AggregateType, CompareOp, GroupedSortKey, HavingClause,
+    HavingCondition, LogicalOp, SelectColumns, SelectStatement, Value,
 };
 
 use crate::velesql_result::QueryResultRow;
@@ -95,8 +95,10 @@ fn aggregate(
             json_rows.push(row);
         }
     }
-    if let Some(order_by) = stmt.order_by.as_deref() {
-        sort_aggregate_rows(&mut json_rows, order_by);
+    // Without GROUP BY the aggregates collapse into one row: there is nothing
+    // to order, and core ignores that ORDER BY too.
+    if stmt.group_by.is_some() {
+        sort_aggregate_rows(&mut json_rows, stmt)?;
     }
     json_rows
         .into_iter()
@@ -104,37 +106,36 @@ fn aggregate(
         .collect()
 }
 
-/// Sorts grouped aggregate rows by the SELECT's ORDER BY, mirroring core's
-/// `Collection::sort_aggregation_results`: each ORDER BY key resolves to a
-/// JSON field on the group row (a group-key column or an aggregate output
-/// column), compared with the same total JSON ordering. Multi-key sort is
-/// stable so equal leading keys preserve earlier-key order. Similarity /
-/// arithmetic ORDER BY forms are not applicable to grouped rows and are
-/// skipped, matching core.
-fn sort_aggregate_rows(rows: &mut [serde_json::Value], order_by: &[SelectOrderBy]) {
-    let keys: Vec<(String, bool)> = order_by
-        .iter()
-        .filter_map(|clause| aggregate_order_key(&clause.expr).map(|k| (k, clause.descending)))
+/// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved by core's
+/// `SelectStatement::grouped_sort_keys` — the resolution core's own aggregate
+/// executor sorts through — to the row fields it names: a group-key column,
+/// or an aggregate under the name [`output_name`] stored it with. The sort is
+/// stable, so rows with equal keys keep their first-seen order.
+///
+/// # Errors
+///
+/// Returns core's `V015` message for an ORDER BY item that names no field of
+/// the grouped rows, rather than leaving them in scan order.
+fn sort_aggregate_rows(
+    rows: &mut [serde_json::Value],
+    stmt: &SelectStatement,
+) -> Result<(), String> {
+    let keys: Vec<(String, bool)> = stmt
+        .grouped_sort_keys()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(key, descending)| {
+            let field = match key {
+                GroupedSortKey::GroupColumn(column) => column.to_string(),
+                GroupedSortKey::Aggregate(agg) => output_name(agg),
+            };
+            (field, descending)
+        })
         .collect();
-    if keys.is_empty() {
-        return;
+    if !keys.is_empty() {
+        rows.sort_by(|a, b| compare_aggregate_rows(a, b, &keys));
     }
-    rows.sort_by(|a, b| compare_aggregate_rows(a, b, &keys));
-}
-
-/// Resolves an ORDER BY expression to the JSON field name used by the
-/// aggregate output row, or `None` for forms that do not apply to grouped
-/// rows (similarity / arithmetic), matching core's `sort_aggregation_results`.
-fn aggregate_order_key(expr: &OrderByExpr) -> Option<String> {
-    match expr {
-        OrderByExpr::Field(name) => Some(name.clone()),
-        OrderByExpr::Aggregate(agg) => Some(
-            agg.alias
-                .clone()
-                .unwrap_or_else(|| aggregate_default_name(agg)),
-        ),
-        _ => None,
-    }
+    Ok(())
 }
 
 /// Total order over two aggregate rows for the resolved `(field, descending)`
@@ -301,13 +302,17 @@ fn write_aggregates(
 ) -> Result<(), String> {
     for agg in aggregates {
         let value = compute_aggregate(agg, rows)?;
-        let name = agg
-            .alias
-            .clone()
-            .unwrap_or_else(|| aggregate_default_name(agg));
-        out.insert(name, value);
+        out.insert(output_name(agg), value);
     }
     Ok(())
+}
+
+/// The field a group row stores an aggregate under: its alias, else its
+/// function-call-shaped default name.
+fn output_name(agg: &AggregateFunction) -> String {
+    agg.alias
+        .clone()
+        .unwrap_or_else(|| aggregate_default_name(agg))
 }
 
 fn aggregate_default_name(agg: &AggregateFunction) -> String {

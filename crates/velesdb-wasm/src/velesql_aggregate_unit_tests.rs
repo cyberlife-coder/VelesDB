@@ -143,6 +143,65 @@ fn test_group_by_order_by_count_desc() {
     assert!(pos(&out, "\"cat\":\"c\"") < pos(&out, "\"cat\":\"b\""));
 }
 
+/// `SELECT cat, COUNT(*) AS n ... GROUP BY cat` over rows where cat "a" has 3
+/// rows, "b" 1 and "c" 2, in first-seen order a, b, c.
+fn aliased_count_by_cat() -> (Vec<(u64, f32, serde_json::Value)>, SelectStatement) {
+    let raw = ["a", "b", "a", "c", "a", "c"]
+        .iter()
+        .zip(1..)
+        .map(|(cat, id)| row(id, 0.0, &serde_json::json!({"cat": cat, "x": id})))
+        .collect();
+    let mut s = base_select();
+    s.columns = SelectColumns::Aggregations(vec![AggregateFunction {
+        function_type: AggregateType::Count,
+        argument: AggregateArg::Wildcard,
+        alias: Some("n".to_string()),
+    }]);
+    s.group_by = Some(GroupByClause {
+        columns: vec!["cat".to_string()],
+    });
+    (raw, s)
+}
+
+fn order_by_aggregate(function_type: AggregateType, argument: AggregateArg) -> SelectOrderBy {
+    SelectOrderBy {
+        expr: OrderByExpr::Aggregate(AggregateFunction {
+            function_type,
+            argument,
+            alias: None,
+        }),
+        descending: true,
+    }
+}
+
+#[test]
+fn test_group_by_order_by_count_expression_sorts_groups_selected_under_an_alias() {
+    // The parser gives `ORDER BY COUNT(*)` no alias, while the SELECT stores
+    // the count under `n`: the sort must still find it there.
+    let (raw, mut s) = aliased_count_by_cat();
+    let rows = scanned(&raw);
+    s.order_by = Some(vec![order_by_aggregate(
+        AggregateType::Count,
+        AggregateArg::Wildcard,
+    )]);
+    let out = apply(&s, &rows, &Params::new()).expect("test: aliased agg order by");
+    assert!(pos(&out, "\"cat\":\"a\"") < pos(&out, "\"cat\":\"c\""));
+    assert!(pos(&out, "\"cat\":\"c\"") < pos(&out, "\"cat\":\"b\""));
+}
+
+#[test]
+fn test_group_by_order_by_aggregate_missing_from_select_is_rejected() {
+    let (raw, mut s) = aliased_count_by_cat();
+    let rows = scanned(&raw);
+    s.order_by = Some(vec![order_by_aggregate(
+        AggregateType::Sum,
+        AggregateArg::Column("x".to_string()),
+    )]);
+    let err = apply(&s, &rows, &Params::new())
+        .expect_err("test: ORDER BY an aggregate the rows do not carry must fail");
+    assert!(err.contains("V015"), "got: {err}");
+}
+
 #[test]
 fn test_group_by_order_by_group_key_asc() {
     // ORDER BY a group key (cat ASC) must sort groups alphabetically.

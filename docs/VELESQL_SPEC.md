@@ -1387,6 +1387,15 @@ ORDER BY COUNT(*) DESC
 LIMIT 10
 ```
 
+An ORDER BY item of a `GROUP BY` query names a column of the grouped rows: a
+`GROUP BY` column, a SELECT aggregate repeated as an expression (`COUNT(*)`
+above, which sorts on `cnt`), or a SELECT aggregate's alias or default name
+(`ORDER BY cnt`; `ORDER BY count` for an unaliased `COUNT(*)`). An item that
+names none — an aggregate the SELECT does not list, a column outside
+`GROUP BY`, `similarity()` or an arithmetic expression — fails the query with
+`V015` instead of leaving the groups unsorted. `HAVING` may test any aggregate,
+listed in SELECT or not.
+
 ### Arithmetic Scoring (v3.0+)
 
 Combine multiple score components with arithmetic expressions in ORDER BY:

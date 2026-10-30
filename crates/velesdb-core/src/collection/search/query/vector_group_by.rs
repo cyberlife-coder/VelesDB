@@ -5,8 +5,12 @@
 //! This is architecturally distinct from `execute_aggregate` which scans
 //! all payloads and returns `serde_json::Value`.
 
+use std::borrow::Cow;
+
 use crate::point::SearchResult;
-use crate::velesql::{AggregateArg, AggregateFunction, AggregateType, SelectStatement};
+use crate::velesql::{
+    AggregateArg, AggregateFunction, AggregateType, OrderByExpr, SelectStatement,
+};
 use rustc_hash::FxHashMap;
 
 /// Configuration for vector-search GROUP BY post-processing.
@@ -69,6 +73,39 @@ pub(crate) fn is_vector_group_by_query(stmt: &SelectStatement) -> bool {
         .as_ref()
         .is_some_and(crate::velesql::Condition::has_vector_search);
     has_group_by && has_vector_near
+}
+
+/// Rewrites each `ORDER BY <aggregate>` of a vector GROUP BY into the payload
+/// field the grouped results carry that aggregate in, so the SELECT pipeline's
+/// field ORDER BY sorts on it. The aggregate is matched to its SELECT item
+/// through [`SelectStatement::order_by_aggregate_target`], the resolution the
+/// SQL aggregation path uses too; left as is, an aggregate item compared every
+/// group as equal. Borrows the statement unchanged when no item is one.
+///
+/// # Errors
+///
+/// `V015` when an ORDER BY aggregate is not in the SELECT list.
+pub(crate) fn order_by_on_group_fields(
+    stmt: &SelectStatement,
+) -> crate::error::Result<Cow<'_, SelectStatement>> {
+    let has_aggregate_item = stmt
+        .order_by
+        .iter()
+        .flatten()
+        .any(|item| matches!(item.expr, OrderByExpr::Aggregate(_)));
+    if !has_aggregate_item {
+        return Ok(Cow::Borrowed(stmt));
+    }
+    let mut rewritten = stmt.clone();
+    for item in rewritten.order_by.iter_mut().flatten() {
+        if let OrderByExpr::Aggregate(wanted) = &item.expr {
+            let target = stmt
+                .order_by_aggregate_target(wanted)
+                .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+            item.expr = OrderByExpr::Field(aggregation_result_key(target));
+        }
+    }
+    Ok(Cow::Owned(rewritten))
 }
 
 /// Extracts the score aggregation strategy from the aggregate functions.

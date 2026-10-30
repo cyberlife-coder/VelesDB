@@ -454,16 +454,16 @@ impl Collection {
         let mut result = serde_json::Map::new();
 
         for agg in aggregations {
-            let key = Self::aggregation_result_key(agg);
             let value = Self::aggregation_result_value(agg, agg_result);
-            result.insert(key, value);
+            result.insert(agg.result_key(), value);
         }
 
         serde_json::Value::Object(result)
     }
 
-    // NOTE: aggregation_result_key and aggregation_result_value are in grouped.rs
-    // and shared by both grouped and ungrouped aggregation paths.
+    // NOTE: aggregation_result_value is in grouped.rs and shared by both
+    // grouped and ungrouped aggregation paths; the result key is
+    // `AggregateFunction::result_key`.
 
     /// Get a nested value from JSON payload using dot notation.
     pub(crate) fn get_nested_value<'a>(

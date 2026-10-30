@@ -418,7 +418,9 @@ scalar-expression ones below, which use the same single-collection dataset):
   `execute_query`, which only groups when combined with vector `NEAR`
   search) and via the default SELECT pipeline on WASM. G005 (issue #1556)
   locks `LIMIT` truncation on grouped results — formerly D006 below, now
-  resolved on both engines.
+  resolved on both engines. G006–G007 lock `ORDER BY COUNT(*)` /
+  `ORDER BY AVG(col)` when the SELECT stores that aggregate under an `AS`
+  alias.
 - `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
@@ -442,8 +444,9 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R004: queries both engines must refuse — `NEAR_FUSED`
-  with `weighted`/`rsf`, and `USING FUSION` over a single `NEAR`.
+- `rejected_cases` R001–R005: queries both engines must refuse — `NEAR_FUSED`
+  with `weighted`/`rsf`, `USING FUSION` over a single `NEAR`, and a `GROUP BY`
+  ordered by an aggregate the SELECT does not list (V015).
 - `dml_cases` W001–W008: `UPDATE` / `DELETE` statements run on a fresh copy of
   the dataset, then a SELECT (or a `NEAR`) is asserted.
 - `projection_cases` P001–P005: `SELECT DISTINCT` with `ORDER BY`, `LIMIT`, a

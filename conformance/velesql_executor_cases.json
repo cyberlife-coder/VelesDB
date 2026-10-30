@@ -271,6 +271,23 @@
         { "category": "tech", "n": 3, "total_year": 6065.0 }
       ],
       "note": "issue #1556: LIMIT applies to the ordered group rows in both engines (was documented_divergences D006 — core returned every group)"
+    },
+    {
+      "id": "G006",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY COUNT(*) ASC, category DESC LIMIT 1",
+      "expect_groups": [
+        { "category": "other", "n": 2 }
+      ],
+      "note": "ORDER BY repeats an aggregate the SELECT stores under an alias: both engines sort by the aliased column. Both used to look the row up under the aggregate's default name, compare every group as equal and fall through to the tie-breaker, which alone puts tech first"
+    },
+    {
+      "id": "G007",
+      "query": "SELECT category, AVG(year) AS mean_year FROM docs GROUP BY category ORDER BY AVG(year) ASC, category DESC",
+      "expect_groups": [
+        { "category": "other", "mean_year": 2020.0 },
+        { "category": "tech", "mean_year": 2021.6666666666667 }
+      ],
+      "note": "same as G006 for AVG"
     }
   ],
   "setops_cases": [
@@ -469,6 +486,11 @@
       "id": "R004",
       "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'weighted')",
       "note": "same as R003 for a weight-sensitive strategy"
+    },
+    {
+      "id": "R005",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY SUM(year) DESC",
+      "note": "ORDER BY an aggregate the SELECT does not list names no column of the grouped rows (V015); both engines used to accept it and return the groups unsorted"
     }
   ],
   "dml_cases": [

@@ -18,8 +18,8 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::{
-    AggregateArg, AggregateFunction, AggregateResult, AggregateType, Aggregator, HavingClause,
-    Query,
+    AggregateArg, AggregateFunction, AggregateResult, AggregateType, Aggregator, GroupedSortKey,
+    HavingClause, Query,
 };
 use std::collections::HashMap;
 
@@ -35,21 +35,63 @@ impl Collection {
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
         let max_groups = Self::extract_max_groups_limit(stmt.with_clause.as_ref());
+        let sort_columns = Self::grouped_sort_columns(stmt)?;
 
+        let accumulated = Self::select_and_having_aggregates(aggregations, having);
         let groups =
-            self.scan_and_group(stmt, aggregations, group_by_columns, max_groups, params)?;
+            self.scan_and_group(stmt, &accumulated, group_by_columns, max_groups, params)?;
 
         let results = Self::build_grouped_results(
             groups,
             aggregations,
             group_by_columns,
             having,
-            stmt.order_by.as_deref(),
+            &sort_columns,
             stmt.limit,
             stmt.offset,
         );
 
         Ok(serde_json::Value::Array(results))
+    }
+
+    /// The row field each ORDER BY item sorts on, with its direction, resolved
+    /// once per query through [`crate::velesql::SelectStatement::grouped_sort_keys`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `V015` for an item that names no field of the grouped rows.
+    fn grouped_sort_columns(stmt: &crate::velesql::SelectStatement) -> Result<Vec<(String, bool)>> {
+        let keys = stmt
+            .grouped_sort_keys()
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        Ok(keys
+            .into_iter()
+            .map(|(key, descending)| {
+                let field = match key {
+                    GroupedSortKey::GroupColumn(column) => column.to_string(),
+                    GroupedSortKey::Aggregate(agg) => agg.result_key(),
+                };
+                (field, descending)
+            })
+            .collect())
+    }
+
+    /// The aggregates the scan must accumulate: the SELECT's, plus any HAVING
+    /// tests that the SELECT does not list (`HAVING SUM(x) > 1` beside
+    /// `COUNT(*)`), which would otherwise read as absent and drop every group.
+    fn select_and_having_aggregates(
+        aggregations: &[AggregateFunction],
+        having: Option<&HavingClause>,
+    ) -> Vec<AggregateFunction> {
+        let having_aggregates = having
+            .into_iter()
+            .flat_map(|clause| &clause.conditions)
+            .map(|condition| &condition.aggregate);
+        aggregations
+            .iter()
+            .chain(having_aggregates)
+            .cloned()
+            .collect()
     }
 
     /// Scans all points, applies WHERE filter, and groups by key.
@@ -208,7 +250,7 @@ impl Collection {
         aggregations: &[AggregateFunction],
         group_by_columns: &[String],
         having: Option<&HavingClause>,
-        order_by: Option<&[crate::velesql::SelectOrderBy]>,
+        sort_columns: &[(String, bool)],
         limit: Option<u64>,
         offset: Option<u64>,
     ) -> Vec<serde_json::Value> {
@@ -229,16 +271,13 @@ impl Collection {
                 }
             }
             for agg in aggregations {
-                let key = Self::aggregation_result_key(agg);
                 let value = Self::aggregation_result_value(agg, &agg_result);
-                row.insert(key, value);
+                row.insert(agg.result_key(), value);
             }
             results.push(serde_json::Value::Object(row));
         }
 
-        if let Some(order_by) = order_by {
-            Self::sort_aggregation_results(&mut results, order_by);
-        }
+        Self::sort_aggregation_results(&mut results, sort_columns);
 
         let skip = usize::try_from(offset.unwrap_or(0)).unwrap_or(usize::MAX);
         let take = limit.map_or(usize::MAX, |l| usize::try_from(l).unwrap_or(usize::MAX));
@@ -247,34 +286,6 @@ impl Collection {
         }
 
         results
-    }
-
-    /// Compute the result key for an aggregation function.
-    pub(crate) fn aggregation_result_key(agg: &AggregateFunction) -> String {
-        if let Some(ref alias) = agg.alias {
-            alias.clone()
-        } else {
-            match &agg.argument {
-                AggregateArg::Wildcard => "count".to_string(),
-                AggregateArg::Score => format!("{}_score", Self::aggregate_type_prefix(agg)),
-                AggregateArg::Column(col) => {
-                    format!("{}_{col}", Self::aggregate_type_prefix(agg))
-                }
-            }
-        }
-    }
-
-    /// The result-key prefix for an aggregation function's type, e.g.
-    /// `AggregateType::Sum` -> `"sum"`.
-    fn aggregate_type_prefix(agg: &AggregateFunction) -> &'static str {
-        match agg.function_type {
-            AggregateType::Count => "count",
-            AggregateType::Sum => "sum",
-            AggregateType::Avg => "avg",
-            AggregateType::Min => "min",
-            AggregateType::Max => "max",
-            AggregateType::First => "first",
-        }
     }
 
     /// Compute the result value for an aggregation function.
