@@ -14,10 +14,10 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::pipeline::{
-    actionable_search_error, build_search_response, record_circuit_breaker,
-    validate_query_dimension,
+use super::outcome::{
+    build_search_response, read_refused, record_circuit_breaker, search_error_response,
 };
+use super::pipeline::validate_query_dimension;
 use crate::handlers::helpers::{
     apply_pre_check, extract_client_id, get_vector_collection_or_404, notify_query_timing,
 };
@@ -33,6 +33,9 @@ use crate::handlers::helpers::{
     request_body = BatchSearchRequest,
     responses(
         (status = 200, description = "Batch search results", body = BatchSearchResponse),
+        (status = 429, description = "The client's rate limit", body = ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (
@@ -90,16 +93,15 @@ pub async fn batch_search(
         None,
     ) {
         Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
+        Ok(Some(_)) => {
             state.operational_metrics.inc_errors();
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Read denied by governance policy".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
+            return search_error_response(&velesdb_core::Error::Config(
+                "scope narrowing is not supported for batch search".to_string(),
+            ));
+        }
+        Err(refusal) => {
+            state.operational_metrics.inc_errors();
+            return read_refused(&refusal);
         }
     }
 
@@ -138,7 +140,7 @@ pub async fn batch_search(
         Ok(batch_results) => build_batch_responses(&state, batch_results, &req),
         Err(e) => {
             state.operational_metrics.inc_errors();
-            return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response();
+            return search_error_response(&e);
         }
     };
 

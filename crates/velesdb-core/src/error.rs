@@ -394,17 +394,20 @@ pub enum GuardRailKind {
 }
 
 /// Whose time budget a [`GuardRailKind::Timeout`] ran out of.
+///
+/// One classification decides it for every surface:
+/// `QueryLimits::timeout_budget`, shared by `VelesQL` `WITH (timeout_ms = N)`
+/// and the REST search's `timeout_ms`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TimeoutBudget {
-    /// A budget the request chose tighter than the server's limit — `VelesQL`
-    /// `WITH (timeout_ms = N)`, a REST search's `timeout_ms`. Running out of
-    /// it says the client asked for too little time, not that the engine is
-    /// slow.
+    /// A budget the request chose strictly tighter than the server's limit
+    /// (`QueryLimits::timeout_ms`), or chose with no server limit set.
+    /// Running out of it says the client asked for too little time, not that
+    /// the engine is slow.
     Client,
-    /// The server's limit (`QueryLimits::timeout_ms`), including a client
-    /// budget no tighter than it: a query that runs that long is load the
-    /// engine could not carry.
+    /// The server's limit, or a request budget at or above it: a query that
+    /// runs that long is load the engine could not carry.
     Configured,
 }
 

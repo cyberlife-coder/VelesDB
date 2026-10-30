@@ -90,6 +90,40 @@ impl ExecutedStrategyCell {
     }
 }
 
+/// Milliseconds every query context adds to the time it measures while a
+/// [`QueryClockSkewGuard`] is active (test-only fault hook).
+#[cfg(any(test, feature = "test-fault-injection"))]
+static CLOCK_SKEW_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Test-only fault hook: while bound, every [`QueryContext`] measures its
+/// elapsed time `skew_ms` later than the wall clock, so a test can make a
+/// query run past a time budget deterministically instead of racing one.
+///
+/// The skew is process-wide (an atomic, like
+/// `fault_injection::SaveConfigFaultGuard`), which is why the test suites run
+/// single-threaded; dropping the guard resets it, panics included. Bind it
+/// to a named variable (`let _skew = ...`): `let _ = ...` drops it at once.
+#[cfg(any(test, feature = "test-fault-injection"))]
+#[derive(Debug)]
+pub struct QueryClockSkewGuard(());
+
+#[cfg(any(test, feature = "test-fault-injection"))]
+impl QueryClockSkewGuard {
+    /// Starts skewing every query clock by `skew_ms`.
+    #[must_use = "the guard must be bound to a variable or the skew resets immediately"]
+    pub fn activate(skew_ms: u64) -> Self {
+        CLOCK_SKEW_MS.store(skew_ms, Ordering::SeqCst);
+        Self(())
+    }
+}
+
+#[cfg(any(test, feature = "test-fault-injection"))]
+impl Drop for QueryClockSkewGuard {
+    fn drop(&mut self) {
+        CLOCK_SKEW_MS.store(0, Ordering::SeqCst);
+    }
+}
+
 impl QueryContext {
     /// Creates a new query context with the given limits.
     #[must_use]
@@ -122,25 +156,26 @@ impl QueryContext {
         self.executed_filter_strategy.get()
     }
 
-    /// Replaces the time budget with one the request chose (`VelesQL`
-    /// `WITH (timeout_ms = N)`); `0` disables the timeout, as in
-    /// [`QueryLimits::timeout_ms`].
+    /// Applies the time budget the request asked for (`VelesQL`
+    /// `WITH (timeout_ms = N)`), as
+    /// [`QueryLimits::client_timeout_ms`] resolves it against the server's
+    /// limit: never longer than that limit, and `0` keeps it.
     ///
-    /// A timeout under that budget is the client's
-    /// ([`TimeoutBudget::Client`](crate::error::TimeoutBudget::Client)) only
-    /// when the budget is tighter than the server's limit — or the server
-    /// sets none. A budget at or above the limit means the query also ran
-    /// past the server's own limit, which is load on the engine
-    /// ([`TimeoutBudget::Configured`](crate::error::TimeoutBudget::Configured)).
-    pub fn set_client_timeout_ms(&mut self, timeout_ms: u64) {
-        use crate::error::TimeoutBudget;
-        let configured = self.limits.timeout_ms;
-        self.timeout_budget = if configured == 0 || timeout_ms < configured {
-            TimeoutBudget::Client
-        } else {
-            TimeoutBudget::Configured
-        };
-        self.limits.timeout_ms = timeout_ms;
+    /// A timeout under the result is classified by
+    /// [`QueryLimits::timeout_budget`]: the client's only when its budget is
+    /// strictly tighter than the server's limit.
+    pub fn set_client_timeout_ms(&mut self, requested_ms: u64) {
+        let effective_ms = self.limits.client_timeout_ms(requested_ms);
+        self.timeout_budget = self.limits.timeout_budget(effective_ms);
+        self.limits.timeout_ms = effective_ms;
+    }
+
+    /// Milliseconds since the query started, as the timeout check sees them.
+    fn elapsed_ms(&self) -> u64 {
+        let measured = self.start_time.elapsed().as_millis() as u64;
+        #[cfg(any(test, feature = "test-fault-injection"))]
+        let measured = measured.saturating_add(CLOCK_SKEW_MS.load(Ordering::SeqCst));
+        measured
     }
 
     /// Checks if the query has timed out (US-001).
@@ -154,7 +189,7 @@ impl QueryContext {
         if self.limits.timeout_ms == 0 {
             return Ok(());
         }
-        let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
+        let elapsed_ms = self.elapsed_ms();
         if elapsed_ms >= self.limits.timeout_ms {
             return Err(exceeded(
                 LimitType::Timeout,

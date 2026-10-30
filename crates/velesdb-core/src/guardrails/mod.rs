@@ -15,6 +15,8 @@ mod resilience;
 #[cfg(test)]
 mod resilience_tests;
 
+#[cfg(any(test, feature = "test-fault-injection"))]
+pub use context::QueryClockSkewGuard;
 pub use context::QueryContext;
 pub use limits::{
     GuardRailViolation, QueryLimits, DEFAULT_CIRCUIT_FAILURE_THRESHOLD,

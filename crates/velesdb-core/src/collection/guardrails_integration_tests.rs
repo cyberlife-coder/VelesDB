@@ -147,7 +147,7 @@ fn test_execute_query_cardinality_violations_leave_circuit_breaker_closed() {
     // A cardinality ceiling the query crosses is the caller's error (the same
     // query is refused however healthy the collection is), so repeated
     // violations must not open the breaker. Engine-side failures still do:
-    // see `tests/bdd/circuit_breaker_contract.rs`.
+    // see `database/circuit_breaker_contract_tests.rs`.
     let limits = QueryLimits {
         max_cardinality: 1, // collection has 10 points — scan exceeds this
         circuit_failure_threshold: 2,

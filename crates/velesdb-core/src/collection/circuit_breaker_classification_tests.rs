@@ -108,7 +108,7 @@ fn dimension_mismatch_never_opens_the_breaker() {
 /// broad for the configured limit): refused every time, it never opens the
 /// breaker. The engine-side positive controls — a timeout under the server's
 /// limit, in a SELECT and inside a MATCH traversal — live in the BDD contract
-/// (`tests/bdd/circuit_breaker_contract.rs`), driven through
+/// (`database/circuit_breaker_contract_tests.rs`), driven through
 /// `Database::execute_query`.
 #[test]
 fn cardinality_stops_never_open_the_breaker() {

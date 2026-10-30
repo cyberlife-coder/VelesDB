@@ -193,7 +193,7 @@ fn test_e2e_guardrails_circuit_breaker_state() {
     }
 
     // A cardinality stop is the caller's error, so it leaves the breaker
-    // closed; engine failures open it (tests/bdd/circuit_breaker_contract.rs).
+    // closed; engine failures open it (database/circuit_breaker_contract_tests.rs).
     let state = col.runtime.guard_rails.circuit_breaker.state();
     assert_eq!(
         state,

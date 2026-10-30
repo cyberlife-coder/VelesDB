@@ -116,7 +116,8 @@ pub struct MatchQueryMeta {
         (status = 400, description = "Parse error or invalid query", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
-        (status = 503, description = "A guard rail stopped the query", body = ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = ErrorResponse),
+        (status = 503, description = "The database is locked, the circuit breaker is open, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the query", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     )
 )]

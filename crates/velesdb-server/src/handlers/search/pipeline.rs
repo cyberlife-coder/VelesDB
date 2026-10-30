@@ -1,29 +1,14 @@
-//! Search pipeline helpers: validation, sparse resolution, fusion parsing,
-//! and shared result handling.
+//! Search pipeline helpers: request validation, sparse resolution, fusion
+//! parsing, and dispatch to core. How the outcome becomes a response and a
+//! circuit-breaker record lives in `outcome.rs`.
 
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use velesdb_core::collection::VectorCollection;
 use velesdb_core::index::sparse::DEFAULT_SPARSE_INDEX_NAME;
 
-use crate::types::{
-    parse_search_mode, validate_ef_search, ErrorResponse, IdScoreResult, SearchIdsResponse,
-    SearchRequest, SearchResponse, SearchResultResponse,
-};
+use super::outcome::read_refused;
+use crate::types::{parse_search_mode, validate_ef_search, ErrorResponse, SearchRequest};
 use crate::AppState;
-
-/// Convert a `Vec<SearchResult>` into a `SearchResponse`.
-pub(crate) fn build_search_response(results: Vec<velesdb_core::SearchResult>) -> SearchResponse {
-    SearchResponse {
-        results: results
-            .into_iter()
-            .map(|r| SearchResultResponse {
-                id: r.point.id,
-                score: r.score,
-                payload: r.point.payload,
-            })
-            .collect(),
-    }
-}
 
 /// Parse a JSON value into a `Filter`, returning a 400 response on failure.
 #[allow(clippy::result_large_err)]
@@ -85,23 +70,6 @@ pub(crate) fn validate_query_dimension(
         "Search rejected due to vector dimension mismatch"
     );
     Err(dimension_mismatch_error(collection_name, expected, actual))
-}
-
-pub(crate) fn actionable_search_error(error: &velesdb_core::Error) -> ErrorResponse {
-    let base_error = error.to_string();
-    let lower = base_error.to_lowercase();
-    let hint = if lower.contains("dimension") {
-        " Hint: check that query vector dimension matches collection dimension."
-    } else if lower.contains("filter") {
-        " Hint: validate filter syntax and start with a broader query before reintroducing strict filters."
-    } else {
-        " Hint: if you get empty results, retry without strict filters/thresholds, then tighten progressively."
-    };
-
-    ErrorResponse {
-        error: format!("{base_error}{hint}"),
-        code: Some(error.code().to_string()),
-    }
 }
 
 /// Resolves sparse input from a `SearchRequest`, validating ambiguity rules.
@@ -294,7 +262,7 @@ pub(crate) fn execute_dense_search(
     state
         .db
         .gated_search_outcome(name, None, None, read)
-        .map_err(|refusal| read_refused(StatusCode::BAD_REQUEST, &refusal))
+        .map_err(|refusal| read_refused(&refusal))
 }
 
 /// Builds payload-less [`SearchResult`]s from id/score pairs.
@@ -371,22 +339,8 @@ pub(crate) fn execute_dense_search_ids(
         Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
             "scope narrowing is not supported on the ids fast path".to_string(),
         ))),
-        Err(refusal) => Err(read_refused(StatusCode::BAD_REQUEST, &refusal)),
+        Err(refusal) => Err(read_refused(&refusal)),
     }
-}
-
-/// The response for a read the control-plane gate refused (the observer's
-/// `AccessDecision::Deny`, or its own failure), shaped as the search error
-/// response the endpoint gives (`status` + actionable body).
-///
-/// Returned on the `Err` side of the execute functions, which the handlers
-/// never record with the circuit breaker: a denial is the policy's answer,
-/// not a sign the collection is unhealthy, whatever error carries it.
-pub(crate) fn read_refused(
-    status: StatusCode,
-    refusal: &velesdb_core::Error,
-) -> axum::response::Response {
-    (status, Json(actionable_search_error(refusal))).into_response()
 }
 
 /// Search mode classification used by [`execute_search_request`] to
@@ -487,7 +441,7 @@ pub(crate) fn execute_search_request(
             Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
                 "scope narrowing is not supported for sparse-only search".to_string(),
             ))),
-            Err(refusal) => Err(read_refused(StatusCode::BAD_REQUEST, &refusal)),
+            Err(refusal) => Err(read_refused(&refusal)),
         },
     }
 }
@@ -533,186 +487,8 @@ fn execute_hybrid_sparse(
         Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
             "scope narrowing is not supported for hybrid dense+sparse search".to_string(),
         ))),
-        Err(refusal) => Err(read_refused(StatusCode::BAD_REQUEST, &refusal)),
+        Err(refusal) => Err(read_refused(&refusal)),
     }
-}
-
-/// Record empty-results diagnostic and notify the query timing subsystem.
-fn record_search_metrics(state: &AppState, name: &str, start: std::time::Instant, is_empty: bool) {
-    if is_empty {
-        state.onboarding_metrics.record_empty_search_results();
-    }
-    let elapsed = start.elapsed();
-    let duration_us = elapsed.as_micros();
-    #[allow(clippy::cast_possible_truncation, deprecated)]
-    // Reason: value is clamped to u64::MAX above, so the truncation is lossless.
-    // `notify_query` is deprecated for callers that route through the VelesQL DML
-    // path; the REST search pipeline does not, so core never fires `on_query` for
-    // it and this shim is the sole, non-double-counting telemetry source.
-    state
-        .db
-        .notify_query(name, duration_us.min(u128::from(u64::MAX)) as u64);
-    // Record into Prometheus histogram (seconds).
-    state
-        .query_duration_histogram
-        .observe(elapsed.as_secs_f64());
-}
-
-/// Core search result handler: records metrics, delegates success to `on_ok`,
-/// returns actionable error response on failure.
-fn finish_search_core(
-    state: &AppState,
-    name: &str,
-    start: std::time::Instant,
-    error_status: StatusCode,
-    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
-    on_ok: impl FnOnce(Vec<velesdb_core::SearchResult>) -> axum::response::Response,
-) -> axum::response::Response {
-    match search_result {
-        Ok(results) => {
-            record_search_metrics(state, name, start, results.is_empty());
-            on_ok(results)
-        }
-        Err(e) => {
-            state.operational_metrics.inc_errors();
-            (error_status, Json(actionable_search_error(&e))).into_response()
-        }
-    }
-}
-
-/// Shared result-handling for all search modes.
-pub(crate) fn finish_search(
-    state: &AppState,
-    name: &str,
-    start: std::time::Instant,
-    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
-) -> axum::response::Response {
-    finish_search_core(
-        state,
-        name,
-        start,
-        StatusCode::BAD_REQUEST,
-        search_result,
-        |results| Json(build_search_response(results)).into_response(),
-    )
-}
-
-/// Maps search results to IDs+scores response with timing metrics.
-pub(crate) fn finish_search_ids(
-    state: &AppState,
-    name: &str,
-    start: std::time::Instant,
-    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
-) -> axum::response::Response {
-    finish_search_core(
-        state,
-        name,
-        start,
-        StatusCode::BAD_REQUEST,
-        search_result,
-        |results| {
-            let response = SearchIdsResponse {
-                results: results
-                    .into_iter()
-                    .map(|r| IdScoreResult {
-                        id: r.point.id,
-                        score: r.score,
-                    })
-                    .collect(),
-            };
-            Json(response).into_response()
-        },
-    )
-}
-
-/// Record circuit-breaker outcome based on a search result: a success, or a
-/// failure counted only when the error says the engine is unhealthy
-/// (`CircuitBreaker::record_error`) — a caller's error never opens the breaker.
-pub(crate) fn record_circuit_breaker<T>(
-    collection: &VectorCollection,
-    result: &velesdb_core::Result<T>,
-) {
-    match result {
-        Ok(_) => collection.guard_rails().circuit_breaker.record_success(),
-        Err(e) => collection.guard_rails().circuit_breaker.record_error(e),
-    }
-}
-
-/// Handles `Ok`/`Err` from a core search call: records circuit-breaker
-/// outcome and delegates to [`finish_search`] for metrics + response.
-pub(crate) fn finish_search_with_cb(
-    state: &AppState,
-    name: &str,
-    start: std::time::Instant,
-    collection: &VectorCollection,
-    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
-) -> axum::response::Response {
-    record_circuit_breaker(collection, &search_result);
-    finish_search(state, name, start, search_result)
-}
-
-/// Handles `Ok`/`Err` from a core search call: records circuit-breaker
-/// outcome and delegates to [`finish_search_ids`] for metrics + response.
-pub(crate) fn finish_search_ids_with_cb(
-    state: &AppState,
-    name: &str,
-    start: std::time::Instant,
-    collection: &VectorCollection,
-    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
-) -> axum::response::Response {
-    record_circuit_breaker(collection, &search_result);
-    finish_search_ids(state, name, start, search_result)
-}
-
-/// Variant of [`finish_search_with_cb`] that uses a custom error status code
-/// instead of the default 400 used by [`finish_search`].
-pub(crate) fn finish_search_with_status(
-    state: &AppState,
-    name: &str,
-    start: std::time::Instant,
-    collection: &VectorCollection,
-    error_status: StatusCode,
-    search_result: velesdb_core::Result<Vec<velesdb_core::SearchResult>>,
-) -> axum::response::Response {
-    record_circuit_breaker(collection, &search_result);
-    finish_search_core(state, name, start, error_status, search_result, |results| {
-        Json(build_search_response(results)).into_response()
-    })
-}
-
-/// Handles a search that ran past the request's own `timeout_ms` budget:
-/// records it with the circuit breaker as what it is — the client's timeout
-/// ([`TimeoutBudget::Client`](velesdb_core::TimeoutBudget::Client)), which
-/// `record_error` does not count — and builds the 408 Request Timeout
-/// response, naming the collection and the budget so that clients can log
-/// actionable diagnostics.
-pub(crate) fn client_timeout_response(
-    collection: &VectorCollection,
-    collection_name: &str,
-    timeout_ms: u64,
-) -> axum::response::Response {
-    let message = format!(
-        "Search on collection '{collection_name}' exceeded the \
-         requested timeout of {timeout_ms}ms. The server returned \
-         early; the in-flight query may continue in the background \
-         until completion.",
-    );
-    let timeout = velesdb_core::Error::GuardRail {
-        kind: velesdb_core::GuardRailKind::Timeout(velesdb_core::TimeoutBudget::Client),
-        message: message.clone(),
-    };
-    collection
-        .guard_rails()
-        .circuit_breaker
-        .record_error(&timeout);
-    (
-        crate::handlers::helpers::http_status_for_error(&timeout),
-        Json(ErrorResponse {
-            error: message,
-            code: Some(timeout.code().to_string()),
-        }),
-    )
-        .into_response()
 }
 
 // Async worker wrappers (TimeoutElapsed, run_search_with_optional_timeout,
@@ -721,7 +497,3 @@ pub(crate) fn client_timeout_response(
 #[cfg(test)]
 #[path = "parse_fusion_strategy_tests.rs"]
 mod parse_fusion_strategy_tests;
-
-#[cfg(test)]
-#[path = "timeout_response_tests.rs"]
-mod timeout_response_tests;

@@ -210,9 +210,12 @@ Current codes:
 
 A statement that fails during execution answers `422` when the failure is
 the client's (`Error::is_caller_error`: a query error, an unsupported shape,
-a guard-rail ceiling the query crossed, …) and the engine's own status
+a guard-rail ceiling the query crossed, a `WITH (timeout_ms = N)` budget
+tighter than the server's limit running out, …) and the engine's own status
 otherwise — `500` for a storage, I/O or internal fault, `503` for a timeout
-under the server's limit — keeping the `VELESQL_*` code.
+under the server's limit, the memory budget, an open circuit breaker or a
+locked database — keeping the `VELESQL_*` code. `WITH (timeout_ms = N)` can
+shorten the server's limit, never lengthen it, and `0` keeps it.
 
 `/collections/{name}/match` no longer emits the bespoke `*_ERROR`
 strings (`COLLECTION_NOT_FOUND` / `PARSE_ERROR` / `EXECUTION_ERROR` / …).

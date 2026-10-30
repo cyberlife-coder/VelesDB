@@ -25,8 +25,6 @@ mod array_contains;
 mod bm25_match_conformance;
 #[path = "bdd/bugfixes.rs"]
 mod bugfixes;
-#[path = "bdd/circuit_breaker_contract.rs"]
-mod circuit_breaker_contract;
 #[path = "bdd/collection_type_migration.rs"]
 mod collection_type_migration;
 #[path = "bdd/contains_text_filter.rs"]

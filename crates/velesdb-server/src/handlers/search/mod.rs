@@ -2,6 +2,7 @@
 
 pub(crate) mod batch;
 pub(crate) mod multi;
+mod outcome;
 mod pipeline;
 mod workers;
 
@@ -24,11 +25,12 @@ use crate::types::{
 use crate::AppState;
 
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
+use outcome::{
+    finish_search_ids_with_cb, finish_search_with_cb, read_refused, search_timeout_response,
+};
 use pipeline::{
-    client_timeout_response, execute_dense_search_ids, execute_search_request,
-    finish_search_ids_with_cb, finish_search_with_cb, finish_search_with_status,
-    ids_fast_path_eligible, parse_mode_or_400, parse_optional_filter, read_refused,
-    validate_ef_search_or_400, validate_query_dimension,
+    execute_dense_search_ids, execute_search_request, ids_fast_path_eligible, parse_mode_or_400,
+    parse_optional_filter, validate_ef_search_or_400, validate_query_dimension,
 };
 use workers::{run_blocking_search, run_search_with_optional_timeout};
 
@@ -105,6 +107,10 @@ fn search_request_pre_check(
     request_body = SearchRequest,
     responses(
         (status = 200, description = "Search results", body = SearchResponse),
+        (status = 408, description = "The request's own timeout_ms ran out", body = crate::types::ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
         (
@@ -160,7 +166,7 @@ pub async fn search(
         }
         Err(workers::TimeoutElapsed) => {
             state.operational_metrics.inc_errors();
-            return client_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
+            return search_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
         }
     };
 
@@ -202,6 +208,10 @@ fn execute_search_ids_owned(
     request_body = TextSearchRequest,
     responses(
         (status = 200, description = "Text search results", body = SearchResponse),
+        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     )
@@ -251,7 +261,7 @@ pub async fn text_search(
         state_for_work
             .db
             .gated_search_outcome(&name_for_work, None, None, read)
-            .map_err(|refusal| read_refused(StatusCode::INTERNAL_SERVER_ERROR, &refusal))
+            .map_err(|refusal| read_refused(&refusal))
     })
     .await;
 
@@ -263,14 +273,7 @@ pub async fn text_search(
         }
     };
 
-    finish_search_with_status(
-        &state,
-        &name,
-        start,
-        &collection,
-        StatusCode::INTERNAL_SERVER_ERROR,
-        search_result,
-    )
+    finish_search_with_cb(&state, &name, start, &collection, search_result)
 }
 
 /// Hybrid search combining vector similarity and BM25 text search.
@@ -284,6 +287,9 @@ pub async fn text_search(
     request_body = HybridSearchRequest,
     responses(
         (status = 200, description = "Hybrid search results", body = SearchResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
@@ -344,7 +350,7 @@ pub async fn hybrid_search(
         state_for_work
             .db
             .gated_search_outcome(&name_for_work, None, None, read)
-            .map_err(|refusal| read_refused(StatusCode::BAD_REQUEST, &refusal))
+            .map_err(|refusal| read_refused(&refusal))
     })
     .await;
 
@@ -375,6 +381,10 @@ pub async fn hybrid_search(
     request_body = SearchRequest,
     responses(
         (status = 200, description = "IDs-only search results", body = SearchIdsResponse),
+        (status = 408, description = "The request's own timeout_ms ran out", body = crate::types::ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
         (
@@ -428,7 +438,7 @@ pub async fn search_ids(
         }
         Err(workers::TimeoutElapsed) => {
             state.operational_metrics.inc_errors();
-            return client_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
+            return search_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
         }
     };
 

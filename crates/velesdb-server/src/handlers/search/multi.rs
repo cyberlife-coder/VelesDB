@@ -11,10 +11,10 @@ use std::sync::Arc;
 use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchIdsResponse, SearchResponse};
 use crate::AppState;
 
-use super::pipeline::{
-    finish_search_ids_with_cb, finish_search_with_cb, id_score_results, parse_filter_or_400,
-    validate_query_dimension,
+use super::outcome::{
+    finish_search_ids_with_cb, finish_search_with_cb, read_refused, search_error_response,
 };
+use super::pipeline::{id_score_results, parse_filter_or_400, validate_query_dimension};
 use super::workers::run_blocking_search;
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
@@ -137,6 +137,9 @@ fn prepare_multi_query(
     request_body = MultiQuerySearchRequest,
     responses(
         (status = 200, description = "Multi-query search results", body = SearchResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
@@ -182,16 +185,15 @@ pub async fn multi_query_search(
         None,
     ) {
         Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
+        Ok(Some(_)) => {
             state.operational_metrics.inc_errors();
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Read denied by governance policy".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
+            return search_error_response(&velesdb_core::Error::Config(
+                "scope narrowing is not supported for multi-query search".to_string(),
+            ));
+        }
+        Err(refusal) => {
+            state.operational_metrics.inc_errors();
+            return read_refused(&refusal);
         }
     }
 
@@ -238,6 +240,9 @@ pub async fn multi_query_search(
     request_body = MultiQuerySearchRequest,
     responses(
         (status = 200, description = "Multi-query ids-only results", body = SearchIdsResponse),
+        (status = 429, description = "The client's rate limit", body = ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = ErrorResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
@@ -279,16 +284,15 @@ pub async fn multi_query_search_ids(
         None,
     ) {
         Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
+        Ok(Some(_)) => {
             state.operational_metrics.inc_errors();
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Read denied by governance policy".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
+            return search_error_response(&velesdb_core::Error::Config(
+                "scope narrowing is not supported for multi-query search".to_string(),
+            ));
+        }
+        Err(refusal) => {
+            state.operational_metrics.inc_errors();
+            return read_refused(&refusal);
         }
     }
 

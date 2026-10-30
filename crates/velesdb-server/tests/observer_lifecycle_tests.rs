@@ -356,6 +356,73 @@ async fn read_gate_denials_never_open_the_circuit_breaker() {
     }
 }
 
+/// A denied read answers the denial error's own status and code on every
+/// search endpoint — dense, ids, text, hybrid, batch and multi-query alike —
+/// where it used to answer `400`, `500` or a code-less `403` depending on the
+/// endpoint. Here the policy denies with `VELES-013`, an engine-class error,
+/// so every endpoint answers `500` with that code.
+#[tokio::test]
+async fn read_gate_denials_answer_the_denial_errors_status_everywhere() {
+    let dir = TempDir::new().expect("test: dir");
+    let observer = Arc::new(SwitchableDenyObserver::default());
+    let app =
+        create_test_app_with_observer(&dir, Arc::clone(&observer) as Arc<dyn DatabaseObserver>);
+    let status = post(
+        &app,
+        "/collections",
+        json!({"name": COLLECTION, "dimension": DIM, "metric": "cosine"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    observer.deny.store(true, Ordering::SeqCst);
+
+    let reads = [
+        ("search", json!({"vector": QUERY, "top_k": 1})),
+        ("search/ids", json!({"vector": QUERY, "top_k": 1})),
+        ("search/text", json!({"query": "hello", "top_k": 1})),
+        (
+            "search/hybrid",
+            json!({"vector": QUERY, "query": "hello", "top_k": 1, "vector_weight": 0.5}),
+        ),
+        (
+            "search/batch",
+            json!({"searches": [{"vector": QUERY, "top_k": 1}]}),
+        ),
+        (
+            "search/multi",
+            json!({"vectors": [QUERY, QUERY], "top_k": 1}),
+        ),
+        (
+            "search/multi/ids",
+            json!({"vectors": [QUERY, QUERY], "top_k": 1}),
+        ),
+    ];
+    for (path, body) in &reads {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/collections/{COLLECTION}/{path}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("test: build POST request"),
+            )
+            .await
+            .expect("test: POST request");
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{path}"
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("test: read body");
+        let json: Value = serde_json::from_slice(&bytes).expect("test: JSON body");
+        assert_eq!(json["code"], "VELES-013", "{path}: {json}");
+    }
+}
+
 async fn put(app: &axum::Router, uri: &str, body: Value) -> StatusCode {
     app.clone()
         .oneshot(

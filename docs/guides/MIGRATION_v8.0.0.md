@@ -106,20 +106,44 @@ requests.
 
 ### REST statuses
 
-| Failure | 7.1.0 | 8.0.0 |
-|---|---|---|
-| A depth, cardinality or capacity ceiling (`max_collections`, `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`, `max_perfect_mode_vectors`), on routes answering with the canonical mapping (`/collections/{name}/match`, collection and point routes) | `503` | `400` |
-| The rate limit, on `/collections/{name}/match` | `503` | `429` |
-| A storage, I/O or internal fault in a statement on `/query`, `/aggregate` or `/query/explain` | `422` | `500` |
-| A timeout under the server's `timeout_ms` on `/query`, `/aggregate` or `/query/explain` | `422` | `503` |
+Every REST error takes its status from one mapping: `4xx` for the
+client's errors, `5xx` for the engine's.
 
-Every body keeps its code (`VELES-027`, or the endpoint's `VELESQL_*`).
-Retry only a `5xx`: a `4xx` is refused the same way until the request
+| Failure | Where | 7.1.0 | 8.0.0 |
+|---|---|---|---|
+| A depth, cardinality or capacity ceiling (`max_collections`, `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`, `max_perfect_mode_vectors`) | `/collections/{name}/match`, collection, point and graph routes | `503` | `400` |
+| The rate limit | `/collections/{name}/match` | `503` | `429` |
+| A missing collection, an engine fault, an open breaker or a guard rail the engine could not carry | `/search`, `/search/ids`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids` | `400` | `404`, `500`, `503` |
+| The client's own error | `/search/text` | `500` | `400` (`404` for a missing collection) |
+| A read the access gate denied | `/search`, `/search/ids`, `/search/hybrid` | `400` | the denial error's status |
+| A read the access gate denied | `/search/text` | `500` | the denial error's status |
+| A read the access gate denied | `/search/batch`, `/search/multi`, `/search/multi/ids` | `403`, no code | the denial error's status and code |
+| A scope narrowing the endpoint cannot apply | `/search/batch`, `/search/multi`, `/search/multi/ids` | `403` | `400` `VELES-009` |
+| A search's `timeout_ms` at or above the server's `timeout_ms`, run out | `/search`, `/search/ids` | `408` | `503` |
+| A storage, I/O or internal fault | `/query`, `/aggregate`, `/query/explain` | `422` | `500` |
+| A timeout under the server's limit, the memory budget, an open breaker, a locked database | `/query`, `/aggregate`, `/query/explain` | `422` | `503` |
+
+Unchanged: an open breaker, the memory budget, a timeout under the server's
+limit and a locked database stay `503` on the routes that already used the
+mapping; a search's `timeout_ms` strictly tighter than the server's limit
+stays `408`; a client's own failure on `/query`, `/aggregate` and
+`/query/explain` stays `422`, its `WITH (timeout_ms)` running out included.
+Every body keeps its code (`VELES-NNN`, or the endpoint's `VELESQL_*`).
+
+**Retry** a `5xx`; a `429` after a backoff; a `408` with a larger budget or a
+simpler query. Any other `4xx` is refused the same way until the request
 changes.
 
 The circuit breaker counts only the engine's failures. A client's own
 error — a `4xx` above, its own `timeout_ms` or `WITH (timeout_ms = N)`, a read
 the access gate denied — no longer opens it for every caller.
+
+### `WITH (timeout_ms = N)` cannot lengthen the server's limit
+
+The budget is the tighter of `N` and the server's `timeout_ms`, and `0`
+keeps the server's limit, where 7.1.0 let `N` replace the limit — longer, or
+`0` to disable it. **Fix:** a query that needs longer than the server's
+limit needs the limit raised (`PUT /guardrails`, `Database::update_guardrails`).
 
 ## 3. Rust API
 
@@ -171,8 +195,9 @@ the access gate denied — no longer opens it for every caller.
 
 `velesdb_core::MAX_JSON_NESTING` (127) and `MAX_VALUE_DEPTH` (124), also
 under `validation`. `GuardRailKind`, `TimeoutBudget`, `Error::is_caller_error`,
-`CircuitBreaker::record_error`, `QueryValidator::validate_match_clause` and
-`Database::gated_search_outcome`.
+`CircuitBreaker::record_error`, `QueryValidator::validate_match_clause`,
+`Database::gated_search_outcome`, `QueryLimits::client_timeout_ms` and
+`QueryLimits::timeout_budget`.
 
 ## 4. Python and the integrations
 

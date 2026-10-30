@@ -51,6 +51,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VelesqlErrorResponse"
+        "500":
+          description: An engine fault during execution (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelesqlErrorResponse"
+        "503":
+          description: The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelesqlErrorResponse"
   /collections:
     get:
       tags:
@@ -1101,6 +1113,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "422":
           $ref: "#/components/responses/MalformedBody"
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Internal server error
           content:
@@ -1108,7 +1126,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
-          description: A guard rail stopped the query
+          description: The database is locked, the circuit breaker is open, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the query
           content:
             application/json:
               schema:
@@ -1615,12 +1633,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: The request's own timeout_ms ran out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "422":
           description: A field of the wrong type, such as a negative or non-integer ef_search
           content:
             text/plain:
               schema:
                 type: string
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The circuit breaker is open, or a guard rail the engine could not carry stopped the search
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/search/batch":
     post:
       tags:
@@ -1665,6 +1707,24 @@ paths:
             text/plain:
               schema:
                 type: string
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The circuit breaker is open, or a guard rail the engine could not carry stopped the search
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/search/hybrid":
     post:
       tags:
@@ -1705,6 +1765,24 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "422":
           $ref: "#/components/responses/MalformedBody"
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The circuit breaker is open, or a guard rail the engine could not carry stopped the search
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/search/ids":
     post:
       tags:
@@ -1744,12 +1822,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: The request's own timeout_ms ran out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "422":
           description: A field of the wrong type, such as a negative or non-integer ef_search
           content:
             text/plain:
               schema:
                 type: string
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The circuit breaker is open, or a guard rail the engine could not carry stopped the search
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/search/multi":
     post:
       tags:
@@ -1776,6 +1878,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
           content:
@@ -1784,8 +1892,20 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "422":
           $ref: "#/components/responses/MalformedBody"
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The circuit breaker is open, or a guard rail the engine could not carry stopped the search
           content:
             application/json:
               schema:
@@ -1831,6 +1951,24 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "422":
           $ref: "#/components/responses/MalformedBody"
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The circuit breaker is open, or a guard rail the engine could not carry stopped the search
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/search/text":
     post:
       tags:
@@ -1857,6 +1995,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
           content:
@@ -1865,6 +2009,24 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "422":
           $ref: "#/components/responses/MalformedBody"
+        "429":
+          description: The client's rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The circuit breaker is open, or a guard rail the engine could not carry stopped the search
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/stats":
     get:
       tags:
@@ -2125,6 +2287,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VelesqlErrorResponse"
+        "500":
+          description: An engine fault during execution (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelesqlErrorResponse"
+        "503":
+          description: The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelesqlErrorResponse"
   /query/explain:
     post:
       tags:
@@ -2159,6 +2333,18 @@ paths:
                 $ref: "#/components/schemas/VelesqlErrorResponse"
         "422":
           description: Query validation/execution error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelesqlErrorResponse"
+        "500":
+          description: An engine fault during execution (storage, I/O, internal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VelesqlErrorResponse"
+        "503":
+          description: The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement
           content:
             application/json:
               schema:
