@@ -27,7 +27,7 @@ import time
 
 try:
     # velesdb-core's canonical string -> u64 derivation, through the binding
-    # (velesdb >= 7.2.0). This package keeps no copy of it.
+    # (velesdb >= 8.0.0). This package keeps no copy of it.
     from velesdb import hash_id as _core_hash_id
 except ImportError:
     _core_hash_id = None
@@ -73,7 +73,7 @@ def stable_hash_id(value: str, *, algorithm: str = "sha256") -> int:
               must agree with the ID core or ``velesdb-migrate`` would derive
               for the same string — e.g. correlating a document ingested via
               LangChain/LlamaIndex/Haystack with the same document migrated
-              via ``velesdb-migrate``. Needs velesdb >= 7.2.0.
+              via ``velesdb-migrate``. Needs velesdb >= 8.0.0.
 
     Returns:
         A deterministic non-negative integer ID; see `algorithm` above for
@@ -92,7 +92,7 @@ def stable_hash_id(value: str, *, algorithm: str = "sha256") -> int:
         if _core_hash_id is None:
             raise ImportError(
                 "stable_hash_id(algorithm='fnv1a') is velesdb.hash_id, which needs "
-                "velesdb >= 7.2.0; the installed velesdb does not provide it"
+                "velesdb >= 8.0.0; the installed velesdb does not provide it"
             )
         return _core_hash_id(value)
     raise ValueError(f"Unknown stable_hash_id algorithm: {algorithm!r} (expected 'sha256' or 'fnv1a')")

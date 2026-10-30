@@ -3,7 +3,7 @@ import pytest
 from velesdb_common import ids
 from velesdb_common.ids import make_initial_id_counter, stable_hash_id
 
-# `algorithm="fnv1a"` is `velesdb.hash_id` (velesdb >= 7.2.0): its tests need
+# `algorithm="fnv1a"` is `velesdb.hash_id` (velesdb >= 8.0.0): its tests need
 # a binding that provides it.
 requires_core_hash_id = pytest.mark.skipif(
     ids._core_hash_id is None, reason="installed velesdb predates velesdb.hash_id"
@@ -118,7 +118,7 @@ def test_stable_hash_id_fnv1a_without_the_binding_says_what_is_missing(monkeypat
     # No local FNV-1a copy to fall back to: an older wheel is named, never
     # silently answered with a different derivation.
     monkeypatch.setattr(ids, "_core_hash_id", None)
-    with pytest.raises(ImportError, match="velesdb >= 7.2.0"):
+    with pytest.raises(ImportError, match="velesdb >= 8.0.0"):
         stable_hash_id("hello", algorithm="fnv1a")
     # The SHA-256 default needs no binding.
     assert stable_hash_id("hello") > 0

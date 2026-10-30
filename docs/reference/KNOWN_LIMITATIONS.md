@@ -337,7 +337,7 @@ Callers who need a Python-derived ID to agree with core/`velesdb-migrate`'s
 FNV-1a output for the same string can opt in with
 `stable_hash_id(value, algorithm="fnv1a")` (added in #1542;
 `velesdb_common.ids` module docstring has the full contract). Since the
-binding exposes `velesdb.hash_id` (velesdb 7.2.0), that path *is*
+binding exposes `velesdb.hash_id` (velesdb 8.0.0), that path *is*
 `velesdb_core::hash_id`, called through the binding: the MIT package no
 longer carries its own FNV-1a, and raises `ImportError` with an older wheel
 rather than derive the id another way. This is
