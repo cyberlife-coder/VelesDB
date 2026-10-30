@@ -59,6 +59,7 @@ mod graph_persistence;
 mod graph_store;
 mod graph_worker_hints;
 mod idb_helpers;
+mod js_value;
 /// WASM binding for `velesdb-memory`'s agent-memory wedge — see
 /// [`memory_service::WasmMemoryService`], exported to JS as `MemoryService`.
 mod memory_service;

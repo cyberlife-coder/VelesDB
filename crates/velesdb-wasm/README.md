@@ -146,8 +146,10 @@ Signatures and the fusion parameters are in
 One rule to internalize before writing any code: **ids go in as `BigInt`
 (`1n`) and come back from `search()` as plain numbers**. The input side is a
 `wasm-bindgen` `u64` parameter; the output side goes through
-`serde-wasm-bindgen`, which emits `u64` as a JS number by default. Keep ids
-below `Number.MAX_SAFE_INTEGER`.
+`serde-wasm-bindgen`, whose JSON-compatible serializer emits `u64` as a JS
+number. Keep ids below `Number.MAX_SAFE_INTEGER`. Records come back as plain
+objects (`hit.id`, `hit.payload.title`), with `null` for an absent value;
+before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
 
 ## Known limits
 

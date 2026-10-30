@@ -24,5 +24,5 @@ pub fn get_by_id(store: &VectorStore, id: u64) -> Result<JsValue, JsValue> {
         "payload": store.payloads[idx]
     });
 
-    serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    crate::js_value::to_js_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }

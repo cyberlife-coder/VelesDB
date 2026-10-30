@@ -248,6 +248,9 @@ impl VectorStore {
     }
 
     /// Text search on payload fields (substring matching).
+    ///
+    /// Returns `[{id, score, payload}, ...]` in insertion order, truncated to
+    /// `k`; every match scores `1.0` (a substring match has no ranking).
     #[wasm_bindgen]
     pub fn text_search(
         &self,
@@ -308,7 +311,7 @@ impl VectorStore {
         let results = self
             .search_sparse_scored(query_indices, query_values, k)
             .map_err(|e| JsValue::from_str(&e))?;
-        serde_wasm_bindgen::to_value(&results)
+        crate::js_value::to_js_value(&results)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
     }
 
@@ -355,7 +358,7 @@ impl VectorStore {
             })
             .collect();
 
-        serde_wasm_bindgen::to_value(&hybrid_results)
+        crate::js_value::to_js_value(&hybrid_results)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
     }
 
@@ -404,7 +407,7 @@ impl VectorStore {
         k: usize,
     ) -> Result<JsValue, JsValue> {
         if num_vectors == 0 {
-            return serde_wasm_bindgen::to_value::<Vec<Vec<(u64, f32)>>>(&vec![])
+            return crate::js_value::to_js_value::<Vec<Vec<(u64, f32)>>>(&vec![])
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         }
         store_search::validate_multi_vector_len(vectors.len(), num_vectors, self.dimension)

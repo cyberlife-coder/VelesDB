@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`velesdb-wasm` returns plain objects, not ES2015 `Map`s, so the
+  TypeScript SDK's WASM backend can read its results (#2332).** Every value
+  the binding handed to JavaScript went through `serde-wasm-bindgen`'s
+  default serializer, which turns a map into a `Map`: a record from
+  `hybrid_search`, `text_search`, `search_with_filter` or `get`, the
+  `bindings` of `query`, and the `properties` of `GraphNode.to_json` /
+  `GraphEdge.to_json`. On a `Map`, `record.id` is `undefined` and
+  `JSON.stringify` yields `{}`, so the SDK's `textSearch`, `hybridSearch`,
+  filtered `search` and `get` threw (`Cannot read properties of undefined`)
+  on every call that matched a row, with velesdb-wasm 6.x and 7.x. The crate
+  now has one serializer, `Serializer::json_compatible()`, and a test fails
+  on any call that bypasses it. What changes for a direct caller of the
+  binding: records are plain objects, and an absent value arrives as `null`
+  instead of `undefined` (a missing `payload`, `query`'s `graphScore` and
+  `columnData`). Ids are unchanged: still a JS `number`, still refused above
+  `Number.MAX_SAFE_INTEGER`. `text_search` records also gain the `score` the
+  [WASM API guide](docs/guides/WASM_API.md) documents, `1.0` for every
+  match, the text score `hybrid_search` gives one; without it the SDK's
+  `textSearch` returned `score: undefined`. Graphs saved to IndexedDB by
+  earlier versions still load: the deserializer reads both shapes. The SDK
+  gains a suite that runs its search family over a real velesdb-wasm build
+  instead of a fake store, run by the `wasm-check` CI job.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

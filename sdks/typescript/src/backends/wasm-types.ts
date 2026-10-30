@@ -53,11 +53,15 @@ export interface WasmFilteredResult {
   payload?: Record<string, unknown> | null;
 }
 
-/** Hybrid search result returned by VectorStore.hybrid_search(). */
+/**
+ * Record returned by VectorStore.hybrid_search() and text_search(): a plain
+ * object since velesdb-wasm 8.0.0 (#2332), `payload` null when the point has
+ * none.
+ */
 export interface WasmHybridResult {
   id: bigint | number;
   score: number;
-  payload?: Record<string, unknown>;
+  payload?: Record<string, unknown> | null;
 }
 
 /** Point returned by VectorStore.get(). */
