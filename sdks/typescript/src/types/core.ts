@@ -76,15 +76,15 @@ export interface DeferredIndexerOptions {
 /**
  * Async index builder configuration (`velesdb_core::collection::streaming::AsyncIndexBuilderConfig`).
  *
- * Enables the parallel segment-based `AsyncIndexBuilder` for bulk inserts
- * (Issue #488 -- Bulk Insert V2). Used when the collection is known to
- * receive large bulk loads where the extra segment coordination cost is
- * amortised over millions of inserts.
+ * Enables the `AsyncIndexBuilder` for bulk inserts (Issue #488 -- Bulk
+ * Insert V2): `upsert_bulk` defers linking its points into the HNSW graph
+ * until `mergeThreshold` of them are pending or a flush runs, and searches
+ * find them meanwhile.
  */
 export interface AsyncIndexBuilderOptions {
-  /** Buffered vector count that triggers a build (default: 10_000). */
+  /** Pending point count at which `upsert_bulk` links them (default: 10_000). */
   mergeThreshold?: number;
-  /** Number of segments for parallel construction (default: num_cpus). */
+  /** Reserved: core parses it and reads it nowhere; it changes nothing. */
   segmentCount?: number;
 }
 

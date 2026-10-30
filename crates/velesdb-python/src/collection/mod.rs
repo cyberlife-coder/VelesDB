@@ -70,8 +70,9 @@ fn deferred_from_dict(value: &Bound<'_, PyAny>) -> PyResult<DeferredIndexerConfi
 }
 
 /// Build an `AsyncIndexBuilderConfig` from a Python dict, overriding only the
-/// keys present on top of the struct defaults. `segment_count` accepts a
-/// Python `None` to fall back to the CPU count.
+/// keys present on top of the struct defaults. `segment_count` accepts an int
+/// or `None` and is stored as given: core reserves it and reads it nowhere —
+/// a flush links on core's dedicated graph pool whatever it holds.
 fn async_builder_from_dict(value: &Bound<'_, PyAny>) -> PyResult<AsyncIndexBuilderConfig> {
     let dict = value.cast::<PyDict>()?;
     let mut cfg = AsyncIndexBuilderConfig::default();

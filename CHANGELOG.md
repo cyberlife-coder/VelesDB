@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of them; the `bulk_insert_v2_benchmark` bench `search_with_10k_pending`
   measures it, with no recorded figure yet.
 
+### Documentation
+
+- **`segment_count` is documented as inert in Python, Mobile and TypeScript.**
+  Core reserves the async index builder's `segment_count` and reads it
+  nowhere: a flush links on core's dedicated graph pool. The Python binding
+  said `None` fell back to the CPU count, Mobile that flushes ran on the
+  global thread pool, and the TypeScript SDK that it set parallel segments
+  defaulting to the CPU count.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

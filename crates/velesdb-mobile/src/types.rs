@@ -568,15 +568,16 @@ impl From<MobileDeferredIndexerConfig>
     }
 }
 
-/// Async index builder configuration (parallel segment construction for
-/// deferred bulk loads).
+/// Async index builder configuration: `upsert_bulk` defers linking its points
+/// into the HNSW graph, and searches find them meanwhile.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct MobileAsyncIndexBuilderConfig {
-    /// Number of buffered points before a segment merge is triggered.
+    /// Number of pending points at which `upsert_bulk` links them into the
+    /// graph; a flush links whatever is pending.
     pub merge_threshold: u64,
-    /// Reserved — parsed but not yet wired (core issue #488 Task 4):
-    /// flushes parallelize on the global thread pool and this knob
-    /// changes nothing today.
+    /// Reserved — core parses it and reads it nowhere: a flush links on
+    /// core's dedicated graph pool (`graph_pool`), not the global thread
+    /// pool, and this knob changes nothing.
     pub segment_count: Option<u32>,
 }
 
