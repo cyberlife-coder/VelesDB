@@ -24,9 +24,15 @@ import logging
 
 from velesdb_common.ids import stable_hash_id
 
-from llamaindex_velesdb._common import open_database as _open_database
+from llamaindex_velesdb._common import open_database as _open_database, point_id
 
 logger = logging.getLogger(__name__)
+
+try:
+    from velesdb import EdgeExistsError as _EdgeExistsError
+except (ImportError, AttributeError):  # pragma: no cover — no binding, no graph store to raise it
+    class _EdgeExistsError(Exception):  # type: ignore[no-redef]
+        """Stand-in when ``velesdb`` is absent: nothing raises it then."""
 
 if TYPE_CHECKING:
     from llamaindex_velesdb.vectorstore import VelesDBVectorStore
@@ -269,7 +275,7 @@ class GraphLoader:
         """
         payload = {"label": label, **(metadata or {})}
         if self._native_graph is not None:
-            self._add_native_node(node_id, payload, vector)
+            self._add_native_node(node_id, label, payload, vector)
             return
 
         collection = self._get_collection(dimension=len(vector) if vector else None)
@@ -287,20 +293,24 @@ class GraphLoader:
             }])
 
     def _add_native_node(
-        self, node_id: int, payload: Dict[str, Any], vector: Optional[List[float]]
+        self,
+        node_id: int,
+        label: str,
+        payload: Dict[str, Any],
+        vector: Optional[List[float]],
     ) -> None:
         """Upsert a node into the native graph collection.
 
         Core refuses an edge whose source or target has no node in the same
         collection (``NodeNotFound``, issue #1470), so nodes go where their
         edges go: one graph collection, as the LangChain loader writes it.
-        ``_labels`` is what ``MATCH (n:LABEL)`` matches on.
+        ``_labels`` is what ``MATCH (n:LABEL)`` matches on; it is set from
+        ``label`` after the metadata, so a ``_labels`` key in the node's
+        metadata cannot replace it.
         """
         if not self._native_graph.has_embeddings:
             vector = None
-        self._native_graph.upsert_node(
-            node_id, {"_labels": [payload["label"]], **payload}, vector
-        )
+        self._native_graph.upsert_node(node_id, {**payload, "_labels": [label]}, vector)
 
     def add_edge(
         self,
@@ -444,7 +454,7 @@ class GraphLoader:
     def _graph_node_id(self, node_id: str, node_label: str) -> int:
         """The graph node id of the LlamaIndex node ``node_id`` (see ``load_from_nodes``)."""
         if self._native_graph is not None:
-            return stable_hash_id(node_id)
+            return point_id(node_id)
         return _generate_id(node_id, node_label)
 
     def _load_graph_nodes(
@@ -476,7 +486,7 @@ class GraphLoader:
             return graph_ids[target]
         if self._native_graph is None:
             return None
-        target_id = stable_hash_id(target)
+        target_id = point_id(target)
         return target_id if target_id in self._native_graph else None
 
     def _load_relations(self, loaded: List[Tuple[Any, int]]) -> Tuple[int, int]:
@@ -509,11 +519,15 @@ class GraphLoader:
         ``mirrored`` is the set of edge ids in the in-memory list ``get_edges``
         reads without a native graph; it keeps that list free of duplicates.
         Returns True when the graph holds the edge, False if writing it failed.
+        An ``EdgeExistsError`` (another writer added the id between the check
+        and the write) means the graph holds it.
         """
         store = self._native_graph if self._native_graph is not None else self._graph_store
         try:
             if store is not None and not store.has_edge(edge["id"]):
                 store.add_edge(edge)
+        except _EdgeExistsError:
+            pass
         except Exception as exc:
             logger.warning("Failed to write %s edge %s: %s", edge["label"], edge["id"], exc)
             return False

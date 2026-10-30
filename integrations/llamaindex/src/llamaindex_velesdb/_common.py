@@ -9,20 +9,31 @@ from typing import Any
 
 # Re-export shared helpers so existing intra-package imports keep working.
 from velesdb_common.ids import make_initial_id_counter  # noqa: F401
+from velesdb_common.ids import stable_hash_id
 from velesdb_common.graph import (  # noqa: F401
     build_graph_rest_payload,
     is_timeout_exception,
     open_native_graph,
-    parse_graph_traverse_response,
     parse_graph_traverse_results,
 )
 
 __all__ = [
     "make_initial_id_counter", "build_graph_rest_payload",
-    "is_timeout_exception", "open_native_graph", "parse_graph_traverse_response",
-    "parse_graph_traverse_results",
-    "open_database",
+    "is_timeout_exception", "open_native_graph", "parse_graph_traverse_results",
+    "open_database", "point_id",
 ]
+
+
+def point_id(node_id: str) -> int:
+    """The VelesDB point id a LlamaIndex node id is stored under.
+
+    The one derivation of this package: ``VelesDBVectorStore`` inserts, reads
+    and deletes a node under it, ``GraphLoader`` gives a native graph node
+    that id, and ``GraphRetriever`` expands a seed from it and fetches a
+    neighbour by it. Every node id is hashed, a numeric string such as
+    ``"1"`` included, so the three always agree.
+    """
+    return stable_hash_id(node_id)
 
 
 def open_database(path: str, config: Any = None) -> Any:

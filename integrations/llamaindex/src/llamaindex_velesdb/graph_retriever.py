@@ -32,12 +32,12 @@ Example:
 from typing import Any, List, Optional, Tuple
 import logging
 
-from velesdb_common.ids import stable_hash_id
 from llamaindex_velesdb._common import (
     build_graph_rest_payload,
     is_timeout_exception,
     open_native_graph,
     parse_graph_traverse_results,
+    point_id,
 )
 
 # Lazy VelesDBError resolution. `velesdb` is a runtime dependency for
@@ -404,69 +404,18 @@ class GraphRetriever(BaseRetriever):
                 logger.debug("Failed to fetch neighbour node %s: %s", neighbor_id, exc)
 
     def _extract_node_id(self, node: Any) -> Optional[int]:
-        """Extract numeric node ID from a LlamaIndex node.
+        """The graph id of a seed: the point id its node id is stored under.
 
-        ID convention (llamaindex): node IDs are **hash-based** via
-        ``_stable_hash_id(node.node_id)``. The extraction path in practice
-        is the ``_id_from_node_id`` fallback:
-
-          1. ``_id_from_metadata`` looks for ``id`` / ``doc_id`` /
-             ``node_id`` in ``node.metadata`` — in the default flow NONE
-             of these are present (``node_builder.py`` stores ``id`` at
-             the top level of the point dict, not in the payload; and
-             ``vectorstore._metadata_from_payload`` explicitly excludes
-             ``node_id`` from metadata).
-          2. ``_id_from_node_id`` reads ``node.node_id`` (the UUID string
-             assigned by LlamaIndex) and returns
-             ``stable_hash_id(node.node_id)``.
-
-        Callers adding graph edges MUST use the same ``_stable_hash_id``
-        of the original ``node_id`` as ``source`` / ``target``. This
-        differs from the langchain integration, which uses the internal
-        VelesDB point ID via ``metadata["_int_id"]`` — see
-        ``integrations/langchain/src/langchain_velesdb/graph_retriever.py``
-        ``_build_expanded_results``.
+        ``point_id`` is the derivation ``VelesDBVectorStore`` stores the node
+        under and ``GraphLoader`` gives its native graph node, so the seed
+        expands from the node the loader linked, whatever its metadata holds
+        and even when its node id is a numeric string. Edges added by hand
+        must use ``point_id(node.node_id)`` as ``source`` / ``target`` too.
+        LangChain reads the stored point id back from ``metadata["_int_id"]``
+        instead; both name the same point.
         """
-        try:
-            found, from_meta = self._id_from_metadata(node)
-            if found:
-                return from_meta
-            return self._id_from_node_id(node)
-        except (AttributeError, KeyError) as exc:
-            logger.debug("Failed to extract node id from node metadata: %s", exc)
-        return None
-
-    @staticmethod
-    def _id_from_metadata(node: Any) -> tuple:
-        """Try to extract an integer ID from node.metadata.
-
-        Returns (found: bool, value: Optional[int]) so callers can
-        distinguish 'no key matched' from 'key matched but unusable'.
-        """
-        if not hasattr(node, "metadata"):
-            return False, None
-        for key in ["id", "doc_id", "node_id"]:
-            if key in node.metadata:
-                val = node.metadata[key]
-                if isinstance(val, int):
-                    return True, val
-                if isinstance(val, str):
-                    try:
-                        return True, int(val)
-                    except ValueError:
-                        return True, None
-                return True, None
-        return False, None
-
-    @staticmethod
-    def _id_from_node_id(node: Any) -> Optional[int]:
-        """Try to extract an integer ID from node.node_id, falling back to hash."""
-        if not hasattr(node, "node_id"):
-            return None
-        try:
-            return int(node.node_id)
-        except (ValueError, TypeError):
-            return stable_hash_id(node.node_id)
+        node_id = getattr(node, "node_id", None)
+        return None if node_id is None else point_id(node_id)
 
     def _traverse_graph(self, source_id: int) -> List[Tuple[int, int]]:
         """Traverse graph from source node, dispatching to native or REST.
@@ -525,7 +474,7 @@ class GraphRetriever(BaseRetriever):
         """Fetch a node by its **internal integer ID** (already hashed).
 
         ``node_id`` is the hash-based int returned by
-        ``_extract_node_id`` / ``stable_hash_id(uuid)``. Delegates to
+        ``_extract_node_id`` / ``point_id(node_id)``. Delegates to
         :meth:`VelesDBVectorStore.get_nodes_by_int_ids`, which passes the
         ID straight to the underlying collection — using
         :meth:`~VelesDBVectorStore.get_nodes` instead would re-hash the

@@ -658,6 +658,57 @@ class TestLoadFromNodesExtractRelations:
 
         assert native_store.get_nodes(["chunk-a"])[0].get_content() == "chunk a"
 
+    def test_given_metadata_labels_when_added_natively_then_loader_label_wins(
+        self, native_store
+    ):
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        loader.add_node(node_id=1, label="PERSON", metadata={"_labels": ["SPOOFED"]})
+
+        assert loader._native_graph.get_node_payload(1)["_labels"] == ["PERSON"]
+
+    def test_given_edge_added_concurrently_when_extracted_then_counted_as_held(self):
+        """``has_edge`` said no, then another writer added it: the graph holds it."""
+        import velesdb
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(MagicMock())
+        native = MagicMock()
+        native.has_edge.return_value = False
+        native.add_edge.side_effect = velesdb.EdgeExistsError("Edge with ID 1 already exists")
+        loader._native_graph = native
+
+        counts = loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+
+        assert counts == {"nodes": 4, "edges": 6, "skipped_relations": 0}
+
+    def test_given_7_1_0_loader_points_when_cleanup_snippet_run_then_only_they_go(
+        self, native_store
+    ):
+        """The README's cleanup for the metadata-only points a 7.1.0 loader
+        wrote into the vector store's collection, run verbatim."""
+        from llama_index.core.schema import TextNode
+        from velesdb_common.ids import stable_hash_id
+
+        nodes = [TextNode(text="chunk a", id_="a", embedding=[1.0, 0.0, 0.0, 0.0])]
+        vector_store = native_store
+        vector_store.add(nodes)
+        collection = vector_store.client.get_collection(vector_store.collection_name)
+        orphan = stable_hash_id("DOCUMENT:a")  # what 7.1.0's load_from_nodes wrote
+        # A metadata-only point: get() cannot see it, but the collection counts it.
+        collection.upsert_metadata([{"id": orphan, "payload": {"label": "DOCUMENT"}}])
+        assert len(collection) == 2
+
+        # --- README snippet ---
+        node_label = "DOCUMENT"  # the node_label passed to load_from_nodes
+        collection = vector_store.client.get_collection(vector_store.collection_name)
+        collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])
+        # --- end ---
+
+        assert len(collection) == 1
+        assert vector_store.get_nodes(["a"])[0].get_content() == "chunk a"
+
     def test_given_edge_write_fails_when_extracted_then_edge_not_counted(self):
         """A failed write is logged and left out of the count, never raised."""
         from llamaindex_velesdb import GraphLoader
@@ -838,3 +889,24 @@ class TestGraphRetrieverRestDepth:
         assert [r.node.get_content() for r in results] == ["seed", "node 42", "node 43"]
         assert [r.node.metadata["graph_depth"] for r in results] == [0, 1, 2]
         assert [r.score for r in results] == [0.9, None, None]
+
+
+class TestGraphRetrieverNumericNodeIds:
+    """A numeric-string node id names the same point in store, loader and retriever."""
+
+    def test_given_numeric_node_ids_when_retrieved_then_neighbour_reached(
+        self, native_store
+    ):
+        from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
+
+        nodes = [
+            TextNode(text=f"{name} text", id_=str(i), embedding=vector)
+            for i, (name, vector) in enumerate(_RANKED.items(), start=1)
+        ]  # ids "1" (near) .. "4" (far)
+        nodes[0].relationships[NodeRelationship.NEXT] = RelatedNodeInfo(node_id="4")
+        retriever = _graph_retriever(native_store, nodes, seed_k=1, expand_k=2)
+
+        results = retriever.retrieve("query")
+
+        assert [r.node.node_id for r in results] == ["1", "4"]
+        assert [r.node.metadata["graph_depth"] for r in results] == [0, 1]

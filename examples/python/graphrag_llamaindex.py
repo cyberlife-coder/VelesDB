@@ -96,19 +96,20 @@ class VelesDBGraphRetriever:
             seed_id = seed.node.node_id
             try:
                 resp = requests.post(
-                    f"{self.server_url}/api/graph/traverse",
+                    f"{self.server_url}/collections/{self.collection}/graph/traverse",
                     json={
-                        "collection": self.collection,
-                        "start_node": seed_id,
+                        "source": seed_id,
                         "max_depth": self.max_depth,
                         "limit": self.expand_k,
                     },
                     timeout=5,
                 )
                 resp.raise_for_status()
-                neighbor_ids = resp.json().get("node_ids", [])
 
-                for nid in neighbor_ids:
+                # TraverseResponse: each hit has target_id (a u64 serialised
+                # as a string) and depth (hops from the seed).
+                for hit in resp.json().get("results", []):
+                    nid = hit["target_id"]
                     if nid not in seen_ids:
                         seen_ids.add(nid)
                         # Fetch the neighbor node by its u64 ID directly via
@@ -128,7 +129,7 @@ class VelesDBGraphRetriever:
                                 for k, v in payload.items()
                                 if k not in ("text", "_node_id")
                             }
-                            meta["graph_depth"] = 1
+                            meta["graph_depth"] = hit["depth"]
                             meta["retrieval_mode"] = "graph"
                             node = TextNode(
                                 text=text, metadata=meta, id_=original_node_id

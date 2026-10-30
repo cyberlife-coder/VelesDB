@@ -333,11 +333,24 @@ counts = loader.load_from_nodes(nodes, extract_relations=True)
   `stable_hash_id(f"{node_label}:{node.node_id}")`, because the point ID would
   overwrite the stored node, and only same-call targets are linked.
 
-> **Changed since 8.0.0:** native-mode graph node ids used to be
-> `stable_hash_id(f"{node_label}:{node.node_id}")`. No stored data depends on
-> them: in 8.0.0 the native mode never persisted anything (the
-> loader fell back to an in-memory graph store), so there is nothing to
-> migrate.
+> **Upgrading from 7.1.0:** with a graph collection, the 7.1.0 loader wrote
+> its nodes into the vector store's collection, as metadata-only points at
+> `stable_hash_id(f"{node_label}:{node.node_id}")` (or at the id given to
+> `add_node`). 8.0.0 writes them into the graph collection and no longer reads
+> those points; search and `get` never return them, but they stay stored and
+> counted. Delete them with the nodes you loaded and the `node_label` you
+> passed:
+>
+> ```python
+> from velesdb_common.ids import stable_hash_id
+>
+> node_label = "DOCUMENT"  # the node_label passed to load_from_nodes
+> collection = vector_store.client.get_collection(vector_store.collection_name)
+> collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])
+> ```
+>
+> Only do this for a store that used `graph_collection_name`: without one,
+> those points are still the loader's nodes.
 
 `GraphRetriever` finds seed nodes by vector search, then expands the context
 through the graph:

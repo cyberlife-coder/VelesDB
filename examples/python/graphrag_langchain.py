@@ -44,9 +44,11 @@ class GraphRetriever:
         seed_k: int = 2,
         expand_k: int = 5,
         max_depth: int = 2,
+        collection: str = "knowledge_base",
     ) -> None:
         self._vector_store = vector_store
         self._server_url = server_url.rstrip("/")
+        self._collection = collection
         self._seed_k = seed_k
         self._expand_k = expand_k
         self._max_depth = max_depth
@@ -63,17 +65,19 @@ class GraphRetriever:
                 continue
             try:
                 response = httpx.post(
-                    f"{self._server_url}/api/graph/traverse",
+                    f"{self._server_url}/collections/{self._collection}/graph/traverse",
                     json={
-                        "start_node": int(doc_id),
+                        "source": int(doc_id),
                         "max_depth": self._max_depth,
                         "limit": self._expand_k,
                     },
                     timeout=5.0,
                 )
                 response.raise_for_status()
-                neighbor_ids = response.json().get("node_ids", [])
-                for neighbor_id in neighbor_ids:
+                # TraverseResponse: each hit has target_id (a u64 serialised
+                # as a string) and depth (hops from the seed).
+                for hit in response.json().get("results", []):
+                    neighbor_id = hit["target_id"]
                     # Fetch the neighbor document by its u64 ID directly,
                     # not via similarity search on the string representation
                     # of the integer (which would match arbitrary text instead
@@ -95,7 +99,7 @@ class GraphRetriever:
                                 if k not in ("text", "_original_id")
                             }
                             meta["id"] = original_id
-                            meta["graph_depth"] = 1
+                            meta["graph_depth"] = hit["depth"]
                             expanded.append(
                                 Document(page_content=text, metadata=meta)
                             )
