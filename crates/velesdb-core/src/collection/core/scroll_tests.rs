@@ -98,3 +98,21 @@ fn test_scroll_batch_partial_last_batch() {
     assert!(b3.points.is_empty());
     assert!(b3.next_cursor.is_none());
 }
+
+/// A `batch_size` larger than any collection returns the points there are.
+/// The batch used to be reserved at `batch_size` up front, so `usize::MAX`
+/// overflowed the capacity and aborted the process.
+#[test]
+fn test_scroll_batch_huge_size_returns_every_point() {
+    let (_dir, col) = temp_collection(2);
+    col.upsert(vec![
+        Point::new(1, vec![1.0, 0.0], None),
+        Point::new(2, vec![0.0, 1.0], None),
+    ])
+    .expect("upsert");
+
+    let batch = col.scroll_batch(None, usize::MAX, None).expect("scroll");
+
+    let ids: Vec<u64> = batch.points.iter().map(|p| p.id).collect();
+    assert_eq!(ids, vec![1, 2]);
+}

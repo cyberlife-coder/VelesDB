@@ -418,7 +418,9 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         Self {
             distance,
             vectors: RwLock::new(vectors),
-            layers: RwLock::new(vec![Layer::new_base(max_elements)]),
+            layers: RwLock::new(vec![Layer::new_base(
+                crate::index::hnsw::params::presized_elements(max_elements),
+            )]),
             entry_point: AtomicUsize::new(NO_ENTRY_POINT),
             max_layer: AtomicUsize::new(0),
             promotion: parking_lot::Mutex::new(()),

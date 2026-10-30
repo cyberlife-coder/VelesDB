@@ -15,7 +15,9 @@ use crate::types::{EnableStreamingRequest, ErrorResponse, StreamInsertRequest};
 use crate::AppState;
 use velesdb_core::{BackpressureError, Point, VectorCollection};
 
-use crate::handlers::helpers::{error_response, get_vector_collection_or_404};
+use crate::handlers::helpers::{
+    auto_core_error_response, error_response, get_vector_collection_or_404,
+};
 
 const STREAM_BATCH_SIZE: usize = 100;
 const STREAM_BATCH_MAX_WAIT: Duration = Duration::from_millis(100);
@@ -338,7 +340,8 @@ fn stream_insert_result_to_response(
 /// back to the engine defaults. Calling this again replaces the existing
 /// ingester (the old drain task is aborted).
 ///
-/// Returns `200 OK` on success and `404 Not Found` when the collection does
+/// Returns `200 OK` on success, `400 Bad Request` (`VELES-009`) for a config
+/// the pipeline cannot run with, and `404 Not Found` when the collection does
 /// not exist.
 #[utoipa::path(
     post,
@@ -350,6 +353,7 @@ fn stream_insert_result_to_response(
     request_body = EnableStreamingRequest,
     responses(
         (status = 200, description = "Streaming enabled", body = Object),
+        (status = 400, description = "A buffer_size of 0 or past the channel's limit, or a flush_interval_ms of 0 (VELES-009)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     )
@@ -364,7 +368,9 @@ pub async fn enable_streaming(
         Err(resp) => return resp,
     };
 
-    enable_streaming_on(&collection, &req);
+    if let Err(e) = enable_streaming_on(&collection, &req) {
+        return auto_core_error_response(&e);
+    }
 
     Json(serde_json::json!({
         "message": "Streaming enabled",
@@ -375,10 +381,19 @@ pub async fn enable_streaming(
 
 /// Enables streaming on the collection when persistence is compiled in.
 #[cfg(feature = "persistence")]
-fn enable_streaming_on(collection: &VectorCollection, req: &EnableStreamingRequest) {
-    collection.enable_streaming(req.to_config());
+fn enable_streaming_on(
+    collection: &VectorCollection,
+    req: &EnableStreamingRequest,
+) -> velesdb_core::Result<()> {
+    collection.enable_streaming(req.to_config())
 }
 
 /// No-op when persistence is disabled (the streaming pipeline is unavailable).
 #[cfg(not(feature = "persistence"))]
-fn enable_streaming_on(_collection: &VectorCollection, _req: &EnableStreamingRequest) {}
+#[allow(clippy::unnecessary_wraps)] // Reason: same signature as the persistence build.
+fn enable_streaming_on(
+    _collection: &VectorCollection,
+    _req: &EnableStreamingRequest,
+) -> velesdb_core::Result<()> {
+    Ok(())
+}

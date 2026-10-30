@@ -534,6 +534,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A huge `batch_size` no longer aborts the process.**
+  `Collection::scroll_batch` reserved `batch_size` points up front, and the
+  streaming ingester's drain task reserved its configured `batch_size`, so a
+  caller's `usize::MAX` (or any size past memory) overflowed the capacity and
+  aborted the process. The Python `scroll` iterator and `scroll_batch`, the
+  Tauri `scroll_batch` and the CLI pass a scroll size through (REST caps one
+  at 10 000); REST `/stream/enable` and the Python, Tauri and mobile
+  `enable_streaming` pass a streaming `batch_size` through, the mobile one
+  turning a `u64` past `usize` into `usize::MAX`. Both now grow with the
+  points they actually hold. The sparse, hybrid and filtered search
+  resolvers and the GPU multi-probe merge are sized the same way, by the hits
+  found rather than by `k` or `limit`, which the searches already bounded.
+  An HNSW index reserved its base layer and its id mappings at
+  `max_elements` before its first insert; REST `hnsw_max_elements` and the
+  Python `HnswOptions.max_elements` pass it through, and on an SQ8 or RaBitQ
+  collection (whose own arena is capped) `usize::MAX` aborted the collection
+  create. `max_elements` stays the capacity hint it is documented as: the
+  up-front reservation is capped at 2 000 000 slots, above every
+  `for_dataset_size` preset, and the index grows past it as nodes arrive.
+- **BREAKING (Rust API) — `enable_streaming` refuses a config the pipeline
+  cannot run with.** A streaming `buffer_size` of 0 or past
+  `tokio::sync::Semaphore::MAX_PERMITS`, or a `flush_interval_ms` of 0, hit an
+  assertion in tokio's channel or interval and aborted the process (release
+  builds abort on panic), reachable from a REST request. The new
+  `StreamingConfig::validate` refuses them, and `Collection::enable_streaming`
+  and `VectorCollection::enable_streaming` now return `Result<()>`, with
+  `Error::Config` (`VELES-009`) and the current ingester left running.
+  REST `/stream/enable` answers `400`, Python raises `ValueError`, Tauri and
+  mobile reject with `VELES-009`. *Migration*: handle or `?` the result.
+
+- **Stored floats read back bit for bit.** Payloads, edge-WAL records and
+  edge-snapshot properties are JSON, and `serde_json`'s default parser returns
+  some doubles one ULP off (`127.75015752618465` reads back as
+  `127.75015752618464`): a float written to a payload or an edge property
+  could come back different after a reopen, and an exact-equality filter on
+  it stop matching. `velesdb-core` now enables `serde_json`'s
+  `float_roundtrip` feature, which parses every float exactly. This covers
+  reads: a value an earlier version already read off by one ULP and wrote
+  back (a snapshot, a compaction, a read-modify-write) keeps that value.
+  Cargo unifies the feature across a build, so every `serde_json` float parse
+  in a binary that links core pays it, the application's own and other
+  dependencies' included, REST request bodies too: measured on a
+  768-dimension query body (15.5 KB, release build), parsing went from
+  38-40 µs to 56-63 µs into a typed `Vec<f32>` (about +20 µs per vector,
+  +200 ms per 10 000-vector batch) and from 44-47 µs to 57-61 µs into a
+  `serde_json::Value` (`benches/json_float_parse_benchmark.rs` runs the same
+  parse). An `f32` is now parsed directly and correctly rounded
+  instead of through `f64`, so a vector component can differ from before by
+  one `f32` ULP, toward the exact value.
+
+- **Python: a payload nested too deep raises instead of crashing the
+  interpreter.** The conversion of a Python value to JSON recursed once per
+  level of lists and dicts with no bound, so a very deep list, or one that
+  contains itself (`a = []; a.append(a)`), overflowed the native stack: on
+  7.1.0 an `upsert` with such a payload ends the process with a segmentation
+  fault. The conversion now stops at `MAX_JSON_NESTING` (127) levels, the
+  depth `serde_json` reads back, the payload dict (or an edge's properties
+  map) counting as the first, and raises `ValueError` naming the bound. A
+  payload within it but deeper than 124 levels still reaches core's own
+  refusal (`VELES-017`).
 - **Graph edges with properties survive a flush and a reopen.** `flush()`
   writes every edge to the `edge_store.bin` snapshot, encoded with postcard,
   and then truncates the edge WAL. An edge's properties are
@@ -544,9 +604,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loss permanent. The snapshot now writes each edge's properties as one JSON
   string; `GraphEdge`'s own serde form, which the API and the edge WAL carry,
   is unchanged. A snapshot of edges without properties keeps the same bytes
-  in both directions. Float properties read back through `serde_json`'s
-  default float parser, as they already did from the edge WAL, which can
-  return a double one ULP off. An `edge_store.bin` that cannot be decoded is no longer
+  in both directions. Float properties read back exactly (see "Stored floats
+  read back bit for bit"). An `edge_store.bin` that cannot be decoded is no longer
   left in place to be overwritten: the open logs the decode error, moves the
   file to `edge_store.bin.unreadable-<unix milliseconds>` next to it (never
   replacing an earlier one), and opens the collection with the edges the WAL

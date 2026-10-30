@@ -936,7 +936,7 @@ pub async fn enable_streaming<R: Runtime>(
     state
         .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
-            coll.enable_streaming(config);
+            coll.enable_streaming(config)?;
             Ok(())
         })
         .await

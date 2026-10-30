@@ -216,3 +216,39 @@ fn test_parse_storage_mode_invalid() {
         assert!(parse_storage_mode("invalid").is_err());
     });
 }
+
+/// `python_to_json` on its own, as the filter, VelesQL and agent-memory
+/// callers use it: the outermost list is the first level, 127 lists convert
+/// and 128 raise, and a self-containing list raises instead of recursing
+/// without end.
+#[test]
+fn test_python_to_json_nests_at_most_max_json_nesting() {
+    pyo3::Python::initialize();
+    Python::attach(|py| {
+        let nested = |levels: usize| -> Py<PyAny> {
+            let mut value: Py<PyAny> = 0_i64
+                .into_pyobject(py)
+                .expect("test: int to Python")
+                .into_any()
+                .unbind();
+            for _ in 0..levels {
+                value = pyo3::types::PyList::new(py, [value])
+                    .expect("test: one-element list")
+                    .into_any()
+                    .unbind();
+            }
+            value
+        };
+
+        assert!(python_to_json(py, &nested(MAX_JSON_NESTING)).is_ok());
+        let err = python_to_json(py, &nested(MAX_JSON_NESTING + 1)).unwrap_err();
+        assert!(err.to_string().contains("127 levels"), "{err}");
+
+        let cyclic = pyo3::types::PyList::empty(py);
+        cyclic
+            .append(&cyclic)
+            .expect("test: append the list to itself");
+        let err = python_to_json(py, &cyclic.into_any().unbind()).unwrap_err();
+        assert!(err.to_string().contains("127 levels"), "{err}");
+    });
+}

@@ -28,8 +28,9 @@ let config = StreamingConfig {
 
 // `collection` is a `VectorCollection` obtained from
 // `db.get_vector_collection(name).expect("collection exists")` — the handle is
-// cheap to clone (Arc-backed inside). Activate the streaming pipeline:
-collection.enable_streaming(config);
+// cheap to clone (Arc-backed inside). Activate the streaming pipeline; a
+// `buffer_size` of 0 or a `flush_interval_ms` of 0 is refused (VELES-009):
+collection.enable_streaming(config)?;
 
 // Send points — returns immediately.
 let point = Point::new(1, vec![0.1; 384], None);
