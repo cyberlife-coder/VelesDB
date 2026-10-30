@@ -84,7 +84,7 @@ pub(crate) fn is_vector_group_by_query(stmt: &SelectStatement) -> bool {
 ///
 /// # Errors
 ///
-/// `V015` when an ORDER BY aggregate is not in the SELECT list.
+/// `V016` when an ORDER BY aggregate is not in the SELECT list.
 pub(crate) fn order_by_on_group_fields(
     stmt: &SelectStatement,
 ) -> crate::error::Result<Cow<'_, SelectStatement>> {

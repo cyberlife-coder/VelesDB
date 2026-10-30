@@ -669,7 +669,7 @@ fn test_order_by_aggregate_missing_from_select_is_rejected() {
     )
     .expect_err("test: ORDER BY an aggregate the rows do not carry must fail");
 
-    assert!(err.to_string().contains("V015"), "got: {err}");
+    assert!(err.to_string().contains("V016"), "got: {err}");
 }
 
 #[test]
@@ -684,7 +684,7 @@ fn test_order_by_ungrouped_column_on_grouped_rows_is_rejected() {
     )
     .expect_err("test: ORDER BY a column the grouped rows do not carry must fail");
 
-    assert!(err.to_string().contains("V015"), "got: {err}");
+    assert!(err.to_string().contains("V016"), "got: {err}");
 }
 
 // =========================================================================

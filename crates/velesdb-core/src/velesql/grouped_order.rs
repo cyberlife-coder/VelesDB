@@ -14,7 +14,7 @@
 //! pipeline both sort through it, each reading an aggregate under the name it
 //! stored it with (the two name an unaliased aggregate differently — see
 //! `documented_divergences` D001 in `conformance/velesql_executor_cases.json`).
-//! An item that names no column of the rows is refused with `V015` instead of
+//! An item that names no column of the rows is refused with `V016` instead of
 //! comparing every row as equal.
 
 use super::ast::{AggregateArg, AggregateFunction, OrderByExpr, SelectColumns, SelectStatement};
@@ -40,7 +40,7 @@ impl SelectStatement {
     ///
     /// # Errors
     ///
-    /// [`ValidationErrorKind::OrderByNotInResult`] (`V015`) for an item that
+    /// [`ValidationErrorKind::OrderByNotInResult`] (`V016`) for an item that
     /// names no column of the grouped rows: an aggregate the SELECT does not
     /// list, a column outside GROUP BY, `similarity()` or an arithmetic
     /// expression.
@@ -57,7 +57,7 @@ impl SelectStatement {
     ///
     /// # Errors
     ///
-    /// `V015` when the SELECT lists no such aggregate.
+    /// `V016` when the SELECT lists no such aggregate.
     pub(crate) fn order_by_aggregate_target(
         &self,
         wanted: &AggregateFunction,
@@ -128,7 +128,7 @@ impl SelectStatement {
 }
 
 /// Validates the ORDER BY of a GROUP BY aggregation against its grouped rows
-/// (`V015`). A vector GROUP BY (`NEAR` in WHERE) is not one: it returns
+/// (`V016`). A vector GROUP BY (`NEAR` in WHERE) is not one: it returns
 /// search results whose ORDER BY may also use `similarity()`, and resolves its
 /// aggregate items when it groups (`vector_group_by::order_by_on_group_fields`).
 pub(super) fn validate_grouped_order_by(stmt: &SelectStatement) -> Result<(), ValidationError> {
@@ -138,7 +138,7 @@ pub(super) fn validate_grouped_order_by(stmt: &SelectStatement) -> Result<(), Va
     Ok(())
 }
 
-/// A `V015` error naming the unresolved ORDER BY item, which the error's
+/// A `V016` error naming the unresolved ORDER BY item, which the error's
 /// display shows through its suggestion only.
 fn not_in_result(item: impl Into<String>, remedy: &str) -> ValidationError {
     let item = item.into();

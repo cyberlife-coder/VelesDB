@@ -59,7 +59,7 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns `V015` for an item that names no field of the grouped rows.
+    /// Returns `V016` for an item that names no field of the grouped rows.
     fn grouped_sort_columns(stmt: &crate::velesql::SelectStatement) -> Result<Vec<(String, bool)>> {
         let keys = stmt
             .grouped_sort_keys()

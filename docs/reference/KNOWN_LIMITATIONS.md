@@ -444,9 +444,9 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R005: queries both engines must refuse — `NEAR_FUSED`
-  with `weighted`/`rsf`, `USING FUSION` over a single `NEAR`, and a `GROUP BY`
-  ordered by an aggregate the SELECT does not list (V015).
+- `rejected_cases` R001–R004 and R010: queries both engines must refuse —
+  `NEAR_FUSED` with `weighted`/`rsf`, `USING FUSION` over a single `NEAR`, and
+  a `GROUP BY` ordered by an aggregate the SELECT does not list (V016).
 - `dml_cases` W001–W008: `UPDATE` / `DELETE` statements run on a fresh copy of
   the dataset, then a SELECT (or a `NEAR`) is asserted.
 - `projection_cases` P001–P005: `SELECT DISTINCT` with `ORDER BY`, `LIMIT`, a

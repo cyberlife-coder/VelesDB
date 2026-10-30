@@ -163,7 +163,7 @@ impl ValidationErrorKind {
             Self::FusionMisconfigured => "V012",
             Self::InvalidSearchMode => "V013",
             Self::InvalidEfSearch => "V014",
-            Self::OrderByNotInResult => "V015",
+            Self::OrderByNotInResult => "V016",
         }
     }
 

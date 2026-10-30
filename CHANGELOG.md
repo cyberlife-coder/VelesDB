@@ -57,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - An ORDER BY that names no column of the grouped rows (an aggregate the
     SELECT does not list, a column outside `GROUP BY`, `similarity()` or an
     arithmetic expression) used to leave the groups unsorted with no error;
-    it now fails with the new validation code `V015` (`OrderByNotInResult`).
+    it now fails with the new validation code `V016` (`OrderByNotInResult`).
     Migration: add the aggregate to the SELECT list, or order by a
     `GROUP BY` column.
   - `HAVING` on an aggregate the SELECT does not list

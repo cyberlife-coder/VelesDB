@@ -114,7 +114,7 @@ fn aggregate(
 ///
 /// # Errors
 ///
-/// Returns core's `V015` message for an ORDER BY item that names no field of
+/// Returns core's `V016` message for an ORDER BY item that names no field of
 /// the grouped rows, rather than leaving them in scan order.
 fn sort_aggregate_rows(
     rows: &mut [serde_json::Value],

@@ -285,7 +285,7 @@ fn test_given_chunked_collection_when_order_by_aggregate_missing_from_select_the
     )
     .expect_err("test: ORDER BY an aggregate the grouped rows do not carry must fail");
 
-    assert!(err.to_string().contains("V015"), "got: {err}");
+    assert!(err.to_string().contains("V016"), "got: {err}");
 }
 
 // =========================================================================

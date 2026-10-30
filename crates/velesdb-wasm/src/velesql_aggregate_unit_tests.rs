@@ -199,7 +199,7 @@ fn test_group_by_order_by_aggregate_missing_from_select_is_rejected() {
     )]);
     let err = apply(&s, &rows, &Params::new())
         .expect_err("test: ORDER BY an aggregate the rows do not carry must fail");
-    assert!(err.contains("V015"), "got: {err}");
+    assert!(err.contains("V016"), "got: {err}");
 }
 
 #[test]

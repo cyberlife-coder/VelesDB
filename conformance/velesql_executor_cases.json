@@ -488,9 +488,9 @@
       "note": "same as R003 for a weight-sensitive strategy"
     },
     {
-      "id": "R005",
+      "id": "R010",
       "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY SUM(year) DESC",
-      "note": "ORDER BY an aggregate the SELECT does not list names no column of the grouped rows (V015); both engines used to accept it and return the groups unsorted"
+      "note": "ORDER BY an aggregate the SELECT does not list names no column of the grouped rows (V016); both engines used to accept it and return the groups unsorted"
     }
   ],
   "dml_cases": [
