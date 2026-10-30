@@ -193,6 +193,8 @@ impl Default for RuntimeLimits {
 //   5. pq_quantizer → pq_training_buffer
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
+//   7. label_index / graph_range_indexes    (never both held; see
+//                                            docs/CONCURRENCY_MODEL.md)
 //   8. (reserved — edge_store now uses internal sharded locking)
 //   9. sparse_indexes
 //  10. delta_buffer
@@ -313,8 +315,13 @@ pub(crate) struct GraphStore {
 
     /// Graph node property range indexes keyed by `"label.property"` (EPIC-047).
     ///
-    /// Populated automatically when nodes are stored via `store_node_payload`.
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    /// Derived from the node payloads like `label_index`: maintained on every
+    /// payload write and delete path that maintains the label index, and
+    /// rebuilt from the stored payloads on open
+    /// (`core/graph_property_index_wiring.rs`). A MATCH range predicate uses
+    /// an existing index as its whole candidate set.
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`;
+    /// never held together with `label_index`).
     pub(crate) graph_range_indexes: Arc<RwLock<HashMap<String, CompositeRangeIndex>>>,
 
     /// Edge property indexes keyed by `"rel_type.property"` (EPIC-047).

@@ -161,6 +161,47 @@ fn updating_existing_nodes_removes_the_old_labels_and_property_entries() {
     assert_eq!(range_index_shape(&batched), range_index_shape(&looped));
 }
 
+/// A batch whose write fails part-way leaves the indexes describing what
+/// storage holds: the same indexes as the writes that landed, alone.
+///
+/// No fault hook reaches the payload WAL's record write or sync (the
+/// `atomic_write` `FaultGuard` covers snapshot replacement only), so the state
+/// a failed write leaves (node 1 rewritten, node 3 never written) is built by
+/// writing that one record straight to storage, then handed to the
+/// reconciliation `store_node_payloads` runs on its error branch. Before it,
+/// the batch removed node 1's old entries and indexed nothing on an error, so
+/// node 1 sat in storage under no label at all.
+#[test]
+fn a_failed_batch_indexes_what_storage_holds() {
+    let (failed, _failed_dir) = graph_collection();
+    let (landed, _landed_dir) = graph_collection();
+    for collection in [&failed, &landed] {
+        for id in 1..=2u64 {
+            collection
+                .store_node_payload(id, &person(&format!("n{id}"), 10 * age_of(id)))
+                .expect("test: seed");
+        }
+    }
+    let rewritten = json!({ "_labels": ["Company"], "name": "n1", "age": 5 });
+    landed
+        .store_node_payload(1, &rewritten)
+        .expect("test: the write that landed");
+
+    // The batch meant to rewrite node 1 and to add node 3.
+    let ids = [1, 3];
+    let mut storage = failed.storage.payload_storage.write();
+    let old = Collection::collect_old_payloads_by_id(ids.iter().copied(), &storage);
+    storage
+        .store_batch(&[(1, &rewritten)])
+        .expect("test: the record written before the failure");
+    failed.reindex_after_failed_node_write(&storage, &ids, &old);
+    drop(storage);
+
+    assert_eq!(label_members(&failed, "Person"), vec![2]);
+    assert_eq!(label_members(&failed, "Company"), vec![1]);
+    assert_eq!(range_index_shape(&failed), range_index_shape(&landed));
+}
+
 #[test]
 fn a_duplicate_id_resolves_to_the_last_payload_with_no_entry_from_the_first() {
     let (collection, _dir) = graph_collection();

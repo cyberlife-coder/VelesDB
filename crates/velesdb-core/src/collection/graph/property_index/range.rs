@@ -8,7 +8,7 @@
 
 // EPIC-047 US-002/US-003 — range indexes and edge property indexes.
 // Index population is wired via graph_property_index_wiring.rs;
-// query-side lookups are wired but not yet called from MATCH pipeline.
+// node lookups serve the MATCH prefilter (search/query/match_exec/index_prefilter.rs).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,12 +19,17 @@ use std::ops::Bound;
 // =============================================================================
 
 /// Wrapper for total ordering on JSON values.
+///
+/// Numbers are ordered by their `f64` value with `-0.0 == 0.0`, as a MATCH
+/// WHERE compares them, so an index lookup on a bound never leaves out a
+/// value WHERE accepts. Equality is the ordering's: two numbers with the same
+/// `f64` value are one key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderedValue(pub(crate) Value);
 
 impl PartialEq for OrderedValue {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.cmp(other) == std::cmp::Ordering::Equal
     }
 }
 
@@ -46,7 +51,9 @@ impl Ord for OrderedValue {
             (Value::Number(a), Value::Number(b)) => {
                 let a_f = a.as_f64().unwrap_or(0.0);
                 let b_f = b.as_f64().unwrap_or(0.0);
-                a_f.total_cmp(&b_f)
+                // A JSON number is never NaN, so `partial_cmp` is total here;
+                // unlike `total_cmp` it puts `-0.0` and `0.0` level.
+                a_f.partial_cmp(&b_f).unwrap_or(std::cmp::Ordering::Equal)
             }
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
