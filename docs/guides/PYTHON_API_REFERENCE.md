@@ -107,6 +107,12 @@ collection.upsert([
     {"id": 1, "vector": [0.1, 0.2, 0.3, 0.4], "payload": {"key": "value"}}
 ])
 
+# A payload holds str, int, float, bool, None, list and dict values (anything
+# else raises ValueError). Core refuses one nested deeper than 124 levels of
+# lists and dicts (VELES-017), the payload dict counting as the first; the
+# conversion itself raises ValueError past 127, so a self-containing list
+# raises instead of crashing.
+
 # Bulk insert (optimized for high throughput)
 # Uses parallel HNSW insertion + single flush at the end
 collection.upsert_bulk([

@@ -535,6 +535,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Error::Config` (`VELES-009`) and the current ingester left running.
   REST `/stream/enable` answers `400`, Python raises `ValueError`, Tauri and
   mobile reject with `VELES-009`. *Migration*: handle or `?` the result.
+
+- **Python: a payload nested too deep raises instead of crashing the
+  interpreter.** The conversion of a Python value to JSON recursed once per
+  level of lists and dicts with no bound, so a very deep list, or one that
+  contains itself (`a = []; a.append(a)`), overflowed the native stack: on
+  7.1.0 an `upsert` with such a payload ends the process with a segmentation
+  fault. The conversion now stops at `MAX_JSON_NESTING` (127) levels, the
+  depth `serde_json` reads back, the payload dict (or an edge's properties
+  map) counting as the first, and raises `ValueError` naming the bound. A
+  payload within it but deeper than 124 levels still reaches core's own
+  refusal (`VELES-017`).
 - **Graph edges with properties survive a flush and a reopen.** `flush()`
   writes every edge to the `edge_store.bin` snapshot, encoded with postcard,
   and then truncates the edge WAL. An edge's properties are
