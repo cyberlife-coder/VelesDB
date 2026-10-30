@@ -291,10 +291,25 @@ await db.createGraphCollection('social', {
 });
 ```
 
-`schemaMode` is sent as core's `graph_schema`. `'strict'` declares no node or
-edge types (the SDK has no option for them), so a strict collection refuses
-every typed node and edge; leave it `'schemaless'` unless that is what you
-want. Over REST, velesdb-server builds a graph collection from its name and
+`schemaMode`, `nodeTypes` and `edgeTypes` are sent as core's `graph_schema`
+(`GraphSchema`). A `'strict'` graph accepts only the node types it declares,
+and only declared edges between the declared endpoint types:
+
+```typescript
+await db.createGraphCollection('org', {
+  schemaMode: 'strict',
+  nodeTypes: [
+    { name: 'Person', properties: { name: 'string', age: 'integer' } },
+    { name: 'Company' },
+  ],
+  edgeTypes: [{ name: 'WORKS_AT', fromType: 'Person', toType: 'Company' }],
+});
+```
+
+Property types are core's `ValueType`: `'string'`, `'integer'`, `'float'`,
+`'boolean'`, `'vector'`. Declaring types on a schemaless graph is refused with
+`VALIDATION_ERROR`, since core would ignore them. The WASM backend has no graph
+collections and refuses `createGraphCollection` with `NOT_SUPPORTED`. Over REST, velesdb-server builds a graph collection from its name and
 schema alone: it does not read `dimension` or `metric` for
 `collection_type: 'graph'`.
 

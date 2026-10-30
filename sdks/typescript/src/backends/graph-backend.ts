@@ -16,7 +16,6 @@ import type {
   TraverseResponse,
   DegreeResponse,
   GraphCollectionConfig,
-  GraphSchemaMode,
   RelateRequest,
   RelateResponse,
   RelationsResponse,
@@ -24,6 +23,7 @@ import type {
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
 import { parseVelesError, EdgeNotFoundError } from '../errors';
+import { ValidationError } from '../types';
 
 /** Minimal transport interface for graph operations. */
 export type GraphTransport = BaseTransport;
@@ -162,11 +162,29 @@ export async function getNodeDegree(
 
 /**
  * The `graph_schema` velesdb-server deserializes as `velesdb_core::GraphSchema`
- * for a schema mode (pinned by `conformance/graph_schema_wire_cases.json`).
- * The SDK declares no node or edge types, so a strict schema allows none.
+ * (pinned by `conformance/graph_schema_wire_cases.json`). Core keeps the types
+ * of a schemaless schema but never checks them, so declaring any there is
+ * refused rather than sent to be ignored.
  */
-function graphSchemaWire(mode: GraphSchemaMode): Record<string, unknown> {
-  return { schemaless: mode === 'schemaless', node_types: [], edge_types: [] };
+function graphSchemaWire(config: GraphCollectionConfig | undefined): Record<string, unknown> {
+  const nodeTypes = config?.nodeTypes ?? [];
+  const edgeTypes = config?.edgeTypes ?? [];
+  const schemaless = (config?.schemaMode ?? 'schemaless') === 'schemaless';
+  if (schemaless && (nodeTypes.length > 0 || edgeTypes.length > 0)) {
+    throw new ValidationError(
+      "nodeTypes and edgeTypes apply to a strict graph only: set schemaMode: 'strict'"
+    );
+  }
+  return {
+    schemaless,
+    node_types: nodeTypes.map((t) => ({ name: t.name, properties: t.properties ?? {} })),
+    edge_types: edgeTypes.map((t) => ({
+      name: t.name,
+      from_type: t.fromType,
+      to_type: t.toType,
+      properties: t.properties ?? {},
+    })),
+  };
 }
 
 export async function createGraphCollection(
@@ -179,7 +197,7 @@ export async function createGraphCollection(
     collection_type: 'graph',
     dimension: config?.dimension,
     metric: config?.metric ?? 'cosine',
-    graph_schema: graphSchemaWire(config?.schemaMode ?? 'schemaless'),
+    graph_schema: graphSchemaWire(config),
   });
 
   throwOnError(response);

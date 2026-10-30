@@ -349,8 +349,10 @@ the npm package ships.
   `recallOlderThan` was already strict (`<`), as core's `older_than()` is.
 - **`createGraphCollection({ schemaMode: 'strict' })` now takes effect.** The
   SDK sent `schema_mode`, which the server never read, so every graph
-  collection was schemaless. It now sends core's `graph_schema`. The SDK
-  declares no node or edge types, so a strict collection refuses every typed
-  node and edge; drop `schemaMode: 'strict'` to keep the old behaviour.
+  collection was schemaless. It now sends core's `graph_schema`, with the
+  node and edge types declared in the new `nodeTypes` / `edgeTypes` options
+  (core's `NodeType` / `EdgeType`). A strict graph accepts only those types;
+  declare them, or drop `schemaMode: 'strict'` to keep the old schemaless
+  behaviour. Types on a schemaless graph throw `ValidationError`.
 - **Node.js 22 or later** (`engines.node`). CI builds and tests the SDK on 22;
   18 and 20 are end-of-life.

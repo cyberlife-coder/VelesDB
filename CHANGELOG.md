@@ -28,13 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (behavior) — `createGraphCollection({ schemaMode: 'strict' })`
   creates a strict graph** (TypeScript SDK). The SDK sent `schema_mode`, a
   field velesdb-server never read, so every graph collection came out
-  schemaless; it now sends core's `graph_schema`
-  (`{ schemaless, node_types: [], edge_types: [] }`), pinned by
-  `conformance/graph_schema_wire_cases.json` and parsed as `GraphSchema` by
-  `crates/velesdb-core/tests/graph_schema_wire_conformance.rs`. The SDK
-  declares no node or edge types, so a strict collection refuses every typed
-  node and edge. Migration: drop `schemaMode: 'strict'` to keep the old
-  behaviour.
+  schemaless; it now sends core's `graph_schema`. The new `nodeTypes` and
+  `edgeTypes` options mirror core's `NodeType` and `EdgeType` (properties
+  typed by `ValueType`), so a strict graph can declare what it accepts;
+  declaring types on a schemaless graph, where core ignores them, throws
+  `ValidationError`. The wire shape is pinned by
+  `conformance/graph_schema_wire_cases.json`:
+  `crates/velesdb-core/tests/graph_schema_wire_conformance.rs` parses each case
+  as `GraphSchema`, round-trips it and checks the node types and edges it
+  accepts and refuses, and the SDK test checks it sends each case's
+  `graph_schema` for its config. The WASM backend still refuses graph
+  collections with `NOT_SUPPORTED`. Migration: declare the types, or drop
+  `schemaMode: 'strict'` to keep the old schemaless behaviour.
 - **BREAKING (behavior) — velesdb-wasm refuses a metadata filter core cannot
   parse.** `VectorStore.search_with_filter` validates the filter with
   `velesdb_core::Filter::from_json_value` (new `filter::validate_filter`) and

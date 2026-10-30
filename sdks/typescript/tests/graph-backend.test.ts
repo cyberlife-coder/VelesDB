@@ -22,6 +22,8 @@ import {
 } from '../src/backends/graph-backend';
 import type { TransportResponse } from '../src/backends/shared';
 import { CollectionNotFoundError } from '../src/errors';
+import { ValidationError } from '../src/types';
+import type { GraphCollectionConfig } from '../src/types';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +36,9 @@ const graphSchemaFixture = JSON.parse(
     ),
     'utf8'
   )
-) as { cases: Array<{ schema_mode: string; graph_schema: unknown }> };
+) as {
+  cases: Array<{ id: string; sdk_config: GraphCollectionConfig; graph_schema: unknown }>;
+};
 
 function buildTransport(
   overrides: Partial<GraphTransport> = {}
@@ -367,13 +371,41 @@ describe('createGraphCollection', () => {
   // velesdb-server reads `graph_schema` (a core GraphSchema); the values are
   // pinned by conformance/graph_schema_wire_cases.json, which velesdb-core's
   // tests/graph_schema_wire_conformance.rs parses as GraphSchema.
-  const graphSchemaFor = (mode: string): unknown => {
-    const found = graphSchemaFixture.cases.find((c) => c.schema_mode === mode);
-    if (found === undefined) throw new Error(`fixture case ${mode} is missing`);
-    return found.graph_schema;
-  };
+  it.each(graphSchemaFixture.cases.map((c) => [c.id, c] as const))(
+    'sends the fixture graph_schema for case %s',
+    async (_id, c) => {
+      const transport = buildTransport();
+      (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        data: {},
+      });
 
-  it('POSTs with default metric=cosine and a schemaless graph_schema', async () => {
+      await createGraphCollection(transport, 'kg', c.sdk_config);
+
+      const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[0]).toBe('POST');
+      expect(call[1]).toBe('/collections');
+      expect((call[2] as Record<string, unknown>).graph_schema).toEqual(c.graph_schema);
+    }
+  );
+
+  it('forwards name / collection_type / dimension / metric', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {},
+    });
+
+    await createGraphCollection(transport, 'kg', { dimension: 128, metric: 'euclidean' });
+
+    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[2]).toMatchObject({
+      name: 'kg',
+      collection_type: 'graph',
+      dimension: 128,
+      metric: 'euclidean',
+    });
+  });
+
+  it('defaults metric to cosine', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: {},
@@ -381,37 +413,24 @@ describe('createGraphCollection', () => {
 
     await createGraphCollection(transport, 'kg');
 
-    expect(transport.requestJson).toHaveBeenCalledWith('POST', '/collections', {
-      name: 'kg',
-      collection_type: 'graph',
-      dimension: undefined,
-      metric: 'cosine',
-      graph_schema: graphSchemaFor('schemaless'),
-    });
+    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[2]).toMatchObject({ metric: 'cosine' });
   });
 
-  it('forwards dimension / metric and sends schemaMode strict as a strict graph_schema', async () => {
-    const transport = buildTransport();
-    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      data: {},
-    });
+  it.each([
+    ['nodeTypes', { nodeTypes: [{ name: 'Person' }] }],
+    ['edgeTypes', { edgeTypes: [{ name: 'KNOWS', fromType: 'Person', toType: 'Person' }] }],
+  ] as const)(
+    'refuses %s on a schemaless graph, where core would ignore them',
+    async (_name, config) => {
+      const transport = buildTransport();
 
-    await createGraphCollection(transport, 'kg', {
-      dimension: 128,
-      metric: 'euclidean',
-      schemaMode: 'strict',
-    });
-
-    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    expect(call[2]).toEqual({
-      name: 'kg',
-      collection_type: 'graph',
-      dimension: 128,
-      metric: 'euclidean',
-      graph_schema: graphSchemaFor('strict'),
-    });
-  });
+      await expect(createGraphCollection(transport, 'kg', config)).rejects.toBeInstanceOf(
+        ValidationError
+      );
+      expect(transport.requestJson).not.toHaveBeenCalled();
+    }
+  );
 
   it('throws on error response (no resourceLabel → typed VelesError)', async () => {
     const transport = buildTransport();

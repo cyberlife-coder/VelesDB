@@ -165,6 +165,29 @@ export interface RelationsResponse {
 /** Schema mode for graph collections */
 export type GraphSchemaMode = 'schemaless' | 'strict';
 
+/** Property value type in a graph schema (`velesdb_core::ValueType`, serialized lowercase). */
+export type GraphValueType = 'string' | 'integer' | 'float' | 'boolean' | 'vector';
+
+/** A node type a strict graph accepts (`velesdb_core::NodeType`). */
+export interface GraphNodeType {
+  /** Node label. */
+  name: string;
+  /** Declared properties and their types (default: none). */
+  properties?: Record<string, GraphValueType>;
+}
+
+/** An edge type a strict graph accepts (`velesdb_core::EdgeType`). */
+export interface GraphEdgeType {
+  /** Edge label. */
+  name: string;
+  /** Node type the edge leaves; must be one of `nodeTypes`. */
+  fromType: string;
+  /** Node type the edge reaches; must be one of `nodeTypes`. */
+  toType: string;
+  /** Declared properties and their types (default: none). */
+  properties?: Record<string, GraphValueType>;
+}
+
 /** Graph collection configuration */
 export interface GraphCollectionConfig {
   /** Optional embedding dimension for node vectors */
@@ -172,11 +195,15 @@ export interface GraphCollectionConfig {
   /** Distance metric for embeddings (default: 'cosine') */
   metric?: DistanceMetric;
   /**
-   * Schema mode (default: 'schemaless'). Sent as core's `graph_schema`.
-   * `'strict'` creates a schema with no declared node or edge types — the SDK
-   * cannot declare any — so the collection refuses every typed node and
-   * edge (`velesdb_core::GraphSchema::validate_node_type` /
-   * `validate_edge_type`).
+   * Schema mode (default: 'schemaless'). Sent with `nodeTypes` and
+   * `edgeTypes` as core's `graph_schema`. A `'strict'` graph accepts only
+   * the declared node types, and only declared edges between the declared
+   * endpoint types (`velesdb_core::GraphSchema::validate_node_type` /
+   * `validate_edge_type`); with none declared it accepts none.
    */
   schemaMode?: GraphSchemaMode;
+  /** Node types a `'strict'` graph accepts. Refused on a schemaless graph, which ignores them. */
+  nodeTypes?: GraphNodeType[];
+  /** Edge types a `'strict'` graph accepts. Refused on a schemaless graph, which ignores them. */
+  edgeTypes?: GraphEdgeType[];
 }
