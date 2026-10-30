@@ -114,6 +114,11 @@ requests.
   `text/plain` a page on another site can send without a preflight. The
   TypeScript SDK already sends both. **Fix:** set the header in a hand-written
   client.
+- **A browser page on another origin cannot change state.** A `POST`, `PUT`,
+  `PATCH` or `DELETE` whose `Origin` is neither the server's own nor in
+  `cors_origins` is refused with `403`; 7.1.0 ran it. Requests without an
+  `Origin` header (curl, the SDKs, backends) are unaffected. **Fix:** list the
+  front end's origin in `cors_origins`.
 - **`[server]` and `[logging]` keys 7.1.0 ignored now take effect.**
   `[server] workers`, `max_body_size`, `cors_enabled`, `cors_origins` and
   `[logging] level` / `format` / `file` (and `VELESDB_LOGGING_LEVEL`) were

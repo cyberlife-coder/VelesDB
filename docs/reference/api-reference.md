@@ -46,6 +46,16 @@ Per-IP rate limiting is enabled by default (100 requests/second per IP). When a 
 
 **Configuration**: See [CONFIGURATION.md](../guides/CONFIGURATION.md#rate-limiting) for CLI, environment variable, and TOML options.
 
+### Browser origins (CORS and the origin guard)
+
+On every route, a request whose method is not `GET`, `HEAD` or `OPTIONS` and
+that carries an `Origin` header is refused with `403` unless that origin is
+the server's own (its `host[:port]` equals the request's `Host`) or allowed by
+`[server] cors_origins` (`["*"]`: any). Requests without `Origin` — curl, the
+SDKs, other servers — are not affected. No CORS header is sent unless
+`cors_origins` is configured. This `403` is not repeated in each operation of
+`openapi.yaml`. See [SERVER_SECURITY.md](../guides/SERVER_SECURITY.md#6-cors).
+
 ---
 
 ## Health Check

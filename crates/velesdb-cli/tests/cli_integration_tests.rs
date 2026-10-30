@@ -714,6 +714,38 @@ fn test_velesdb_toml_in_cwd_limit_is_enforced_without_config_flag() {
     }
 }
 
+/// With no `--config` and no `./velesdb.toml`, the `VELESDB_*` engine
+/// variables still apply, as CONFIGURATION.md says — the same single path
+/// `velesdb-server` takes (`VelesConfig::load_engine_only_from_env`). The
+/// CLI used to open the database on bare defaults there, so this cap did
+/// nothing.
+#[test]
+fn test_engine_variables_apply_without_any_config_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test_db");
+    fs::create_dir_all(&db_path).unwrap();
+    assert!(!temp_dir.path().join("velesdb.toml").exists());
+
+    for (name, expect_ok) in [("first", true), ("second", false)] {
+        let assert = velesdb_cmd()
+            .current_dir(temp_dir.path())
+            .env_remove("VELESDB_CONFIG")
+            .env("VELESDB_LIMITS_MAX_COLLECTIONS", "1")
+            .args(["collection", "create"])
+            .arg(&db_path)
+            .arg(name)
+            .args(["--dimension", "4"])
+            .assert();
+        if expect_ok {
+            assert.success();
+        } else {
+            assert
+                .failure()
+                .stderr(predicate::str::contains("max_collections"));
+        }
+    }
+}
+
 #[test]
 fn test_config_flag_works_after_subcommand_too() {
     // `global = true` in clap means `--config` is accepted both before and

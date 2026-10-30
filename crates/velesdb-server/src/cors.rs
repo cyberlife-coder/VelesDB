@@ -202,13 +202,24 @@ pub(crate) fn resolve_cors(
     })
 }
 
-/// Wraps `router` in the CORS layer `cors` describes, or returns it
-/// untouched when [`CorsConfig::is_active`] is `false` — no CORS header is
-/// then sent, and browsers refuse every cross-origin read.
+/// Wraps `router` in the policy `cors` describes, on both sides of what a
+/// browser enforces:
+///
+/// - the origin guard (`origin_guard`), which refuses with `403` a request
+///   that would change state (any method but `GET`, `HEAD`, `OPTIONS`) from
+///   an `Origin` the policy does not allow — CORS alone cannot, since a
+///   request sent without a preflight runs before the browser hides its
+///   answer;
+/// - the CORS layer, when [`CorsConfig::is_active`]; otherwise no CORS
+///   header is sent, and browsers refuse every cross-origin read.
 pub fn apply_cors<S>(router: axum::Router<S>, cors: &CorsConfig) -> axum::Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        crate::origin_guard::OriginPolicy::from_cors(cors),
+        crate::origin_guard::origin_guard,
+    ));
     if cors.is_active() {
         router.layer(build_cors_layer(cors))
     } else {

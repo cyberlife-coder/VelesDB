@@ -413,23 +413,37 @@ server logs a warning at startup when it is on.
 
 A page from another origin can still make the browser *send* a request: CORS
 decides what the page may read and which requests need the server's consent
-first (a preflight), not what leaves the browser. Without a CORS header:
+first (a preflight), not what leaves the browser. The server therefore checks
+two things itself. With the default policy:
 
 - **No response can be read** by a page from another origin.
-- **No request with a body gets through.** A request without a preflight — the
-  only kind the default lets through — can carry only `text/plain`,
-  `application/x-www-form-urlencoded` or `multipart/form-data`. Every route
-  that takes a body refuses those: the JSON routes require
-  `application/json`, `POST .../points/stream` requires `application/x-ndjson`
-  and `POST .../points/raw` requires `application/octet-stream`, each with
-  `415` otherwise. Anything else, including any `DELETE`, `PUT` or `PATCH`,
-  needs a preflight, which the server does not answer.
-- **Still reachable blind:** the `POST` routes that take no body —
-  `.../flush`, `.../analyze`, `.../index/rebuild`, `.../vacuum`,
-  `.../compact`, `.../locality/reorder` — and every `GET`. None of them
-  adds, changes or removes a point, and the page never sees the answer, but it
-  can make the server do the work (an index rebuild or a compaction is
-  expensive).
+- **No request that changes state runs.** The origin guard refuses with `403`
+  every request whose method is not `GET`, `HEAD` or `OPTIONS` when its
+  `Origin` header names an origin the policy does not allow — with the default,
+  any origin but the server's own. That covers every `POST`, `PUT`, `PATCH`
+  and `DELETE`, with or without a body, including the body-less maintenance
+  routes (`.../flush`, `.../index/rebuild`, `.../compact`, ...).
+- **Defence in depth on bodies.** A request sent without a preflight can only
+  carry `text/plain`, `application/x-www-form-urlencoded` or
+  `multipart/form-data`; every route that takes a body refuses those (the JSON
+  routes require `application/json`, `POST .../points/stream`
+  `application/x-ndjson`, `POST .../points/raw` `application/octet-stream`,
+  with `415` otherwise).
+
+What the guard does not look at:
+
+- **Requests without `Origin`** — curl, the SDKs, a backend calling the server.
+  Browsers always send `Origin` on a cross-origin request and on any `POST`,
+  so this exempts no page.
+- **`GET` requests**, which change nothing; a foreign page can send one but
+  never read the answer.
+- **The server's own origin**, recognised by `Origin`'s `host[:port]` equalling
+  the request's `Host`, so Swagger UI and any page the server serves keep
+  working. A page that reaches the server under its own host name (DNS
+  rebinding) is same-origin for the browser too; only API keys stop that.
+
+With `cors_origins` listing origins, those origins pass the guard as well;
+with `["*"]`, every origin does.
 
 CORS is not access control. If anything but you can reach the port — another
 user on the machine, the network, a container neighbour — set

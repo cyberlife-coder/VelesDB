@@ -54,6 +54,7 @@ mod cors;
 mod handlers;
 pub mod logging;
 pub mod onboarding;
+mod origin_guard;
 pub mod rate_limit;
 pub mod routes;
 pub mod runtime;

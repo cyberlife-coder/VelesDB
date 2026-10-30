@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every other route that takes a body is a JSON route, which axum already
   restricts to `application/json`. The TypeScript SDK sends both types.
 
+- **BREAKING (behaviour): a request that changes state from a browser origin
+  the CORS policy does not allow is refused with `403`.** CORS only hides
+  answers; in 7.1.0 a page on any site could still fire the body-less
+  `POST`s (flush, analyze, index rebuild, vacuum, compact, locality reorder)
+  without a preflight. An origin guard now covers every route at once: a
+  method other than `GET`/`HEAD`/`OPTIONS` with an `Origin` header passes only
+  if that origin is the server's own (`Origin`'s authority equals `Host`) or
+  allowed by `cors_origins` (`["*"]`: any). Requests without `Origin` — curl,
+  the SDKs, backends — are not affected.
+
 - **`VelesConfig::load_from_path_engine_only` reads only the environment
   variables of engine sections** (and of removed sections, so their warning
   still fires). In 7.1.0 a `VELESDB_SERVER_*` or `VELESDB_LOGGING_*` variable
@@ -41,7 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared config file this way: `VELESDB_SERVER_PORT=80` stopped
   `velesdb-server` (whose port is `VELESDB_PORT`) with `server.port must be
   >= 1024`. A caller that relied on such a variable reaching those fields
-  through this loader no longer gets it; `load_from_path` is unchanged.
+  through this loader no longer gets it; `load_from_path` is unchanged. The
+  new `VelesConfig::load_engine_only_from_env` is the same layer with no
+  file, and both binaries use it when they have no config file: in 7.1.0
+  `velesdb-server` and the `velesdb` CLI then opened on bare defaults and
+  ignored `VELESDB_LIMITS_MAX_COLLECTIONS` and every other engine variable.
   `velesdb_core::config::WORKERS_CAP` and `LOG_LEVELS` are now public, so a
   hosting shell validates `[server] workers` and log levels by the engine's
   own rules instead of a copy.
@@ -88,9 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `VELESDB_PORT` / `VELESDB_HOST`.
   - Engine variables (`VELESDB_LIMITS_MAX_COLLECTIONS`, ...) apply when
     `velesdb-server` starts with no config file at all, as CONFIGURATION.md
-    says. In 7.1.0, without `--config` and without `./velesdb.toml`, the
-    server started from `VelesConfig::default()` and skipped the environment
-    (new `VelesConfig::load_engine_only_from_env`).
+    says (see the `load_from_path_engine_only` entry above; the CLI is fixed
+    the same way).
   - An unknown top-level table (`[sever]`) is named in the same startup
     warning as an unread key. Tables the engine or the update check read, and
     removed tables the engine already warns about, are not.
