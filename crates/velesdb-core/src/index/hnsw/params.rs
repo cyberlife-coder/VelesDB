@@ -73,6 +73,22 @@ impl Default for HnswParams {
     }
 }
 
+/// The most node slots an index reserves before its first insert.
+///
+/// `max_elements` is a capacity hint: the base layer and the id mappings
+/// grow past it as nodes arrive. They used to be reserved at `max_elements`
+/// up front, so a caller's huge value (REST `hnsw_max_elements`, Python
+/// `HnswOptions.max_elements`) reserved slots it would never fill, and
+/// `usize::MAX` overflowed the capacity and aborted the process. The cap
+/// covers every preset (`for_dataset_size` asks for at most 1 500 000), so
+/// an index sized by one still starts fully reserved.
+pub(crate) const MAX_PRESIZED_ELEMENTS: usize = 2_000_000;
+
+/// The node slots an index reserves up front for `max_elements`.
+pub(crate) fn presized_elements(max_elements: usize) -> usize {
+    max_elements.min(MAX_PRESIZED_ELEMENTS)
+}
+
 impl HnswParams {
     /// Creates optimized parameters based on vector dimension.
     ///

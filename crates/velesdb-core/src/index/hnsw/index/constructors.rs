@@ -197,7 +197,9 @@ impl HnswIndex {
             arena_dir: arena_dir.as_deref(),
         })?;
 
-        let mappings = ShardedMappings::with_capacity(params.max_elements);
+        let mappings = ShardedMappings::with_capacity(
+            crate::index::hnsw::params::presized_elements(params.max_elements),
+        );
 
         Ok(Self {
             dimension,

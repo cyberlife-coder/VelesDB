@@ -525,6 +525,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points they actually hold. The sparse, hybrid and filtered search
   resolvers and the GPU multi-probe merge are sized the same way, by the hits
   found rather than by `k` or `limit`, which the searches already bounded.
+  An HNSW index reserved its base layer and its id mappings at
+  `max_elements` before its first insert; REST `hnsw_max_elements` and the
+  Python `HnswOptions.max_elements` pass it through, and on an SQ8 or RaBitQ
+  collection (whose own arena is capped) `usize::MAX` aborted the collection
+  create. `max_elements` stays the capacity hint it is documented as: the
+  up-front reservation is capped at 2 000 000 slots, above every
+  `for_dataset_size` preset, and the index grows past it as nodes arrive.
 - **BREAKING (Rust API) — `enable_streaming` refuses a config the pipeline
   cannot run with.** A streaming `buffer_size` of 0 or past
   `tokio::sync::Semaphore::MAX_PERMITS`, or a `flush_interval_ms` of 0, hit an
