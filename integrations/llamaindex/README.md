@@ -304,27 +304,40 @@ loader.add_edge(edge_id=1, source=source_id, target=target_id, label="RELATES_TO
 edges = loader.get_edges(label="RELATES_TO")
 ```
 
-`load_from_nodes` loads LlamaIndex nodes as graph nodes in one call, each with
-id `stable_hash_id(f"{node_label}:{node.node_id}")`. With
-`extract_relations=True` it also writes each node's `relationships` as edges,
-labelled with the relationship kind: `SOURCE`, `PREVIOUS`, `NEXT`, `PARENT`,
-`CHILD` (one edge per child):
+`load_from_nodes` loads LlamaIndex nodes as graph nodes in one call, labelled
+`node_label` (stored in `_labels`, so `MATCH (n:DOCUMENT)` finds them). In
+native mode each graph node's id is the node's VelesDB point ID,
+`stable_hash_id(node.node_id)`, so `GraphRetriever` expands from a vector hit
+straight into the loaded graph. With `extract_relations=True` it also writes
+each node's `relationships` as edges, labelled with the relationship kind:
+`SOURCE`, `PREVIOUS`, `NEXT`, `PARENT`, `CHILD` (one edge per child):
 
 ```python
+vector_store.add(nodes)  # the vector-store side: what GraphRetriever seeds from
 counts = loader.load_from_nodes(nodes, extract_relations=True)
 # e.g. {"nodes": 4, "edges": 6, "skipped_relations": 1}
 ```
 
-- Only targets loaded by the same call are linked. A relationship whose target
-  is not among `nodes` (typically `SOURCE`, when the source document is not
-  loaded) is counted in `skipped_relations` and not written: no dangling edge.
-  Load linked nodes together.
+- A relationship is linked when its target is in the graph: loaded by the same
+  call or, in native mode, by an earlier one. Any other target (typically
+  `SOURCE`, when the source document is never loaded) is counted in
+  `skipped_relations` and not written: no dangling edge.
 - Edge ids are deterministic, so loading the same nodes again writes nothing
   new and returns the same counts. `edges` counts the distinct relationship
   edges the graph holds for the call, written now or by an earlier load; an
   edge that fails to write is logged and not counted.
 - With `extract_relations=False` (the default) no edge is written and both
   `edges` and `skipped_relations` are 0.
+- Without a graph collection, nodes go to the vector store's own collection
+  and edges to an in-memory graph store. There the id stays
+  `stable_hash_id(f"{node_label}:{node.node_id}")`, because the point ID would
+  overwrite the stored node, and only same-call targets are linked.
+
+> **Changed since 8.0.0:** native-mode graph node ids used to be
+> `stable_hash_id(f"{node_label}:{node.node_id}")`. No stored data depends on
+> them: in 8.0.0 the native mode never persisted anything (the
+> loader fell back to an in-memory graph store), so there is nothing to
+> migrate.
 
 `GraphRetriever` finds seed nodes by vector search, then expands the context
 through the graph:

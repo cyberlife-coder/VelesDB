@@ -19,7 +19,7 @@ Example:
     >>> edges = loader.get_edges(label="KNOWS")
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 import logging
 
 from velesdb_common.ids import stable_hash_id
@@ -165,22 +165,24 @@ def _relation_edge(label: str, source_id: int, target_id: int) -> Dict[str, Any]
 
 
 def _relation_edges(
-    node: Any, source_id: int, graph_ids: Dict[str, int]
+    node: Any, source_id: int, resolve: Callable[[str], Optional[int]]
 ) -> Tuple[List[Dict[str, Any]], int]:
-    """Edges for ``node.relationships`` whose target is in ``graph_ids``.
+    """Edges for ``node.relationships`` whose target ``resolve`` finds in the graph.
 
-    Returns the edges and the number of relationships skipped because their
-    target is not in ``graph_ids`` (an edge to it would dangle).
+    ``resolve`` maps a LlamaIndex node id to its graph node id, or ``None``
+    when the graph holds no such node. Returns the edges and the number of
+    relationships skipped because their target is not in the graph (an edge
+    to it would dangle).
     """
     edges: List[Dict[str, Any]] = []
     skipped = 0
     for kind, related in node.relationships.items():
         for target in _related_node_ids(related):
-            target_id = graph_ids.get(target)
+            target_id = resolve(target)
             if target_id is None:
                 skipped += 1
                 logger.debug(
-                    "Skipping %s relationship %s -> %s: target not loaded in this call.",
+                    "Skipping %s relationship %s -> %s: target not in the graph.",
                     kind.name, node.node_id, target,
                 )
                 continue
@@ -395,20 +397,25 @@ class GraphLoader:
     ) -> Dict[str, int]:
         """Load LlamaIndex nodes as graph nodes, and optionally their relationships.
 
-        Each node becomes a graph node whose id is derived from ``node_label``
-        and its LlamaIndex ``node_id``.
+        Each node becomes a graph node labelled ``node_label``. With a native
+        graph collection its id is the node's VelesDB point id,
+        ``stable_hash_id(node.node_id)`` — the id ``VelesDBVectorStore`` stores
+        it under and ``GraphRetriever`` expands from — so the graph is
+        reachable from vector search results. Without one, nodes share the
+        vector store's collection, where that id would overwrite the stored
+        node, so they keep ``stable_hash_id(f"{node_label}:{node.node_id}")``.
 
         With ``extract_relations=True``, every entry of a loaded node's
         ``relationships`` (``SOURCE``, ``PREVIOUS``, ``NEXT``, ``PARENT``,
         ``CHILD``) becomes an edge from that node to its target, labelled with
-        the relationship kind's name (``"NEXT"``, ...). Only targets loaded by
-        the same call are linked: a relationship whose target is not among
-        ``nodes`` (or failed to load) is skipped, counted in
-        ``skipped_relations``, and never written as a dangling edge. To link
-        across batches, load the linked nodes together. Edge ids are
-        deterministic, and an edge already in the graph is left as it is, so
-        loading the same nodes again writes nothing new and returns the same
-        counts. An edge that fails to write is logged and not counted.
+        the relationship kind's name (``"NEXT"``, ...), when the target is in
+        the graph: loaded by the same call, or — with a native graph
+        collection — already a node of it (loaded by an earlier call). Any
+        other relationship is skipped, counted in ``skipped_relations``, and
+        never written as a dangling edge. Edge ids are deterministic, and an
+        edge already in the graph is left as it is, so loading the same nodes
+        again writes nothing new and returns the same counts. An edge that
+        fails to write is logged and not counted.
 
         Args:
             nodes: List of LlamaIndex BaseNode objects.
@@ -434,13 +441,19 @@ class GraphLoader:
             counts["edges"], counts["skipped_relations"] = self._load_relations(loaded)
         return counts
 
+    def _graph_node_id(self, node_id: str, node_label: str) -> int:
+        """The graph node id of the LlamaIndex node ``node_id`` (see ``load_from_nodes``)."""
+        if self._native_graph is not None:
+            return stable_hash_id(node_id)
+        return _generate_id(node_id, node_label)
+
     def _load_graph_nodes(
         self, nodes: List[Any], node_label: str
     ) -> List[Tuple[Any, int]]:
         """Add each node to the graph; return ``(node, graph id)`` for those added."""
         loaded: List[Tuple[Any, int]] = []
         for node in nodes:
-            node_id = _generate_id(node.node_id, node_label)
+            node_id = self._graph_node_id(node.node_id, node_label)
             metadata = _extract_graph_metadata(node)
 
             try:
@@ -450,22 +463,42 @@ class GraphLoader:
                 logger.warning(f"Failed to add node {node.node_id}: {e}")
         return loaded
 
+    def _resolve_target(self, target: str, graph_ids: Dict[str, int]) -> Optional[int]:
+        """The graph node id of relationship target ``target``, or ``None``.
+
+        A target loaded by this call resolves from ``graph_ids``. Otherwise a
+        native graph collection is asked whether it already holds the node
+        (``id in graph``: a stored node payload, the check core applies before
+        accepting an edge). The in-memory graph store holds no nodes, so there
+        only same-call targets resolve.
+        """
+        if target in graph_ids:
+            return graph_ids[target]
+        if self._native_graph is None:
+            return None
+        target_id = stable_hash_id(target)
+        return target_id if target_id in self._native_graph else None
+
     def _load_relations(self, loaded: List[Tuple[Any, int]]) -> Tuple[int, int]:
-        """Write the relationships among ``loaded`` nodes as edges.
+        """Write the relationships of ``loaded`` nodes as edges.
 
         Returns (distinct edges the graph holds, relationships skipped).
         """
         graph_ids = {node.node_id: graph_id for node, graph_id in loaded}
+
+        def resolve(target: str) -> Optional[int]:
+            return self._resolve_target(target, graph_ids)
+
         mirrored = {edge["id"] for edge in self._edges}
         held: Set[int] = set()
         skipped = 0
         for node, graph_id in loaded:
-            edges, node_skipped = _relation_edges(node, graph_id, graph_ids)
+            edges, node_skipped = _relation_edges(node, graph_id, resolve)
             skipped += node_skipped
             held.update(e["id"] for e in edges if self._ensure_edge(e, mirrored))
         if skipped:
             logger.info(
-                "Skipped %d relationship(s) whose target was not loaded in this call.",
+                "Skipped %d relationship(s) whose target is not in the graph.",
                 skipped,
             )
         return len(held), skipped

@@ -415,11 +415,11 @@ class TestGraphRetriever:
 _ALL_KINDS = {"SOURCE", "PREVIOUS", "NEXT", "PARENT", "CHILD"}
 
 
-def _graph_id(node_id: str, node_label: str = "DOCUMENT") -> int:
-    """The graph node id load_from_nodes derives for a LlamaIndex node id."""
+def _graph_id(node_id: str) -> int:
+    """The native graph node id of a LlamaIndex node: its VelesDB point id."""
     from velesdb_common.ids import stable_hash_id
 
-    return stable_hash_id(f"{node_label}:{node_id}")
+    return stable_hash_id(node_id)
 
 
 def _linked_nodes():
@@ -510,7 +510,7 @@ class TestLoadFromNodesExtractRelations:
             ("CHILD", _graph_id("p"), _graph_id("b")),
         }
 
-    def test_given_custom_node_label_when_extracted_then_edges_join_labelled_ids(
+    def test_given_custom_node_label_when_loaded_then_label_in_labels_not_in_id(
         self, native_store
     ):
         from llamaindex_velesdb import GraphLoader
@@ -518,10 +518,70 @@ class TestLoadFromNodesExtractRelations:
         loader = GraphLoader(native_store, graph_collection_name="kg")
         loader.load_from_nodes(_linked_nodes(), node_label="CHUNK", extract_relations=True)
 
-        next_edges = loader.get_edges(label="NEXT")
-        assert _edge_triples(next_edges) == {
-            ("NEXT", _graph_id("a", "CHUNK"), _graph_id("b", "CHUNK")),
+        assert loader._native_graph.get_node_payload(_graph_id("a"))["_labels"] == ["CHUNK"]
+        assert _edge_triples(loader.get_edges(label="NEXT")) == {
+            ("NEXT", _graph_id("a"), _graph_id("b")),
         }
+
+    def test_given_target_loaded_by_earlier_call_when_extracted_then_edge_written(
+        self, native_store
+    ):
+        """A later batch may point at a node an earlier batch loaded."""
+        from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        first = loader.load_from_nodes(
+            [TextNode(text="whole document", id_="doc")], extract_relations=True
+        )
+        chunk = TextNode(text="chunk a", id_="a")
+        chunk.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(node_id="doc")
+        chunk.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(node_id="never-loaded")
+
+        second = loader.load_from_nodes([chunk], extract_relations=True)
+
+        assert first == {"nodes": 1, "edges": 0, "skipped_relations": 0}
+        assert second == {"nodes": 1, "edges": 1, "skipped_relations": 1}
+        assert _edge_triples(loader.get_edges()) == {
+            ("SOURCE", _graph_id("a"), _graph_id("doc")),
+        }
+
+    def test_given_extracted_relations_when_retriever_expands_then_related_node_reached(
+        self, native_store
+    ):
+        """GraphRetriever expands from the seed's vector-store point id, so an
+        extracted edge must start there and end at a node it can fetch."""
+        from llama_index.core import VectorStoreIndex
+        from llama_index.core.embeddings import MockEmbedding
+        from llama_index.core.schema import NodeWithScore, NodeRelationship, RelatedNodeInfo, TextNode
+        from llama_index.core.vector_stores.types import VectorStoreQuery
+        from llamaindex_velesdb import GraphLoader, GraphRetriever
+
+        a = TextNode(text="chunk a", id_="chunk-a", embedding=[1.0, 0.0, 0.0, 0.0])
+        b = TextNode(text="chunk b", id_="chunk-b", embedding=[0.0, 1.0, 0.0, 0.0])
+        c = TextNode(text="chunk c", id_="chunk-c", embedding=[0.0, 0.0, 1.0, 0.0])
+        a.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(node_id="chunk-b")
+        native_store.add([a, b, c])
+        GraphLoader(native_store, graph_collection_name="kg").load_from_nodes(
+            [a, b, c], extract_relations=True
+        )
+
+        seed = native_store.query(
+            VectorStoreQuery(query_embedding=[1.0, 0.0, 0.0, 0.0], similarity_top_k=1)
+        ).nodes[0]
+        index = VectorStoreIndex.from_vector_store(
+            native_store, embed_model=MockEmbedding(embed_dim=4)
+        )
+        retriever = GraphRetriever(
+            index=index, mode="native", graph_collection_name="kg", expand_k=5, max_depth=1
+        )
+        # The seed search itself returns expand_k hits (see _retrieve); feed the
+        # one seed to the expansion step so the neighbour can only come from the graph.
+        results = retriever._build_expanded_results([NodeWithScore(node=seed, score=1.0)])
+
+        assert seed.node_id == "chunk-a"
+        expanded = [r.node for r in results if r.node.metadata["graph_depth"] == 1]
+        assert [(n.node_id, n.get_content()) for n in expanded] == [("chunk-b", "chunk b")]
 
     def test_given_loaded_relations_when_reloaded_then_graph_unchanged(
         self, native_store
@@ -604,6 +664,21 @@ class TestLoadFromNodesExtractRelations:
         assert counts["edges"] == 6
         assert len(loader.get_edges()) == 6
         assert loader._graph_store.edge_count() == 6
+
+    def test_given_no_graph_collection_when_loaded_then_stored_node_not_overwritten(
+        self, native_store
+    ):
+        """Without a graph collection, graph nodes share the vector store's
+        collection, so they must not take the stored node's point id."""
+        from llama_index.core.schema import TextNode
+        from llamaindex_velesdb import GraphLoader
+
+        stored = TextNode(text="chunk a", id_="chunk-a", embedding=[1.0, 0.0, 0.0, 0.0])
+        native_store.add([stored])
+
+        GraphLoader(native_store).load_from_nodes([stored])
+
+        assert native_store.get_nodes(["chunk-a"])[0].get_content() == "chunk a"
 
     def test_given_edge_write_fails_when_extracted_then_edge_not_counted(self):
         """A failed write is logged and left out of the count, never raised."""

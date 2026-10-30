@@ -12,11 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
   node relationships as edges.** The option was documented but never read, and
   the call always returned `"edges": 0`. Each `SOURCE`, `PREVIOUS`, `NEXT`,
-  `PARENT` and `CHILD` relationship whose target is loaded by the same call
+  `PARENT` and `CHILD` relationship whose target is in the graph — loaded by
+  the same call or, with a native graph collection, by an earlier one —
   becomes an edge labelled with the kind's name, with a deterministic id, so a
-  reload writes nothing new and returns the same counts. A relationship whose
-  target is not in the call is skipped, never written as a dangling edge, and
-  counted in the new `skipped_relations` key of the result.
+  reload writes nothing new and returns the same counts. Any other
+  relationship is skipped, never written as a dangling edge, and counted in
+  the new `skipped_relations` key of the result.
+
+### Changed
+
+- **BREAKING (behavior) — LlamaIndex `GraphLoader` native graph node ids are
+  VelesDB point ids.** With a graph collection, `load_from_nodes` gives each
+  node the id `VelesDBVectorStore` stores it under,
+  `stable_hash_id(node.node_id)`, instead of
+  `stable_hash_id(f"{node_label}:{node.node_id}")`; the label stays in
+  `_labels`. `GraphRetriever` expands from a vector hit's point id, so it now
+  reaches the loaded graph, the way LangChain's retriever expands from the
+  point id (`_int_id`). Without a graph collection the old id is kept: those
+  nodes share the vector store's collection, where the point id would
+  overwrite the stored node. *Migration*: none. No stored data depends on the
+  old native ids: in 8.0.0 the native mode never persisted anything, because
+  the loader fell back to an in-memory graph store (see Fixed).
 
 ### Fixed
 
