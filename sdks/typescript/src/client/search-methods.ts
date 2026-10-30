@@ -14,6 +14,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
   PqTrainOptions,
@@ -26,7 +27,6 @@ import type {
   GuardRailsConfigResponse,
   AggregateQueryOptions,
   AggregateResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -76,13 +76,13 @@ export function searchBatch(
   return backend.searchBatch(collection, searches);
 }
 
-/** Perform full-text search using BM25. */
+/** Full-text search: BM25 on REST, an unranked substring match on WASM. */
 export function textSearch(
   backend: IVelesDBBackend,
   collection: string,
   query: string,
   options?: { k?: number; filter?: FilterInput }
-): Promise<SearchResult[]> {
+): Promise<TextSearchResult[]> {
   requireNonEmptyString(query, 'Query');
   return backend.textSearch(collection, query, options);
 }
@@ -228,12 +228,11 @@ export function query(
   backend: IVelesDBBackend,
   collection: string,
   queryString: string,
-  params?: Record<string, unknown>,
-  options?: QueryOptions
+  params?: Record<string, unknown>
 ): Promise<QueryApiResponse> {
   requireNonEmptyString(collection, 'Collection name');
   requireNonEmptyString(queryString, 'Query string');
-  return backend.query(collection, queryString, params, options);
+  return backend.query(collection, queryString, params);
 }
 
 /** Explain the execution plan for a VelesQL query. */

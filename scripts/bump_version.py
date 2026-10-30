@@ -37,6 +37,13 @@ TARGETS: "list[tuple[str, str]]" = [
     ("integrations/llamaindex/pyproject.toml", "toml"),
     ("integrations/haystack/pyproject.toml", "toml"),
     ("integrations/langgraph/pyproject.toml", "toml"),
+    # Each integration imports `velesdb_common` modules added in the release it
+    # ships with (`scores` came in 8.0.0), and the packages publish in lock-step.
+    # A floor left at an older release let pip keep a velesdb-common without the
+    # module, and the integration failed at import: 8.0.0 shipped `>=4.0.0`.
+    ("integrations/langchain/pyproject.toml", "pip_common_floor"),
+    ("integrations/llamaindex/pyproject.toml", "pip_common_floor"),
+    ("integrations/haystack/pyproject.toml", "pip_common_floor"),
     ("integrations/haystack/src/haystack_velesdb/__init__.py", "py_init_version"),
     ("examples/wasm-browser-demo/index.html", "wasm_cdn_url"),
     ("docs/guides/CONFIGURATION.md", "doc_toml_header"),
@@ -309,6 +316,10 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
             r'(name = "velesdb-core"\nversion = ")' + VERSION_RE + r'(")',
             r"\g<1>" + ver + r"\g<2>",
         )
+    elif fmt == "pip_common_floor":
+        text, n = _sub_first(
+            text, r'("velesdb-common>=)' + VERSION_RE + r'(")', r"\g<1>" + ver + r"\g<2>"
+        )
     elif fmt == "cargo_dep_pin":
         # `velesdb-core = "X.Y.Z"` in a TOML snippet — a different shape from
         # `cargo_pin`'s `velesdb-core@X.Y.Z`, which is the shell/cargo-install
@@ -318,7 +329,8 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
         # and the table `velesdb-core = { version = "X.Y.Z", features = [...] }`.
         text, n = _sub_all(
             text,
-            r'(velesdb-core\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?")' + VERSION_RE + r'(")',
+            r'((?:velesdb-(?:core|server|cli|migrate|mobile)|tauri-plugin-velesdb)'
+            r'\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?")' + VERSION_RE + r'(")',
             r"\g<1>" + ver + r"\g<2>",
         )
     elif fmt == "ghcr_image":

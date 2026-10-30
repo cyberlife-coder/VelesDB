@@ -174,7 +174,7 @@ unversioned `/…` form is kept for backward compatibility — its responses car
 | Windows x86_64 (MSVC) | Supported | Portable `.zip`; no signed MSI installer yet |
 | Docker | Supported | Repository `Dockerfile`: `rust:bookworm` builder running the toolchain `rust-toolchain.toml` pins, `debian:bookworm-slim` runtime, non-root user, port 8080 |
 | Rust toolchain | 1.90 or later | Workspace MSRV, for `cargo install` and source builds |
-| `velesdb-core` | 5.0.0 | Same workspace version; non-optional dependency with `openapi` + `persistence` enabled |
+| `velesdb-core` | 8.0.0 | Same workspace version; non-optional dependency with `openapi` + `persistence` enabled |
 | HTTP clients | Any | Plain JSON over HTTP/1.1, described by an OpenAPI 3.0 document |
 
 ## Troubleshooting

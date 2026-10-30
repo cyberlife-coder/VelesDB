@@ -95,5 +95,5 @@ Swap the `embed()` function and bump `EMBEDDING_DIM` to your model's output size
 | `src/server.ts` | Express app — routes, validation (zod), error handler. |
 | `src/velesdb.ts` | SDK init wrapper — opens the REST connection, creates the `documents` collection if missing. |
 | `src/embed.ts` | Hashing-trick embedder used by both `/ingest` and `/search`. |
-| `Dockerfile` | Multi-stage Node 20 alpine build for the app. |
+| `Dockerfile` | Multi-stage Node 22 alpine build for the app (the SDK requires Node 22+). |
 | `docker-compose.yml` | Runs `velesdb-server` + this app together. |

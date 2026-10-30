@@ -943,7 +943,7 @@ The query language itself is documented once, not per surface. For the full
 syntax — DDL, DML, `vector NEAR`, sparse and hybrid search, `MATCH`
 traversals, `WHERE` operators, scalar subqueries, pagination — see the
 [VelesQL cheat sheet](./VELESQL_CHEATSHEET.md) (every example there is
-parse-checked in CI) and, normatively, [`VELESQL_SPEC.md`](../VELESQL_SPEC.md).
+parsed and validated in CI) and, normatively, [`VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
 ### VelesQL v2.0 Features
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
+  node relationships as edges.** The option was documented but never read, and
+  the call always returned `"edges": 0`. Each `SOURCE`, `PREVIOUS`, `NEXT`,
+  `PARENT` and `CHILD` relationship whose target is in the graph — loaded by
+  the same call or, with a native graph collection, by an earlier one —
+  becomes an edge labelled with the kind's name, with a deterministic id, so a
+  reload writes nothing new and returns the same counts. Any other
+  relationship is skipped, never written as a dangling edge, and counted in
+  the new `skipped_relations` key of the result.
+
 ### Changed
 
 - **BREAKING (behaviour): `velesdb-server` sends no CORS header unless origins
@@ -88,6 +100,149 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VELESDB_ALLOWED_HOSTS: velesdb`, and the root `docker-compose.yml`, the
   `Dockerfile` and the deployment guides show how.
 
+- **BREAKING (behavior) — the TypeScript SDK refuses a filter that is not
+  core-shaped.** `normalizeFilter`, now called on every filter before it
+  leaves the SDK (REST search, batch, text, hybrid, multi-query, sparse,
+  ids and scroll; the WASM filtered search and its batch pre-loop), throws
+  `ValidationError` unless the filter is `{ condition: {...} }`, the shape of
+  `velesdb_core::filter::Filter`. A flat map such as `{ category: 'tech' }`
+  used to reach velesdb-server, which answered `400 missing field condition`,
+  or velesdb-wasm, whose `matches_filter` read a filter without `condition`
+  as "no filter" in 7.1.0 and returned unfiltered neighbours. `null` still means no
+  filter. Migration: build filters with `f.*`.
+- **BREAKING (behavior) — `recallRecent(collection, since)` is exclusive in
+  the TypeScript SDK**, returning events with `timestamp > since` as core's
+  `TemporalIndex::recent` does (it skips `ts <= since`); it was `>=`. The
+  shared fixture's `since` case now pins `gt`. `recallOlderThan` already
+  matched core's strict `older_than`. Migration: pass `since - 1` to keep an
+  event stamped exactly `since`.
+- **BREAKING (behavior) — `createGraphCollection({ schemaMode: 'strict' })`
+  creates a strict graph** (TypeScript SDK). The SDK sent `schema_mode`, a
+  field velesdb-server never read, so every graph collection came out
+  schemaless; it now sends core's `graph_schema`. The new `nodeTypes` and
+  `edgeTypes` options mirror core's `NodeType` and `EdgeType` (properties
+  typed by `ValueType`), so a strict graph can declare what it accepts;
+  declaring types on a schemaless graph, where core ignores them, throws
+  `ValidationError`. The wire shape is pinned by
+  `conformance/graph_schema_wire_cases.json`:
+  `crates/velesdb-core/tests/graph_schema_wire_conformance.rs` parses each case
+  as `GraphSchema`, round-trips it and checks the node types and edges it
+  accepts and refuses, and the SDK test checks it sends each case's
+  `graph_schema` for its config. The WASM backend still refuses graph
+  collections with `NOT_SUPPORTED`. Migration: declare the types, or drop
+  `schemaMode: 'strict'` to keep the old schemaless behaviour.
+- **BREAKING (behavior) — velesdb-wasm filters with core.**
+  `VectorStore.search_with_filter` parses the filter as
+  `velesdb_core::Filter` (`filter::parse_filter`) and evaluates it with
+  `Filter::matches`; the crate's own evaluator, which knew only `eq`, `neq`,
+  the four comparisons, `and`, `or` and `not`, is deleted. Every other core
+  condition kind (`in`, `contains`, `is_null`, `is_not_null`, `like`,
+  `ilike`, the three `array_contains*`, `geo_distance`, `geo_bbox`) matched
+  nothing in the browser in 7.1.0 while REST returned hits; they now select what
+  core selects, checked against the shared
+  `conformance/filter_wire_cases.json`, which now holds one case per kind and
+  is run by both velesdb-core and velesdb-wasm. A filter core cannot parse
+  throws core's message (`Invalid filter: missing field \`condition\``, for
+  one): a flat `{ "category": "tech" }` read as "no filter" in 7.1.0 and
+  returned every point, and a raw `search_with_filter(query, k, null)` now
+  throws instead of searching unfiltered — call `search` for an unfiltered
+  search.
+- **BREAKING — the TypeScript SDK requires Node.js 22 or later**
+  (`engines.node`, was `>=18.0.0`). CI builds and tests the SDK on Node 22
+  only, its test toolchain needs 22.12+, and Node 18 and 20 are end-of-life.
+  The SDK README, `docs/guides/INSTALL_OPTIONS.md`, `CONTRIBUTING.md` and
+  `examples/node-express-rag` (engines, Dockerfile) now state it. The
+  velesdb-wasm README states the floor of its own binary instead, Node 18+
+  (WebAssembly SIMD, bulk memory, non-trapping float-to-int and reference
+  types), where it claimed 20+.
+- **BREAKING (behavior) — `velesdb-wasm` returns `null` for an absent value,
+  where 7.1.0 returned `undefined`.** It follows from the fix below: the
+  binding now serializes as `JSON.parse` would, and `JSON.stringify` keeps a
+  `null` where it drops an `undefined`. Affected: a missing `payload` in
+  `hybrid_search` and `search_with_filter` records, `query()`'s `graphScore`
+  and `columnData`, `GraphNode.to_json()`'s `vector`, and a missing alias in
+  `ParsedQuery.matchReturnItems`. A check written `=== undefined` must become
+  `== null`. See the [migration guide](docs/guides/MIGRATION_v8.0.0.md#7-velesdb-wasm).
+- **BREAKING (TypeScript SDK types) — `textSearch` returns
+  `TextSearchResult[]`, whose `score` is `number | null`.** velesdb-wasm's
+  text search is an unranked, case-insensitive substring match, so its
+  records carry `score: null` (in 7.1.0 the SDK's `textSearch` threw on any
+  match instead, see Fixed). REST still
+  returns the BM25 score. A caller that sorts or thresholds on it must handle
+  `null`.
+
+- **BREAKING (behavior) — LlamaIndex `GraphLoader` with a graph collection
+  writes its nodes there, at VelesDB point ids.** In 7.1.0 `add_node` and
+  `load_from_nodes` wrote every node into the vector store's collection — a
+  metadata-only point, or a vector point when `add_node` got a vector — at the
+  given id, or at `stable_hash_id(f"{node_label}:{node.node_id}")` for
+  `load_from_nodes`, while its edges never persisted (see Fixed). In 8.0.0,
+  with a graph collection, a node is upserted into that graph collection only,
+  labelled through `_labels` (from `label`, which a `_labels` key in the
+  node's metadata no longer overrides); a vector is dropped when the graph
+  collection has no embeddings. `load_from_nodes` gives it the id
+  `VelesDBVectorStore` stores the node under, `stable_hash_id(node.node_id)`,
+  so `GraphRetriever` expands from a vector hit straight into the loaded
+  graph, as LangChain's retriever expands from the point id (`_int_id`).
+  Without a graph collection nothing changes. *Migration*: the points the
+  7.1.0 loader wrote into the vector store's collection are no longer read.
+  They are metadata-only, so search and `get` never return them, but they
+  stay stored and counted; delete them with the snippet in
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md) (section 4).
+- **BREAKING (behavior) — LangChain and LlamaIndex `GraphRetriever` search
+  `seed_k` seeds.** In 7.1.0 they searched `expand_k` (default 10); in 8.0.0
+  they search `seed_k` (default 3), as documented, and fill the rest of
+  `expand_k` with graph neighbours (see Fixed). A query whose seeds have no
+  neighbour now returns at most `seed_k` documents where it returned up to
+  `expand_k`. *Migration*: raise `seed_k` to get more vector hits.
+- **BREAKING (behavior) — LlamaIndex `GraphRetriever` neighbours carry
+  `score=None`.** In 7.1.0 a node reached through the graph had `score=0.5`,
+  a value no search produced, which a downstream score threshold or re-ranker
+  read as a similarity. `NodeWithScore.score` is optional, and `None` now says
+  the node was not scored, as LangChain's neighbours carry no
+  `relevance_score`. `GraphQARetriever` sorts unscored nodes after the scored
+  ones of the same depth. *Migration*: a postprocessor that compares scores
+  must handle `None` (keep or drop graph-reached nodes on purpose).
+- **BREAKING (behavior) — LlamaIndex `GraphRetriever` expands a seed from its
+  point id only.** In 7.1.0 it took the seed's id from an `id`, `doc_id` or
+  `node_id` key of its metadata when one held an integer, else `int()` of a
+  numeric node id, else the hash — while `VelesDBVectorStore` always stores a
+  node under the hash, so a node id like `"1"` (or such a metadata key)
+  expanded from a point that does not exist and found nothing. Store, loader
+  and retriever now share one derivation, `point_id(node_id)` =
+  `stable_hash_id(node_id)`. *Migration*: edges added by hand must use
+  `stable_hash_id(node.node_id)` as `source` / `target`.
+
+### Removed
+
+- **BREAKING — `CollectionConfig.description` (TypeScript SDK).** Core has no
+  collection description: `CreateCollectionRequest` has no such field, so the
+  REST server dropped it silently, and the WASM backend stored it where
+  nothing read it. It is gone from the type, the REST request and
+  `capabilities().collectionConfig`.
+- **BREAKING — `HnswParams.storageMode` (TypeScript SDK).** Nothing read it;
+  the REST request takes `CollectionConfig.storageMode` only, which is the
+  field to set.
+- **BREAKING — `SearchOptions.includeVectors` and `SearchResult.vector`
+  (TypeScript SDK).** No search returns vectors on either backend: core's
+  `SearchRequest` has no `include_vectors` and `SearchResultResponse` is id,
+  score and payload. REST sent the flag to be dropped (while
+  `REST_CAPABILITIES.includeVectors` claimed `true`); WASM refused it. Read a
+  vector with `get()`.
+- **BREAKING — `QueryOptions` and `query()`'s `options` argument (TypeScript
+  SDK).** Core's `QueryRequest` (`/query`, `/aggregate`) is `query`,
+  `params` and `collection`: REST sent `timeout_ms` and `stream` to be
+  dropped, WASM refused them. The server's query timeout is its guard-rails
+  `timeoutMs` (`updateGuardRails`).
+- **BREAKING — the `includeVectors` and `queryOptions` capabilities**, which
+  described the two removed options, leave `CapabilityMap`,
+  `CAPABILITY_LIST_UNIVERSES` and `QUERY_OPTION_NAMES` with them.
+- **BREAKING — `TraverseRequest.cursor` and `TraverseResponse.nextCursor`
+  (TypeScript SDK).** velesdb-server's `TraverseRequest` and
+  `TraverseResponse` have no cursor (the WASM backend has no traversal), so
+  the request field was dropped and the response field always `undefined`.
+  `hasMore` says the traversal stopped at `limit`.
+
 ### Fixed
 
 - **`velesdb-server` applies the `[server]` and `[logging]` settings
@@ -155,6 +310,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query of the wrong dimension now answers `400`, as documented, instead of
   `500`. The `CreateCollectionRequest` field docs (and so the OpenAPI
   descriptions) name the graph case.
+
+- **The TypeScript SDK's agent memory works over REST.**
+  `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`,
+  `recallRecentEvents` and `recallOlderThanEvents` sent a flat
+  `{ _memory_type: '...' }` filter that velesdb-server refuses with a `400`,
+  so every recall failed while `REST_CAPABILITIES.agentMemory` advertised
+  them. They now send core filters built by one pair of helpers
+  (`memoryTypeFilter`, `episodicWindowFilter`), and the temporal recalls let
+  the server apply their `timestamp` window (`gt` since, `lt` before)
+  instead of scrolling every episodic point to filter it client-side. The
+  exact JSON is pinned by `conformance/filter_wire_cases.json`, shared by a
+  velesdb-core test that parses each case as `Filter` and checks which
+  payloads it selects (`tests/filter_wire_conformance.rs`) and an SDK test
+  that asserts the requests carry those bodies
+  (`sdks/typescript/tests/filter-wire-contract.test.ts`).
+- **`velesdb-wasm` returns plain objects, not ES2015 `Map`s, so the TypeScript
+  SDK's WASM backend can read its results (#2332).** Every value the binding
+  handed to JavaScript went through `serde-wasm-bindgen`'s default serializer,
+  which turns a map into a `Map`: a record from `hybrid_search`,
+  `text_search`, `search_with_filter` or `get`, the `bindings` of `query`, and
+  the `properties` of `GraphNode.to_json` / `GraphEdge.to_json`. On a `Map`,
+  `record.id` is `undefined` and `JSON.stringify` yields `{}`, so the SDK's
+  `textSearch`, `hybridSearch`, filtered `search` and `get` threw (`Cannot
+  read properties of undefined`) on every call that matched a row, with
+  velesdb-wasm 6.x through 7.1.0. The crate now has one serializer,
+  `Serializer::json_compatible()`, and a test fails on any call that bypasses
+  it. What changes for a direct caller of the binding: records are plain
+  objects, and an absent value is `null` (listed under Changed). Ids are
+  unchanged: still a JS `number`, still refused above
+  `Number.MAX_SAFE_INTEGER`. `text_search` records gain an explicit `score:
+  null`: the [WASM API guide](docs/guides/WASM_API.md) promised a score its
+  unranked substring match never computed, and the guide now says so. The
+  `velesdb-wasm` crate doc showed `search()` returning BigInt ids (`[[1n,
+  0.95]]`); they are JS numbers, and it now says so. Graphs saved to IndexedDB
+  by earlier versions still load: the deserializer reads both shapes. The SDK
+  gains a suite that runs its search family over a real velesdb-wasm build
+  instead of a fake store, run by the `wasm-check` CI job.
+
+- **LlamaIndex `GraphLoader` reaches its graph collection.** It opened a
+  second `velesdb.Database` on the vector store's path, which core refuses
+  once the store holds it open (`VELES-031`), and silently fell back to an
+  in-memory graph store, so in 7.1.0 no edge persisted. It now reuses the
+  store's own handle, as `GraphRetriever` does.
+- **LangChain and LlamaIndex `GraphRetriever` return graph neighbours.** In
+  7.1.0 every result slot went to a vector hit on a store holding at least
+  `expand_k` documents, so graph expansion never added one. The order is now
+  defined and the same in both: seeds by score, then neighbours seed by seed
+  in traversal order, where the set they were kept in made it arbitrary. A
+  neighbour that is a seed or that the vector store cannot return takes no
+  slot.
+- **LangChain and LlamaIndex `GraphRetriever` report a neighbour's real
+  `graph_depth`.** In 7.1.0 every neighbour was marked `1`, also one reached
+  at depth 2, so `GraphQARetriever`'s depth re-ranking could not tell them
+  apart. It is now the hops from the nearest seed, as the traversal reports
+  it, in native and REST mode alike. REST mode also turns `target_id`, which
+  the server serialises as a string, into an integer: LlamaIndex passed the
+  string to the collection, which raised `TypeError` out of `retrieve()`. The
+  new `velesdb_common.graph.parse_graph_traverse_results` returns
+  `(target_id, depth)` pairs, and `parse_graph_traverse_response` now returns
+  integer ids.
+- **The GraphRAG examples run.** `examples/python/graphrag_langchain.py` and
+  `graphrag_llamaindex.py` imported a store class that does not exist and
+  called REST routes the server does not have. They now use the integrations
+  natively (`VelesDBVectorStore`, `GraphLoader`, `GraphRetriever`), with no
+  server, and run offline with the frameworks' fake embeddings and LLM when no
+  OpenAI key is set or with `--offline`; each integration's test suite runs
+  its example that way.
+
+- **The Python quickstart and examples run on 8.0.0.** The root README's
+  "three commands that work" ran `examples/python/hello_velesdb.py`, which
+  passed `SearchOptions(top_k=...)`: 8.0.0 removed that alias, so the script
+  stopped with `TypeError`, as did the other `SearchOptions(top_k=)` calls in
+  `examples/`, `tutorials/`, `demos/rag-pdf-demo` and the Python API reference
+  (29 call sites in 12 files). They pass `k=`. The VelesQL tutorial ran the direct search methods on a graph
+  collection, which 8.0.0 refuses, and now runs them on a vector collection.
+  CI used to compile the examples only; it now runs every example that needs
+  no network, server or API key against the wheel it builds
+  (`scripts/run-python-examples.py`, with a deterministic stand-in encoder).
+  The examples and the RAG demo require `velesdb>=8.0.0`.
+- **LangChain, LlamaIndex and Haystack require the velesdb-common they
+  import.** They import `velesdb_common.scores`, first shipped in
+  velesdb-common 8.0.0, but declared `>=4.0.0` (`>=3.8.0` for Haystack): pip
+  kept an installed 7.x and the integration failed at import. The floor now
+  equals the workspace version, policed by `check-version-sync.py` and moved
+  by `bump_version.py`.
+- **VelesQL samples that core refuses.** The TypeScript SDK README and the
+  architecture reference ran `USING FUSION` with no branch to fuse, and the
+  CLI cookbook's weighted, maximum and default fusion samples with a single
+  `NEAR`: each fails with `V012`. They fuse `NEAR` with a `MATCH`.
+- **Every `sql` block in the docs is VelesQL the engine accepts.** 60 statements
+  in the spec and the guides were refused: `MATCH` without `RETURN` (or with
+  `ORDER BY` before it), `HAVING` on a SELECT alias, `IN (SELECT ...)`, a comma
+  join, `DATE()`, a PostgreSQL `CREATE TABLE`, and grammar notation or
+  consecutive statements with no `;`. They are rewritten in supported syntax,
+  or the guide now says the feature does not exist (comma joins, `DATE()`,
+  set-membership subqueries — also listed in the spec and the conformance
+  matrix); the cookbook no longer calls scalar subqueries and outer joins
+  unexecutable. The cheat-sheet test became `velesql_doc_samples`, which parses
+  and validates every `sql` block of the user-facing markdown; the fence
+  convention it enforces (`postgresql`, `text`, `velesql-error`) is in
+  `CONTRIBUTING.md`. The MATCH `ORDER BY` forms the engine refuses (an
+  aggregate, a lone bare identifier) are now documented in the spec, the graph
+  patterns guide and the conformance matrix.
+- **Docs that named a missing API or a wrong version.**
+  - The concurrency guide configured a collection with
+    `CollectionConfig::new(..).with_durability(..)`, which does not exist: a
+    collection always opens its storage with `DurabilityMode::Fsync`. The
+    guide now batches with `upsert_bulk`, which syncs once per call.
+  - The API correspondence table kept `SearchOptions.top_k` as an accepted
+    alias, and the WASM bundle guide still recommended `sq8` for a 4x memory
+    saving that 8.0.0 removed.
+  - The Tauri tutorial pinned `tauri-plugin-velesdb = "4.3.0"` beside
+    `velesdb-core = "8.0.0"` and could not compile; the server README named
+    velesdb-core 5.0.0 and the migrate README a 4.3.0 destination format.
+    The doc version guard now checks every crate that versions with the
+    workspace, and a version one table cell away from its crate name.
+- **`@wiscale/tauri-plugin-velesdb` ships a README.** Its package listed
+  `README.md` in `files`, but none existed, so the npm page was empty.
+- The committed Playwright report of the e-commerce example is removed.
+
+### Documentation
+
+- **TypeScript SDK README:** the stale "What's New in v3.12.0" section under
+  the v8.0.0 banner is replaced by what 8.0.0 changes; filters, the HNSW
+  options, the search and query options, graph schema mode, traversal and
+  the supported Node.js
+  versions describe what the SDK does. `docs/guides/AGENT_MEMORY.md` states
+  the filters agent memory sends, and `docs/guides/MIGRATION_v8.0.0.md` gains
+  a TypeScript SDK section.
 
 ## [8.0.0] - 2026-10-30
 

@@ -4,7 +4,7 @@
 //! `entity` / `compileContext` / `compileTranscript` / `explainCompilation` /
 //! `contextSavings` / `suggestBudget` / `retrieveContextSource` /
 //! `saveWorkingContext` / `loadWorkingContext` / `listWorkingContexts`,
-//! backed entirely in-memory ([`WasmStore`]): no filesystem, no network, no
+//! backed entirely in-memory (`WasmStore`): no filesystem, no network, no
 //! `persistence` feature (`Cargo.toml` pulls `velesdb-memory` with
 //! `default-features = false, features = ["context"]` only).
 //!
@@ -25,7 +25,7 @@
 //! One method available on the Node/Python bindings is deliberately absent
 //! here, re-confirmed by issue #1547's audit:
 //!
-//! - `feedback` (RL Memory): [`MemoryService::feedback`] lives in the
+//! - `feedback` (RL Memory): `MemoryService::feedback` lives in the
 //!   `persistence`-gated `reinforce` module
 //!   (`crates/velesdb-memory/src/service.rs`'s own doc comment on that
 //!   module: "a durable learned confidence is meaningless on the in-memory
@@ -399,7 +399,7 @@ impl WasmMemoryService {
     /// every id field crosses as a decimal string.
     ///
     /// In-memory semantics: externalized sources and savings events live in
-    /// this session's [`WasmStore`] — `ctx://source/` handles resolve only
+    /// this session's `WasmStore` — `ctx://source/` handles resolve only
     /// within the current browser session (no persistence in WASM).
     #[wasm_bindgen(js_name = compileContext)]
     pub fn compile_context(&self, request: JsValue) -> Result<JsValue, JsValue> {
@@ -440,7 +440,7 @@ impl WasmMemoryService {
     /// compiled result.
     ///
     /// In-memory semantics: same as [`Self::compile_context`] — externalized
-    /// sources and savings events live only in this session's [`WasmStore`].
+    /// sources and savings events live only in this session's `WasmStore`.
     #[wasm_bindgen(js_name = compileTranscript)]
     pub fn compile_transcript(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let input: CompileTranscriptInput = serde_wasm_bindgen::from_value(request)
@@ -466,7 +466,7 @@ impl WasmMemoryService {
     /// delegation to `velesdb_memory`'s bridge — zero logic in the binding.
     ///
     /// In-memory semantics: like [`Self::compile_context`], the aggregated
-    /// events live only in this session's [`WasmStore`].
+    /// events live only in this session's `WasmStore`.
     #[wasm_bindgen(js_name = contextSavings)]
     pub fn context_savings(&self, project: Option<String>) -> Result<JsValue, JsValue> {
         // Type annotated for the same reason as `compile_context`: the
@@ -545,7 +545,7 @@ impl WasmMemoryService {
     /// carried one.
     ///
     /// In-memory semantics: the handle resolves only within this session's
-    /// [`WasmStore`] — see [`Self::compile_context`]'s doc comment.
+    /// `WasmStore` — see [`Self::compile_context`]'s doc comment.
     #[wasm_bindgen(js_name = retrieveContextSource)]
     pub fn retrieve_context_source(&self, handle: &str) -> Result<JsValue, JsValue> {
         let source = self
@@ -573,7 +573,7 @@ impl WasmMemoryService {
     /// Resolves to the stored fact id as a decimal string.
     ///
     /// **In-memory semantics**: like [`Self::compile_context`], this is
-    /// backed entirely by this session's [`WasmStore`] — there is no
+    /// backed entirely by this session's `WasmStore` — there is no
     /// filesystem or IndexedDB persistence behind this binding. A "saved"
     /// working context disappears the moment the page (or worker) that
     /// created this `MemoryService` instance is gone. This is useful to
@@ -614,7 +614,7 @@ impl WasmMemoryService {
     /// value.
     ///
     /// **In-memory semantics**: see [`Self::save_working_context`]'s doc
-    /// comment — this only ever resolves what THIS session's [`WasmStore`]
+    /// comment — this only ever resolves what THIS session's `WasmStore`
     /// still holds; nothing persists across a page reload.
     #[wasm_bindgen(js_name = loadWorkingContext)]
     pub fn load_working_context(&self, project: &str, session: &str) -> Result<JsValue, JsValue> {
@@ -643,7 +643,7 @@ impl WasmMemoryService {
     /// saved_at}]}`, empty (never an error) when nothing was saved (#1517).
     ///
     /// **In-memory semantics**: see [`Self::save_working_context`]'s doc
-    /// comment — reflects only what this session's [`WasmStore`] currently
+    /// comment — reflects only what this session's `WasmStore` currently
     /// holds, never a cross-session/browser-restart view.
     #[wasm_bindgen(js_name = listWorkingContexts)]
     pub fn list_working_contexts(&self, project: &str) -> Result<JsValue, JsValue> {

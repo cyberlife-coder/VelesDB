@@ -251,6 +251,36 @@ under `validation`.
 
   Those scores now pass through as core returns them.
 
+- **LlamaIndex `GraphLoader` with a `graph_collection_name`** writes its nodes
+  into that graph collection, at `stable_hash_id(node.node_id)` (the id
+  `VelesDBVectorStore` stores the node under), labelled through `_labels`; a
+  vector is dropped when the graph collection has no embeddings. The 7.1.0
+  loader wrote them into the vector store's collection as metadata-only points
+  at `stable_hash_id(f"{node_label}:{node.node_id}")` (or at the id given to
+  `add_node`). Nothing reads those points any more; they stay stored and
+  counted until deleted:
+
+  ```python
+  from velesdb_common.ids import stable_hash_id
+
+  node_label = "DOCUMENT"  # the node_label passed to load_from_nodes
+  collection = vector_store.client.get_collection(vector_store.collection_name)
+  collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])
+  ```
+
+  Without a graph collection the loader is unchanged, and those points are
+  still its nodes: do not delete them.
+- **LangChain and LlamaIndex `GraphRetriever` search `seed_k` seeds**
+  (default 3), not `expand_k` (default 10), then fill up to `expand_k` with
+  graph neighbours. A query whose seeds have no neighbour returns at most
+  `seed_k` documents: raise `seed_k` for more vector hits.
+- **LlamaIndex `GraphRetriever`:**
+  - a graph-reached node has `score=None` instead of `0.5`; a postprocessor
+    that compares scores must handle `None`;
+  - a seed expands from `stable_hash_id(node.node_id)` only, never from an
+    `id`/`doc_id`/`node_id` metadata key or `int()` of a numeric node id;
+    edges added by hand must use that id as `source` / `target`.
+
 ## 5. Tauri plugin
 
 Rejections carry core's codes and a new `recoverable` field:
@@ -310,7 +340,20 @@ Rejections carry core's codes and a new `recoverable` field:
 - **`updateGuardrails` throws `VelesError`** for limits core refuses.
 - **`SearchQuality.Adaptive` with `min_ef > max_ef`** is refused.
 
-## 7. `velesdb-wasm` storage modes
+## 7. `velesdb-wasm`
+
+### Values returned to JavaScript
+
+- **Records are plain objects**, no longer ES2015 `Map`s: read `hit.id` and
+  `hit.payload.title`, not `hit.get('id')` (#2332).
+- **An absent value is `null`, where 7.1.0 gave `undefined`:** a missing
+  `payload`, `query()`'s `graphScore` and `columnData`, `GraphNode.to_json()`'s
+  `vector`, an alias missing from `ParsedQuery.matchReturnItems`. Test with `== null`, which
+  matches both.
+- **`text_search` records carry `score: null`.** The match is an unranked
+  substring match; sort or threshold on something else.
+
+### Storage modes
 
 - **Every mode keeps f32 vectors** and returns core's top-k and scores for that
   mode.
@@ -320,6 +363,17 @@ Rejections carry core's codes and a new `recoverable` field:
 - **Trained PQ collections differ from core:** once a PQ collection has
   trained, core's default `search()` returns ADC-approximated scores. The
   browser returns exact ones.
+
+### Metadata filters
+
+- **`VectorStore.search_with_filter` parses and evaluates the filter with
+  core**, so every core condition kind selects what REST selects. In 7.1.0,
+  `in`, `contains`, `is_null`, `like`, the `array_contains*` and the geo
+  conditions matched nothing.
+- **A filter core cannot parse throws core's message**
+  (`Invalid filter: missing field \`condition\``, for one). In 7.1.0 a flat
+  `{ category: 'tech' }` matched every point and `null` searched unfiltered;
+  call `search` for an unfiltered search.
 
 ## 8. Observability
 
@@ -377,3 +431,50 @@ Rejections carry core's codes and a new `recoverable` field:
 - **WASM `SELECT DISTINCT`** applies `ORDER BY` and the default `LIMIT`.
 - **Error messages:** REST and WASM report core's wording for an unknown fusion
   strategy or search mode.
+
+## 10. TypeScript SDK (`@wiscale/velesdb-sdk`)
+
+The SDK's 8.0.0 refuses what velesdb-server would drop or refuse, instead of
+sending it. Each item is in the `[Unreleased]` section of the CHANGELOG until
+the npm package ships.
+
+- **Filters must be core-shaped.** A `filter` is `{ condition: { type, ... } }`
+  (`velesdb_core::filter::Filter`); build it with `f.*`. A flat field map such
+  as `{ category: 'tech' }` throws `ValidationError` on both backends. Over
+  REST the server already answered it with a `400`; on WASM it used to match
+  every point. `normalizeFilter` performs the check and is exported.
+- **`CollectionConfig.description` is removed.** Core has no collection
+  description; the REST server dropped the field. On WASM, an untyped caller
+  that still passes it gets `NOT_SUPPORTED`.
+- **`HnswParams.storageMode` is removed.** Nothing read it. Set the top-level
+  `CollectionConfig.storageMode`.
+- **`SearchOptions.includeVectors` and `SearchResult.vector` are removed.** No
+  search, on either backend, returns vectors (core's `SearchResultResponse` is
+  id, score, payload). Read a vector with `get()`.
+- **`query()` loses its `options` argument and `QueryOptions` is removed**
+  (`timeoutMs`, `stream`): core's `QueryRequest` takes neither. The server's
+  timeout is its guard-rails `timeoutMs` (`updateGuardRails`).
+- **`capabilities()` drops the `includeVectors` and `queryOptions` keys**,
+  which described those fields.
+- **`TraverseRequest.cursor` and `TraverseResponse.nextCursor` are removed.**
+  Core has no traversal cursor; `hasMore` says the traversal stopped at
+  `limit`. Raise `limit` to reach further.
+- **`recallRecent(collection, since)` is exclusive:** it returns events with
+  `timestamp > since`, as core's `episodic.recent()` does (it was `>=`).
+  Pass `since - 1` to keep an event stamped exactly `since`.
+  `recallOlderThan` was already strict (`<`), as core's `older_than()` is.
+- **`createGraphCollection({ schemaMode: 'strict' })` now takes effect.** The
+  SDK sent `schema_mode`, which the server never read, so every graph
+  collection was schemaless. It now sends core's `graph_schema`, with the
+  node and edge types declared in the new `nodeTypes` / `edgeTypes` options
+  (core's `NodeType` / `EdgeType`). A strict graph checks node `_labels` and
+  edge label/endpoint types against them;
+  declare them, or drop `schemaMode: 'strict'` to keep the old schemaless
+  behaviour. Types on a schemaless graph throw `ValidationError`.
+- **`textSearch` returns `TextSearchResult[]`, whose `score` is
+  `number | null`.** On WASM it is always `null` (an unranked substring
+  match); REST still returns the BM25 score. Handle `null` before sorting or
+  thresholding on it. On WASM, 7.1.0's `textSearch` threw on any match, and
+  every record now arrives as a plain object (see [§7](#7-velesdb-wasm)).
+- **Node.js 22 or later** (`engines.node`). CI builds and tests the SDK on 22;
+  18 and 20 are end-of-life.

@@ -2,18 +2,17 @@
 //!
 //! Provides search functionality extracted from the main store.
 
+use crate::js_value::to_js_value;
 use crate::wasm_error::WasmError;
 use crate::{fusion, text_search, vector_ops, DistanceMetric};
 use serde::Serialize;
 use wasm_bindgen::JsValue;
 
-/// Serializes a value to `JsValue` via `serde_wasm_bindgen`.
-///
-/// Consolidates the repeated `to_value(...).map_err(...)` pattern used
-/// throughout the WASM search module.
+/// Serializes a search result through [`to_js_value`], rendering a failure
+/// (an id above `Number.MAX_SAFE_INTEGER`) as a JS string error.
 #[inline]
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
-    serde_wasm_bindgen::to_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
+    to_js_value(value).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Converts scored triples `(id, score, payload)` to a JSON array of objects.
@@ -118,6 +117,11 @@ pub fn search(
 }
 
 /// Text search in payloads.
+///
+/// A case-insensitive substring match: it selects records, it does not rank
+/// them. Matches come back in insertion order with `score: null` — the
+/// `{id, score, payload}` shape of the other record-returning searches, with
+/// no number a caller could mistake for relevance and threshold or sort on.
 pub fn text_search_impl(
     query: &str,
     ids: &[u64],
@@ -140,6 +144,7 @@ pub fn text_search_impl(
                 if matches {
                     Some(serde_json::json!({
                         "id": id,
+                        "score": serde_json::Value::Null,
                         "payload": p
                     }))
                 } else {
