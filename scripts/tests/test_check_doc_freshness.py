@@ -349,6 +349,13 @@ class VersionGuardTests(FreshnessGuardTestCase):
         self.write("docs/ALPHA.md", ALPHA_CLEAN + "\nThis guide targets VelesDB v3.12.0.\n")
         self.assertGuardFails("versions", "[prose-core-version]", "says 3.12.0")
 
+    def test_an_old_version_one_table_cell_over_is_refused(self) -> None:
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + "\n| Component | Version |\n|---|---|\n| `velesdb-core` | 3.12.0 |\n",
+        )
+        self.assertGuardFails("versions", "[prose-core-version]", "says 3.12.0")
+
     def test_measurement_word_alone_does_not_exempt_an_old_version(self) -> None:
         self.write(
             "docs/ALPHA.md",

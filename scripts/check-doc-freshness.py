@@ -209,7 +209,10 @@ VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
         "velesdb-core",
         re.compile(
             r"\b(?:VelesDB|velesdb-(?:core|server|cli|wasm|python|migrate|mobile|sdk))"
-            r"\s*(?:@|v\s*)?(\d+\.\d+\.\d+)\b",
+            # A closing backtick and a table cell border may sit between the
+            # name and its version: `velesdb-core` | 5.0.0 survived 8.0.0 in
+            # the server README because the version was one cell over.
+            r"`?\s*(?:\|\s*)?(?:@|v\s*)?(\d+\.\d+\.\d+)\b",
             re.IGNORECASE,
         ),
         exact=True,
