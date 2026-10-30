@@ -843,3 +843,124 @@ fn a_node_deleted_from_a_metadata_only_collection_leaves_the_range_index() {
 
     assert_older_than(&collection, 10, &[2]);
 }
+
+// -------------------------------------------------------------------------
+// The range prefilter is a superset of what WHERE accepts
+// -------------------------------------------------------------------------
+//
+// The prefilter only rejects, so every node it drops must be one WHERE would
+// have rejected too. Each case below is one where the index ordering and the
+// WHERE comparison used to disagree.
+
+/// The ids `MATCH (n:P) [WHERE {condition}]` returns, sorted.
+fn matched_where(collection: &Collection, condition: Option<&str>) -> Vec<u64> {
+    let filter = condition.map_or_else(String::new, |c| format!("WHERE {c} "));
+    let sql = format!("MATCH (n:P) {filter}RETURN n LIMIT 100");
+    let mut ids: Vec<u64> = collection
+        .execute_query_str(&sql, &HashMap::new())
+        .unwrap()
+        .iter()
+        .map(|result| result.point.id)
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn labelled(properties: serde_json::Value) -> serde_json::Value {
+    let mut payload = properties;
+    payload["_labels"] = serde_json::json!(["P"]);
+    payload
+}
+
+#[test]
+fn a_float_equality_finds_every_value_within_the_where_tolerance() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(1, &labelled(serde_json::json!({ "w": 0.5004 })))
+        .unwrap();
+    col.upsert_node_payload(2, &labelled(serde_json::json!({ "w": 0.5 })))
+        .unwrap();
+    col.upsert_node_payload(3, &labelled(serde_json::json!({ "w": 0.7 })))
+        .unwrap();
+
+    assert_eq!(matched_where(&col.inner, Some("n.w = 0.5")), vec![1, 2]);
+}
+
+#[test]
+fn an_integer_bound_above_2_pow_53_does_not_hide_the_next_integer() {
+    let (_dir, col) = make_test_collection(None);
+    // 2^53 + 1 rounds onto the bound 2^53 as an f64; 2^53 + 10 does not.
+    col.upsert_node_payload(1, &aged(9_007_199_254_740_993))
+        .unwrap();
+    col.upsert_node_payload(2, &aged(9_007_199_254_741_002))
+        .unwrap();
+
+    assert_eq!(
+        matched_where(&col.inner, Some("n.age > 9007199254740992")),
+        vec![1, 2]
+    );
+    assert_eq!(
+        matched_where(&col.inner, Some("n.age < 9007199254741002")),
+        vec![1]
+    );
+}
+
+#[test]
+fn a_negative_zero_satisfies_a_zero_bound() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(1, &labelled(serde_json::json!({ "w": -0.0 })))
+        .unwrap();
+    col.upsert_node_payload(2, &labelled(serde_json::json!({ "w": 1.5 })))
+        .unwrap();
+
+    assert_eq!(matched_where(&col.inner, Some("n.w >= 0.0")), vec![1, 2]);
+}
+
+#[test]
+fn a_top_level_dotted_key_does_not_hide_a_nested_property() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(1, &labelled(serde_json::json!({ "a": { "b": 5 } })))
+        .unwrap();
+    // WHERE reads `n.a.b` as a nested path, which this node does not have.
+    col.upsert_node_payload(2, &labelled(serde_json::json!({ "a.b": 7 })))
+        .unwrap();
+
+    assert_eq!(matched_where(&col.inner, Some("n.a.b > 1")), vec![1]);
+    assert!(
+        !col.inner
+            .graph
+            .graph_range_indexes
+            .read()
+            .contains_key("P.a.b"),
+        "a dotted top-level key is unreachable by WHERE and must not be indexed"
+    );
+}
+
+#[test]
+fn only_scalar_properties_are_range_indexed() {
+    let (_dir, col) = make_test_collection(None);
+    col.upsert_node_payload(
+        1,
+        &labelled(serde_json::json!({
+            "age": 30,
+            "name": "ada",
+            "gone": null,
+            "tags": [1, 2],
+            "meta": { "x": 1 },
+        })),
+    )
+    .unwrap();
+
+    let mut keys: Vec<String> = col
+        .inner
+        .graph
+        .graph_range_indexes
+        .read()
+        .keys()
+        .cloned()
+        .collect();
+    keys.sort();
+    assert_eq!(keys, ["P.age", "P.gone", "P.name"]);
+    // An array or an object never satisfies an index-eligible predicate.
+    assert!(matched_where(&col.inner, Some("n.tags = 1")).is_empty());
+    assert_eq!(matched_where(&col.inner, Some("n.age = 30")), vec![1]);
+}

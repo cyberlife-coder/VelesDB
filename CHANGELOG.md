@@ -450,6 +450,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rebuilds both from the stored payloads, WAL replay included, in the same
   scan.
 
+  The index lookup is also kept a superset of what WHERE accepts, which it
+  was not in four cases, each of which hid matching nodes: `n.w = 0.5` matched
+  exactly where WHERE accepts any value within 0.001 (the lookup is now that
+  tolerance, doubled, around the literal); `n.age > 9007199254740992` missed
+  `2^53 + 1`, which the index orders as the `f64` `2^53` (a strict bound on an
+  integer is now looked up inclusive); `n.w >= 0.0` missed `-0.0` (the index
+  now orders `-0.0` and `0.0` equal, as WHERE does); and a top-level key
+  containing a dot, `"a.b"`, was indexed under the key WHERE uses for the
+  nested path `a` → `b` (such keys are no longer indexed: WHERE cannot reach
+  them). Only scalar properties are indexed — null, booleans, numbers,
+  strings — since an array or an object never satisfies an index-eligible
+  comparison.
+
+  **Memory:** every scalar property of every labelled node is now held in the
+  range indexes, strings included, on every write path and from the open on.
+  Measured on 100 000 labelled nodes, each with two numbers, a distinct 1 KB
+  string and a 20-element array (debug build): the open took 23.8 s and
+  170 MiB of RSS, against 20.9 s and 46 MiB without the range rebuild; the
+  indexes cost about the size of the indexed strings.
+
 - **`GraphCollection::traverse_bfs_parallel` counts only results against
   `limit`.** The traverser emitted each start node at depth 0, which took a
   slot of `limit` before the `min_depth` filter dropped it, so

@@ -68,20 +68,64 @@ fn indexable_properties(payload: &Value) -> Vec<(&str, &Value)> {
         .unwrap_or_default()
 }
 
-/// Adds every labelled property of `payload` to `indexes` for `node_id`,
-/// creating the `"label.property"` index on first sight.
+/// The labels of a node payload, borrowed: the `_labels` array's strings.
+fn payload_labels(payload: &Value) -> impl Iterator<Item = &str> {
+    payload
+        .get("_labels")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+}
+
+/// The `(property, value)` pairs of a payload a range index holds: top-level
+/// scalars (null, boolean, number, string) under a key without a `.`.
+///
+/// Both exclusions keep an entry only where an index-eligible WHERE can
+/// match it, so leaving the rest out never hides a node. An array or an
+/// object never satisfies an extracted comparison (`evaluate_comparison`
+/// and the filter engine's `BETWEEN` both reject them), and indexing them
+/// copied every embedded vector and nested document of every labelled node.
+/// A dotted top-level key is unreachable: WHERE reads `n.a.b` as the nested
+/// path `a`, then `b`, and the index key `label.a.b` it is looked up under
+/// would otherwise hold the dotted key's nodes and hide the nested ones.
+fn range_indexable_properties(payload: &Value) -> impl Iterator<Item = (&str, &Value)> {
+    payload
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, value)| {
+            *key != "_labels" && !key.contains('.') && !value.is_array() && !value.is_object()
+        })
+        .map(|(key, value)| (key.as_str(), value))
+}
+
+/// Writes the `"label.property"` key into `buf`, reusing its allocation.
+fn write_range_key(buf: &mut String, label: &str, property: &str) {
+    buf.clear();
+    buf.push_str(label);
+    buf.push('.');
+    buf.push_str(property);
+}
+
+/// Adds every labelled scalar property of `payload` to `indexes` for
+/// `node_id`, creating the `"label.property"` index on first sight.
 ///
 /// The one insertion step shared by the write paths
 /// ([`Collection::apply_range_index_changes`]) and the open-time rebuild, so a
 /// reopened collection holds exactly the entries the writes had made.
 pub(crate) fn index_payload_ranges(indexes: &mut GraphRangeIndexes, node_id: u64, payload: &Value) {
-    let properties = indexable_properties(payload);
-    for label in extract_labels(payload) {
-        for &(prop_name, prop_value) in &properties {
-            indexes
-                .entry(range_index_key(&label, prop_name))
-                .or_insert_with(|| CompositeRangeIndex::new(label.clone(), prop_name))
-                .insert(node_id, prop_value);
+    let mut key = String::new();
+    for label in payload_labels(payload) {
+        for (property, value) in range_indexable_properties(payload) {
+            write_range_key(&mut key, label, property);
+            if let Some(index) = indexes.get_mut(key.as_str()) {
+                index.insert(node_id, value);
+            } else {
+                let mut index = CompositeRangeIndex::new(label, property);
+                index.insert(node_id, value);
+                indexes.insert(key.clone(), index);
+            }
         }
     }
 }
@@ -89,11 +133,12 @@ pub(crate) fn index_payload_ranges(indexes: &mut GraphRangeIndexes, node_id: u64
 /// Removes the entries [`index_payload_ranges`] made for `node_id` from
 /// `payload`, the payload the node carried until now.
 fn unindex_payload_ranges(indexes: &mut GraphRangeIndexes, node_id: u64, payload: &Value) {
-    let properties = indexable_properties(payload);
-    for label in extract_labels(payload) {
-        for &(prop_name, prop_value) in &properties {
-            if let Some(index) = indexes.get_mut(&range_index_key(&label, prop_name)) {
-                let _removed = index.remove(node_id, prop_value);
+    let mut key = String::new();
+    for label in payload_labels(payload) {
+        for (property, value) in range_indexable_properties(payload) {
+            write_range_key(&mut key, label, property);
+            if let Some(index) = indexes.get_mut(key.as_str()) {
+                let _removed = index.remove(node_id, value);
             }
         }
     }
@@ -110,7 +155,8 @@ impl Collection {
     /// write lock once for the whole batch.
     ///
     /// Each change removes what the old payload indexed before indexing the
-    /// new one — the sequence every path runs on the label index — so a property carried on both sides of an update is not added and then
+    /// new one — the sequence every path runs on the label index — so a
+    /// property carried on both sides of an update is not added and then
     /// taken straight back out. Callers pass the effective old payload of a
     /// duplicate id within one batch (the previous occurrence, not the
     /// pre-batch value), exactly as they do for the label index.
