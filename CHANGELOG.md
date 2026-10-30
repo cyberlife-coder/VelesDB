@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the graph collection, with `_labels` for `MATCH`, instead of the vector
   store's collection: core refuses an edge whose endpoints are not nodes of
   the same collection, so `add_edge` between loader nodes failed there.
+- **LangChain and LlamaIndex `GraphRetriever` return graph neighbours again.**
+  Both searched for `expand_k` seeds instead of the documented `seed_k`, then
+  cut the result to `expand_k`, so on a store holding at least `expand_k`
+  documents every slot went to a vector hit and graph expansion never added
+  one. They now search `seed_k` seeds and fill the rest of `expand_k` with the
+  nodes the graph reaches from them. The order is defined and the same in
+  both: seeds by score, then neighbours seed by seed in traversal order, where
+  the set they were kept in made it arbitrary. A neighbour that is a seed or
+  that the vector store cannot return no longer takes a slot.
 
 ## [8.0.0] - 2026-10-30
 

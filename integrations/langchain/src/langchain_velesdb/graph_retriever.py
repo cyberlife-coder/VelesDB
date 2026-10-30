@@ -82,6 +82,13 @@ class GraphRetriever(BaseRetriever):
     2. Graph traversal to expand context to related documents
     3. Return combined results for RAG
 
+    Results: the ``seed_k`` vector hits first, best score first, then the
+    documents the graph reaches from them — seed by seed, each in traversal
+    order — skipping any already returned or that the vector store cannot
+    return, until ``expand_k`` documents in all. Neighbours carry
+    ``graph_depth=1`` and no ``relevance_score``: they were reached through the graph, not
+    scored. With ``low_latency=True`` only the seeds are returned.
+
     Supports two modes:
 
     - ``"native"`` (default): uses the VelesDB Python bindings directly,
@@ -97,8 +104,9 @@ class GraphRetriever(BaseRetriever):
             If omitted, inferred from ``vector_store._db_path`` / ``_path``.
         graph_collection_name: Name of the graph collection (native mode).
         server_url: URL of VelesDB server (REST mode only).
-        seed_k: Number of initial vector search results (default: 3).
-        expand_k: Maximum documents to include after expansion (default: 10).
+        seed_k: Number of vector search hits the graph is expanded from
+            (default: 3).
+        expand_k: Maximum documents returned, seeds included (default: 10).
         max_depth: Maximum graph traversal depth (default: 2).
         rel_types: Relationship types to follow (default: all).
         score_threshold: Minimum relevance score for seed documents
@@ -254,7 +262,7 @@ class GraphRetriever(BaseRetriever):
         # threshold keeps the closest seeds under euclidean/hamming too.
         seeds = self.vector_store.similarity_search_with_relevance_scores(
             query,
-            k=self.seed_k if self.low_latency else self.expand_k,
+            k=self.seed_k,
             score_threshold=self.score_threshold,
         )
 
@@ -289,8 +297,12 @@ class GraphRetriever(BaseRetriever):
         IDs via ``_stable_hash_id(node_id)`` — see
         ``integrations/llamaindex/src/llamaindex_velesdb/graph_retriever.py``
         ``_extract_node_id``.
+
+        ``seed_docs`` and ``neighbour_ids`` are dicts used as insertion-ordered
+        sets: seeds keep their vector-search order, and neighbours the order
+        they were reached in (seed by seed, each seed's traversal in order).
         """
-        expanded_ids: set = set()
+        neighbour_ids: dict = {}
         seed_docs: dict = {}
         graph_available = True
 
@@ -299,23 +311,25 @@ class GraphRetriever(BaseRetriever):
             if doc_id is None:
                 continue
             seed_docs[doc_id] = (doc, score)
-            expanded_ids.add(doc_id)
 
             if graph_available:
                 graph_available = self._expand_from_seed(
-                    doc_id, expanded_ids, graph_available
+                    doc_id, neighbour_ids, graph_available
                 )
 
-        return self._assemble_results(seed_docs, expanded_ids, graph_available)
+        return self._assemble_results(seed_docs, neighbour_ids, graph_available)
 
     def _expand_from_seed(
-        self, doc_id: int, expanded_ids: set, graph_available: bool
+        self, doc_id: int, neighbour_ids: dict, graph_available: bool
     ) -> bool:
-        """Traverse graph from one seed node; return updated graph_available flag."""
+        """Traverse graph from one seed node; return updated graph_available flag.
+
+        Reached ids are appended to ``neighbour_ids`` in traversal order; an id
+        already there keeps its first position.
+        """
         try:
-            neighbors = self._traverse_graph(doc_id)
-            for neighbor_id in neighbors:
-                expanded_ids.add(neighbor_id)
+            for neighbor_id in self._traverse_graph(doc_id):
+                neighbour_ids.setdefault(neighbor_id, None)
         except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError, _VelesDBError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
@@ -335,10 +349,10 @@ class GraphRetriever(BaseRetriever):
     def _assemble_results(
         self,
         seed_docs: dict,
-        expanded_ids: set,
+        neighbour_ids: dict,
         graph_available: bool,
     ) -> List[Document]:
-        """Build the final document list from seeds and expanded neighbours."""
+        """Seeds in vector-search order, then neighbours, at most ``expand_k``."""
         retrieval_mode = "graph_expanded" if graph_available else "vector_fallback"
         result_docs: List[Document] = []
 
@@ -348,18 +362,25 @@ class GraphRetriever(BaseRetriever):
             doc.metadata["retrieval_mode"] = retrieval_mode
             result_docs.append(doc)
 
+        result_docs = result_docs[: self.expand_k]
         if graph_available:
-            self._append_neighbor_docs(result_docs, expanded_ids, seed_docs)
-
-        return result_docs[: self.expand_k]
+            self._append_neighbor_docs(result_docs, neighbour_ids, seed_docs)
+        return result_docs
 
     def _append_neighbor_docs(
-        self, result_docs: List[Document], expanded_ids: set, seed_docs: dict
+        self, result_docs: List[Document], neighbour_ids: dict, seed_docs: dict
     ) -> None:
-        """Fetch and append expanded neighbor documents to the result list."""
-        remaining = self.expand_k - len(result_docs)
-        neighbor_ids = [nid for nid in expanded_ids if nid not in seed_docs][:remaining]
-        for neighbor_id in neighbor_ids:
+        """Append neighbours in reach order until ``expand_k`` documents.
+
+        A neighbour that is a seed is skipped, and so is one the vector store
+        cannot return; neither takes a slot. Neighbours carry no
+        ``relevance_score``: they were reached through the graph, not scored.
+        """
+        for neighbor_id in neighbour_ids:
+            if len(result_docs) >= self.expand_k:
+                return
+            if neighbor_id in seed_docs:
+                continue
             try:
                 neighbor_doc = self._fetch_document(neighbor_id)
                 if neighbor_doc:

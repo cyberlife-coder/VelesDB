@@ -85,6 +85,13 @@ class GraphRetriever(BaseRetriever):
     2. Graph traversal to expand context to related nodes
     3. Return combined results for RAG
 
+    Results: the ``seed_k`` vector hits first, best score first, then the
+    nodes the graph reaches from them — seed by seed, each in traversal
+    order — skipping any already returned or that the vector store cannot
+    return, until ``expand_k`` nodes in all. Neighbours carry
+    ``graph_depth=1`` and ``score=0.5``, a placeholder: they were reached through the graph, not
+    scored. With ``low_latency=True`` only the seeds are returned.
+
     Supports two modes:
 
     - ``"native"`` (default): uses the VelesDB Python bindings directly,
@@ -100,8 +107,9 @@ class GraphRetriever(BaseRetriever):
         db_path: Filesystem path to VelesDB data directory (native mode).
         graph_collection_name: Name of the graph collection (native mode).
         server_url: URL of VelesDB server (REST mode only).
-        seed_k: Number of initial vector search results (default: 3).
-        expand_k: Maximum nodes to include after expansion (default: 10).
+        seed_k: Number of vector search hits the graph is expanded from
+            (default: 3).
+        expand_k: Maximum nodes returned, seeds included (default: 10).
         max_depth: Maximum graph traversal depth (default: 2).
         rel_types: Relationship types to follow (default: all).
         collection_name: Override collection name for REST traversal URL.
@@ -277,8 +285,7 @@ class GraphRetriever(BaseRetriever):
             List of NodeWithScore objects.
         """
         query_str = query_bundle.query_str
-        k = self._seed_k if self._low_latency else self._expand_k
-        base_retriever = self._index.as_retriever(similarity_top_k=k)
+        base_retriever = self._index.as_retriever(similarity_top_k=self._seed_k)
         seed_nodes = base_retriever.retrieve(query_str)
 
         if not seed_nodes:
@@ -301,8 +308,13 @@ class GraphRetriever(BaseRetriever):
     def _build_expanded_results(
         self, seed_nodes: List[NodeWithScore]
     ) -> List[NodeWithScore]:
-        """Run graph expansion and return combined node list."""
-        expanded_ids: set = set()
+        """Run graph expansion and return combined node list.
+
+        ``seed_map`` and ``neighbour_ids`` are dicts used as insertion-ordered
+        sets: seeds keep their vector-search order, and neighbours the order
+        they were reached in (seed by seed, each seed's traversal in order).
+        """
+        neighbour_ids: dict = {}
         seed_map: dict = {}
         graph_available = True
 
@@ -311,23 +323,25 @@ class GraphRetriever(BaseRetriever):
             if node_id is None:
                 continue
             seed_map[node_id] = nws
-            expanded_ids.add(node_id)
 
             if graph_available:
                 graph_available = self._expand_from_seed(
-                    node_id, expanded_ids, graph_available
+                    node_id, neighbour_ids, graph_available
                 )
 
-        return self._assemble_results(seed_map, expanded_ids, graph_available)
+        return self._assemble_results(seed_map, neighbour_ids, graph_available)
 
     def _expand_from_seed(
-        self, node_id: int, expanded_ids: set, graph_available: bool
+        self, node_id: int, neighbour_ids: dict, graph_available: bool
     ) -> bool:
-        """Traverse graph from one seed node; return updated graph_available flag."""
+        """Traverse graph from one seed node; return updated graph_available flag.
+
+        Reached ids are appended to ``neighbour_ids`` in traversal order; an id
+        already there keeps its first position.
+        """
         try:
-            neighbors = self._traverse_graph(node_id)
-            for neighbor_id in neighbors:
-                expanded_ids.add(neighbor_id)
+            for neighbor_id in self._traverse_graph(node_id):
+                neighbour_ids.setdefault(neighbor_id, None)
         except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError, _VelesDBError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
@@ -347,10 +361,10 @@ class GraphRetriever(BaseRetriever):
     def _assemble_results(
         self,
         seed_map: dict,
-        expanded_ids: set,
+        neighbour_ids: dict,
         graph_available: bool,
     ) -> List[NodeWithScore]:
-        """Build the final result list from seeds and expanded neighbours."""
+        """Seeds in vector-search order, then neighbours, at most ``expand_k``."""
         retrieval_mode = "graph_expanded" if graph_available else "vector_fallback"
         results: List[NodeWithScore] = []
 
@@ -359,18 +373,25 @@ class GraphRetriever(BaseRetriever):
             nws.node.metadata["retrieval_mode"] = retrieval_mode
             results.append(nws)
 
+        results = results[: self._expand_k]
         if graph_available:
-            self._append_neighbor_nodes(results, expanded_ids, seed_map)
-
-        return results[: self._expand_k]
+            self._append_neighbor_nodes(results, neighbour_ids, seed_map)
+        return results
 
     def _append_neighbor_nodes(
-        self, results: List[NodeWithScore], expanded_ids: set, seed_map: dict
+        self, results: List[NodeWithScore], neighbour_ids: dict, seed_map: dict
     ) -> None:
-        """Fetch and append expanded neighbor nodes to the result list."""
-        remaining = self._expand_k - len(results)
-        neighbor_ids = [nid for nid in expanded_ids if nid not in seed_map][:remaining]
-        for neighbor_id in neighbor_ids:
+        """Append neighbours in reach order until ``expand_k`` results.
+
+        A neighbour that is a seed is skipped, and so is one the vector store
+        cannot return; neither takes a slot. Neighbours carry ``score=0.5``, a
+        placeholder: they were reached through the graph, not scored.
+        """
+        for neighbor_id in neighbour_ids:
+            if len(results) >= self._expand_k:
+                return
+            if neighbor_id in seed_map:
+                continue
             try:
                 neighbor_node = self._fetch_node(neighbor_id)
                 if neighbor_node:

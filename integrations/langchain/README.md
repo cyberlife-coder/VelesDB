@@ -278,6 +278,35 @@ for row in results:
 > core `velesdb.Database` API or the [REST server](https://github.com/cyberlife-coder/VelesDB)
 > directly. (Tracked in `docs/reference/ECOSYSTEM_PARITY.md`, action item #7.)
 
+## Graph Retrieval
+
+`GraphRetriever` finds seed documents by vector search, then expands the
+context through a VelesDB graph collection whose node ids are the documents'
+VelesDB point IDs (`metadata["_int_id"]`). Native mode reuses the vector
+store's database, so create the graph collection there first:
+
+```python
+from langchain_velesdb import GraphRetriever
+
+vector_store._get_db().create_graph_collection("kg")  # once, then add nodes and edges
+retriever = GraphRetriever(
+    vector_store=vector_store,
+    mode="native",
+    graph_collection_name="kg",
+    seed_k=3,      # vector hits the graph is expanded from
+    expand_k=10,   # max documents returned, seeds included
+    max_depth=2,   # BFS traversal depth
+)
+docs = retriever.invoke("What is VelesDB?")
+```
+
+The result holds the `seed_k` vector hits first, best score first, then the
+documents the graph reaches from them, seed by seed in traversal order, until
+`expand_k` documents in all. A document already returned, or one the vector
+store cannot return, is skipped and takes no slot. Neighbours carry
+`graph_depth=1` and no `relevance_score`: they were reached through the
+graph, not scored. `low_latency=True` returns the seeds only.
+
 ## Features
 
 - **High Performance**: VelesDB's Rust backend delivers sub-millisecond latencies

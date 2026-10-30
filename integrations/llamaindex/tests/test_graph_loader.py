@@ -546,42 +546,20 @@ class TestLoadFromNodesExtractRelations:
             ("SOURCE", _graph_id("a"), _graph_id("doc")),
         }
 
-    def test_given_extracted_relations_when_retriever_expands_then_related_node_reached(
+    def test_given_extracted_relations_when_retrieved_then_related_node_reached(
         self, native_store
     ):
         """GraphRetriever expands from the seed's vector-store point id, so an
         extracted edge must start there and end at a node it can fetch."""
-        from llama_index.core import VectorStoreIndex
-        from llama_index.core.embeddings import MockEmbedding
-        from llama_index.core.schema import NodeWithScore, NodeRelationship, RelatedNodeInfo, TextNode
-        from llama_index.core.vector_stores.types import VectorStoreQuery
-        from llamaindex_velesdb import GraphLoader, GraphRetriever
+        nodes = _ranked_nodes(near_next="far")
+        retriever = _graph_retriever(native_store, nodes, seed_k=1, expand_k=2, max_depth=1)
 
-        a = TextNode(text="chunk a", id_="chunk-a", embedding=[1.0, 0.0, 0.0, 0.0])
-        b = TextNode(text="chunk b", id_="chunk-b", embedding=[0.0, 1.0, 0.0, 0.0])
-        c = TextNode(text="chunk c", id_="chunk-c", embedding=[0.0, 0.0, 1.0, 0.0])
-        a.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(node_id="chunk-b")
-        native_store.add([a, b, c])
-        GraphLoader(native_store, graph_collection_name="kg").load_from_nodes(
-            [a, b, c], extract_relations=True
-        )
+        results = retriever.retrieve("query")
 
-        seed = native_store.query(
-            VectorStoreQuery(query_embedding=[1.0, 0.0, 0.0, 0.0], similarity_top_k=1)
-        ).nodes[0]
-        index = VectorStoreIndex.from_vector_store(
-            native_store, embed_model=MockEmbedding(embed_dim=4)
-        )
-        retriever = GraphRetriever(
-            index=index, mode="native", graph_collection_name="kg", expand_k=5, max_depth=1
-        )
-        # The seed search itself returns expand_k hits (see _retrieve); feed the
-        # one seed to the expansion step so the neighbour can only come from the graph.
-        results = retriever._build_expanded_results([NodeWithScore(node=seed, score=1.0)])
-
-        assert seed.node_id == "chunk-a"
-        expanded = [r.node for r in results if r.node.metadata["graph_depth"] == 1]
-        assert [(n.node_id, n.get_content()) for n in expanded] == [("chunk-b", "chunk b")]
+        assert [(r.node.node_id, r.node.get_content()) for r in results] == [
+            ("near", "near text"), ("far", "far text"),
+        ]
+        assert [r.node.metadata["graph_depth"] for r in results] == [0, 1]
 
     def test_given_loaded_relations_when_reloaded_then_graph_unchanged(
         self, native_store
@@ -695,3 +673,102 @@ class TestLoadFromNodesExtractRelations:
 
         assert counts == {"nodes": 4, "edges": 0, "skipped_relations": 0}
         assert loader._edges == []
+
+
+# ---------------------------------------------------------------------------
+# GraphRetriever.retrieve(): seed_k seeds, then graph neighbours, expand_k cap.
+# ---------------------------------------------------------------------------
+
+# Cosine to the MockEmbedding query vector (all 0.5): 1.0, 0.87, 0.71, 0.5.
+_RANKED = {
+    "near": [1.0, 1.0, 1.0, 1.0],
+    "mid": [1.0, 1.0, 1.0, 0.0],
+    "low": [1.0, 1.0, 0.0, 0.0],
+    "far": [1.0, 0.0, 0.0, 0.0],
+}
+
+
+def _ranked_nodes(**links):
+    """Four nodes ranked near > mid > low > far against the query.
+
+    ``links`` maps ``"<source>_next"``/``"<source>_previous"`` to a target id.
+    """
+    from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
+
+    nodes = {
+        name: TextNode(text=f"{name} text", id_=name, embedding=vector)
+        for name, vector in _RANKED.items()
+    }
+    for key, target in links.items():
+        source, kind = key.split("_")
+        nodes[source].relationships[NodeRelationship[kind.upper()]] = RelatedNodeInfo(
+            node_id=target
+        )
+    return list(nodes.values())
+
+
+def _graph_retriever(store, nodes, **kwargs):
+    """Store ``nodes``, load their relations into ``kg``, and return a native retriever."""
+    from llama_index.core import VectorStoreIndex
+    from llama_index.core.embeddings import MockEmbedding
+    from llamaindex_velesdb import GraphLoader, GraphRetriever
+
+    store.add(nodes)
+    GraphLoader(store, graph_collection_name="kg").load_from_nodes(
+        nodes, extract_relations=True
+    )
+    index = VectorStoreIndex.from_vector_store(store, embed_model=MockEmbedding(embed_dim=4))
+    return GraphRetriever(index=index, mode="native", graph_collection_name="kg", **kwargs)
+
+
+class TestGraphRetrieverSeedAndExpand:
+    """``seed_k`` vector hits, then their graph neighbours, at most ``expand_k`` nodes."""
+
+    def test_given_store_larger_than_expand_k_when_retrieved_then_neighbour_returned(
+        self, native_store
+    ):
+        """The far node is never a vector hit, so only the graph can return it."""
+        retriever = _graph_retriever(
+            native_store, _ranked_nodes(near_next="far"), seed_k=1, expand_k=2
+        )
+
+        results = retriever.retrieve("query")
+
+        assert [r.node.node_id for r in results] == ["near", "far"]
+        assert results[1].node.metadata["retrieval_mode"] == "graph_expanded"
+
+    def test_given_seeds_and_chain_when_retrieved_then_seeds_by_score_then_bfs_order(
+        self, native_store
+    ):
+        """Seeds come first, best score first; neighbours follow in traversal
+        order, a node already returned (the seed ``near``) is not repeated, and
+        the list stops at ``expand_k``."""
+        nodes = _ranked_nodes(near_next="far", far_next="low", mid_previous="near")
+        retriever = _graph_retriever(native_store, nodes, seed_k=2, expand_k=3, max_depth=2)
+
+        results = retriever.retrieve("query")
+
+        assert [r.node.node_id for r in results] == ["near", "mid", "far"]
+        assert results[0].score > results[1].score
+        assert [r.node.metadata["graph_depth"] for r in results] == [0, 0, 1]
+
+    def test_given_room_when_retrieved_then_deeper_neighbour_follows_nearer_one(
+        self, native_store
+    ):
+        nodes = _ranked_nodes(near_next="far", far_next="low")
+        retriever = _graph_retriever(native_store, nodes, seed_k=1, expand_k=5, max_depth=2)
+
+        results = retriever.retrieve("query")
+
+        assert [r.node.node_id for r in results] == ["near", "far", "low"]
+
+    def test_given_seed_k_above_expand_k_when_retrieved_then_capped_at_expand_k(
+        self, native_store
+    ):
+        retriever = _graph_retriever(
+            native_store, _ranked_nodes(near_next="far"), seed_k=3, expand_k=2
+        )
+
+        results = retriever.retrieve("query")
+
+        assert [r.node.node_id for r in results] == ["near", "mid"]
