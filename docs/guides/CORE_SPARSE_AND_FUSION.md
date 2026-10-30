@@ -165,4 +165,4 @@ Full signatures live on [docs.rs](https://docs.rs/velesdb-core).
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 8.0.0
