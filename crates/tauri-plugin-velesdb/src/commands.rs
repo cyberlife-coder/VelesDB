@@ -1,7 +1,7 @@
 //! Tauri commands for `VelesDB` operations exposed via IPC.
-#![allow(clippy::missing_errors_doc, deprecated)]
+#![allow(clippy::missing_errors_doc)]
 
-use crate::error::{CommandError, Error};
+use crate::error::CommandError;
 use crate::events::emit_collection_updated;
 use crate::helpers::{
     map_core_results, metric_to_string, parse_filter, parse_fusion_strategy, parse_metric,
@@ -515,7 +515,7 @@ async fn batch_search_per_query(
                 let filter = parse_filter(&s.filter)?;
                 #[cfg(feature = "persistence")]
                 let quality = parse_search_quality(&s.quality)
-                    .map_err(|e| Error::InvalidConfig(e.to_string()))?;
+                    .map_err(|e| crate::error::Error::InvalidConfig(e.to_string()))?;
                 #[cfg(not(feature = "persistence"))]
                 let quality: Option<()> = None;
 
@@ -719,7 +719,10 @@ pub async fn compact_storage<R: Runtime>(
 
 /// Updates query guardrail limits for every collection in the database.
 ///
-/// This is a full replacement: all fields of `limits` are applied.
+/// This is a full replacement: all fields of `limits` are applied, once they
+/// pass core's `QueryLimits::validate` (a `rate_limit_qps` or
+/// `circuit_failure_threshold` of `0` is refused with `VELES-009` and nothing
+/// changes).
 #[command]
 pub async fn update_guardrails<R: Runtime>(
     _app: AppHandle<R>,
@@ -728,7 +731,8 @@ pub async fn update_guardrails<R: Runtime>(
 ) -> std::result::Result<(), CommandError> {
     state
         .run_db(move |db| {
-            db.update_guardrails(&limits.into());
+            let limits: velesdb_core::guardrails::QueryLimits = limits.into();
+            db.update_guardrails_with(|live| live.clone_from(&limits))?;
             Ok(())
         })
         .await
@@ -856,8 +860,7 @@ pub async fn train_pq<R: Runtime>(
             });
 
             let empty_params = std::collections::HashMap::new();
-            db.execute_query(&query, &empty_params)
-                .map_err(|e| Error::InvalidConfig(format!("PQ training failed: {e}")))?;
+            db.execute_query(&query, &empty_params)?;
 
             Ok("PQ training complete".to_string())
         })
@@ -889,7 +892,7 @@ pub async fn stream_insert<R: Runtime>(
             for p in request.points {
                 let point = velesdb_core::Point::new(p.id, p.vector, p.payload);
                 coll.stream_insert(point).map_err(|e| {
-                    Error::InvalidConfig(format!("Stream insert backpressure: {e}"))
+                    crate::error::Error::InvalidConfig(format!("Stream insert backpressure: {e}"))
                 })?;
                 inserted += 1;
             }
@@ -933,7 +936,7 @@ pub async fn enable_streaming<R: Runtime>(
     state
         .run_db(move |db| {
             let coll = require_vector_collection(&db, &request.collection)?;
-            coll.enable_streaming(config);
+            coll.enable_streaming(config)?;
             Ok(())
         })
         .await

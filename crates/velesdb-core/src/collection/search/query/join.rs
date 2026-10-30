@@ -33,8 +33,9 @@ impl JoinedResult {
 }
 
 /// Conservative server-side ceiling on the number of joined rows materialized
-/// when the query carries no explicit LIMIT (mirrors `query::options::MAX_LIMIT`).
-pub const JOIN_ROW_CEILING: usize = 100_000;
+/// when the query carries no explicit LIMIT: the query pipeline's own LIMIT
+/// ceiling, `query::options::MAX_LIMIT`.
+pub const JOIN_ROW_CEILING: usize = super::MAX_LIMIT;
 
 /// Adaptive batch size thresholds.
 const SMALL_BATCH_THRESHOLD: usize = 100;

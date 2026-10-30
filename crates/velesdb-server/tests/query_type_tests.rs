@@ -1,6 +1,5 @@
-//! Tests for `QueryType` detection (EPIC-052 US-006).
-//!
-//! Validates that /query endpoint correctly detects query types.
+//! Tests for the `/query` endpoint's unified response format (EPIC-052
+//! US-006): the serialized `QueryType` tag and the warnings field.
 
 use serde_json::json;
 use velesdb_core::api_types::{QueryType, UnifiedQueryResponse};

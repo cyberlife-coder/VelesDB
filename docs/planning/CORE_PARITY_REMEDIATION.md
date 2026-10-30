@@ -17,7 +17,7 @@ the residual gaps are core-internal/ops plumbing (by design) or already tracked 
 | # | Item | Rationale | Effort | Risk / guard-rail | License lens |
 |---|------|-----------|--------|-------------------|--------------|
 | **T1** | WASM `crates/velesdb-wasm/src/fusion.rs` → call `velesdb_core::FusionStrategy::fuse` instead of re-implementing all 5 strategies | Removes fusion-ranking divergence (WASM computes locally, no server) | M | **Touches ranking → QUALITY_BAR Gate 1 recall@10 ≥ 0.95.** Add WASM-vs-core fusion equivalence test. Guarded by T2. | Core-licensed, pure architecture |
-| **T2** | Executor-level conformance fixtures for WASM (+CLI): compare result rows/counts/ordering, not just parse-ok (`conformance/velesql_parser_cases.json` is parser-only today) | Auto-catches future JOIN/agg/setops divergence; safety net for T1 | M | test-only; **do FIRST** | Core |
+| **T2** | Executor-level conformance fixtures for WASM (+CLI): compare result rows/counts/ordering, not just parse-ok. **Done:** `conformance/velesql_executor_cases.json` runs in core, CLI and WASM (2026-06-20); since v2.1.0 (2026-10-29) it also covers the WASM executor's NEAR, `similarity()`, `NEAR_FUSED`, UPDATE/DELETE and DISTINCT modules | Auto-catches future JOIN/agg/setops divergence; safety net for T1 | M | test-only; **do FIRST** | Core |
 | **T3** | ID-hash single-sourcing: Haystack imports `velesdb_common.ids.stable_hash_id` (delete `_str_id_to_int`). migrate `stable_point_id` (numeric-else-FNV-1a) is intentionally different for checkpoint resumability → **document, do NOT change** | Same logical doc must map to the same point ID across components | S | bit-identical today → no data migration | Haystack is **MIT** touching ID logic → escalated; valid fix = call shared helper |
 | **T4** | Mobile: re-export core `GraphNode/GraphEdge/TraversalResult/GraphSchema` via UniFFI instead of redefining `MobileGraphNode/Edge/...` (already diverged: core `TraversalResult.path: Vec<u64>` absent in mobile). The forked `MobileGraphStore` engine itself = design decision, not a rewrite | Stops type shadowing / divergence | M | changes Swift/Kotlin API shape → care | Core |
 | **T5** | LangChain/`integrations/common` re-declare `ALLOWED_METRICS`/`ALLOWED_STORAGE_MODES` parallel to the Rust enums → derive from the binding or single-source with a sync test | Avoid enum-set drift | S | low | MIT layer; keep canonical set sourced from core |
@@ -26,7 +26,7 @@ the residual gaps are core-internal/ops plumbing (by design) or already tracked 
 ### Explicitly NOT doing (kept relevant)
 - Do **not** expose core-internal metrics / durability / ColumnStore-batch / registry-introspection over bindings just to fill the matrix — by-design internal surface.
 - Do **not** change migrate's `stable_point_id` algorithm — it would break existing resumable checkpoints (see `KNOWN_LIMITATIONS.md` #4). Document the intentional difference instead.
-- Do **not** rewrite `MobileGraphStore`'s in-memory engine — only fix the type shadowing (T4).
+- Do **not** rewrite `MobileGraphStore`'s in-memory engine — only fix the type shadowing (T4). *(Superseded 2026-10-29: the engine was retired in favour of core's `GraphCollection`; see KNOWN_LIMITATIONS §14.)*
 - Pre-existing tracked parity gaps (RSF in Haystack, named-sparse-index *creation* in LangChain/LlamaIndex, `@collection` MATCH propagation) stay in `ECOSYSTEM_PARITY.md` "Remaining Gaps" / roadmap.
 
 ## Waves (each item = a feature branch off `develop` → PR, per Git Flow)

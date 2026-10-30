@@ -6,8 +6,9 @@ use super::{
     assess, phase_for, validate_sample, ControllerConfig, ControllerPhase, ConvergenceSample,
     RECOVER_CUTOVER, RESUME_CATCH_UP,
 };
+use crate::migration::capture;
 use crate::mutation::atomic_file::{
-    capture, open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
+    open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
     validate_regular_file, validate_workspace,
 };
 use crate::MemoryError;

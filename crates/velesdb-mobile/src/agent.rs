@@ -2,7 +2,10 @@
 //!
 //! Provides semantic memory for AI agents on iOS/Android.
 
-use super::{DistanceMetric, VelesCollection, VelesDatabase, VelesError, VelesPoint};
+use super::{
+    DistanceMetric, SearchQuality, SearchResult, VelesCollection, VelesDatabase, VelesError,
+    VelesPoint,
+};
 
 /// Result from semantic memory query.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -28,6 +31,7 @@ pub struct SemanticResult {
 /// let memory = try VelesSemanticMemory(db: db, dimension: 384)
 /// try memory.store(id: 1, content: "Paris is the capital of France", embedding: embedding)
 /// let results = try memory.query(embedding: queryEmbedding, topK: 5)
+/// let exact = try memory.queryWithQuality(embedding: queryEmbedding, topK: 5, quality: .perfect)
 /// ```
 #[derive(uniffi::Object)]
 pub struct VelesSemanticMemory {
@@ -44,6 +48,26 @@ impl VelesSemanticMemory {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string()
+    }
+
+    /// Joins each search hit with the content text of its stored point.
+    fn with_content(&self, results: Vec<SearchResult>) -> Vec<SemanticResult> {
+        let ids: Vec<u64> = results.iter().map(|r| r.id).collect();
+        let contents: std::collections::HashMap<u64, String> = self
+            .collection
+            .get(ids)
+            .into_iter()
+            .map(|p| (p.id, Self::content_from_payload(p.payload.as_ref())))
+            .collect();
+
+        results
+            .into_iter()
+            .map(|r| SemanticResult {
+                id: r.id,
+                score: r.score,
+                content: contents.get(&r.id).cloned().unwrap_or_default(),
+            })
+            .collect()
     }
 }
 
@@ -98,23 +122,34 @@ impl VelesSemanticMemory {
         top_k: u32,
     ) -> Result<Vec<SemanticResult>, VelesError> {
         let results = self.collection.search(embedding, top_k)?;
+        Ok(self.with_content(results))
+    }
 
-        let ids: Vec<u64> = results.iter().map(|r| r.id).collect();
-        let contents: std::collections::HashMap<u64, String> = self
+    /// [`Self::query`] at an explicit search quality instead of the
+    /// collection's own, through [`VelesCollection::search_with_quality`]:
+    /// the same read gate, and the same refusal of a `Custom` or `Adaptive`
+    /// ef outside 16 to 4096.
+    ///
+    /// It is served by that gated search (core's `Database::gated_search`)
+    /// rather than by core's `SemanticMemory::query_with_quality`, which
+    /// reads the collection leaf directly and so would skip the observer
+    /// read gate every mobile read passes (audit F-5.4, #1392).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VelesError::Database`] for an out-of-range ef, or when the
+    /// search fails (for example `Perfect` over a collection larger than
+    /// `limits.max_perfect_mode_vectors`).
+    pub fn query_with_quality(
+        &self,
+        embedding: Vec<f32>,
+        top_k: u32,
+        quality: SearchQuality,
+    ) -> Result<Vec<SemanticResult>, VelesError> {
+        let results = self
             .collection
-            .get(ids)
-            .into_iter()
-            .map(|p| (p.id, Self::content_from_payload(p.payload.as_ref())))
-            .collect();
-
-        Ok(results
-            .into_iter()
-            .map(|r| SemanticResult {
-                id: r.id,
-                score: r.score,
-                content: contents.get(&r.id).cloned().unwrap_or_default(),
-            })
-            .collect())
+            .search_with_quality(embedding, top_k, quality)?;
+        Ok(self.with_content(results))
     }
 
     /// Returns the number of stored knowledge facts.

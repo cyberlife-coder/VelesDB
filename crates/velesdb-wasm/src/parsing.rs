@@ -32,9 +32,9 @@ pub(crate) fn parse_metric_inner(metric: &str) -> Result<DistanceMetric, String>
 /// Parses a storage mode string into a StorageMode.
 ///
 /// # Supported values
-/// - "full" - Full f32 precision
-/// - "sq8" - 8-bit scalar quantization
-/// - "binary" - 1-bit quantization
+/// The names and aliases `velesdb-core` accepts: `full`, `sq8`, `binary`,
+/// `pq`, `rabitq`. Every mode keeps f32 vectors and returns the same results
+/// as core with that mode (see [`StorageMode`]).
 ///
 /// # Errors
 /// Returns a JsValue error if the mode is not recognized.
@@ -44,58 +44,24 @@ pub fn parse_storage_mode(mode: &str) -> Result<StorageMode, JsValue> {
 
 /// Delegates to [`velesdb_core::StorageMode::from_str`] (single source of truth)
 /// and maps to the local WASM `StorageMode` enum.
-///
-/// # PQ / `RaBitQ` fallback
-///
-/// The browser engine has no Product-Quantization codebook training (that
-/// path is `persistence`-gated in core and unavailable in WASM). A request
-/// for `"pq"` or `"rabitq"` is therefore stored using the SQ8 encode/decode
-/// path. This is architecturally justified, but no longer silent: a one-time
-/// `console.warn` is emitted so the caller knows the requested mode was
-/// downgraded.
 fn parse_storage_mode_inner(mode: &str) -> Result<StorageMode, String> {
     let core: velesdb_core::StorageMode = mode.parse()?;
-    warn_if_pq_fallback(core);
     Ok(core_to_wasm_storage_mode(core))
 }
-
-/// Emits a one-time `console.warn` when PQ/`RaBitQ` is requested in WASM,
-/// where it transparently falls back to the SQ8 storage path.
-///
-/// The `console.warn` binding requires a live JS environment, so it is only
-/// invoked on the `wasm32` target. On native (test) builds this is a no-op.
-#[cfg(target_arch = "wasm32")]
-fn warn_if_pq_fallback(core: velesdb_core::StorageMode) {
-    if matches!(
-        core,
-        velesdb_core::StorageMode::ProductQuantization | velesdb_core::StorageMode::RaBitQ
-    ) {
-        web_sys::console::warn_1(&JsValue::from_str(
-            "VelesDB WASM: Product Quantization / RaBitQ is not available in the \
-             browser engine (no codebook training); storing vectors with SQ8 \
-             quantization instead.",
-        ));
-    }
-}
-
-/// Native no-op counterpart of [`warn_if_pq_fallback`]; see the `wasm32`
-/// variant for the browser behavior.
-#[cfg(not(target_arch = "wasm32"))]
-fn warn_if_pq_fallback(_core: velesdb_core::StorageMode) {}
 
 /// Validates a search quality string for API parity with Python and Server SDKs.
 ///
 /// In WASM, search is brute-force O(n) — there is no HNSW graph, so
 /// `ef_search` has no effect. This function validates the quality string
-/// (rejecting unknown modes) for forward-compatibility, and bounds each ef to
-/// the range every other surface enforces, `validate_ef_search`'s, so a mode
-/// the server refuses is refused here too (#2275). The core `SearchQuality`
-/// enum and `parse_search_mode` are behind the `persistence` feature gate, so
-/// the shape is read locally.
+/// (rejecting unknown modes) for forward-compatibility, through core's own
+/// grammar, [`velesdb_core::api_types::parse_search_mode`]: the forms, the
+/// aliases, the ef range (#2275) and the messages are the ones every other
+/// surface reports, and a form core gains reaches WASM with it.
 ///
 /// # Supported values
 ///
-/// - `"fast"`, `"balanced"`, `"accurate"`, `"perfect"`, `"autotune"` / `"auto"`
+/// - `"fast"`, `"balanced"`, `"accurate"`, `"perfect"`,
+///   `"autotune"` / `"auto_tune"` / `"auto"`
 /// - `"custom:<ef>"` (e.g. `"custom:256"`)
 /// - `"adaptive:<min_ef>:<max_ef>"` (e.g. `"adaptive:32:512"`)
 ///
@@ -110,55 +76,7 @@ pub fn parse_search_quality(quality: &str) -> Result<(), JsValue> {
 ///
 /// Returns `Ok(())` when the quality string is valid.
 fn parse_search_quality_inner(mode: &str) -> Result<(), String> {
-    let lower = mode.to_lowercase();
-    match lower.as_str() {
-        "fast" | "balanced" | "accurate" | "perfect" | "autotune" | "auto_tune" | "auto" => Ok(()),
-        other => parse_advanced_quality(other),
-    }
-}
-
-/// Validates `custom:<ef>` and `adaptive:<min_ef>:<max_ef>` quality modes.
-fn parse_advanced_quality(mode: &str) -> Result<(), String> {
-    if let Some(ef_str) = mode.strip_prefix("custom:") {
-        let ef = ef_str.parse::<usize>().map_err(|_| {
-            format!(
-                "Invalid custom ef_search value: '{ef_str}'. Expected integer, \
-                 e.g. 'custom:256'"
-            )
-        })?;
-        return velesdb_core::api_types::validate_ef_search(ef);
-    }
-    if let Some(params) = mode.strip_prefix("adaptive:") {
-        return parse_adaptive_params(params);
-    }
-    Err(format!(
-        "Unknown search quality: '{mode}'. Valid: fast, balanced, accurate, perfect, \
-         autotune, custom:<ef>, adaptive:<min_ef>:<max_ef>"
-    ))
-}
-
-/// Validates `<min_ef>:<max_ef>` for the adaptive quality mode.
-fn parse_adaptive_params(params: &str) -> Result<(), String> {
-    let parts: Vec<&str> = params.split(':').collect();
-    if parts.len() != 2 {
-        return Err(format!(
-            "Invalid adaptive format: '{params}'. Expected 'adaptive:<min_ef>:<max_ef>'"
-        ));
-    }
-    let min_ef = parts[0]
-        .parse::<usize>()
-        .map_err(|_| format!("Invalid adaptive min_ef: '{}'", parts[0]))?;
-    let max_ef = parts[1]
-        .parse::<usize>()
-        .map_err(|_| format!("Invalid adaptive max_ef: '{}'", parts[1]))?;
-    velesdb_core::api_types::validate_ef_search(min_ef)?;
-    velesdb_core::api_types::validate_ef_search(max_ef)?;
-    if min_ef > max_ef {
-        return Err(format!(
-            "Adaptive min_ef ({min_ef}) must be <= max_ef ({max_ef})"
-        ));
-    }
-    Ok(())
+    velesdb_core::api_types::parse_search_mode(mode).map(drop)
 }
 
 /// Maps a `velesdb_core::StorageMode` to the local WASM `StorageMode`.

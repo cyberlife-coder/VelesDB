@@ -3,6 +3,8 @@
 //! warning at startup.
 
 use velesdb_memory::DynEmbedder;
+#[cfg(feature = "extractor-http")]
+use velesdb_memory::SettingError;
 
 /// An embedder together with the identifier of the model behind it.
 ///
@@ -243,9 +245,10 @@ const CHAT_TEMPLATE_KWARGS_VAR: &str = "VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_K
 /// [`parse_chat_template_kwargs`] over the process environment.
 ///
 /// # Errors
-/// The variable is set, non-blank and not a JSON object.
+/// [`SettingError::InvalidChatTemplateKwargs`] when the variable is set,
+/// non-blank and not a JSON object.
 #[cfg(feature = "extractor-http")]
-fn chat_template_kwargs() -> Result<Option<serde_json::Value>, String> {
+fn chat_template_kwargs() -> Result<Option<serde_json::Value>, SettingError> {
     parse_chat_template_kwargs(env_opt(CHAT_TEMPLATE_KWARGS_VAR).as_deref())
 }
 
@@ -260,9 +263,12 @@ fn chat_template_kwargs() -> Result<Option<serde_json::Value>, String> {
 /// hold a secret the chat template reads.
 ///
 /// # Errors
-/// `raw` is non-blank and not a JSON object.
+/// [`SettingError::InvalidChatTemplateKwargs`] when `raw` is non-blank and
+/// not a JSON object.
 #[cfg(feature = "extractor-http")]
-fn parse_chat_template_kwargs(raw: Option<&str>) -> Result<Option<serde_json::Value>, String> {
+fn parse_chat_template_kwargs(
+    raw: Option<&str>,
+) -> Result<Option<serde_json::Value>, SettingError> {
     use serde_json::Value;
 
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
@@ -270,22 +276,35 @@ fn parse_chat_template_kwargs(raw: Option<&str>) -> Result<Option<serde_json::Va
     };
     match serde_json::from_str::<Value>(raw) {
         Ok(object @ Value::Object(_)) => Ok(Some(object)),
-        Ok(other) => {
-            let kind = match other {
-                Value::Null => "null",
-                Value::Bool(_) => "a boolean",
-                Value::Number(_) => "a number",
-                Value::String(_) => "a string",
-                Value::Array(_) => "an array",
-                Value::Object(_) => "an object",
-            };
-            Err(format!(
-                "{CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object: found {kind}"
-            ))
-        }
-        Err(err) => Err(format!(
-            "{CHAT_TEMPLATE_KWARGS_VAR} must be a JSON object: {err}"
-        )),
+        Ok(other) => Err(invalid_chat_template_kwargs(format!(
+            "found {}",
+            json_kind(&other)
+        ))),
+        Err(err) => Err(invalid_chat_template_kwargs(err.to_string())),
+    }
+}
+
+/// The kind of a JSON value, worded for a refusal: what was found instead of
+/// an object, without the value itself.
+#[cfg(feature = "extractor-http")]
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    use serde_json::Value;
+
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
+#[cfg(feature = "extractor-http")]
+fn invalid_chat_template_kwargs(reason: String) -> SettingError {
+    SettingError::InvalidChatTemplateKwargs {
+        variable: CHAT_TEMPLATE_KWARGS_VAR.to_owned(),
+        reason,
     }
 }
 
@@ -312,8 +331,8 @@ pub(crate) fn build_migration_target(
     backend: &str,
 ) -> Result<(DynEmbedder, String), velesdb_memory::MemoryError> {
     let configured = build_embedder_selection(Some(backend)).map_err(|error| {
-        velesdb_memory::MemoryError::MigrationCapture(format!(
-            "cannot configure migration target '{backend}': {error}"
+        velesdb_memory::MemoryError::Migration(velesdb_memory::migration::MigrationError::Capture(
+            format!("cannot configure migration target '{backend}': {error}"),
         ))
     })?;
     Ok((configured.embedder, configured.model))

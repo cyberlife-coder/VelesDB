@@ -18,7 +18,7 @@ velesdb repl ./my_db    # explicit path
 ```
 
 ```
-VelesDB v7.1.0 - VelesQL REPL
+VelesDB v8.0.0 - VelesQL REPL
 Database: ./data
 Type .help for commands, .quit to exit
 
@@ -128,7 +128,7 @@ Per-Node Statistics:
 | Command | Description |
 |---------|-------------|
 | `.sparse-search <col> <index> <json> [k]` | Sparse vector search. JSON format: `[[idx, weight], ...]`. Default k=10. |
-| `.hybrid-sparse <col> <dense> <sparse> [k] [--strategy rrf\|average\|max] [--index <name>]` | Dense+sparse hybrid search with fusion. Default k=10, strategy=rrf. |
+| `.hybrid-sparse <col> <dense> <sparse> [k] [--strategy rrf\|average\|max\|weighted\|relative_score] [--index <name>]` | Dense+sparse hybrid search with fusion. Default k=10, strategy=rrf. Strategy names follow core's grammar (`avg`, `max`, `rsf` aliases, any case); `weighted` uses core's 0.6 / 0.3 / 0.1. |
 | `.guardrails` | Display current query guard-rails (timeout, memory limit, rate limit, circuit breaker) |
 | `.agent [cmd]` | Agent memory commands (preview — not yet fully implemented in the CLI) |
 
@@ -287,4 +287,4 @@ executed successfully.`, `Admin statement executed successfully.`, or
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 8.0.0

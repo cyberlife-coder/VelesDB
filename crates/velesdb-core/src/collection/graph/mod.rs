@@ -14,13 +14,13 @@
 //!
 //! # Example
 //!
-//! Note: `GraphNode`/`Element` are exported value types for programmatic
+//! Note: `GraphNode` is an exported value type for programmatic
 //! construction; the query runtime itself persists node data as JSON payloads
 //! (`GraphCollection::upsert_node_payload` / `INSERT NODE`) and MATCH
 //! evaluates against those payloads, not against `GraphNode` instances.
 //!
 //! ```rust,ignore
-//! use velesdb_core::collection::graph::{GraphSchema, NodeType, EdgeType, ValueType, GraphNode, Element};
+//! use velesdb_core::collection::graph::{GraphSchema, NodeType, EdgeType, ValueType, GraphNode};
 //! use std::collections::HashMap;
 //!
 //! // Define a schema with Person and Company nodes
@@ -68,6 +68,9 @@ mod streaming_tests;
 mod traversal;
 mod traversal_bidir;
 mod traversal_csr;
+mod traversal_dfs;
+#[cfg(test)]
+mod traversal_dfs_tests;
 #[cfg(test)]
 mod traversal_tests;
 
@@ -91,8 +94,6 @@ mod schema_tests;
 pub use clustered_index::ClusteredIndex;
 pub use csr_snapshot::{AdjacencySource, CsrSnapshot, EdgePredicate, LabelFilter, NoFilter};
 pub use edge::{EdgeStore, GraphEdge};
-#[allow(unused_imports)] // Re-exported for test access via super::*
-pub(crate) use node::Element;
 // Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
 #[allow(unused_imports)]
 pub(crate) use csr_snapshot::SnapshotBuilder;
@@ -109,7 +110,8 @@ pub use streaming::{
     bfs_stream, concurrent_bfs_stream, BfsIterator, ConcurrentBfsIterator, StreamingConfig,
     MAX_VISITED_SIZE,
 };
-pub(crate) use traversal::{deadline_reached, DEADLINE_CHECK_INTERVAL};
 pub use traversal::{TraversalConfig, TraversalPath, TraversalResult, DEFAULT_MAX_DEPTH};
 pub use traversal_bidir::bfs_traverse_both;
 pub use traversal_csr::{bfs_traverse_csr, bfs_traverse_csr_filtered};
+pub use traversal_dfs::dfs_traverse;
+pub(crate) use traversal_dfs::dfs_traverse_with;

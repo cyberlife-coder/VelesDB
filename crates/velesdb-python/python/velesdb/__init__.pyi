@@ -16,6 +16,26 @@ STORAGE_MODES: Tuple[str, ...]
 CONDITION_TYPES: Tuple[str, ...]
 
 
+# Core contracts, each a call into velesdb-core.
+
+def hash_id(value: str) -> int:
+    """The canonical string -> u64 point id: ``velesdb_core::hash_id``,
+    FNV-1a 64-bit over the UTF-8 bytes (full unsigned 64-bit range)."""
+    ...
+
+def metric_higher_is_better(metric: str) -> bool:
+    """Whether a higher score is a closer match under ``metric``: ``True``
+    for cosine, dot and Jaccard (similarities), ``False`` for Euclidean and
+    Hamming (distances). Raises ``ValueError`` for an unknown metric."""
+    ...
+
+def validate_search_quality(mode: str) -> None:
+    """Checks a search quality mode with core's parser, the one
+    ``Collection.search_with_quality`` uses. Raises ``ValueError`` with
+    core's message for a mode no search would accept."""
+    ...
+
+
 # ---------------------------------------------------------------------------
 # Structural return types (TypedDict)
 #
@@ -154,6 +174,44 @@ class FusionStrategy:
         """Short alias for :meth:`relative_score` (``USING FUSION rsf`` in VelesQL)."""
         ...
 
+    @staticmethod
+    def from_name(
+        name: str,
+        *,
+        k: Optional[int] = None,
+        avg_weight: Optional[float] = None,
+        max_weight: Optional[float] = None,
+        hit_weight: Optional[float] = None,
+        dense_weight: Optional[float] = None,
+        sparse_weight: Optional[float] = None,
+    ) -> "FusionStrategy":
+        """Create the strategy a name stands for, through velesdb-core's grammar.
+
+        Names: ``rrf``, ``average`` (``avg``), ``maximum`` (``max``),
+        ``weighted``, ``relative_score`` (``rsf``), case-insensitive. A
+        parameter left out takes core's default (k=60; 0.6/0.3/0.1;
+        0.5/0.5); a single ``relative_score`` weight implies the other.
+
+        Raises:
+            ValueError: If the name is unknown or the weights are invalid
+        """
+        ...
+
+    def fused_higher_is_better(self, metric: str) -> bool:
+        """Whether a higher fused score is a closer match under ``metric``.
+
+        The direction of the scores ``Collection.multi_query_search`` returns
+        with this strategy, read from velesdb-core's
+        ``FusionStrategy::fused_direction``: ``average``, ``maximum`` and
+        ``weighted`` keep a distance metric's units (lower is closer under
+        ``euclidean`` and ``hamming``); ``rrf`` and ``relative_score`` scores
+        are higher-is-better under every metric.
+
+        Raises:
+            ValueError: If the metric is unknown
+        """
+        ...
+
 
 class SearchOptions:
     """Options for a vector search request (v1.15+).
@@ -182,7 +240,6 @@ class SearchOptions:
         vector: Dense query vector (list or numpy array).
         sparse_vector: Sparse query as dict[int, float] or scipy sparse.
         k: Max results to return (default: 10).
-        top_k: Deprecated alias for ``k``.
         filter: Metadata pre-filter dict. Shape: ``{"condition": <cond>}`` where
             ``<cond>`` is ``{"type": <op>, "field": ..., ...}``. Operators:
             ``eq``/``neq``/``gt``/``gte``/``lt``/``lte`` (``field``+``value``),
@@ -208,7 +265,6 @@ class SearchOptions:
     vector: Optional[Union[List[float], "np.ndarray"]]
     sparse_vector: Optional[Dict[int, float]]
     k: int
-    top_k: int
     filter: Optional[Dict[str, Any]]
     sparse_index_name: Optional[str]
     include_vectors: bool
@@ -221,8 +277,7 @@ class SearchOptions:
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
         *,
         sparse_vector: Optional[Dict[int, float]] = None,
-        k: Optional[int] = None,
-        top_k: Optional[int] = None,
+        k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
         sparse_index_name: Optional[str] = None,
         include_vectors: bool = False,
@@ -237,7 +292,6 @@ class SearchOptions:
         self, sparse_vector: Optional[Dict[int, float]]
     ) -> "SearchOptions": ...
     def with_k(self, k: int) -> "SearchOptions": ...
-    def with_top_k(self, top_k: int) -> "SearchOptions": ...
     def with_filter(self, filter: Optional[Dict[str, Any]]) -> "SearchOptions": ...
     def with_sparse_index_name(self, name: Optional[str]) -> "SearchOptions": ...
     def with_include_vectors(self, include: bool) -> "SearchOptions": ...
@@ -468,19 +522,15 @@ class Collection:
     def search(
         self,
         vector: Optional[Union[List[float], "np.ndarray"]] = None,
-        *,
-        sparse_vector: Optional[Dict[int, float]] = None,
         top_k: int = 10,
         filter: Optional[Dict[str, Any]] = None,
+        sparse_vector: Optional[Dict[int, float]] = None,
         sparse_index_name: Optional[str] = None,
-        principal: Optional[str] = None,
-        tenant: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for similar vectors (dense, sparse, or hybrid).
 
-        .. deprecated:: 1.15.0
-            Use :py:meth:`search_request` with a :py:class:`SearchOptions` object.
-            This method will be removed in v2.0.0.
+        The keyword shorthand over :py:meth:`search_request`; use that with a
+        :py:class:`SearchOptions` for fusion and read-gate options.
 
         Modes:
         - Dense only: ``search(vector, top_k=10)``
@@ -504,8 +554,8 @@ class Collection:
     def search_request(self, opts: "SearchOptions") -> List[Dict[str, Any]]:
         """Search for similar vectors using a :py:class:`SearchOptions` builder (v1.15+).
 
-        Preferred over :py:meth:`search` for new code; avoids the long
-        parameter list warning and is the sole canonical entry point from v2.0.
+        Takes every search parameter :py:meth:`search` takes, plus fusion,
+        ``include_vectors`` and the read-gate ``principal`` / ``tenant``.
 
         Args:
             opts: A populated :py:class:`SearchOptions` instance.
@@ -693,7 +743,23 @@ class Collection:
         ...
 
     def indexes_memory_usage(self) -> int:
-        """Get total memory usage of all indexes in bytes."""
+        """Estimated heap bytes of the secondary, property and range indexes
+        (every index ``list_indexes`` lists; the HNSW graph is not counted)."""
+        ...
+
+    def apply_advanced_config(self, config: Dict[str, Any]) -> None:
+        """Set ``pq_rescore_oversampling``, ``deferred_indexing`` and/or
+        ``async_index_builder`` and persist them (absent key = unchanged,
+        ``None`` = clear).
+
+        A setting the collection does not run yet takes effect at once; a
+        change to one it runs takes effect at the next open (see
+        ``pending_reopen``).
+        """
+        ...
+
+    def pending_reopen(self) -> List[str]:
+        """Streaming settings persisted but not in force until the next open."""
         ...
 
     def analyze(self) -> Dict[str, Any]:
@@ -753,10 +819,6 @@ class Collection:
             ValueError: If ``quality`` names no mode, or gives an ef outside
                 16-4096.
         """
-        ...
-
-    def get_graph_store(self) -> "GraphStore":
-        """Get a graph store adapter for edge/traversal operations."""
         ...
 
     # Index Management
@@ -1371,7 +1433,7 @@ class StreamingConfig:
 
     Args:
         max_depth: Maximum traversal depth (default: 3)
-        max_visited: Maximum nodes to visit (default: 10000)
+        max_visited: Maximum number of results (default: 10000)
         relationship_types: Optional filter by relationship types
     """
 
@@ -1464,7 +1526,12 @@ class GraphStore:
         limit: int = 10000,
         relationship_types: Optional[List[str]] = None,
     ) -> List[TraversalResult]:
-        """Run a DFS traversal from ``source`` (keyword-only arguments)."""
+        """Run core's DFS from ``source`` (keyword-only arguments).
+
+        One result per node reached, in depth-first order, describing the
+        edge that reached it; ``limit`` caps the results, as for
+        :meth:`traverse_bfs`.
+        """
         ...
 
     def remove_edge(self, edge_id: int) -> None: ...
@@ -1927,11 +1994,30 @@ class PySemanticMemory:
         """
         ...
 
-    def query(self, embedding: List[float], top_k: int = 10) -> List[Dict[str, Any]]:
+    def query(
+        self,
+        embedding: List[float],
+        top_k: int = 10,
+        quality: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Query semantic memory by similarity.
+
+        Args:
+            embedding: Query vector
+            top_k: Number of results to return (default: 10)
+            quality: Search quality for this query, as
+                :meth:`Collection.search_with_quality` takes it: ``"fast"``,
+                ``"balanced"``, ``"accurate"``, ``"perfect"``, ``"autotune"``,
+                ``"custom:<ef>"`` or ``"adaptive:<min_ef>:<max_ef>"``, each ef
+                in 16-4096. ``None`` (default) keeps the collection's own
+                quality.
 
         Returns:
             List of dicts with 'id', 'score', 'content' keys
+
+        Raises:
+            ValueError: If ``quality`` names no mode, or gives an ef outside
+                16-4096.
         """
         ...
 
@@ -2310,6 +2396,7 @@ class MemoryService:
         embedder: str = "hash",
         ollama_url: Optional[str] = None,
         ollama_model: Optional[str] = None,
+        search_quality: Optional[str] = None,
     ) -> None:
         """Open or create a memory store at ``path``.
 
@@ -2319,12 +2406,19 @@ class MemoryService:
                 ``"ollama"`` (real semantic recall via a local model).
             ollama_url: Ollama server URL (used when ``embedder="ollama"``).
             ollama_model: Ollama model name (used when ``embedder="ollama"``).
+            search_quality: Recall quality: ``"fast"``, ``"balanced"``,
+                ``"accurate"``, ``"perfect"``, ``"autotune"``,
+                ``"custom:<ef>"`` or ``"adaptive:<min_ef>:<max_ef>"``, each ef
+                in 16-4096. An explicit value wins over
+                ``VELESDB_MEMORY_SEARCH_QUALITY``; omitting both keeps the
+                collection's own quality.
 
         Opening with ``"hash"`` emits one degraded-recall notice on stderr.
         Set ``VELESDB_MEMORY_QUIET=1`` to suppress it for deliberate offline use.
 
         Raises:
-            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``.
+            ValueError: If ``embedder`` is not ``"hash"`` or ``"ollama"``, or
+                ``search_quality`` is not a quality.
             RuntimeError: If the store cannot be opened or the Ollama embedder
                 cannot be initialised.
         """

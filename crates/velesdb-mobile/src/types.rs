@@ -25,13 +25,28 @@ pub enum VelesError {
         recoverable: bool,
     },
 
-    /// Collection operation failed.
-    #[error("Collection error: {message}")]
-    Collection { message: String },
+    /// Collection operation failed: the collection is missing, already
+    /// exists, or is not of the kind the call needs.
+    ///
+    /// `code` and `recoverable` are core's for the condition, as on
+    /// `Database`: `"VELES-002"` for a missing collection or one of the wrong
+    /// kind, `"VELES-001"` for a duplicate.
+    #[error("[{code}] Collection error: {message}")]
+    Collection {
+        message: String,
+        code: String,
+        recoverable: bool,
+    },
 
-    /// Vector dimension mismatch.
-    #[error("Dimension mismatch: expected {expected}, got {actual}")]
-    DimensionMismatch { expected: u32, actual: u32 },
+    /// Vector dimension mismatch. `code` is core's `"VELES-004"` and
+    /// `recoverable` core's answer for it.
+    #[error("[{code}] Dimension mismatch: expected {expected}, got {actual}")]
+    DimensionMismatch {
+        expected: u32,
+        actual: u32,
+        code: String,
+        recoverable: bool,
+    },
 }
 
 impl VelesError {
@@ -48,6 +63,42 @@ impl VelesError {
             recoverable: true,
         }
     }
+
+    /// A collection that exists but is not of the kind the call needs.
+    ///
+    /// Coded as core codes the same condition: its own graph lookup
+    /// (`resolve_graph_collection`) and the server's vector lookup
+    /// (`get_vector_collection_or_404`) answer `VELES-002` for a collection
+    /// that is not of the kind asked, so the code and recoverability are read
+    /// from that core variant rather than copied; the kind is in the message.
+    #[must_use]
+    pub(crate) fn wrong_collection_kind(name: &str, message: String) -> Self {
+        let core = velesdb_core::Error::CollectionNotFound(name.to_string());
+        VelesError::Collection {
+            message,
+            code: core.code().to_string(),
+            recoverable: core.is_recoverable(),
+        }
+    }
+
+    /// Maps a core error through [`From`], keeping core's code and
+    /// recoverability, and prefixes `context` to a `Database` message so the
+    /// caller still sees which call failed.
+    #[must_use]
+    pub(crate) fn from_core(context: &str, err: velesdb_core::Error) -> Self {
+        match Self::from(err) {
+            VelesError::Database {
+                message,
+                code,
+                recoverable,
+            } => VelesError::Database {
+                message: format!("{context}: {message}"),
+                code,
+                recoverable,
+            },
+            typed => typed,
+        }
+    }
 }
 
 impl From<velesdb_core::Error> for VelesError {
@@ -61,13 +112,19 @@ impl From<velesdb_core::Error> for VelesError {
                 VelesError::DimensionMismatch {
                     expected: expected as u32,
                     actual: actual as u32,
+                    code,
+                    recoverable,
                 }
             }
             velesdb_core::Error::CollectionNotFound(name) => VelesError::Collection {
                 message: format!("Collection not found: {name}"),
+                code,
+                recoverable,
             },
             velesdb_core::Error::CollectionExists(name) => VelesError::Collection {
                 message: format!("Collection already exists: {name}"),
+                code,
+                recoverable,
             },
             other => VelesError::Database {
                 message: other.to_string(),
@@ -177,38 +234,33 @@ pub enum SearchQuality {
 impl TryFrom<SearchQuality> for velesdb_core::SearchQuality {
     type Error = VelesError;
 
-    /// Fallible: `Custom`'s `ef` and `Adaptive`'s `min_ef`/`max_ef` are
-    /// checked against the range the `ef_search` `WITH` option enforces
-    /// elsewhere, [`velesdb_core::api_types::validate_ef_search`]'s, so a
-    /// Swift/Kotlin caller cannot reach the HNSW traversal with an unbounded
-    /// `ef` through this FFI boundary (#2275).
+    /// Fallible: checked by core's
+    /// [`velesdb_core::api_types::validate_search_quality`], the rules its
+    /// `custom:` / `adaptive:` parser applies — every ef in the `ef_search`
+    /// range, so a Swift/Kotlin caller cannot reach the HNSW traversal with
+    /// an unbounded `ef` through this FFI boundary (#2275), and
+    /// `min_ef <= max_ef` for `Adaptive`.
     ///
     /// # Errors
     ///
     /// Returns [`VelesError::Database`] when `ef`, `min_ef` or `max_ef` falls
-    /// outside the accepted range.
+    /// outside the accepted range, or `min_ef` exceeds `max_ef`.
     fn try_from(quality: SearchQuality) -> Result<Self, Self::Error> {
-        Ok(match quality {
+        let to_usize = |ef: u32| usize::try_from(ef).unwrap_or(usize::MAX);
+        let quality = match quality {
             SearchQuality::Fast => velesdb_core::SearchQuality::Fast,
             SearchQuality::Balanced => velesdb_core::SearchQuality::Balanced,
             SearchQuality::Accurate => velesdb_core::SearchQuality::Accurate,
             SearchQuality::Perfect => velesdb_core::SearchQuality::Perfect,
-            SearchQuality::Custom { ef } => {
-                let ef = usize::try_from(ef).unwrap_or(usize::MAX);
-                velesdb_core::api_types::validate_ef_search(ef).map_err(VelesError::database)?;
-                velesdb_core::SearchQuality::Custom(ef)
-            }
-            SearchQuality::Adaptive { min_ef, max_ef } => {
-                let min_ef = usize::try_from(min_ef).unwrap_or(usize::MAX);
-                let max_ef = usize::try_from(max_ef).unwrap_or(usize::MAX);
-                velesdb_core::api_types::validate_ef_search(min_ef)
-                    .map_err(VelesError::database)?;
-                velesdb_core::api_types::validate_ef_search(max_ef)
-                    .map_err(VelesError::database)?;
-                velesdb_core::SearchQuality::Adaptive { min_ef, max_ef }
-            }
+            SearchQuality::Custom { ef } => velesdb_core::SearchQuality::Custom(to_usize(ef)),
+            SearchQuality::Adaptive { min_ef, max_ef } => velesdb_core::SearchQuality::Adaptive {
+                min_ef: to_usize(min_ef),
+                max_ef: to_usize(max_ef),
+            },
             SearchQuality::AutoTune => velesdb_core::SearchQuality::AutoTune,
-        })
+        };
+        velesdb_core::api_types::validate_search_quality(&quality).map_err(VelesError::database)?;
+        Ok(quality)
     }
 }
 
@@ -422,11 +474,12 @@ pub struct MobileIndexInfo {
     pub label: String,
     /// Property name.
     pub property: String,
-    /// Index type name.
+    /// Index type: `hash` (graph property), `range` (graph range) or `btree`
+    /// (secondary payload index, whose `label` is `secondary`).
     pub index_type: String,
     /// Number of distinct values.
     pub cardinality: u64,
-    /// Approximate memory usage in bytes.
+    /// Estimated heap size of the index, in bytes.
     pub memory_bytes: u64,
 }
 

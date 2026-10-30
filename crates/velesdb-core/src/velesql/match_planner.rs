@@ -77,13 +77,6 @@ pub struct MatchGraphStats {
     pub label_selectivity: f64,
 }
 
-/// Former name of [`MatchGraphStats`].
-#[deprecated(
-    since = "5.2.0",
-    note = "renamed to MatchGraphStats — same fields, graph-only scope"
-)]
-pub type CollectionStats = MatchGraphStats;
-
 /// Query planner for MATCH queries.
 #[derive(Debug, Default)]
 pub struct MatchQueryPlanner;
@@ -249,7 +242,7 @@ impl MatchQueryPlanner {
     }
 
     /// Check if WHERE clause contains a similarity condition.
-    fn has_similarity_condition(where_clause: Option<&Condition>) -> bool {
+    pub(crate) fn has_similarity_condition(where_clause: Option<&Condition>) -> bool {
         where_clause.is_some_and(Self::condition_has_similarity)
     }
 

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::migration::capture;
 use crate::migration::{
     commit_retained_switch, finalize_staged_live_switch, rollback_staged_live_switch,
     target_embedder_witness, MigrationState, OnlineMigrationStartup, ARCHIVE_SUFFIX,
@@ -224,8 +225,4 @@ fn path_exists(path: &Path) -> Result<bool, MemoryError> {
             path.display()
         ))),
     }
-}
-
-fn capture(message: impl Into<String>) -> MemoryError {
-    MemoryError::MigrationCapture(message.into())
 }

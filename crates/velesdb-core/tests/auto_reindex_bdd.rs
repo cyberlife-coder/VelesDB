@@ -5,7 +5,7 @@
 //! Covers the `VectorCollection::attach_auto_reindex` /
 //! `detach_auto_reindex` / `auto_reindex_manager` /
 //! `check_auto_reindex_divergence` surface and the hot-path hook in
-//! `upsert_bulk_inner` that consults the attached manager after every
+//! `upsert_bulk` that consults the attached manager after every
 //! successful batch.
 //!
 //! Test categories:

@@ -21,14 +21,17 @@
 //! stays WASM-local; the normalization math underneath it is single-sourced
 //! from core (issue #1545).
 //!
+//! The strategy *name* — its aliases, its case rule — is core's grammar,
+//! [`velesdb_core::FusionStrategy::from_name`], whichever aggregation runs.
+//!
 //! `weighted` defaults: when no explicit weights are supplied, `fuse_results`
-//! uses `velesdb_core::FusionStrategy::weighted_default()`, i.e. core's
-//! canonical `DEFAULT_WEIGHTED_*` constants (`avg=0.6, max=0.3, hit=0.1`).
-//! Callers may override them via the `weights` parameter.
+//! uses core's canonical `DEFAULT_WEIGHTED_*` constants
+//! (`avg=0.6, max=0.3, hit=0.1`), as `from_name` fills them in. Callers may
+//! override them via the `weights` parameter.
 
 use std::collections::HashMap;
 
-use velesdb_core::FusionStrategy;
+use velesdb_core::{FusionParams, FusionStrategy};
 
 /// Fuses results from multiple queries using the specified strategy.
 ///
@@ -47,36 +50,30 @@ use velesdb_core::FusionStrategy;
 /// Fused results sorted by combined score (descending).
 /// # Errors
 ///
-/// Returns an error if `strategy` is not one of the recognised names:
-/// `"average"` / `"avg"`, `"maximum"` / `"max"`, `"weighted"`,
-/// `"relative_score"` / `"rsf"`, `"rrf"`; or if `weights` are supplied for
-/// `"weighted"` but are negative or do not sum to 1.0.
+/// Returns core's error if `strategy` is not one of the names
+/// [`FusionStrategy::from_name`] accepts (`"average"` / `"avg"`,
+/// `"maximum"` / `"max"`, `"weighted"`, `"relative_score"` / `"rsf"`,
+/// `"rrf"`, case-insensitive), or if `weights` are supplied for `"weighted"`
+/// but are negative or do not sum to 1.0.
 pub fn fuse_results(
     all_results: &[Vec<(u64, f32)>],
     strategy: &str,
     rrf_k: u32,
     weights: Option<(f32, f32, f32)>,
 ) -> Result<Vec<(u64, f32)>, String> {
-    match strategy.to_lowercase().as_str() {
-        "average" | "avg" => fuse_with_core(all_results, &FusionStrategy::Average),
-        "maximum" | "max" => fuse_with_core(all_results, &FusionStrategy::Maximum),
-        "weighted" => {
-            let weighted_strategy = match weights {
-                Some((avg_weight, max_weight, hit_weight)) => {
-                    FusionStrategy::weighted(avg_weight, max_weight, hit_weight)
-                        .map_err(|e| e.to_string())?
-                }
-                None => FusionStrategy::weighted_default(),
-            };
-            fuse_with_core(all_results, &weighted_strategy)
-        }
-        "rrf" => fuse_with_core(all_results, &FusionStrategy::RRF { k: rrf_k }),
-        "relative_score" | "rsf" => Ok(fuse_relative_score(all_results)),
-        _ => Err(format!(
-            "Unknown fusion strategy '{strategy}'. \
-             Expected one of: average, avg, maximum, max, weighted, \
-             relative_score, rsf, rrf"
-        )),
+    let (avg_weight, max_weight, hit_weight) = match weights {
+        Some((avg, max, hit)) => (Some(avg), Some(max), Some(hit)),
+        None => (None, None, None),
+    };
+    let params = FusionParams::default()
+        .with_rrf_k(Some(rrf_k))
+        .with_avg_weight(avg_weight)
+        .with_max_weight(max_weight)
+        .with_hit_weight(hit_weight);
+    match FusionStrategy::from_name(strategy, params).map_err(|e| e.to_string())? {
+        // The N-branch aggregation stays local (D005); see the module doc.
+        FusionStrategy::RelativeScore { .. } => Ok(fuse_relative_score(all_results)),
+        core_strategy => fuse_with_core(all_results, &core_strategy),
     }
 }
 

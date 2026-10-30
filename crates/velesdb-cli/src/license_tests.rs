@@ -14,21 +14,6 @@ fn test_license_tier_display() {
 }
 
 #[test]
-fn test_license_info_has_feature() {
-    let info = LicenseInfo {
-        key: "TEST-KEY".to_string(),
-        tier: LicenseTier::Professional,
-        organization: "Test Corp".to_string(),
-        expires_at: u64::MAX,
-        max_instances: 1,
-        features: vec![PremiumFeature::Snapshots],
-    };
-
-    assert!(info.has_feature(PremiumFeature::Snapshots));
-    assert!(!info.has_feature(PremiumFeature::MultiTenancy));
-}
-
-#[test]
 fn test_premium_feature_enum_only_contains_true_premium_variants() {
     // After #390: HybridSearch, AdvancedFiltering, GpuAcceleration are free
     // in open-source core and must NOT be in the PremiumFeature enum.
@@ -105,8 +90,8 @@ fn test_legacy_license_with_removed_features_deserializes() {
         2,
         "Only Snapshots and RBAC are true premium"
     );
-    assert!(info.has_feature(PremiumFeature::Snapshots));
-    assert!(info.has_feature(PremiumFeature::RBAC));
+    assert!(info.features.contains(&PremiumFeature::Snapshots));
+    assert!(info.features.contains(&PremiumFeature::RBAC));
 }
 
 #[test]

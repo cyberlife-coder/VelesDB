@@ -52,7 +52,7 @@ after use and `recall` re-ranks against the updated confidence.
 
 | Call | Purpose |
 |---|---|
-| `MemoryService(path, embedder="hash", ollama_url=None, ollama_model=None)` | open (or create) an on-disk store |
+| `MemoryService(path, embedder="hash", ollama_url=None, ollama_model=None, search_quality=None)` | open (or create) an on-disk store |
 | `remember(fact, links=None, metadata=None, ttl_seconds=None)` | store a fact, return its stable `int` id |
 | `recall(query, k=10, filter=None)` | similarity recall |
 | `recall_where(query, filters, k=10)` | recall narrowed by metadata predicates |
@@ -62,6 +62,23 @@ after use and `recall` re-ranks against the updated confidence.
 | `feedback(id, success)` | reinforce or weaken a memory |
 | `forget(id)` | delete a memory |
 | `remember_extracted(text, model, url=None, metadata=None)` | extract facts from raw text, then store them |
+
+`search_quality` picks the recall quality — the latency/recall trade-off of
+the vector search behind `recall`, `why` and the other similarity reads:
+
+```python
+mem = MemoryService("./agent_memory", search_quality="accurate")
+```
+
+It accepts the mode names REST and VelesQL use, in any letter case:
+`"fast"`, `"balanced"`, `"accurate"`, `"perfect"` (exact, and refused past the
+engine's exhaustive-scan guard), `"autotune"`, `"custom:<ef>"` and
+`"adaptive:<min_ef>:<max_ef>"`, each ef in `[16, 4096]`. An explicit argument
+wins over the `VELESDB_MEMORY_SEARCH_QUALITY` environment variable; with
+neither, the store keeps the collection's own quality. A value that is none of
+these raises `ValueError` at construction rather than being ignored.
+`recall_where` (column predicates) runs its own search path and is not
+affected — see [Recall quality](MCP_SERVER_SETUP.md#recall-quality).
 
 `links` is a list of `(target_id, relation)` tuples, exactly as in the snippet
 above. Context-compiler methods on the same object are documented in
@@ -149,4 +166,4 @@ memory.procedural.reinforce(procedure_id=1, success=False)
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

@@ -265,72 +265,6 @@ fn test_no_temporary_file_is_left_behind() {
     assert!(temporaries.is_empty(), "{id}: {temporaries:?}");
 }
 
-#[test]
-fn test_peek_never_writes() {
-    let tmp = TempDir::new().expect("tempdir");
-    let dirs = vec![tmp.path().join("cfg")];
-    let first = peek_install_id(&dirs);
-    let second = peek_install_id(&dirs);
-    assert!(is_id(&first) && is_id(&second));
-    assert_ne!(first, second, "nothing stored, so each peek is a fresh id");
-    assert!(!dirs[0].exists(), "peeking must not create the directory");
-
-    let stored = resolve_install_id(&dirs);
-    assert_eq!(
-        peek_install_id(&dirs),
-        stored,
-        "peek reads what resolve stored"
-    );
-}
-
-/// The deprecated helper looks in the per-user config directory first, so
-/// that is the directory to watch: every candidate is pointed into a
-/// temporary directory, and none of it may be created.
-#[test]
-fn test_deprecated_hash_helper_never_creates_the_id_file() {
-    let tmp = TempDir::new().expect("tempdir");
-    let home = tmp.path().to_string_lossy().into_owned();
-    let lookup = |key: &str| match key {
-        "HOME" | "XDG_CONFIG_HOME" | "APPDATA" => Some(OsString::from(&home)),
-        _ => None,
-    };
-    let data_dir = tmp.path().join("data");
-
-    let first = stored_install_hash(Platform::CURRENT, lookup, &data_dir);
-    let second = stored_install_hash(Platform::CURRENT, lookup, &data_dir);
-
-    assert_eq!(first.len(), 64);
-    assert_ne!(
-        first, second,
-        "no stored id: each call hashes a fresh random id"
-    );
-    assert!(
-        std::fs::read_dir(tmp.path())
-            .expect("read_dir")
-            .next()
-            .is_none(),
-        "neither the config directory nor the data directory may be created"
-    );
-}
-
-#[test]
-fn test_deprecated_hash_helper_reads_a_stored_id() {
-    let tmp = TempDir::new().expect("tempdir");
-    let home = tmp.path().to_string_lossy().into_owned();
-    let lookup = |key: &str| match key {
-        "HOME" | "XDG_CONFIG_HOME" | "APPDATA" => Some(OsString::from(&home)),
-        _ => None,
-    };
-    let data_dir = tmp.path().join("data");
-    let dirs = candidate_dirs(Platform::CURRENT, lookup, Some(&data_dir));
-    let stored = resolve_install_id(&dirs);
-
-    assert_eq!(
-        stored_install_hash(Platform::CURRENT, lookup, &data_dir),
-        hash_install_id(&stored)
-    );
-}
-
 /// The same race, started from a damaged file instead of a missing one (an
 /// empty `install-id` is what a crash used to leave): every racer sees the
 /// corruption, and they must still end with one id.
@@ -495,8 +429,12 @@ fn test_fifo_named_like_an_install_file_is_unusable_not_blocking() {
         // A special lock file makes the directory unusable; a special id file
         // is not read and is replaced by the rename.
         assert_eq!(loaded.is_none(), name == LOCK_NAME, "{name}");
-        let dir = tmp.path().to_path_buf();
-        assert!(is_id(&within(10, move || peek_install_id(&[dir]))));
+        // Reading the id file afterwards must not block either: it holds the
+        // id the rename put in place of a special id file, and nothing when
+        // the special lock file left the directory unusable.
+        let file = tmp.path().join(FILE_NAME);
+        let read = within(10, move || read_id(&file));
+        assert_eq!(read.is_some(), name == FILE_NAME, "{name}");
     }
 }
 

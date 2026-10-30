@@ -25,13 +25,13 @@ which your IDE reads directly (`py.typed` is included in the wheel).
 ## Search API note
 
 `search_request(SearchOptions(...))` is the canonical search entry point and is
-used throughout the VelesDB Python documentation. The older multi-keyword
-`collection.search(vector=..., top_k=..., filter=...)` still works but is
-**deprecated since v1.15** — it emits a `DeprecationWarning`.
-`SearchOptions` accepts canonical `k`, plus `vector`, `sparse_vector`, `filter`,
-`sparse_index_name` and `include_vectors`, plus a fluent builder
-(`SearchOptions().with_vector(v).with_k(10)`). The deprecated `top_k` spelling
-remains accepted as an alias for one compatibility version. The `vector` argument
+used throughout the VelesDB Python documentation.
+`collection.search(vector, top_k=..., filter=...)` is the keyword shorthand
+over it, for the dense, sparse and hybrid cases without fusion or read-gate
+options. `SearchOptions` accepts `k`, plus `vector`, `sparse_vector`, `filter`,
+`sparse_index_name`, `include_vectors`, `fusion`, `principal` and `tenant`,
+plus a fluent builder (`SearchOptions().with_vector(v).with_k(10)`). The
+`top_k` alias of `SearchOptions` was removed in 8.0.0: use `k`. The `vector` argument
 accepts numpy arrays (`dtype=np.float32`) as well as Python lists.
 
 ## Database
@@ -106,6 +106,12 @@ info = collection.info()
 collection.upsert([
     {"id": 1, "vector": [0.1, 0.2, 0.3, 0.4], "payload": {"key": "value"}}
 ])
+
+# A payload holds str, int, float, bool, None, list and dict values (anything
+# else raises ValueError). Core refuses one nested deeper than 124 levels of
+# lists and dicts (VELES-017), the payload dict counting as the first; the
+# conversion itself raises ValueError past 127, so a self-containing list
+# raises instead of crashing.
 
 # Bulk insert (optimized for high throughput)
 # Uses parallel HNSW insertion + single flush at the end
@@ -366,6 +372,11 @@ strategy = FusionStrategy.weighted(max_weight=0.3, hit_weight=0.1)  # legacy kwa
 # Relative Score Fusion -- linear blend of dense and sparse scores
 strategy = FusionStrategy.relative_score(dense_weight=0.7, sparse_weight=0.3)
 strategy = FusionStrategy.rsf(dense_weight=0.7, sparse_weight=0.3)  # alias
+
+# By name -- the grammar the REST server, CLI, Tauri and WASM read (velesdb-core's)
+strategy = FusionStrategy.from_name("avg")                 # aliases, any case
+strategy = FusionStrategy.from_name("weighted")            # core defaults 0.6/0.3/0.1
+strategy = FusionStrategy.from_name("rsf", dense_weight=0.7)  # sparse_weight = 0.3
 ```
 
 | Strategy | Formula | Best For |
@@ -375,6 +386,19 @@ strategy = FusionStrategy.rsf(dense_weight=0.7, sparse_weight=0.3)  # alias
 | `maximum()` | max(scores) | When any single match is sufficient |
 | `weighted(a, m, h)` / `weighted(dict)` | a*avg + m*max + h*hit_ratio | Fine-grained scoring control |
 | `relative_score(d, s)` / `rsf(d, s)` | d*dense + s*sparse | Dense+sparse hybrid pipelines |
+| `from_name(name, **params)` | the named strategy | A strategy chosen by a config string; `ValueError` on an unknown name |
+
+The direction of the fused scores depends on the strategy as well as the
+metric. `strategy.fused_higher_is_better(metric)` answers it from velesdb-core
+(`FusionStrategy::fused_direction`): `rrf` and `relative_score` scores are
+higher-is-better under every metric, while `average`, `maximum` and `weighted`
+keep the metric's units, so on a `euclidean` or `hamming` collection their
+`multi_query_search` scores are distances (lower is closer):
+
+```python
+FusionStrategy.average().fused_higher_is_better("euclidean")  # False
+FusionStrategy.rrf().fused_higher_is_better("euclidean")      # True
+```
 
 ## Distance metrics
 
@@ -390,6 +414,16 @@ Aliases accepted for `dot`: `dotproduct`, `dot_product`, `inner`, `ip`; `l2`
 maps to `euclidean` and `cos` to `cosine`. The canonical list is exported at
 runtime as `velesdb.DISTANCE_METRICS` (also `velesdb.STORAGE_MODES` and
 `velesdb.CONDITION_TYPES`).
+
+Three module functions answer from velesdb-core itself, so code built on the
+binding (the LangChain, LlamaIndex and Haystack integrations among it) needs
+no copy of core logic:
+
+| Function | Core source | Returns |
+|----------|-------------|---------|
+| `velesdb.metric_higher_is_better(metric)` | `DistanceMetric::higher_is_better` | `True` for `cosine`, `dot` and `jaccard` (similarities), `False` for `euclidean` and `hamming` (distances); `ValueError` for an unknown metric |
+| `velesdb.validate_search_quality(mode)` | `api_types::parse_search_mode` | `None` for a mode `search_with_quality` accepts, else `ValueError` with the same message |
+| `velesdb.hash_id(value)` | `velesdb_core::hash_id` | the canonical string → `u64` point id (FNV-1a 64-bit over the UTF-8 bytes) |
 
 ## Storage modes (quantization)
 
@@ -450,4 +484,4 @@ see [PYTHON_PERFORMANCE.md](PYTHON_PERFORMANCE.md).
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 8.0.0

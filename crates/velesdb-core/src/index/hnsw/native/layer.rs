@@ -155,14 +155,6 @@ impl Layer {
         }
     }
 
-    /// Adds a neighbor to a node's adjacency list.
-    #[allow(dead_code)] // Reason: Used in tests for graph construction verification
-    pub(super) fn add_neighbor(&self, node_id: NodeId, neighbor: NodeId) {
-        if node_id < self.neighbors.len() {
-            self.neighbors[node_id].write().push(neighbor);
-        }
-    }
-
     /// Remaps all neighbor IDs using the provided old-to-new mapping.
     ///
     /// After graph reordering, node IDs change. This method updates every

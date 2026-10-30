@@ -4,11 +4,9 @@
 //! file NLOC under 500. These methods handle MATCH dispatch, parallel
 //! execution, result merging, and MATCH-specific metrics.
 
-use crate::collection::graph::property_index::PredicateType;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::SearchResult;
-use crate::velesql::{CompareOp, Condition};
 
 use super::match_metrics::global_match_metrics;
 use super::MAX_LIMIT;
@@ -56,8 +54,10 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<SearchResult>> {
-        let raw = self.dispatch_match_strategy(match_clause, params, ctx)?;
-        self.finalize_match_results(match_clause, raw, ctx, params)
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx);
+        count_guard_rail_stop(
+            raw.and_then(|raw| self.finalize_match_results(match_clause, raw, ctx, params)),
+        )
     }
 
     /// Public ordered-MATCH entry point: runs the full cost-based planner
@@ -116,14 +116,16 @@ impl Collection {
         params: &std::collections::HashMap<String, serde_json::Value>,
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
-        let raw = self.dispatch_match_strategy(match_clause, params, ctx)?;
-        self.finalize_match_ordering(match_clause, raw, ctx, params)
+        let raw = self.dispatch_match_strategy(match_clause, params, ctx);
+        count_guard_rail_stop(
+            raw.and_then(|raw| self.finalize_match_ordering(match_clause, raw, ctx, params)),
+        )
     }
 
     /// Selects and runs the planner strategy, returning RAW (unordered,
-    /// unconverted) [`MatchResult`]s plus recording metrics and the advisor
-    /// query pattern. Shared by the SQL `SearchResult` path and the ordered
-    /// `MatchResult` path so strategy dispatch lives in exactly one place.
+    /// unconverted) [`MatchResult`]s plus recording metrics. Shared by the SQL
+    /// `SearchResult` path and the ordered `MatchResult` path so strategy
+    /// dispatch lives in exactly one place.
     ///
     /// [`MatchResult`]: super::match_exec::MatchResult
     fn dispatch_match_strategy(
@@ -133,6 +135,11 @@ impl Collection {
         ctx: &crate::guardrails::QueryContext,
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         let start = std::time::Instant::now();
+        if crate::velesql::match_planner::MatchQueryPlanner::has_similarity_condition(
+            match_clause.where_clause.as_ref(),
+        ) {
+            global_match_metrics().record_similarity_query();
+        }
 
         // W6-A2: Cost-based strategy selection.
         let stats = self.compute_match_collection_stats();
@@ -150,15 +157,6 @@ impl Collection {
             Err(_) => {
                 global_match_metrics().record_failure(start.elapsed());
             }
-        }
-
-        // S4-10: Record query pattern for the index advisor.
-        if result.is_ok() {
-            // Reason: u128->u64 cast; query durations < u64::MAX ms (~585 millennia)
-            #[allow(clippy::cast_possible_truncation)]
-            let elapsed_ms = start.elapsed().as_millis() as u64;
-            let (labels, properties, predicates) = extract_match_query_pattern(match_clause);
-            self.record_query_pattern(labels, properties, predicates, elapsed_ms);
         }
 
         result
@@ -366,6 +364,21 @@ impl Collection {
     }
 }
 
+/// Counts a MATCH stopped by a guard rail during execution — depth,
+/// cardinality, memory or timeout, raised by the strategy or by the final
+/// checks — in `velesdb_match_guardrail_hits_total`, and passes the result on.
+///
+/// Both MATCH funnels ([`Collection::dispatch_match_query`] and
+/// [`Collection::dispatch_match_ordered`]) end here, so each stop is counted
+/// once. A rate-limit or circuit-breaker refusal happens before a MATCH
+/// starts and is not one of these (see `velesdb_rate_limit_requests_total`).
+fn count_guard_rail_stop<T>(result: Result<T>) -> Result<T> {
+    if matches!(result, Err(crate::error::Error::GuardRail(_))) {
+        global_match_metrics().record_guard_rail_hit();
+    }
+    result
+}
+
 /// Computes the effective RETURN `LIMIT` for a MATCH query, clamped to the
 /// server-wide `MAX_LIMIT` ceiling. `None` means no LIMIT was specified, so the
 /// caller leaves the result set unbounded (subject only to `MAX_LIMIT` upstream).
@@ -392,86 +405,6 @@ fn sort_match_baseline(results: &mut [super::match_exec::MatchResult]) {
             .then_with(|| a.depth.cmp(&b.depth))
             .then_with(|| a.path.cmp(&b.path))
     });
-}
-
-/// Extracts labels, property names, and predicate types from a MATCH clause
-/// for index advisor pattern tracking (S4-10).
-///
-/// Labels come from all `NodePattern.labels` across every pattern.
-/// Properties and predicates come from the WHERE clause conditions.
-fn extract_match_query_pattern(
-    match_clause: &crate::velesql::MatchClause,
-) -> (Vec<String>, Vec<String>, Vec<PredicateType>) {
-    let mut labels: Vec<String> = match_clause
-        .patterns
-        .iter()
-        .flat_map(|p| p.nodes.iter())
-        .flat_map(|n| n.labels.iter())
-        .cloned()
-        .collect();
-    labels.sort_unstable();
-    labels.dedup();
-
-    let mut properties: Vec<String> = Vec::new();
-    let mut predicates: Vec<PredicateType> = Vec::new();
-
-    if let Some(ref cond) = match_clause.where_clause {
-        collect_condition_predicates(cond, &mut properties, &mut predicates);
-    }
-
-    properties.sort_unstable();
-    properties.dedup();
-
-    (labels, properties, predicates)
-}
-
-/// Recursively walks a `Condition` tree and collects property names and
-/// their corresponding `PredicateType` for the index advisor.
-// Reason: Condition is #[non_exhaustive] — the wildcard arm is required for
-// forward-compatibility when new variants are added, even though the compiler
-// currently sees all arms as covered within the same crate.
-#[allow(unreachable_patterns)]
-fn collect_condition_predicates(
-    cond: &Condition,
-    properties: &mut Vec<String>,
-    predicates: &mut Vec<PredicateType>,
-) {
-    match cond {
-        Condition::Comparison(c) => {
-            properties.push(c.column.clone());
-            let pred = match c.operator {
-                CompareOp::Eq | CompareOp::NotEq => PredicateType::Equality,
-                CompareOp::Gt | CompareOp::Gte | CompareOp::Lt | CompareOp::Lte => {
-                    PredicateType::Range
-                }
-            };
-            predicates.push(pred);
-        }
-        Condition::In(i) => {
-            properties.push(i.column.clone());
-            predicates.push(PredicateType::In);
-        }
-        Condition::Between(b) => {
-            properties.push(b.column.clone());
-            predicates.push(PredicateType::Range);
-        }
-        Condition::Like(l) => {
-            properties.push(l.column.clone());
-            predicates.push(PredicateType::Like);
-        }
-        Condition::And(lhs, rhs) | Condition::Or(lhs, rhs) => {
-            collect_condition_predicates(lhs, properties, predicates);
-            collect_condition_predicates(rhs, properties, predicates);
-        }
-        Condition::Not(inner) | Condition::Group(inner) => {
-            collect_condition_predicates(inner, properties, predicates);
-        }
-        // All remaining variants (vector search, similarity, null checks,
-        // full-text match, graph match, contains, geo conditions, and any
-        // future #[non_exhaustive] additions) do not map to property index
-        // predicates — intentionally skipped.
-        _ => {}
-    }
 }
 
 /// Merges the GraphFirst and VectorFirst result sets (union semantics).

@@ -217,3 +217,30 @@ fn test_strict_gt_maps_to_gt() {
         "Strict GT must map to PredicateKind::Gt (exclusive)"
     );
 }
+
+#[test]
+fn a_strict_bound_on_an_integer_is_looked_up_inclusive() {
+    for (operator, inclusive) in [(CompareOp::Gt, true), (CompareOp::Lt, false)] {
+        let kind = predicate_kind(operator, &Value::Integer(1 << 53));
+        match kind {
+            Some(PredicateKind::Gte(_)) => assert!(inclusive, "{operator:?}"),
+            Some(PredicateKind::Lte(_)) => assert!(!inclusive, "{operator:?}"),
+            other => panic!("{operator:?} on an integer maps to {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_float_equality_is_looked_up_as_twice_the_where_tolerance() {
+    let kind = predicate_kind(CompareOp::Eq, &Value::Float(0.5));
+    let Some(PredicateKind::Range(low, high)) = kind else {
+        panic!("a float equality maps to {kind:?}");
+    };
+    let width = 2.0 * FLOAT_EQ_TOLERANCE;
+    assert_eq!(low.as_f64(), Some(0.5 - width));
+    assert_eq!(high.as_f64(), Some(0.5 + width));
+    assert!(matches!(
+        predicate_kind(CompareOp::Eq, &Value::Integer(5)),
+        Some(PredicateKind::Exact(_))
+    ));
+}

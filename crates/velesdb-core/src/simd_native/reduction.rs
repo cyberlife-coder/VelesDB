@@ -58,56 +58,6 @@ pub(crate) unsafe fn hsum_avx512(v: std::arch::x86_64::__m512) -> f32 {
 }
 
 // =============================================================================
-// 4-accumulator reduction helpers
-// =============================================================================
-
-/// Combines 4 AVX2 accumulators into one via binary-tree addition.
-///
-/// # Safety
-///
-/// Caller must ensure CPU supports AVX2.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-#[inline]
-#[allow(dead_code)] // Available for custom 4-acc kernels outside the macro
-pub(crate) unsafe fn reduce_4acc_avx256(
-    a0: std::arch::x86_64::__m256,
-    a1: std::arch::x86_64::__m256,
-    a2: std::arch::x86_64::__m256,
-    a3: std::arch::x86_64::__m256,
-) -> std::arch::x86_64::__m256 {
-    // SAFETY: `_mm256_add_ps` requires AVX2, guaranteed by #[target_feature].
-    // No pointer arithmetic — operates purely on register values.
-    use std::arch::x86_64::_mm256_add_ps;
-    let sum01 = _mm256_add_ps(a0, a1);
-    let sum23 = _mm256_add_ps(a2, a3);
-    _mm256_add_ps(sum01, sum23)
-}
-
-/// Combines 4 AVX-512 accumulators into one via binary-tree addition.
-///
-/// # Safety
-///
-/// Caller must ensure CPU supports AVX-512F.
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
-#[inline]
-#[allow(dead_code)] // Available for custom 4-acc kernels outside the macro
-pub(crate) unsafe fn reduce_4acc_avx512(
-    a0: std::arch::x86_64::__m512,
-    a1: std::arch::x86_64::__m512,
-    a2: std::arch::x86_64::__m512,
-    a3: std::arch::x86_64::__m512,
-) -> std::arch::x86_64::__m512 {
-    // SAFETY: `_mm512_add_ps` requires AVX-512F, guaranteed by #[target_feature].
-    // No pointer arithmetic — operates purely on register values.
-    use std::arch::x86_64::_mm512_add_ps;
-    let sum01 = _mm512_add_ps(a0, a1);
-    let sum23 = _mm512_add_ps(a2, a3);
-    _mm512_add_ps(sum01, sum23)
-}
-
-// =============================================================================
 // 4-accumulator loop macros
 // =============================================================================
 

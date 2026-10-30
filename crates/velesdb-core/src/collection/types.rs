@@ -4,8 +4,7 @@
 //! the sibling `collection_config` module.
 
 use crate::collection::graph::property_index::{
-    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex, IndexAdvisor,
-    QueryPatternTracker,
+    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex,
 };
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
@@ -26,6 +25,7 @@ use crate::point::Point;
 use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
+use arc_swap::ArcSwapOption;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -193,6 +193,8 @@ impl Default for RuntimeLimits {
 //   5. pq_quantizer → pq_training_buffer
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
+//   7. label_index / graph_range_indexes    (never both held; see
+//                                            docs/CONCURRENCY_MODEL.md)
 //   8. (reserved — edge_store now uses internal sharded locking)
 //   9. sparse_indexes
 //  10. delta_buffer
@@ -313,8 +315,13 @@ pub(crate) struct GraphStore {
 
     /// Graph node property range indexes keyed by `"label.property"` (EPIC-047).
     ///
-    /// Populated automatically when nodes are stored via `store_node_payload`.
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
+    /// Derived from the node payloads like `label_index`: maintained on every
+    /// payload write and delete path that maintains the label index, and
+    /// rebuilt from the stored payloads on open
+    /// (`core/graph_property_index_wiring.rs`). A MATCH range predicate uses
+    /// an existing index as its whole candidate set.
+    /// Lock order position: **7** (same tier as `property_index` / `range_index`;
+    /// never held together with `label_index`).
     pub(crate) graph_range_indexes: Arc<RwLock<HashMap<String, CompositeRangeIndex>>>,
 
     /// Edge property indexes keyed by `"rel_type.property"` (EPIC-047).
@@ -327,16 +334,6 @@ pub(crate) struct GraphStore {
     ///
     /// Lock order position: **7** (same tier as `property_index` / `range_index`).
     pub(crate) composite_index_manager: Arc<RwLock<CompositeIndexManager>>,
-
-    /// Query pattern tracker for auto-index suggestion (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) query_pattern_tracker: Arc<RwLock<QueryPatternTracker>>,
-
-    /// Index advisor that suggests indexes based on tracked patterns (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) index_advisor: Arc<RwLock<IndexAdvisor>>,
 
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
@@ -479,9 +476,17 @@ pub(crate) struct StreamingState {
     /// `None` when deferred indexing is not configured. When `Some`, inserts
     /// are buffered and batch-merged into the HNSW index at threshold.
     ///
+    /// Built from the config when the collection is assembled. A shared slot,
+    /// so that `apply_advanced_config` can install one into a collection
+    /// running none and every clone sees it (the registry's included); it
+    /// never replaces a live one — see [`PendingReopen`]. Read lock-free with
+    /// `load()` on the write and search paths.
+    ///
     /// Lock order position: **11** (after `delta_buffer` at 10).
+    ///
+    /// [`PendingReopen`]: crate::collection::streaming::PendingReopen
     #[cfg(feature = "persistence")]
-    pub(crate) deferred_indexer: Option<Arc<DeferredIndexer>>,
+    pub(crate) deferred_indexer: Arc<ArcSwapOption<DeferredIndexer>>,
 
     /// Async index builder for bulk insert V2 (Issue #488).
     ///
@@ -489,8 +494,10 @@ pub(crate) struct StreamingState {
     /// bulk import and flushes them to the HNSW index via
     /// `HnswIndex::insert_batch_parallel`.
     ///
+    /// Same slot contract as `deferred_indexer`.
+    ///
     /// Lock order position: **11** (same tier as `deferred_indexer`).
-    pub(crate) async_index_builder: Option<Arc<AsyncIndexBuilder>>,
+    pub(crate) async_index_builder: Arc<ArcSwapOption<AsyncIndexBuilder>>,
 
     /// Runtime-only auto-reindex manager (Wave 3 Commit 9).
     ///
@@ -639,7 +646,7 @@ impl Collection {
     /// the whole batch, then `max_payload_size` per point.
     ///
     /// Shared by [`Self::upsert`](crate::collection::Collection) and
-    /// `upsert_bulk_inner` so both ingest paths apply identical limits with
+    /// `upsert_bulk` so both ingest paths apply identical limits with
     /// no duplicated logic. Runs before any storage lock or WAL write, so a
     /// violation rejects the batch without leaving partial state.
     ///
@@ -658,7 +665,10 @@ impl Collection {
     ///
     /// Returns [`Error::GuardRail`](crate::error::Error::GuardRail) when the
     /// batch would push the collection past `max_vectors_per_collection`, or
-    /// when any point's serialized payload exceeds `max_payload_size`.
+    /// when any point's serialized payload exceeds `max_payload_size`, and
+    /// [`Error::SchemaValidation`](crate::error::Error::SchemaValidation) when
+    /// a payload nests deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
     pub(crate) fn enforce_upsert_limits(
         &self,
         points: &[crate::point::Point],
@@ -667,7 +677,7 @@ impl Collection {
         self.enforce_vector_count(points.len(), limits.max_vectors_per_collection)?;
         for point in points {
             if let Some(payload) = point.payload.as_ref() {
-                Self::enforce_payload_value_size(point.id, payload, limits.max_payload_size)?;
+                Self::enforce_payload_limits(point.id, payload, limits.max_payload_size)?;
             }
         }
         Ok(())
@@ -694,20 +704,24 @@ impl Collection {
         Ok(())
     }
 
-    /// Rejects a JSON payload whose serialized size exceeds the cap.
+    /// Rejects a JSON payload that nests deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH), which
+    /// could not be read back from storage, or whose serialized size exceeds
+    /// the cap.
     ///
-    /// The single shared payload-size gate, reused by every ingest path
+    /// The single shared payload gate, reused by every ingest path
     /// (`Point` upsert, raw bulk, and graph node writes). Measures the
     /// serialized length with a bounded counting writer that stops as soon
     /// as the running total passes `cap`, so it never materializes a throwaway
     /// `Vec` and never serializes more than `cap + 1` bytes. Payloads that
     /// fail to serialize (the JSON value is in-memory and infallible in
     /// practice) are accepted.
-    pub(crate) fn enforce_payload_value_size(
+    pub(crate) fn enforce_payload_limits(
         id: u64,
         payload: &serde_json::Value,
         cap: usize,
     ) -> crate::error::Result<()> {
+        crate::validation::validate_payload_depth(id, payload)?;
         let mut counter = crate::collection::payload_size::BoundedCounter::new(cap);
         if serde_json::to_writer(&mut counter, payload).is_err() && !counter.exceeded() {
             // A real I/O error from the counter only ever signals "over cap"
@@ -810,11 +824,22 @@ impl Collection {
     /// ingester (the old drain task is aborted via `Drop`).
     ///
     /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`](crate::error::Error::Config) for a config
+    /// [`StreamingConfig::validate`](crate::collection::streaming::StreamingConfig::validate)
+    /// refuses; the current ingester, if any, is left running.
     #[cfg(feature = "persistence")]
-    pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
+    pub fn enable_streaming(
+        &self,
+        config: crate::collection::streaming::StreamingConfig,
+    ) -> crate::error::Result<()> {
         use crate::collection::streaming::StreamIngester;
+        config.validate()?;
         let ingester = StreamIngester::new(self.clone(), config);
         *self.streaming.stream_ingester.write() = Some(ingester);
+        Ok(())
     }
 
     /// Pushes entries into the delta buffer if it is currently active.

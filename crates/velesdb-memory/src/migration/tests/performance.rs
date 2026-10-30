@@ -226,7 +226,8 @@ fn the_per_point_write_cost_is_measured_against_varied_vectors() {
 ///
 /// The cause is [`wal_append_add_document`], which opens the BM25 WAL file,
 /// writes one entry and `sync_all()`s it — PER DOCUMENT — from a per-point loop
-/// in `bulk_store_payloads_inner`. The bulk path is careful to take a single
+/// in the bulk payload path (since #1797 the batch takes one BM25 WAL append,
+/// and the function that held the loop is gone). The bulk path is careful to take a single
 /// WAL sync for payloads and a single flush for vectors, then falls back to an
 /// open + fsync per point for the text index. ~3.4 ms is exactly one fsync.
 ///

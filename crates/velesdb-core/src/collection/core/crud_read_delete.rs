@@ -186,12 +186,13 @@ impl Collection {
     /// the BM25 removes — O(1) fsyncs per batch under the write locks, not
     /// O(N) (finding C3).
     fn delete_metadata_only(&self, ids: &[u64]) -> Result<()> {
-        // LOCK ORDER: payload_storage(3) → label_index(7).
+        // LOCK ORDER: payload_storage(3) → label_index(7), released →
+        // graph_range_indexes(7).
         let mut payload_storage = self.storage.payload_storage.write();
         let mut label_idx = self.graph.label_index.write();
 
         // Old payloads must be read before the tombstones land — they feed
-        // the secondary-index and label-index removals below.
+        // the secondary-index, label-index and range-index removals below.
         let old_payloads: Vec<Option<serde_json::Value>> = ids
             .iter()
             .map(|&id| payload_storage.retrieve(id).ok().flatten())
@@ -211,7 +212,9 @@ impl Collection {
             }
         }
         let point_count = payload_storage.ids().len();
+        // label_index(7) released before graph_range_indexes(7), its rank-mate.
         drop(label_idx);
+        self.remove_deleted_from_range_indexes(ids, &old_payloads);
         drop(payload_storage);
         self.storage.config.write().point_count = point_count;
         Ok(())
@@ -225,7 +228,8 @@ impl Collection {
         Ok(())
     }
 
-    /// Removes points from vector/payload storage, HNSW index, caches, and label index.
+    /// Removes points from vector/payload storage, HNSW index, caches, and the
+    /// label and range indexes.
     ///
     /// # Durability: one barrier per touched store per batch (finding C3)
     ///
@@ -268,14 +272,15 @@ impl Collection {
     ///   entries are exactly what a re-issued delete of the same ids cleans
     ///   up.
     fn delete_vector_core_stores(&self, ids: &[u64]) -> Result<()> {
-        // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7).
+        // LOCK ORDER: vector_storage(2) → payload_storage(3) → caches(4) → label_index(7),
+        // released → graph_range_indexes(7).
         let mut vector_storage = self.storage.vector_storage.write();
         let mut payload_storage = self.storage.payload_storage.write();
         let mut pq_cache = self.storage.pq_cache.write();
         let mut label_idx = self.graph.label_index.write();
 
         // Old payloads must be read before the tombstones land — they feed
-        // the secondary-index and label-index removals below.
+        // the secondary-index, label-index and range-index removals below.
         let old_payloads: Vec<Option<serde_json::Value>> = ids
             .iter()
             .map(|&id| payload_storage.retrieve(id).ok().flatten())
@@ -300,12 +305,32 @@ impl Collection {
         }
 
         let point_count = vector_storage.len();
+        // label_index(7) released before graph_range_indexes(7), its rank-mate.
         drop(label_idx);
+        self.remove_deleted_from_range_indexes(ids, &old_payloads);
         drop(vector_storage);
         drop(payload_storage);
         drop(pq_cache);
         self.storage.config.write().point_count = point_count;
         Ok(())
+    }
+
+    /// Removes deleted nodes from the graph range indexes, the way the label
+    /// index removal above them does: from the payload each node carried.
+    ///
+    /// Called with `payload_storage` still write-held, so no write to these
+    /// ids can index a newer payload in between, and after `label_index` is
+    /// released (both sit at rank 7, with no order between them).
+    fn remove_deleted_from_range_indexes(
+        &self,
+        ids: &[u64],
+        old_payloads: &[Option<serde_json::Value>],
+    ) {
+        self.apply_range_index_changes(
+            ids.iter()
+                .zip(old_payloads)
+                .map(|(&id, old)| (id, old.as_ref(), None)),
+        );
     }
 
     /// Removes IDs from delta buffer and deferred indexer (persistence feature).
@@ -319,7 +344,7 @@ impl Collection {
 
         // Lock order: deferred_indexer(11) acquired after delta_buffer(10).
         #[cfg(feature = "persistence")]
-        if let Some(ref di) = self.streaming.deferred_indexer {
+        if let Some(di) = self.streaming.deferred_indexer.load().as_ref() {
             for &id in ids {
                 di.remove(id);
             }

@@ -189,6 +189,7 @@ There are no environment variables. Everything is an argument to the factory:
 | `embedder` | `"hash"` | `"hash"` is offline and deterministic; `"ollama"` gives real semantic recall. |
 | `ollamaUrl` | `"http://localhost:11434"` | Only with `embedder: "ollama"`. |
 | `ollamaModel` | `"all-minilm"` | Only with `embedder: "ollama"`. |
+| `searchQuality` | the collection's own | Recall quality: `"fast"`, `"balanced"`, `"accurate"`, `"perfect"`, `"autotune"`, `"custom:<ef>"` or `"adaptive:<min_ef>:<max_ef>"`, each ef in 16–4096. Wins over `VELESDB_MEMORY_SEARCH_QUALITY`; an unknown value rejects the open. |
 
 ```js
 const store = MemoryService.open('./agent_mem', 'ollama')
@@ -325,4 +326,4 @@ Questions: contact@wiscale.fr.
 
 ---
 
-`velesdb-node v0.15.0` (npm `@wiscale/velesdb-memory-node@0.15.0`) · Last updated: 2026-10-26 · Applies to: velesdb-core 7.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-node v0.16.0` (npm `@wiscale/velesdb-memory-node@0.16.0`) · Last updated: 2026-10-28 · Applies to: velesdb-core 8.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

@@ -280,6 +280,12 @@ class TestCollection:
         ) is None
         assert collection.apply_advanced_config({}) is None
 
+        # The builder was installed live (none ran before); changing it now
+        # waits for the next open, and pending_reopen says so.
+        assert collection.pending_reopen() == []
+        collection.apply_advanced_config({"async_index_builder": {"merge_threshold": 7}})
+        assert collection.pending_reopen() == ["async_index_builder"]
+
         # Verify the collection is still functional after the clear/no-op calls.
         collection.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}])
         assert collection.count() == 1
@@ -334,6 +340,16 @@ class TestCollection:
         """A misspelled/unknown key is rejected loudly."""
         with pytest.raises(ValueError, match="unknown guardrail field"):
             temp_db.update_guardrails(self._full_guardrails(timeoutMs=5000))
+
+    def test_update_guardrails_refuses_a_zero_rate_limit(self, temp_db):
+        """A limit that would reject every query is refused and changes nothing."""
+        collection = temp_db.create_collection("gr_zero", dimension=4)
+        before = collection.guard_rails()
+
+        with pytest.raises(ValueError, match="rate_limit_qps"):
+            temp_db.update_guardrails(self._full_guardrails(rate_limit_qps=0, timeout_ms=1))
+
+        assert collection.guard_rails() == before
 
     def test_auto_reindex_lifecycle_without_manager(self, temp_db):
         """detach/divergence behave when no auto-reindex manager is attached."""
@@ -1025,6 +1041,42 @@ class TestFusionStrategy:
         assert strategy is not None
         assert "dense_weight=0.7" in repr(strategy)
         assert "sparse_weight=0.3" in repr(strategy)
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("rrf", "FusionStrategy.rrf(k=60)"),
+            ("AVG", "FusionStrategy.average()"),
+            ("max", "FusionStrategy.maximum()"),
+            (
+                "Weighted",
+                "FusionStrategy.weighted(avg_weight=0.6, max_weight=0.3, hit_weight=0.1)",
+            ),
+            (
+                "rsf",
+                "FusionStrategy.relative_score(dense_weight=0.5, sparse_weight=0.5)",
+            ),
+        ],
+    )
+    def test_fusion_strategy_from_name_uses_core_grammar(self, name, expected):
+        """from_name() reads a name, its aliases and defaults as core does."""
+        assert repr(velesdb.FusionStrategy.from_name(name)) == expected
+
+    def test_fusion_strategy_from_name_with_parameters(self):
+        """from_name() forwards parameters; one rsf weight implies the other."""
+        assert "k=30" in repr(velesdb.FusionStrategy.from_name("rrf", k=30))
+        strategy = velesdb.FusionStrategy.from_name("relative_score", dense_weight=0.75)
+        assert "dense_weight=0.75" in repr(strategy)
+        assert "sparse_weight=0.25" in repr(strategy)
+
+    def test_fusion_strategy_from_name_refuses_unknown_names_and_bad_weights(self):
+        """An unknown name and refused weights raise ValueError with core's message."""
+        with pytest.raises(ValueError, match="Unknown fusion strategy 'nope'"):
+            velesdb.FusionStrategy.from_name("nope")
+        with pytest.raises(ValueError, match="sum to 1.0"):
+            velesdb.FusionStrategy.from_name(
+                "weighted", avg_weight=0.9, max_weight=0.9, hit_weight=0.9
+            )
 
 
 class TestMultiQuerySearch:

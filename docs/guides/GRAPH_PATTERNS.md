@@ -1,6 +1,6 @@
 # Graph Patterns Guide
 
-*Version 7.1.0 -- May 2026*
+*Version 8.0.0 -- May 2026*
 
 Practical guide for using VelesQL `MATCH` graph patterns in VelesDB.
 
@@ -199,6 +199,7 @@ const results = await invoke('plugin:velesdb|traverse_graph_parallel', {
 ### Mobile (UniFFI)
 
 ```swift
+let graphStore = try db.getGraphStore(name: "kg")!
 let results = try graphStore.bfsTraverseParallel(sourceIds: [1, 5, 10], maxDepth: 3, limit: 100)
 ```
 
@@ -355,7 +356,9 @@ Two distinct fusion paths exist, with different reach:
 - The **richer `fusion::FusionStrategy`** (RRF, RSF, weighted, average, max) is
   currently reachable only through dense+sparse fusion and `NEAR_FUSED`. RSF /
   weighted / avg / max are **not** selectable for the plain vector + BM25 hybrid;
-  use `NEAR_FUSED` (or dense+sparse) to choose a non-RRF strategy.
+  use dense+sparse to choose any non-RRF strategy, or `NEAR_FUSED` for average
+  / max (it rejects RSF and weighted with `V012`: N query vectors against one
+  index are not two branches to weigh).
 
 ## Related Documentation
 

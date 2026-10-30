@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-09-10 — applies to v7.x (workspace 7.1.0).
+> **Last updated:** 2026-09-10 — applies to v8.x (workspace 8.0.0).
 
 ---
 
@@ -60,7 +60,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
   Source: `recall_benchmark`'s recall report (10K random 128-D vectors, an
   index built with `HnswParams::max_recall`), re-measured 2026-09-10 on 6.0.0
   at the current bases, which come from `SearchQuality::ef_search`
-  (`crates/velesdb-core/src/index/hnsw/params.rs`).
+  (`crates/velesdb-core/src/search_quality.rs`).
 
 **When this triggers:** any change to `index/hnsw/`, `simd_native/`, `quantization/`, `fusion/`, or result-conversion code in Python bindings.
 

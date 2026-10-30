@@ -50,6 +50,15 @@ from velesdb import MemoryService
 tools = make_memory_tools(service=MemoryService("./agent_memory"))
 ```
 
+The same route sets the recall quality, which this package never touches: pass
+`search_quality` (`"fast"`, `"balanced"`, `"accurate"`, `"perfect"`, `"autotune"`,
+`"custom:<ef>"` or `"adaptive:<min_ef>:<max_ef>"`) to `MemoryService`, or export `VELESDB_MEMORY_SEARCH_QUALITY`.
+An explicit value wins over the variable.
+
+```python
+tools = make_memory_tools(service=MemoryService("./agent_memory", search_quality="accurate"))
+```
+
 ### Cross-run resumption
 
 `save_working_context` / `load_working_context` let an agent pick up a task

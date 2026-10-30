@@ -190,17 +190,30 @@ impl NodeMemoryService {
     /// does). The default `"hash"` embedder does no I/O. Per-operation methods
     /// are all async. Opening with `hash` emits one degraded-recall notice on
     /// stderr; `VELESDB_MEMORY_QUIET=1` suppresses it for deliberate offline use.
+    ///
+    /// `searchQuality` is the recall quality (`"fast"`, `"balanced"`,
+    /// `"accurate"`, `"perfect"`, `"autotune"`, `"custom:<ef>"` or
+    /// `"adaptive:<min_ef>:<max_ef>"`, each ef in 16-4096); an explicit
+    /// value wins over `VELESDB_MEMORY_SEARCH_QUALITY`, and omitting both keeps
+    /// the collection's own quality. An unknown value rejects the open.
     #[napi(factory)]
     pub fn open(
         path: String,
         embedder: Option<String>,
         ollama_url: Option<String>,
         ollama_model: Option<String>,
+        search_quality: Option<String>,
     ) -> napi::Result<Self> {
+        let quality = velesdb_memory::resolve_search_quality(search_quality.as_deref())
+            .map_err(setting_error)?;
         let (emb, embedder_model, embedder_semantic) =
             build_embedder(embedder.as_deref(), ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
         let svc = MemoryService::open(&path, emb).map_err(to_napi_err)?;
+        let svc = match quality {
+            Some(quality) => svc.with_search_quality(quality),
+            None => svc,
+        };
         warn_hash_embedder_not_semantic(embedder_semantic);
         Ok(Self {
             inner: Arc::new(svc),

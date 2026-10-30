@@ -1,8 +1,6 @@
 //! Collection lifecycle methods (create, open, flush).
 
-use crate::collection::graph::property_index::{
-    CompositeIndexManager, IndexAdvisor, QueryPatternTracker,
-};
+use crate::collection::graph::property_index::CompositeIndexManager;
 use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig};
 use crate::error::Result;
@@ -10,6 +8,8 @@ use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex};
 use crate::storage::{LogPayloadStorage, MmapStorage, PayloadStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
+
+use super::graph_property_index_wiring::{index_payload_ranges, GraphRangeIndexes};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -30,6 +30,7 @@ pub(super) struct CollectionParts {
     pub(super) text_index: Arc<Bm25Index>,
     pub(super) property_index: PropertyIndex,
     pub(super) label_index: LabelIndex,
+    pub(super) graph_range_indexes: GraphRangeIndexes,
     pub(super) range_index: RangeIndex,
     pub(super) edge_store: ConcurrentEdgeStore,
     pub(super) sparse_indexes: BTreeMap<String, SparseInvertedIndex>,
@@ -58,11 +59,25 @@ impl CollectionParts {
             text_index,
             property_index: PropertyIndex::new(),
             label_index: LabelIndex::new(),
+            graph_range_indexes: GraphRangeIndexes::new(),
             range_index: RangeIndex::new(),
             edge_store: ConcurrentEdgeStore::new(),
             sparse_indexes: BTreeMap::new(),
         }
     }
+}
+
+/// The vector and payload stores, shared by every handle on a collection.
+type Storages = (Arc<RwLock<MmapStorage>>, Arc<RwLock<LogPayloadStorage>>);
+
+/// The graph-dimension state a `Collection` is assembled from:
+/// [`Collection::open`] loads it from disk, a new collection starts empty.
+struct GraphParts {
+    property_index: PropertyIndex,
+    label_index: LabelIndex,
+    graph_range_indexes: GraphRangeIndexes,
+    range_index: RangeIndex,
+    edge_store: ConcurrentEdgeStore,
 }
 
 impl Collection {
@@ -86,12 +101,13 @@ impl Collection {
                 parts.index,
                 parts.text_index,
             ),
-            graph: Self::build_graph_store(
-                parts.property_index,
-                parts.label_index,
-                parts.range_index,
-                parts.edge_store,
-            ),
+            graph: Self::build_graph_store(GraphParts {
+                property_index: parts.property_index,
+                label_index: parts.label_index,
+                graph_range_indexes: parts.graph_range_indexes,
+                range_index: parts.range_index,
+                edge_store: parts.edge_store,
+            }),
             query: crate::collection::types::QueryState {
                 sparse_indexes: Arc::new(RwLock::new(parts.sparse_indexes)),
                 secondary_indexes: Arc::new(RwLock::new(HashMap::new())),
@@ -114,8 +130,8 @@ impl Collection {
                 #[cfg(feature = "persistence")]
                 delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
                 #[cfg(feature = "persistence")]
-                deferred_indexer,
-                async_index_builder,
+                deferred_indexer: Arc::new(arc_swap::ArcSwapOption::new(deferred_indexer)),
+                async_index_builder: Arc::new(arc_swap::ArcSwapOption::new(async_index_builder)),
                 auto_reindex: Arc::new(RwLock::new(None)),
             },
             runtime: crate::collection::types::RuntimeGuards::default(),
@@ -146,14 +162,17 @@ impl Collection {
         }
     }
 
-    /// Builds the graph half of a `Collection` from its persisted indexes;
-    /// derived/query-tracking indexes always start empty.
-    fn build_graph_store(
-        property_index: PropertyIndex,
-        label_index: LabelIndex,
-        range_index: RangeIndex,
-        edge_store: ConcurrentEdgeStore,
-    ) -> Arc<crate::collection::types::GraphStore> {
+    /// Builds the graph half of a `Collection` from its persisted indexes and
+    /// the ones rebuilt from the payloads; the edge property, composite and
+    /// query-tracking indexes start empty.
+    fn build_graph_store(parts: GraphParts) -> Arc<crate::collection::types::GraphStore> {
+        let GraphParts {
+            property_index,
+            label_index,
+            graph_range_indexes,
+            range_index,
+            edge_store,
+        } = parts;
         Arc::new(crate::collection::types::GraphStore {
             property_index: Arc::new(RwLock::new(property_index)),
             // Dirty at open: the first flush persists the baseline once,
@@ -162,11 +181,9 @@ impl Collection {
             label_index: Arc::new(RwLock::new(label_index)),
             range_index: Arc::new(RwLock::new(range_index)),
             range_index_dirty: std::sync::atomic::AtomicBool::new(true),
-            graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
+            graph_range_indexes: Arc::new(RwLock::new(graph_range_indexes)),
             edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
             composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
-            query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
-            index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
             edge_store: Arc::new(edge_store),
             edge_wal_lock: Arc::new(Mutex::new(())),
         })
@@ -177,7 +194,7 @@ impl Collection {
     /// Returns `Some(Arc<DeferredIndexer>)` when `deferred_indexing` is
     /// configured and enabled; `None` otherwise.
     #[cfg(feature = "persistence")]
-    fn build_deferred_indexer(
+    pub(super) fn build_deferred_indexer(
         config: &CollectionConfig,
     ) -> Option<Arc<crate::collection::streaming::DeferredIndexer>> {
         config
@@ -195,7 +212,7 @@ impl Collection {
     ///
     /// Returns `Some(Arc<AsyncIndexBuilder>)` when `async_index_builder` is
     /// configured; `None` otherwise.
-    fn build_async_index_builder(
+    pub(super) fn build_async_index_builder(
         config: &CollectionConfig,
     ) -> Option<Arc<crate::collection::streaming::AsyncIndexBuilder>> {
         config.async_index_builder.as_ref().map(|cfg| {
@@ -214,8 +231,7 @@ impl Collection {
         config: CollectionConfig,
         hnsw_params: Option<crate::index::hnsw::HnswParams>,
     ) -> Result<CollectionParts> {
-        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
-        let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
+        let (vector_storage, payload_storage) = Self::open_storages(&path, config.dimension)?;
         // Arena files from a run that never got to drop them are pure waste
         // and unreadable to anyone — sweep before handing the directory out.
         // Safe here because the database holds an exclusive lock on its data
@@ -344,17 +360,19 @@ impl Collection {
     pub fn open(path: PathBuf) -> Result<Self> {
         let mut config = super::recovery::load_config(&path)?;
 
-        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(&path, config.dimension)?));
-        let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(&path)?));
+        let (vector_storage, payload_storage) = Self::open_storages(&path, config.dimension)?;
         let index = Self::load_or_create_hnsw(&path, &config)?;
         // Issue #389: try snapshot + WAL first, fall back to payload
         // rebuild if no snapshot exists (backward-compat).
         let text_index = Self::load_bm25_index(&path, &payload_storage)?;
 
-        let property_index = Self::load_property_index(&path);
-        let label_index = Self::rebuild_label_index(&payload_storage);
-        let range_index = Self::load_range_index(&path);
-        let edge_store = Self::load_edge_store(&path);
+        let GraphParts {
+            property_index,
+            label_index,
+            graph_range_indexes,
+            range_index,
+            edge_store,
+        } = Self::load_graph_parts(&path, &payload_storage)?;
         let sparse_indexes = Self::load_named_sparse_indexes(&path);
 
         config.point_count =
@@ -371,6 +389,7 @@ impl Collection {
             text_index,
             property_index,
             label_index,
+            graph_range_indexes,
             range_index,
             edge_store,
             sparse_indexes,
@@ -604,7 +623,9 @@ impl Collection {
     /// file or deserialization error.
     ///
     /// This is the single implementation for the load-or-default pattern shared
-    /// by `PropertyIndex`, `RangeIndex`, and `EdgeStore`.
+    /// by the indexes a collection can rebuild as empty (`PropertyIndex`,
+    /// `RangeIndex`); the edge snapshot has its own loader, `load_edge_store`,
+    /// which refuses an unreadable file.
     fn load_or_default<T>(
         path: &std::path::Path,
         file_name: &str,
@@ -626,13 +647,83 @@ impl Collection {
         default()
     }
 
-    fn load_edge_store(path: &std::path::Path) -> ConcurrentEdgeStore {
-        Self::load_or_default(
-            path,
-            "edge_store.bin",
-            ConcurrentEdgeStore::load_from_file,
-            ConcurrentEdgeStore::new,
-        )
+    /// Opens the vector and payload stores of the collection at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of either store's open.
+    fn open_storages(path: &std::path::Path, dimension: usize) -> Result<Storages> {
+        let vector_storage = Arc::new(RwLock::new(MmapStorage::new(path, dimension)?));
+        let payload_storage = Arc::new(RwLock::new(LogPayloadStorage::new(path)?));
+        Ok((vector_storage, payload_storage))
+    }
+
+    /// Loads the graph dimension: the property and range indexes, the label
+    /// and graph range indexes rebuilt from the payloads, and the edge store.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of [`Self::load_edge_store`].
+    fn load_graph_parts(
+        path: &std::path::Path,
+        payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+    ) -> Result<GraphParts> {
+        let (label_index, graph_range_indexes) = Self::rebuild_payload_indexes(payload_storage);
+        Ok(GraphParts {
+            property_index: Self::load_property_index(path),
+            label_index,
+            graph_range_indexes,
+            range_index: Self::load_range_index(path),
+            edge_store: Self::load_edge_store(path)?,
+        })
+    }
+
+    /// Loads the `edge_store.bin` snapshot, or an empty store when the
+    /// collection has none (one created before edges were persisted).
+    ///
+    /// Unlike the property and range indexes, which `load_or_default`
+    /// rebuilds as empty, the edges are primary data, and the edge WAL is
+    /// truncated once a snapshot is written: an undecodable snapshot left in
+    /// place would be overwritten at the next flush. It is therefore moved
+    /// aside (see `quarantine_edge_snapshot`), and the collection opens with
+    /// the edges the WAL still holds; the moved file keeps every byte for a
+    /// manual recovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`](crate::Error::Io) when the snapshot cannot be
+    /// read for another reason than its content (permissions, I/O), or
+    /// cannot be moved aside (a read-only directory): the collection is not
+    /// opened without its edges while their file is still in the way of the
+    /// next flush.
+    fn load_edge_store(path: &std::path::Path) -> Result<ConcurrentEdgeStore> {
+        let snapshot = path.join("edge_store.bin");
+        match ConcurrentEdgeStore::load_from_file(&snapshot) {
+            Ok(store) => Ok(store),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConcurrentEdgeStore::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                tracing::error!(
+                    snapshot = %snapshot.display(),
+                    error = %e,
+                    "the edge snapshot cannot be decoded; moving it aside"
+                );
+                let quarantined = quarantine_edge_snapshot(&snapshot).inspect_err(|rename| {
+                    tracing::error!(
+                        snapshot = %snapshot.display(),
+                        error = %rename,
+                        "the undecodable edge snapshot cannot be moved aside; \
+                         the collection is not opened"
+                    );
+                })?;
+                tracing::error!(
+                    quarantined = %quarantined.display(),
+                    "the undecodable edge snapshot was moved aside, bytes intact: \
+                     the collection opens with only the edges its WAL holds"
+                );
+                Ok(ConcurrentEdgeStore::new())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn load_property_index(path: &std::path::Path) -> PropertyIndex {
@@ -644,18 +735,27 @@ impl Collection {
         )
     }
 
-    /// Rebuilds the label index from payload storage on collection open.
+    /// Rebuilds the two indexes derived from node payloads — the label index
+    /// and the graph range indexes — from payload storage on collection open.
     ///
-    /// Scans all stored payloads and extracts `_labels` arrays to populate
-    /// the in-memory `LabelIndex`. This is cheap for typical graph workloads
-    /// (label arrays are small) and avoids requiring a separate persistence
-    /// file for the label index.
-    fn rebuild_label_index(payload_storage: &Arc<RwLock<LogPayloadStorage>>) -> LabelIndex {
+    /// One scan of the stored payloads (the WAL already replayed by
+    /// `LogPayloadStorage::new`) feeds both, through the same insertion steps
+    /// the write paths use, so a reopened collection holds the entries its
+    /// writes had made. Neither index has a persistence file. The range
+    /// indexes used to start empty here instead: a MATCH range predicate then
+    /// fell back to a full scan until the first node-payload write created the
+    /// index, from which point it served that write's nodes as the whole
+    /// candidate set and hid every node written before the reopen.
+    fn rebuild_payload_indexes(
+        payload_storage: &Arc<RwLock<LogPayloadStorage>>,
+    ) -> (LabelIndex, GraphRangeIndexes) {
         let storage = payload_storage.read();
         let mut index = LabelIndex::new();
+        let mut range_indexes = GraphRangeIndexes::new();
         for id in storage.ids() {
             if let Ok(Some(payload)) = storage.retrieve(id) {
                 index.index_from_payload(id, &payload);
+                index_payload_ranges(&mut range_indexes, id, &payload);
             }
         }
         // ONE aggregated line for the whole rebuild, not one per node: on a
@@ -671,7 +771,7 @@ impl Collection {
                  indexed — label lookups fall back to a full scan"
             );
         }
-        index
+        (index, range_indexes)
     }
 
     fn load_range_index(path: &std::path::Path) -> RangeIndex {
@@ -722,3 +822,71 @@ impl Collection {
         self.storage.pq_quantizer.read()
     }
 }
+
+/// Moves an undecodable `edge_store.bin` aside, to
+/// `edge_store.bin.unreadable-<unix milliseconds>` in the same directory, so
+/// the next flush cannot overwrite it, and returns the new path.
+///
+/// # Errors
+///
+/// Returns the I/O error of the name reservation, the rename, or the
+/// directory sync.
+fn quarantine_edge_snapshot(snapshot: &std::path::Path) -> std::io::Result<PathBuf> {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis());
+    quarantine_edge_snapshot_at(snapshot, millis)
+}
+
+/// [`quarantine_edge_snapshot`] at a given time, for tests.
+///
+/// The name is reserved by creating it exclusively (`create_new`), with a
+/// `-<n>` suffix while it is taken, then the snapshot is renamed over the
+/// reserved, empty file: an earlier quarantine is never replaced, even by a
+/// concurrent open. The rename is made durable (written through on Windows,
+/// the directory synced on Unix); a failed directory sync is logged and the
+/// quarantine kept, never undone. A crash between the reservation and the
+/// rename leaves an empty `.unreadable-*` file: an unused reservation.
+fn quarantine_edge_snapshot_at(
+    snapshot: &std::path::Path,
+    millis: u128,
+) -> std::io::Result<PathBuf> {
+    let base = format!("edge_store.bin.unreadable-{millis}");
+    let mut target = snapshot.with_file_name(&base);
+    let mut taken: u64 = 0;
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                taken += 1;
+                target = snapshot.with_file_name(format!("{base}-{taken}"));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    if let Err(e) = crate::storage::atomic_write::replace_file(snapshot, &target) {
+        // The snapshot was not moved: the reservation is empty and would
+        // only mislead. Best effort.
+        let _ = std::fs::remove_file(&target);
+        return Err(e);
+    }
+    // From here `target` holds the snapshot's bytes, whatever happens.
+    if let Err(e) = crate::storage::atomic_write::sync_parent_directory(&target) {
+        // The rename may not survive a crash; the next open would then find
+        // `edge_store.bin` again and move it aside again. Nothing is lost.
+        tracing::warn!(
+            quarantined = %target.display(),
+            error = %e,
+            "the edge snapshot quarantine is not synced to disk yet"
+        );
+    }
+    Ok(target)
+}
+
+#[cfg(test)]
+#[path = "lifecycle_quarantine_tests.rs"]
+mod quarantine_tests;

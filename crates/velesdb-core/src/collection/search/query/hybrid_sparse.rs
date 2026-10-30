@@ -16,6 +16,10 @@ use crate::point::{Point, SearchResult};
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::{Condition, SparseVectorExpr, SparseVectorSearch};
 
+/// The two ranked branches of a hybrid search, before fusion: the dense hits
+/// as `(id, score)` pairs, the sparse hits as scored documents.
+type HybridBranches = (Vec<(u64, f32)>, Vec<crate::index::sparse::ScoredDoc>);
+
 impl Collection {
     // ------------------------------------------------------------------
     // Condition extraction
@@ -23,11 +27,9 @@ impl Collection {
 
     /// Recursively walks the condition tree to find a `SparseVectorSearch` node.
     ///
-    /// **First-wins semantics**: when multiple `SparseVectorSearch` nodes exist
-    /// in a compound condition (e.g. `AND`), only the left-most one is returned.
-    /// Queries containing more than one `SPARSE_NEAR` clause are currently not
-    /// supported; callers that need to detect this case should call
-    /// [`Self::validate_single_sparse_search`] before invoking this function.
+    /// A query has at most one: `validate_similarity_query_structure` rejects
+    /// a second `SPARSE_NEAR` before this runs, so the left-most node it
+    /// returns is the only one.
     pub(crate) fn extract_sparse_vector_search(
         condition: &Condition,
     ) -> Option<&SparseVectorSearch> {
@@ -42,36 +44,6 @@ impl Collection {
             }
             _ => None,
         }
-    }
-
-    /// Counts `SparseVectorSearch` nodes in the condition tree.
-    ///
-    /// Returns an error if more than one `SPARSE_NEAR` clause is found,
-    /// because the planner only handles a single sparse branch per query.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` when the condition contains more than one
-    /// `SparseVectorSearch` node (ambiguous multi-sparse query).
-    #[allow(dead_code)] // Reason: Query validator guard for multi-sparse disambiguation — wired in future planner
-    pub(crate) fn validate_single_sparse_search(condition: &Condition) -> Result<()> {
-        fn count(cond: &Condition) -> usize {
-            match cond {
-                Condition::SparseVectorSearch(_) => 1,
-                Condition::And(l, r) | Condition::Or(l, r) => count(l) + count(r),
-                Condition::Group(inner) | Condition::Not(inner) => count(inner),
-                _ => 0,
-            }
-        }
-
-        let n = count(condition);
-        if n > 1 {
-            return Err(Error::Query(format!(
-                "Query contains {n} SPARSE_NEAR clauses; only one is supported per query. \
-                 Use separate queries for each sparse search."
-            )));
-        }
-        Ok(())
     }
 
     /// Resolve a `SparseVectorExpr` to a concrete `SparseVector`.
@@ -277,32 +249,6 @@ impl Collection {
     // Hybrid dense+sparse execution
     // ------------------------------------------------------------------
 
-    /// Execute hybrid dense+sparse search with the default RRF strategy.
-    ///
-    /// Runs both branches (optionally in parallel via `rayon::join`), then
-    /// fuses results using RRF with k=60.
-    ///
-    /// Currently only exercised by integration tests; production callers use
-    /// [`Self::execute_hybrid_search_with_strategy`] directly.
-    #[allow(dead_code)] // Reason: Integration-test entry point; production callers use execute_hybrid_search_with_strategy
-    pub(crate) fn execute_hybrid_search(
-        &self,
-        dense_vector: &[f32],
-        svs: &SparseVectorSearch,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-        filter_condition: Option<&Condition>,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
-        self.execute_hybrid_search_with_strategy(
-            dense_vector,
-            svs,
-            params,
-            filter_condition,
-            limit,
-            &FusionStrategy::rrf_default(),
-        )
-    }
-
     /// Execute hybrid search with an explicit fusion strategy.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_hybrid_search_with_strategy(
@@ -343,26 +289,33 @@ impl Collection {
             index_name,
             candidate_k,
             metadata_filter.as_ref(),
-        );
+        )?;
 
         self.fuse_dense_sparse(dense_results, &sparse_results, limit, strategy)
     }
 
     /// Execute dense and sparse branches, optionally in parallel.
     ///
+    /// Either branch's failure fails the hybrid search — a dense query of the
+    /// wrong dimension, an unknown sparse index — instead of leaving that
+    /// branch empty for [`fuse_dense_sparse`](Self::fuse_dense_sparse) to
+    /// degrade over. A branch that ran and matched nothing is still an empty,
+    /// successful branch. When both fail, the dense error is reported.
+    ///
     /// # Lock ordering
     ///
     /// When a `metadata_filter` is present, `payload_storage(3)` is acquired
-    /// before `sparse_indexes(9)` in both execution paths to respect the
-    /// canonical lock order (see `docs/CONCURRENCY_MODEL.md`).
+    /// before `sparse_indexes(9)` (see `sparse_branch` and
+    /// `docs/CONCURRENCY_MODEL.md`).
     ///
     /// In the `persistence` path, the two branches run via `rayon::join`; the
     /// dense closure never touches `sparse_indexes`, so there is no ordering
     /// conflict between the two parallel closures.
-    // Both branches take payload_storage(3) before sparse_indexes(9), the
-    // order recorded inline below, and hold them for the whole filtered
-    // search because the filter closure reads through them per candidate.
-    #[expect(clippy::significant_drop_tightening)]
+    ///
+    /// # Errors
+    ///
+    /// Returns the dense branch's error (e.g. a dimension mismatch), else the
+    /// sparse branch's (e.g. the named sparse index does not exist).
     pub(crate) fn execute_both_branches(
         &self,
         dense_vector: &[f32],
@@ -370,108 +323,90 @@ impl Collection {
         index_name: &str,
         candidate_k: usize,
         metadata_filter: Option<&crate::filter::Filter>,
-    ) -> (Vec<(u64, f32)>, Vec<crate::index::sparse::ScoredDoc>) {
+    ) -> Result<HybridBranches> {
+        let dense = || self.dense_branch(dense_vector, candidate_k, metadata_filter);
+        let sparse = || self.sparse_branch(sparse_query, index_name, candidate_k, metadata_filter);
         #[cfg(feature = "persistence")]
-        {
-            // Parallel execution via rayon::join.
-            // The dense closure uses search_ids() which internally acquires
-            // vector_storage(2) only — no conflict with sparse locks.
-            // The sparse closure acquires payload_storage(3) before
-            // sparse_indexes(9) when filtering is needed.
-            let (dense, sparse) = rayon::join(
-                || {
-                    // The metadata filter bounds BOTH branches. The dense
-                    // branch previously ignored it entirely (only sparse
-                    // filtered), so dense-only candidates the filter
-                    // excludes leaked into fusion.
-                    if let Some(filter) = metadata_filter {
-                        self.search_with_filter(dense_vector, candidate_k, filter)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|r| (r.point.id, r.score))
-                            .collect()
-                    } else {
-                        self.search_ids(dense_vector, candidate_k)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(Into::into)
-                            .collect()
-                    }
-                },
-                || {
-                    if let Some(filter) = metadata_filter {
-                        // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
-                        let payload_storage = self.storage.payload_storage.read();
-                        let indexes = self.query.sparse_indexes.read();
-                        let Some(index) = indexes.get(index_name) else {
-                            return Vec::new();
-                        };
-                        let filter_fn = |id: u64| {
-                            let payload = payload_storage.retrieve(id).ok().flatten();
-                            let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
-                            filter.matches(p)
-                        };
-                        sparse_search_filtered(index, sparse_query, candidate_k, Some(&filter_fn))
-                    } else {
-                        let indexes = self.query.sparse_indexes.read();
-                        let Some(index) = indexes.get(index_name) else {
-                            return Vec::new();
-                        };
-                        sparse_search(index, sparse_query, candidate_k)
-                    }
-                },
-            );
-            (dense, sparse)
-        }
-
+        let (dense, sparse) = rayon::join(dense, sparse);
         #[cfg(not(feature = "persistence"))]
-        {
-            // Sequential fallback (no rayon).
-            // Same both-branches contract as the rayon variant above.
-            let dense: Vec<(u64, f32)> = if let Some(filter) = metadata_filter {
-                self.search_with_filter(dense_vector, candidate_k, filter)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|r| (r.point.id, r.score))
-                    .collect()
-            } else {
-                self.search_ids(dense_vector, candidate_k)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect()
-            };
-            let sparse = if let Some(filter) = metadata_filter {
-                // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
-                let payload_storage = self.storage.payload_storage.read();
-                let indexes = self.query.sparse_indexes.read();
-                if let Some(index) = indexes.get(index_name) {
-                    let filter_fn = |id: u64| {
-                        let payload = payload_storage.retrieve(id).ok().flatten();
-                        let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
-                        filter.matches(p)
-                    };
-                    sparse_search_filtered(index, sparse_query, candidate_k, Some(&filter_fn))
-                } else {
-                    Vec::new()
-                }
-            } else {
-                let indexes = self.query.sparse_indexes.read();
-                if let Some(index) = indexes.get(index_name) {
-                    sparse_search(index, sparse_query, candidate_k)
-                } else {
-                    Vec::new()
-                }
-            };
-            (dense, sparse)
-        }
+        let (dense, sparse) = (dense(), sparse());
+        Ok((dense?, sparse?))
+    }
+
+    /// The dense (HNSW) branch of a hybrid search, as `(id, score)` pairs.
+    ///
+    /// The metadata filter bounds BOTH branches. The dense branch previously
+    /// ignored it entirely (only sparse filtered), so dense-only candidates the
+    /// filter excludes leaked into fusion. `search_ids` acquires
+    /// `vector_storage(2)` only — no conflict with the sparse branch's locks.
+    fn dense_branch(
+        &self,
+        dense_vector: &[f32],
+        candidate_k: usize,
+        metadata_filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<(u64, f32)>> {
+        Ok(match metadata_filter {
+            Some(filter) => self
+                .search_with_filter(dense_vector, candidate_k, filter)?
+                .into_iter()
+                .map(|r| (r.point.id, r.score))
+                .collect(),
+            None => self
+                .search_ids(dense_vector, candidate_k)?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        })
+    }
+
+    /// The sparse branch of a hybrid search on the named sparse index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the named sparse index does not exist, as the
+    /// sparse-only search does.
+    // With a filter, payload_storage(3) is taken before sparse_indexes(9) and
+    // both are held for the whole filtered search, because the filter closure
+    // reads through them per candidate.
+    #[expect(clippy::significant_drop_tightening)]
+    fn sparse_branch(
+        &self,
+        sparse_query: &SparseVector,
+        index_name: &str,
+        candidate_k: usize,
+        metadata_filter: Option<&crate::filter::Filter>,
+    ) -> Result<Vec<crate::index::sparse::ScoredDoc>> {
+        // LOCK ORDER: payload_storage(3) before sparse_indexes(9).
+        let payload_storage = metadata_filter.map(|_| self.storage.payload_storage.read());
+        let indexes = self.query.sparse_indexes.read();
+        let index = indexes
+            .get(index_name)
+            .ok_or_else(|| resolve::sparse_index_not_found(index_name))?;
+        let (Some(filter), Some(payload_storage)) = (metadata_filter, payload_storage.as_ref())
+        else {
+            return Ok(sparse_search(index, sparse_query, candidate_k));
+        };
+        let filter_fn = |id: u64| {
+            let payload = payload_storage.retrieve(id).ok().flatten();
+            let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
+            filter.matches(p)
+        };
+        Ok(sparse_search_filtered(
+            index,
+            sparse_query,
+            candidate_k,
+            Some(&filter_fn),
+        ))
     }
 
     /// Fuse dense and sparse branch results into ranked `SearchResult`s.
     ///
-    /// Gracefully degrades when either branch is empty by resolving the
-    /// other branch directly, skipping fusion entirely. Shared by the
-    /// VelesQL hybrid path and the raw `SparseVector` SDK entry points.
+    /// A branch that came back empty is still fused, as an empty list: the
+    /// scores returned always have the direction
+    /// [`FusionStrategy::fused_direction`] states for a dense and a sparse
+    /// branch, so a caller reading them as fused scores never meets the dense
+    /// branch's raw distances instead. Shared by the VelesQL hybrid path and
+    /// the raw `SparseVector` SDK entry points.
     ///
     /// # Errors
     ///
@@ -485,16 +420,6 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         if dense_results.is_empty() && sparse_results.is_empty() {
             return Ok(Vec::new());
-        }
-        if dense_results.is_empty() {
-            let scored: Vec<(u64, f32)> = sparse_results
-                .iter()
-                .map(|sd| (sd.doc_id, sd.score))
-                .collect();
-            return Ok(self.resolve_fused_results(&scored, limit));
-        }
-        if sparse_results.is_empty() {
-            return Ok(self.resolve_fused_results(&dense_results, limit));
         }
 
         let sparse_tuples: Vec<(u64, f32)> = sparse_results
@@ -528,32 +453,34 @@ impl Collection {
         &self,
         pairs: impl Iterator<Item = (u64, f32)>,
         limit: usize,
-        capacity_hint: usize,
     ) -> Vec<SearchResult> {
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
-        let mut out = Vec::with_capacity(capacity_hint.min(limit));
-        for (id, score) in pairs.take(limit) {
-            let vector = vector_storage
-                .retrieve(id)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let payload = payload_storage.retrieve(id).ok().flatten();
-            if is_payload_expired(payload.as_ref(), now_secs) {
-                continue;
-            }
-            let point = Point {
-                id,
-                vector,
-                payload,
-                sparse_vectors: None,
-            };
-            out.push(SearchResult::new(point, score));
-        }
-        // The loop is both guards' last use; nothing below reads storage.
+        // Sized by the hits resolved, never by the caller's `limit`.
+        let out: Vec<SearchResult> = pairs
+            .take(limit)
+            .filter_map(|(id, score)| {
+                let vector = vector_storage
+                    .retrieve(id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let payload = payload_storage.retrieve(id).ok().flatten();
+                if is_payload_expired(payload.as_ref(), now_secs) {
+                    return None;
+                }
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                };
+                Some(SearchResult::new(point, score))
+            })
+            .collect();
+        // The collect is both guards' last use; nothing below reads storage.
         drop(payload_storage);
         drop(vector_storage);
         out
@@ -565,11 +492,7 @@ impl Collection {
         results: &[crate::index::sparse::ScoredDoc],
         limit: usize,
     ) -> Vec<SearchResult> {
-        self.resolve_id_score_pairs(
-            results.iter().map(|sd| (sd.doc_id, sd.score)),
-            limit,
-            results.len(),
-        )
+        self.resolve_id_score_pairs(results.iter().map(|sd| (sd.doc_id, sd.score)), limit)
     }
 
     /// Resolve fused `(id, score)` tuples to `SearchResult`.
@@ -578,6 +501,6 @@ impl Collection {
         fused: &[(u64, f32)],
         limit: usize,
     ) -> Vec<SearchResult> {
-        self.resolve_id_score_pairs(fused.iter().copied(), limit, fused.len())
+        self.resolve_id_score_pairs(fused.iter().copied(), limit)
     }
 }

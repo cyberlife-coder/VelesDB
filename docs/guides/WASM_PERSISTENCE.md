@@ -52,7 +52,7 @@ const clone = VectorStore.import_from_bytes(bytes);
 This path is synchronous and runtime-agnostic. It is also what `save()` uses
 under the hood.
 
-## Binary format (`VELS` v2)
+## Binary format (`VELS` v3)
 
 Layout written by `export_to_bytes`, little-endian throughout
 (`crates/velesdb-wasm/src/serialization.rs`):
@@ -60,26 +60,33 @@ Layout written by `export_to_bytes`, little-endian throughout
 | Field | Size | Description |
 |---|---|---|
 | Magic | 4 bytes | `"VELS"` |
-| Version | 1 byte | `2` |
+| Version | 1 byte | `3` |
 | Dimension | 4 bytes | `u32` |
 | Metric | 1 byte | `0`=cosine, `1`=euclidean, `2`=dot, `3`=hamming, `4`=jaccard |
 | Storage mode | 1 byte | `0`=full, `1`=sq8, `2`=binary, `3`=PQ, `4`=RaBitQ |
 | Count | 8 bytes | `u64`, number of vectors |
 | Ids | count × 8 bytes | `u64` each |
-| `data` | length-prefixed blob | f32 vectors (full mode) |
-| `data_sq8` | length-prefixed blob | SQ8 codes |
-| `data_binary` | length-prefixed blob | binary codes |
-| `sq8_mins` | length-prefixed blob | f32 dequantization minima |
-| `sq8_scales` | length-prefixed blob | f32 dequantization scales |
+| `data` | length-prefixed blob | f32 vectors, `count × dimension`, in every storage mode |
 | Payloads | count × blob | JSON bytes per vector, empty blob = no payload |
 
-Each length-prefixed blob starts with its byte length as a `u64`.
+Each length-prefixed blob starts with its byte length as a `u64`. A blob whose
+`data` does not hold exactly one vector per id is rejected at load.
 
-**v1 is still readable.** The v1 header was 18 bytes (no storage-mode byte) and
-carried only ids plus f32 vectors, i.e. full precision only; `import_from_bytes`
-accepts it for legacy data. v2 additionally preserves the storage mode, the
-quantized buffers and the payloads, and it fixed a v1 defect where exporting a
-quantized store indexed the empty `data` buffer.
+**v2 and v1 are still readable.** v2 had the same header, then four more blobs
+between `data` and the payloads — `data_sq8` (SQ8 codes), `data_binary`
+(packed sign bits), `sq8_mins` and `sq8_scales` (per-vector f32 minimum and
+encode scale) — because `sq8`/`pq`/`rabitq` stores kept only per-vector SQ8
+codes and `binary` stores only sign bits. Loading a v2 quantized store rebuilds
+the vectors that build searched over: the SQ8 reconstruction (decoded with
+core's `QuantizedVector::to_f32`, which matches the v2 decode to a few ULP) or
+the sign bits as `0.0`/`1.0`. The original f32 values were never stored, so
+they cannot come back; re-insert them to get exact scores. v3 dropped the four
+blobs because every storage mode now keeps the f32 vectors (see
+[storage modes](WASM_API.md#storage-modes-and-memory)); its version byte makes
+an older build reject a v3 blob with `Unsupported version: 3` instead of
+loading a quantized-mode store with no codes. The v1 header was 18 bytes (no
+storage-mode byte) and carried only ids plus f32 vectors, i.e. full precision
+only, and no payloads.
 
 **The sparse index is not persisted** in either version — rebuild it after a
 load with `sparse_insert`.
@@ -91,9 +98,10 @@ VectorStore.import_from_bytes(new Uint8Array([1, 2, 3, 4, 5]));
 // Error: Invalid data: wrong magic number
 ```
 
-Historical reference verified against `@wiscale/velesdb-wasm@4.0.0`: a 3-dimension store
-holding one vector exports to 87 bytes, magic `VELS`, version byte `2`, and
-re-imports with `len === 1`.
+A 3-dimension store holding one vector without a payload exports to 55 bytes,
+magic `VELS`, version byte `3`, and re-imports with `len === 1`
+(`serialization_tests.rs` pins the size; the v2 export of the same store was
+87 bytes).
 
 ## Graph persistence
 
@@ -158,4 +166,4 @@ different shape from the table above; expect different absolute numbers.
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 8.0.0

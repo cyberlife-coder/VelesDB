@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use pyo3::exceptions::{PyDeprecationWarning, PyOverflowError, PyValueError};
+use pyo3::exceptions::{PyOverflowError, PyValueError};
 use pyo3::prelude::*;
 use velesdb_core::FusionStrategy as CoreFusionStrategy;
 use velesdb_core::{GatedRead, QueryOperationKind, SearchResult};
@@ -31,75 +31,11 @@ struct ParsedSearch {
 
 #[pymethods]
 impl Collection {
-    /// Search for similar vectors (dense, sparse, or hybrid).
-    ///
-    /// .. deprecated:: 1.15.0
-    ///    Use :py:meth:`search_request` with a :py:class:`SearchOptions` object
-    ///    instead.  This method will be removed in v2.0.0.
-    ///
-    /// Supports three modes depending on which arguments are provided:
-    /// - Dense only: `search(vector, top_k=10)` (backward compatible)
-    /// - Sparse only: `search(sparse_vector={0: 1.5, 3: 0.8}, top_k=10)`
-    /// - Hybrid: `search(vector, sparse_vector={...}, top_k=10)` (fused with RRF k=60)
-    ///
-    /// Args:
-    ///     vector: Dense query vector (list or numpy array). Optional if sparse_vector is given.
-    ///     sparse_vector: Sparse query as dict[int, float] or scipy sparse. Optional if vector is given.
-    ///     top_k: Number of results to return (default: 10).
-    ///     filter: Optional metadata filter dict for pre-filtering results.
-    ///     sparse_index_name: Optional name of the sparse index to query. When ``None``,
-    ///         the default (unnamed) sparse index is used. Named sparse indexes are useful
-    ///         for multi-model embeddings (e.g. BGE-M3 dense + sparse).
-    ///
-    /// Returns:
-    ///     List of dicts with id, score, and payload.
-    // The too_many_arguments allow is preserved here because this legacy method
-    // retains its original 6-kwarg signature for backward compatibility until
-    // v2.0.  New callers should use search_request(SearchOptions) instead
-    // (issue #717 v1.15 path).
-    #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (vector=None, *, sparse_vector=None, top_k=10, filter=None, sparse_index_name=None, include_vectors=false, principal=None, tenant=None))]
-    fn search(
-        &self,
-        py: Python<'_>,
-        vector: Option<Py<PyAny>>,
-        sparse_vector: Option<Py<PyAny>>,
-        top_k: usize,
-        filter: Option<Py<PyAny>>,
-        sparse_index_name: Option<String>,
-        include_vectors: bool,
-        principal: Option<String>,
-        tenant: Option<String>,
-    ) -> PyResult<Vec<Py<PyAny>>> {
-        PyErr::warn(
-            py,
-            &py.get_type::<PyDeprecationWarning>(),
-            c"Collection.search() is deprecated since v1.15. \
-              Use Collection.search_request(SearchOptions(...)) instead. \
-              Will be removed in v2.0.",
-            2,
-        )?;
-
-        let opts = SearchOptions {
-            vector,
-            sparse_vector,
-            k: top_k,
-            filter,
-            sparse_index_name,
-            include_vectors,
-            fusion: None,
-            principal,
-            tenant,
-        };
-        self.search_request(py, &opts)
-    }
-
     /// Search for similar vectors using a :py:class:`SearchOptions` builder.
     ///
-    /// This is the v1.15+ canonical search entry point.  It accepts all search
-    /// parameters as a single ``SearchOptions`` object, eliminating the
-    /// ``too_many_arguments`` lint suppression required by the legacy
-    /// ``search()`` method (issue #717).
+    /// The native search entry point: every search parameter travels in one
+    /// ``SearchOptions`` object. ``velesdb.Collection.search(vector, top_k=...)``
+    /// is the keyword shorthand over it.
     ///
     /// Args:
     ///     opts: A :py:class:`SearchOptions` instance with all search parameters.
@@ -706,7 +642,7 @@ fn ef_search_from_py(ef_search: &Bound<'_, PyAny>) -> PyResult<usize> {
 /// (`fast`, `balanced`, `accurate`, `perfect`, `autotune`), `custom:<ef>`
 /// and `adaptive:<min_ef>:<max_ef>`, each ef in the `ef_search` range
 /// (#2275). A copy of that parser lived here and answered differently.
-fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
+pub(crate) fn parse_search_quality(mode: &str) -> PyResult<velesdb_core::SearchQuality> {
     velesdb_core::api_types::parse_search_mode(mode).map_err(PyValueError::new_err)
 }
 

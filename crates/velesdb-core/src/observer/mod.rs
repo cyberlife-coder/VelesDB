@@ -1,7 +1,7 @@
-//! `DatabaseObserver` — extension hook for velesdb-premium.
+//! `DatabaseObserver` — the extension hook of an out-of-tree policy layer.
 //!
-//! The core library has zero knowledge of Premium internals.
-//! Premium implements this trait and injects it via
+//! The core library has zero knowledge of any implementation of it. A policy
+//! layer implements this trait and injects it via
 //! [`Database::open_with_observer`](crate::Database::open_with_observer).
 //!
 //! # Contract
@@ -25,8 +25,9 @@ use crate::collection::CollectionType;
 
 /// Lifecycle and control-plane hooks for database events.
 ///
-/// Implement this trait in `velesdb-premium` to attach RBAC, audit logging,
-/// multi-tenant routing, or replication logic without modifying the core.
+/// Implement this trait in an out-of-tree policy layer to attach RBAC, audit
+/// logging, multi-tenant routing, or replication logic without modifying the
+/// core.
 ///
 /// # Contract
 ///
@@ -45,14 +46,14 @@ use crate::collection::CollectionType;
 /// relying on the defaults (the trait-level equivalent of `#[non_exhaustive]`,
 /// which Rust does not permit on traits directly).
 ///
-/// # Example (Premium side)
+/// # Example (implementation side)
 ///
 /// ```rust,ignore
 /// use velesdb_core::{DatabaseObserver, CollectionType};
 ///
-/// struct PremiumObserver { /* audit_log, rbac, tenant_router */ }
+/// struct PolicyObserver { /* audit_log, rbac, tenant_router */ }
 ///
-/// impl DatabaseObserver for PremiumObserver {
+/// impl DatabaseObserver for PolicyObserver {
 ///     fn on_collection_created(&self, name: &str, kind: &CollectionType) {
 ///         // self.audit_log.record(...)
 ///     }

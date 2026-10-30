@@ -195,7 +195,7 @@ helper. Community-scope cleanup, not a feature.
   search boundary:
   - `max_vectors_per_collection` — one O(1) `len() + batch > cap` check
     (shared `enforce_vector_count` helper) on every ingest entry:
-    `Collection::upsert` / `upsert_bulk_inner` / `upsert_metadata` (Point
+    `Collection::upsert` / `upsert_bulk` / `upsert_metadata` (Point
     paths) and `upsert_bulk_from_raw` (the zero-copy Python/REST bulk path),
     before any storage lock or WAL write. It is a conservative pre-count: a
     pure update batch re-supplying existing ids is counted as net-new, so a
@@ -204,12 +204,15 @@ helper. Community-scope cleanup, not a feature.
     `config.point_count`, so this field does not apply to pure-graph node
     ingest.
   - `max_payload_size` — a per-point serialized-size check (shared
-    `enforce_payload_value_size` helper) on the same cold ingest boundary for
+    `enforce_payload_limits` helper) on the same cold ingest boundary for
     every payload path: Point upsert, raw bulk, and graph node writes
     (`store_node_payload`). The size is measured with a bounded counting
     writer that aborts past the cap, so it allocates no throwaway buffer and
     serializes at most `cap + 1` bytes — **not** in the innermost WAL
-    `write_store_record` loop.
+    `write_store_record` loop. The same helper first refuses a payload nested
+    deeper than `MAX_VALUE_DEPTH` (124) arrays and objects, which
+    `serde_json` could not read back from every document core writes it
+    into (the agent-memory snapshot is the deepest).
   - `max_perfect_mode_vectors` — a single gate (`enforce_perfect_mode_limit`)
     consulted by all four index search entry points
     (`search_with_quality` / `search_with_opts` and the filtered path
@@ -447,7 +450,7 @@ avoid implying a guarantee that does not exist. Community-scope.
 
 ---
 
-*Last updated: 2026-10-25 · Applies to: velesdb-core 7.1.0 (this stamp tracks
-the document revision; this revision closes entry 1, removed from the schema
-for 7.0.0. The rest of the inventory was last re-verified against the code on
+*Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0 (this stamp tracks
+the document revision; this revision names `upsert_bulk` for the bulk
+ingest limit check, its private `upsert_bulk_inner` being folded into it. The rest of the inventory was last re-verified against the code on
 2026-06-14, as stated at the top of this page)*

@@ -180,6 +180,74 @@ fn is_windows_reserved(name: &str) -> bool {
     )
 }
 
+/// The most arrays and objects `serde_json` reads back nested in one document.
+///
+/// Its parser stops at the 128th level, so a value written inside a deeper
+/// JSON document is written, and then fails to decode.
+pub const MAX_JSON_NESTING: usize = 127;
+
+/// The deepest nesting of arrays and objects a stored value may have: an
+/// edge's properties (the map counting as the first level) and a point's
+/// payload (the payload counting as the first level).
+///
+/// Three levels below [`MAX_JSON_NESTING`], for the deepest JSON document
+/// core writes such a value into: the agent-memory snapshot, whose envelope,
+/// list and record (point or edge) hold it. Every shallower one (the payload
+/// log, an edge WAL record, the edge snapshot's JSON property strings) fits.
+pub const MAX_VALUE_DEPTH: usize = MAX_JSON_NESTING - 3;
+
+/// Validates that a point payload nests no deeper than [`MAX_VALUE_DEPTH`],
+/// the payload counting as the first level.
+///
+/// # Errors
+///
+/// Returns [`Error::SchemaValidation`] naming the point when it does.
+#[cfg(feature = "persistence")] // Its callers, the collection ingest paths, are.
+pub(crate) fn validate_payload_depth(id: u64, payload: &serde_json::Value) -> Result<()> {
+    if nests_deeper_than(std::iter::once(payload), 0, MAX_VALUE_DEPTH) {
+        return Err(Error::SchemaValidation(format!(
+            "point {id} has a payload nested more than {MAX_VALUE_DEPTH} levels \
+             deep, which cannot be persisted"
+        )));
+    }
+    Ok(())
+}
+
+/// Whether any of `values`, each held `depth` arrays or objects deep, nests
+/// past `limit` levels in all. Iterative, so a hostile depth cannot overflow
+/// the stack, and it stops at the first container past the limit. Only
+/// containers are queued: scalars cannot deepen the nesting.
+#[cfg(feature = "persistence")] // Its callers, the graph and payload stores, are.
+pub(crate) fn nests_deeper_than<'a>(
+    values: impl IntoIterator<Item = &'a serde_json::Value>,
+    depth: usize,
+    limit: usize,
+) -> bool {
+    use serde_json::Value;
+
+    let is_container = |v: &&Value| matches!(v, Value::Array(_) | Value::Object(_));
+    let mut pending: Vec<(&Value, usize)> = values
+        .into_iter()
+        .filter(is_container)
+        .map(|v| (v, depth + 1))
+        .collect();
+    while let Some((value, depth)) = pending.pop() {
+        if depth > limit {
+            return true;
+        }
+        match value {
+            Value::Array(items) => {
+                pending.extend(items.iter().filter(is_container).map(|c| (c, depth + 1)));
+            }
+            Value::Object(map) => {
+                pending.extend(map.values().filter(is_container).map(|c| (c, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Convenience constructor for [`Error::InvalidCollectionName`].
 fn invalid_name(name: &str, reason: &str) -> Error {
     Error::InvalidCollectionName {

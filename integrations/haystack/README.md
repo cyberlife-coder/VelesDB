@@ -132,9 +132,14 @@ integers using the first 8 bytes of SHA-256 (~9.2 × 10¹⁸ slots).  For a
 is negligible for typical RAG workloads.  A `ValueError` is raised at write time
 if a collision is detected between a new document and an existing one.
 
-**Note on `scale_score`:** When `True` (default), cosine similarity scores
-are normalised from `[-1, 1]` to `[0, 1]` so they behave like probabilities
-in downstream re-ranking.
+**Note on `scale_score`:** When `True` (default), scores are higher-is-closer,
+as Haystack's `DocumentJoiner` and rankers expect: cosine similarities are
+normalised from `[-1, 1]` to `[0, 1]`, a `euclidean` or `hamming` distance `d`
+becomes `1 / (1 + d)`, and dot and Jaccard similarities are unchanged. A fused
+score (`fusion=...`) is never rescaled, but one that is still a distance
+(`average`, `maximum` or `weighted` over a distance metric) is mapped to
+`1 / (1 + d)`. The direction of each metric and strategy comes from
+velesdb-core, through `velesdb_common.scores`.
 
 **Note on streaming ingestion:** `stream_insert()` and `write_documents_streaming()`
 forward to the underlying `velesdb.Collection.stream_insert`, which requires

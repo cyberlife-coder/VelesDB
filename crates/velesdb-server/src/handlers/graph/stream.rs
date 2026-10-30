@@ -73,6 +73,11 @@ pub async fn stream_traverse(
 
     // Snapshot the parameters and state needed by the blocking worker.
     let coll_handle = state.db.get_graph_collection(&collection);
+    // Counted once the read is admitted, as on the other graph handlers: an
+    // unknown collection is not a graph query.
+    if coll_handle.is_some() {
+        state.operational_metrics.record_graph_query();
+    }
 
     // F-17 fix: execute the synchronous traversal and event
     // construction on a blocking worker so the Tokio async runtime

@@ -249,6 +249,13 @@ impl MatchMetrics {
         output.push_str(&format!(
             "velesdb_match_latency_seconds_bucket{{le=\"+Inf\"}} {cumulative}\n",
         ));
+        // `_count` is the `+Inf` bucket by definition; `_sum` is in seconds,
+        // the unit the family's name and bucket bounds use.
+        let sum_seconds = self.latency_sum_ns.load(Ordering::Relaxed) as f64 / 1e9;
+        output.push_str(&format!(
+            "velesdb_match_latency_seconds_sum {sum_seconds}\n\
+             velesdb_match_latency_seconds_count {cumulative}\n",
+        ));
     }
 
     /// Resets all metrics (for testing).

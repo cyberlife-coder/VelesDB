@@ -3,6 +3,8 @@
 //! TDD: Tests written BEFORE implementation (RED phase).
 
 use super::*;
+use crate::error::Error;
+use crate::validation::MAX_VALUE_DEPTH;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -1030,4 +1032,248 @@ fn test_from_bytes_label_order_is_deterministic() {
     let second = EdgeStore::from_bytes(&bytes).unwrap();
     assert_eq!(ids(&first), ids(&second), "same bytes, same order");
     assert_eq!(first.get_edges_by_label("KNOWS").len(), 50);
+}
+
+// -- snapshot wire form (`edge_store.bin` is postcard, the API is JSON) --
+
+fn edge_with_properties() -> GraphEdge {
+    GraphEdge::new(7, 1, 2, "KNOWS")
+        .unwrap()
+        .with_properties(HashMap::from([
+            ("since".to_string(), json!("2024")),
+            ("weight".to_string(), json!(0.5)),
+            ("tags".to_string(), json!(["a", {"nested": null}])),
+        ]))
+}
+
+/// The serialized layout of `GraphEdge` and of `EdgeStore` before the
+/// snapshot wire form: the derived one, the properties as a map.
+#[derive(serde::Serialize)]
+struct DerivedEdge {
+    id: u64,
+    source: u64,
+    target: u64,
+    label: String,
+    properties: HashMap<String, serde_json::Value>,
+}
+
+#[derive(serde::Serialize)]
+struct DerivedEdgeStore {
+    edges: HashMap<u64, DerivedEdge>,
+    outgoing: HashMap<u64, Vec<u64>>,
+    incoming: HashMap<u64, Vec<u64>>,
+}
+
+/// One edge from 1 to 2, in the derived layout.
+fn derived_store(properties: HashMap<String, serde_json::Value>) -> DerivedEdgeStore {
+    let edge = DerivedEdge {
+        id: 7,
+        source: 1,
+        target: 2,
+        label: "KNOWS".to_string(),
+        properties,
+    };
+    DerivedEdgeStore {
+        edges: HashMap::from([(7, edge)]),
+        outgoing: HashMap::from([(1, vec![7])]),
+        incoming: HashMap::from([(2, vec![7])]),
+    }
+}
+
+#[test]
+fn test_edge_properties_round_trip_through_the_snapshot() {
+    let mut store = EdgeStore::new();
+    store.add_edge(edge_with_properties()).unwrap();
+    store
+        .add_edge(GraphEdge::new(8, 2, 1, "PLAIN").unwrap())
+        .unwrap();
+
+    let restored = EdgeStore::from_bytes(&store.to_bytes().unwrap()).unwrap();
+
+    assert_eq!(restored.get_edge(7), Some(&edge_with_properties()));
+    assert_eq!(
+        restored.get_edge(8),
+        Some(&GraphEdge::new(8, 2, 1, "PLAIN").unwrap())
+    );
+}
+
+/// A store whose edges have no properties writes the bytes it wrote before
+/// the wire form, and reads the bytes written then: an empty string and an
+/// empty map are the same postcard byte.
+#[test]
+fn test_a_snapshot_without_properties_keeps_its_bytes_in_both_directions() {
+    let legacy_bytes = postcard::to_allocvec(&derived_store(HashMap::new())).unwrap();
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(GraphEdge::new(7, 1, 2, "KNOWS").unwrap())
+        .unwrap();
+
+    assert_eq!(store.to_bytes().unwrap(), legacy_bytes);
+    let restored = EdgeStore::from_bytes(&legacy_bytes).unwrap();
+    assert_eq!(
+        restored.get_edge(7),
+        Some(&GraphEdge::new(7, 1, 2, "KNOWS").unwrap())
+    );
+}
+
+/// A snapshot that 7.1.0 and earlier wrote with properties cannot be decoded
+/// (`serde_json::Value` needs `deserialize_any`): that is the file the open
+/// quarantines rather than reads.
+#[test]
+fn test_a_snapshot_written_with_properties_before_the_wire_form_is_undecodable() {
+    let properties = HashMap::from([("since".to_string(), json!("2024"))]);
+    let legacy_bytes = postcard::to_allocvec(&derived_store(properties)).unwrap();
+
+    assert!(EdgeStore::from_bytes(&legacy_bytes).is_err());
+}
+
+/// Only the snapshot changed form: `GraphEdge`'s own serde representation
+/// still carries the properties as a map, in JSON and in binary formats.
+#[test]
+fn test_graph_edge_serde_keeps_properties_as_a_map() {
+    let edge = edge_with_properties();
+    let derived = DerivedEdge {
+        id: 7,
+        source: 1,
+        target: 2,
+        label: "KNOWS".to_string(),
+        properties: edge.properties().clone(),
+    };
+
+    let value = serde_json::to_value(&edge).unwrap();
+    assert_eq!(value["properties"]["since"], json!("2024"));
+    assert_eq!(serde_json::from_value::<GraphEdge>(value).unwrap(), edge);
+    assert_eq!(
+        postcard::to_allocvec(&edge).unwrap(),
+        postcard::to_allocvec(&derived).unwrap()
+    );
+}
+
+// -- properties depth (every JSON document core writes an edge into) --
+
+/// Properties nesting exactly `depth` levels of containers, the map included.
+fn edge_nested(depth: usize) -> GraphEdge {
+    let mut value = json!(1);
+    for _ in 1..depth {
+        value = json!([value]);
+    }
+    GraphEdge::new(7, 1, 2, "DEEP")
+        .unwrap()
+        .with_properties(HashMap::from([("k".to_string(), value)]))
+}
+
+/// The deepest JSON document core writes an edge into: the agent-memory
+/// snapshot's envelope, its edge list, then the edge.
+fn in_memory_snapshot(edge: &GraphEdge) -> Vec<u8> {
+    serde_json::to_vec(&json!({ "points": [], "edges": [edge] })).unwrap()
+}
+
+#[test]
+fn test_the_deepest_persistable_properties_read_back_everywhere() {
+    let edge = edge_nested(MAX_VALUE_DEPTH);
+    edge.ensure_persistable().unwrap();
+
+    let wal_record = serde_json::to_vec(&edge).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<GraphEdge>(&wal_record).unwrap(),
+        edge
+    );
+    let snapshot: serde_json::Value = serde_json::from_slice(&in_memory_snapshot(&edge)).unwrap();
+    assert_eq!(
+        serde_json::from_value::<GraphEdge>(snapshot["edges"][0].clone()).unwrap(),
+        edge
+    );
+    let mut store = EdgeStore::new();
+    store.add_edge(edge.clone()).unwrap();
+    let restored = EdgeStore::from_bytes(&store.to_bytes().unwrap()).unwrap();
+    assert_eq!(restored.get_edge(7), Some(&edge));
+}
+
+/// One level deeper is refused, and is exactly where the agent-memory
+/// snapshot would stop decoding: the bound is serde_json's, not a margin.
+#[test]
+fn test_properties_one_level_deeper_are_not_persistable() {
+    let edge = edge_nested(MAX_VALUE_DEPTH + 1);
+
+    let err = edge.ensure_persistable().unwrap_err();
+
+    assert!(matches!(err, Error::SchemaValidation(_)), "{err}");
+    let snapshot = in_memory_snapshot(&edge);
+    assert!(serde_json::from_slice::<serde_json::Value>(&snapshot).is_err());
+}
+
+#[test]
+fn test_properties_depth_counts_objects_and_the_deepest_branch() {
+    // The properties map, then `objects` nested objects.
+    let edge_with_objects = |objects: usize| {
+        let mut deep = json!({});
+        for _ in 1..objects {
+            deep = json!({ "next": deep });
+        }
+        GraphEdge::new(7, 1, 2, "DEEP")
+            .unwrap()
+            .with_properties(HashMap::from([
+                ("shallow".to_string(), json!([1, 2])),
+                ("deep".to_string(), deep),
+            ]))
+    };
+
+    assert!(edge_with_objects(MAX_VALUE_DEPTH - 1)
+        .ensure_persistable()
+        .is_ok());
+    assert!(edge_with_objects(MAX_VALUE_DEPTH)
+        .ensure_persistable()
+        .is_err());
+    assert!(edge_with_properties().ensure_persistable().is_ok());
+}
+
+/// The snapshot refuses to write an edge it could not read back, even one
+/// that reached the store without going through `Collection::add_edge`.
+#[test]
+fn test_the_snapshot_does_not_write_properties_too_deep_to_read_back() {
+    let mut store = EdgeStore::new();
+    store
+        .add_edge(edge_nested(crate::validation::MAX_JSON_NESTING + 1))
+        .unwrap();
+
+    assert!(store.to_bytes().is_err());
+}
+
+/// An edge past `MAX_VALUE_DEPTH` but within what the snapshot reads back,
+/// as a 7.x edge WAL can replay, still snapshots: a flush must not fail on it
+/// forever.
+#[test]
+fn test_the_snapshot_writes_a_replayed_edge_it_can_read_back() {
+    let edge = edge_nested(crate::validation::MAX_JSON_NESTING);
+    let mut store = EdgeStore::new();
+    store.add_edge(edge.clone()).unwrap();
+
+    let restored = EdgeStore::from_bytes(&store.to_bytes().unwrap()).unwrap();
+
+    assert_eq!(restored.get_edge(7), Some(&edge));
+}
+
+/// An edge's float property reads back bit for bit from the WAL record and
+/// the snapshot.
+#[test]
+fn test_edge_float_properties_round_trip_exactly() {
+    // One of the doubles the default serde_json parser returns one ULP off.
+    let value = 127.750_157_526_184_65_f64;
+    let edge = GraphEdge::new(7, 1, 2, "W")
+        .unwrap()
+        .with_properties(HashMap::from([("w".to_string(), json!(value))]));
+    let mut store = EdgeStore::new();
+    store.add_edge(edge.clone()).unwrap();
+
+    // The edge WAL record is the edge's own serde_json form.
+    let from_wal: GraphEdge = serde_json::from_slice(&serde_json::to_vec(&edge).unwrap()).unwrap();
+    let from_snapshot = EdgeStore::from_bytes(&store.to_bytes().unwrap()).unwrap();
+
+    for read_back in [&from_wal, from_snapshot.get_edge(7).unwrap()] {
+        let stored = read_back
+            .property("w")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap();
+        assert_eq!(stored.to_bits(), value.to_bits());
+    }
 }

@@ -48,17 +48,3 @@ pub use search::{
     batch_search, hybrid_search, multi_query_search, multi_query_search_ids, search, search_ids,
     text_search,
 };
-
-// Graph handlers (EPIC-016) - exported via lib.rs
-#[allow(unused_imports)]
-pub use graph::{
-    add_edge, add_edges_batch, get_edge_count, get_edges, get_node_degree, get_node_edges,
-    get_node_payload, graph_search, list_nodes, remove_edge, traverse_graph, traverse_parallel,
-    upsert_node_payload, DegreeResponse, TraversalResultItem, TraversalStats, TraverseRequest,
-    TraverseResponse,
-};
-
-// Metrics handlers - conditional on prometheus feature
-#[cfg(feature = "prometheus")]
-#[allow(unused_imports)]
-pub use metrics::{health_metrics, prometheus_metrics};

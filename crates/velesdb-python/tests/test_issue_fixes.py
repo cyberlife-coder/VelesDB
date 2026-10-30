@@ -7,6 +7,8 @@ Regression tests for GitHub issues #356, #357, #412, #413, and #419.
 - #412: bool→int silent conversion in python_to_json (True stored as 1)
 - #413: unsupported payload types silently dropped instead of raising
 - #419: batch_search per-query top_k — mixed k values should return correct counts
+- Payload nesting: a payload past JSON's 127 levels, or one containing itself,
+  raises ValueError instead of overflowing the native stack
 
 Run with: pytest tests/test_issue_fixes.py -v
 """
@@ -335,3 +337,78 @@ class TestIssue419BatchSearchPerQueryTopK:
         assert len(results) == 0, (
             f"Empty batch returned {len(results)} results, expected 0"
         )
+
+
+def _nested_lists(levels):
+    """A value nesting ``levels`` lists around the int 0."""
+    value = 0
+    for _ in range(levels):
+        value = [value]
+    return value
+
+
+class TestPayloadNestingCap:
+    """A payload nesting deeper than JSON can read back raises, not crashes.
+
+    The conversion to JSON recursed once per level with no bound, so a deep or
+    self-containing list overflowed the native stack and aborted the process.
+    """
+
+    def test_a_deeply_nested_list_raises(self, temp_db):
+        col = temp_db.create_collection("deep_list", dimension=4)
+        with pytest.raises(ValueError, match="127 levels"):
+            col.upsert([{
+                "id": 1,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "payload": {"deep": _nested_lists(100_000)},
+            }])
+
+    def test_a_self_containing_list_raises(self, temp_db):
+        col = temp_db.create_collection("cyclic_list", dimension=4)
+        cyclic = []
+        cyclic.append(cyclic)
+        with pytest.raises(ValueError, match="127 levels"):
+            col.upsert([{
+                "id": 1,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "payload": {"cyclic": cyclic},
+            }])
+
+    def test_the_deepest_payload_core_accepts_is_stored(self, temp_db):
+        # 124 levels with the payload dict as the first, core's bound.
+        col = temp_db.create_collection("deepest_accepted", dimension=4)
+        payload = {"v": _nested_lists(123)}
+        col.upsert([{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": payload}])
+        assert col.get([1])[0]["payload"] == payload
+
+    def test_a_self_containing_dict_raises(self, temp_db):
+        col = temp_db.create_collection("cyclic_dict", dimension=4)
+        cyclic = {}
+        cyclic["self"] = cyclic
+        with pytest.raises(ValueError, match="127 levels"):
+            col.upsert([{
+                "id": 1,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "payload": {"cyclic": cyclic},
+            }])
+
+    def test_a_payload_between_the_two_bounds_reaches_core(self, temp_db):
+        # 127 levels: within JSON's bound, so the conversion passes it on, and
+        # core refuses it past its own 124 (VELES-017, a ValueError).
+        col = temp_db.create_collection("between_bounds", dimension=4)
+        with pytest.raises(ValueError, match="124"):
+            col.upsert([{
+                "id": 1,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "payload": {"v": _nested_lists(126)},
+            }])
+
+    def test_a_payload_past_the_json_bound_is_refused_before_core(self, temp_db):
+        # 128 levels: the conversion refuses it, naming the JSON bound.
+        col = temp_db.create_collection("past_json_bound", dimension=4)
+        with pytest.raises(ValueError, match="127 levels"):
+            col.upsert([{
+                "id": 1,
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "payload": {"v": _nested_lists(127)},
+            }])

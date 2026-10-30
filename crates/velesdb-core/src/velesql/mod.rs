@@ -53,6 +53,9 @@ mod explain;
 // explain_tests exercises the REST `api_types` EXPLAIN conversions (gated with the
 // server/persistence layer), so it stays persistence-gated even though `explain`
 // itself is now persistence-free (P1.4).
+pub mod distinct_evaluator;
+#[cfg(test)]
+mod distinct_evaluator_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod explain_tests;
 mod graph_pattern;
@@ -233,6 +236,8 @@ pub use ast::{
     // WITH clause
     QuantizationMode,
     Query,
+    // Result shape of a statement (single source for the bindings)
+    QueryResultKind,
     SchemaDefinition,
     SelectColumns,
     SelectEdgesStatement,

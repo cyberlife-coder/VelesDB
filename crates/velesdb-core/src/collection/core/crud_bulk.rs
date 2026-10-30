@@ -2,7 +2,7 @@
 //!
 //! Extracted from `crud.rs` (Issue #425) to keep each file under 500 NLOC.
 //! These methods are optimized for high-throughput import with parallel I/O.
-//! Raw import path (`upsert_bulk_from_raw`) is in `crud_bulk_raw.rs`.
+//! Raw import path (`upsert_bulk_from_raw`) is in `bulk_import.rs`.
 //!
 //! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
 //! V2 path: `DirectVectorWriter` places each vector in the graph's
@@ -10,7 +10,7 @@
 //! graph for higher throughput.
 
 use crate::collection::types::Collection;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::index::hnsw::direct_writer::DirectVectorWriter;
 use crate::point::Point;
 use crate::storage::VectorStorage;
@@ -33,38 +33,6 @@ impl Collection {
     ///
     /// Returns an error if any point has a mismatched dimension.
     pub fn upsert_bulk(&self, points: &[Point]) -> Result<usize> {
-        self.upsert_bulk_inner(points, true)
-    }
-
-    /// Bulk insert without forcing WAL fsync at the end.
-    ///
-    /// Identical to [`upsert_bulk`](Self::upsert_bulk) except the WAL
-    /// buffer is flushed to the OS kernel (ensuring data is out of the
-    /// process) but **not** fsynced to disk. This eliminates the 1-5ms
-    /// per-batch fsync overhead on Windows.
-    ///
-    /// # Safety Contract
-    ///
-    /// The caller **must** call [`flush()`](Self::flush) after the final
-    /// batch to establish a durability barrier. Without that final fsync,
-    /// data since the last sync point may be lost on power failure.
-    ///
-    /// # When to Use
-    ///
-    /// Use this for intermediate batches in a streaming bulk import.
-    /// The final batch should use [`upsert_bulk`](Self::upsert_bulk) or be
-    /// followed by an explicit [`flush()`](Self::flush).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any point has a mismatched dimension.
-    #[allow(dead_code)] // Reserved for future streaming ingestion surface.
-    pub(crate) fn upsert_bulk_deferred_sync(&self, points: &[Point]) -> Result<usize> {
-        self.upsert_bulk_inner(points, false)
-    }
-
-    /// Shared implementation for bulk insert with configurable fsync.
-    fn upsert_bulk_inner(&self, points: &[Point], fsync: bool) -> Result<usize> {
         if points.is_empty() {
             return Ok(0);
         }
@@ -83,12 +51,16 @@ impl Collection {
         // backend that would desynchronize the positional encoding store
         // from the node ids. Quantized collections always take the standard
         // path.
-        let use_v2 = self.streaming.async_index_builder.is_some()
-            && !self.storage.index.is_quantized_backend();
-        let count = if use_v2 {
-            self.upsert_bulk_v2_path(&vector_refs, points, &sparse_batch, fsync)?
+        // Loaded once: the V2 path and its builder are one decision.
+        let builder = self
+            .streaming
+            .async_index_builder
+            .load_full()
+            .filter(|_| !self.storage.index.is_quantized_backend());
+        let count = if let Some(aib) = builder {
+            self.upsert_bulk_v2_path(&aib, &vector_refs, points, &sparse_batch)?
         } else {
-            self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch, fsync)?
+            self.upsert_bulk_standard_path(&vector_refs, points, &sparse_batch)?
         };
 
         // Wave 3 Commit 9 — wire `AutoReindexManager` into the bulk hot
@@ -108,25 +80,14 @@ impl Collection {
     /// written once (#2264).
     fn upsert_bulk_v2_path(
         &self,
+        aib: &crate::collection::streaming::AsyncIndexBuilder,
         vector_refs: &[(u64, &[f32])],
         points: &[Point],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
-        fsync: bool,
     ) -> Result<usize> {
-        let Some(aib) = self.streaming.async_index_builder.as_ref() else {
-            return Err(Error::Config(
-                "bulk v2 path requires async index builder".to_string(),
-            ));
-        };
-
-        // Collect pre-batch payloads before overwriting — used for histogram decrements.
-        let old_payloads = {
-            let storage = self.storage.payload_storage.read();
-            Self::collect_old_payloads(points, &storage)
-        };
-
         // WAL + payload write (same durability guarantees as standard path).
-        self.store_vectors_and_payloads_inner(vector_refs, points, &old_payloads, fsync)?;
+        let entries = Self::payload_entries(points);
+        self.store_vectors_and_payloads(vector_refs, &entries)?;
 
         // Place each vector in the graph's ContiguousVectors, where rerank and
         // brute force see it at once, and queue its id for the builder to link
@@ -144,7 +105,7 @@ impl Collection {
         }
 
         let count = vector_refs.len();
-        self.finalize_bulk_upsert(points, &old_payloads, sparse_batch)?;
+        self.finalize_bulk_upsert(points, entries.len(), sparse_batch)?;
 
         // Track inserts for periodic HNSW save (Issue #423 Component 3).
         #[allow(clippy::cast_possible_truncation)]
@@ -165,29 +126,26 @@ impl Collection {
         vector_refs: &[(u64, &[f32])],
         points: &[Point],
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
-        fsync: bool,
     ) -> Result<usize> {
-        // Collect pre-batch payloads before overwriting — used for histogram decrements.
-        let old_payloads = {
-            let storage = self.storage.payload_storage.read();
-            Self::collect_old_payloads(points, &storage)
-        };
-
-        self.store_vectors_and_payloads_inner(vector_refs, points, &old_payloads, fsync)?;
+        let entries = Self::payload_entries(points);
+        self.store_vectors_and_payloads(vector_refs, &entries)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);
-        self.finalize_bulk_upsert(points, &old_payloads, sparse_batch)?;
+        self.finalize_bulk_upsert(points, entries.len(), sparse_batch)?;
 
         Ok(inserted)
     }
 
     /// Post-write bookkeeping shared by the V2 and standard bulk paths:
-    /// refreshes the point count, applies the sparse batch, replaces payload
-    /// histograms (dedup by id), and invalidates caches.
+    /// refreshes the point count, applies the sparse batch, and invalidates
+    /// caches.
+    ///
+    /// `payload_count` is how many of `points` carry a payload: a bulk point
+    /// without one leaves the stored payload as it is.
     fn finalize_bulk_upsert(
         &self,
         points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
+        payload_count: usize,
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
     ) -> Result<()> {
         // Two statements so the guards never overlap: the one-liner form
@@ -196,43 +154,66 @@ impl Collection {
         let point_count = self.storage.vector_storage.read().len();
         self.storage.config.write().point_count = point_count;
         self.apply_sparse_batch_bulk(sparse_batch)?;
-        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
-        // so only the final payload counts, then atomic decrement + increment.
-        self.apply_histogram_replace_dedup(points, old_payloads);
-        self.bump_generation_with_mirror_upserts(points);
+        if payload_count == points.len() {
+            self.bump_generation_with_mirror_upserts(points);
+        } else {
+            // The mirror's incremental upsert reads a missing payload as an
+            // empty row, which a point that kept its payload is not.
+            self.invalidate_caches_and_bump_generation();
+        }
         Ok(())
     }
 
-    /// Writes vectors and payloads with configurable fsync behavior.
+    /// Writes vectors and payloads, each store paying one durability barrier
+    /// for the whole batch, then brings every index derived from the payloads
+    /// in line with them. Shared by `upsert_bulk` and `upsert_bulk_from_raw`.
     ///
-    /// When `fsync` is `false`, WAL data is written and the buffer is
-    /// flushed to the OS kernel, but `sync_all()` is skipped. This
-    /// eliminates the 1-5ms per-batch overhead on Windows for
-    /// intermediate streaming batches.
-    fn store_vectors_and_payloads_inner(
+    /// The two stores run in parallel and both complete even when one fails.
+    /// Stored payloads are readable whatever happened to the vectors, so the
+    /// secondary indexes, the histograms and BM25 follow them before a vector
+    /// error is returned; returning it first left stored payloads unindexed.
+    ///
+    /// LOCK ORDER: vector_storage(2) ‖ payload_storage(3) → label_index(7),
+    /// released → graph_range_indexes(7); then, with both storage locks
+    /// released, secondary_indexes(6), stats_io_mutex(12), the BM25 WAL.
+    pub(super) fn store_vectors_and_payloads(
         &self,
         vector_refs: &[(u64, &[f32])],
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
-        fsync: bool,
+        entries: &[(u64, &serde_json::Value)],
     ) -> Result<()> {
         #[cfg(feature = "persistence")]
-        {
-            let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors_inner(vector_refs, fsync),
-                || self.bulk_store_payloads_inner(points, old_payloads, fsync),
-            );
-            vec_result?;
-            pay_result?;
-        }
-
+        let (vectors_stored, old_payloads) = rayon::join(
+            || self.bulk_store_vectors(vector_refs),
+            || self.store_payload_entries(entries),
+        );
         #[cfg(not(feature = "persistence"))]
-        {
-            self.bulk_store_vectors_inner(vector_refs, fsync)?;
-            self.bulk_store_payloads_inner(points, old_payloads, fsync)?;
-        }
+        let (vectors_stored, old_payloads) = (
+            self.bulk_store_vectors(vector_refs),
+            self.store_payload_entries(entries),
+        );
 
-        Ok(())
+        let old_payloads = old_payloads?;
+        // The raw bulk path always maintained the secondary indexes; this one
+        // never did, so an equality lookup missed every bulk-upserted point.
+        self.update_secondary_indexes_for_entries(entries, &old_payloads);
+        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
+        // so only the final payload counts, then atomic decrement + increment.
+        self.apply_histogram_replace_for_entries(entries, &old_payloads);
+        // Issue #1797: one BM25 WAL barrier for the whole batch, after the
+        // payloads it describes are stored.
+        self.update_text_index_for_entries(entries, &old_payloads)?;
+        vectors_stored
+    }
+
+    /// The `(id, payload)` of every point that carries a payload, in order.
+    ///
+    /// A bulk point without a payload stores none and leaves the stored one
+    /// as it is, so it changes nothing an index derives from payloads.
+    fn payload_entries(points: &[Point]) -> Vec<(u64, &serde_json::Value)> {
+        points
+            .iter()
+            .filter_map(|p| p.payload.as_ref().map(|payload| (p.id, payload)))
+            .collect()
     }
 
     /// Collects sparse vectors grouped by index name for batch insert.
@@ -256,120 +237,56 @@ impl Collection {
 
     /// Stores vectors in bulk via batch WAL + mmap write.
     pub(super) fn bulk_store_vectors(&self, vectors: &[(u64, &[f32])]) -> Result<()> {
-        self.bulk_store_vectors_inner(vectors, true)
-    }
-
-    /// Stores vectors with configurable fsync behavior.
-    ///
-    /// When `fsync` is `false`, `store_batch()` writes WAL entries to the
-    /// `BufWriter` but `flush()` is skipped entirely. The mmap write is
-    /// still performed so the data is immediately readable in-process.
-    fn bulk_store_vectors_inner(&self, vectors: &[(u64, &[f32])], fsync: bool) -> Result<()> {
         let mut storage = self.storage.vector_storage.write();
         storage.store_batch(vectors)?;
-        if fsync {
-            storage.flush()?;
-        }
+        storage.flush()?;
         drop(storage);
         Ok(())
     }
 
-    /// Stores payloads and updates BM25 text index + label index in bulk.
+    /// Stores bulk payload entries and updates the label and range indexes,
+    /// returning each entry's pre-batch payload (the first occurrence of an
+    /// id gets it, a repeat gets `None`, as `collect_old_payloads` does).
+    ///
+    /// Shared by `upsert_bulk` and `upsert_bulk_from_raw`. `entries` holds only
+    /// the points that carry a payload: one without a payload stores nothing,
+    /// so it keeps its payload and every index entry derived from it.
     ///
     /// Uses `LogPayloadStorage::store_batch()` for a single WAL sync instead
     /// of per-point fsync: a batch pays one sync, not one per point.
     ///
-    /// When `fsync` is `false`, WAL entries are written and the buffer is
-    /// flushed to the OS kernel, but `sync_all()` is skipped.
-    fn bulk_store_payloads_inner(
+    /// One `payload_storage` write guard spans the old-payload read, the write
+    /// and the index update, so a concurrent writer cannot store a payload for
+    /// these ids in between. Overwritten payloads have their labels and range
+    /// entries removed before the new ones are indexed (Issue #486 and its
+    /// follow-up: indexing only the incoming payloads left an overwritten
+    /// point listed under its old labels too).
+    ///
+    /// LOCK ORDER: payload_storage(3) → label_index(7), released →
+    /// graph_range_indexes(7).
+    pub(super) fn store_payload_entries(
         &self,
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
-        fsync: bool,
-    ) -> Result<()> {
-        let entries: Vec<(u64, &serde_json::Value)> = points
-            .iter()
-            .filter_map(|p| p.payload.as_ref().map(|pl| (p.id, pl)))
-            .collect();
-
-        if fsync {
-            self.storage.payload_storage.write().store_batch(&entries)?;
-        } else {
-            self.storage
-                .payload_storage
-                .write()
-                .store_batch_deferred(&entries)?;
+        entries: &[(u64, &serde_json::Value)],
+    ) -> Result<Vec<Option<serde_json::Value>>> {
+        if entries.is_empty() {
+            return Ok(Vec::new());
         }
-
-        // Issue #425: BM25 skip — when no point has a payload AND the BM25
-        // index is empty, skip the text index work entirely. The bulk path
-        // inserts fresh points (no old documents to remove), so it would be a
-        // no-op for every point.
-        //
-        // Issue #1797: this used to call `update_text_index` PER POINT, and
-        // that helper opens the BM25 WAL, writes one frame and `sync_all()`s it
-        // on every call — one durability barrier per document, which capped
-        // bulk insertion of text-bearing points at roughly one fsync each. The
-        // batch below writes every frame under a single open + flush + fsync.
-        if !entries.is_empty() || !self.storage.text_index.is_empty() {
-            self.bulk_update_text_index(points, old_payloads)?;
+        let mut storage = self.storage.payload_storage.write();
+        let old_payloads =
+            Self::collect_old_payloads_by_id(entries.iter().map(|&(id, _)| id), &storage);
+        if let Err(error) = storage.store_batch(entries) {
+            // A failed batch is not all-or-nothing: the records written before
+            // the error, or all of them when only the sync failed, are readable.
+            let ids: Vec<u64> = entries.iter().map(|&(id, _)| id).collect();
+            self.index_payloads_after_failed_write(&storage, &ids, &old_payloads);
+            return Err(error.into());
         }
-
-        // Issue #486: Update label index for bulk-inserted points.
-        // The bulk path previously skipped label indexing (handled in
-        // per_point_updates for the single-upsert path). Without this,
-        // MATCH queries with label patterns (e.g., `(d:Doc)`) return
-        // empty results for points inserted via upsert_bulk / REST API.
-        self.update_label_index_bulk(points, old_payloads);
-
-        Ok(())
-    }
-
-    /// Batch-updates the label index for bulk-upserted points.
-    ///
-    /// This used to index the incoming payloads and nothing else, justified by
-    /// "for the bulk path, points are always new inserts (no old payload to
-    /// remove from the label index)". That was never true: both bulk paths
-    /// call [`collect_old_payloads`](Self::collect_old_payloads) precisely
-    /// because a bulk upsert overwrites existing points, and the pre-batch
-    /// payload it returns is the one whose labels have to come back out.
-    /// Re-upserting a point with `_labels` changed from `Doc` to `Archived`
-    /// left it indexed under both, so `MATCH (d:Doc)` returned a point that
-    /// is no longer a `Doc`.
-    ///
-    /// It now runs the same remove-then-index sequence as the single-upsert
-    /// path, through the same helpers, so the two cannot drift again:
-    ///
-    /// - [`needs_label_updates`](Self::needs_label_updates) also asks whether
-    ///   an *old* payload carried labels. Asking only about the incoming
-    ///   points made a payload that dropped its labels return before the loop
-    ///   and keep the stale entry forever.
-    /// - [`resolve_effective_old`](Self::resolve_effective_old) resolves the
-    ///   old payload for a duplicate id within one batch to the previous
-    ///   occurrence rather than the pre-batch value.
-    /// - [`apply_label_updates`](Self::apply_label_updates) removes before it
-    ///   indexes, which is what keeps a label carried on *both* sides of the
-    ///   update from being added and then taken straight back out.
-    ///
-    /// LOCK ORDER: label_index(7) — after payload_storage(3).
-    fn update_label_index_bulk(
-        &self,
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
-    ) {
-        if !Self::needs_label_updates(points, old_payloads) {
-            return;
-        }
-        let mut seen: std::collections::HashMap<u64, Option<&serde_json::Value>> =
-            std::collections::HashMap::with_capacity(points.len());
-        let mut label_updates = Vec::with_capacity(points.len());
-        for (point, pre_batch_old) in points.iter().zip(old_payloads) {
-            let effective_old =
-                Self::resolve_effective_old(&seen, point.id, pre_batch_old.as_ref());
-            label_updates.push((point.id, effective_old.cloned(), point.payload.clone()));
-            seen.insert(point.id, point.payload.as_ref());
-        }
-        Self::apply_label_updates(&self.graph.label_index, &label_updates);
+        self.index_payload_writes(
+            entries.iter().map(|&(id, payload)| (id, Some(payload))),
+            &old_payloads,
+        );
+        drop(storage);
+        Ok(old_payloads)
     }
 
     /// Applies sparse batch with WAL-before-apply for bulk insert.

@@ -643,7 +643,7 @@ fn test_remove_edges_counts_only_successes_without_short_circuiting() {
     // removing an absent edge, and this test pins that down.
     let attempted = std::cell::RefCell::new(Vec::new());
     let (count, failure) =
-        super::ddl_executor::remove_edges_reporting_failure([1, 2, 3, 4].into_iter(), |id| {
+        crate::collection::remove_edges_reporting_failure([1, 2, 3, 4].into_iter(), |id| {
             attempted.borrow_mut().push(id);
             if id % 2 == 0 {
                 EdgeRemoval::Removed
@@ -668,7 +668,7 @@ fn test_remove_edges_reports_first_failure_after_attempting_every_id() {
     // remaining id, so a mid-list failure never strands the rest.
     let attempted = std::cell::RefCell::new(Vec::new());
     let (count, failure) =
-        super::ddl_executor::remove_edges_reporting_failure([1, 2, 3, 4].into_iter(), |id| {
+        crate::collection::remove_edges_reporting_failure([1, 2, 3, 4].into_iter(), |id| {
             attempted.borrow_mut().push(id);
             match id {
                 2 => EdgeRemoval::Failed("index desync".to_string()),

@@ -160,20 +160,17 @@ pub(crate) fn resolve_sparse_input(
 ///
 /// Defaults to RRF k=60 when no fusion config is provided.
 ///
-/// Supported strategy strings (case-insensitive):
+/// The strategy names, their aliases, the case rule and the defaults of every
+/// parameter the request leaves out are core's grammar,
+/// [`velesdb_core::FusionStrategy::from_name`]:
 ///
 /// | Strategy | Aliases | Parameters |
 /// |---|---|---|
 /// | RRF | `rrf` | `k` (default 60) |
-/// | Relative Score | `rsf`, `relative_score` | `dense_w`, `sparse_w` (default 0.5 / 0.5) |
+/// | Relative Score | `rsf`, `relative_score` | `dense_w`, `sparse_w` (default 0.5 / 0.5; one alone implies its complement) |
 /// | Average | `average`, `avg` | — |
 /// | Maximum | `maximum`, `max` | — |
 /// | Weighted | `weighted` | `avg_w`, `max_w`, `hit_w` (default 0.6 / 0.3 / 0.1) |
-///
-/// The weighted defaults are the #1545 canon, read from
-/// [`velesdb_core::DEFAULT_WEIGHTED_AVG_WEIGHT`] and its siblings; this table
-/// listed the pre-#1545 literals 0.5 / 0.3 / 0.2 for as long as the code did,
-/// and kept listing them after #2093 fixed the code.
 ///
 /// Unknown strategies yield a 400 Bad Request response listing the
 /// supported values, as do weights the strategy refuses (negative, non-finite,
@@ -184,66 +181,26 @@ pub(crate) fn resolve_sparse_input(
 pub(crate) fn parse_fusion_strategy(
     fusion: Option<&crate::types::FusionRequest>,
 ) -> Result<velesdb_core::FusionStrategy, axum::response::Response> {
-    let f = match fusion {
-        None => return Ok(velesdb_core::FusionStrategy::rrf_default()),
-        Some(f) => f,
+    let Some(f) = fusion else {
+        return Ok(velesdb_core::FusionStrategy::rrf_default());
     };
-    match f.strategy.to_lowercase().as_str() {
-        "rrf" => Ok(velesdb_core::FusionStrategy::RRF {
-            k: f.k.unwrap_or(60),
-        }),
-        "rsf" | "relative_score" => {
-            let (dw, sw) = match (f.dense_w, f.sparse_w) {
-                (Some(d), Some(s)) => (d, s),
-                (Some(d), None) => (d, 1.0 - d),
-                (None, Some(s)) => (1.0 - s, s),
-                (None, None) => (0.5, 0.5),
-            };
-            velesdb_core::FusionStrategy::relative_score(dw, sw).map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Invalid RSF fusion weights: {e}"),
-                        code: None,
-                    }),
-                )
-                    .into_response()
-            })
-        }
-        "average" | "avg" => Ok(velesdb_core::FusionStrategy::Average),
-        "maximum" | "max" => Ok(velesdb_core::FusionStrategy::Maximum),
-        "weighted" => velesdb_core::FusionStrategy::weighted(
-            // Canonical defaults from core's fusion module (#1545) — this
-            // arm previously froze the pre-#1545 literals 0.5/0.3/0.2,
-            // forking the REST default from every other surface.
-            f.avg_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_AVG_WEIGHT),
-            f.max_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_MAX_WEIGHT),
-            f.hit_w.unwrap_or(velesdb_core::DEFAULT_WEIGHTED_HIT_WEIGHT),
-        )
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid weighted fusion weights: {e}"),
-                    code: None,
-                }),
-            )
-                .into_response()
-        }),
-        other => Err((
+    let params = velesdb_core::FusionParams::default()
+        .with_rrf_k(f.k)
+        .with_avg_weight(f.avg_w)
+        .with_max_weight(f.max_w)
+        .with_hit_weight(f.hit_w)
+        .with_dense_weight(f.dense_w)
+        .with_sparse_weight(f.sparse_w);
+    velesdb_core::FusionStrategy::from_name(&f.strategy, params).map_err(|e| {
+        (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
-                error: format!(
-                    "Invalid fusion strategy: '{other}'. Valid values: \
-                     'rrf', 'rsf' (alias: 'relative_score'), \
-                     'average' (alias: 'avg'), \
-                     'maximum' (alias: 'max'), 'weighted'"
-                ),
+                error: e.to_string(),
                 code: None,
             }),
         )
-            .into_response()),
-    }
+            .into_response()
+    })
 }
 
 /// Parses a search request's `mode`, or counts a request error and answers

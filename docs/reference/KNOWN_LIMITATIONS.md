@@ -336,7 +336,11 @@ with core's FNV-1a for the same string, by design — see the rationale below.
 Callers who need a Python-derived ID to agree with core/`velesdb-migrate`'s
 FNV-1a output for the same string can opt in with
 `stable_hash_id(value, algorithm="fnv1a")` (added in #1542;
-`velesdb_common.ids` module docstring has the full contract). This is
+`velesdb_common.ids` module docstring has the full contract). Since the
+binding exposes `velesdb.hash_id` (velesdb 8.0.0), that path *is*
+`velesdb_core::hash_id`, called through the binding: the MIT package no
+longer carries its own FNV-1a, and raises `ImportError` with an older wheel
+rather than derive the id another way. This is
 **opt-in only** — the SHA-256 default is unchanged and MUST stay unchanged:
 aligning the default to FNV-1a would change the `u64` derived from every
 string ID already stored through these integrations, silently orphaning
@@ -420,6 +424,32 @@ scalar-expression ones below, which use the same single-collection dataset):
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
   (see D004 below).
 
+**Fixture v2.1.0 (2026-10-29)** adds the statement families the WASM executor
+implements on its own modules (`velesql_similarity`, `velesql_fused`,
+`velesql_update`, `velesql_delete`, DISTINCT), again checked against **core and
+WASM**, plus more scalar cases the CLI runs too:
+
+- `cases` X015–X020: `LIKE` (`%` and `_`), `ILIKE`, and `OFFSET` with and
+  without `LIMIT`, including an offset past the end.
+- `cases` X021–X022: `vector NEAR` under `OR`, alone and inside an `AND`. The
+  NEAR leaf is TRUE in a boolean context and its ranking orders the rows, on
+  all three executors.
+- `near_cases` N001–N012: `NEAR` ranking with `LIMIT`/`OFFSET`, hybrid
+  `NEAR` + metadata, `ORDER BY similarity()` or a column over `NEAR` hits, and
+  `similarity()` thresholds with and without `NEAR`. Each case also asserts the
+  rows' scores (`expect_scores`, within 1e-5); the vectors are bound from the
+  fixture's `query_params` and chosen so no two points tie.
+- `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
+  explicit `k`), `average` and `maximum` strategies, with a metadata filter,
+  and with a trailing `USING FUSION` clause; ids and fused scores.
+- `rejected_cases` R001–R004: queries both engines must refuse — `NEAR_FUSED`
+  with `weighted`/`rsf`, and `USING FUSION` over a single `NEAR`.
+- `dml_cases` W001–W008: `UPDATE` / `DELETE` statements run on a fresh copy of
+  the dataset, then a SELECT (or a `NEAR`) is asserted.
+- `projection_cases` P001–P005: `SELECT DISTINCT` with `ORDER BY`, `LIMIT`, a
+  filter and `NEAR`, and a named-column projection, compared as projected rows
+  (core's `project_results` on core, the row JSON on WASM).
+
 `documented_divergences` (informational entries in the same JSON file, not
 pass/fail cases) record real, currently-existing core↔WASM behavioural gaps
 discovered while building this coverage, so they're visible instead of
@@ -455,6 +485,23 @@ silently relied upon:
   cap — a LIMIT-less `GROUP BY` still returns every group). Locked by
   `aggregate_cases` G005 above and
   `crates/velesdb-core/tests/velesql_group_by_limit.rs`.
+- **D007** — `DELETE` on core accepts only `id = N` / `id IN (...)`; WASM
+  evaluates any `WHERE`. WASM is a superset, so the fixture's `dml_cases`
+  delete by id.
+- **D008** — `UPDATE ... SET vector = ...` works on core; WASM refuses it and
+  points to `UPSERT`. The fixture's `dml_cases` assign payload fields only.
+- **D009** — a row no vector ranked scores 1.0 on core and 0.0 on WASM; only
+  the vector cases assert scores.
+- ~~D010~~ — **fixed 2026-10-29**: the WASM executor now runs core's
+  `QueryValidator`, so it refuses `USING FUSION` over a single `NEAR` and
+  `NEAR_FUSED` with `weighted`/`rsf` (V012) instead of answering them. Locked
+  by `rejected_cases` R001–R004.
+- ~~D011~~ — **fixed 2026-10-29**: a WASM `similarity()` threshold without
+  `NEAR` ranks the rows by that similarity and carries it as their score
+  (`near_cases` N009–N012).
+- ~~D012~~ — **fixed 2026-10-29**: WASM `SELECT DISTINCT` goes through core's
+  `velesql::distinct_evaluator::apply_distinct` in the plain SELECT pipeline,
+  so `ORDER BY` and the default `LIMIT` apply (`projection_cases` P001–P004).
 
 ### Large production files vs the NLOC/complexity gate (audit F-5.13)
 
@@ -473,32 +520,26 @@ The rule of thumb when adding a large file: only list it under `engines.lizard.e
 
 ## Bindings / SDK architecture
 
-### 14. `MobileGraphStore` is a deliberate in-memory graph fork
+### 14. `MobileGraphStore` delegates to core's graph collection (resolved)
 
-**Status**: documented (by design). Source: `crates/velesdb-mobile/src/graph.rs` (`MobileGraphStore`); core counterparts `crates/velesdb-core/src/collection/graph/edge.rs` (`EdgeStore`) and `crates/velesdb-core/src/collection/graph_collection.rs` (`GraphCollection`). Decision recorded in `docs/planning/CORE_PARITY_REMEDIATION.md` (T4).
+**Status**: resolved. Source: `crates/velesdb-mobile/src/graph.rs` (`MobileGraphStore`, a handle on `velesdb_core::GraphCollection`) and `crates/velesdb-mobile/src/graph_payload.rs` (record ↔ node payload mapping, legacy snapshot import).
 
-The mobile SDK's `MobileGraphStore` is a self-contained, purely in-memory graph
-engine (node/edge maps plus BFS/DFS/degree/label helpers) rather than a delegate
-to `velesdb-core`'s graph runtime. This is an intentional design decision, **not**
-an accidental rewrite: mobile needs a RAM-only graph with no filesystem path,
-WAL, or on-disk payloads, whereas core's `GraphCollection` persists nodes as JSON
-payloads and requires a path. Core today exposes an in-memory `EdgeStore` (edges
-+ traversal) but has **no in-memory `GraphNode`-object store** (label + properties
-+ vector CRUD), so the node half of `MobileGraphStore` has no core API to delegate
-to.
+The mobile SDK's `MobileGraphStore` used to be a self-contained in-memory graph
+engine (node/edge maps, its own BFS/DFS, a JSON `save`/`load`), kept apart from
+core on the grounds that mobile needed a graph with no filesystem path. That
+reasoning did not hold: every mobile app already opens a `VelesDatabase` at a
+path, and the fork's semantics drifted from core's (multi-source BFS
+deduplicated by node instead of by path; edges to unknown nodes were accepted).
+The store is now obtained with `VelesDatabase::get_graph_store(name)` and is the
+graph of a core graph collection: storage, BFS, DFS and multi-source BFS are
+core's, nodes are stored as payloads carrying core's `_labels` so VelesQL
+`MATCH` sees them, and every read passes the observer read gate.
 
-What *is* single-sourced is the record types: `MobileGraphStore` is pinned to
-core via `From<velesdb_core::GraphNode / GraphEdge / TraversalResult>` conversions
-(`graph.rs`), so any field drift in the core types is a compile error in mobile —
-the type-shadowing risk (the in-scope half of T4) is closed.
-
-**User impact**: none functionally — the mobile graph API behaves as documented.
-The architectural caveat is that mobile graph semantics are maintained
-independently of core's graph engine. Full delegation is gated on core first
-shipping an in-memory `GraphStore` API (node + edge CRUD, label query, cascade
-remove, BFS/DFS); until then, copying core's graph engine into the MIT-licensed
-mobile crate would violate the Core License boundary, so the fork is the correct
-boundary-preserving choice.
+**User impact**: a breaking change for Swift/Kotlin callers, listed in the
+CHANGELOG with its migration path; a graph saved by the old `save(path)` is
+loaded once with `importSnapshot(path)`. The record types stay pinned to core
+through the `From<velesdb_core::GraphNode / GraphEdge / TraversalResult>`
+conversions in `graph.rs`.
 
 ---
 

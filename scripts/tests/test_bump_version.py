@@ -86,6 +86,55 @@ class CrateFooterStampRewriteTests(unittest.TestCase):
         self.assertEqual(out, text)
 
 
+# The lockfiles of the crates built OUTSIDE the workspace. `cargo build` at the
+# root refreshes the root `Cargo.lock` only, so these kept the old core version
+# through the 7.1.0 bump and the fuzz compile check, which builds with
+# `--locked`, failed on the release PR.
+OUTSIDE_WORKSPACE_LOCKS = {
+    "demos/tauri-rag-app/src-tauri/Cargo.lock",
+    "examples/agent_memory/Cargo.lock",
+    "examples/ecommerce_recommendation/Cargo.lock",
+    "examples/mini_recommender/Cargo.lock",
+    "examples/rust/Cargo.lock",
+    "fuzz/Cargo.lock",
+}
+
+
+class OutsideWorkspaceLockfileTests(unittest.TestCase):
+    LOCK = (
+        '[[package]]\nname = "serde"\nversion = "1.0.200"\n\n'
+        '[[package]]\nname = "velesdb-core"\nversion = "7.0.0"\n'
+        'dependencies = [\n "serde",\n]\n'
+    )
+
+    def test_every_lockfile_the_guard_reads_is_one_the_bumper_writes(self) -> None:
+        guarded = {path for path, fmt in guard.TARGETS if fmt == "cargo_lock_core"}
+        bumped = {path for path, fmt in bump.TARGETS if fmt == "cargo_lock_core"}
+        self.assertEqual(guarded, bumped)
+
+    def test_the_lockfiles_built_outside_the_workspace_are_policed(self) -> None:
+        guarded = {path for path, fmt in guard.TARGETS if fmt == "cargo_lock_core"}
+        self.assertEqual(guarded, OUTSIDE_WORKSPACE_LOCKS)
+
+    def _bump(self, text: str) -> "tuple[int, str]":
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "Cargo.lock"
+            lock.write_text(text, encoding="utf-8")
+            n = bump.bump_file(lock, "cargo_lock_core", "7.1.0", datetime.date(2026, 10, 28))
+            return n, lock.read_text(encoding="utf-8")
+
+    def test_moves_the_core_version_and_no_other_package(self) -> None:
+        n, out = self._bump(self.LOCK)
+        self.assertEqual(n, 1)
+        self.assertIn('name = "velesdb-core"\nversion = "7.1.0"', out)
+        self.assertIn('name = "serde"\nversion = "1.0.200"', out)
+
+    def test_a_lockfile_already_at_the_target_is_a_no_op(self) -> None:
+        text = self.LOCK.replace("7.0.0", "7.1.0")
+        _, out = self._bump(text)
+        self.assertEqual(out, text)
+
+
 class GuardedClaimParityTests(unittest.TestCase):
     """`check-doc-freshness.py --guard versions` reads three product-version
     claims in prose that `bump_version.py` did not write: the 7.0.0 bump left

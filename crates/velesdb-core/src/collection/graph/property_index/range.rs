@@ -6,11 +6,10 @@
 //! B-tree storage via [`BTreeOrderedIndex`], differing only in their metadata
 //! (label vs relationship-type) and public API surface.
 
-// EPIC-047 US-002/US-003/US-004 — range indexes and edge property indexes.
+// EPIC-047 US-002/US-003 — range indexes and edge property indexes.
 // Index population is wired via graph_property_index_wiring.rs;
-// query-side lookups are wired but not yet called from MATCH pipeline.
+// node lookups serve the MATCH prefilter (search/query/match_exec/index_prefilter.rs).
 
-use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ops::Bound;
@@ -20,12 +19,17 @@ use std::ops::Bound;
 // =============================================================================
 
 /// Wrapper for total ordering on JSON values.
+///
+/// Numbers are ordered by their `f64` value with `-0.0 == 0.0`, as a MATCH
+/// WHERE compares them, so an index lookup on a bound never leaves out a
+/// value WHERE accepts. Equality is the ordering's: two numbers with the same
+/// `f64` value are one key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderedValue(pub(crate) Value);
 
 impl PartialEq for OrderedValue {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.cmp(other) == std::cmp::Ordering::Equal
     }
 }
 
@@ -47,7 +51,9 @@ impl Ord for OrderedValue {
             (Value::Number(a), Value::Number(b)) => {
                 let a_f = a.as_f64().unwrap_or(0.0);
                 let b_f = b.as_f64().unwrap_or(0.0);
-                a_f.total_cmp(&b_f)
+                // A JSON number is never NaN, so `partial_cmp` is total here;
+                // unlike `total_cmp` it puts `-0.0` and `0.0` level.
+                a_f.partial_cmp(&b_f).unwrap_or(std::cmp::Ordering::Equal)
             }
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
@@ -274,93 +280,5 @@ impl EdgePropertyIndex {
     #[allow(dead_code)] // Reason: Public API — used by tests and future query planner integration
     pub fn lookup_range(&self, lower: Option<&Value>, upper: Option<&Value>) -> Vec<u64> {
         self.index.lookup_range(lower, upper)
-    }
-}
-
-// =============================================================================
-// EPIC-047 US-004: Index Intersection
-// =============================================================================
-
-/// Utilities for intersecting index results.
-#[allow(dead_code)] // Reason: Public API — used by tests and future multi-predicate MATCH evaluation
-pub struct IndexIntersection;
-
-#[allow(dead_code)] // Reason: Public API — used by tests and future multi-predicate MATCH evaluation
-impl IndexIntersection {
-    /// Intersects multiple node ID sets using RoaringBitmap for efficiency.
-    #[must_use]
-    pub fn intersect_bitmaps(sets: &[RoaringBitmap]) -> RoaringBitmap {
-        if sets.is_empty() {
-            return RoaringBitmap::new();
-        }
-
-        let mut result = sets[0].clone();
-        for set in &sets[1..] {
-            result &= set;
-            // Early exit if empty
-            if result.is_empty() {
-                return result;
-            }
-        }
-        result
-    }
-
-    /// Intersects multiple `Vec<u64>` sets, converting to bitmaps.
-    ///
-    /// # Warning
-    ///
-    /// IDs greater than `u32::MAX` will be dropped and logged as a warning,
-    /// since `RoaringBitmap` only supports 32-bit integers.
-    #[must_use]
-    pub fn intersect_vecs(sets: &[&[u64]]) -> Vec<u64> {
-        if sets.is_empty() {
-            return Vec::new();
-        }
-
-        // BUG-2 FIX: Log warning when IDs > u32::MAX are dropped
-        let mut dropped_count = 0usize;
-        let bitmaps: Vec<RoaringBitmap> = sets
-            .iter()
-            .map(|s| {
-                s.iter()
-                    .filter_map(|&id| {
-                        if let Ok(id32) = u32::try_from(id) {
-                            Some(id32)
-                        } else {
-                            dropped_count += 1;
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-
-        if dropped_count > 0 {
-            tracing::warn!(
-                dropped_count,
-                "intersect_vecs: {} IDs > u32::MAX were silently dropped. \
-                 Consider using intersect_two() for large ID ranges.",
-                dropped_count
-            );
-        }
-
-        Self::intersect_bitmaps(&bitmaps)
-            .iter()
-            .map(u64::from)
-            .collect()
-    }
-
-    /// Intersects two sets with early exit optimization.
-    #[must_use]
-    pub fn intersect_two(a: &[u64], b: &[u64]) -> Vec<u64> {
-        // Use the smaller set for lookup
-        let (smaller, larger) = if a.len() < b.len() { (a, b) } else { (b, a) };
-
-        let larger_set: rustc_hash::FxHashSet<_> = larger.iter().collect();
-        smaller
-            .iter()
-            .filter(|id| larger_set.contains(id))
-            .copied()
-            .collect()
     }
 }

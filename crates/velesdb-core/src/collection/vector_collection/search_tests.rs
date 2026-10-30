@@ -406,6 +406,60 @@ fn test_execute_query_str_returns_consistent_results() {
 
 // ─── enable_streaming() ────────────────────────────────────────────────────
 
+/// A config the channel or the flush timer cannot run with is refused before
+/// anything is spawned: tokio asserts on each of them, so they aborted the
+/// process, and a refusal leaves no ingester behind.
+#[tokio::test]
+async fn test_enable_streaming_refuses_a_config_the_pipeline_cannot_run() {
+    use crate::collection::streaming::StreamingConfig;
+    let (coll, _dir) = create_test_vc();
+    for (config, field) in [
+        (StreamingConfig::new(0, 4, 50), "buffer_size"),
+        (
+            StreamingConfig::new(tokio::sync::Semaphore::MAX_PERMITS + 1, 4, 50),
+            "buffer_size",
+        ),
+        (StreamingConfig::new(100, 4, 0), "flush_interval_ms"),
+    ] {
+        let err = coll
+            .enable_streaming(config)
+            .expect_err("test: an unusable config must be refused");
+        assert!(matches!(err, crate::error::Error::Config(_)), "{err}");
+        assert!(err.to_string().contains(field), "{err}");
+    }
+    assert!(
+        coll.stream_insert(Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None))
+            .is_err(),
+        "a refused config must not leave an ingester"
+    );
+}
+
+/// A configured `batch_size` larger than memory streams like any other: the
+/// drain task used to reserve the whole batch up front, which aborted the
+/// process on `usize::MAX`.
+#[tokio::test]
+async fn test_enable_streaming_with_a_huge_batch_size_flushes_on_the_timer() {
+    let (coll, _dir) = create_test_vc();
+    coll.enable_streaming(crate::collection::streaming::StreamingConfig {
+        buffer_size: 100,
+        batch_size: usize::MAX,
+        flush_interval_ms: 20,
+    })
+    .expect("test: valid streaming config");
+
+    coll.stream_insert(Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None))
+        .expect("test: stream_insert ok");
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while coll.get(&[1])[0].is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the timer flush never stored the point"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn test_enable_streaming_sends_and_searches() {
     let (coll, _dir) = create_test_vc();
@@ -416,7 +470,8 @@ async fn test_enable_streaming_sends_and_searches() {
         batch_size: 4,
         flush_interval_ms: 50,
     };
-    coll.enable_streaming(config);
+    coll.enable_streaming(config)
+        .expect("test: valid streaming config");
 
     // Send points through the streaming channel.
     for i in 1..=4u64 {
@@ -562,4 +617,121 @@ fn hybrid_sparse_search_is_filtered_with_none() {
     let a: Vec<u64> = plain.iter().map(|r| r.point.id).collect();
     let b: Vec<u64> = none.iter().map(|r| r.point.id).collect();
     assert_eq!(a, b);
+}
+
+/// A dense query of the wrong dimension is the caller's error, not an empty
+/// dense branch: the hybrid search used to swallow the dense failure and
+/// answer with the sparse hits alone.
+#[test]
+fn hybrid_sparse_search_surfaces_a_dense_dimension_mismatch() {
+    let (coll, _dir) = create_test_vc();
+    seed_sparse_points(&coll);
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(10, 1.0)]);
+    let strategy = crate::fusion::FusionStrategy::rrf_default();
+
+    let err = coll
+        .hybrid_sparse_search(&[0.5, 0.5], &sparse_q, 5, "", &strategy)
+        .expect_err("a 2-dim dense query on a 4-dim collection must fail");
+
+    assert!(
+        matches!(
+            err,
+            crate::error::Error::DimensionMismatch {
+                expected: 4,
+                actual: 2
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+/// An unknown sparse index is an error, as it is for the sparse-only search
+/// (`VectorCollection::sparse_search`) — not an empty sparse branch the fusion skips.
+#[test]
+fn hybrid_sparse_search_on_an_unknown_sparse_index_is_an_error() {
+    let (coll, _dir) = create_test_vc();
+    seed_sparse_points(&coll);
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(10, 1.0)]);
+    let strategy = crate::fusion::FusionStrategy::rrf_default();
+
+    let err = coll
+        .hybrid_sparse_search(&[0.5, 0.5, 0.3, 0.1], &sparse_q, 5, "missing", &strategy)
+        .expect_err("an unknown sparse index must fail");
+
+    assert_eq!(
+        err.to_string(),
+        "[VELES-009] Configuration error: Sparse index 'missing' not found"
+    );
+}
+
+/// The public hybrid search fuses through the collection's own
+/// `fuse_dense_sparse`, which aligns a distance metric's polarity (#2102). On
+/// a Euclidean collection a score-level strategy (RSF) must therefore rank
+/// the dense-nearest point first.
+#[test]
+fn hybrid_sparse_search_aligns_distance_polarity() {
+    let dir = TempDir::new().unwrap();
+    let coll = VectorCollection::create(
+        dir.path().join("euclid"),
+        "euclid",
+        4,
+        DistanceMetric::Euclidean,
+        StorageMode::Full,
+    )
+    .unwrap();
+    seed_sparse_points(&coll);
+    // Same weight on every point: the sparse branch ties, the dense one decides.
+    let sparse_q = crate::index::sparse::SparseVector::new(vec![(20, 1.0)]);
+    let rsf = crate::fusion::FusionStrategy::relative_score(0.5, 0.5).unwrap();
+    let dense_q = [0.0, 0.5, 0.3, 0.1]; // point 0's vector
+
+    let public: Vec<u64> = coll
+        .hybrid_sparse_search(&dense_q, &sparse_q, 3, "", &rsf)
+        .unwrap()
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    assert_eq!(
+        public.first(),
+        Some(&0),
+        "dense-nearest first, got {public:?}"
+    );
+}
+
+/// A sparse term no point carries leaves the sparse branch empty. The result
+/// is still fused, so its scores have the direction the strategy states
+/// (`fused_direction` of a distance branch and a relevance branch: higher is
+/// better) instead of the dense branch's raw distances, which a caller
+/// reading them as fused would rank backwards.
+#[test]
+fn hybrid_sparse_search_with_an_empty_sparse_branch_still_returns_fused_scores() {
+    let dir = TempDir::new().unwrap();
+    let coll = VectorCollection::create(
+        dir.path().join("euclid_empty_sparse"),
+        "euclid_empty_sparse",
+        4,
+        DistanceMetric::Euclidean,
+        StorageMode::Full,
+    )
+    .unwrap();
+    seed_sparse_points(&coll);
+    let absent_term = crate::index::sparse::SparseVector::new(vec![(99_999, 1.0)]);
+    let dense_q = [0.0, 0.5, 0.3, 0.1]; // point 0's vector, distance 0
+
+    for strategy in [
+        crate::fusion::FusionStrategy::rrf_default(),
+        crate::fusion::FusionStrategy::relative_score(0.5, 0.5).unwrap(),
+        crate::fusion::FusionStrategy::Average,
+    ] {
+        let results = coll
+            .hybrid_sparse_search(&dense_q, &absent_term, 3, "", &strategy)
+            .unwrap();
+
+        assert_eq!(results.first().map(|r| r.point.id), Some(0), "{strategy:?}");
+        assert!(
+            results.windows(2).all(|w| w[0].score >= w[1].score),
+            "{strategy:?}: fused scores are higher-is-better, best first: {:?}",
+            results.iter().map(|r| r.score).collect::<Vec<_>>()
+        );
+    }
 }

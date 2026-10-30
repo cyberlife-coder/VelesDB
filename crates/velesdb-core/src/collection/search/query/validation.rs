@@ -53,6 +53,21 @@ impl Collection {
             ));
         }
 
+        Self::reject_more_than_one_sparse_search(condition)?;
+
+        Self::reject_unexecutable_fused_search(condition)?;
+
+        // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
+        // Only block when multiple similarity() are in OR (handled above)
+
+        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
+        // Warning: This requires scanning all documents - use with LIMIT for performance
+
+        Ok(())
+    }
+
+    /// Rejects a `NEAR_FUSED` the fusion executor cannot run as written.
+    fn reject_unexecutable_fused_search(condition: &Condition) -> Result<()> {
         // NEAR_FUSED routes to the multi-vector fusion executor, which can only
         // honor a single fused predicate optionally AND-ed with a metadata
         // filter. Reject shapes it cannot execute — more than one fused, a fused
@@ -77,13 +92,21 @@ impl Collection {
                     .to_string(),
             ));
         }
+        Ok(())
+    }
 
-        // EPIC-044 US-002: similarity() OR metadata IS now supported (union mode)
-        // Only block when multiple similarity() are in OR (handled above)
-
-        // EPIC-044 US-003: NOT similarity() IS now supported via full scan
-        // Warning: This requires scanning all documents - use with LIMIT for performance
-
+    /// Rejects a condition with more than one `SPARSE_NEAR`: a query runs a
+    /// single sparse branch (`extract_sparse_vector_search` takes the first),
+    /// so a second one would be dropped without a word.
+    fn reject_more_than_one_sparse_search(condition: &Condition) -> Result<()> {
+        let sparse_count =
+            count_matching_leaves(condition, |c| matches!(c, Condition::SparseVectorSearch(_)));
+        if sparse_count > 1 {
+            return Err(Error::Query(format!(
+                "the query has {sparse_count} SPARSE_NEAR clauses, and a query runs one \
+                 sparse search; run one query per sparse vector and fuse the results"
+            )));
+        }
         Ok(())
     }
 
@@ -124,13 +147,24 @@ impl Collection {
         count_matching_leaves(condition, is_vector_leaf)
     }
 
-    /// Check if similarity() appears in an OR clause with non-similarity conditions.
-    /// This pattern cannot be correctly executed with current architecture.
+    /// Check if a `similarity()` threshold appears in an OR clause with
+    /// non-similarity conditions — the shape the union executor
+    /// (`union_query.rs`) runs.
+    ///
+    /// Only a `similarity()` leaf qualifies. A `NEAR` leaf is TRUE in a
+    /// boolean context (`where_eval.rs` evaluates `VectorSearch` to `true`)
+    /// and ranks the rows, so `NEAR OR <metadata>` is the NEAR search over the
+    /// WHERE with that leaf read as TRUE — which the regular NEAR dispatch
+    /// runs, since [`extract_vector_search`](Self::extract_vector_search)
+    /// finds the leaf under the OR and
+    /// [`extract_metadata_filter`](Self::extract_metadata_filter) drops an OR
+    /// that has a NEAR side. The union executor has no NEAR leg: routed there,
+    /// the shape lost every NEAR hit and scored the metadata rows 1.0.
     pub(crate) fn has_similarity_in_problematic_or(condition: &Condition) -> bool {
         any_subtree(condition, &|c| {
             if let Condition::Or(left, right) = c {
-                let left_has_sim = Self::count_similarity_conditions(left) > 0;
-                let right_has_sim = Self::count_similarity_conditions(right) > 0;
+                let left_has_sim = has_similarity_threshold(left);
+                let right_has_sim = has_similarity_threshold(right);
                 let left_has_other = Self::has_non_similarity_conditions(left);
                 let right_has_other = Self::has_non_similarity_conditions(right);
                 // Problematic: one side has similarity, other side has non-similarity
@@ -158,6 +192,11 @@ impl Collection {
                 )
         }) > 0
     }
+}
+
+/// True if the tree holds a `similarity()` threshold leaf.
+fn has_similarity_threshold(condition: &Condition) -> bool {
+    count_matching_leaves(condition, |c| matches!(c, Condition::Similarity(_))) > 0
 }
 
 /// True if any `NEAR_FUSED` leaf sits under an `OR` or `NOT`, where the fusion

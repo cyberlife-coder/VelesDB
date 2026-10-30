@@ -27,7 +27,6 @@
 //! v2.0 (breaking): `search()` kwargs path removed, `search_request()` is the
 //! single canonical entry point.
 
-use pyo3::exceptions::{PyDeprecationWarning, PyTypeError};
 use pyo3::prelude::*;
 
 use crate::FusionStrategy;
@@ -101,7 +100,6 @@ impl SearchOptions {
     ///     vector: Dense query vector.
     ///     sparse_vector: Sparse query (dict[int, float] or scipy sparse).
     ///     k: Max results to return (default: 10).
-    ///     top_k: Deprecated alias for ``k``.
     ///     filter: Metadata pre-filter dict.
     ///     sparse_index_name: Named sparse index to query.
     ///     include_vectors: Include raw vectors in results (default: False).
@@ -115,8 +113,7 @@ impl SearchOptions {
         vector = None,
         *,
         sparse_vector = None,
-        k = None,
-        top_k = None,
+        k = 10,
         filter = None,
         sparse_index_name = None,
         include_vectors = false,
@@ -125,19 +122,17 @@ impl SearchOptions {
         tenant = None,
     ))]
     pub fn new(
-        py: Python<'_>,
         vector: Option<Py<PyAny>>,
         sparse_vector: Option<Py<PyAny>>,
-        k: Option<usize>,
-        top_k: Option<usize>,
+        k: usize,
         filter: Option<Py<PyAny>>,
         sparse_index_name: Option<String>,
         include_vectors: bool,
         fusion: Option<FusionStrategy>,
         principal: Option<String>,
         tenant: Option<String>,
-    ) -> PyResult<Self> {
-        resolve_k(py, k, top_k).map(|k| Self {
+    ) -> Self {
+        Self {
             vector,
             sparse_vector,
             k,
@@ -147,7 +142,7 @@ impl SearchOptions {
             fusion,
             principal,
             tenant,
-        })
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -192,28 +187,6 @@ impl SearchOptions {
         slf
     }
 
-    /// Deprecated alias for :py:meth:`with_k`.
-    pub fn with_top_k(slf: Py<Self>, py: Python<'_>, top_k: usize) -> PyResult<Py<Self>> {
-        warn_top_k(py)?;
-        slf.bind(py).borrow_mut().k = top_k;
-        Ok(slf)
-    }
-
-    /// Deprecated alias for the canonical ``k`` attribute.
-    #[getter(top_k)]
-    fn top_k(&self, py: Python<'_>) -> PyResult<usize> {
-        warn_top_k(py)?;
-        Ok(self.k)
-    }
-
-    /// Deprecated alias for the canonical ``k`` attribute.
-    #[setter(top_k)]
-    fn set_top_k(&mut self, py: Python<'_>, top_k: usize) -> PyResult<()> {
-        warn_top_k(py)?;
-        self.k = top_k;
-        Ok(())
-    }
-
     /// Sets the metadata filter and returns `self`.
     pub fn with_filter(slf: Py<Self>, py: Python<'_>, filter: Option<Py<PyAny>>) -> Py<Self> {
         slf.bind(py).borrow_mut().filter = filter;
@@ -251,27 +224,4 @@ impl SearchOptions {
         slf.bind(py).borrow_mut().tenant = tenant;
         slf
     }
-}
-
-fn resolve_k(py: Python<'_>, k: Option<usize>, top_k: Option<usize>) -> PyResult<usize> {
-    match (k, top_k) {
-        (Some(_), Some(_)) => Err(PyTypeError::new_err(
-            "pass `k` or deprecated `top_k`, not both",
-        )),
-        (Some(value), None) => Ok(value),
-        (None, Some(value)) => {
-            warn_top_k(py)?;
-            Ok(value)
-        }
-        (None, None) => Ok(10),
-    }
-}
-
-fn warn_top_k(py: Python<'_>) -> PyResult<()> {
-    PyErr::warn(
-        py,
-        &py.get_type::<PyDeprecationWarning>(),
-        c"`top_k` is deprecated; use `k` instead. It will be removed after one compatibility version.",
-        2,
-    )
 }

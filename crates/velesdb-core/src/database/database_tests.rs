@@ -1650,3 +1650,102 @@ fn test_graph_node_payload_enforces_payload_size_cap() {
     let small = serde_json::json!({ "k": 1 });
     graph.upsert_node_payload(2, &small).unwrap();
 }
+
+/// A payload nesting exactly `depth` arrays, the outermost one included.
+fn payload_nested(depth: usize) -> serde_json::Value {
+    let mut value = serde_json::json!(1);
+    for _ in 0..depth {
+        value = serde_json::json!([value]);
+    }
+    value
+}
+
+/// Every payload ingest path refuses a payload `serde_json` could not read
+/// back from the payload log, before writing anything.
+#[test]
+fn test_every_payload_path_refuses_a_payload_too_deep_to_read_back() {
+    use crate::validation::MAX_VALUE_DEPTH;
+
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+    db.create_collection("v", 2, DistanceMetric::Cosine)
+        .unwrap();
+    db.create_metadata_collection("m").unwrap();
+    db.create_graph_collection("g", crate::collection::GraphSchema::new())
+        .unwrap();
+    let vectors = db.get_vector_collection("v").unwrap();
+    let metadata = db.get_metadata_collection("m").unwrap();
+    let graph = db.get_graph_collection("g").unwrap();
+    let deep = payload_nested(MAX_VALUE_DEPTH + 1);
+    let point = || Point::new(1, vec![1.0, 0.0], Some(deep.clone()));
+
+    let errors = [
+        vectors.upsert([point()]).unwrap_err(),
+        vectors.upsert_bulk(&[point()]).unwrap_err(),
+        vectors
+            .upsert_bulk_from_raw(&[1.0, 0.0], &[1], 2, Some(&[Some(deep.clone())]))
+            .unwrap_err(),
+        metadata
+            .upsert([Point::metadata_only(1, deep.clone())])
+            .unwrap_err(),
+        graph.upsert_node_payload(1, &deep).unwrap_err(),
+    ];
+
+    for err in &errors {
+        assert!(matches!(err, Error::SchemaValidation(_)), "got {err:?}");
+    }
+    assert!(vectors.get(&[1])[0].is_none());
+    assert!(metadata.get(&[1])[0].is_none());
+    assert_eq!(graph.get_node_payload(1).unwrap(), None);
+}
+
+/// The deepest payload accepted is read back after a reopen: the limit is
+/// the one the payload log needs, not an arbitrary margin.
+#[test]
+fn test_the_deepest_accepted_payload_survives_a_reopen() {
+    let dir = tempdir().unwrap();
+    let deep = payload_nested(crate::validation::MAX_VALUE_DEPTH);
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_metadata_collection("m").unwrap();
+        let metadata = db.get_metadata_collection("m").unwrap();
+        metadata
+            .upsert([Point::metadata_only(1, deep.clone())])
+            .unwrap();
+        metadata.flush().unwrap();
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let point = db.get_metadata_collection("m").unwrap().get(&[1]);
+
+    assert_eq!(
+        point[0].as_ref().and_then(|p| p.payload.clone()),
+        Some(deep)
+    );
+}
+
+/// A stored float reads back bit for bit after a reopen: the default
+/// `serde_json` parser returns some doubles one ULP off.
+#[test]
+fn test_payload_floats_survive_a_reopen_exactly() {
+    // One of the doubles the default parser returns one ULP off.
+    let value = 127.750_157_526_184_65_f64;
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_metadata_collection("m").unwrap();
+        let metadata = db.get_metadata_collection("m").unwrap();
+        metadata
+            .upsert([Point::metadata_only(1, serde_json::json!({ "x": value }))])
+            .unwrap();
+        metadata.flush().unwrap();
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let point = db.get_metadata_collection("m").unwrap().get(&[1]);
+    let stored = point[0].as_ref().and_then(|p| p.payload.as_ref()).unwrap()["x"]
+        .as_f64()
+        .unwrap();
+
+    assert_eq!(stored.to_bits(), value.to_bits());
+}

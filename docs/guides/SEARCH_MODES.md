@@ -1,6 +1,6 @@
 # 🎯 Search Modes - Recall Configuration Guide
 
-*Version 7.1.0 -- Last updated: 2026-09-10*
+*Version 8.0.0 -- Last updated: 2026-09-10*
 
 Complete guide to the **recall vs latency** trade-off in VelesDB: what the search modes mean and when to pick which. Covers dense search (HNSW), sparse search (SPLADE/BM42), and hybrid search (dense+sparse with fusion). Includes a comparison with Milvus, OpenSearch, and Qdrant practices.
 
@@ -180,6 +180,36 @@ Adaptive and AutoTune run their two phases only inside `HnswIndex::search_with_q
 - VelesQL reaches it for a `NEAR` with no other `WHERE` condition, given a mode with `WITH (mode = ...)` and no `ef_search`, which wins over it, unless the query also sets `rerank = false`, which runs one pass. With other conditions it depends on their shape: text, sparse, fused and graph-anchored searches do not apply the mode, and a filter whose bitmap is at most 80% the size of the HNSW index (the bitmap also counts points not yet indexed) skips the second phase or scans exactly (#2268).
 
 Whether or not a shape applies it, the mode is checked: a VelesQL `mode` (or `quality`) that names no form above, or is not a string, fails the query with `V013`, and a `/search` or `/search/ids` request, or a `/search/batch` entry, with one gets a `400`, each naming the accepted forms (#2267). `custom:<ef>`'s ef and both `adaptive:<min_ef>:<max_ef>` bounds must also lie in the 16–4096 range the `ef_search` option enforces: an integer outside it fails the same way, naming the value (#2275); the endpoints with no `mode` field ignore it, as they ignore any field they do not know. The WASM executor reads no `WITH` option, so it neither applies nor checks a mode.
+
+Every surface reads the mode through one parser in `velesdb_core::api_types`,
+so a mode means the same thing, and fails with the same words, on REST,
+VelesQL, the CLI, the Python SDK and the memory server. An embedding
+application calls the same functions:
+
+```rust
+use velesdb_core::api_types::{
+    mode_to_search_quality, parse_search_mode, validate_ef_search, MAX_EF_SEARCH, MIN_EF_SEARCH,
+};
+use velesdb_core::SearchQuality;
+
+// Strict: an unknown or out-of-range mode is an Err naming the accepted forms.
+assert_eq!(parse_search_mode("Accurate")?, SearchQuality::Accurate); // any letter case
+assert_eq!(parse_search_mode("custom:256")?, SearchQuality::Custom(256));
+assert!(parse_search_mode("adaptive").is_err());        // both bounds are required
+assert!(parse_search_mode("custom:8000").is_err());     // ef outside [16, 4096]
+
+// Lenient: None instead of Err, for a caller that has its own fallback.
+assert_eq!(mode_to_search_quality("bogus"), None);
+
+// The dedicated ef_search option is checked against the same range.
+assert!(validate_ef_search(MIN_EF_SEARCH).is_ok() && validate_ef_search(MAX_EF_SEARCH).is_ok());
+assert!(validate_ef_search(MAX_EF_SEARCH + 1).is_err());
+```
+
+Prefer `parse_search_mode` at an entry point: `mode_to_search_quality`'s
+`None` cannot be told apart from "no mode given", which is how a typo used to
+run at the default quality (#2267). `MIN_EF_SEARCH` and `MAX_EF_SEARCH` (16 and
+4096) are the bounds both functions enforce.
 
 Where a single graph pass runs, Adaptive uses `max(min_ef, k)` and AutoTune Balanced's `max(160, k*5)`, k being the count the index receives, each scaled by the index size.
 
@@ -787,4 +817,4 @@ println!("Recall@10: {:.1}%", recall * 100.0);
 
 ---
 
-*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 7.1.0*
+*VelesDB Documentation -- Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0*

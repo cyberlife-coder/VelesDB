@@ -16,10 +16,11 @@
 //!
 //! # Case coverage
 //!
-//! All ten `cases` (X001–X010) are runnable by the CLI executor and asserted
-//! against the golden ids — scalar WHERE filters, single- and multi-column
-//! ORDER BY, the deterministic ascending-id tie-break, and bounded top-k
-//! (`ORDER BY ... LIMIT k`).
+//! Every `cases` entry (X001–X022) is runnable by the CLI executor and asserted
+//! against the golden ids — scalar WHERE filters and expressions, LIKE/ILIKE,
+//! single- and multi-column ORDER BY, the deterministic ascending-id
+//! tie-break, bounded top-k (`ORDER BY ... LIMIT k`) and OFFSET. The fixture's
+//! other sections are core+WASM only.
 //!
 //! # known_bugs (B001)
 //!
@@ -161,7 +162,7 @@ fn assert_cases(db_path: &Path, cases: &[Case]) {
     }
 }
 
-/// All golden `cases` (X001–X010) must reproduce the core result set exactly
+/// All golden `cases` (X001–X022) must reproduce the core result set exactly
 /// when run through the CLI binary.
 #[test]
 fn test_cli_velesql_executor_conformance_fixture_cases() {

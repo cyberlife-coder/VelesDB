@@ -149,6 +149,34 @@ pub fn assess(
 // WHAT THE OPERATOR ASKED FOR
 // ---------------------------------------------------------------------------
 
+/// Why a `--strategy` value is not a regime.
+///
+/// `non_exhaustive`: a new refused spelling adds a variant without a breaking
+/// release.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum StrategyError {
+    /// A regime that does not exist on purpose: reusing vectors whatever the
+    /// provenance says.
+    #[error(
+        "--strategy {value} does not exist, and not by oversight: reusing vectors against \
+         an unproven provenance is an official route to a store whose vectors and whose \
+         recorded model disagree, which recall would answer from without ever failing. \
+         Use --strategy reembed to rebuild from the stored text"
+    )]
+    Refused {
+        /// The spelling the operator used.
+        value: String,
+    },
+
+    /// Not one of the three regimes.
+    #[error("--strategy expects auto, reuse or reembed, got {value:?}")]
+    Unknown {
+        /// What was given.
+        value: String,
+    },
+}
+
 /// What the operator selected on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -165,24 +193,21 @@ impl Strategy {
     /// Parse a `--strategy` value.
     ///
     /// # Errors
-    /// Names the three accepted values. `force-reuse`, in any spelling, gets
-    /// its own message: it is refused by design rather than merely absent, and
-    /// an operator who reached for it is asking the one question this batch
-    /// answered with "no".
-    pub fn parse(value: &str) -> Result<Self, String> {
+    /// [`StrategyError::Unknown`] naming the three accepted values.
+    /// `force-reuse`, in either spelling, is [`StrategyError::Refused`]: it is
+    /// refused by design rather than merely absent, and an operator who
+    /// reached for it is asking the one question this batch answered with "no".
+    pub fn parse(value: &str) -> Result<Self, StrategyError> {
         match value {
             "auto" => Ok(Self::Auto),
             "reuse" => Ok(Self::Reuse),
             "reembed" => Ok(Self::Reembed),
-            "force-reuse" | "force_reuse" => Err(format!(
-                "--strategy {value} does not exist, and not by oversight: reusing vectors against \
-                 an unproven provenance is an official route to a store whose vectors and whose \
-                 recorded model disagree, which recall would answer from without ever failing. \
-                 Use --strategy reembed to rebuild from the stored text"
-            )),
-            other => Err(format!(
-                "--strategy expects auto, reuse or reembed, got {other:?}"
-            )),
+            "force-reuse" | "force_reuse" => Err(StrategyError::Refused {
+                value: value.to_owned(),
+            }),
+            other => Err(StrategyError::Unknown {
+                value: other.to_owned(),
+            }),
         }
     }
 

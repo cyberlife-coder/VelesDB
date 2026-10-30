@@ -222,14 +222,6 @@ pub(super) fn resolve_install_id(dirs: &[PathBuf]) -> String {
         .unwrap_or_else(new_id)
 }
 
-/// The stored id when a directory holds one, else a fresh id; nothing is
-/// ever written.
-pub(super) fn peek_install_id(dirs: &[PathBuf]) -> String {
-    dirs.iter()
-        .find_map(|dir| read_id(&dir.join(FILE_NAME)))
-        .unwrap_or_else(new_id)
-}
-
 /// SHA-256 hex digest sent to the server in place of the id itself.
 pub(super) fn hash_install_id(id: &str) -> String {
     let mut hasher = Sha256::new();
@@ -243,35 +235,6 @@ pub(super) fn hash_install_id(id: &str) -> String {
 pub(super) fn install_hash(data_dir: Option<&Path>) -> String {
     let dirs = candidate_dirs(Platform::CURRENT, |key| std::env::var_os(key), data_dir);
     hash_install_id(&resolve_install_id(&dirs))
-}
-
-/// Compute the hash identifying this installation.
-///
-/// Deprecated: the hash no longer depends on the machine or on `data_dir`.
-/// It is derived from a random id the update check stores once per user, and
-/// `data_dir` is only a fallback place to look for it. This function reads
-/// that id and **never creates it** — an install that opted out of the
-/// update check must not gain a file by calling it — so with no stored id it
-/// returns the hash of a fresh random id that is not kept, so two calls
-/// then return two different values.
-#[deprecated(
-    since = "7.0.0",
-    note = "the update check derives its install hash itself; this reads the stored id, never creates one (a fresh random hash on every call when none is stored), and is no longer machine- or data-dir-bound"
-)]
-#[must_use]
-pub fn compute_instance_hash(data_dir: &Path) -> String {
-    stored_install_hash(Platform::CURRENT, |key| std::env::var_os(key), data_dir)
-}
-
-/// [`compute_instance_hash`] with the platform and the environment given, so
-/// a test can point every candidate directory at a temporary one.
-fn stored_install_hash(
-    platform: Platform,
-    lookup: impl Fn(&str) -> Option<OsString>,
-    data_dir: &Path,
-) -> String {
-    let dirs = candidate_dirs(platform, lookup, Some(data_dir));
-    hash_install_id(&peek_install_id(&dirs))
 }
 
 #[cfg(test)]

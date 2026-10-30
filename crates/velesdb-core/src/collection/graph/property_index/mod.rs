@@ -11,21 +11,17 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
-mod advisor;
 mod composite;
 mod range;
 
-pub(crate) use advisor::PredicateType;
-#[allow(unused_imports)] // Reason: PatternStats used by property_index_tests
-pub use advisor::{IndexAdvisor, IndexSuggestion, PatternStats, QueryPattern, QueryPatternTracker};
 #[allow(unused_imports)]
 // Reason: Used by property_index_tests; not referenced from production code yet
 pub(crate) use composite::CompositeIndexType;
 #[allow(unused_imports)] // Reason: CompositeGraphIndex used by property_index_tests
 pub use composite::{CompositeGraphIndex, CompositeIndexManager};
 #[allow(unused_imports)]
-// Reason: IndexIntersection, OrderedValue used by property_index_tests
-pub use range::{CompositeRangeIndex, EdgePropertyIndex, IndexIntersection, OrderedValue};
+// Reason: OrderedValue used by property_index_tests
+pub use range::{CompositeRangeIndex, EdgePropertyIndex, OrderedValue};
 
 use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};
 use roaring::RoaringBitmap;
@@ -187,15 +183,31 @@ impl PropertyIndex {
     /// Get total memory estimate in bytes.
     #[must_use]
     pub fn memory_usage(&self) -> usize {
-        let mut total = std::mem::size_of::<Self>();
-        for ((label, prop), value_map) in &self.indexes {
-            total += label.len() + prop.len();
-            for (value_key, bitmap) in value_map {
-                total += value_key.len();
-                total += bitmap.serialized_size();
-            }
-        }
-        total
+        std::mem::size_of::<Self>()
+            + self
+                .indexes
+                .iter()
+                .map(|((label, prop), values)| Self::entry_memory(label, prop, values))
+                .sum::<usize>()
+    }
+
+    /// Memory estimate in bytes of the index on `(label, property)`, by the
+    /// formula [`Self::memory_usage`] sums; `None` when there is no such index.
+    #[must_use]
+    pub fn index_memory_usage(&self, label: &str, property: &str) -> Option<usize> {
+        let key = make_label_prop_key(label, property);
+        self.indexes
+            .get(&key)
+            .map(|values| Self::entry_memory(label, property, values))
+    }
+
+    fn entry_memory(label: &str, prop: &str, values: &HashMap<String, RoaringBitmap>) -> usize {
+        label.len()
+            + prop.len()
+            + values
+                .iter()
+                .map(|(value_key, bitmap)| value_key.len() + bitmap.serialized_size())
+                .sum::<usize>()
     }
 
     // =========================================================================

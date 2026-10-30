@@ -4,7 +4,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 > The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`recallFused`/`recallFusedDated`/`relate`/`unrelate`/`forget`/`entity`/`rememberExtracted`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall. The deterministic context compiler (`compileContext`) runs here too — fully in the browser (WASM), media fragments included, with `retrieveContextSource` for externalized-source retrieval — and in the native Node binding, [`@wiscale/velesdb-memory-node`](../../crates/velesdb-node/README.md).
 
-**v7.1.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+**v8.0.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
 
 ## What's New in v3.12.0
 
@@ -256,11 +256,11 @@ Create a vector collection.
 |--------|------|---------|-------------|
 | `dimension` | `number` | Required | Vector dimension |
 | `metric` | `'cosine' \| 'euclidean' \| 'dot' \| 'hamming' \| 'jaccard'` | `'cosine'` | Distance metric (aliases: `'ip'`/`'inner'`/`'dotproduct'` for dot) |
-| `storageMode` | `'full' \| 'sq8' \| 'binary'` | `'full'` | Quantization mode (aliases: `'f32'` for full, `'int8'` for sq8, `'bit'` for binary) |
+| `storageMode` | `'full' \| 'sq8' \| 'binary' \| 'pq' \| 'rabitq'` | `'full'` | Quantization mode (aliases: `'f32'` for full, `'int8'` for sq8, `'bit'` for binary) |
 | `hnsw` | `{ m?: number, efConstruction?: number }` | - | HNSW index tuning |
 | `description` | `string` | - | Optional description |
 
-> **WASM backend:** `storageMode` takes `full`, `sq8` or `binary`, by those names. `pq` and `rabitq` are refused with `NOT_SUPPORTED`, since velesdb-wasm would store them as SQ8, and so is any `collectionType` other than `vector`. `hnsw`, `pqRescoreOversampling`, `deferredIndexing` and `asyncIndexBuilder` are refused too: WASM builds no HNSW graph and scans every stored vector, so they have nowhere to go. `db.capabilities()` lists what applies (`storageModes`, `collectionTypes`, `collectionConfig`).
+> **WASM backend:** `storageMode` takes `full`, `sq8`, `binary`, `pq` or `rabitq`, by those names. Each returns the same results as the same mode in velesdb-core, and none saves memory: velesdb-wasm keeps f32 vectors in every mode (3 KB per 768-D vector; the table below does not apply to it), so `pq` needs no training there. Any `collectionType` other than `vector` is refused with `NOT_SUPPORTED`. `hnsw`, `pqRescoreOversampling`, `deferredIndexing` and `asyncIndexBuilder` are refused too: WASM builds no HNSW graph and scans every stored vector, so they have nowhere to go. `db.capabilities()` lists what applies (`storageModes`, `collectionTypes`, `collectionConfig`).
 
 ##### Storage Modes
 

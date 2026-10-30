@@ -67,7 +67,11 @@ try {
 | `VELES-001` | the collection already exists |
 | `VELES-002` | the collection was not found — check the name, it is case-sensitive |
 | `VELES-004` | vector dimension mismatch |
-| `INVALID_CONFIG` | wrong collection family, or a VelesQL parse error |
+| `VELES-009` | wrong collection family |
+| `VELES-010` | VelesQL parse error |
+
+Every rejection also carries `recoverable`, core's answer to whether a retry can
+succeed.
 
 A permission error that fires *before* reaching the plugin means the capability
 is missing, or `windows` does not list the calling window's label.

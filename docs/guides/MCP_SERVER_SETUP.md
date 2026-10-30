@@ -23,6 +23,7 @@ guide is everything else.
 - [Windows](#windows)
 - [Installing the daemon without a Rust toolchain](#installing-the-daemon-without-a-rust-toolchain)
 - [Embedding backend](#embedding-backend)
+- [Recall quality](#recall-quality)
 - [Auto-extraction backend (opt-in)](#auto-extraction-backend-opt-in)
 
 ## Install
@@ -795,6 +796,26 @@ the *transport* is safe: the same model served by Ollama or by an
 OpenAI-compatible server produces the same vectors, and the daemon compares the
 model and the dimension rather than which backend served them.
 
+## Recall quality
+
+Recall searches the vector index at the collection's own quality unless you
+choose one. The dial trades latency for recall:
+
+| `VELESDB_MEMORY_SEARCH_QUALITY` (`[search] quality`) | Effect |
+|---|---|
+| unset, empty | The collection's own quality, as before this setting existed. |
+| `fast`, `balanced`, `accurate` | Increasing `ef_search`: lower latency to higher recall. |
+| `perfect` | Scores every stored vector. Exact, and O(n): the engine refuses it past its exhaustive-scan guard, and recall then fails rather than scanning. |
+| `autotune` | The engine picks per query. |
+| `custom:<ef>` | An explicit `ef_search`. |
+| `adaptive:<min_ef>:<max_ef>` | Starts at `min_ef` and searches once more, up to `max_ef`, only when the first results are scattered. |
+
+The same names the REST API and VelesQL accept, in any letter case (`auto` and
+`auto_tune` are aliases of `autotune`), each ef in `[16, 4096]`. A value that is
+none of them stops the daemon at startup and names the accepted forms, rather
+than being ignored. Fused recall with column predicates (`recall_where`) uses its
+own search path and is not affected.
+
 ## Auto-extraction backend (opt-in)
 
 By default the graph is **bring-your-own-links**: you wire edges with `relate`
@@ -890,4 +911,4 @@ trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-10-26 · Applies to: velesdb-memory 0.15.0
+Last updated: 2026-10-29 · Applies to: velesdb-memory 0.16.0

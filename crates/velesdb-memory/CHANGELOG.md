@@ -9,7 +9,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`cli_flags::FlagError`**, the two refusals the hand-rolled subcommand parsers
+  share: `MissingValue { flag }` (`<flag> requires a value`) and
+  `Unknown { command, flag }` (`unknown <command> flag "<flag>"`), with
+  `cli_flags::value_after` to read a flag's value. `migrate-embeddings` and
+  `compile-stdin` both use it, so the same mistake is worded once.
+
 ### Changed
+
+- **BREAKING: the `migrate-embeddings` parsers fail with `MigrateUsageError`, not
+  `String`.** `migration::parse_migrate_args`, `require_destination` and
+  `default_scratch_parent` return `MigrateUsageError` (`Flag(FlagError)`,
+  `Strategy(StrategyError)`, `MissingDestination`, `NoScratchParent { store }`),
+  and `Strategy::parse` returns `StrategyError` (`Refused { value }` for
+  `force-reuse`, `Unknown { value }`). All are `#[non_exhaustive]`. The messages
+  are unchanged; a caller that matched the `String` reads `to_string()` or the
+  variant.
+
+- **A malformed `VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS` is a
+  `SettingError`.** It is the new `SettingError::InvalidChatTemplateKwargs
+  { variable, reason }`, like the other startup settings, instead of a bare
+  message. The daemon still stops at startup with the same wording, and the
+  raw value is still never echoed.
+
+### Documentation
+
+- **The README names the recall-quality setting.** `VELESDB_MEMORY_SEARCH_QUALITY`
+  (`[search] quality`) was documented only in `MCP_SERVER_SETUP.md`; the README
+  now lists its accepted forms, `adaptive:<min_ef>:<max_ef>` included, and that
+  an invalid value stops the daemon at startup.
+
+## [0.16.0] - 2026-10-28
+
+> **BREAKING for Rust callers (0.x minor).** Fallible functions that returned
+> `Result<_, String>` now return a typed error, `MemoryError::MigrationCapture` is
+> `MigrationError::Capture`, and `ConfigFile` gains a `search` field. Each change is
+> listed under *Changed* with the form a caller migrates to. Nothing changes on disk:
+> a store written by 0.15.0 opens unchanged, and the daemon, the MCP tools and the
+> bindings behave as before (the one message that changes is noted below). Recall quality is opt-in, so a store
+> that does not set it searches as before. This version needs `velesdb-core` 7.1.0
+> or later.
+
+### Added
+
+- **Recall quality is a setting.** `VELESDB_MEMORY_SEARCH_QUALITY` (`[search] quality`
+  in `velesdb-memory.toml`) sets the quality recall searches the vector index at:
+  `fast`, `balanced`, `accurate`, `perfect`, `autotune` or `custom:<ef>`, the grammar
+  the REST API and the CLI already speak. Unset keeps the collection's own quality,
+  so nothing changes for a store that does not opt in; a value that is not a quality
+  stops the daemon at startup. Library callers use
+  `MemoryService::with_search_quality` / `NativeStore::with_search_quality`, and
+  `select_search_quality` parses the setting (`SettingError::InvalidSearchQuality`).
+  `resolve_search_quality` is the explicit-then-environment rule the bindings use: the Node
+  `MemoryService.open(path, embedder, ollamaUrl, ollamaModel, searchQuality)` and the
+  Python `MemoryService(path, ..., search_quality=...)` take it as a trailing optional
+  argument, an explicit value winning over `VELESDB_MEMORY_SEARCH_QUALITY`.
+  Needs a `velesdb-core` that has `SemanticMemory::query_filtered_with_quality`.
+
+### Changed
+
+- **BREAKING: `MemoryError::MigrationCapture` is `MigrationError::Capture`.** The
+  online-migration observer's refusals used a variant of their own on `MemoryError`,
+  beside the migration pipeline's `MemoryError::Migration`; both now live under
+  `MigrationError` (`Capture(String)`, class `Internal` as before), and the twelve
+  private `capture` helpers collapsed into one. A caller that matched
+  `MemoryError::MigrationCapture(detail)` matches
+  `MemoryError::Migration(MigrationError::Capture(detail))`. The `Display` loses its
+  `migration capture error:` prefix and reads `migration error: <detail>`.
 
 - **BREAKING: `IngestRoots::parse` fails with `IngestRootsError`, not `String`.**
   A root that cannot be resolved is `Unresolvable { entry, source }` (the io cause is

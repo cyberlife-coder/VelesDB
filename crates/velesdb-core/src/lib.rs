@@ -166,6 +166,7 @@ pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
 pub mod scored_result;
+mod search_quality;
 pub mod simd_dispatch;
 #[cfg(test)]
 mod simd_dispatch_tests;
@@ -200,17 +201,14 @@ pub mod velesql;
 pub mod wire;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
-#[allow(deprecated)] // Reason: re-exports the deprecated entry points until the next major
 pub use update_check::{
-    check_for_updates, check_for_updates_with, spawn_update_check, spawn_update_check_with,
-    spawn_update_heartbeat, UpdateCheckContext,
+    check_for_updates_with, spawn_update_check_with, spawn_update_heartbeat, UpdateCheckConfig,
+    UpdateCheckContext,
 };
-#[cfg(all(not(target_arch = "wasm32"), feature = "update-check"))]
-#[allow(deprecated)] // Reason: re-exports the deprecated hash helper until the next major
-pub use update_check::{compute_instance_hash, UpdateCheckConfig};
 
 #[cfg(feature = "persistence")]
-pub use index::{HnswIndex, HnswParams, SearchQuality, VectorIndex};
+pub use index::{HnswIndex, HnswParams, VectorIndex};
+pub use search_quality::SearchQuality;
 
 #[cfg(feature = "persistence")]
 pub use collection::streaming::{BackpressureError, StreamIngester, StreamingConfig};
@@ -260,7 +258,7 @@ pub use quantization::{
 pub use scored_result::ScoredResult;
 pub use validation::{
     validate_collection_name, validate_dimension, validate_dimension_match,
-    MAX_COLLECTION_NAME_LENGTH, MAX_DIMENSION, MIN_DIMENSION,
+    MAX_COLLECTION_NAME_LENGTH, MAX_DIMENSION, MAX_JSON_NESTING, MAX_VALUE_DEPTH, MIN_DIMENSION,
 };
 // Canonical cross-engine stable hashing (FNV-1a). Lives in `wire::stable_hash`
 // so persistence-free targets (WASM) can delegate to it. Consumers deriving a
@@ -290,8 +288,8 @@ pub use config::{
 #[cfg(feature = "persistence")]
 pub use config::{LoggingConfig, ServerConfig, StorageConfig};
 pub use fusion::{
-    FusionError, FusionStrategy, DEFAULT_WEIGHTED_AVG_WEIGHT, DEFAULT_WEIGHTED_HIT_WEIGHT,
-    DEFAULT_WEIGHTED_MAX_WEIGHT,
+    FusionError, FusionParams, FusionStrategy, DEFAULT_RRF_K, DEFAULT_WEIGHTED_AVG_WEIGHT,
+    DEFAULT_WEIGHTED_HIT_WEIGHT, DEFAULT_WEIGHTED_MAX_WEIGHT,
 };
 #[cfg(feature = "persistence")]
 pub use guardrails::QueryLimits;
@@ -299,9 +297,7 @@ pub use metrics::{
     average_metrics, compute_latency_percentiles, hit_rate, mean_average_precision, mrr, ndcg_at_k,
     precision_at_k, recall_at_k, LatencyStats,
 };
-pub use metrics::{
-    DurationHistogram, GuardRailsMetrics, OperationalMetrics, QueryStats, TraversalMetrics,
-};
+pub use metrics::{DurationHistogram, GuardRailsMetrics, OperationalMetrics, QueryStats};
 
 #[cfg(feature = "persistence")]
 mod database;

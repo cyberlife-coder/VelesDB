@@ -56,6 +56,12 @@ except (ImportError, AttributeError):
     ALLOWED_METRICS = _FALLBACK_METRICS
     ALLOWED_STORAGE_MODES = _FALLBACK_STORAGE_MODES
     ALLOWED_CONDITION_TYPES = _FALLBACK_CONDITION_TYPES
+# velesdb-core's search quality parser, through the binding (velesdb >= 8.0.0).
+# There is no literal fallback: this package keeps no copy of the grammar.
+try:
+    from velesdb import validate_search_quality as _core_validate_search_quality
+except ImportError:
+    _core_validate_search_quality = None
 # Aliases accepted by the Rust core via ``from_str_with_aliases()``.
 # Maps alias → canonical name (same set of aliases as Rust).
 STORAGE_MODE_ALIASES: dict[str, str] = {
@@ -453,47 +459,17 @@ def _validate_sparse_entry(key: Any, value: Any) -> None:
         )
 
 
-_SIMPLE_QUALITIES = frozenset({
-    "fast", "balanced", "accurate", "perfect",
-    "autotune", "auto_tune", "auto",  # aliases for consistency with WASM/Rust
-})
-# Matched with fullmatch: `$` would also accept a trailing newline, which
-# core then refuses at search time.
-_CUSTOM_QUALITY_RE = re.compile(r"custom:\d+", re.ASCII)
-_ADAPTIVE_QUALITY_RE = re.compile(r"adaptive:\d+:\d+", re.ASCII)
-# The range every ef of a custom/adaptive mode must lie in, mirroring
-# velesdb-core's `api_types::{MIN_EF_SEARCH, MAX_EF_SEARCH}`: the binding
-# refuses any other ef, so a store built with one would fail every search
-# (#2275). tests/test_security.py pins the mirror to core's source.
-MIN_EF_SEARCH = 16
-MAX_EF_SEARCH = 4096
-
-
-def _check_ef_range(quality: str, *efs: str) -> tuple:
-    """Each ef, a string of ASCII digits, as an int in range, or a
-    SecurityError naming it. The length is checked before ``int()``, which
-    refuses a string of more than 4 300 digits with a plain ValueError."""
-    values = []
-    for ef in efs:
-        digits = ef.lstrip("0") or "0"
-        if len(digits) > len(str(MAX_EF_SEARCH)) or not MIN_EF_SEARCH <= int(digits) <= MAX_EF_SEARCH:
-            raise SecurityError(
-                f"Invalid search_quality '{quality}': ef_search must be an integer "
-                f"between {MIN_EF_SEARCH} and {MAX_EF_SEARCH}, got {ef}"
-            )
-        values.append(int(digits))
-    return tuple(values)
-
-
 def validate_search_quality(quality: str) -> str:
-    """Validate a search quality string.
+    """Validate a search quality string with velesdb-core's own parser.
 
-    Accepted forms:
-    - Simple presets: ``'fast'``, ``'balanced'``, ``'accurate'``,
-      ``'perfect'``, ``'autotune'``
-    - Custom ef: ``'custom:N'`` where N is an integer in 16-4096 (e.g. ``'custom:256'``)
-    - Adaptive range: ``'adaptive:MIN:MAX'``, both in 16-4096 and
-      ``MIN <= MAX`` (e.g. ``'adaptive:32:512'``)
+    The accepted forms are core's, through ``velesdb.validate_search_quality``:
+    the presets (``'fast'``, ``'balanced'``, ``'accurate'``, ``'perfect'``,
+    ``'autotune'``), ``'custom:N'`` and ``'adaptive:MIN:MAX'``, each ef in the
+    ``ef_search`` range (16-4096) and ``MIN <= MAX``. A mode refused here is one
+    every search would refuse, with the same message.
+
+    With a ``velesdb`` older than that function (< 8.0.0) only the type is
+    checked here; the binding still refuses an invalid mode, at search time.
 
     Args:
         quality: Search quality preset or custom/adaptive string.
@@ -502,34 +478,18 @@ def validate_search_quality(quality: str) -> str:
         Validated quality string (lowercased).
 
     Raises:
-        SecurityError: If quality is not a string or not a recognised form.
+        SecurityError: If quality is not a string or not a mode core accepts.
     """
     if not isinstance(quality, str):
         raise SecurityError(
             f"search_quality must be a string, got {type(quality).__name__}"
         )
-    quality_lower = quality.lower()
-    if quality_lower in _SIMPLE_QUALITIES:
-        return quality_lower
-    if _CUSTOM_QUALITY_RE.fullmatch(quality_lower):
-        _check_ef_range(quality, quality_lower.split(":")[1])
-        return quality_lower
-    adaptive_match = _ADAPTIVE_QUALITY_RE.fullmatch(quality_lower)
-    if adaptive_match:
-        parts = quality_lower.split(":")
-        # The range first, as core checks it: `adaptive:5000:32` names 5000.
-        min_ef, max_ef = _check_ef_range(quality, parts[1], parts[2])
-        if min_ef > max_ef:
-            raise SecurityError(
-                f"Invalid adaptive range: min_ef ({min_ef}) > max_ef ({max_ef})"
-            )
-        return quality_lower
-    raise SecurityError(
-        f"Invalid search_quality '{quality}'. "
-        f"Allowed presets: {', '.join(sorted(_SIMPLE_QUALITIES))}. "
-        "Custom form: 'custom:N' (e.g. 'custom:256'). "
-        "Adaptive form: 'adaptive:MIN:MAX' (e.g. 'adaptive:32:512')."
-    )
+    if _core_validate_search_quality is not None:
+        try:
+            _core_validate_search_quality(quality)
+        except ValueError as exc:
+            raise SecurityError(f"Invalid search_quality: {exc}") from exc
+    return quality.lower()
 
 
 def validate_sparse_vector(sparse_vector: Any) -> dict:

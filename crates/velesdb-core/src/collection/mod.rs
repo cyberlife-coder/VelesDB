@@ -75,6 +75,9 @@ mod metadata_only_tests;
 mod guardrails_integration_tests;
 
 #[cfg(all(test, feature = "persistence"))]
+mod metrics_wiring_tests;
+
+#[cfg(all(test, feature = "persistence"))]
 mod e2e_integration_tests;
 
 #[cfg(all(test, feature = "persistence"))]
@@ -95,6 +98,8 @@ pub use graph::{
     ConcurrentEdgeStore, EdgeStore, EdgeType, GraphEdge, GraphNode, GraphSchema, NodeType,
     PropertyIndex, RangeIndex, TraversalConfig, TraversalPath, TraversalResult, ValueType,
 };
+#[cfg(all(test, feature = "persistence"))]
+pub(crate) use graph_collection::remove_edges_reporting_failure;
 #[cfg(feature = "persistence")]
 pub use graph_collection::GraphCollection;
 #[cfg(feature = "persistence")]

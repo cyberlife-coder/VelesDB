@@ -25,32 +25,12 @@ import hashlib
 import secrets
 import time
 
-# FNV-1a 64-bit: a public-domain algorithm with standard published constants
-# (see http://www.isthe.com/chongo/tech/comp/fnv/). This is a from-scratch,
-# MIT-licensed reimplementation of that well-known public algorithm — not a
-# copy of VelesDB core's Rust implementation — chosen so that
-# `stable_hash_id(v, algorithm="fnv1a")` agrees byte-for-byte with
-# `velesdb_core::hash_id(v)` for every `v`. That equivalence is pinned by
-# golden vectors published by core, reproduced as literals in
-# `tests/test_ids.py` (no Rust import required).
-_FNV64_OFFSET_BASIS = 0xCBF29CE484222325
-_FNV64_PRIME = 0x100000001B3
-_U64_MASK = 0xFFFFFFFFFFFFFFFF
-
-
-def _fnv1a_64(value: str) -> int:
-    """Compute the FNV-1a 64-bit hash of ``value``'s UTF-8 bytes.
-
-    Full unsigned 64-bit output (bit 63 may be set) — unlike the SHA-256
-    default, this does not clear the sign bit, so it matches
-    ``velesdb_core::hash_id``'s output exactly rather than staying within
-    the positive-i64 range.
-    """
-    digest = _FNV64_OFFSET_BASIS
-    for byte in value.encode("utf-8"):
-        digest ^= byte
-        digest = (digest * _FNV64_PRIME) & _U64_MASK
-    return digest
+try:
+    # velesdb-core's canonical string -> u64 derivation, through the binding
+    # (velesdb >= 8.0.0). This package keeps no copy of it.
+    from velesdb import hash_id as _core_hash_id
+except ImportError:
+    _core_hash_id = None
 
 
 def make_initial_id_counter() -> int:
@@ -86,13 +66,14 @@ def stable_hash_id(value: str, *, algorithm: str = "sha256") -> int:
               the sign bit cleared. Positive 63-bit integer ID. This is the
               historical default every VelesDB Python integration has always
               used; existing stores depend on it staying the default.
-            - ``"fnv1a"``: FNV-1a 64-bit over the UTF-8 bytes, matching
-              ``velesdb_core::hash_id`` and ``velesdb-migrate``'s non-numeric
-              fallback byte-for-byte. Full unsigned 64-bit integer ID (bit 63
-              may be set). Use this when a string ID must agree with the ID
-              core or ``velesdb-migrate`` would derive for the same string —
-              e.g. correlating a document ingested via LangChain/LlamaIndex/
-              Haystack with the same document migrated via ``velesdb-migrate``.
+            - ``"fnv1a"``: ``velesdb.hash_id``, which *is*
+              ``velesdb_core::hash_id`` (FNV-1a 64-bit over the UTF-8 bytes,
+              also ``velesdb-migrate``'s non-numeric fallback). Full unsigned
+              64-bit integer ID (bit 63 may be set). Use this when a string ID
+              must agree with the ID core or ``velesdb-migrate`` would derive
+              for the same string — e.g. correlating a document ingested via
+              LangChain/LlamaIndex/Haystack with the same document migrated
+              via ``velesdb-migrate``. Needs velesdb >= 8.0.0.
 
     Returns:
         A deterministic non-negative integer ID; see `algorithm` above for
@@ -100,11 +81,18 @@ def stable_hash_id(value: str, *, algorithm: str = "sha256") -> int:
 
     Raises:
         ValueError: if `algorithm` is not ``"sha256"`` or ``"fnv1a"``.
+        ImportError: for ``"fnv1a"``, when the installed ``velesdb`` predates
+            ``velesdb.hash_id`` (or is not installed).
     """
     if algorithm == "sha256":
         hash_bytes = hashlib.sha256(value.encode("utf-8")).digest()
         # Use 8 bytes (64 bits) and clear the sign bit to stay in positive i64 range.
         return int.from_bytes(hash_bytes[:8], byteorder="big") & 0x7FFFFFFFFFFFFFFF
     if algorithm == "fnv1a":
-        return _fnv1a_64(value)
+        if _core_hash_id is None:
+            raise ImportError(
+                "stable_hash_id(algorithm='fnv1a') is velesdb.hash_id, which needs "
+                "velesdb >= 8.0.0; the installed velesdb does not provide it"
+            )
+        return _core_hash_id(value)
     raise ValueError(f"Unknown stable_hash_id algorithm: {algorithm!r} (expected 'sha256' or 'fnv1a')")

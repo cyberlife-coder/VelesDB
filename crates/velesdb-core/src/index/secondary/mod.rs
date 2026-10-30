@@ -161,6 +161,12 @@ impl IdSet {
     pub(crate) fn to_vec(&self) -> Vec<u64> {
         self.iter_ascending().collect()
     }
+
+    /// Memory estimate in bytes, on the graph indexes' basis: the bitmap's
+    /// serialized size plus the overflow ids.
+    fn memory_usage(&self) -> usize {
+        self.bitmap.serialized_size() + self.overflow.len() * std::mem::size_of::<u64>()
+    }
 }
 
 impl From<Vec<u64>> for IdSet {
@@ -181,6 +187,32 @@ pub(crate) enum SecondaryIndex {
 }
 
 impl SecondaryIndex {
+    /// Memory estimate in bytes: per distinct value, its key (the string
+    /// bytes for a string key) and its id set — the basis of the graph
+    /// property and range indexes' `memory_usage`, so the three add up.
+    pub(crate) fn memory_usage(&self) -> usize {
+        match self {
+            Self::BTree(tree) => tree
+                .read()
+                .iter()
+                .map(|(value, ids)| {
+                    let key_heap = match value {
+                        JsonValue::String(s) => s.len(),
+                        JsonValue::Number(_) | JsonValue::Bool(_) => 0,
+                    };
+                    std::mem::size_of::<JsonValue>() + key_heap + ids.memory_usage()
+                })
+                .sum(),
+        }
+    }
+
+    /// Number of distinct values indexed.
+    pub(crate) fn cardinality(&self) -> usize {
+        match self {
+            Self::BTree(tree) => tree.read().len(),
+        }
+    }
+
     /// Returns a [`RoaringBitmap`] of all point IDs matching the given value.
     ///
     /// The bitmap is built on-the-fly from the B-tree leaf. Returns

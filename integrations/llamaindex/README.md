@@ -164,6 +164,16 @@ results = vector_store.multi_query_search(
 )
 ```
 
+**Similarities are higher-is-closer on every search path.** A raw score of a
+distance metric (`euclidean`, `hamming`) becomes `1 / (1 + d)`; cosine, dot and
+Jaccard scores pass through. Fused and text scores keep the direction core
+gives them: `rrf` and `relative_score` fusion, `hybrid_query` (RRF of vector and
+BM25 ranks), `text_query` (BM25) and dense + sparse `query(..., sparse_vector=...)`
+scores are already higher-is-better and pass through unchanged, while
+`average`, `maximum` and `weighted` fusion keep the metric's units and are
+mapped like a raw score on a distance metric. `velesql()` reads its scores in
+the metric's direction, the direction of a `NEAR` score.
+
 ### Advanced Search
 
 #### `search_quality` — Quality Presets

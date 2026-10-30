@@ -188,6 +188,9 @@ pub(crate) fn build_configured_service(
 ) -> Result<ConfiguredService, Box<dyn std::error::Error>> {
     apply_config_file(args)?;
     let store_path = std::env::var("VELESDB_MEMORY_PATH").unwrap_or_else(|_| default_store_path());
+    // Refused before the store is opened, so a bad value never takes the
+    // single-writer lock first.
+    let search_quality = configured_search_quality()?;
     let recovery = velesdb_memory::migration::recover_online_migration_startup(
         std::path::Path::new(&store_path),
         build_migration_target,
@@ -203,12 +206,27 @@ pub(crate) fn build_configured_service(
         &store_path,
         configured,
     )?)?;
+    let service = match search_quality {
+        Some(quality) => service.with_search_quality(quality),
+        None => service,
+    };
     Ok(ConfiguredService {
         service,
         store_path,
         embedder_model,
         embedder_dimension,
     })
+}
+
+/// `VELESDB_MEMORY_SEARCH_QUALITY` (`[search] quality`), validated.
+///
+/// Unset or blank leaves the collection's own quality; anything else must be a
+/// quality or startup stops, the rule `VELESDB_MEMORY_DEFAULT_TTL` and
+/// `VELESDB_MEMORY_INGEST_ROOTS` follow.
+pub(crate) fn configured_search_quality(
+) -> Result<Option<velesdb_memory::SearchQuality>, Box<dyn std::error::Error>> {
+    velesdb_memory::resolve_search_quality(None)
+        .map_err(|error| format!("{}: {error}", velesdb_memory::SEARCH_QUALITY_VAR).into())
 }
 
 pub(crate) fn embedder_after_startup_recovery(

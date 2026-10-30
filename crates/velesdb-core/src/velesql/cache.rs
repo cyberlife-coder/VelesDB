@@ -251,6 +251,15 @@ impl QueryCache {
 
         let bucket = inner.map.entry(hash).or_default();
         bucket.retain(|entry| entry.original_query != raw_query);
+        // A different canonical query already in this bucket: the hash
+        // collided, and the per-bucket vector keeps both instead of
+        // overwriting (`velesdb_cache_collision_fallback_total`).
+        if bucket
+            .iter()
+            .any(|entry| entry.canonical_query != new_entry.canonical_query)
+        {
+            crate::metrics::global_guardrails_metrics().record_cache_collision_fallback();
+        }
         bucket.push(new_entry);
 
         if is_new_key {

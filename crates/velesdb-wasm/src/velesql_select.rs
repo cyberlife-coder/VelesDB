@@ -17,7 +17,8 @@
 
 use std::collections::HashMap;
 
-use velesdb_core::velesql::{Condition, Query, SelectStatement, VectorSearch};
+use velesdb_core::velesql::distinct_evaluator::apply_distinct;
+use velesdb_core::velesql::{Condition, DistinctMode, Query, SelectStatement, VectorSearch};
 
 use crate::database::DatabaseInner;
 use crate::observer::WasmQueryOperationKind;
@@ -69,6 +70,10 @@ pub(crate) fn execute(
 
 /// Runs a non-vector SELECT (optionally with a similarity() threshold in
 /// the WHERE clause).
+///
+/// With a threshold, each row carries its similarity as its score and the
+/// rows come back best first, as core's `dispatch_similarity_query` returns
+/// them; otherwise rows keep insertion order with score 0.0.
 fn execute_plain(
     db: &DatabaseInner,
     stmt: &SelectStatement,
@@ -83,9 +88,25 @@ fn execute_plain(
         if !filters.passes(id, payload, idx, &borrowed, params)? {
             continue;
         }
-        out.push((id, 0.0, payload.cloned()));
+        let score = filters.eval.as_ref().map_or(0.0, |e| e.score_at(idx));
+        out.push((id, score, payload.cloned()));
+    }
+    if filters.eval.is_some() {
+        rank_by_score(&mut out, borrowed.metric.higher_is_better());
     }
     Ok(out)
+}
+
+/// Stable sort of scored rows in the metric's direction (best first).
+fn rank_by_score(rows: &mut [OwnedScanRow], higher_is_better: bool) {
+    rows.sort_by(|a, b| {
+        let ascending = a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal);
+        if higher_is_better {
+            ascending.reverse()
+        } else {
+            ascending
+        }
+    });
 }
 
 /// Bundles the payload + similarity filters applied row-wise by the SELECT
@@ -188,9 +209,9 @@ fn execute_vector_search(
     let residual_without_vector = strip_vector_search(stmt.where_clause.as_ref());
     let filters = WhereFilters::build(db, stmt, params, Some(residual_without_vector.clone()))?;
 
-    // #9: a single-vector NEAR has no real second scored branch. Mirror core,
-    // where a `NEAR + metadata` query applies the metadata predicate as a HARD
-    // filter and the FUSION clause is structurally inapplicable.
+    // A FUSION clause reaches this point only when core's validator counted a
+    // second fusable branch (text MATCH or SPARSE_NEAR) beside the NEAR; over
+    // a lone NEAR it is refused before dispatch (V012, `velesql_exec::execute`).
     if let Some(clause) = &stmt.fusion_clause {
         reject_single_branch_weighted_fusion(clause)?;
         scored = apply_fusion(
@@ -271,13 +292,8 @@ pub(crate) fn score_all(
         query,
         &store.ids,
         &store.data,
-        &store.data_sq8,
-        &store.data_binary,
-        &store.sq8_mins,
-        &store.sq8_scales,
         store.dimension,
         store.metric,
-        store.storage_mode,
     );
     vector_ops::sort_results(&mut scored, store.metric.higher_is_better());
     scored
@@ -421,10 +437,12 @@ fn finalize_aggregated(
     Ok(apply_limit_offset(stmt, out, u64::MAX))
 }
 
-/// Finalizes a non-aggregated SELECT: window functions, ORDER BY, column
-/// projection (including `AS` aliases), then OFFSET/LIMIT.
+/// Finalizes a non-aggregated SELECT: DISTINCT, window functions, ORDER BY,
+/// column projection (including `AS` aliases), then OFFSET/LIMIT — core's
+/// order (`apply_select_postprocessing`).
 ///
-/// Routed through velesdb-core's single source of truth — `window_evaluator`
+/// Routed through velesdb-core's single source of truth — `apply_distinct`
+/// keys DISTINCT exactly as core does, `window_evaluator`
 /// injects window aliases into the payload, `velesql_orderby::sort_rows`
 /// evaluates arithmetic / rejects unevaluable ORDER BY forms, and
 /// `projection::project_results` materializes exactly the SELECT columns. This
@@ -435,6 +453,9 @@ fn finalize_plain(
     rows: Vec<OwnedScanRow>,
 ) -> Result<Vec<QueryResultRow>, String> {
     let mut results = velesql_project::to_search_results(rows);
+    if stmt.distinct == DistinctMode::All {
+        results = apply_distinct(results, &stmt.columns);
+    }
     velesql_project::inject_window_functions(stmt, &mut results)?;
     velesql_orderby::sort_rows(stmt, &mut results)?;
     let projected = velesql_project::project(stmt, &results)?;

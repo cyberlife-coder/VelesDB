@@ -25,32 +25,25 @@ use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_co
 /// an `AppState`: everything here is a pure function of the request body,
 /// and the caller owns the metrics and the HTTP shell.
 ///
-/// The weighted strategies go through their validating constructors rather
-/// than being built as struct literals. The literals accepted any `f32` the
-/// JSON body carried, so a negative weight, a set that did not sum to 1.0, or
-/// a non-finite value reached the fusion kernel and came back as a silently
-/// wrong ranking instead of an error (#2095). The weight rules stay on the
-/// core constructors and their message is reported verbatim, so the server
-/// never carries a second, driftable copy of the same contract.
+/// The name, its aliases and the weight rules are core's
+/// ([`velesdb_core::FusionStrategy::from_name`]), and its message is reported
+/// verbatim, so the server never carries a second, driftable copy of either.
+/// The weighted strategies therefore go through their validating
+/// constructors: struct literals accepted any `f32` the JSON body carried, so
+/// a negative weight, a set that did not sum to 1.0, or a non-finite value
+/// reached the fusion kernel and came back as a silently wrong ranking
+/// instead of an error (#2095).
 pub(super) fn build_fusion_strategy(
     req: &MultiQuerySearchRequest,
 ) -> Result<velesdb_core::FusionStrategy, String> {
-    use velesdb_core::FusionStrategy;
-    match req.strategy.to_lowercase().as_str() {
-        "average" | "avg" => Ok(FusionStrategy::Average),
-        "maximum" | "max" => Ok(FusionStrategy::Maximum),
-        "rrf" => Ok(FusionStrategy::RRF { k: req.rrf_k }),
-        "weighted" => FusionStrategy::weighted(req.avg_weight, req.max_weight, req.hit_weight)
-            .map_err(|error| format!("Invalid weighted fusion weights: {error}")),
-        "relative_score" | "rsf" => {
-            FusionStrategy::relative_score(req.dense_weight, req.sparse_weight)
-                .map_err(|error| format!("Invalid relative_score fusion weights: {error}"))
-        }
-        _ => Err(format!(
-            "Invalid strategy: {}. Valid: average, maximum, rrf, weighted, relative_score",
-            req.strategy
-        )),
-    }
+    let params = velesdb_core::FusionParams::default()
+        .with_rrf_k(Some(req.rrf_k))
+        .with_avg_weight(Some(req.avg_weight))
+        .with_max_weight(Some(req.max_weight))
+        .with_hit_weight(Some(req.hit_weight))
+        .with_dense_weight(Some(req.dense_weight))
+        .with_sparse_weight(Some(req.sparse_weight));
+    velesdb_core::FusionStrategy::from_name(&req.strategy, params).map_err(|e| e.to_string())
 }
 
 /// Parse the fusion strategy the request asks for, returning a 400 response

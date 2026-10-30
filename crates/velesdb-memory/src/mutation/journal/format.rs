@@ -3,7 +3,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use sha2::{Digest, Sha256};
 
-use super::{capture, validate_epoch_id, EpochIdentity};
+use super::{validate_epoch_id, EpochIdentity};
+use crate::migration::capture;
 use crate::mutation::DirtyKey;
 use crate::MemoryError;
 

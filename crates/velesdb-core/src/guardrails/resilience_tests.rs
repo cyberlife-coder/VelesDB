@@ -259,3 +259,65 @@ fn circuit_breaker_concurrent_check_and_failure_make_progress() {
         h.join().expect("worker panicked");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Runtime reconfiguration (`PUT /guardrails`, `Database::update_guardrails`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn rate_limiter_set_limit_qps_applies_to_a_new_client() {
+    let limiter = RateLimiter::new(100);
+    limiter.set_limit_qps(1);
+    // A new client's bucket starts at the *new* limit: one token, not 100.
+    limiter
+        .check("fresh")
+        .expect("first request within the new limit");
+    match limiter.check("fresh") {
+        Err(GuardRailViolation::RateLimitExceeded { limit_qps }) => assert_eq!(limit_qps, 1),
+        other => panic!("expected RateLimitExceeded at the new limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn rate_limiter_set_limit_qps_caps_an_existing_bucket() {
+    let limiter = RateLimiter::new(100);
+    limiter
+        .check("warm")
+        .expect("seed the bucket at 100 tokens");
+    limiter.set_limit_qps(1);
+    // The refill clamps the 99 banked tokens to the new ceiling of 1.
+    limiter.check("warm").expect("one token survives the clamp");
+    assert!(
+        limiter.check("warm").is_err(),
+        "a lowered limit must not be bypassed by tokens banked under the old one"
+    );
+}
+
+#[test]
+fn circuit_reconfigure_lowers_the_threshold_without_resetting_state() {
+    let cb = CircuitBreaker::new(5, 60);
+    cb.record_failure();
+    cb.record_failure();
+    cb.reconfigure(3, 60);
+    assert_eq!(
+        cb.state(),
+        CircuitState::Closed,
+        "reconfiguring never trips"
+    );
+    // The two failures already counted still count toward the new threshold.
+    cb.record_failure();
+    assert_eq!(cb.state(), CircuitState::Open);
+}
+
+#[test]
+fn circuit_reconfigure_recovery_applies_to_an_open_breaker() {
+    let cb = CircuitBreaker::new(1, 9_999);
+    cb.record_failure();
+    assert!(cb.check().is_err(), "precondition: open for 9 999 s");
+    cb.reconfigure(1, 0);
+    assert!(
+        cb.check().is_ok(),
+        "a shortened recovery lets the probe through"
+    );
+    assert_eq!(cb.state(), CircuitState::HalfOpen);
+}

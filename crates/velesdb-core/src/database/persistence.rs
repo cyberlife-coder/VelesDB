@@ -149,13 +149,17 @@ impl Database {
             Ok(typed) => {
                 // Parity item E: thread the live LimitsConfig caps into the
                 // startup-loaded collection (not persisted — re-pushed here).
-                self.push_runtime_limits(typed.inner());
-                typed.insert_into(
-                    &self.vector_colls,
-                    &self.graph_colls,
-                    &self.metadata_colls,
-                    name,
-                );
+                // `Collection` clones share every `Arc`, so the limits pushed
+                // into this handle are the ones the registered value carries.
+                let inner = typed.inner().clone();
+                self.admit_collection(&inner, || {
+                    typed.insert_into(
+                        &self.vector_colls,
+                        &self.graph_colls,
+                        &self.metadata_colls,
+                        name,
+                    );
+                });
                 true
             }
             Err(e) => {

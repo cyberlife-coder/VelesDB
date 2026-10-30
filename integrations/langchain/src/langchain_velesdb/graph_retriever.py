@@ -101,7 +101,11 @@ class GraphRetriever(BaseRetriever):
         expand_k: Maximum documents to include after expansion (default: 10).
         max_depth: Maximum graph traversal depth (default: 2).
         rel_types: Relationship types to follow (default: all).
-        score_threshold: Minimum score for seed documents (default: 0.0).
+        score_threshold: Minimum relevance score for seed documents
+            (default: 0.0), compared to the vector store's
+            ``similarity_search_with_relevance_scores``, which is
+            higher-is-closer under every metric. The seeds'
+            ``relevance_score`` metadata carries the same value.
         low_latency: If True, skip graph expansion for minimal latency (default: False).
         timeout_ms: Timeout for REST graph operations in milliseconds (default: 1000).
         fallback_on_timeout: If True, return vector-only results on timeout (default: True).
@@ -246,14 +250,13 @@ class GraphRetriever(BaseRetriever):
         Returns:
             List of relevant documents.
         """
-        seed_results = self.vector_store.similarity_search_with_score(
-            query, k=self.seed_k if self.low_latency else self.expand_k
+        # Relevance scores are higher-is-closer under every metric, so the
+        # threshold keeps the closest seeds under euclidean/hamming too.
+        seeds = self.vector_store.similarity_search_with_relevance_scores(
+            query,
+            k=self.seed_k if self.low_latency else self.expand_k,
+            score_threshold=self.score_threshold,
         )
-
-        seeds = [
-            (doc, score) for doc, score in seed_results
-            if score >= self.score_threshold
-        ]
 
         if not seeds:
             return []

@@ -201,18 +201,20 @@ impl SparseVectorInput {
                 map.len()
             ));
         }
-        let mut pairs = Vec::with_capacity(map.len());
-        for (key, value) in map {
-            if !value.is_finite() {
-                return Err(format!(
-                    "Sparse vector value for key '{key}' is not finite: {value}"
-                ));
-            }
-            let idx: u32 = key
-                .parse()
-                .map_err(|_| format!("Sparse vector key '{key}' is not a valid u32 term ID"))?;
-            pairs.push((idx, value));
-        }
+        let pairs = map
+            .into_iter()
+            .map(|(key, value)| {
+                if !value.is_finite() {
+                    return Err(format!(
+                        "Sparse vector value for key '{key}' is not finite: {value}"
+                    ));
+                }
+                let idx: u32 = key
+                    .parse()
+                    .map_err(|_| format!("Sparse vector key '{key}' is not a valid u32 term ID"))?;
+                Ok((idx, value))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         Ok(crate::sparse_index::SparseVector::new(pairs))
     }
 }
@@ -222,20 +224,23 @@ impl SparseVectorInput {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct FusionRequest {
     /// Fusion strategy: "rrf", "rsf" (alias "`relative_score`"),
-    /// "average" (alias "avg"), "maximum" (alias "max"), or "weighted".
+    /// "average" (alias "avg"), "maximum" (alias "max"), or "weighted",
+    /// case-insensitive — the grammar of `FusionStrategy::from_name`.
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
     /// RRF k parameter (only for strategy = "rrf", default 60).
     #[serde(default)]
     pub k: Option<u32>,
-    /// Dense weight (only for strategy = "rsf", default 0.5).
+    /// Dense weight (only for strategy = "rsf", default 0.5, or the
+    /// complement of `sparse_w` when only that one is given).
     #[serde(default)]
     pub dense_w: Option<f32>,
-    /// Sparse weight (only for strategy = "rsf", default 0.5).
+    /// Sparse weight (only for strategy = "rsf", default 0.5, or the
+    /// complement of `dense_w` when only that one is given).
     #[serde(default)]
     pub sparse_w: Option<f32>,
     /// Weighted fusion: weight applied to the average score component
-    /// (only for strategy = "weighted", default 0.5).
+    /// (only for strategy = "weighted", default 0.6).
     #[serde(default)]
     pub avg_w: Option<f32>,
     /// Weighted fusion: weight applied to the maximum score component
@@ -243,7 +248,7 @@ pub struct FusionRequest {
     #[serde(default)]
     pub max_w: Option<f32>,
     /// Weighted fusion: weight applied to the hit-ratio component
-    /// (only for strategy = "weighted", default 0.2).
+    /// (only for strategy = "weighted", default 0.1).
     #[serde(default)]
     pub hit_w: Option<f32>,
 }
@@ -446,7 +451,9 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_top_k")]
     #[cfg_attr(feature = "openapi", schema(example = 10))]
     pub top_k: usize,
-    /// Fusion strategy: "average", "maximum", "rrf", "weighted", "`relative_score`".
+    /// Fusion strategy: "average" (alias "avg"), "maximum" (alias "max"),
+    /// "rrf", "weighted", or "`relative_score`" (alias "rsf"),
+    /// case-insensitive — the grammar of `FusionStrategy::from_name`.
     #[serde(default = "default_fusion_strategy")]
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
@@ -456,7 +463,7 @@ pub struct MultiQuerySearchRequest {
     pub rrf_k: u32,
     /// Weighted fusion: weight for average score component.
     #[serde(default = "default_avg_weight")]
-    #[cfg_attr(feature = "openapi", schema(example = 0.5))]
+    #[cfg_attr(feature = "openapi", schema(example = 0.6))]
     pub avg_weight: f32,
     /// Weighted fusion: weight for max score component.
     #[serde(default = "default_max_weight")]
@@ -464,7 +471,7 @@ pub struct MultiQuerySearchRequest {
     pub max_weight: f32,
     /// Weighted fusion: weight for hit count component.
     #[serde(default = "default_hit_weight")]
-    #[cfg_attr(feature = "openapi", schema(example = 0.2))]
+    #[cfg_attr(feature = "openapi", schema(example = 0.1))]
     pub hit_weight: f32,
     /// Relative score fusion: weight for the dense (vector) branch.
     #[serde(default = "default_dense_weight")]

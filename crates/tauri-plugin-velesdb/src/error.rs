@@ -60,30 +60,56 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
+/// Code of [`Error::TaskJoin`], the one plugin condition core has no code for.
+const TASK_JOIN_CODE: &str = "TASK_JOIN";
+
+impl Error {
+    /// The code and recoverability this error reports, both read from core's
+    /// taxonomy: a core error answers for itself, and a plugin-local variant
+    /// answers through the core variant naming the same condition, so neither
+    /// is a copy that can drift from [`velesdb_core::Error::code`].
+    fn classification(&self) -> (&'static str, bool) {
+        use velesdb_core::Error as Core;
+        let equivalent = match self {
+            Self::Database(core_err) => return (core_err.code(), core_err.is_recoverable()),
+            // A blocking task that panicked or was cancelled at shutdown:
+            // retrying the same command cannot help.
+            Self::TaskJoin(_) => return (TASK_JOIN_CODE, false),
+            Self::CollectionNotFound(_) => Core::CollectionNotFound(String::new()),
+            // Agent memory entries are points, so a missing one is VELES-003.
+            Self::NotFound(_) => Core::PointNotFound(0),
+            Self::DimensionMismatch { expected, actual } => Core::DimensionMismatch {
+                expected: *expected,
+                actual: *actual,
+            },
+            Self::InvalidConfig(_) | Self::ConfigLoad { .. } => Core::Config(String::new()),
+            Self::Serialization(_) => Core::Serialization(String::new()),
+            Self::Io(io_err) => Core::Io(io_err.kind().into()),
+        };
+        (equivalent.code(), equivalent.is_recoverable())
+    }
+}
+
 /// Serializable error for Tauri commands.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandError {
     /// Error message.
     pub message: String,
-    /// Error code for programmatic handling.
+    /// Core taxonomy code (`VELES-###`) for programmatic handling, or
+    /// `TASK_JOIN` for a blocking task that could not be joined.
     pub code: String,
+    /// Whether retrying can succeed, as [`velesdb_core::Error::is_recoverable`]
+    /// answers for the same condition.
+    pub recoverable: bool,
 }
 
 impl From<Error> for CommandError {
     fn from(err: Error) -> Self {
-        let code = match &err {
-            Error::Database(core_err) => core_err.code(),
-            Error::CollectionNotFound(_) => "VELES-002",
-            Error::NotFound(_) => "NOT_FOUND",
-            Error::DimensionMismatch { .. } => "DIMENSION_MISMATCH",
-            Error::InvalidConfig(_) | Error::ConfigLoad { .. } => "INVALID_CONFIG",
-            Error::TaskJoin(_) => "TASK_JOIN",
-            Error::Serialization(_) => "SERIALIZATION_ERROR",
-            Error::Io(_) => "VELES-011",
-        };
+        let (code, recoverable) = err.classification();
         Self {
             message: err.to_string(),
             code: code.to_string(),
+            recoverable,
         }
     }
 }

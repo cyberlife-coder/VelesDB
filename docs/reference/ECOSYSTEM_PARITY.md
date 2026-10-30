@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-10-28 (v7.1.0; velesdb-memory 0.15.0)
+Last updated: 2026-10-29 (v8.0.0 + unreleased fusion/search-mode grammar and fused score direction; velesdb-memory 0.16.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -64,6 +64,9 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 - **Auto `_veles_date` stamp (introduced in velesdb-memory 0.11.0)**: every `remember` now auto-stamps a reserved `_veles_date` metadata field (`YYYYMMDD`, caller-set value never overwritten), making `recall_fused(date_field=…)` work with zero setup. Surfaced by delegation in Python (`tests/test_memory_service.py` asserts the stamp) and Node (`recallFusedDated`). **WASM is read-side only**: no clock exists on `wasm32-unknown-unknown`, so the WASM write path never stamps `_veles_date` (`MemoryService::remember_with_ttl`'s contract) — `recallFusedDated` exists there, but zero-setup dating does not; a caller must set `_veles_date` explicitly for the timeline to fill. The TS SDK (which wraps WASM) types and documents the `_veles_date` key (`sdks/typescript/src/memory.ts`, `MemoryMetadata._veles_date`) and ships `recallFusedDated`, under the same explicit-stamp caveat. LangGraph now exposes `recall_where`/`recall_fused(date_field=…)` to reach it too (see above), pending a `velesdb` release past 3.12.0.
 - **`load_working_context` returns an ENVELOPE on every surface since velesdb-memory 0.12.0**: `{found, working, other_sessions}` — the MCP tool, the Node, Python and WASM bindings, and the TS SDK. **Breaking** for the three bindings and the SDK, which until 0.12.0 returned the bare working context (or `null`/`None`): read `.working` for that value. The bare form could not express the difference between "nothing was ever saved" and "a typo in `session` missed a session that exists" — `other_sessions` names the near-misses, and is filled in on a hit too, since a typo landing on another REAL session is the case a caller can least detect. Shape parity is now enforced, not just method-name parity: `crates/velesdb-memory/tests/binding_parity_bdd.rs` reads each tool's `output_schema` root keys off the LIVE server and requires every binding to relay them or declare the divergence. Three pre-existing divergences it surfaced were declared there as known gaps (six entries, since two of them spanned more than one binding): all three bindings dropped `entity.relations_in` (added server-side by #1681), the Node binding's `CompiledContextJs` dropped `compile_context.warnings`, and both the Node and Python bindings dropped `remember_extracted.skipped_over_cap`. **All six are closed** (#1690, #1691, #1692); `SHAPE_DIVERGENCES` now holds deliberate unwraps only.
 - **The TypeScript SDK is inside a guard's perimeter (#1721)**: it had never been in one, and shipped 17 of the 19 methods the WASM binding exposed for its whole life — `entity` and `unrelate` were simply absent. It is checked as a SECOND LINK rather than as a fourth binding: the SDK wraps the WASM bundle and can never publish more than it does, so the invariant is "the SDK relays every tool that reaches WASM", composed with the existing "WASM relays every tool the server advertises". Framing it as a fourth binding would have duplicated WASM's `feedback` exemption into a second list — and a decision recorded twice is a decision that will drift. The reader is a small TypeScript-aware scan in the same file, because the tool list comes from a REAL running MCP server; a check living in the SDK's own test suite would have had to hard-code that list, which is the very defect #1721 reports.
+- **Hybrid Search (dense + sparse) — one fusion in core** (2026-10-29): `VectorCollection::hybrid_sparse_search` / `hybrid_sparse_search_filtered`, the entry point the server, CLI, Python, mobile and Tauri call, carried its own copy of the dense + sparse fusion without the #2102 score-direction alignment, so on a Euclidean or Hamming collection a score-level strategy ranked the farthest dense point first. It now delegates to `Collection::hybrid_sparse_search_inner`, the body the VelesQL `NEAR ... AND SPARSE_NEAR ...` path fuses through. On every one of those surfaces a dense vector of the wrong dimension fails with `DimensionMismatch` (VELES-004) and an unknown sparse index with `Sparse index '...' not found` (VELES-009), as the sparse-only search already did; both used to degrade to the other branch. WASM's in-memory `hybrid_search_fuse` is a separate path and unchanged.
+- **VelesQL `NEAR` under `OR`** (2026-10-29): core and WASM agree. `vector NEAR $v OR <metadata>` returns the NEAR ranking with NEAR scores and reads the rest of the WHERE with the NEAR leaf as TRUE — what the WASM executor already did, and what core's WHERE evaluator says. Core used to drop the NEAR hits. Executor fixture cases X021–X022 run on core, CLI and WASM.
+- **`NEAR_FUSED ... USING FUSION 'weighted'|'rsf'`** (known gap): core's validator rejects it with `V012`; the WASM executor does not run core's `QueryValidator` and executes it as `rrf` (`crates/velesdb-wasm/src/velesql_fused.rs`, `config_to_strategy`).
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
 - **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
 - **Haystack DocumentStore protocol limits**: The Haystack 2.x `DocumentStore` ABC exposes `write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, and `delete_documents`. Dense retrieval in pipelines ships as the dedicated `VelesDBEmbeddingRetriever` component (`integrations/haystack/src/haystack_velesdb/retriever.py`); BM25/hybrid retriever components remain a follow-up. Graph collections, agent memory, and sparse-named indexes are intentionally `N/A` because they have no idiomatic mapping in Haystack's protocol and are reachable through the raw `velesdb` Python wrapper if needed.
@@ -87,6 +90,20 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
   | Durable TTL set/refresh | ✅ `PATCH .../points/{id}/ttl` | ✅ `client.setTtlDurable()` | ❌ (throws `NOT_SUPPORTED`) | ✅ `set_semantic/episodic/procedural_ttl_durable`, `store_with_ttl`, `record_with_ttl`, `learn_with_ttl` |
   | Temporal recall facades | n/a (use `/query`) | ✅ `recallRecent` / `recallOlderThan` | ❌ (throws `NOT_SUPPORTED`) | ✅ `episodic.recent` / `episodic.older_than` |
 - **Agent Memory (WASM / Mobile)**: WASM now ships the high-level `MemoryService` wedge (remember — incl. per-fact `ttlSeconds` — /recall/recallWhere/recallFused/relate/unrelate/forget/entity/why/rememberExtracted; in-memory only, no persistence under WASM, #1310) alongside the primitive `SemanticMemory`. `rememberExtracted` on WASM (and on the TS SDK wrapping it) runs the deterministic, network-free `outline` extractor ONLY — a generative backend (`"ollama"`) is refused by name rather than silently substituted, because it would put a network call in the bundle (`crates/velesdb-wasm/src/memory_service.rs`, `sdks/typescript/src/memory.ts` `rememberExtracted`). `feedback` remains deliberately absent on WASM (it sits behind the `persistence` feature; a durable learned confidence is meaningless for a store that disappears on page reload). Mobile remains ⚠️ semantic-only (`VelesSemanticMemory`). Episodic/procedural memory, the standalone TTL setters (`setTtlDurable`-style), and snapshots are not exposed on these bindings.
+- **Agent Memory — search quality per call (velesdb-core 8.0.0)**: `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and `query_excluding_with_quality` run one semantic search at an explicit `SearchQuality`; `query`, `query_filtered` and `query_excluding` keep the collection's runtime quality. Usage: [AGENT_MEMORY.md](../guides/AGENT_MEMORY.md#semantic-search-at-an-explicit-quality). Where the choice reaches a caller:
+
+  | Surface | Per-call quality | Per-store quality |
+  |---|---|---|
+  | Core (`SemanticMemory`) | ✅ the three `*_with_quality` methods | n/a |
+  | `velesdb-memory` MCP server | n/a | ✅ `VELESDB_MEMORY_SEARCH_QUALITY` / `[search] quality` ([MCP_SERVER_SETUP.md](../guides/MCP_SERVER_SETUP.md#recall-quality)) |
+  | Python `MemoryService` | n/a | ✅ `MemoryService(path, ..., search_quality=...)` |
+  | Node `MemoryService` | n/a | ✅ `searchQuality` |
+  | Python `AgentMemory.semantic` | ✅ `query(embedding, top_k, quality=...)` → `query_with_quality` | n/a |
+  | Tauri plugin | ✅ `semantic_query`'s optional `quality` → `query_with_quality` | n/a |
+  | Mobile `VelesSemanticMemory` | ✅ `query_with_quality(embedding, top_k, SearchQuality)` through the collection's gated `search_with_quality` | n/a |
+  | WASM / TS SDK `MemoryService` | N/A — brute-force search, no HNSW (see `SearchQuality` below) | N/A |
+
+  Every string setting and argument is parsed with `velesdb_core::api_types::parse_search_mode`, so the accepted forms (`custom:<ef>` and `adaptive:<min_ef>:<max_ef>` included) and the refusal of an unknown one are the same everywhere; mobile takes its typed `SearchQuality` enum, checked against the same ef range by `api_types::validate_ef_search`. Mobile is the one surface not served by `SemanticMemory::query_with_quality`: that method reads the collection leaf directly, and every mobile read goes through the observer read gate (`Database::gated_search`, #1392), so the mobile memory keeps its gated collection search and only gains the quality. The filtered and excluding `*_with_quality` variants are Rust-only. `recall_where` / column-predicate recall runs its own search path and is not affected.
 - **Auto-extraction (text → graph)**: lives in the high-level `velesdb-memory` **MCP server**, not in this core-feature matrix. `MemoryService::remember_extracted` (and the `remember_extracted` MCP tool) run an `Extractor` over raw text and auto-wire the fact↔topic graph; MCP accepts the backend per call, with the daemon's configured backend as the default and `outline` always available. The reusable core primitive it builds on is `SemanticMemory::query_excluding` (negative-filter vector search, used to keep internal entity hubs out of recall/why). The MCP `recall`/`why` tools inherit hub-exclusion transparently. The high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) is now exposed beyond the MCP server in **Python** (`velesdb-python`, #1242), **Node.js** (`velesdb-node` / npm `@wiscale/velesdb-memory-node`, #1245), and the **TS/WASM SDK** (`MemoryService` over the in-browser backend, #1310 — `rememberExtracted` included there via the deterministic `outline` extractor only; a generative backend is refused, see the Agent Memory (WASM / Mobile) note).
 - **Persistence (WASM)**: Disabled by design — `persistence` feature flag is excluded for `wasm32-unknown-unknown` targets.
 - **GPU**: Requires `gpu` feature flag; only available in crates that link `wgpu` (core, server, Python bindings).
@@ -128,6 +145,24 @@ and multi-column ORDER BY, the ascending-id tie-break, and bounded top-k
 [KNOWN_LIMITATIONS #13](./KNOWN_LIMITATIONS.md#13-velesql-executor-conformance-core-wasm-cli)
 (resolved).
 
+Since fixture v2.1.0 (2026-10-29) the core and WASM halves also cover the
+statement families the WASM executor implements on its own rather than through
+core: NEAR ranking, hybrid NEAR + metadata and `similarity()` thresholds, with
+each row's score (`near_cases`); `NEAR_FUSED` rrf/average/maximum
+(`fusion_cases`); queries both engines must refuse (`rejected_cases`);
+UPDATE/DELETE followed by a SELECT (`dml_cases`); DISTINCT and named-column
+projection (`projection_cases`). LIKE, ILIKE and OFFSET joined the scalar cases
+the CLI runs as well. Growing the fixture surfaced three WASM defects, now
+fixed: the executor did not run core's `QueryValidator` (it answered `USING
+FUSION` over a single `NEAR`, and `NEAR_FUSED` weighted/rsf, which core
+refuses), a `similarity()` threshold without `NEAR` came back unranked with
+score 0.0, and `SELECT DISTINCT` ignored `ORDER BY` and the default `LIMIT`.
+The accepted gaps that remain are the fixture's `documented_divergences`:
+D001 (unaliased aggregate key), D003 (set-operation row order), D004 (MATCH data
+model), D005 (multi-query rsf), D007 (WASM DELETE accepts any WHERE, core only
+id predicates), D008 (core UPDATE may set `vector`) and D009 (an unranked row
+scores 1.0 on core, 0.0 on WASM).
+
 ## Enum Propagation Matrix
 
 Tracks whether core enums are fully propagated to each ecosystem component.
@@ -158,7 +193,11 @@ All 5 variants (`Full`, `SQ8`, `Binary`, `ProductQuantization`, `RaBitQ`) are su
 
 > **Documented divergence — the memory behaviour of `SQ8` and `RaBitQ` is not uniform across surfaces.** The API is: every component accepts and persists all 5 variants, which is what the 10/10 above measures. What differs is what the mode *does* to the resident set.
 >
-> Since #2112 those two modes keep their f32 vectors in a file-backed arena rather than an anonymous allocation, cutting anonymous RSS 61% at 100 000 × 768-d (see [QUANTIZATION.md](../guides/QUANTIZATION.md#measured-resident-set)). That arena is gated on the `persistence` feature and needs a writable collection directory. `velesdb-wasm` takes `velesdb-core` with `default-features = false`, so **on WASM and in the browser, `SQ8` and `RaBitQ` run with a heap arena and deliver no resident-set saving** — same mode name, same results, different memory profile. A native host that cannot host the arena file (read-only directory, no space) degrades the same way, by design and with a `warn!`.
+> Since #2112 those two modes keep their f32 vectors in a file-backed arena rather than an anonymous allocation, cutting anonymous RSS 61% at 100 000 × 768-d (see [QUANTIZATION.md](../guides/QUANTIZATION.md#measured-resident-set)). That arena is gated on the `persistence` feature and needs a writable collection directory. A native host that cannot host the arena file (read-only directory, no space) runs those modes with a heap arena and no resident-set saving, by design and with a `warn!`.
+>
+> **WASM: same mode name, same results, no memory saving.** The browser `VectorStore` does not use core's index: it searches by brute force. Every storage mode keeps the f32 vectors (4 bytes per dimension plus 8 per id, as `Full`) and scores them exactly, so each mode returns the same top-k and scores as a core collection created with it — core re-ranks its quantized modes with exact f32 and runs `Binary` as `Full`. `crates/velesdb-wasm/src/quantization_parity_tests.rs` pins this per mode and metric against a real core collection (CI's "WASM↔core quantization parity" step). This was not true until the change that introduced that test: the browser store kept only lossy codes (a per-vector SQ8 for `SQ8`/`ProductQuantization`/`RaBitQ`, sign bits decoded to 0/1 for `Binary`) and scored the reconstruction, so the same mode name ranked differently from core. Stores saved in that format (`VELS` v2) still load, as their reconstruction.
+>
+> One core-side split remains, and the browser follows core's exact side of it: once a `ProductQuantization` collection has trained its quantizer (128 inserts), core's default `search()` returns ADC-approximated scores over an oversampled candidate set, while `search_with_quality` returns exact f32 scores (`collection/search/vector.rs`). The browser store returns the exact scores in both entry points.
 >
 > Nothing to fix in the bindings: they pass the mode through and core decides. It is recorded here because "supported everywhere" is true of the surface and would be misread as true of the benefit.
 
@@ -203,7 +242,7 @@ All 4 strategies (`RRF`, `Weighted`, `Maximum`, `RSF`) plus `Average` are suppor
 | Core | ✅ (source of truth) | |
 | Server | ✅ | |
 | Python | ✅ | |
-| WASM | N/A | Brute-force only, no HNSW index |
+| WASM | N/A | Brute-force only, no HNSW index; the mode string is still validated by core's `parse_search_mode` |
 | Mobile | ✅ | `SearchQuality` enum mapped to core (`search_with_quality`) |
 | CLI | ✅ | |
 | TS SDK | ✅ | |
@@ -223,7 +262,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 | Server | ✅ | |
 | Python | ✅ | |
 | WASM | ✅ | |
-| Mobile | ✅ | `create_graph_collection` / `create_graph_collection_with_embeddings` exposed via `#[uniffi::export]` |
+| Mobile | ✅ | `create_graph_collection` / `create_graph_collection_with_embeddings` exposed via `#[uniffi::export]`; `get_graph_store` hands back the collection's graph as a `MobileGraphStore` |
 | CLI | ✅ | |
 | TS SDK | ✅ | |
 | Tauri | ✅ | |
@@ -243,9 +282,23 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
 
 ---
 
+## Recently Landed (2026-10-29)
+
+- **Agent-memory semantic search takes a quality per call in Python, Tauri and mobile.** See the "search quality per call" matrix above: Python `memory.semantic.query(..., quality=...)` and the Tauri `semantic_query` `quality` field parse with core's `parse_search_mode` and call `SemanticMemory::query_with_quality`; mobile adds `VelesSemanticMemory::query_with_quality` over its gated collection search.
+- **Python's `GraphStore.traverse_dfs` is core's DFS.** Core gains `collection::graph::dfs_traverse(&EdgeStore, source, &TraversalConfig)`, the loop a collection's `traverse_dfs_config` now runs too (an equivalence test pins the two), and `crates/velesdb-python/src/graph_store.rs` drops its own `dfs_collect`, which emitted one result per edge (a node reached by two edges twice) in an order of its own. Its BFS already delegated to `bfs_stream`; both now share one result mapping. `velesdb-wasm`'s `GraphStore` still carries its own traversals, because core's graph module needs `persistence`.
+
+- **The Python integrations call core instead of copying it.** `velesdb-python` now exposes `velesdb.hash_id` (`velesdb_core::hash_id`), `velesdb.metric_higher_is_better` (`DistanceMetric::higher_is_better`) and `velesdb.validate_search_quality` (`api_types::parse_search_mode`). The MIT `velesdb_common` package dropped its FNV-1a copy (`stable_hash_id(algorithm="fnv1a")` delegates, and raises `ImportError` on a wheel older than 8.0.0) and its search-quality grammar (it delegates and wraps core's `ValueError` as `SecurityError`; an older wheel leaves the check to search time). The SHA-256 default of `stable_hash_id` and its documented divergence from core ([KNOWN_LIMITATIONS #12](./KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components)) are unchanged.
+- **LlamaIndex score direction fixed for Jaccard.** `VelesDBVectorStore` treated Jaccard, a similarity in core, as a distance and inverted its ranking through `1 / (1 + s)`. The direction now comes from the binding via `velesdb_common.scores.score_to_similarity` (offline fallback pinned to the binding by a drift test), with an end-to-end regression test on a real Jaccard collection. LangChain's threshold followed in the next entry.
+- **Score direction holds on every integration search path.** Core states the direction of fused scores (`FusionStrategy::fused_direction`, Python `FusionStrategy.fused_higher_is_better`): RRF and relative-score scores are higher-is-better under every metric, average/maximum/weighted keep the metric's units. LlamaIndex stopped mapping RRF/RSF fusion, `hybrid_query`, `text_query`, dense + sparse and CONTAINS_TEXT scores through `1 / (1 + s)` on `euclidean`/`hamming`, which ranked the best fused match least similar; only raw single-metric scores and score-space fusions of a distance are mapped. LangChain's `similarity_search_with_relevance_scores` returns higher-is-closer relevance under every metric (a distance becomes `1 / (1 + d)`), so `score_threshold`, the `similarity_score_threshold` retriever and `GraphRetriever.score_threshold` keep the closest documents instead of the farthest. Both read the direction from the binding through `velesdb_common.scores`, with a literal fallback pinned by drift tests for a wheel older than 8.0.0. Haystack's `Document.score` follows the same rule under `scale_score=True`, and LangChain's async relevance path runs the sync one. A dense + sparse search with an empty branch is fused too, so its scores always have the stated direction. Open: LlamaIndex `velesql()` reads every score in the metric's direction, so on a distance collection a `USING FUSION`/`NEAR_FUSED` statement's fused score, a text `MATCH` score and the `1.0` a non-`NEAR` `SELECT` row carries are all mapped like a `NEAR` distance; core exposes no per-statement score direction to tell them apart.
+- **The TypeScript SDK's WASM allowlist lists every storage mode.** `WASM_CAPABILITIES.storageModes` now includes `pq` and `rabitq`, which velesdb-wasm keeps as f32 and answers with core's results like the other modes; they were refused with `NOT_SUPPORTED` while the browser stored them as SQ8.
+- **`SearchConfigOptions.default_mode` maps through core's serde names** instead of a hand-written table in `crates/velesdb-python/src/options/search.rs`, so a `SearchMode` variant core adds is accepted from Python as it is from a `[search]` TOML section.
+- **Fusion strategy names are single-sourced in core.** `velesdb_core::FusionStrategy::from_name(name, FusionParams)` is the one reading of `rrf`, `average`/`avg`, `maximum`/`max`, `weighted`, `relative_score`/`rsf` (case-insensitive), with core's defaults (`DEFAULT_RRF_K`, `DEFAULT_WEIGHTED_*`, `DEFAULT_RELATIVE_SCORE_*`) and the validating constructors. The server (`/search/multi` and the hybrid `fusion` object), the CLI (`multi-search` and the REPL's `.hybrid-sparse`), Tauri and WASM's `fuse_results` delegate to it; Python exposes it as `FusionStrategy.from_name`. This removed three drifts: the CLI's `weighted` used the pre-#1545 0.5/0.3/0.2, the REPL was case-sensitive and refused `avg`, and Tauri refused `avg`/`max`. WASM's N-branch `rsf` aggregation stays local (D005); only its name parsing moved. Still on their own name tables, outside this change: the MIT `velesdb_common.fusion` builder and the TS SDK's `FUSION_STRATEGY_NAMES` (`sdks/typescript/src/backends/wasm-search.ts`).
+- **WASM's search-mode grammar is core's.** `SearchQuality` and `api_types::parse_search_mode` no longer need `persistence`, so `velesdb-wasm` validates `search_with_quality` modes with core's parser. Its local copy in `parsing.rs` is gone, and an equivalence test pins the decision on a shared table.
+
 ## Recently Landed (2026-06-14)
 
 - **WASM fusion now delegates 4/5 strategies to core.** `average`/`maximum`/`weighted`/`rrf` map onto `velesdb_core::FusionStrategy::fuse` (ranking identical to core, pinned by an equivalence test); `relative_score`/`rsf` stays WASM-local by design because its N-branch equal-weight semantics differ from core's two-branch dense+sparse weighted sum. See the RSF/Weighted note above.
+- **(2026-10-29) Executor conformance covers the WASM executor's own modules.** Fixture v2.1.0 adds NEAR, `similarity()`, `NEAR_FUSED`, rejected, UPDATE/DELETE and DISTINCT/projection cases, run against core and WASM; the WASM executor now validates with core's `QueryValidator` and dedups through core's `velesql::distinct_evaluator`. See the Conformance Test Coverage section above.
 - **Executor-level conformance now exists for core.** `conformance/velesql_executor_cases.json` + `crates/velesdb-core/tests/velesql_executor_conformance.rs` assert result rows/counts/ordering (not just that a query parses). Extended to the WASM and CLI executors on 2026-06-20 (action item 2 — now done).
 - **Scalar `ORDER BY` + `LIMIT` correctness bug fixed.** A scalar (non-`similarity()`) `ORDER BY <col> ... LIMIT k` previously truncated to `k` in storage order *before* sorting; it now fetches the full matching set so the sort precedes truncation, restoring the [KNOWN_LIMITATIONS #9](./KNOWN_LIMITATIONS.md#9-bounded-query-result-materialization) bounded==unbounded guarantee. The `similarity()`-ordered HNSW fast path was untouched, so recall is unaffected. (Surfaced by the new executor conformance net above.)
 - **Point-ID hashing single-sourced for Haystack.** The Haystack `DocumentStore` now imports the canonical `velesdb_common.ids.stable_hash_id` instead of a bit-identical forked copy (behaviour-preserving; removes a re-implemented hash from an MIT package). The intentional remaining divergence — `velesdb-migrate`'s distinct `stable_point_id` — is documented in [KNOWN_LIMITATIONS #12](./KNOWN_LIMITATIONS.md#12-string--u64-point-id-hashing-differs-across-components).
@@ -278,9 +331,9 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
      tool (plus `list_working_contexts`, tracked above). Presumed by-design
      toolkit scoping — to be confirmed and recorded, not inferred.
    - **Mobile**: `velesdb-mobile` ships only a thin semantic-memory slice
-     (`VelesSemanticMemory`) plus its own RAM-only `MobileGraphStore`; no doc
-     records whether full memory-wedge parity on mobile is wanted or
-     declined. Open decision.
+     (`VelesSemanticMemory`); its `MobileGraphStore` is a core graph
+     collection (item 13), not a memory surface. No doc records whether full
+     memory-wedge parity on mobile is wanted or declined. Open decision.
    - **REST relation/TTL divergences from the memory wedge**
      (documented pending a decision, not silently): REST `relate`
      (`POST /collections/{name}/relations`,
@@ -294,3 +347,55 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
      `ttl_seconds: 0` as expire-now where the wedge refuses `Some(0)`
      (`ZeroTtl`).
 10. **Read-path gate (observer) parity (audit F-5.4).** The 3.10.0 read-path gate — `velesdb_core::observer` + `database::gated_search` / `authorize_read` (scope AND-composed with the caller filter, fail-closed on non-filterable paths) — is wired into **`velesdb-server`** (search/match/graph handlers) and **`velesdb-python`** (`.search()` gating). `tauri-plugin-velesdb` ships a **notify-only** observer (no deny). **`velesdb-mobile`** now ships a deny-capable observer (`open_with_observer` + `MobileObserver`/`MobileAccessDecision`, `crates/velesdb-mobile/src/lib.rs:145`). **`velesdb-node`** (memory-only, out of scope by design) and **`velesdb-wasm`** expose **no** observer, so the gate is inactive there. This is a **parity gap, not a vulnerability**: the core contract is fail-open *only when no observer is registered* (no policy ⇒ no denial to enforce), so an ungated binding simply has no governance layer to bypass. Governance-sensitive deployments must use the server or Python surface. Wiring an observer hook into mobile/wasm is a follow-up; node is intentionally excluded (it never touches the gated core `Collection`).
+11. **Core documentation gaps (2026-10 parity audit).** ✅ **Documented (2026-10-29).** Core surfaces that had no usage documentation now have it, in the guide where a user of that surface looks:
+    - [CORE_OPERATIONS_API.md](../guides/CORE_OPERATIONS_API.md) (new): the observer port (`open_with_observer`, the DDL / DML / read hooks, `AccessDecision` / `AccessScope` / `QueryAccessContext`), governed reads (`gated_search` with every `GatedRead` variant, `authorize_read`), guard-rails (`QueryLimits`, `Database::update_guardrails`, `CircuitBreaker`, `RateLimiter`), validation and stable ids (`validate_*`, `MAX_COLLECTION_NAME_LENGTH`, `MIN`/`MAX_DIMENSION`, `hash_id`, `hash_id_bytes`, `hash_edge_id`), index introspection (`list_indexes`, `indexes_memory_usage`, `order_by_index_advice`), `apply_advanced_config`, auto-reindex detection, the filter-strategy decision and planner, the standalone `ColumnStore` with its filters and TTLs, and the metrics types including `graph_metrics_prometheus` / `match_metrics_prometheus` and every retrieval metric.
+    - [api-reference.md](./api-reference.md): every `/metrics` family the server writes, `velesdb_graph_*` and `velesdb_match_*` included; the `/search` request fields the table omitted (`mode`, `ef_search`, `timeout_ms`, the sparse and fusion fields) and what `/search/batch` does with them; the real `/guardrails` defaults, which the example misstated (`memory_limit_bytes` 1 GiB and `rate_limit_qps` 100, for 100 MiB and 100 000).
+    - [CORE_COLLECTIONS_AND_METRICS.md](../guides/CORE_COLLECTIONS_AND_METRICS.md): `AnyCollection`'s shared operations and `is_*` / `as_*` / `into_*` access; [SEARCH_MODES.md](../guides/SEARCH_MODES.md): the `api_types` mode parser and ef bounds; [AGENT_MEMORY.md](../guides/AGENT_MEMORY.md): the `*_with_quality` searches, incoming and bounded relations, and relations on episodic and procedural memory; [CORE_API_MAP.md](../guides/CORE_API_MAP.md): the import paths of all of the above.
+
+    Writing them down surfaced behaviour that did less than its name, since fixed in core (unreleased) and documented as fixed:
+    - **Guard-rails reach every limit.** `Database::update_guardrails` (and `PUT /guardrails`, now `update_guardrails_with`) reconfigures each collection's `RateLimiter` and `CircuitBreaker` in place, and every collection created or opened afterwards starts from the updated limits; `Database::guardrail_limits` is the single source `GET /guardrails` reads. The server's own `AppState.query_limits` copy is gone. Python, Mobile and Tauri call the same `update_guardrails`, so they get the same reach with no binding change.
+    - **Advanced config takes effect or says it will not yet.** `apply_advanced_config` installs a deferred indexer or an async index builder at once into a collection that runs none (which covers `POST /collections`); a change to a live one is persisted for the next open and named by the new `VectorCollection::pending_reopen` (`PendingReopen`). Python `Collection.pending_reopen()` and Mobile `pending_reopen()` relay it as field names. REST has no endpoint that changes these settings after creation, so it needs none.
+    - **Every `/metrics` family is fed.** Core feeds `velesdb_limits_exceeded_total` (`QueryContext` checks), `velesdb_rate_limit_requests_total` (`RateLimiter::check`), `velesdb_cache_collision_fallback_total` (query-cache bucket collisions), `velesdb_match_guardrail_hits_total` and `velesdb_match_similarity_queries_total`, and `velesdb_match_latency_seconds` has `_sum` / `_count`; `Database::refresh_storage_gauges` sets `velesdb_documents_total` and `velesdb_index_size_bytes` at each scrape; the server counts `velesdb_active_connections` on both serving paths and `velesdb_queries_by_type{type="graph"}` on its traversal and `/match` handlers. The never-fed `velesdb_traversal_*` families are removed in favour of the per-collection `velesdb_graph_traversal*` core already feeds, and in 8.0.0 so is `velesdb_core::TraversalMetrics`, the never-fed type whose `export_prometheus` still wrote them.
+    - **`list_indexes` reports real figures.** `memory_bytes` is each index's heap estimate, a secondary index is labelled `btree` (it was `hash`), range indexes report their cardinality, and `indexes_memory_usage` includes secondary indexes.
+12. ✅ **Done (2026-10-29). Bindings carry core's error taxonomy and result
+    kind instead of re-deriving them.** `tauri-plugin-velesdb` reports
+    core's `VELES-###` code and `Error::is_recoverable` for every condition core
+    codes, the ones the plugin detects itself included (`VELES-003`,
+    `VELES-004`, `VELES-009`, `VELES-010`, `VELES-012` replace `NOT_FOUND`,
+    `DIMENSION_MISMATCH`, `INVALID_CONFIG` and `SERIALIZATION_ERROR`;
+    `crates/tauri-plugin-velesdb/src/error.rs`), with `TASK_JOIN` the one
+    plugin-only code. `velesdb-mobile` maps a core error through core's code
+    and recoverability on `execute_query`, `query`, `train_pq` and the sparse
+    and multi-query leaves, which answered a codeless, always-recoverable
+    `Database` error (`VelesError::from_core`, `crates/velesdb-mobile/src/types.rs`).
+    Its typed `Collection` and `DimensionMismatch` variants carry the same
+    `code` and `recoverable` as `Database`, read from core's error, and a
+    collection of the wrong kind is coded as core's own lookups code it,
+    `VELES-002` (`VelesError::wrong_collection_kind`).
+    The statement result kind is single-sourced in core as
+    `velesql::Query::result_kind`, which mobile and WASM both map from, so
+    mobile's `SELECT EDGES` is `Rows`, as WASM's was. `velesdb-server` was
+    checked and needed no change: its `VELES-004` and `VELES-027` literals
+    match core's taxonomy (`VELES-027` covers a timeout through
+    `GuardRailViolation::Timeout`).
+13. ✅ **Done (2026-10-29) for mobile. Graph traversal is core's on mobile.**
+    `velesdb-mobile` carried a second graph engine (`MobileGraphStore`: hash
+    maps, its own BFS and DFS, a JSON `save`/`load`) whose multi-source BFS
+    deduplicated by node where core deduplicates by path, and which accepted
+    edges to unknown nodes. It is now a handle on a core `GraphCollection`
+    obtained with `VelesDatabase::get_graph_store`: storage, BFS, DFS and
+    multi-source BFS are core's, nodes carry core's `_labels` so VelesQL
+    `MATCH` sees them, and every read passes the read gate as
+    `GraphTraversal` (`crates/velesdb-mobile/src/graph.rs`;
+    `traversals_are_cores` and `velesql_match_sees_store_nodes` in
+    `graph_tests.rs` pin both). `import_snapshot` migrates a file the old
+    `save` wrote. `remove_edge` returns whether it removed an edge and
+    surfaces a refused write-ahead-log append as core's `VELES-006`, through
+    the new `GraphCollection::try_remove_edge`; `clear` removes edges before
+    nodes, as core's `TRUNCATE` does. Still forked: `velesdb-wasm` keeps its
+    own `GraphStore` (`crates/velesdb-wasm/src/graph.rs`) because core's
+    graph module is gated behind `persistence`, which wasm does not build.
+    `velesdb-python`'s in-memory `GraphStore` is no longer forked: its BFS and,
+    since #2549, its DFS run core's over a standalone `EdgeStore`
+    (`bfs_stream` and the free `collection::graph::dfs_traverse`,
+    `crates/velesdb-python/src/graph_store.rs`).

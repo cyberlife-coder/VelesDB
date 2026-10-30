@@ -70,6 +70,17 @@ TARGETS: "list[tuple[str, str]]" = [
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     ("sdks/typescript/package-lock.json", "npm_lock"),
+    # The lockfiles of the crates built OUTSIDE the workspace (the fuzz targets,
+    # the Rust examples, the Tauri demo) pin velesdb-core by path, so each
+    # records its version. `cargo build` at the root refreshes only the root
+    # lockfile: these stayed on the old version through the 7.1.0 bump and the
+    # fuzz compile check, which builds with `--locked`, failed the release PR.
+    ("demos/tauri-rag-app/src-tauri/Cargo.lock", "cargo_lock_core"),
+    ("examples/agent_memory/Cargo.lock", "cargo_lock_core"),
+    ("examples/ecommerce_recommendation/Cargo.lock", "cargo_lock_core"),
+    ("examples/mini_recommender/Cargo.lock", "cargo_lock_core"),
+    ("examples/rust/Cargo.lock", "cargo_lock_core"),
+    ("fuzz/Cargo.lock", "cargo_lock_core"),
     ("docs/getting-started.md", "doc_health_snippet"),
     ("docs/reference/api-reference.md", "doc_health_snippet"),
     ("docs/guides/SERVER_SECURITY.md", "doc_health_snippet"),
@@ -292,6 +303,12 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
         text, n = _sub_first(text, r"(?m)^(\*\*v)" + VERSION_RE + r"(\*\*)", r"\g<1>" + ver + r"\g<2>")
     elif fmt == "cargo_pin":
         text, n = _sub_all(text, r"(velesdb-(?:core|server|cli)@)" + VERSION_RE, r"\g<1>" + ver)
+    elif fmt == "cargo_lock_core":
+        text, n = _sub_first(
+            text,
+            r'(name = "velesdb-core"\nversion = ")' + VERSION_RE + r'(")',
+            r"\g<1>" + ver + r"\g<2>",
+        )
     elif fmt == "cargo_dep_pin":
         # `velesdb-core = "X.Y.Z"` in a TOML snippet — a different shape from
         # `cargo_pin`'s `velesdb-core@X.Y.Z`, which is the shell/cargo-install

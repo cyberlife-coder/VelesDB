@@ -4,7 +4,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use velesdb_core::FusionStrategy as CoreFusionStrategy;
+use velesdb_core::fusion::ScoreDirection;
+use velesdb_core::{FusionParams, FusionStrategy as CoreFusionStrategy};
 
 /// Fusion strategy for combining results from multiple vector searches.
 ///
@@ -148,6 +149,93 @@ impl FusionStrategy {
         Self::relative_score(dense_weight, sparse_weight)
     }
 
+    /// Create the fusion strategy a name stands for.
+    ///
+    /// The name grammar is velesdb-core's, the one the REST server, the CLI,
+    /// the Tauri plugin and the WASM build read: ``rrf``, ``average``
+    /// (alias ``avg``), ``maximum`` (alias ``max``), ``weighted`` and
+    /// ``relative_score`` (alias ``rsf``), case-insensitive. A parameter left
+    /// out takes core's default; one the named strategy does not read is
+    /// ignored. A single ``relative_score`` weight implies the other.
+    ///
+    /// Args:
+    ///     name: Strategy name or alias
+    ///     k: RRF ranking constant (default: 60)
+    ///     avg_weight, max_weight, hit_weight: ``weighted`` weights
+    ///         (default: 0.6 / 0.3 / 0.1)
+    ///     dense_weight, sparse_weight: ``relative_score`` weights
+    ///         (default: 0.5 / 0.5)
+    ///
+    /// Returns:
+    ///     FusionStrategy: The named strategy
+    ///
+    /// Raises:
+    ///     ValueError: If the name is unknown or the weights are invalid
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.from_name("avg")
+    ///     >>> strategy = FusionStrategy.from_name("rsf", dense_weight=0.7)
+    #[staticmethod]
+    #[pyo3(signature = (
+        name,
+        *,
+        k = None,
+        avg_weight = None,
+        max_weight = None,
+        hit_weight = None,
+        dense_weight = None,
+        sparse_weight = None
+    ))]
+    fn from_name(
+        name: &str,
+        k: Option<u32>,
+        avg_weight: Option<f32>,
+        max_weight: Option<f32>,
+        hit_weight: Option<f32>,
+        dense_weight: Option<f32>,
+        sparse_weight: Option<f32>,
+    ) -> PyResult<Self> {
+        let params = FusionParams::default()
+            .with_rrf_k(k)
+            .with_avg_weight(avg_weight)
+            .with_max_weight(max_weight)
+            .with_hit_weight(hit_weight)
+            .with_dense_weight(dense_weight)
+            .with_sparse_weight(sparse_weight);
+        CoreFusionStrategy::from_name(name, params)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(format!("{e}")))
+    }
+
+    /// Whether a higher fused score is a closer match when this strategy
+    /// fuses branches scored by ``metric``, as
+    /// ``Collection.multi_query_search`` does.
+    ///
+    /// Reads velesdb-core's ``FusionStrategy::fused_direction``: ``average``,
+    /// ``maximum`` and ``weighted`` keep a distance metric's units (lower is
+    /// closer under ``euclidean`` and ``hamming``); ``rrf`` and
+    /// ``relative_score`` scores are higher-is-better under every metric.
+    ///
+    /// Args:
+    ///     metric: Distance metric name or alias, as ``create_collection``
+    ///         accepts it
+    ///
+    /// Returns:
+    ///     bool: ``True`` if a higher fused score is a closer match
+    ///
+    /// Raises:
+    ///     ValueError: If the metric is unknown
+    ///
+    /// Example:
+    ///     >>> FusionStrategy.average().fused_higher_is_better("euclidean")
+    ///     False
+    ///     >>> FusionStrategy.rrf().fused_higher_is_better("euclidean")
+    ///     True
+    fn fused_higher_is_better(&self, metric: &str) -> PyResult<bool> {
+        let direction = crate::utils::parse_metric(metric)?.score_direction();
+        Ok(self.inner.fused_direction(&[direction]) == ScoreDirection::HigherIsBetter)
+    }
+
     fn __repr__(&self) -> String {
         match &self.inner {
             CoreFusionStrategy::Average => "FusionStrategy.average()".to_string(),
@@ -244,3 +332,7 @@ fn optional_weight(weights: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f3
         None => Ok(None),
     }
 }
+
+#[cfg(test)]
+#[path = "fusion_tests.rs"]
+mod tests;

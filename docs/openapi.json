@@ -11,7 +11,7 @@
       "name": "VelesDB Core License 1.0",
       "url": "https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE"
     },
-    "version": "7.1.0"
+    "version": "8.0.0"
   },
   "servers": [
     {
@@ -3047,7 +3047,7 @@
           "points"
         ],
         "summary": "Enable streaming ingestion on a collection.",
-        "description": "Spawns the background drain task so subsequent calls to\n`/collections/{name}/stream/insert` accept points instead of returning a\n`409 Conflict` \"streaming not configured\" error. Omitted body fields fall\nback to the engine defaults. Calling this again replaces the existing\ningester (the old drain task is aborted).\n\nReturns `200 OK` on success and `404 Not Found` when the collection does\nnot exist.",
+        "description": "Spawns the background drain task so subsequent calls to\n`/collections/{name}/stream/insert` accept points instead of returning a\n`409 Conflict` \"streaming not configured\" error. Omitted body fields fall\nback to the engine defaults. Calling this again replaces the existing\ningester (the old drain task is aborted).\n\nReturns `200 OK` on success, `400 Bad Request` (`VELES-009`) for a config\nthe pipeline cannot run with, and `404 Not Found` when the collection does\nnot exist.",
         "operationId": "enable_streaming",
         "parameters": [
           {
@@ -3077,6 +3077,16 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A buffer_size of 0 or past the channel's limit, or a flush_interval_ms of 0 (VELES-009)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3254,6 +3264,7 @@
           "guardrails"
         ],
         "summary": "Update guard-rails configuration (partial update).",
+        "description": "Every named field reaches every collection: the per-query limits, the\nrate limiter and the circuit breaker of the collections already open, and\nthe starting limits of every collection created or opened afterwards\n(`Database::update_guardrails_with`). Not persisted across a restart.",
         "operationId": "update_guardrails",
         "requestBody": {
           "content": {
@@ -3272,6 +3283,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GuardRailsConfigResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused limits (`rate_limit_qps` or `circuit_failure_threshold` of 0); nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4524,7 +4545,7 @@
               "null"
             ],
             "format": "float",
-            "description": "Weighted fusion: weight applied to the average score component\n(only for strategy = \"weighted\", default 0.5)."
+            "description": "Weighted fusion: weight applied to the average score component\n(only for strategy = \"weighted\", default 0.6)."
           },
           "dense_w": {
             "type": [
@@ -4532,7 +4553,7 @@
               "null"
             ],
             "format": "float",
-            "description": "Dense weight (only for strategy = \"rsf\", default 0.5)."
+            "description": "Dense weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `sparse_w` when only that one is given)."
           },
           "hit_w": {
             "type": [
@@ -4540,7 +4561,7 @@
               "null"
             ],
             "format": "float",
-            "description": "Weighted fusion: weight applied to the hit-ratio component\n(only for strategy = \"weighted\", default 0.2)."
+            "description": "Weighted fusion: weight applied to the hit-ratio component\n(only for strategy = \"weighted\", default 0.1)."
           },
           "k": {
             "type": [
@@ -4565,11 +4586,11 @@
               "null"
             ],
             "format": "float",
-            "description": "Sparse weight (only for strategy = \"rsf\", default 0.5)."
+            "description": "Sparse weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `dense_w` when only that one is given)."
           },
           "strategy": {
             "type": "string",
-            "description": "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\".",
+            "description": "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\",\ncase-insensitive — the grammar of `FusionStrategy::from_name`.",
             "example": "rrf"
           }
         }
@@ -5070,7 +5091,7 @@
             "type": "number",
             "format": "float",
             "description": "Weighted fusion: weight for average score component.",
-            "example": 0.5
+            "example": 0.6
           },
           "dense_weight": {
             "type": "number",
@@ -5093,7 +5114,7 @@
             "type": "number",
             "format": "float",
             "description": "Weighted fusion: weight for hit count component.",
-            "example": 0.2
+            "example": 0.1
           },
           "max_weight": {
             "type": "number",
@@ -5116,7 +5137,7 @@
           },
           "strategy": {
             "type": "string",
-            "description": "Fusion strategy: \"average\", \"maximum\", \"rrf\", \"weighted\", \"`relative_score`\".",
+            "description": "Fusion strategy: \"average\" (alias \"avg\"), \"maximum\" (alias \"max\"),\n\"rrf\", \"weighted\", or \"`relative_score`\" (alias \"rsf\"),\ncase-insensitive — the grammar of `FusionStrategy::from_name`.",
             "example": "rrf"
           },
           "top_k": {

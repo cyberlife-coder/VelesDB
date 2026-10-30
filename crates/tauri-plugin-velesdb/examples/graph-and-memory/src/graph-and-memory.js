@@ -75,7 +75,7 @@ async function knowledgeGraph() {
   log('--- knowledge graph ---');
 
   // A graph collection is its own family: `upsert` and `search` reject it with
-  // INVALID_CONFIG ("Collection 'x' is not a vector collection").
+  // VELES-009 ("Collection 'x' is not a vector collection").
   // Omit `dimension` for a graph with no node embeddings.
   await invoke('plugin:velesdb|create_graph_collection', {
     request: { name: GRAPH },

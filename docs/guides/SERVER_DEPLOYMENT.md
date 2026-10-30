@@ -93,6 +93,11 @@ credentials, so load balancers and orchestrators can probe the server:
 enabled, because the Prometheus exposition leaks collection names and write
 rates (see `crates/velesdb-server/src/auth.rs::is_public_path` and finding F-02
 of the auth audit). Scrape it with the `Authorization: Bearer <key>` header.
+The families it carries — plan cache, query counters and durations, the
+engine's guard-rail rejections, per-graph-collection `velesdb_graph_*` series
+labelled `collection="<name>"`, and the process-wide `velesdb_match_*` series —
+are listed in the [REST reference](../reference/api-reference.md#get-metrics),
+including the ones declared but not fed yet, which always read `0`.
 
 ---
 
@@ -173,4 +178,4 @@ enabled = false
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

@@ -28,6 +28,7 @@ each guide links back.
 | [Core: sparse vectors and fusion](./CORE_SPARSE_AND_FUSION.md) | Named sparse vectors (SPLADE, BM25, tag sets) beside dense embeddings, and result fusion |
 | [Core: streaming inserts](./CORE_STREAMING_INSERTS.md) | Bounded-channel ingestion, backpressure and the delta buffer for continuously arriving data |
 | [Core: query plan cache](./CORE_QUERY_PLAN_CACHE.md) | The two-tier LRU plan cache that lets repeated queries skip parsing and planning |
+| [Core: operations API](./CORE_OPERATIONS_API.md) | Observer port and governed reads, guard-rails, validation and stable ids, index introspection, the column store, metrics and their Prometheus export |
 | [Core: Agent Memory SDK (Rust)](./AGENT_MEMORY.md#rust-api) | The `velesdb_core::agent` memory subsystems for chatbots, RAG and autonomous agents — the Rust API section of the Agent Memory guide |
 | [Core: performance numbers](./CORE_PERFORMANCE.md) | The measured figures, with their methodology and hardware |
 | [Search Modes](./SEARCH_MODES.md) | What Fast/Balanced/Accurate/Perfect/Adaptive mean and when to pick which |
@@ -125,6 +126,10 @@ version migration guides below.
 |-------|-------------|
 | [Migration v3.3.0](./MIGRATION_v3.3.0.md) | VelesQL correctness + cross-surface parity release migration guide |
 | [Migration v4.0.0](./MIGRATION_v4.0.0.md) | Hardening + API-cleanup release migration guide |
+| [Migration v5.0.0](./MIGRATION_v5.0.0.md) | The `load_working_context` envelope, on every surface that relays it |
+| [Migration v6.0.0](./MIGRATION_v6.0.0.md) | Three compile-time Rust API changes in `velesdb-core` |
+| [Migration v7.0.0](./MIGRATION_v7.0.0.md) | Search modes and `ef_search` that now fail, removed Rust API, `.vectors` v2 |
+| [Migration v8.0.0](./MIGRATION_v8.0.0.md) | Removed deprecated API, refused inputs, binding error codes; do not downgrade graph collections with edge properties |
 
 ## Tutorials
 

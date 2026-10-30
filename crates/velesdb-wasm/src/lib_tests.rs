@@ -22,87 +22,23 @@ fn test_storage_mode_binary() {
 }
 
 #[test]
-fn test_sq8_insert_and_memory() {
-    let mut store = VectorStore::new_with_mode(768, "cosine", "sq8").unwrap();
+fn test_every_storage_mode_keeps_f32_and_costs_the_same_memory() {
+    // Every mode keeps the f32 vectors to return core's exact results, so the
+    // mode changes neither what is stored nor what it costs: ids (8 bytes) +
+    // 4 bytes per dimension, the `full` figure.
     #[allow(clippy::cast_precision_loss)]
-    let vector: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001).collect();
+    let vector: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001 - 0.3).collect();
+    for mode in ["full", "sq8", "binary", "pq", "rabitq"] {
+        let mut store = VectorStore::new_with_mode(768, "cosine", mode).unwrap();
+        store.insert(1, &vector).unwrap();
 
-    store.insert(1, &vector).unwrap();
-
-    assert_eq!(store.len(), 1);
-    // SQ8: 768 bytes (u8) + 8 bytes (min+scale) + 8 bytes (id) = 784 bytes
-    // Full would be: 768 * 4 + 8 = 3080 bytes
-    let mem = store.memory_usage();
-    assert!(mem < 1000, "SQ8 should use less than 1KB, got {mem}");
-}
-
-#[test]
-fn test_binary_insert_and_memory() {
-    let mut store = VectorStore::new_with_mode(768, "cosine", "binary").unwrap();
-    let vector: Vec<f32> = (0..768)
-        .map(|i| if i % 2 == 0 { 1.0 } else { 0.0 })
-        .collect();
-
-    store.insert(1, &vector).unwrap();
-
-    assert_eq!(store.len(), 1);
-    // Binary: 768/8 = 96 bytes + 8 bytes (id) = 104 bytes
-    // Full would be: 768 * 4 + 8 = 3080 bytes (~30x more)
-    let mem = store.memory_usage();
-    assert!(
-        mem < 150,
-        "Binary should use less than 150 bytes, got {mem}"
-    );
-}
-
-#[test]
-fn test_sq8_quantization_roundtrip() {
-    let mut store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
-
-    // Insert vectors - verify quantization works
-    store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
-    store.insert(2, &[0.0, 1.0, 0.0, 0.0]).unwrap();
-    store.insert(3, &[0.5, 0.5, 0.0, 0.0]).unwrap();
-
-    assert_eq!(store.len(), 3);
-    // Verify SQ8 data was stored
-    assert_eq!(store.data_sq8.len(), 12); // 3 vectors * 4 dims
-    assert_eq!(store.sq8_mins.len(), 3);
-    assert_eq!(store.sq8_scales.len(), 3);
-}
-
-#[test]
-fn test_binary_packing() {
-    let mut store = VectorStore::new_with_mode(8, "hamming", "binary").unwrap();
-
-    // Core convention: value >= 0.0 -> bit 1, value < 0.0 -> bit 0.
-    // First two non-negative, rest negative.
-    store
-        .insert(1, &[1.0, 1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0])
-        .unwrap();
-
-    assert_eq!(store.len(), 1);
-    // 8 dims = 1 byte
-    assert_eq!(store.data_binary.len(), 1);
-    // First two bits set: 0b00000011 = 3
-    assert_eq!(store.data_binary[0], 3);
-}
-
-#[test]
-fn test_binary_packing_large() {
-    let mut store = VectorStore::new_with_mode(16, "hamming", "binary").unwrap();
-
-    // Core convention: non-negative -> 1, negative -> 0.
-    // First 8 non-negative (bits set), last 8 negative (bits clear).
-    let mut vec = vec![-1.0f32; 16];
-    for item in vec.iter_mut().take(8) {
-        *item = 1.0;
+        assert_eq!(store.len(), 1);
+        assert_eq!(
+            store.data, vector,
+            "{mode}: the inserted f32 vector is kept"
+        );
+        assert_eq!(store.memory_usage(), 8 + 768 * 4, "{mode}");
     }
-    store.insert(1, &vec).unwrap();
-
-    assert_eq!(store.data_binary.len(), 2);
-    assert_eq!(store.data_binary[0], 0xFF); // All 8 bits set
-    assert_eq!(store.data_binary[1], 0x00); // No bits set
 }
 
 #[test]
@@ -119,7 +55,7 @@ fn test_remove_sq8() {
 
 #[test]
 fn test_clear_all_modes() {
-    for mode in ["full", "sq8", "binary"] {
+    for mode in ["full", "sq8", "binary", "pq", "rabitq"] {
         let mut store = VectorStore::new_with_mode(4, "cosine", mode).unwrap();
         store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
         store.insert(2, &[0.0, 1.0, 0.0, 0.0]).unwrap();

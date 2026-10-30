@@ -471,4 +471,4 @@ modes combine with.
 
 ---
 
-*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 7.1.0*
+*VelesDB Documentation -- Last updated: 2026-08-08 · Applies to: velesdb-core 8.0.0*

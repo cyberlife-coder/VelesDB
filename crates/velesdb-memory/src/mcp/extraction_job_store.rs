@@ -106,13 +106,15 @@ fn remove_if_temporary(entry: &std::fs::DirEntry) -> Result<bool, ExtractionJobE
 
 fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, ExtractionJobError> {
     // `path_exists`'s own failure is built by `capture`, which carries
-    // `MigrationCapture`'s "migration capture error:" framing — meant for
+    // `MigrationError::Capture`'s "migration capture error:" framing — meant for
     // the online-migration observer, not this unrelated caller. Unwrapped
     // to its inner detail so a genuine stat failure (e.g. the containing
     // directory losing search permission) keeps its own I/O detail instead
     // (#2409 round 12).
     let exists = crate::mutation::atomic_file::path_exists(path).map_err(|err| match err {
-        crate::MemoryError::MigrationCapture(detail) => storage_error(detail),
+        crate::MemoryError::Migration(crate::migration::MigrationError::Capture(detail)) => {
+            storage_error(detail)
+        }
         other => storage_error(other),
     })?;
     if !exists {
@@ -135,7 +137,7 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, ExtractionJobError>
     // symlink swap (#2404) or any other non-regular type (a FIFO, and on
     // unix a directory too — Windows can't even open a directory here
     // without `FILE_FLAG_BACKUP_SEMANTICS`, which this crate doesn't set,
-    // so it surfaces as the generic `MigrationCapture` arm below instead,
+    // so it surfaces as the generic `MigrationError::Capture` arm below instead,
     // unverified), just not a hard link; such a refusal gets this store's
     // own "invalid extraction job record" phrasing (matching the
     // oversized-record refusal below) instead of the shared guard's
@@ -152,7 +154,9 @@ fn read_record_bytes(path: &Path) -> Result<Option<Vec<u8>>, ExtractionJobError>
         crate::MemoryError::NotARegularFile { .. } => {
             ExtractionJobError::Storage(format!("invalid extraction job record {}", path.display()))
         }
-        crate::MemoryError::MigrationCapture(detail) => storage_error(detail),
+        crate::MemoryError::Migration(crate::migration::MigrationError::Capture(detail)) => {
+            storage_error(detail)
+        }
         other => storage_error(other),
     })?;
     let length = metadata.len();

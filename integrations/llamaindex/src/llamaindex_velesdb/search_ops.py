@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 from llama_index.core.vector_stores.types import (
     VectorStoreQuery,
@@ -16,6 +16,7 @@ from llama_index.core.vector_stores.types import (
 )
 
 from velesdb_common.fusion import build_fusion_strategy as _build_fusion_strategy_fn
+from velesdb_common.scores import fused_higher_is_better
 
 from llamaindex_velesdb.errors import VelesDBCapabilityError
 from llamaindex_velesdb.security import (
@@ -67,8 +68,17 @@ class SearchOpsMixin:
     Expects the host class to provide:
         - ``self._collection``: Optional VelesDB collection (may be None)
         - ``self._get_collection(dimension)``: Returns or creates the collection
-        - ``self._build_query_result(results)``: Converts result dicts to
-          VectorStoreQueryResult
+        - ``self._build_query_result(results, higher_is_better=...)``: Converts
+          result dicts to VectorStoreQueryResult, given the direction of
+          their scores
+        - ``self._metric_higher_is_better()``: The direction of a raw
+          single-metric score on this store
+
+    Every search path states the direction of the scores it returns, because
+    it is not always the metric's: BM25, RRF and relative-score fusion are
+    higher-is-better under every metric, while average, maximum and weighted
+    fusion keep a distance metric's units (velesdb-core's
+    ``FusionStrategy::fused_direction``).
     """
 
     def query(
@@ -121,7 +131,7 @@ class SearchOpsMixin:
                 "Apply filters separately or omit the sparse_vector."
             )
 
-        results = self._execute_query(
+        results, higher_is_better = self._execute_query(
             collection, query.query_embedding, k,
             sparse_vector=sparse_vector,
             sparse_index_name=sparse_index_name,
@@ -129,7 +139,7 @@ class SearchOpsMixin:
             search_quality=quality,
         )
 
-        return self._build_query_result(results)
+        return self._build_query_result(results, higher_is_better=higher_is_better)
 
     def _execute_query(
         self,
@@ -141,7 +151,7 @@ class SearchOpsMixin:
         sparse_index_name: Optional[str] = None,
         core_filter: Optional[dict] = None,
         search_quality: Optional[str] = None,
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], bool]:
         """Execute the appropriate search variant on the collection.
 
         Dispatch order: filtered → sparse → quality-aware → plain dense.
@@ -158,7 +168,8 @@ class SearchOpsMixin:
             search_quality: Optional quality preset string.
 
         Returns:
-            List of search result dicts.
+            The search result dicts, and whether their scores are
+            higher-is-better.
         """
         if core_filter is not None:
             search_with_filter = getattr(collection, "search_with_filter", None)
@@ -181,7 +192,8 @@ class SearchOpsMixin:
                         "the VectorStoreQuery to fall back to dense search."
                     ),
                 )
-            return search_with_filter(query_embedding, top_k=k, filter=core_filter)
+            results = search_with_filter(query_embedding, top_k=k, filter=core_filter)
+            return results, self._metric_higher_is_better()
 
         if sparse_vector is not None:
             return self._run_sparse_search(
@@ -190,11 +202,13 @@ class SearchOpsMixin:
             )
 
         if search_quality is not None:
-            return collection.search_with_quality(
+            results = collection.search_with_quality(
                 query_embedding, quality=search_quality, top_k=k,
             )
+            return results, self._metric_higher_is_better()
 
-        return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+        results = collection.search_request(_SearchOptions(vector=query_embedding, k=k))
+        return results, self._metric_higher_is_better()
 
     def _run_sparse_search(
         self,
@@ -204,7 +218,7 @@ class SearchOpsMixin:
         k: int,
         *,
         sparse_index_name: Optional[str] = None,
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], bool]:
         """Run hybrid dense+sparse search, degrading to dense-only on failure.
 
         Args:
@@ -215,18 +229,23 @@ class SearchOpsMixin:
             sparse_index_name: Optional named sparse index to target.
 
         Returns:
-            List of search result dicts.
+            The search result dicts, and whether their scores are
+            higher-is-better: always for the fused dense+sparse results, the
+            metric's direction for the dense-only fallback.
         """
         search_kwargs: dict[str, Any] = {
             "vector": query_embedding,
             "sparse_vector": sparse_vector,
-            "top_k": k,
+            "k": k,
         }
         if sparse_index_name is not None:
             search_kwargs["sparse_index_name"] = sparse_index_name
 
         try:
-            return collection.search_request(_SearchOptions(**search_kwargs))
+            # A sparse branch is higher-is-better, so the fused scores never
+            # stay in a distance metric's units (core's
+            # FusionStrategy::fused_direction over mixed branches).
+            return collection.search_request(_SearchOptions(**search_kwargs)), True
         except (RuntimeError, ValueError, _VelesDBError):
             # Since Wave 3 Commit 2, `VELES-015 SearchNotSupported` is
             # routed to `ValueError` and other sparse-search failures
@@ -241,7 +260,8 @@ class SearchOpsMixin:
                 UserWarning,
                 stacklevel=2,
             )
-            return collection.search_request(_SearchOptions(vector=query_embedding, top_k=k))
+            results = collection.search_request(_SearchOptions(vector=query_embedding, k=k))
+            return results, self._metric_higher_is_better()
 
     def query_with_score_threshold(
         self,
@@ -307,7 +327,9 @@ class SearchOpsMixin:
             vector_weight=vector_weight,
         )
 
-        return self._build_query_result(results)
+        # Core fuses the vector and BM25 ranks with RRF: higher is better
+        # under every metric.
+        return self._build_query_result(results, higher_is_better=True)
 
     def text_query(
         self,
@@ -336,7 +358,8 @@ class SearchOpsMixin:
 
         results = self._collection.text_search(query_str, top_k=similarity_top_k)
 
-        return self._build_query_result(results)
+        # A BM25 relevance, not a metric score: higher is better.
+        return self._build_query_result(results, higher_is_better=True)
 
     def contains_text_search(
         self,
@@ -381,7 +404,8 @@ class SearchOpsMixin:
         validate_query(query_str)
 
         results = self._collection.query(query_str)
-        return self._build_query_result(results)
+        # No NEAR clause, so no metric score: core scores every match 1.0.
+        return self._build_query_result(results, higher_is_better=True)
 
     def batch_query(
         self,
@@ -414,7 +438,11 @@ class SearchOpsMixin:
 
         batch_results = collection.batch_search(searches)
 
-        return [self._build_query_result(res_list) for res_list in batch_results]
+        higher_is_better = self._metric_higher_is_better()
+        return [
+            self._build_query_result(res_list, higher_is_better=higher_is_better)
+            for res_list in batch_results
+        ]
 
     def multi_query_search(
         self,
@@ -439,7 +467,11 @@ class SearchOpsMixin:
             **kwargs: Additional arguments.
 
         Returns:
-            Query result with fused nodes and scores.
+            Query result with fused nodes and scores. RRF and relative-score
+            scores are returned as core computes them (higher is better under
+            every metric); average, maximum and weighted scores keep the
+            metric's units, so on a distance metric they are mapped to a
+            similarity like a plain query's.
         """
         if not query_embeddings:
             return VectorStoreQueryResult(nodes=[], similarities=[], ids=[])
@@ -454,7 +486,8 @@ class SearchOpsMixin:
             fusion=fusion_strategy,
         )
 
-        return self._build_query_result(results)
+        higher_is_better = fused_higher_is_better(fusion_strategy, fusion, self.metric)
+        return self._build_query_result(results, higher_is_better=higher_is_better)
 
     def _build_fusion_strategy(
         self,
@@ -500,7 +533,9 @@ class SearchOpsMixin:
         results = collection.search_with_ef(
             query_embedding, top_k=top_k, ef_search=ef_search,
         )
-        return self._build_query_result(results)
+        return self._build_query_result(
+            results, higher_is_better=self._metric_higher_is_better()
+        )
 
     def query_ids(
         self,

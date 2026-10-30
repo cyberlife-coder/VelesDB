@@ -57,7 +57,11 @@ mod ddl_executor_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod graph_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod guardrails_wiring_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod hnsw_config_wiring_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod metrics_wiring_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod query_engine_tests;
 #[cfg(all(test, feature = "persistence"))]
@@ -74,10 +78,11 @@ pub use gated_search::GatedRead;
 /// `Database::open()` automatically loads all previously created collections from disk.
 /// There is no need to call `load_collections()` separately.
 ///
-/// # Extension (Premium)
+/// # Extension
 ///
-/// Use [`Database::open_with_observer`] to inject a [`DatabaseObserver`] implementation
-/// from `velesdb-premium` without modifying this crate.
+/// Use [`Database::open_with_observer`] to inject a [`DatabaseObserver`]
+/// implementation — an out-of-tree policy layer, say — without modifying this
+/// crate.
 #[cfg(feature = "persistence")]
 pub struct Database {
     /// Path to the data directory
@@ -107,7 +112,8 @@ pub struct Database {
     collection_stats: parking_lot::RwLock<
         std::collections::HashMap<String, crate::collection::stats::CollectionStats>,
     >,
-    /// Optional lifecycle observer (used by velesdb-premium for RBAC, audit, multi-tenant).
+    /// Optional lifecycle observer (an out-of-tree policy layer implementing
+    /// [`DatabaseObserver`]: RBAC, audit, multi-tenant).
     observer: Option<std::sync::Arc<dyn DatabaseObserver>>,
     /// Monotonic DDL schema version counter (CACHE-01).
     ///
@@ -128,6 +134,20 @@ pub struct Database {
     /// never cached (expiry does not bump `write_generation`).
     join_store_cache:
         parking_lot::RwLock<std::collections::HashMap<String, query_join::JoinStoreEntry>>,
+    /// The live query guard-rails (EPIC-048): the single source every
+    /// collection's `GuardRails` is set from.
+    ///
+    /// [`Database::update_guardrails`] replaces it and pushes it to every
+    /// registered collection; every registration path pushes it to the
+    /// collection it admits (`Database::admit_collection`). **Not persisted**
+    /// — a reopened database starts from `QueryLimits::default()`.
+    ///
+    /// Lock order: taken *before* the three registries, on both sides. The
+    /// update holds it for write while it reads them; a registration holds it
+    /// for read across its registry insert, so an update racing a
+    /// registration either ran first (the registration pushes its value) or
+    /// waits until the collection is in a registry (the update reaches it).
+    guardrail_limits: parking_lot::RwLock<crate::guardrails::QueryLimits>,
 }
 
 #[cfg(feature = "persistence")]
@@ -172,7 +192,8 @@ impl Database {
         Self::open_impl(path, None, Some(config))
     }
 
-    /// Opens a database with a [`DatabaseObserver`] (used by velesdb-premium).
+    /// Opens a database with a [`DatabaseObserver`], the port an out-of-tree
+    /// policy layer implements.
     ///
     /// The observer receives lifecycle hooks for every collection operation,
     /// enabling RBAC, audit logging, multi-tenant routing, etc.
@@ -249,6 +270,7 @@ impl Database {
             schema_version: std::sync::atomic::AtomicU64::new(0),
             compiled_plan_cache: crate::cache::CompiledPlanCache::new(1_000, 10_000),
             join_store_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
+            guardrail_limits: parking_lot::RwLock::new(crate::guardrails::QueryLimits::default()),
         };
 
         // Auto-load all existing collections from disk (replaces manual load_collections()).

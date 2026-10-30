@@ -3,6 +3,7 @@
 Run with: pytest tests/test_vectorstore.py -v
 """
 
+import importlib
 import tempfile
 import shutil
 from typing import List
@@ -985,6 +986,14 @@ class TestServerUrlRemoved:
         assert not hasattr(store, "server_url")
 
 
+# search_quality is refused by velesdb-core's parser, which the binding exposes
+# from velesdb 8.0.0 on; an older wheel refuses a bad mode only at search time.
+requires_core_quality_parser = pytest.mark.skipif(
+    not hasattr(importlib.import_module("velesdb"), "validate_search_quality"),
+    reason="installed velesdb predates velesdb.validate_search_quality",
+)
+
+
 class TestSearchQualityLangChain:
     """Tests for the search_quality parameter (feat/searchquality-propagation)."""
 
@@ -1028,6 +1037,7 @@ class TestSearchQualityLangChain:
         )
         assert store._search_quality is None
 
+    @requires_core_quality_parser
     def test_init_with_invalid_quality_raises(self, embeddings):
         """Constructor raises SecurityError for unknown quality string."""
         from langchain_velesdb.security import SecurityError
@@ -1081,7 +1091,7 @@ class TestSearchQualityLangChain:
                 return [{"payload": {"text": "world"}, "score": 0.8}]
 
             def search_request(self, opts):
-                return self.search(opts.vector, top_k=opts.top_k)
+                return self.search(opts.vector, top_k=opts.k)
 
         store._get_collection = lambda _dim: _MockCollection()  # type: ignore[method-assign]
         results = store.similarity_search("test query", k=3)
@@ -1119,6 +1129,7 @@ class TestSearchQualityLangChain:
                       "custom:128", "custom:1024", "adaptive:16:256", "adaptive:32:512"):
             assert validate_search_quality(value) == value
 
+    @requires_core_quality_parser
     def test_validate_search_quality_rejects_invalid(self):
         """validate_search_quality raises SecurityError for unknown strings."""
         from langchain_velesdb.security import validate_search_quality, SecurityError

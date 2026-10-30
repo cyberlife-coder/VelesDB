@@ -1,6 +1,6 @@
 # Tauri plugin — command, event and permission reference
 
-*Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0*
+*Last updated: 2026-07-25 · Applies to: velesdb-core 8.0.0*
 
 Complete surface of [`tauri-plugin-velesdb`](../../crates/tauri-plugin-velesdb/README.md):
 every IPC command, every event, the permission model, and the storage/metric
@@ -201,6 +201,11 @@ only on the persistence path, and it is **ignored when a `filter` is also
 supplied** (known limitation #457). See the
 [search modes guide](./SEARCH_MODES.md).
 
+`semantic_query` takes the same optional `quality` string, parsed by the same
+core parser, and runs that one agent-memory query at it
+(`SemanticMemory::query_with_quality`); an unusable mode is refused as
+`VELES-009` and an absent one keeps the memory collection's own quality.
+
 ---
 
 ## Engine configuration
@@ -231,19 +236,24 @@ plugin call adds Tauri's IPC to them.
 
 ## Error codes
 
-Commands reject with `{ message, code }`.
+Commands reject with `{ message, code, recoverable }`. `code` is velesdb-core's
+`VELES-###` taxonomy, whether core or the plugin detected the condition, and
+`recoverable` is core's `Error::is_recoverable` for it, so a retry policy needs no
+string matching.
 
 | Code | Raised by |
 |------|-----------|
-| `VELES-001` | Collection already exists (from velesdb-core) |
+| `VELES-001` | Collection already exists |
 | `VELES-002` | Collection not found |
+| `VELES-003` | Agent-memory entry not found |
+| `VELES-004` | Embedding or vector dimension differs from the stored dimension |
+| `VELES-009` | Wrong collection kind, bad quality mode, bad metric or fusion, config load failure |
+| `VELES-010` | VelesQL parse error |
 | `VELES-011` | I/O error |
-| `INVALID_CONFIG` | Wrong collection kind, bad quality mode, VelesQL parse error, config load failure |
-| `NOT_FOUND` | Agent-memory entry not found |
-| `DIMENSION_MISMATCH` | Embedding dimension differs from the stored dimension |
-| `SERIALIZATION_ERROR` | Payload could not be (de)serialized |
+| `VELES-012` | Payload could not be (de)serialized |
+| `TASK_JOIN` | The plugin's blocking task panicked or was cancelled (`recoverable: false`); the one code core has no equivalent for |
 
-Other `VELES-XXX` codes are forwarded verbatim from velesdb-core.
+Every other `VELES-###` code is forwarded verbatim from velesdb-core.
 
 ---
 

@@ -47,8 +47,8 @@ impl MutationCapture {
     ) -> Result<(), MemoryError> {
         let mut installed = self.observer.write();
         if installed.is_some() && observer.is_some() {
-            return Err(MemoryError::MigrationCapture(
-                "a mutation observer is already active".to_owned(),
+            return Err(crate::migration::capture(
+                "a mutation observer is already active",
             ));
         }
         *installed = observer;

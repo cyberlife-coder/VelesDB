@@ -649,6 +649,41 @@ VelesQL `MATCH` bridge filters expired ids from the *result* rows; an
 expired endpoint deeper in a pattern stops matching once `auto_expire`
 sweeps it.
 
+The six relation methods — `relate`, `relations`, `incoming_relations`,
+`relations_bounded`, `incoming_relations_bounded` and `unrelate` — exist on
+all three subsystems, `semantic()`, `episodic()` and `procedural()`, with the
+same signatures, so
+events can be chained (`CAUSED`, `FOLLOWED`) and procedures linked
+(`DEPENDS_ON`, `REFINES`) exactly like facts:
+
+```rust
+// Incoming edges: who points at this memory (expired sources are hidden).
+let cited_by = memory.semantic().incoming_relations(2)?;
+
+// Bounded reads: at most `cap` edges, O(cap) work even on a hub memory
+// referenced by thousands of others. `truncated` says whether stored edges
+// were left unread — `edges.len() == cap` alone cannot tell you that.
+let page = memory.semantic().relations_bounded(1, 50)?;
+for edge in &page.edges {
+    println!("{} -[{}]-> {}", edge.source(), edge.label(), edge.target());
+}
+if page.truncated {
+    // more than 50 edges are stored on memory 1
+}
+let first_citers = memory.semantic().incoming_relations_bounded(2, 50)?;
+
+// Episodic and procedural memories relate the same way.
+memory.episodic().relate(10, 11, "FOLLOWED", None)?;
+memory.procedural().relate(20, 21, "DEPENDS_ON", None)?;
+```
+
+`relations_bounded` / `incoming_relations_bounded` return a
+`BoundedRelations { edges, truncated }`. TTL-expired edges inside the scanned
+window are dropped without being replaced, so `edges.len() < cap` together
+with `truncated == true` is a normal result. Prefer the bounded form wherever
+you keep only a prefix: the unbounded `relations` / `incoming_relations`
+materialize the memory's whole degree first.
+
 ### Configuration (Python)
 
 ```python
@@ -935,6 +970,69 @@ memory.snapshot()?;
 memory.load_latest_snapshot()?;
 ```
 
+### Semantic search at an explicit quality
+
+`SemanticMemory::query`, `query_filtered` and `query_excluding` search the
+vector index at the collection's runtime quality. Since velesdb-core 7.1.0
+each has a `_with_quality` twin that takes a
+[`SearchQuality`](./SEARCH_MODES.md) for that one call instead; results,
+TTL filtering and over-fetching are otherwise identical, and the three
+original methods are unchanged.
+
+```rust
+use serde_json::{json, Map, Value};
+use velesdb_core::SearchQuality;
+
+let semantic = memory.semantic();
+
+// Plain similarity, at the Accurate preset.
+let hits = semantic.query_with_quality(&query_emb, 10, SearchQuality::Accurate)?;
+
+// Payload filter (every pair must match) + offset pagination, here the
+// second page of 10, at an explicit ef_search of 256.
+let mut filter: Map<String, Value> = Map::new();
+filter.insert("category".into(), json!("tech"));
+let page_2 = semantic.query_filtered_with_quality(
+    &query_emb, 10, &filter, 10, SearchQuality::Custom(256),
+)?;
+
+// Negative filter: drop points matching every pair of `exclude`. The fetch
+// window grows until 10 survivors are found or the collection is exhausted.
+let mut exclude: Map<String, Value> = Map::new();
+exclude.insert("kind".into(), json!("hub"));
+let rest = semantic.query_excluding_with_quality(
+    &query_emb, 10, &exclude, SearchQuality::Fast,
+)?;
+
+// Exact scoring of every stored fact. Past the exhaustive-scan guard
+// (`limits.max_perfect_mode_vectors`) this returns an error; it does not fall
+// back to an approximate search.
+let exact = semantic.query_with_quality(&query_emb, 10, SearchQuality::Perfect)?;
+```
+
+Each returns `Vec<(id, score, content)>`, like the method it mirrors. The
+variants that need no `ef` are `Fast`, `Balanced`, `Accurate`, `Perfect` and
+`AutoTune`; `Custom(ef)` and `Adaptive { min_ef, max_ef }` take one. To read
+a quality from user input or configuration, parse it with
+`velesdb_core::api_types::parse_search_mode` (the grammar REST and VelesQL
+accept, see [Search modes](./SEARCH_MODES.md#when-the-two-phases-run)),
+which refuses an unknown name or an ef outside `[16, 4096]` instead of
+falling back to the default.
+
+The bindings reach the plain query at a quality per call, parsed by that same
+`parse_search_mode`: `memory.semantic.query(embedding, top_k=10, quality=None)`
+in Python (an unusable mode raises `ValueError`), the Tauri `semantic_query`
+command's optional `quality` field (refused as `VELES-009`), and
+`VelesSemanticMemory.queryWithQuality(embedding, topK, quality)` on mobile,
+which takes the typed `SearchQuality` its `searchWithQuality` takes and runs
+through the collection's read gate. The filtered and excluding variants stay
+Rust-only. The high-level memory wedge built on top of them takes a quality
+per deployment — `VELESDB_MEMORY_SEARCH_QUALITY` for the
+[MCP server](./MCP_SERVER_SETUP.md#recall-quality),
+`MemoryService(path, ..., search_quality=...)` in
+[Python](./PYTHON_AGENT_MEMORY.md) and `searchQuality` in the
+[Node binding](../../crates/velesdb-node/README.md).
+
 > **Using `SemanticMemory` on its own.** The supported path is `AgentMemory`,
 > which owns the shared `MemoryTtl` and snapshot manager, so TTL and snapshots
 > round-trip across restarts. If you reach for a `SemanticMemory` directly:
@@ -957,13 +1055,14 @@ memory.load_latest_snapshot()?;
 | Type | Description |
 |------|-------------|
 | `AgentMemory` | Unified interface; holds `SemanticMemory`, `EpisodicMemory`, `ProceduralMemory` |
-| `SemanticMemory` | `store(id, content, embedding)`, `query(embedding, k)` returning `Vec<(id, score, content)>` |
+| `SemanticMemory` | `store(id, content, embedding)`, `query(embedding, k)` returning `Vec<(id, score, content)>`; `query_filtered`, `query_excluding`, and the three `*_with_quality(.., quality)` twins (7.1.0) |
 | `EpisodicMemory` | `record(id, description, timestamp, embedding)`, `recent(limit, since)`, `recall_similar(embedding, k)` |
 | `ProceduralMemory` | `learn(id, name, steps, embedding, confidence)`, `recall(embedding, k, min_confidence)`, `reinforce(id, success)` |
 | `ProcedureMatch` | Recall result: `id`, `name`, `steps: Vec<String>`, `confidence: f32`, `score: f32` |
 | `EvictionConfig` | `consolidation_age_threshold: u64`, `min_confidence_threshold: f32`, `max_entries_per_cycle: usize` |
 | `SnapshotManager` | `new(dir, max_snapshots)` — versioned state persistence with automatic rotation |
 | `TemporalIndex` | B-tree temporal index for O(log N) time-range queries |
+| `BoundedRelations` | Returned by `relations_bounded` / `incoming_relations_bounded` on every subsystem: `edges: Vec<GraphEdge>` (at most `cap`), `truncated: bool` |
 | `ExpireResult` | Returned by `auto_expire()`: `semantic_expired`, `episodic_expired`, `procedural_expired`, `episodic_consolidated`, `procedural_evicted`, `consolidation_truncated` |
 
 Full signatures live on [docs.rs](https://docs.rs/velesdb-core). For dated
@@ -991,6 +1090,7 @@ the embedded bindings expose each subsystem as its own object (`semantic.store`,
 |--------|--------|------|-------------------|
 | `semantic.store()` | Yes | Yes | Yes (`storeFact`) |
 | `semantic.query()` | Yes | Yes | Yes (`searchFacts`) |
+| `semantic.query_with_quality()` / `query_filtered_with_quality()` / `query_excluding_with_quality()` | No (use `MemoryService(..., search_quality=...)`) | Yes (7.1.0) | No |
 | `semantic.delete()` | Yes | Yes | Yes (`deleteMemory`) |
 | `episodic.record()` | Yes | Yes | Yes (`recordEvent`, returns id) |
 | `episodic.recent()` | Yes | Yes | Yes (`recallRecent`) |
@@ -1005,6 +1105,7 @@ the embedded bindings expose each subsystem as its own object (`semantic.store`,
 | TTL management (`set_*_ttl`, `set_*_ttl_durable`, `store_with_ttl` / `record_with_ttl` / `learn_with_ttl`, `auto_expire`) | Yes | Yes | Partial — durable per-point TTL via `db.setTtlDurable()`; subsystem helpers embedded-only |
 | Snapshots (`snapshot`, `load_*_snapshot`, `list_snapshot_versions`) | Yes | Yes | No (embedded-only) |
 | VelesQL bridges (`query_semantic` / `query_episodic` / `query_procedural`) | Yes | Yes | No (embedded-only) |
+| Relations (`relate` / `relations` / `incoming_relations` / `relations_bounded` / `incoming_relations_bounded` / `unrelate`) | No (the `MemoryService` wedge has its own `relate`) | Yes, on all three subsystems | Partial — `client.relate()` / `getRelations()` (outgoing) / `unrelate()` over REST; no incoming or bounded form |
 
 ---
 
@@ -1165,4 +1266,4 @@ Yes. The SDK is covered end-to-end by Rust and Python test suites, including sna
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

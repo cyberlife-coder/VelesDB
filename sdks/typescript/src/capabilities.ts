@@ -348,9 +348,10 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   namedSparseIndexes: false,
   includeVectors: false,
   idOnlySearch: false,
-  // velesdb-wasm stores `pq` and `rabitq` as SQ8 (the browser has no
-  // codebook training), so only the modes it implements are listed.
-  storageModes: Object.freeze<StorageMode[]>(['full', 'sq8', 'binary']),
+  // velesdb-wasm accepts every core storage mode, keeps f32 vectors in each
+  // and returns the top-k and scores a core collection created with that
+  // mode returns (#2544). No mode saves memory in the browser.
+  storageModes: STORAGE_MODES,
   collectionTypes: Object.freeze<CollectionType[]>(['vector']),
   // No HNSW graph, no PQ rescoring, no deferred or async indexing: WASM
   // scans every stored vector, so their settings have nowhere to go.

@@ -141,6 +141,21 @@ fn test_unknown_keys_are_ignored() {
     assert!(MigrationConfig::parse_yaml(&yaml).is_ok());
 }
 
+/// Pinecone's `environment` field is gone (8.0.0); a config written for an
+/// earlier release still sets it and must keep loading.
+#[test]
+fn test_a_pinecone_config_that_still_sets_environment_loads() {
+    let yaml = format!(
+        "source: {{type: pinecone, api_key: k, environment: us-east-1-aws, index: i}}\n\
+         {MINIMAL_DESTINATION}"
+    );
+    let config = MigrationConfig::parse_yaml(&yaml).expect("test: pre-8.0 pinecone config");
+    let SourceConfig::Pinecone(pinecone) = config.source else {
+        panic!("test: pinecone source");
+    };
+    assert_eq!(pinecone.index, "i");
+}
+
 #[test]
 fn test_invalid_documents_are_rejected_with_a_yaml_error() {
     let duplicate = "source: {type: qdrant, url: u, collection: c}\n\

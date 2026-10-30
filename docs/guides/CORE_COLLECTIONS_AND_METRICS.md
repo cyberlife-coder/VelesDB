@@ -40,6 +40,50 @@ yields `None` when the name refers to a graph or metadata-only collection.
 `Database::get_any_collection(name)` returns the type-erased `AnyCollection`
 and checks the vector → graph → metadata registries in that order.
 
+### Working through `AnyCollection`
+
+`AnyCollection` is an enum over the three typed handles. The operations every
+kind supports dispatch without a `match` — `name`, `config`, `point_count`,
+`is_empty`, `flush`, `get`, `upsert`, the graph-edge calls (`add_edge`,
+`remove_edge`, `get_outgoing_edges`, `edge_exists`, `max_edge_id`),
+`execute_query_str`, `execute_aggregate` and `diagnostics`; the typed handle is
+one call away when you need a kind-specific method.
+
+```rust
+use std::collections::HashMap;
+use velesdb_core::velesql::Parser;
+use velesdb_core::Database;
+
+let db = Database::open("./data")?;
+let any = db.get_any_collection("documents").ok_or("collection not found")?;
+
+println!("{} holds {} points", any.name(), any.point_count());
+let diag = any.diagnostics();
+println!("search ready: {}, index: {:?}", diag.search_ready, diag.index_health);
+
+let params = HashMap::new();
+let rows = any.execute_query_str("SELECT * FROM documents LIMIT 5", &params)?;
+let query = Parser::parse("SELECT category, COUNT(*) FROM documents GROUP BY category")?;
+let counts = any.execute_aggregate(&query, &params)?; // serde_json::Value
+
+// Check, borrow, or take the typed handle.
+assert!(any.is_vector() && !any.is_graph() && !any.is_metadata());
+if let Some(vectors) = any.as_vector() {
+    let hits = vectors.search(&[0.1_f32; 768], 10)?;
+}
+let vectors = any
+    .into_vector()
+    .map_err(|other| format!("{} is not a vector collection", other.name()))?;
+```
+
+`as_vector` / `as_graph` / `as_metadata` borrow (`Option<&T>`, with `_mut`
+forms), and `into_vector` / `into_graph` / `into_metadata` consume, handing the
+`AnyCollection` back in `Err` on a mismatch. The enum is `#[non_exhaustive]`,
+so a `match` on it needs a wildcard arm. `execute_query_str` and
+`execute_aggregate` run on the collection itself: a database observer's read
+gate is consulted by `Database::execute_query`, not here (see
+[Core: operations API](./CORE_OPERATIONS_API.md#control-plane-observer)).
+
 ## Distance metrics
 
 All five metrics are variants of `DistanceMetric`:
@@ -181,7 +225,8 @@ lock-free entry-point reads (a small lock serializes its rare promotions).
 - [Core performance](./CORE_PERFORMANCE.md)
 - [Tuning guide](./TUNING_GUIDE.md) — HNSW parameters
 - [Search modes](./SEARCH_MODES.md) — Fast / Balanced / Accurate / Perfect / Adaptive
+- [Core: operations API](./CORE_OPERATIONS_API.md) — index introspection, guard-rails, observer, metrics
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

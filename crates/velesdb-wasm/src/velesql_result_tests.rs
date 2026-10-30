@@ -39,6 +39,12 @@ fn test_classify_admin_flush() {
 }
 
 #[test]
+fn test_classify_select_edges() {
+    let q = Parser::parse("SELECT EDGES FROM kg WHERE source = 1").expect("test: parse");
+    assert_eq!(classify_query(&q), QueryResultKind::Rows);
+}
+
+#[test]
 fn test_classify_show() {
     let q = Parser::parse("SHOW COLLECTIONS").expect("test: parse");
     assert_eq!(classify_query(&q), QueryResultKind::Rows);

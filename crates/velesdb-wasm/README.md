@@ -133,7 +133,7 @@ crate is not on docs.rs, so the narrative documentation lives here:
 | Guide | Contents |
 |---|---|
 | [JavaScript API](../../docs/guides/WASM_API.md) | `VectorStore` (construction, metrics, insert paths, the search family, payload filters, storage modes), `GraphStore`, `MemoryService`, `SparseIndex`, `WasmDatabase`, and the BigInt/number marshalling rules. |
-| [Persistence and binary format](../../docs/guides/WASM_PERSISTENCE.md) | IndexedDB `save`/`load`/`delete_database`, byte-level export/import, the `VELS` v2 format, graph persistence, performance figures and how to reproduce them. |
+| [Persistence and binary format](../../docs/guides/WASM_PERSISTENCE.md) | IndexedDB `save`/`load`/`delete_database`, byte-level export/import, the `VELS` v3 format (and the v2/v1 formats it still reads), graph persistence, performance figures and how to reproduce them. |
 | [VelesQL in the browser](../../docs/guides/WASM_VELESQL.md) | Parsing, `executeQuery`, `EXPLAIN`, the full WASM-vs-REST feature matrix, every rejected shape with its exact error message, and how to migrate a query to the REST server. |
 | [Bundle size optimization](../../docs/wasm/bundle-optimization.md) | Keeping the `.wasm` payload small. |
 
@@ -153,8 +153,10 @@ below `Number.MAX_SAFE_INTEGER`.
 
 - **Brute-force search only.** There is no HNSW graph in the WASM build; search
   is O(n) over every vector. `search_with_quality()` accepts the same quality
-  strings as the Python and Server SDKs, but all modes return identical
-  results — the parameter exists for API parity.
+  strings as the Python and Server SDKs, read by core's own
+  `parse_search_mode` (so it refuses what they refuse, with the same message),
+  but all modes return identical results — the parameter exists for API
+  parity.
 - **~100 K vectors is the practical ceiling**, set by browser RAM. Beyond that,
   move to the REST server.
 - **Single collection per query.** Cross-collection `MATCH` (`@collection`)
@@ -162,9 +164,17 @@ below `Number.MAX_SAFE_INTEGER`.
   hops.
 - **No filesystem.** The agent-memory wedge (`MemoryService`) is in-memory
   only; nothing persists unless you persist it yourself.
-- **No quantizer training.** `TRAIN QUANTIZER`, Product Quantization and RaBitQ
-  need `rayon`/`ndarray`/`persistence`, which are compiled out for
-  `wasm32-unknown-unknown`. `sq8` and `binary` storage modes still work.
+- **Storage modes save no memory.** `sq8`, `binary`, `pq` and `rabitq` return
+  the same top-k and scores as `velesdb-core` with that mode — core re-ranks
+  its quantized modes with exact f32 distances — so every mode keeps the f32
+  vectors: 4 bytes per dimension plus 8 per id, 3080 bytes per 768-D vector,
+  exactly as `full`. Earlier builds stored `sq8`/`pq`/`rabitq` at ~784 bytes
+  and `binary` at ~104 bytes per such vector, but scored a lossy
+  reconstruction that ranked differently from core. Their saved stores (format
+  v2) still load. See [storage modes](../../docs/guides/WASM_API.md#storage-modes-and-memory).
+- **No quantizer training.** `TRAIN QUANTIZER` needs
+  `rayon`/`ndarray`/`persistence`, which are compiled out for
+  `wasm32-unknown-unknown`.
 - **`SemanticMemory.query()` has been broken since 4.0.0 (still present)** — it throws
   `Invalid search results` on every call (`src/agent.rs` calls `as_string()` on
   an array-valued `JsValue`). Use `MemoryService`, or a `VectorStore` with
@@ -203,7 +213,7 @@ to instantiate the module.
 | `null pointer passed to rust` or `undefined is not a function` on the first call | A class was constructed before `await init()` resolved. | Await `init()` first; in a bundler, enable top-level await or wrap the app entry in an async bootstrap. |
 | `Error: [VELES-004] Vector dimension mismatch: expected N, got M` | The query length differs from `store.dimension`. | Embed the query with the same model and dimension used at index time. |
 | `Unknown metric. Use: cosine, euclidean, l2, dot, dotproduct, inner, ip, hamming, jaccard` | Unsupported metric string in the constructor. | Use one of the listed names; they are case-insensitive. |
-| `Invalid data: wrong magic number` on `import_from_bytes` | The buffer is not a `VELS` export (truncated, or another format). | Re-export from a `VectorStore`; see the [binary format](../../docs/guides/WASM_PERSISTENCE.md#binary-format-vels-v2). |
+| `Invalid data: wrong magic number` on `import_from_bytes` | The buffer is not a `VELS` export (truncated, or another format). | Re-export from a `VectorStore`; see the [binary format](../../docs/guides/WASM_PERSISTENCE.md#binary-format-vels-v3). |
 | `Invalid search results` | `SemanticMemory.query()` — a known defect since 4.0.0, still present. | Use `MemoryService` instead. |
 | Console warning about `application/wasm` MIME type | The static server does not label `.wasm`. | Harmless: the loader falls back to `WebAssembly.instantiate`. Configure the MIME type to keep `WebAssembly.instantiateStreaming` on the fast path. |
 
@@ -215,4 +225,4 @@ artifact embeds the engine and is governed by the Core License.
 
 ---
 
-`velesdb-wasm v7.1.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 7.1.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)
+`velesdb-wasm v8.0.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 8.0.0 · [Report a docs error](https://github.com/cyberlife-coder/velesdb/issues)

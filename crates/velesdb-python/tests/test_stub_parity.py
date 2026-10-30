@@ -46,7 +46,7 @@ def test_compatibility_stub_surface_matches_runtime() -> None:
     classes = _classes()
 
     expected = {
-        "FusionStrategy": {"rsf"},
+        "FusionStrategy": {"rsf", "from_name", "fused_higher_is_better"},
         "Database": {"get_collections"},
         "GraphStore": {
             "get_outgoing_edges",
@@ -101,3 +101,22 @@ def test_every_exported_class_is_declared_in_stub() -> None:
     }
     missing = sorted(exported_classes - set(_classes()))
     assert missing == [], f"exported classes missing from the type stub: {missing}"
+
+
+def test_every_exported_function_is_declared_in_stub() -> None:
+    """Every module-level function in ``velesdb.__all__`` must have a stub
+    ``def``, the function half of the class guard above."""
+    import inspect
+
+    velesdb = pytest.importorskip("velesdb")
+    exported = getattr(velesdb, "__all__", None) or dir(velesdb)
+    exported_functions = {
+        name for name in exported if inspect.isroutine(getattr(velesdb, name, None))
+    }
+    stub_functions = {
+        node.name
+        for node in ast.parse(STUB_PATH.read_text()).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    missing = sorted(exported_functions - stub_functions)
+    assert missing == [], f"exported functions missing from the type stub: {missing}"

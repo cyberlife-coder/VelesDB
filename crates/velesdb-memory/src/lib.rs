@@ -59,6 +59,9 @@
 //! The storage facets refine the unit that rule applies to: an adapter picks
 //! which *facets* it serves, but each facet it implements is forwarded whole.
 
+/// The refusals the binary's hand-rolled subcommand parsers share: a flag
+/// with no value, a flag the subcommand does not know.
+pub mod cli_flags;
 /// Wall-clock "today" as a `YYYYMMDD` integer, read only by `remember`'s
 /// auto-date stamping (see [`storage::AUTO_DATE_FIELD`]) — never by the
 /// context compiler, which stays clock-free and deterministic. Internal:
@@ -166,6 +169,9 @@ pub mod rerank;
 /// Shared JSON Schema post-processing (strips `schemars`' non-standard integer
 /// `format` keywords so strict MCP clients don't warn on every id field).
 mod schema;
+/// Which recall quality the operator asked for ([`select_search_quality`]).
+#[cfg(feature = "persistence")]
+pub mod search_quality;
 pub mod service;
 mod setting;
 #[cfg(all(test, any(feature = "embedder-http", feature = "extractor-http")))]
@@ -238,11 +244,15 @@ pub use remote_endpoint::embedder_env_endpoint;
 #[cfg(any(feature = "embedder-http", feature = "extractor-http"))]
 pub use remote_endpoint::{role_auth, RemoteEndpoint};
 pub use rerank::{DynReranker, RerankError, Reranker};
+#[cfg(feature = "persistence")]
+pub use search_quality::{resolve_search_quality, select_search_quality, SEARCH_QUALITY_VAR};
 pub use service::{AutographWorkerHandle, MemoryService, Metadata};
 pub use setting::SettingError;
 #[cfg(feature = "persistence")]
 pub use storage::NativeStore;
 pub use storage::{ColumnStore, FactStore, GraphStore, RecallStore, AUTO_DATE_FIELD};
+#[cfg(feature = "persistence")]
+pub use velesdb_core::SearchQuality;
 // Re-exported separately so the deprecation shim's allowance covers only the
 // alias, never the facet traits above.
 #[allow(deprecated)]

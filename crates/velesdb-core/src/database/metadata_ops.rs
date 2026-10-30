@@ -16,8 +16,11 @@ impl Database {
         let path = self.data_dir.join(name);
         let coll = MetadataCollection::create(path, name)?;
         // Parity item E: thread the live LimitsConfig caps into the collection.
-        self.push_runtime_limits(&coll.inner);
-        self.metadata_colls.write().insert(name.to_string(), coll);
+        self.admit_collection(&coll.inner, || {
+            self.metadata_colls
+                .write()
+                .insert(name.to_string(), coll.clone());
+        });
 
         if let Some(ref obs) = self.observer {
             obs.on_collection_created(name, &CollectionType::MetadataOnly);
@@ -55,10 +58,11 @@ impl Database {
         }
         let coll = MetadataCollection::open(self.data_dir.join(name)).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
-        self.push_runtime_limits(&coll.inner);
-        self.metadata_colls
-            .write()
-            .insert(name.to_string(), coll.clone());
+        self.admit_collection(&coll.inner, || {
+            self.metadata_colls
+                .write()
+                .insert(name.to_string(), coll.clone());
+        });
         Some(coll)
     }
 }

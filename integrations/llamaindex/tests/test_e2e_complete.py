@@ -103,6 +103,34 @@ class TestVectorStoreE2E:
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def test_jaccard_similarity_is_higher_for_closer_nodes(self):
+        """Jaccard is a similarity in core (higher is closer), so it passes
+        through unchanged. It was mapped like a distance, through
+        ``1 / (1 + s)``, which ranked the best match as the least similar and
+        made ``similarity_cutoff`` drop it first."""
+        temp_dir = tempfile.mkdtemp()
+        try:
+            store = VelesDBVectorStore(
+                path=temp_dir,
+                collection_name="jaccard_sim",
+                dimension=4,
+                metric="jaccard",
+            )
+            store.add([
+                TextNode(text="same", id_="same", embedding=[1.0, 1.0, 0.0, 0.0]),
+                TextNode(text="half", id_="half", embedding=[1.0, 0.0, 0.0, 0.0]),
+                TextNode(text="disjoint", id_="disjoint", embedding=[0.0, 0.0, 1.0, 1.0]),
+            ])
+            result = store.query(
+                VectorStoreQuery(query_embedding=[1.0, 1.0, 0.0, 0.0], similarity_top_k=3)
+            )
+            assert result.ids[0] == "same"
+            sims = dict(zip(result.ids, result.similarities))
+            assert sims["same"] > sims["half"] > sims["disjoint"]
+            assert result.similarities == sorted(result.similarities, reverse=True)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     def test_add_nodes_with_metadata(self, temp_store):
         """Test adding nodes with metadata."""
         nodes = [

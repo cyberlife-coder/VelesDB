@@ -7,6 +7,915 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-10-30
+
+> **MAJOR release.** The breaking changes and how to move past each one are in
+> [`docs/guides/MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md).
+> API deprecated one major or more ago is removed: in Rust, `store_node_payload`,
+> `OperationalMetrics::shared`, `effective_ef_search`, `CollectionStats`, the
+> 7.0 update-check entry points, `TraversalMetrics` and velesdb-migrate's
+> `PineconeConfig::environment`, and `EdgeStore` loses its serde impls; in
+> Python, the native `Collection.search`, the `top_k` alias and
+> `get_graph_store`. Point payloads and edge properties nested deeper than 124
+> levels are refused (`VELES-017`) where they used to be written and then fail
+> to read back or to restore; a second `SPARSE_NEAR` is refused where it was
+> dropped, and a failing branch fails a hybrid dense + sparse search. The WASM
+> VelesQL executor validates with core's `QueryValidator`. The Tauri plugin and
+> the mobile bindings carry core's `VELES-###` codes, and `MobileGraphStore` is
+> a core graph collection. `velesdb-wasm` storage modes return core's results
+> and keep f32 vectors in every mode. Graph edges with properties now survive a
+> flush and a reopen, and a `MATCH` range predicate returns every matching node.
+> `enable_streaming` returns `Result` and refuses a config that aborted the
+> process; caller-chosen sizes no longer abort it either. Stored floats read
+> back bit for bit (`serde_json`'s `float_roundtrip`, at a parse cost stated
+> below), and the Python binding raises on a value nested past 127 levels.
+> **Do not downgrade** to 7.x a graph collection whose edges carry properties:
+> 7.x cannot read the 8.0 edge snapshot.
+
+### Added
+
+- **`velesdb_core::MAX_JSON_NESTING` (127) and `MAX_VALUE_DEPTH` (124)**, also
+  under `validation`: the nesting `serde_json` reads back, and the deepest
+  edge properties and point payloads core accepts (see the two `VELES-017`
+  changes under Changed).
+
+- **Agent-memory semantic search at an explicit quality in Python, Tauri and
+  mobile.** The bindings now reach core 7.1.0's
+  `SemanticMemory::query_with_quality`: Python's
+  `memory.semantic.query(embedding, top_k=10, quality=None)` and the Tauri
+  `semantic_query` command's optional `quality` field (guest-js
+  `SemanticQueryRequest.quality`) take a mode string, parsed by core's
+  `parse_search_mode` as `Collection.search_with_quality` and `search` already
+  parse theirs: `fast`, `balanced`, `accurate`, `perfect`, `autotune`/`auto`,
+  `custom:<ef>` or `adaptive:<min_ef>:<max_ef>`, each ef in 16–4096. An
+  unusable mode is a `ValueError` in Python and `VELES-009` in Tauri, never the
+  default quality. Mobile's `VelesSemanticMemory` gains
+  `query_with_quality(embedding, top_k, quality)` (`queryWithQuality`), taking
+  the `SearchQuality` enum `VelesCollection.search_with_quality` takes; it stays
+  on that gated collection search rather than core's `SemanticMemory`, which
+  reads the collection leaf without the observer read gate every mobile read
+  passes (#1392). Omitting the quality keeps the collection's own everywhere.
+- **`api_types::validate_search_quality` checks a typed `SearchQuality` by
+  the rules of `parse_search_mode`.** Every `Custom`/`Adaptive` ef must be in
+  the `ef_search` range and an `Adaptive` `min_ef` must not exceed `max_ef`,
+  so a binding's enum is accepted exactly when its `custom:`/`adaptive:`
+  string would be. Mobile's `SearchQuality` conversion goes through it, and
+  now refuses `Adaptive { min_ef: 512, max_ef: 32 }`, which core's parser
+  already refused and which ran as a search that never escalated.
+- **`collection::graph::dfs_traverse(&EdgeStore, source, &TraversalConfig)`:
+  core's DFS over a standalone edge store.** It is the loop a collection's
+  `traverse_dfs_config` runs (moved, not copied, into
+  `collection/graph/traversal_dfs.rs`, with its #906 push-time bound), so a
+  binding holding a bare `EdgeStore` gets the same order, depths, paths and
+  bounds as a collection; a test pins the two answers equal.
+- **`velesql::Query::result_kind()` classifies a statement by the result it
+  produces.** It returns the new `velesql::QueryResultKind` (`Rows`, `Mutation`,
+  `Deletion`, `Ddl`, `Train`, `Admin`), with `SELECT EDGES` as `Rows`. The
+  mobile and WASM bindings each carried their own copy of this rule, and the
+  copies disagreed; both now map from this one, and the enum is exhaustive so
+  that a new kind fails to compile in every binding that reports it.
+- **`GraphCollection::get_edge(edge_id)` returns one edge by ID.** Finding one
+  edge took `get_edges(None)` and a filter, which clones every edge in the
+  graph; this clones only the one asked for. The mobile graph store's
+  `getEdge` uses it.
+- **`GraphCollection::try_remove_edge(edge_id)` reports a removal that did not
+  happen.** `remove_edge` answers `false` both for an absent edge and for a
+  removal the edge write-ahead log refused (or an index found out of sync with
+  the edge's source shard), so a caller could not tell "already gone" from "left
+  in place". `try_remove_edge` returns `Ok(true)` for a removal, `Ok(false)` for
+  an absent edge, and core's storage error (`VELES-006`) carrying the reason
+  otherwise, the code `TRUNCATE` already gives the same failures.
+  `remove_edge` is unchanged. The mobile graph store's `removeEdge` uses it.
+- **`GraphCollection::truncate()` removes every edge, then every node, by the
+  rule VelesQL `TRUNCATE` follows.** It attempts every edge, removes the nodes
+  only if no edge removal failed, and returns `(edges, nodes)` removed, or
+  core's storage error (`VELES-006`) naming the first failed edge with the
+  nodes left in place. `TRUNCATE` and the mobile graph store's `clear` call
+  it, where the mobile store had its own copy of the loop.
+
+- **The Python binding exposes three core contracts as module functions.**
+  `velesdb.hash_id(value)` is `velesdb_core::hash_id`, the canonical string →
+  `u64` point id; `velesdb.metric_higher_is_better(metric)` is
+  `DistanceMetric::higher_is_better`, the order core sorts results by; and
+  `velesdb.validate_search_quality(mode)` runs core's `parse_search_mode`, the
+  parser `search_with_quality` uses, raising `ValueError` with its message. The
+  MIT integrations call them instead of carrying copies (below), so a change in
+  core reaches them with the next wheel.
+- **`FusionStrategy::from_name`: one fusion strategy name grammar in core.**
+  `velesdb_core::FusionStrategy::from_name(name, FusionParams)` reads `rrf`,
+  `average` (alias `avg`), `maximum` (alias `max`), `weighted` and
+  `relative_score` (alias `rsf`), case-insensitively, fills every parameter the
+  caller leaves out with core's default, and builds the weighted strategies
+  through the validating constructors. An unknown name is the new
+  `FusionError::UnknownStrategy`, whose message lists the accepted names. A
+  single `relative_score` weight implies its complement. `FusionParams` is
+  `#[non_exhaustive]`, built from `FusionParams::default()` and its `with_*`
+  setters. The defaults it fills are now constants too: `DEFAULT_RRF_K` (60),
+  `DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT` and `DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT`
+  (0.5 each), beside the existing `DEFAULT_WEIGHTED_*` ones. Python gets the same
+  grammar as `FusionStrategy.from_name(name, *, k=..., avg_weight=..., ...)`.
+- **`FusionStrategy::fused_direction`: the direction of fused scores, in core.**
+  `velesdb_core::FusionStrategy::fused_direction(&[ScoreDirection])` returns the
+  polarity of what `fuse_with_directions` produces: `LowerIsBetter` only when
+  every branch is a distance and the strategy keeps the input score space
+  (`Average`, `Maximum`, `Weighted`), `HigherIsBetter` for `RRF`, `WeightedRRF`,
+  `RelativeScore` and any mixed or empty set of branches.
+  `fuse_with_directions` reads it instead of repeating the rule. Python exposes
+  it as `FusionStrategy.fused_higher_is_better(metric)`, the direction of the
+  scores `multi_query_search` returns with that strategy; `velesdb_common.scores`
+  gains `fused_higher_is_better(strategy, fusion, metric)`, which calls it and
+  falls back to a literal set pinned to it by a drift test for a wheel older
+  than 8.0.0, and `to_similarity(score, higher_is_better)`.
+- **`parse_search_mode` and `SearchQuality` no longer need `persistence`.**
+  `SearchQuality` moved from `index::hnsw::params` to its own ungated module.
+  It is re-exported at `velesdb_core::SearchQuality` and at its old path.
+  `api_types::parse_search_mode` and `mode_to_search_quality` now build without
+  the `persistence` feature, so a `default-features = false` consumer
+  (`velesdb-wasm`) reads search modes with core's parser instead of its own copy.
+
+- **The executor conformance fixture covers the WASM executor's own statement
+  families.** `conformance/velesql_executor_cases.json` (v2.1.0) adds, each
+  asserted against `velesdb-core` and the `velesdb-wasm` executor: NEAR ranking,
+  hybrid NEAR + metadata and `similarity()` thresholds with per-row scores
+  (`near_cases`), `NEAR_FUSED` rrf/average/maximum (`fusion_cases`), queries both
+  engines must refuse (`rejected_cases`), UPDATE/DELETE followed by a SELECT
+  (`dml_cases`) and DISTINCT/named-column projection (`projection_cases`).
+  LIKE, ILIKE and OFFSET join the scalar `cases` (X015-X020), which the CLI
+  runs too. Three accepted gaps are recorded as `documented_divergences`
+  D007-D009: DELETE takes any WHERE on WASM but only `id = N` / `id IN (...)`
+  on core, UPDATE may set `vector` on core only, and an unranked row scores
+  1.0 on core and 0.0 on WASM.
+- **`velesdb_core::velesql::distinct_evaluator`.** DISTINCT deduplication
+  (`apply_distinct`) moves out of the `persistence`-gated collection query
+  engine, beside `window_evaluator`, so the WASM executor dedups through the
+  same key as core.
+
+- **Guard-rails have one live source in core.** `Database::guardrail_limits()`
+  returns the limits in force, and `Database::update_guardrails_with(|limits|
+  ...)` edits them in place and propagates the result as one step, so two
+  concurrent partial updates both land. `RateLimiter::set_limit_qps` and
+  `CircuitBreaker::reconfigure` change a limiter or a breaker in place, keeping
+  its buckets and its state. `velesdb_core::metrics::LimitType`, the argument
+  of `GuardRailsMetrics::record_limit_exceeded`, is now exported.
+  `QueryLimits::validate` refuses a `rate_limit_qps` or a
+  `circuit_failure_threshold` of `0`, which would reject every query or open
+  the breaker on the first failure now that both take effect;
+  `update_guardrails_with` applies it to the edited limits and returns
+  `Error::Config` (`VELES-009`), changing nothing, when they fail. The
+  existing `update_guardrails` keeps its unchecked signature.
+- **`VectorCollection::pending_reopen` names the streaming settings not in
+  force yet.** It returns the `PendingReopen` settings (`DeferredIndexing`,
+  `AsyncIndexBuilder`, with `field_name()`) whose persisted value differs from
+  the component the collection runs, and that the next open will apply. Python
+  `Collection.pending_reopen()` and Mobile `pending_reopen()` return the field
+  names.
+- **`Database::refresh_storage_gauges(&OperationalMetrics)`** sets
+  `velesdb_documents_total` (points across every collection) and
+  `velesdb_index_size_bytes` (the summed `indexes_memory_usage`) from the live
+  database; `/metrics` calls it before every export.
+
+### Changed
+
+- **BREAKING (behavior) — a query with two `SPARSE_NEAR` clauses is
+  rejected.** A query runs one sparse search, and a second `SPARSE_NEAR`
+  (under `AND` or `OR`) was dropped without a word, the query answering for
+  the first sparse vector alone; with `USING FUSION` it even passed fusion
+  validation as a second branch. It now fails with a query error
+  (`VELES-010`) naming the count; the guard that existed for it was never
+  called. Run one query per sparse vector and fuse the results.
+
+- **BREAKING (behavior) — edges whose properties nest deeper than 124 levels
+  are refused.** `add_edge` and `add_edges_batch` return `VELES-017`
+  (`SchemaValidation`), before any lock or write, for an edge whose
+  properties nest more than `validation::MAX_VALUE_DEPTH` (124) levels of
+  arrays and objects, the properties map counting as the first. Core writes
+  edges into JSON documents, which `serde_json` reads back up to
+  `validation::MAX_JSON_NESTING` (127) levels; the deepest, the agent-memory
+  snapshot, holds an edge three levels down. A deeper edge was written, then
+  skipped with a warning on edge-WAL replay, or failed the agent-memory
+  restore. The edge snapshot refuses to write an edge it could not read
+  back (past `MAX_JSON_NESTING`, should one reach an `EdgeStore` directly),
+  rather than write a file it cannot read; one a 7.x edge WAL replays at 125
+  or 126 levels still snapshots.
+- **BREAKING — `EdgeStore` no longer implements `Serialize`/`Deserialize`.**
+  Its derived serde form was the `edge_store.bin` layout, a private
+  persistence format; the snapshot now has its own private form. Persist a
+  store with `to_bytes`/`from_bytes` or `save_to_file`/`load_from_file`.
+
+- **BREAKING (behavior) — LangChain `GraphLoader` writes one persistent graph
+  collection.** Its relations went to an in-memory `velesdb.GraphStore`, lost
+  when the process ended, and its entities to a separate vector or metadata
+  collection under a `label` payload key. Entities are now the nodes of the
+  graph collection `collection_name` (created on the first load, with the
+  dimension of the first embedding, or without embeddings when there is no
+  `embedding_fn`), labelled with their type through `_labels` so
+  `MATCH (n:TYPE)` finds them, and relations are its edges. *Migration*: a
+  `collection_name` that names a collection the previous loader created is not
+  a graph collection, so the load fails; delete it or pass a new name.
+- **The LangChain, LlamaIndex and Haystack integrations require
+  `velesdb>=5.1.0`,** the first release whose `SearchOptions` takes `k`, which
+  they now pass instead of the `top_k` alias removed below.
+
+- **BREAKING (behavior) — point payloads nested deeper than 124 levels are
+  refused.** Every payload ingest path (`upsert`, `upsert_bulk`,
+  `upsert_bulk_from_raw`, `upsert_metadata`, graph node payload writes)
+  returns `VELES-017` (`SchemaValidation`) naming the point, before anything
+  is written, for a payload nesting more than `validation::MAX_VALUE_DEPTH`
+  (124) arrays and objects. `serde_json` reads back 127 nested levels: a
+  payload deeper than that, reachable from the Rust API and the Python
+  binding (the REST API's JSON parser already stopped earlier), was written
+  to the payload log, and then every read of that point failed; one at 125
+  to 127 levels read back, but made the agent-memory snapshot holding it,
+  three levels deeper, fail to restore. The bound is the one edge properties
+  have, so every stored value fits every document core writes it into.
+  *Upgrading:* a payload a 7.x store holds at 125 to 127 levels stays
+  readable, but writing it back unchanged (a VelesQL `UPDATE`, any
+  read-modify-write) is now refused; flatten it first.
+
+- **BREAKING (behavior) — LangChain relevance scores are higher-is-closer under
+  every metric.** `similarity_search_with_relevance_scores` returned the raw
+  score and kept `score >= score_threshold`; under `euclidean` and `hamming` the
+  raw score is a distance, so a threshold kept the farthest documents and
+  dropped the closest. A distance `d` is now returned as `1 / (1 + d)` (the
+  metric's direction comes from velesdb-core through `velesdb_common.scores`),
+  so the threshold, and `as_retriever(search_type="similarity_score_threshold")`
+  which calls it, keep the closest documents. Cosine keeps its `[0, 1]`
+  rescaling, dot and Jaccard their raw similarity, and fused dense + sparse
+  scores pass through. `GraphRetriever.score_threshold` now filters seeds on
+  these relevance scores, and the seeds' `relevance_score` metadata carries
+  them. `similarity_search_with_score` still returns the raw distance; a sparse
+  search that falls back to dense-only is now scored as the dense search it
+  ran, so its cosine scores are normalised too. Migration: a threshold written
+  as a maximum distance `d` on a `euclidean` or `hamming` store becomes
+  `1 / (1 + d)`. The async `asimilarity_search_with_relevance_scores`, and the
+  async `similarity_score_threshold` retriever that calls it, run the same
+  method; they raised `NotImplementedError` from LangChain's default
+  `_select_relevance_score_fn`.
+- **BREAKING (behavior) — Haystack `Document.score` is higher-is-closer under
+  every metric when `scale_score=True` (the default).** A `euclidean` or
+  `hamming` score was the raw distance, so `DocumentJoiner` and rankers, which
+  sort descending, put the farthest document first. A distance `d` is now
+  `1 / (1 + d)`; cosine keeps its `[0, 1]` rescaling, dot and Jaccard their raw
+  similarity, and `scale_score=False` still returns raw scores. A fused score
+  (`fusion=...`) that is still a distance (`average`, `maximum` or `weighted`
+  over a distance metric, as core's `fused_direction` states) is mapped the
+  same way whatever `scale_score` says.
+- **LlamaIndex similarities on a `euclidean` or `hamming` store change range
+  for fused, hybrid and text scores.** They pass through as core returns them
+  (see Fixed): RRF scores near `1 / 60`, BM25 scores that can exceed `1`, `1.0`
+  for a `contains_text_search` match, where they were all squeezed through
+  `1 / (1 + s)`. A `similarity_cutoff` tuned on those paths needs re-tuning.
+- **`velesdb_common.scores.to_similarity` keeps the order of negative
+  lower-is-better scores.** `weighted` fusion over distances subtracts a hit
+  bonus, so a very close match can score below `0`; it was clamped to `1.0`,
+  which tied every such match. A negative score `d` is now `2 - 1 / (1 - d)`,
+  in `(1, 2)`; a distance `d >= 0` is still `1 / (1 + d)`.
+- **The TypeScript SDK's WASM backend creates `pq` and `rabitq` collections.**
+  `WASM_CAPABILITIES.storageModes` lists all five core storage modes: velesdb-wasm
+  keeps f32 vectors in every mode and returns core's results for it (#2544), so
+  the reason for refusing `pq` and `rabitq` with `NOT_SUPPORTED` (the browser
+  stored both as SQ8) is gone. No mode saves memory in the browser.
+
+- **BREAKING (behavior) — the `velesdb-wasm` VelesQL executor validates queries
+  with core's `QueryValidator`.** A query core refuses is now refused in the
+  browser instead of answered. In particular `USING FUSION` over a single
+  `NEAR` (one fusable branch) fails with V012 for every strategy: `rrf`,
+  `maximum` and `average` used to be accepted as a documented no-op, but `rrf`
+  re-ranked the hits by RRF against a constant metadata branch, so order and
+  scores changed. `NEAR_FUSED ... USING FUSION 'weighted'` or `'rsf'` also fails
+  with V012 instead of silently running as `rrf`. Migration: drop the `USING
+  FUSION` clause from a single-`NEAR` query (the metadata predicate already
+  filters), and give `NEAR_FUSED` `rrf`, `average` or `maximum`.
+
+- **BREAKING (Tauri plugin) — every rejection carries core's `VELES-###` code
+  and a new `recoverable` field.** The plugin coded the conditions it detects
+  itself apart from core, so one app could receive two codes for a dimension
+  mismatch depending on which layer caught it. The plugin-local codes are
+  replaced by the code core gives the same condition, read from the core
+  variant rather than copied: `NOT_FOUND` becomes `VELES-003`,
+  `DIMENSION_MISMATCH` `VELES-004`, `INVALID_CONFIG` `VELES-009` and
+  `SERIALIZATION_ERROR` `VELES-012`. A VelesQL parse error is core's query
+  error, `VELES-010`, instead of `INVALID_CONFIG`, as on WASM and mobile, and a
+  core failure during `train_pq` or an aggregation query keeps its own code
+  instead of being flattened into `INVALID_CONFIG`; their messages are now core's
+  (`Database error: [VELES-0xx] ...`) rather than `VelesQL parse error: ...`,
+  `PQ training failed: ...` or `Aggregation error: ...`. `recoverable` is core's
+  `Error::is_recoverable` for the condition. `TASK_JOIN`, a blocking task that
+  panicked or was cancelled, has no core equivalent: it keeps its code and
+  reports `recoverable: false`. Migration: match `VELES-009` where you matched
+  `INVALID_CONFIG`, and so on for the other three; the guest-js `CommandError`
+  type gains `recoverable: boolean`.
+- **BREAKING (mobile) — `MobileGraphStore` is a graph collection, stored and
+  traversed by core.** The store was a second graph engine of its own: hash
+  maps in RAM, its own BFS and DFS, and a JSON file written by `save` and read
+  by `load`. Its multi-source BFS kept one result per node where core keeps one
+  per path, and it accepted edges to nodes it had never been given. It is now a
+  handle on a core `GraphCollection`, so every traversal is core's and the graph
+  is durable with no save step: it survives an app restart, and its nodes are
+  the ones VelesQL `MATCH` sees through `executeQuery`. Changes for Swift and
+  Kotlin:
+  - The `MobileGraphStore()` constructor, `save(path)` and
+    `MobileGraphStore.load(path)` are gone. Create the collection with
+    `createGraphCollection(name)` (or `createGraphCollectionWithEmbeddings` for
+    nodes with vectors) and get its store with the new
+    `VelesDatabase.getGraphStore(name)`, which returns nil/null for a missing
+    collection and throws for one that is not a graph collection. `flush()` is
+    new.
+  - Every method now throws. Reads pass the database's read gate as
+    `GraphTraversal`, so an observer registered with `openWithObserver` can
+    deny them, and a scope filter is refused since no graph read can apply
+    one; writes and storage can fail now that they reach disk.
+  - `removeEdge(edgeId)` returns a `Bool`: `true` when it removed the edge,
+    `false` when there was none, which stays a no-op. A removal the edge
+    write-ahead log refuses leaves the edge in place and throws core's storage
+    error (`Database`, code `VELES-006`) instead of passing silently. `clear()`
+    runs core's `TRUNCATE` rule (the new `GraphCollection::truncate`): every
+    edge is attempted, then the nodes are removed only if none was refused, so
+    a refusal throws with the nodes left in place and no edge is left pointing
+    at a deleted node.
+  - Core's rules apply. `addEdge` refuses an edge whose source or target was
+    never added, and an empty edge label; edge labels are trimmed.
+    `properties_json` must be a JSON object and must not contain the reserved
+    `_labels` key, which is where core keeps the node's label.
+    `bfsTraverseParallel` reports a node reached from two sources once per
+    source, ordered by depth across sources. A node's `vector` needs a
+    collection created with embeddings.
+  - `addNode` on an existing ID replaces its label and properties; a `vector`
+    replaces its embedding and `nil` keeps it, as core's `upsert_node` does
+    (the old store replaced the whole record). A node read back carries one
+    label, its first: one with several labels, written through VelesQL, keeps
+    only the label `addNode` is given if it is rewritten. `propertiesJson` reads
+    back as core re-serializes it (key order and whitespace may differ, and
+    `"{}"` reads back as nil), and `getOutgoing`/`getIncoming` return edges in
+    core's order, not insertion order.
+
+  Migration: an app holding a graph saved by the old `save(path)` creates the
+  graph collection, gets its store, and calls `importSnapshot(path)` once. It
+  reads that JSON file as written, upserts its nodes and adds its edges, and
+  refuses, before writing anything, an edge ID the store already holds or an
+  edge whose endpoint is in neither the file nor the store; add any such node
+  with `addNode`, then import again. An edge whose ID another writer takes
+  while the import runs is reported as an error rather than skipped. The old
+  file can be deleted afterwards.
+
+- **BREAKING (mobile) — the `Collection` and `DimensionMismatch` errors carry
+  core's `code` and `recoverable`, as `Database` does.** A missing or
+  duplicate collection and a dimension mismatch reached Swift and Kotlin as
+  typed variants with no code, so a retry policy or a log keyed on `VELES-###`
+  had to special-case them. Both variants gain `code` and `recoverable`, read
+  from core's error for the condition: `VELES-002` for a missing collection,
+  `VELES-001` for a duplicate, `VELES-004` for a dimension mismatch, all
+  recoverable. `getCollection` and `getGraphStore` on a collection of the wrong
+  kind answer `VELES-002`, the code core's own lookups give it, with the kind in
+  the message. Their messages now lead with the code
+  (`[VELES-004] Dimension mismatch: expected 384, got 2`). Migration: a Swift
+  pattern or a Kotlin destructuring that binds every field of either variant
+  binds the two new ones too; code reading the fields by name is unaffected.
+
+- **BREAKING (behavior) — `velesdb-wasm` storage modes return core's results,
+  and no longer save memory.** A `VectorStore` created with `sq8`, `pq` or
+  `rabitq` kept only a per-vector SQ8 encoding, and one created with `binary`
+  only sign bits decoded to 0/1; searches scored that reconstruction, so the
+  same mode name returned different scores and a different order than a
+  `velesdb-core` collection, and `get()` returned the reconstruction. Core keeps
+  the f32 vectors in every mode and re-ranks its quantized paths with exact f32
+  (its `Binary` behaves as `Full`). The browser store now keeps the f32 vectors
+  in every mode and scores them exactly: same top-k and scores as core for the
+  same mode, pinned per mode and metric against a real core collection by
+  `quantization_parity_tests`. The cost is memory: every mode now takes 4 bytes
+  per dimension plus 8 per id (3080 bytes per 768-D vector, where `sq8` took
+  ~784 and `binary` ~104). `batch_search` now works in every mode, and
+  `hybrid_search` scores every mode in one exact pass. The `pq`/`rabitq`
+  `console.warn` about an SQ8 fallback is gone, since there is no fallback.
+  One core-side split is documented rather than copied: after a PQ collection
+  trains (128 inserts), core's default `search()` returns ADC-approximated
+  scores while `search_with_quality` stays exact; the browser store returns the
+  exact ones.
+- **`velesdb-wasm` binary format v3.** `export_to_bytes`/`save` write `VELS` v3:
+  the v2 layout without its four quantized blobs, the f32 vectors being kept in
+  every mode. v2 and v1 blobs still load; a v2 quantized store loads as the
+  reconstruction it was searching over (SQ8 decoded through core's
+  `QuantizedVector::to_f32`, sign bits as 0/1), since its f32 values were never
+  saved. An older build refuses a v3 blob with `Unsupported version: 3`.
+
+- **`velesdb_common` calls the binding instead of re-implementing core.** Its
+  FNV-1a copy and its search-quality grammar (preset set, `custom:`/`adaptive:`
+  regexes, a mirrored 16–4096 ef range) are gone. `stable_hash_id(value,
+  algorithm="fnv1a")` is `velesdb.hash_id` and raises `ImportError` naming
+  velesdb 8.0.0 with an older wheel; its SHA-256 default is unchanged, needs no
+  binding, and still differs from core's FNV-1a by design (KNOWN_LIMITATIONS
+  #12). `validate_search_quality` accepts exactly what core accepts (now
+  `custom:+256` too) and its `SecurityError` carries core's message; with a
+  wheel older than 8.0.0 it checks only the type and leaves the mode to the
+  binding, which refuses an invalid one at search time. The connectors' declared
+  `velesdb` floors stay where they are, since every new call is
+  feature-detected.
+- **`SearchConfigOptions.default_mode` reads core's own mode names.** The
+  binding parsed and rendered `fast`/`balanced`/`accurate`/`perfect` from a
+  hand-written table; it now goes through `SearchMode`'s serde names, the ones
+  the `[search]` TOML section is read with, so a mode core adds is accepted
+  without a binding change. An unknown mode still raises `ValueError` naming
+  `default_mode`, now worded `invalid search.default_mode: unknown variant
+  ..., expected one of ...`.
+- **Every surface that takes a fusion strategy by name now goes through
+  `FusionStrategy::from_name`.** Before, seven `match` blocks had drifted apart:
+  - **CLI** (`multi-search --strategy weighted` and the REPL's
+    `.hybrid-sparse --strategy weighted`): `weighted` now uses core's
+    0.6 / 0.3 / 0.1 instead of the pre-#1545 literals 0.5 / 0.3 / 0.2, so it
+    ranks the same as the server, Python, WASM and Tauri. **This reorders
+    `weighted` results from the CLI.** The REPL now reads names
+    case-insensitively and accepts `avg`;
+  - **Tauri**: `parse_fusion_strategy` accepts `avg` and `max`, builds the
+    weighted strategies through the validating constructors (weights it would
+    have refused only when the fusion ran are refused when the strategy is
+    built), and a single `denseWeight`/`sparseWeight` implies the other. A `k`
+    past `u32::MAX` is refused whatever the strategy;
+  - **REST** (`/search/multi` and the hybrid `fusion` object): the accepted
+    names are unchanged. The two endpoints now report core's message for an
+    unknown strategy (`Unknown fusion strategy '...'. Valid values: ...`) and
+    for refused weights, instead of their own wording. The multi-query
+    endpoint used to say `Invalid strategy: ...`;
+  - **WASM** `fuse_results`: the name grammar is core's. The N-branch `rsf`
+    aggregation stays WASM-local by design (fixture divergence D005).
+  - **MIT integrations** (`velesdb_common.fusion.build_fusion_strategy`, used
+    by LangChain and LlamaIndex): the name goes to the binding's
+    `FusionStrategy.from_name`, so they accept core's aliases and casing and
+    report core's errors. A wheel older than the export (velesdb < 8.0.0)
+    keeps the previous literal dispatch, as the other `velesdb_common` helpers
+    do.
+- **`velesdb-wasm` validates search modes with core's `parse_search_mode`.**
+  `search_with_quality` accepts and refuses exactly what every other surface
+  does, and its refusals now carry core's messages (`Unknown search mode
+  '...'. Valid values: ...`, which names the `auto_tune` and `auto` aliases),
+  replacing `Unknown search quality`, `Invalid custom ef_search value`,
+  `Invalid adaptive ...` and `Adaptive min_ef ... must be <= max_ef`.
+- **The metric aliases are listed once in core.** `DistanceMetric::parse_alias`
+  reads them from one table, and VelesQL DDL validation calls it instead of
+  repeating the list. A `WITH (metric = ' L2 ')` is therefore trimmed at
+  validation as it already was at execution. The DDL executor's unknown-metric
+  message now lists every alias (it named five of the nine).
+- **One `LIMIT` ceiling in the query pipeline.** The union query used its own
+  `MAX_LIMIT` copy, and `JOIN_ROW_CEILING` is now defined from the same
+  constant instead of mirroring it by hand. Both values are unchanged (100 000).
+- The core rustdoc no longer names a private crate. The observer port is
+  described by what it is, the hook an out-of-tree policy layer implements.
+- The REST `FusionRequest` and `MultiQuerySearchRequest` docs (and so the
+  OpenAPI spec) list the strategy aliases and core's weighted defaults. The
+  `FusionRequest` field docs had kept the pre-#1545 0.5 / 0.3 / 0.2, and the
+  `MultiQuerySearchRequest` examples 0.5 and 0.2.
+
+### Removed
+
+- **BREAKING — Python: the deprecated search entry points.** The native
+  `Collection.search(...)` keyword method (deprecated since 1.15.0, with a
+  `DeprecationWarning`) is gone; the `velesdb.Collection.search(vector, top_k,
+  filter, sparse_vector, sparse_index_name)` shorthand stays, no longer warns,
+  and goes through `search_request`. `SearchOptions(top_k=...)`, its `top_k`
+  property and `.with_top_k()` (aliases of `k` since 5.1.0, #1921) are
+  removed. *Migration*: `top_k=` becomes `k=` and `.with_top_k(` becomes
+  `.with_k(`.
+- **BREAKING — Python: `Collection.get_graph_store()`.** It returned a
+  standalone in-memory graph unrelated to the collection, with a
+  `DeprecationWarning` saying so. *Migration*: `Database.get_graph_collection()`
+  for a persistent graph, or `velesdb.GraphStore()` for an in-memory one.
+- `scripts/release.sh`, an unreferenced script that bumped every
+  `Cargo.toml` and pushed `main` and a tag itself, outside `bump_version.py`
+  and the `tag-release.yml` workflow that releases go through.
+
+- **BREAKING (Rust API) — `velesdb-core` items deprecated one major or more
+  ago.** Each replacement already exists and does what the removed item did:
+  - `GraphCollection::store_node_payload` (deprecated in 1.6.0): call
+    `GraphCollection::upsert_node_payload`, same arguments.
+  - `OperationalMetrics::shared` (1.13.2): call `OperationalMetrics::new_arc`;
+    both returned a fresh `Arc`, never a shared one.
+  - `VelesConfig::effective_ef_search` (5.2.0): the engine resolves `[search]`
+    through `SearchConfig::resolved_quality` (#2087, `persistence` feature),
+    which returns the `SearchQuality` to read rather than a `usize`; the
+    removed helper returned `usize::MAX` for `perfect` (#2238). Without the
+    `persistence` feature, the ef_search it computed is
+    `search.ef_search.unwrap_or_else(|| search.default_mode.ef_search())`.
+  - `velesql::match_planner::CollectionStats` (5.2.0): the type is
+    `velesql::match_planner::MatchGraphStats`, same fields.
+  - The update-check entry points deprecated in 7.0.0: `check_for_updates`
+    and `spawn_update_check` become `check_for_updates_with` and
+    `spawn_update_check_with`, which take an
+    `UpdateCheckContext::new(entry, edition)` (add `.with_data_dir(dir)` to
+    keep a data directory) and report the calling binary instead of
+    `"library"`. `compute_instance_hash` has no replacement: the update check
+    derives its install hash itself, and the helper only ever read a stored
+    id, returning a fresh random hash when there was none.
+
+  `Database::notify_upsert` and `Database::notify_query` (deprecated in
+  3.9.0) stay in 8.0: the server's REST bulk upsert, NDJSON stream, search
+  pipeline, batch search and aggregation routes do not run through the core
+  layer that fires `on_upsert` / `on_query`, so these calls are their only
+  observer telemetry.
+- **BREAKING (Rust API) — `velesdb_core::TraversalMetrics`** (also
+  `velesdb_core::metrics::TraversalMetrics`). Nothing in the engine fed it,
+  and its `export_prometheus` still wrote the process-wide
+  `velesdb_traversal_*` families the server stopped writing in #2548. Graph
+  traversal counts are per collection and fed by core:
+  `GraphCollection::metrics()`, and `Database::graph_metrics_prometheus()`
+  for the `velesdb_graph_traversal*` families.
+- **BREAKING (velesdb-migrate) — `PineconeConfig::environment`** (deprecated
+  in 1.12.0). Pinecone serverless discovers the index host through
+  `GET /indexes/{name}`, so the field was never read. A YAML config that still
+  sets `environment:` keeps loading, the key ignored like any unknown key;
+  Rust code that builds a `PineconeConfig` drops the field. The shipped
+  template and example no longer write it.
+- **Dead internal code, with no public API change.** In `velesdb-core`: the
+  graph index advisor (`IndexAdvisor`, `QueryPatternTracker`) that nothing
+  read, so a `MATCH` no longer takes a write lock to record its pattern; a
+  second BFS / DFS implementation only tests called (the tests now run the
+  `traverse_*_config` path every binding uses); the never-called
+  deferred-sync bulk upsert and the `fsync` flag it alone set to `false`; the
+  `Collection` sparse-search wrappers, `estimate_column_selectivity`, the trigram and generic GPU
+  backend selectors, two never-incremented HNSW safety counters, and other
+  unreachable helpers. In `velesdb-server`, an unused query-type detector and
+  the `reqwest` dev-dependency; in `velesdb-cli`, `LicenseInfo::has_feature`;
+  in `velesdb-wasm`, a test-only accessor; in `velesdb-python`, the
+  `pyo3-build-config` build-dependency with no build script to use it.
+
+### Fixed
+
+- **A huge `batch_size` no longer aborts the process.**
+  `Collection::scroll_batch` reserved `batch_size` points up front, and the
+  streaming ingester's drain task reserved its configured `batch_size`, so a
+  caller's `usize::MAX` (or any size past memory) overflowed the capacity and
+  aborted the process. The Python `scroll` iterator and `scroll_batch`, the
+  Tauri `scroll_batch` and the CLI pass a scroll size through (REST caps one
+  at 10 000); REST `/stream/enable` and the Python, Tauri and mobile
+  `enable_streaming` pass a streaming `batch_size` through, the mobile one
+  turning a `u64` past `usize` into `usize::MAX`. Both now grow with the
+  points they actually hold. The sparse, hybrid and filtered search
+  resolvers and the GPU multi-probe merge are sized the same way, by the hits
+  found rather than by `k` or `limit`, which the searches already bounded.
+  An HNSW index reserved its base layer and its id mappings at
+  `max_elements` before its first insert; REST `hnsw_max_elements` and the
+  Python `HnswOptions.max_elements` pass it through, and on an SQ8 or RaBitQ
+  collection (whose own arena is capped) `usize::MAX` aborted the collection
+  create. `max_elements` stays the capacity hint it is documented as: the
+  up-front reservation is capped at 2 000 000 slots, above every
+  `for_dataset_size` preset, and the index grows past it as nodes arrive.
+- **BREAKING (Rust API) — `enable_streaming` refuses a config the pipeline
+  cannot run with.** A streaming `buffer_size` of 0 or past
+  `tokio::sync::Semaphore::MAX_PERMITS`, or a `flush_interval_ms` of 0, hit an
+  assertion in tokio's channel or interval and aborted the process (release
+  builds abort on panic), reachable from a REST request. The new
+  `StreamingConfig::validate` refuses them, and `Collection::enable_streaming`
+  and `VectorCollection::enable_streaming` now return `Result<()>`, with
+  `Error::Config` (`VELES-009`) and the current ingester left running.
+  REST `/stream/enable` answers `400`, Python raises `ValueError`, Tauri and
+  mobile reject with `VELES-009`. *Migration*: handle or `?` the result.
+
+- **Stored floats read back bit for bit.** Payloads, edge-WAL records and
+  edge-snapshot properties are JSON, and `serde_json`'s default parser returns
+  some doubles one ULP off (`127.75015752618465` reads back as
+  `127.75015752618464`): a float written to a payload or an edge property
+  could come back different after a reopen, and an exact-equality filter on
+  it stop matching. `velesdb-core` now enables `serde_json`'s
+  `float_roundtrip` feature, which parses every float exactly. This covers
+  reads: a value an earlier version already read off by one ULP and wrote
+  back (a snapshot, a compaction, a read-modify-write) keeps that value.
+  Cargo unifies the feature across a build, so every `serde_json` float parse
+  in a binary that links core pays it, the application's own and other
+  dependencies' included, REST request bodies too: measured on a
+  768-dimension query body (15.5 KB, release build), parsing went from
+  38-40 µs to 56-63 µs into a typed `Vec<f32>` (about +20 µs per vector,
+  +200 ms per 10 000-vector batch) and from 44-47 µs to 57-61 µs into a
+  `serde_json::Value` (`benches/json_float_parse_benchmark.rs` runs the same
+  parse). An `f32` is now parsed directly and correctly rounded
+  instead of through `f64`, so a vector component can differ from before by
+  one `f32` ULP, toward the exact value.
+
+- **Python: a payload nested too deep raises instead of crashing the
+  interpreter.** The conversion of a Python value to JSON recursed once per
+  level of lists and dicts with no bound, so a very deep list, or one that
+  contains itself (`a = []; a.append(a)`), overflowed the native stack: on
+  7.1.0 an `upsert` with such a payload ends the process with a segmentation
+  fault. The conversion now stops at `MAX_JSON_NESTING` (127) levels, the
+  depth `serde_json` reads back, the payload dict (or an edge's properties
+  map) counting as the first, and raises `ValueError` naming the bound. A
+  payload within it but deeper than 124 levels still reaches core's own
+  refusal (`VELES-017`).
+- **Graph edges with properties survive a flush and a reopen.** `flush()`
+  writes every edge to the `edge_store.bin` snapshot, encoded with postcard,
+  and then truncates the edge WAL. An edge's properties are
+  `serde_json::Value`s, which postcard can write but cannot read back, so a
+  snapshot holding any edge with properties could not be loaded: the
+  collection reopened with an empty edge store (a warning in the log), and
+  the next flush with a non-empty edge WAL overwrote the snapshot, making the
+  loss permanent. The snapshot now writes each edge's properties as one JSON
+  string; `GraphEdge`'s own serde form, which the API and the edge WAL carry,
+  is unchanged. A snapshot of edges without properties keeps the same bytes
+  in both directions. Float properties read back exactly (see "Stored floats
+  read back bit for bit"). An `edge_store.bin` that cannot be decoded is no longer
+  left in place to be overwritten: the open logs the decode error, moves the
+  file to `edge_store.bin.unreadable-<unix milliseconds>` next to it (never
+  replacing an earlier one), and opens the collection with the edges the WAL
+  still holds. A snapshot that cannot be read for another reason
+  (permissions, I/O), or cannot be moved aside (a read-only directory), fails
+  the collection's open with `VELES-011`; `Database::open` then logs a
+  warning and leaves that collection out, as it does for any collection that
+  fails to open, where 7.1.0 opened it without its edges.
+
+  **Upgrading from 7.1.0 or earlier:** 7.1.0 opened such a collection
+  without its edges and kept the snapshot until a flush found the edge WAL
+  non-empty and overwrote it; edges lost that way cannot be brought back. A
+  snapshot not yet overwritten is moved aside by the first 8.0.0 open, bytes
+  intact, for a manual recovery: postcard does not record the type of each
+  property value, so decoding them needs to know which types they had.
+  **Do not downgrade** a collection that has edges with properties to 7.x:
+  7.x cannot decode the 8.0 snapshot either, opens the collection without
+  its edges, and its next flush with a non-empty edge WAL overwrites them.
+
+- **A MATCH range predicate no longer hides nodes the graph range index
+  missed.** `MATCH (n:P) WHERE n.age > 10` takes its candidates from the
+  in-memory `P.age` range index whenever that index exists, but only the
+  node-payload write (`upsert_node_payload` / `upsert_node_payloads`) fed it,
+  and every open started it empty. A node written through
+  `upsert_node(id, payload, Some(vector))`, `upsert`, `upsert_metadata`,
+  `upsert_bulk` or `upsert_bulk_from_raw`, or any node written before a
+  reopen, was then left out of the result, with no error, as soon as one
+  node-payload write had created the index — after a reopen, the query
+  returned only the nodes written since. Deletes also left their entries
+  behind. The range indexes are now derived from the payloads exactly like the
+  label index: every write and delete path that maintains the label index
+  maintains them too, through one shared remove-then-index step, and the open
+  rebuilds both from the stored payloads, WAL replay included, in the same
+  scan.
+
+  The index lookup is also kept a superset of what WHERE accepts, which it
+  was not in four cases, each of which hid matching nodes: `n.w = 0.5` matched
+  exactly where WHERE accepts any value within 0.001 (the lookup is now that
+  tolerance, doubled, around the literal); `n.age > 9007199254740992` missed
+  `2^53 + 1`, which the index orders as the `f64` `2^53` (a strict bound on an
+  integer is now looked up inclusive); `n.w >= 0.0` missed `-0.0` (the index
+  now orders `-0.0` and `0.0` equal, as WHERE does); and a top-level key
+  containing a dot, `"a.b"`, was indexed under the key WHERE uses for the
+  nested path `a` → `b` (such keys are no longer indexed: WHERE cannot reach
+  them). Only scalar properties are indexed — null, booleans, numbers,
+  strings — since an array or an object never satisfies an index-eligible
+  comparison.
+
+  **Memory:** every scalar property of every labelled node is now held in the
+  range indexes, strings included, on every write path and from the open on.
+  Measured on 100 000 labelled nodes, each with two numbers, a distinct 1 KB
+  string and a 20-element array, in a **debug** build (the open times are
+  only comparable with each other, not with a release build): the open took
+  23.8 s and 170 MiB of RSS, against 20.9 s and 46 MiB without the range
+  rebuild. The indexed strings dominate that cost: the indexes hold a copy
+  of every string property of every labelled node, and the 124 MiB they
+  added here is close to the 100 MB of strings the nodes carry.
+
+- **A bulk upsert of a point without a payload keeps that point's payload
+  indexed.** `upsert_bulk` and `upsert_bulk_from_raw` store nothing for a
+  point whose payload is `None`, so the point keeps its stored payload, but
+  the index maintenance treated it as a delete: re-embedding a node with
+  `upsert_bulk([Point::new(1, vector, None)])` removed it from the label and
+  range indexes (`MATCH (n:P)` no longer returned it), from BM25 (its text no
+  longer matched), from the persisted histograms and from the columnar payload
+  mirror. Both bulk paths now derive every payload index from the points that
+  carry a payload, with a repeated id resolved to its previous payload in the
+  batch, and invalidate the mirror when a point keeps its payload. `upsert`
+  keeps its documented behaviour: a point without a payload deletes it.
+  `upsert_bulk` also never maintained the secondary indexes, so an equality
+  lookup missed every point it wrote; it now does, as `upsert_bulk_from_raw`
+  did. The label and range indexes are now updated under the same payload
+  write lock as the write itself on `upsert` and both bulk paths, so a
+  concurrent write to the same ids can no longer leave them describing a
+  payload storage no longer holds.
+
+- **A payload write that fails part-way leaves the indexes describing what
+  was stored.** A batch write to payload storage is not all-or-nothing: the
+  records written before the error, or all of them when only the sync fails,
+  are readable. `upsert`, both bulk paths and `upsert_node_payloads` now read
+  those ids back on the error and index what storage holds; the node-payload
+  write used to remove the old label, range and composite entries before the
+  write and index nothing on an error, so a node it had rewritten sat in
+  storage under no label at all. A bulk upsert whose vector write fails now
+  also updates BM25, the secondary indexes and the histograms for the
+  payloads it stored before returning the error, where it used to return
+  first and leave those payloads out of them.
+
+- **`GraphCollection::traverse_bfs_parallel` counts only results against
+  `limit`.** The traverser emitted each start node at depth 0, which took a
+  slot of `limit` before the `min_depth` filter dropped it, so
+  `traverse_bfs_parallel(&[1], limit = 1)` returned nothing where
+  `traverse_bfs_config(1, limit = 1)` returns one node, and two starts with
+  `limit = 2` returned none. The start entries now get slots of their own, and
+  the result is truncated to `limit` after the filter. REST
+  `/graph/traverse/parallel` and Mobile `bfsTraverseParallel` call it.
+
+- **Python: `GraphStore.traverse_dfs` runs core's DFS.** It ran a DFS of its
+  own (`dfs_collect` in `crates/velesdb-python/src/graph_store.rs`) that
+  emitted one result per edge pushed, so a node reached by two edges came back
+  twice, in an order neither depth-first nor core's. It now calls
+  `dfs_traverse`, as `traverse_bfs` already called core's `bfs_stream`: one
+  result per node reached, in depth-first order, describing the edge that
+  reached it, with `limit` (`StreamingConfig.max_visited`) capping the results
+  as it does for BFS. The `TraversalResult` shape is unchanged. An empty
+  `relationship_types` list now follows every edge, as BFS and core read it;
+  the old DFS followed none and returned no result.
+
+- **LlamaIndex no longer inverts Jaccard rankings.** Core returns a Jaccard
+  *similarity* (higher is closer), but `VelesDBVectorStore` listed `jaccard`
+  among the distances and mapped its scores through `1 / (1 + s)`: the best
+  match got the lowest similarity, so `similarity_cutoff` and node
+  postprocessors dropped it first. The direction now comes from
+  `velesdb.metric_higher_is_better` through the new
+  `velesdb_common.scores.score_to_similarity`, with a literal fallback, pinned to
+  the binding by a drift test, for a wheel that predates the function. Euclidean
+  and Hamming keep their `1 / (1 + d)` mapping.
+
+- **`PUT /guardrails` and `Database::update_guardrails` reach every limit they
+  set.** `rate_limit_qps`, `circuit_failure_threshold` and
+  `circuit_recovery_seconds` were returned but never applied: each collection's
+  rate limiter and circuit breaker kept the values they were built with. And a
+  collection created, loaded or opened after the update started from the
+  defaults. Every registration path now pushes the live limits, under a lock
+  that keeps a concurrent update from missing a collection being registered.
+  Python, Mobile and Tauri call the same core method and get the same reach.
+  Each refuses limits that fail `QueryLimits::validate` and changes nothing:
+  `PUT /guardrails` answers `400` (`VELES-009`), Python raises `ValueError`,
+  Tauri rejects with `VELES-009`, and **BREAKING (Mobile)**
+  `updateGuardrails` now throws `VelesError`.
+- **`apply_advanced_config` takes effect, or says when it will.** The deferred
+  indexer and the async index builder were built only when a collection was
+  opened, so setting either on an open collection, as `POST /collections`
+  does right after creating one, only rewrote `config.json`. One is now
+  installed at once into a collection that runs none, shared by every handle
+  on it; a change to one already running is persisted for the next open and
+  reported by `pending_reopen` (a write uses the component with no lock
+  spanning its use, so swapping it live could strand what a writer had pushed).
+- **Every `/metrics` family is fed.** `velesdb_limits_exceeded_total` now counts
+  every limit a query context refuses, `velesdb_rate_limit_requests_total`
+  every rate-limiter decision, `velesdb_cache_collision_fallback_total` every
+  VelesQL query-cache insert a hash collision sends to an occupied bucket,
+  `velesdb_match_guardrail_hits_total` the `MATCH` queries a guard rail stops
+  while running, and `velesdb_match_similarity_queries_total` the `MATCH`
+  queries with a `similarity()` condition. `velesdb_match_latency_seconds`
+  gains `_sum` and `_count`. The server counts open connections in
+  `velesdb_active_connections` on the HTTP and HTTPS paths, and
+  `velesdb_queries_by_type{type="graph"}` (and `velesdb_queries_total`) on
+  `/graph/traverse`, `/graph/traverse/parallel`, `/graph/traverse/stream` and
+  `/match`, once the read is admitted (collection found, request valid, read
+  authorized). All of them read `0` forever before. A scrape reads the
+  registries only to clone the collection handles, so walking the indexes for
+  `velesdb_index_size_bytes` holds no registry lock.
+- **`list_indexes` reports what each index is and holds.** `memory_bytes` was
+  `0` for every index; it is now each index's heap estimate (key bytes plus each
+  value's serialized id bitmap). A secondary payload index was labelled
+  `"hash"`; it is a B-tree and is labelled `"btree"`. A range index reported a
+  `cardinality` of `0`; it reports its distinct values. `indexes_memory_usage`
+  left secondary indexes out; it now sums every index `list_indexes` lists.
+
+- **`vector NEAR $v OR <metadata>` keeps the NEAR hits.** The shape was routed
+  to the `similarity()` union executor, which has no NEAR leg: every NEAR hit
+  was dropped and only the metadata side came back, each row scored 1.0
+  (`... WHERE vector NEAR $v OR category = 'other' LIMIT 5` returned two rows
+  instead of five). A `NEAR` leaf is TRUE in a boolean context, as the WHERE
+  evaluator and the planner already read it, so the disjunction now runs as the
+  NEAR search with the rest of the WHERE read that way: the rows the NEAR
+  search ranks, with their NEAR scores, and `(NEAR OR x) AND y` filtered by `y`.
+  Core now returns what the WASM executor did; the shared executor fixture pins
+  both (X021, X022). A `similarity()` threshold under `OR` keeps the union
+  semantics. The extractor now also sees a NEAR vector under `OR`, so
+  `NEAR $d OR SPARSE_NEAR $s` runs the same dense + sparse fusion as its `AND`
+  form; it used to drop the dense vector and run a sparse-only search.
+- **A failing branch fails the hybrid dense + sparse search.** The dense branch
+  dropped its error, so a dense vector of the wrong dimension answered with the
+  sparse hits alone instead of `DimensionMismatch` (VELES-004), and an unknown
+  sparse index answered with the dense hits alone, or nothing, instead of the
+  `Sparse index '...' not found` error (VELES-009) the sparse-only search
+  returns. Both now fail the query — `NEAR ... AND SPARSE_NEAR ...` and every
+  binding's `hybrid_sparse_search`.
+- **`VectorCollection::hybrid_sparse_search` aligns distance polarity.** It
+  carried its own copy of the dense + sparse fusion, without the score-direction
+  alignment of #2102: on a Euclidean or Hamming collection a score-level
+  strategy (RSF, weighted, average, maximum) ranked the farthest dense point
+  first. It now delegates to the collection's fusion, so the server, CLI,
+  Python, mobile and Tauri hybrid searches rank like the VelesQL path. RRF was
+  never affected.
+
+- **`velesdb-wasm` ranks a `similarity()` threshold like core.** `WHERE
+  similarity(vector, $q) > t` without `NEAR` returned the passing rows in
+  insertion order with score 0.0, so `ORDER BY similarity()` had nothing to sort
+  on. Each row now carries its similarity as its score and the rows come back
+  best first, as core returns them (conformance `near_cases` N009-N012).
+- **`velesdb-wasm` DISTINCT honours ORDER BY and LIMIT.** `SELECT DISTINCT` ran
+  in the aggregation pipeline, which ignored `ORDER BY`, applied no default
+  `LIMIT` and keyed `DISTINCT *` on id and score, so no row ever collapsed. It
+  now runs in the plain SELECT pipeline through core's `apply_distinct`:
+  DISTINCT, then ORDER BY, OFFSET and LIMIT (10 by default, as in core), and
+  each row keeps its point id instead of a synthetic 0.
+- **`velesdb query execute --format json` prints `[]` for a SELECT that matches
+  nothing.** It printed the prose line `No results.`, which no JSON parser
+  accepts; the table format keeps the message. Found by the new executor
+  conformance case X020 (`OFFSET` past the end), which the CLI runs.
+
+- **`velesdb-wasm` rejects a corrupt store at load instead of aborting at
+  search.** A `VELS` blob whose vector or quantized buffers do not hold exactly
+  one row per id now fails `import_from_bytes`/`load` with `Invalid data: ...`.
+  This includes a v2 quantized store filled through the old `insert_batch`,
+  which appended to the f32 buffer whatever the mode and left the codes short,
+  so its first search indexed out of bounds.
+
+- **LlamaIndex no longer reverses fused, hybrid and BM25 rankings on a distance
+  metric.** Every search path mapped its scores through `1 / (1 + s)` on a
+  `euclidean` or `hamming` store, including scores that are already
+  higher-is-better: `multi_query_search` with `rrf` or `relative_score`,
+  `hybrid_query` (RRF of vector and BM25 ranks), `text_query` (BM25), a dense +
+  sparse `query(..., sparse_vector=...)` and `contains_text_search` (a match
+  scores 1.0). The best match came out least similar, the first one
+  `similarity_cutoff` dropped. Each path now states the direction of its
+  scores: those pass through unchanged, a raw single-metric score is mapped as
+  before, and `average`, `maximum` and `weighted` fusion, which keep the
+  metric's units, take their direction from core through
+  `velesdb_common.scores.fused_higher_is_better`.
+- **A dense + sparse search whose sparse (or dense) branch comes back empty
+  still returns fused scores.** `fuse_dense_sparse` skipped fusion and returned
+  the other branch's raw scores, so on a `euclidean` or `hamming` collection a
+  sparse term no point carries returned ascending distances where every other
+  hybrid search returns higher-is-better fused scores; a caller reading them as
+  fused, as LangChain and LlamaIndex do, ranked the closest documents last. The
+  empty branch is now fused as an empty list, so the scores always have the
+  direction `FusionStrategy::fused_direction` states for a dense and a sparse
+  branch (higher-is-better). The ranking of the non-empty branch is unchanged.
+
+- **Mobile: a core error keeps its code and recoverability on every VelesQL,
+  training and sparse or multi-query call.** `executeQuery`, `query`,
+  `trainPq`, `sparseSearch`, `hybridSparseSearch` and the three
+  `multiQuerySearch` variants wrapped core's error in a `Database` error with an
+  empty `code` and `recoverable: true`, so a non-recoverable `IndexCorrupted`
+  (`VELES-008`) reached Swift and Kotlin as retryable. They now map it as every
+  other call does, keeping the call's context in the message: a VelesQL parse
+  error is `VELES-010`, a missing collection is the `Collection` variant and a
+  dimension mismatch the `DimensionMismatch` variant, where these calls used to
+  answer `Database` for both.
+- **Mobile: `SELECT EDGES` reports kind `Rows`, not `Mutation`.**
+  `executeQuery` answered `"N row(s) affected"` for a read; it now answers
+  `"N row(s) returned"`, as WASM always did.
+
+- **`/metrics` no longer writes `velesdb_traversal_nodes_visited_total`,
+  `velesdb_traversal_edges_scanned_total` and `velesdb_traversal_max_depth`.**
+  The server declared them process-wide and never fed them; the per-collection
+  `velesdb_graph_traversals_total` and `velesdb_graph_traversal_nodes_visited_total`
+  core already feeds are the traversal figures. The bundled Grafana dashboard
+  reads those instead and drops its max-depth panel. `velesdb-server`'s
+  `AppState` loses its `traversal_metrics` and `query_limits` fields; the
+  limits live in the `Database`. The HELP texts of `velesdb_documents_total`,
+  `velesdb_index_size_bytes` and `velesdb_active_connections` now say what
+  each gauge counts.
+- **A secondary index's `index_type` is `"btree"`** in `list_indexes`, REST
+  `GET /collections/{name}/indexes`, the CLI, Python, Mobile and Tauri, which all
+  relay it. A consumer that matched `"hash"` to find payload indexes should
+  match `label == "secondary"` or `"btree"`.
+
+### Documentation
+
+- **The memory wedge's `search_quality` docs list the `adaptive:<min_ef>:<max_ef>`
+  form** core's parser accepts: the Node README and `MemoryService.open` doc,
+  the Python `MemoryService` stub and docstring, the LangGraph README and the
+  `velesdb-memory` `[search] quality` rustdoc named only the five presets and
+  `custom:<ef>`.
+
+- **The core surfaces the 7.1.0 parity audit found undocumented now have usage
+  docs.** `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and
+  `query_excluding_with_quality` are shown in `docs/guides/AGENT_MEMORY.md`, with
+  incoming and bounded relations and the relation methods of episodic and
+  procedural memory; the per-store quality of the memory wedge
+  (`MemoryService(..., search_quality=...)`, `VELESDB_MEMORY_SEARCH_QUALITY`) in
+  the Python guide and READMEs. A new `docs/guides/CORE_OPERATIONS_API.md`
+  covers the observer port and governed reads (`open_with_observer`,
+  `gated_search`, `authorize_read`), guard-rails (`QueryLimits`,
+  `update_guardrails`, `CircuitBreaker`, `RateLimiter`), validation and stable
+  ids, index introspection and the `ORDER BY` advisor, `apply_advanced_config`,
+  auto-reindex detection, the filter-strategy decision, the standalone
+  `ColumnStore`, and the metrics types; `AnyCollection` and the `api_types` mode
+  parser are documented where those topics already live. Every snippet was
+  compiled and run against this tree.
+- **`/metrics` is documented family by family**, the `velesdb_graph_*` (per
+  graph collection) and `velesdb_match_*` (process-wide) series included, each
+  with what feeds it (every family is fed — see Fixed).
+- **The REST reference no longer misstates `/search` and `/guardrails`.** The
+  `/search` table gains `mode`, `ef_search`, `timeout_ms` and the sparse and
+  fusion fields `openapi.yaml` already listed, and `/search/batch` says its
+  entries' `mode` and `ef_search` are validated but not applied. The
+  `GET /guardrails` example showed a 1 GiB memory limit and 100 queries per
+  second; the defaults are 100 MiB and 100 000. `PUT /guardrails` now says what
+  it reaches: every limit, on every collection, including those opened after
+  the update (see Fixed).
+- **No guide shows `NEAR_FUSED ... USING FUSION 'weighted'` as working.** The
+  validator has rejected `weighted` and `rsf` on `NEAR_FUSED` with `V012` since
+  3.3.0, as the spec says, but the CLI cookbook, the business scenarios and the
+  graph-patterns guide still offered them. Their examples now use `average`, and
+  each says where `weighted`/`rsf` do apply: the query-level `USING FUSION(...)`
+  of a two-branch hybrid. The spec's `NEAR_FUSED` section said both that other
+  strategies fall back to RRF and that any other name is rejected; it now says
+  what the engine does — `weighted`/`rsf` rejected, a name outside the five
+  known strategies run as `rrf`. It also documents `NEAR` under `OR`.
+
 ## [7.1.0] - 2026-10-28
 
 > **MINOR release.** Additive: no breaking change to the public API, the on-disk
@@ -10605,7 +11514,10 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v8.0.0...HEAD
+[8.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v7.1.0...v8.0.0
+[7.1.0]: https://github.com/cyberlife-coder/VelesDB/compare/v7.0.0...v7.1.0
+[7.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v6.0.0...v7.0.0
 [6.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.2.0...v6.0.0
 [5.2.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...v5.1.0

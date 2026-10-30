@@ -16,17 +16,6 @@ pub fn setup_collection(dim: usize) -> (TempDir, Collection) {
     (dir, col)
 }
 
-/// Creates a test collection pre-populated with the given points.
-///
-/// Combines [`setup_collection`] with an immediate `upsert` call,
-/// eliminating the two-step boilerplate common in test setup functions.
-#[allow(dead_code)] // Available for future test adoption.
-pub fn setup_collection_with_points(dim: usize, points: Vec<Point>) -> (TempDir, Collection) {
-    let (dir, col) = setup_collection(dim);
-    col.upsert(points).expect("test: upsert");
-    (dir, col)
-}
-
 /// Creates a simple test point with no payload or sparse vectors.
 #[allow(dead_code)] // Available for future test adoption.
 pub fn make_point(id: u64, vector: Vec<f32>) -> Point {

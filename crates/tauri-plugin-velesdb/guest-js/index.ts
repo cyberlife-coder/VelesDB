@@ -300,8 +300,13 @@ export interface QueryResponse {
 export interface CommandError {
   /** Human-readable error message. */
   message: string;
-  /** Error code for programmatic handling. */
+  /**
+   * Core taxonomy code (`VELES-###`) for programmatic handling, or
+   * `TASK_JOIN` when the plugin's blocking task could not be joined.
+   */
   code: string;
+  /** Whether retrying can succeed, as core answers for the same condition. */
+  recoverable: boolean;
 }
 
 // ============================================================================
@@ -897,6 +902,8 @@ export interface SemanticQueryRequest {
   embedding: number[];
   /** Number of results to return. Default: 10. */
   topK?: number;
+  /** Search quality: 'fast', 'balanced', 'accurate', 'perfect', 'auto', 'custom:<ef>' or 'adaptive:<min_ef>:<max_ef>', each ef in 16-4096; any other value is refused. Omitted keeps the memory collection's own quality. */
+  quality?: string;
 }
 
 /** Result from semantic memory query. */
@@ -1209,15 +1216,15 @@ export interface ListIndexesRequest {
 
 /** A single secondary index entry. */
 export interface IndexInfoOutput {
-  /** Node label (or field name for secondary indexes). */
+  /** Node label (`secondary` for a secondary payload index). */
   label: string;
-  /** Property name. */
+  /** Property name (the payload field for a secondary index). */
   property: string;
-  /** Index type (`hash`, `range`, or `secondary`). */
+  /** Index type: `hash` (graph property), `range` (graph range) or `btree` (secondary payload index). */
   indexType: string;
-  /** Number of unique values indexed. */
+  /** Number of distinct values indexed. */
   cardinality: number;
-  /** Memory usage in bytes. */
+  /** Estimated heap size of the index, in bytes. */
   memoryBytes: number;
 }
 

@@ -210,7 +210,7 @@ fn a_bulk_load_into_an_index_with_exact_features_off_is_indexed_at_the_drain() {
         "premise: the loaded index keeps its exact-distance features off"
     );
     assert!(
-        coll.streaming.async_index_builder.is_some(),
+        coll.async_index_builder().is_some(),
         "premise: upsert_bulk takes the V2 path"
     );
 

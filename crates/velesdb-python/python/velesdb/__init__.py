@@ -52,6 +52,9 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     VelesQLParameterError,
     VelesQLSyntaxError,
     __version__,
+    hash_id,
+    metric_higher_is_better,
+    validate_search_quality,
 )
 
 
@@ -276,7 +279,6 @@ class Collection:
 
     def __init__(self, inner: _RawCollection) -> None:
         self._inner = inner
-        self._graph_store: GraphStore | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -326,16 +328,20 @@ class Collection:
         sparse_vector: Any | None = None,
         sparse_index_name: str | None = None,
     ) -> list[dict[str, Any]]:
-        kwargs: dict[str, Any] = {"top_k": top_k}
-        if vector is not None:
-            kwargs["vector"] = list(vector)
-        if filter is not None:
-            kwargs["filter"] = filter
-        if sparse_vector is not None:
-            kwargs["sparse_vector"] = sparse_vector
-        if sparse_index_name is not None:
-            kwargs["sparse_index_name"] = sparse_index_name
-        return self._inner.search(**kwargs)
+        """Search for similar vectors: dense, sparse, or hybrid (fused with RRF).
+
+        The keyword shorthand over :py:meth:`search_request`, which takes the
+        same parameters as one :py:class:`SearchOptions` and adds fusion and
+        read-gate options.
+        """
+        opts = SearchOptions(
+            vector=None if vector is None else list(vector),
+            sparse_vector=sparse_vector,
+            k=top_k,
+            filter=filter,
+            sparse_index_name=sparse_index_name,
+        )
+        return self._inner.search_request(opts)
 
     def search_request(self, opts: SearchOptions) -> list[dict[str, Any]]:
         """Search using a :py:class:`SearchOptions` builder (v1.15+).
@@ -426,28 +432,6 @@ class Collection:
     def count(self) -> int:
         """Return the number of points in the collection."""
         return self._inner.count()
-
-    def get_graph_store(self) -> GraphStore:
-        """Return a standalone in-memory graph store.
-
-        Warning:
-            This graph store is **independent** of this collection's data.
-            Edges and nodes added here are NOT persisted to the collection.
-            For persistent graph operations, use
-            ``Database.get_graph_collection()`` instead.
-        """
-        import warnings
-
-        warnings.warn(
-            "Collection.get_graph_store() returns a standalone in-memory "
-            "graph not connected to this collection. Use "
-            "Database.get_graph_collection() for persistent graph operations.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if self._graph_store is None:
-            self._graph_store = GraphStore()
-        return self._graph_store
 
 
 def _safe_len(vec: Any) -> int | None:
@@ -942,6 +926,12 @@ __all__ = [
     "CONDITION_TYPES",
     "DISTANCE_METRICS",
     "STORAGE_MODES",
+    # Core contracts, each a call into velesdb-core: the canonical
+    # string -> u64 point id, a metric's score direction, and the search
+    # quality grammar.
+    "hash_id",
+    "metric_higher_is_better",
+    "validate_search_quality",
     "embed",
     "__version__",
 ]

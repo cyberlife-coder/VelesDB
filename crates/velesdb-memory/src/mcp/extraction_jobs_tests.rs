@@ -260,7 +260,7 @@ fn a_permission_denied_job_record_keeps_its_io_detail_not_a_refusal_label() {
 }
 
 /// `read_record_bytes`'s `path_exists` check (ahead of the open) raises a
-/// genuine stat failure as `MemoryError::MigrationCapture`, worded for the
+/// genuine stat failure as `MigrationError::Capture`, worded for the
 /// online-migration observer, not this unrelated caller — it must still
 /// surface its own I/O detail, not that wording (#2409 round 12).
 #[cfg(unix)]

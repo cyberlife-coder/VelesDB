@@ -398,6 +398,9 @@ pub struct NativeStore {
     /// collection cursor, which `AgentMemory` does not re-expose.
     db: Arc<Database>,
     capture: MutationCapture,
+    /// Recall's vector-search quality; `None` keeps the collection's own
+    /// runtime quality, which is what every store did before this was a setting.
+    search_quality: Option<velesdb_core::SearchQuality>,
 }
 
 #[cfg(feature = "persistence")]
@@ -413,7 +416,17 @@ impl NativeStore {
             memory,
             db,
             capture: MutationCapture::default(),
+            search_quality: None,
         })
+    }
+
+    /// Run recall's vector search at `quality` instead of the collection's
+    /// runtime quality. `Perfect` scans every vector and is refused by the
+    /// engine past its exhaustive-scan guard, which surfaces as a recall error.
+    #[must_use]
+    pub fn with_search_quality(mut self, quality: velesdb_core::SearchQuality) -> Self {
+        self.search_quality = Some(quality);
+        self
     }
 
     pub(crate) fn set_mutation_observer(
@@ -561,10 +574,14 @@ impl RecallStore for NativeStore {
         filter: &Metadata,
         offset: usize,
     ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.memory
-            .semantic()
-            .query_filtered(embedding, k, filter, offset)
-            .map_err(MemoryError::from)
+        let semantic = self.memory.semantic();
+        match self.search_quality {
+            Some(quality) => {
+                semantic.query_filtered_with_quality(embedding, k, filter, offset, quality)
+            }
+            None => semantic.query_filtered(embedding, k, filter, offset),
+        }
+        .map_err(MemoryError::from)
     }
 
     fn query_excluding(
@@ -573,10 +590,12 @@ impl RecallStore for NativeStore {
         k: usize,
         exclude: &Metadata,
     ) -> Result<Vec<(u64, f32, String)>, MemoryError> {
-        self.memory
-            .semantic()
-            .query_excluding(embedding, k, exclude)
-            .map_err(MemoryError::from)
+        let semantic = self.memory.semantic();
+        match self.search_quality {
+            Some(quality) => semantic.query_excluding_with_quality(embedding, k, exclude, quality),
+            None => semantic.query_excluding(embedding, k, exclude),
+        }
+        .map_err(MemoryError::from)
     }
 }
 
@@ -652,7 +671,7 @@ impl GraphStore for NativeStore {
 
     fn unrelate(&self, edge_id: u64) -> Result<bool, MemoryError> {
         if self.capture.is_active() {
-            return Err(MemoryError::MigrationCapture(format!(
+            return Err(crate::migration::capture(format!(
                 "cannot remove edge {edge_id} without its source id"
             )));
         }

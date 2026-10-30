@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 
 use crate::embedder::Embedder;
 use crate::embedding_provenance::{self, EmbeddingProvenance};
+use crate::migration::capture;
 use crate::migration::{journal_workspace, target_embedder_witness};
 use crate::mutation::catchup::CatchUpConfig;
 use crate::mutation::controller::{ControllerConfig, ConvergenceController};
@@ -395,8 +396,4 @@ fn sibling(source: &Path, suffix: &str) -> Result<PathBuf, MemoryError> {
         .and_then(|name| name.to_str())
         .ok_or_else(|| capture("online migration source has no usable directory name"))?;
     Ok(source.with_file_name(format!("{name}.{suffix}")))
-}
-
-pub(super) fn capture(message: impl Into<String>) -> MemoryError {
-    MemoryError::MigrationCapture(message.into())
 }

@@ -42,6 +42,11 @@ pub enum FusionError {
         /// Number of branches passed to fuse.
         branches: usize,
     },
+    /// A strategy name [`FusionStrategy::from_name`] does not know.
+    UnknownStrategy {
+        /// The name as the caller gave it.
+        name: String,
+    },
 }
 
 impl std::fmt::Display for FusionError {
@@ -66,6 +71,11 @@ impl std::fmt::Display for FusionError {
             } => write!(
                 f,
                 "fuse_with_directions requires one direction per branch: {directions} directions for {branches} branches",
+            ),
+            Self::UnknownStrategy { name } => write!(
+                f,
+                "Unknown fusion strategy '{name}'. Valid values: {}",
+                super::name::FUSION_STRATEGY_NAMES,
             ),
         }
     }
@@ -107,6 +117,20 @@ pub const DEFAULT_WEIGHTED_MAX_WEIGHT: f32 = 0.3;
 /// Canonical default weight for the hit-ratio component of
 /// [`FusionStrategy::Weighted`]. See [`DEFAULT_WEIGHTED_AVG_WEIGHT`].
 pub const DEFAULT_WEIGHTED_HIT_WEIGHT: f32 = 0.1;
+
+/// Canonical default ranking constant of [`FusionStrategy::RRF`]:
+/// [`FusionStrategy::rrf_default`], [`FusionStrategy::default`], and `rrf`
+/// named without a `k` ([`FusionStrategy::from_name`]).
+pub const DEFAULT_RRF_K: u32 = 60;
+
+/// Canonical default dense-branch weight of [`FusionStrategy::RelativeScore`]
+/// when a caller names `relative_score` without weights
+/// ([`FusionStrategy::from_name`]).
+pub const DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT: f32 = 0.5;
+
+/// Canonical default sparse-branch weight of [`FusionStrategy::RelativeScore`].
+/// See [`DEFAULT_RELATIVE_SCORE_DENSE_WEIGHT`].
+pub const DEFAULT_RELATIVE_SCORE_SPARSE_WEIGHT: f32 = 0.5;
 
 /// Strategy for fusing results from multiple vector searches.
 ///
@@ -185,10 +209,11 @@ pub enum FusionStrategy {
 }
 
 impl FusionStrategy {
-    /// Creates an RRF strategy with the standard k=60 parameter.
+    /// Creates an RRF strategy with the standard k=60 parameter
+    /// ([`DEFAULT_RRF_K`]).
     #[must_use]
     pub fn rrf_default() -> Self {
-        Self::RRF { k: 60 }
+        Self::RRF { k: DEFAULT_RRF_K }
     }
 
     /// Creates a `WeightedRRF` strategy with validation.
@@ -264,8 +289,10 @@ impl FusionStrategy {
     /// higher-is-better space — so every strategy combines and ranks them
     /// correctly. When **all** branches are lower-is-better and the strategy
     /// preserves the input score space (`Average`, `Maximum`, `Weighted`),
-    /// the fused scores are negated back so the output stays in the metric's
-    /// own units (best first, ascending). Rank-based strategies (`RRF`,
+    /// the fused scores are negated back so the output is lower-is-better
+    /// again (best first, ascending): in the metric's own units for
+    /// `Average` and `Maximum`; for `Weighted`, its `hit_weight` bonus is
+    /// subtracted, so a very close match can score below `0`. Rank-based strategies (`RRF`,
     /// `WeightedRRF`) only consume the best-first order, and `RelativeScore`
     /// outputs normalized `[0, 1]` similarities; neither is negated back.
     ///
@@ -309,11 +336,7 @@ impl FusionStrategy {
         }
         let mut fused = self.fuse(results)?;
 
-        let all_lower = !directions.is_empty()
-            && directions
-                .iter()
-                .all(|d| *d == ScoreDirection::LowerIsBetter);
-        if all_lower && self.preserves_score_space() {
+        if self.fused_direction(directions) == ScoreDirection::LowerIsBetter {
             // Restore metric units; descending negated order is ascending
             // distance, so the list stays best-first.
             for entry in &mut fused {
@@ -321,6 +344,32 @@ impl FusionStrategy {
             }
         }
         Ok(fused)
+    }
+
+    /// The polarity of the scores [`Self::fuse_with_directions`] returns for
+    /// branches of the given `directions`.
+    ///
+    /// `LowerIsBetter` only when **every** branch is lower-is-better and the
+    /// strategy keeps the input score space (`Average`, `Maximum`,
+    /// `Weighted`): the fused scores are then still in the metric's own
+    /// units, a distance. Rank-based strategies (`RRF`, `WeightedRRF`),
+    /// `RelativeScore` (normalized `[0, 1]`) and any mixed or empty set of
+    /// branches produce higher-is-better scores.
+    ///
+    /// A caller that maps fused scores to a similarity, such as the Python
+    /// integrations, reads the direction here instead of keeping its own
+    /// list of score-space strategies.
+    #[must_use]
+    pub fn fused_direction(&self, directions: &[ScoreDirection]) -> ScoreDirection {
+        let all_lower = !directions.is_empty()
+            && directions
+                .iter()
+                .all(|d| *d == ScoreDirection::LowerIsBetter);
+        if all_lower && self.preserves_score_space() {
+            ScoreDirection::LowerIsBetter
+        } else {
+            ScoreDirection::HigherIsBetter
+        }
     }
 
     /// True for strategies that rank purely by input order, ignoring raw scores.
@@ -616,7 +665,7 @@ impl FusionStrategy {
 
 impl Default for FusionStrategy {
     fn default() -> Self {
-        Self::RRF { k: 60 }
+        Self::rrf_default()
     }
 }
 

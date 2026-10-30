@@ -225,6 +225,33 @@ fn test_query_cache_collision_safe_with_forced_hash_collision() {
     assert_eq!(cache.len(), 2);
 }
 
+/// `velesdb_cache_collision_fallback_total` counts the inserts a hash
+/// collision sent to an occupied bucket — the fallback the per-bucket vector
+/// exists for. Process-wide counter, so the test reads deltas (single-threaded
+/// test run).
+#[test]
+fn test_query_cache_forced_hash_collision_feeds_the_collision_counter() {
+    let counter = &crate::metrics::global_guardrails_metrics().cache_collision_fallback_total;
+    let cache = QueryCache::new_with_hasher(10, |_| 42);
+
+    let before = counter.load(std::sync::atomic::Ordering::Relaxed);
+    cache.parse("SELECT * FROM docs LIMIT 1").expect("q1");
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        before,
+        "the first query takes an empty bucket"
+    );
+    cache.parse("SELECT id FROM docs LIMIT 2").expect("q2");
+    cache
+        .parse("SELECT id FROM docs LIMIT 2")
+        .expect("q2 again is a hit");
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Relaxed),
+        before + 1,
+        "one different query collided into the occupied bucket, once"
+    );
+}
+
 #[test]
 fn test_query_cache_min_size() {
     let cache = QueryCache::new(0);

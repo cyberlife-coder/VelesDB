@@ -24,12 +24,18 @@ fn apply_ord_op<T: PartialOrd>(op: crate::velesql::CompareOp, a: &T, b: &T) -> b
     }
 }
 
-/// Compares two floats with epsilon tolerance for equality.
+/// How far apart two floats may be and still compare equal in a MATCH WHERE.
+///
+/// The index prefilter (`index_prefilter.rs`) widens a float equality by this
+/// same constant, so the candidates it keeps always cover what WHERE accepts.
+pub(super) const FLOAT_EQ_TOLERANCE: f64 = 0.001;
+
+/// Compares two floats with [`FLOAT_EQ_TOLERANCE`] for equality.
 fn compare_floats(op: crate::velesql::CompareOp, actual: f64, expected: f64) -> bool {
     use crate::velesql::CompareOp;
     match op {
-        CompareOp::Eq => (actual - expected).abs() < 0.001,
-        CompareOp::NotEq => (actual - expected).abs() >= 0.001,
+        CompareOp::Eq => (actual - expected).abs() < FLOAT_EQ_TOLERANCE,
+        CompareOp::NotEq => (actual - expected).abs() >= FLOAT_EQ_TOLERANCE,
         _ => apply_ord_op(op, &actual, &expected),
     }
 }

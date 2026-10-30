@@ -111,7 +111,10 @@ mem.why("why the aisle seat on Robert's flight?")   # walks booking → reason
 
 `why()` returns the best-matching memory **plus the connected subgraph** reached
 through typed links — context that shares no words with the question, which a
-plain vector recall cannot find. See
+plain vector recall cannot find. Recall runs at the collection's own search
+quality unless you pick one: `MemoryService(path, search_quality="accurate")`
+(any REST/VelesQL mode name; an explicit value wins over
+`VELESDB_MEMORY_SEARCH_QUALITY`, an unknown one raises `ValueError`). See
 [PYTHON_AGENT_MEMORY.md](../../docs/guides/PYTHON_AGENT_MEMORY.md).
 
 ## Configuration
@@ -185,8 +188,8 @@ so your IDE and mypy/pyright are the reference. Task-oriented guides:
 - **One process per database directory.** A second process opening the same path fails with `DatabaseLockedError` (`[VELES-031]`).
 - **Concurrent WAL writing is not exposed** — Enterprise feature.
 - **No GPU in the published wheels.** The `gpu` Cargo feature exists but is not enabled by `[tool.maturin]`; it requires building from source.
-- **`Collection.search(...)` is deprecated** since v1.15 (emits `DeprecationWarning`); use `search_request(SearchOptions(...))`.
-- **`Collection.get_graph_store()` returns a standalone in-memory graph** that is not connected to the collection; use `Database.create_graph_collection()` for persistence.
+- **`Collection.search(vector, top_k=...)`** is the keyword shorthand over `search_request(SearchOptions(...))`, which adds fusion, `include_vectors` and the read-gate options.
+- **Graph persistence** goes through `Database.create_graph_collection()`; `Collection.get_graph_store()` (a standalone in-memory graph) was removed in 8.0.0.
 
 ## Compatibility
 
@@ -221,4 +224,4 @@ so `except velesdb.VelesDBError` is a safe catch-all.
 
 ---
 
-`velesdb-python v7.1.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 7.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-python v8.0.0` · Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

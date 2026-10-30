@@ -41,6 +41,10 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Use Cases](./guides/USE_CASES.md) | Common use cases and recommended configurations |
 | [Migration v3.3.0](./guides/MIGRATION_v3.3.0.md) | Error codes, REST statuses and query results that changed in 3.3.0. |
 | [Migration v4.0.0](./guides/MIGRATION_v4.0.0.md) | The 4.0.0 breaking changes — start with the WASM `weighted` reordering, which is silent. |
+| [Migration v5.0.0](./guides/MIGRATION_v5.0.0.md) | The `load_working_context` envelope, on every surface that relays it. |
+| [Migration v6.0.0](./guides/MIGRATION_v6.0.0.md) | Three compile-time Rust API changes in `velesdb-core`. |
+| [Migration v7.0.0](./guides/MIGRATION_v7.0.0.md) | The 7.0.0 breaking changes: search modes and `ef_search` that now fail. |
+| [Migration v8.0.0](./guides/MIGRATION_v8.0.0.md) | The 8.0.0 breaking changes — read the edge-snapshot section before upgrading a graph you may roll back. |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
 
 ### API reference, per binding
@@ -51,7 +55,7 @@ Each binding has its own reference guide; the
 | Binding | Reference |
 |---------|-----------|
 | Cross-surface | [API correspondence](./guides/API_CORRESPONDENCE.md) |
-| Rust (`velesdb-core`) | [Public API map](./guides/CORE_API_MAP.md) · [VelesQL](./guides/CORE_VELESQL_REFERENCE.md) |
+| Rust (`velesdb-core`) | [Public API map](./guides/CORE_API_MAP.md) · [VelesQL](./guides/CORE_VELESQL_REFERENCE.md) · [Operations API](./guides/CORE_OPERATIONS_API.md) |
 | Python | [API reference](./guides/PYTHON_API_REFERENCE.md) |
 | WASM (browser) | [JavaScript API](./guides/WASM_API.md) |
 | Node.js | [Addon reference](./guides/NODE_ADDON.md) |
@@ -180,4 +184,4 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 *VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*
 
 ---
-Last updated: 2026-08-20 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

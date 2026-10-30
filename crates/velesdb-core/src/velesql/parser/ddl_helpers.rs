@@ -343,17 +343,18 @@ fn lookup_optional_usize(options: &[(String, String)], key: &str) -> Option<usiz
     lookup_optional_str(options, key).and_then(|v| v.parse::<usize>().ok())
 }
 
-/// Validates that a metric string is a recognized `DistanceMetric` alias.
+/// Validates that a metric string is a recognized `DistanceMetric` alias,
+/// as [`crate::DistanceMetric::parse_alias`] reads it — the executor resolves
+/// the stored string through the same parser.
 fn validate_metric(metric: &str) -> Result<(), ParseError> {
-    match metric.to_lowercase().as_str() {
-        "cosine" | "euclidean" | "l2" | "dot" | "dotproduct" | "inner" | "ip" | "hamming"
-        | "jaccard" => Ok(()),
-        _ => Err(ParseError::syntax(
+    match crate::DistanceMetric::parse_alias(metric) {
+        Some(_) => Ok(()),
+        None => Err(ParseError::syntax(
             0,
             metric,
             format!(
-                "Unknown metric '{metric}'. Supported: cosine, euclidean, \
-                 l2, dot, dotproduct, inner, ip, hamming, jaccard"
+                "Unknown metric '{metric}'. Supported: {}",
+                crate::distance::METRIC_ALIAS_LIST
             ),
         )),
     }

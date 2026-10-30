@@ -3,8 +3,6 @@
 //! Exposes Knowledge Graph operations on Collection for use by
 //! Tauri plugin, REST API, and other consumers.
 
-use rustc_hash::{FxHashMap, FxHashSet};
-
 use crate::collection::graph::{
     EdgeRemoval, GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
 };
@@ -14,12 +12,6 @@ use crate::point::{Point, SearchResult};
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 
 use super::graph_property_index_wiring::extract_labels;
-use super::graph_traversal_helpers::{
-    bfs_pop, bfs_push, dfs_pop, dfs_push, expand_dfs_neighbors, reconstruct_path,
-    traverse_with_frontier, DfsFrontier, TraversalEntry, TraversalParams,
-};
-
-// Traversal helper functions are in graph_traversal_helpers.rs
 
 impl Collection {
     /// Adds an edge to the collection's knowledge graph.
@@ -39,6 +31,10 @@ impl Collection {
     /// `Error::SchemaValidation` is still returned for actual schema-shape
     /// violations (undeclared node type, undeclared edge type, endpoint
     /// type mismatch) once both endpoints are confirmed to exist.
+    /// `Error::SchemaValidation` is also returned, before any lock or write,
+    /// when the properties nest deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH)
+    /// levels, which could not be read back from disk.
     ///
     /// # Example
     ///
@@ -49,6 +45,8 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
+        edge.ensure_persistable()?;
+
         // Position 1, hoisted before the payload guard below (position 3) so
         // the acquisition order is never 3 → 1 (see LOCK ORDERING in
         // collection/types.rs).
@@ -116,11 +114,14 @@ impl Collection {
     /// Returns an error if WAL logging fails (fail-closed: the in-memory
     /// store is not mutated when the WAL append fails). Returns
     /// `Error::NodeNotFound` if any edge's `source` or `target` has no
-    /// stored node payload (see [`Self::add_edge`]).
+    /// stored node payload, and `Error::SchemaValidation` if any edge's
+    /// properties nest too deep (see [`Self::add_edge`]); either fails the
+    /// whole batch before anything is written.
     pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> Result<usize> {
         if edges.is_empty() {
             return Ok(0);
         }
+        edges.iter().try_for_each(GraphEdge::ensure_persistable)?;
 
         // Position 1, hoisted before the payload guard (see add_edge).
         let schema = self.non_schemaless_graph_schema();
@@ -410,100 +411,6 @@ impl Collection {
         self.graph.edge_store.get_incoming_bounded(node_id, cap)
     }
 
-    /// Traverses the graph using BFS from a source node.
-    ///
-    /// # Arguments
-    ///
-    /// * `source` - Starting node ID
-    /// * `max_depth` - Maximum traversal depth
-    /// * `rel_types` - Optional filter by relationship types
-    /// * `limit` - Maximum number of results
-    ///
-    /// # Returns
-    ///
-    /// Vector of traversal results with target nodes and paths.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if traversal fails.
-    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
-    pub fn traverse_bfs(
-        &self,
-        source: u64,
-        max_depth: u32,
-        rel_types: Option<&[&str]>,
-        limit: usize,
-    ) -> Result<Vec<TraversalResult>> {
-        let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let params = self.traversal_params(source, max_depth, filter, limit);
-        let mut frontier = std::collections::VecDeque::new();
-        frontier.push_back((source, 0u32));
-
-        Ok(traverse_with_frontier(
-            &params,
-            bfs_pop,
-            bfs_push,
-            &mut frontier,
-        ))
-    }
-
-    /// Builds the [`TraversalParams`] bundle shared by `traverse_bfs` and
-    /// `traverse_dfs`; the two differ only in their frontier type and
-    /// pop/push functions, which stay with each method.
-    fn traversal_params<'a>(
-        &'a self,
-        source: u64,
-        max_depth: u32,
-        filter: &'a [&'a str],
-        limit: usize,
-    ) -> TraversalParams<'a> {
-        TraversalParams {
-            store: &self.graph.edge_store,
-            filter,
-            limit,
-            max_depth,
-            source,
-        }
-    }
-
-    /// Traverses the graph using DFS from a source node.
-    ///
-    /// # Arguments
-    ///
-    /// * `source` - Starting node ID
-    /// * `max_depth` - Maximum traversal depth
-    /// * `rel_types` - Optional filter by relationship types
-    /// * `limit` - Maximum number of results
-    ///
-    /// # Returns
-    ///
-    /// Vector of traversal results with target nodes and paths.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if traversal fails.
-    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
-    #[allow(clippy::unnecessary_wraps)] // Reason: Public API contract — callers expect Result
-    pub fn traverse_dfs(
-        &self,
-        source: u64,
-        max_depth: u32,
-        rel_types: Option<&[&str]>,
-        limit: usize,
-    ) -> Result<Vec<TraversalResult>> {
-        let filter: &[&str] = rel_types.unwrap_or(&[]);
-        let params = self.traversal_params(source, max_depth, filter, limit);
-        let mut frontier = vec![(source, 0u32)];
-
-        Ok(traverse_with_frontier(
-            &params,
-            dfs_pop,
-            dfs_push,
-            &mut frontier,
-        ))
-    }
-
     /// Gets the in-degree and out-degree of a node.
     ///
     /// Uses degree counters instead of materializing edge vectors for O(1) lookup.
@@ -654,13 +561,6 @@ impl Collection {
         self.storage.config.read().graph_schema.clone()
     }
 
-    /// Returns `true` if this collection was created as a graph collection.
-    #[must_use]
-    #[allow(dead_code)] // Reason: Called via GraphCollection inner delegation + tests
-    pub fn is_graph(&self) -> bool {
-        self.storage.config.read().graph_schema.is_some()
-    }
-
     /// Returns `true` if this graph collection stores node embeddings.
     #[must_use]
     pub fn has_embeddings(&self) -> bool {
@@ -766,69 +666,17 @@ impl Collection {
 
     /// Inner DFS traversal without metrics (see [`Self::traverse_dfs_config`]).
     ///
-    /// Uses parent-pointer map for zero-clone path reconstruction (G4).
+    /// Runs the loop [`crate::collection::graph::dfs_traverse`] runs on a
+    /// standalone `EdgeStore`, over this collection's sharded edge store.
     #[must_use]
     fn traverse_dfs_config_inner(
         &self,
         source_id: u64,
         config: &TraversalConfig,
     ) -> Vec<TraversalResult> {
-        let rel_filter: FxHashSet<&str> = config.rel_types.iter().map(String::as_str).collect();
-
-        let mut results = Vec::new();
-        let mut visited: FxHashSet<u64> = FxHashSet::default();
-        let mut parent_map: FxHashMap<u64, (u64, u64)> = FxHashMap::default();
-        let mut stack: Vec<TraversalEntry> = vec![(source_id, 0)];
-
-        // Start at the threshold so an already-expired deadline aborts on the
-        // first pop; otherwise the clock is only read every N pops.
-        let mut nodes_since_check = crate::collection::graph::DEADLINE_CHECK_INTERVAL;
-        while let Some((node_id, depth)) = stack.pop() {
-            if results.len() >= config.limit {
-                break;
-            }
-            if crate::collection::graph::deadline_reached(config.deadline, &mut nodes_since_check) {
-                break;
-            }
-            // Issue #906: bound the visited set / parent map. A highly-connected
-            // graph with a high limit/max_depth would otherwise grow these
-            // unboundedly (OOM). Consistent with the streaming iterators and
-            // `traverse_with_frontier`: stop and return the bounded result.
-            //
-            // NOTE: this pop-time guard alone is insufficient for DFS — a single
-            // high-out-degree hub fills `stack`/`parent_map` at PUSH time while
-            // `visited` stays tiny. `expand_dfs_neighbors` therefore also caps
-            // push-time growth at `MAX_VISITED_SIZE`.
-            if visited.len() >= crate::collection::graph::MAX_VISITED_SIZE {
-                break;
-            }
-            if !visited.insert(node_id) {
-                continue;
-            }
-            if depth >= config.min_depth && depth > 0 {
-                let path = reconstruct_path(&parent_map, source_id, node_id);
-                results.push(TraversalResult::new(node_id, path, depth));
-                if results.len() >= config.limit {
-                    break;
-                }
-            }
-            if depth < config.max_depth {
-                let mut frontier = DfsFrontier {
-                    stack: &mut stack,
-                    parent_map: &mut parent_map,
-                    max_pending: crate::collection::graph::MAX_VISITED_SIZE,
-                };
-                expand_dfs_neighbors(
-                    &self.graph.edge_store,
-                    node_id,
-                    depth,
-                    &rel_filter,
-                    &visited,
-                    &mut frontier,
-                );
-            }
-        }
-        results
+        crate::collection::graph::dfs_traverse_with(source_id, config, |node| {
+            self.graph.edge_store.get_outgoing(node)
+        })
     }
 
     /// Parallel BFS traversal from multiple start nodes using rayon.
@@ -837,7 +685,10 @@ impl Collection {
     /// independent per-start-node BFS traversals across CPU cores. Below the
     /// threshold, falls back to sequential execution.
     ///
-    /// Results are deduplicated by path signature and truncated to `config.limit`.
+    /// Results are deduplicated by path signature, filtered to
+    /// `config.min_depth`, then truncated to `config.limit`, so `limit` counts
+    /// results only: the traverser also emits each start node at depth 0, and
+    /// is given one extra slot per start node for them.
     #[must_use]
     pub fn traverse_bfs_parallel(
         &self,
@@ -850,7 +701,7 @@ impl Collection {
 
         let par_config = ParallelConfig::new()
             .with_max_depth(config.max_depth)
-            .with_limit(config.limit);
+            .with_limit(config.limit.saturating_add(start_nodes.len()));
 
         let traverser = ParallelTraverser::with_config(par_config);
         let edge_store = &self.graph.edge_store;
@@ -870,6 +721,7 @@ impl Collection {
         results
             .into_iter()
             .filter(|r| r.depth >= config.min_depth)
+            .take(config.limit)
             .map(|r| TraversalResult::new(r.end_node, r.path, r.depth))
             .collect()
     }

@@ -49,6 +49,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod connections;
 mod handlers;
 pub mod onboarding;
 pub mod rate_limit;
@@ -61,9 +62,7 @@ use security_addon::SecurityAddon;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use utoipa::OpenApi;
-use velesdb_core::{
-    Database, DurationHistogram, OperationalMetrics, QueryLimits, TraversalMetrics,
-};
+use velesdb_core::{Database, DurationHistogram, OperationalMetrics};
 
 pub use onboarding::OnboardingMetrics;
 pub use types::*;
@@ -310,14 +309,10 @@ pub struct AppState {
     pub db: Database,
     /// New-user onboarding diagnostics counters.
     pub onboarding_metrics: onboarding::OnboardingMetrics,
-    /// Query guard-rails configuration (EPIC-048).
-    pub query_limits: parking_lot::RwLock<QueryLimits>,
     /// Readiness flag — `true` once the database is fully loaded.
     pub ready: AtomicBool,
     /// Operational metrics: query throughput, connections, doc counts (EPIC-050).
     pub operational_metrics: Arc<OperationalMetrics>,
-    /// Graph traversal metrics: nodes visited, depth, edges scanned.
-    pub traversal_metrics: Arc<TraversalMetrics>,
     /// Query duration histogram for Prometheus export.
     pub query_duration_histogram: Arc<DurationHistogram>,
 }

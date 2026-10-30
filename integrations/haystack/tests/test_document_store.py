@@ -123,14 +123,14 @@ class _FakeSearchOptions:
         vector: Any = None,
         *,
         sparse_vector: Any = None,
-        top_k: int = 10,
+        k: int = 10,
         filter: Any = None,  # pylint: disable=redefined-builtin
         sparse_index_name: Any = None,
         include_vectors: bool = False,
     ) -> None:
         self.vector = vector
         self.sparse_vector = sparse_vector
-        self.top_k = top_k
+        self.k = k
         self.filter = filter
         self.sparse_index_name = sparse_index_name
         self.include_vectors = include_vectors
@@ -165,7 +165,7 @@ class _FakeCollection:
 
     def search_request(self, opts: Any) -> list:
         """Canonical search entry point — delegate to the legacy `search`."""
-        return self.search(opts.vector, top_k=opts.top_k, filter=opts.filter)
+        return self.search(opts.vector, top_k=opts.k, filter=opts.filter)
 
     def multi_query_search(
         self,
@@ -321,6 +321,18 @@ def _load_module() -> types.ModuleType:
     sys.modules["velesdb_common.collection_admin"] = vc_admin
     _admin_spec.loader.exec_module(vc_admin)
 
+    # The REAL velesdb_common.scores too: it imports velesdb lazily-guarded
+    # and, against this fake binding, uses its literal fallbacks, so the
+    # store's score direction is the canonical one.
+    _scores_path = (
+        Path(__file__).resolve().parents[2] / "common" / "src" / "velesdb_common" / "scores.py"
+    )
+    _scores_spec = importlib.util.spec_from_file_location("velesdb_common.scores", _scores_path)
+    assert _scores_spec and _scores_spec.loader
+    vc_scores = importlib.util.module_from_spec(_scores_spec)
+    sys.modules["velesdb_common.scores"] = vc_scores
+    _scores_spec.loader.exec_module(vc_scores)
+
     vc_sec = types.ModuleType("velesdb_common.security")
     vc_sec.validate_path = _passthrough  # type: ignore[attr-defined]
     vc_sec.validate_collection_name = _passthrough  # type: ignore[attr-defined]
@@ -397,12 +409,30 @@ def test_filter_documents_returns_all_when_none() -> None:
     assert len(store.filter_documents()) == 2
 
 
-def test_scale_score_not_applied_for_non_cosine_metric() -> None:
+def test_scale_score_maps_a_distance_to_a_higher_is_closer_score() -> None:
     store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_score_nc", metric="euclidean")
     store.write_documents([Document(id="z", content="raw", embedding=[1.0])])
     scaled = store.embedding_retrieval([1.0], scale_score=True)
-    # For euclidean metric scale_score should be a no-op — raw score returned.
-    assert scaled[0].score == 0.9
+    raw = store.embedding_retrieval([1.0], scale_score=False)
+    # A euclidean score is a distance: DocumentJoiner sorts descending, so the
+    # scaled score must grow as the distance shrinks.
+    assert scaled[0].score == 1.0 / (1.0 + 0.9)
+    assert raw[0].score == 0.9
+
+
+def test_scale_score_keeps_a_dot_similarity() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_score_dot", metric="dot")
+    store.write_documents([Document(id="d", content="dot", embedding=[1.0])])
+    assert store.embedding_retrieval([1.0], scale_score=True)[0].score == 0.9
+
+
+def test_score_space_fusion_over_a_distance_is_higher_is_closer() -> None:
+    store = _MOD.VelesDBDocumentStore(path="/tmp/hs", collection_name="t_fused_l2", metric="euclidean")
+    store.write_documents([Document(id="f", content="fused", embedding=[1.0])])
+    averaged = store.embedding_retrieval([1.0], fusion="average")
+    ranked = store.embedding_retrieval([1.0], fusion="rrf")
+    assert averaged[0].score == 1.0 / (1.0 + 0.9)  # a fused distance, mapped
+    assert ranked[0].score == 0.9  # RRF is already higher-is-better
 
 
 def test_scroll_limit_is_respected() -> None:

@@ -254,6 +254,14 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
         })
     }
 
+    /// Run recall's vector search at `quality` instead of the collection's
+    /// runtime quality. See [`NativeStore::with_search_quality`].
+    #[must_use]
+    pub fn with_search_quality(mut self, quality: velesdb_core::SearchQuality) -> Self {
+        self.store = self.store.with_search_quality(quality);
+        self
+    }
+
     pub(crate) fn install_mutation_observer(
         &self,
         observer: Option<Arc<dyn MutationObserver>>,

@@ -1,5 +1,6 @@
 //! Integration coverage for the Tauri `#[command]` handlers in `commands.rs`,
-//! `commands_graph.rs`, and the lifecycle `observer.rs`.
+//! `commands_graph.rs`, the semantic query of `commands_memory.rs`, and the
+//! lifecycle `observer.rs`.
 //!
 //! The handlers take `AppHandle<R>` + `State<'_, VelesDbState>` arguments that
 //! can only exist inside a Tauri `App`. These tests build a real
@@ -25,19 +26,21 @@ use tauri_plugin_velesdb::commands::{
     add_edge, batch_search, compact_storage, create_collection, create_graph_collection,
     create_metadata_collection, delete_collection, delete_points, enable_streaming, flush,
     get_collection, get_edges, get_guardrails, get_node_degree, get_points, hybrid_search,
-    is_empty, list_collections, multi_query_search, scroll_collection, search, search_ids,
-    stream_insert, text_search, traverse_graph, update_guardrails, upsert, upsert_metadata,
+    is_empty, list_collections, multi_query_search, query, scroll_collection, search, search_ids,
+    stream_insert, text_search, train_pq, traverse_graph, update_guardrails, upsert,
+    upsert_metadata,
 };
+use tauri_plugin_velesdb::commands_memory::{semantic_query, semantic_store};
 use tauri_plugin_velesdb::observer::TauriObserver;
 use tauri_plugin_velesdb::types::{
     AddEdgeRequest, BatchSearchRequest, CreateCollectionRequest, CreateGraphCollectionRequest,
     CreateMetadataCollectionRequest, DeletePointsRequest, EnableStreamingRequest, GetEdgesRequest,
     GetNodeDegreeRequest, GetPointsRequest, GuardrailLimits, HybridSearchRequest,
-    IndividualSearchRequest, MetadataPointInput, MultiQuerySearchRequest, PointInput,
-    ScrollRequest, SearchRequest, StreamInsertRequest, TextSearchRequest, TraverseGraphRequest,
-    UpsertMetadataRequest, UpsertRequest,
+    IndividualSearchRequest, MetadataPointInput, MultiQuerySearchRequest, PointInput, QueryRequest,
+    ScrollRequest, SearchRequest, SemanticQueryRequest, SemanticStoreRequest, StreamInsertRequest,
+    TextSearchRequest, TrainPqRequest, TraverseGraphRequest, UpsertMetadataRequest, UpsertRequest,
 };
-use tauri_plugin_velesdb::VelesDbState;
+use tauri_plugin_velesdb::{CommandError, VelesConfig, VelesDbState};
 
 const DIM: usize = 4;
 
@@ -210,7 +213,7 @@ fn create_collection_invalid_metric_errors() {
     let mut req = vector_collection_request("x");
     req.metric = "not_a_metric".to_string();
     let err = run(create_collection(handle(&app), st(&app), req)).expect_err("bad metric");
-    assert_eq!(err.code, "INVALID_CONFIG");
+    assert_eq!(err.code, "VELES-009");
 }
 
 #[test]
@@ -246,7 +249,7 @@ fn create_metadata_collection_and_upsert_metadata() {
         },
     ))
     .expect_err("metadata-only collection is not a vector collection");
-    assert_eq!(rejected.code, "INVALID_CONFIG");
+    assert_eq!(rejected.code, "VELES-009");
 
     // The success path: metadata-only points (no vector) into a vector
     // collection exercises the `coll.upsert_metadata` branch.
@@ -399,7 +402,7 @@ fn search_missing_collection_and_bad_quality_error() {
         },
     ))
     .expect_err("invalid quality mode");
-    assert_eq!(bad_quality.code, "INVALID_CONFIG");
+    assert_eq!(bad_quality.code, "VELES-009");
 }
 
 #[test]
@@ -622,7 +625,7 @@ fn multi_query_search_fuses_results() {
         },
     ))
     .expect_err("bad fusion");
-    assert_eq!(bad.code, "INVALID_CONFIG");
+    assert_eq!(bad.code, "VELES-009");
 }
 
 #[test]
@@ -920,6 +923,45 @@ fn graph_create_with_embeddings_and_missing_collection_error() {
     assert_eq!(err.code, "VELES-002");
 }
 
+/// A `VelesQL` parse error is core's query error (VELES-010), as on wasm and
+/// mobile, not a plugin-local configuration error.
+#[test]
+fn query_parse_error_carries_core_query_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    let err = run(query(
+        handle(&app),
+        st(&app),
+        QueryRequest {
+            query: "NOT VALID SQL AT ALL".to_string(),
+            params: std::collections::HashMap::new(),
+        },
+    ))
+    .expect_err("parse error");
+    assert_eq!(err.code, "VELES-010");
+    assert!(err.recoverable);
+}
+
+/// A core failure during TRAIN keeps core's code instead of being flattened
+/// into a configuration error.
+#[test]
+fn train_pq_failure_carries_core_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    let err = run(train_pq(
+        handle(&app),
+        st(&app),
+        TrainPqRequest {
+            collection: "ghost".to_string(),
+            m: Some(2),
+            k: Some(4),
+            opq: None,
+        },
+    ))
+    .expect_err("missing collection");
+    assert_eq!(err.code, "VELES-002");
+}
+
 #[test]
 fn create_graph_collection_invalid_schema_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -935,7 +977,7 @@ fn create_graph_collection_invalid_schema_errors() {
         },
     ))
     .expect_err("invalid schema");
-    assert_eq!(err.code, "INVALID_CONFIG");
+    assert_eq!(err.code, "VELES-009");
 }
 
 // ===========================================================================
@@ -1002,5 +1044,103 @@ fn tauri_observer_forwards_lifecycle_hooks_to_app() {
         deleted.load(Ordering::SeqCst),
         1,
         "TauriObserver did not emit collection-deleted"
+    );
+}
+
+/// A unit vector of the agent memory's dimension along `axis`.
+fn memory_axis(axis: usize) -> Vec<f32> {
+    let mut v = vec![0.0; velesdb_core::agent::DEFAULT_DIMENSION];
+    v[axis] = 1.0;
+    v
+}
+
+/// Stores facts 1 (on axis 0) and 2 (on axis 1) in `app`'s semantic memory.
+fn seed_semantic_memory(app: &App<tauri::test::MockRuntime>) {
+    for (id, axis) in [(1, 0), (2, 1)] {
+        run(semantic_store(
+            handle(app),
+            st(app),
+            SemanticStoreRequest {
+                id,
+                content: format!("fact {id}"),
+                embedding: memory_axis(axis),
+            },
+        ))
+        .expect("semantic store");
+    }
+}
+
+fn semantic_query_at(
+    app: &App<tauri::test::MockRuntime>,
+    quality: Option<&str>,
+) -> Result<Vec<u64>, CommandError> {
+    run(semantic_query(
+        handle(app),
+        st(app),
+        SemanticQueryRequest {
+            embedding: memory_axis(0),
+            top_k: 2,
+            quality: quality.map(str::to_string),
+        },
+    ))
+    .map(|results| results.into_iter().map(|r| r.id).collect())
+}
+
+#[test]
+fn semantic_query_at_an_explicit_quality_ranks_like_the_default() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    seed_semantic_memory(&app);
+
+    let default = semantic_query_at(&app, None).expect("default quality");
+    assert_eq!(default, vec![1, 2]);
+    for mode in [
+        "fast",
+        "accurate",
+        "perfect",
+        "custom:64",
+        "adaptive:32:512",
+    ] {
+        assert_eq!(
+            semantic_query_at(&app, Some(mode)).expect("explicit quality"),
+            default,
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn semantic_query_refuses_a_mode_core_refuses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_app(dir.path());
+    seed_semantic_memory(&app);
+
+    for mode in ["nonsense", "custom:8", "adaptive:512:32"] {
+        let err = semantic_query_at(&app, Some(mode)).expect_err("unusable mode");
+        assert_eq!(err.code, "VELES-009", "{mode}");
+    }
+}
+
+#[test]
+fn semantic_query_quality_reaches_core() {
+    // `perfect` meets core's exhaustive-scan cap: proof the mode is not dropped.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = mock_builder()
+        .build(mock_context(noop_assets()))
+        .expect("build mock app");
+    let mut config = VelesConfig::default();
+    config.limits.max_perfect_mode_vectors = 1;
+    app.manage(VelesDbState::new_with_config(
+        dir.path().to_path_buf(),
+        config,
+    ));
+    seed_semantic_memory(&app);
+
+    assert_eq!(semantic_query_at(&app, None).expect("default"), vec![1, 2]);
+    let err = semantic_query_at(&app, Some("perfect")).expect_err("over the cap");
+    assert!(
+        err.message.contains("max_perfect_mode_vectors"),
+        "{}",
+        err.message
     );
 }

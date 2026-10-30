@@ -2,6 +2,7 @@
 #![allow(clippy::doc_markdown)]
 //! `VelesDB` Server - REST API for the `VelesDB` vector database.
 
+use axum::serve::ListenerExt;
 use axum::{extract::ConnectInfo, http::HeaderValue, middleware::Next, Router};
 use clap::Parser;
 use std::future::IntoFuture;
@@ -15,7 +16,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::SwaggerUi;
+use velesdb_core::metrics::OperationalMetrics;
 use velesdb_core::Database;
+use velesdb_server::connections::{CountedStream, CountingListener, OpenConnection};
 #[cfg(feature = "swagger-ui")]
 use velesdb_server::ApiDoc;
 use velesdb_server::{
@@ -135,10 +138,8 @@ fn init_app_state(
     let state = Arc::new(AppState {
         db,
         onboarding_metrics: OnboardingMetrics::default(),
-        query_limits: parking_lot::RwLock::new(velesdb_core::guardrails::QueryLimits::default()),
         ready: std::sync::atomic::AtomicBool::new(false),
         operational_metrics: velesdb_core::metrics::OperationalMetrics::new_arc(),
-        traversal_metrics: std::sync::Arc::new(velesdb_core::metrics::TraversalMetrics::new()),
         query_duration_histogram: std::sync::Arc::new(
             velesdb_core::metrics::DurationHistogram::new(),
         ),
@@ -250,8 +251,13 @@ async fn serve(
         notify_clone.notify_one();
     };
 
-    // into_make_service_with_connect_info provides peer IP to the
-    // rate limiter's SmartIpKeyExtractor.
+    // Every accepted connection is counted in `velesdb_active_connections`.
+    // `into_make_service_with_connect_info` provides the peer IP to the rate
+    // limiter's SmartIpKeyExtractor; axum implements that for a bare
+    // `TcpListener` and for any listener behind `tap_io`, so the counting
+    // listener goes through an identity tap to keep it.
+    let listener = CountingListener::new(listener, Arc::clone(&state.operational_metrics))
+        .tap_io(|_: &mut CountedStream| ());
     let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -290,6 +296,7 @@ async fn tls_accept_loop(
     tls_acceptor: TlsAcceptor,
     app: Router,
     active_conns: Arc<std::sync::atomic::AtomicUsize>,
+    metrics: Arc<OperationalMetrics>,
 ) {
     let shutdown = tokio::signal::ctrl_c();
     let terminate = sigterm();
@@ -302,7 +309,8 @@ async fn tls_accept_loop(
             result = listener.accept() => {
                 match result {
                     Ok((stream, peer_addr)) => {
-                        spawn_tls_connection(stream, peer_addr, tls_acceptor.clone(), app.clone(), active_conns.clone());
+                        let open = OpenConnection::new(Arc::clone(&metrics));
+                        spawn_tls_connection(stream, peer_addr, tls_acceptor.clone(), app.clone(), active_conns.clone(), open);
                     }
                     Err(e) => {
                         tracing::warn!("Failed to accept TCP connection: {e}");
@@ -327,9 +335,12 @@ fn spawn_tls_connection(
     acceptor: TlsAcceptor,
     app: Router,
     conns: Arc<std::sync::atomic::AtomicUsize>,
+    open: OpenConnection,
 ) {
     conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     tokio::spawn(async move {
+        // Counted in `velesdb_active_connections` until this task ends.
+        let _open = open;
         let Ok(tls_stream) = acceptor.accept(stream).await else {
             tracing::debug!("TLS handshake failed");
             conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -379,7 +390,14 @@ async fn serve_tls(
     tracing::info!("VelesDB server listening on https://{}", addr);
 
     let active_conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    tls_accept_loop(listener, tls_acceptor, app, active_conns.clone()).await;
+    tls_accept_loop(
+        listener,
+        tls_acceptor,
+        app,
+        active_conns.clone(),
+        Arc::clone(&state.operational_metrics),
+    )
+    .await;
 
     drain_connections(&active_conns, shutdown_timeout_secs).await;
     flush_and_exit(&state);

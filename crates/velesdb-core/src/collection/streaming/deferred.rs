@@ -58,7 +58,7 @@ const DEFAULT_MAX_BUFFER_AGE_MS: u64 = 5000;
 /// assert!(!config.enabled);
 /// assert_eq!(config.merge_threshold, 1024);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeferredIndexerConfig {
     /// Whether deferred indexing is enabled (default: `false`).
     #[serde(default)]
@@ -143,6 +143,12 @@ impl DeferredIndexer {
             first_push_millis: AtomicU64::new(AGE_EMPTY),
             epoch: Instant::now(),
         }
+    }
+
+    /// The configuration this indexer was built with.
+    #[must_use]
+    pub(crate) fn config(&self) -> &DeferredIndexerConfig {
+        &self.config
     }
 
     /// Records the first-push timestamp if none is recorded yet.

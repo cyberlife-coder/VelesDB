@@ -207,6 +207,8 @@ impl GraphCollection {
     /// # Errors
     ///
     /// - Returns `Error::EdgeExists` if an edge with the same ID already exists.
+    /// - Returns `Error::SchemaValidation` if the properties nest deeper than
+    ///   [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
     ///
     /// # Examples
     ///
@@ -233,7 +235,10 @@ impl GraphCollection {
     /// # Errors
     ///
     /// Returns an error if WAL durability logging fails for graph
-    /// collections (fail-closed: the in-memory store is not mutated).
+    /// collections (fail-closed: the in-memory store is not mutated), and
+    /// `Error::SchemaValidation`, before anything is written, if any edge's
+    /// properties nest deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
     pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> Result<usize> {
         self.inner.add_edges_batch(edges)
     }
@@ -332,16 +337,72 @@ impl GraphCollection {
     /// Returns `true` if the edge existed and was removed, `false` otherwise —
     /// including on the genuine failure paths: a refused WAL append (logged at
     /// `error`, the store left unmutated) and an index desynchronisation inside
-    /// the store. This signature cannot tell those from "already gone".
+    /// the store. This signature cannot tell those from "already gone"; use
+    /// [`try_remove_edge`](Self::try_remove_edge) when the caller must.
     #[must_use]
     pub fn remove_edge(&self, edge_id: u64) -> bool {
         self.inner.remove_edge(edge_id)
+    }
+
+    /// Removes an edge from the graph by ID, failing when the removal was
+    /// attempted and did not happen.
+    ///
+    /// Returns `Ok(true)` if the edge existed and was removed, and `Ok(false)`
+    /// if there was no such edge — removing an absent edge stays a no-op, as
+    /// with [`remove_edge`](Self::remove_edge).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Storage`](crate::Error::Storage) (`VELES-006`) when the
+    /// write-ahead log refuses the removal, which leaves the edge in place, or
+    /// when the store finds the edge in its index but not in its source shard.
+    /// `TRUNCATE` codes the same two failures the same way.
+    pub fn try_remove_edge(&self, edge_id: u64) -> Result<bool> {
+        match self.remove_edge_detailed(edge_id) {
+            EdgeRemoval::Removed => Ok(true),
+            EdgeRemoval::Absent => Ok(false),
+            EdgeRemoval::Failed(reason) => Err(crate::Error::Storage(reason)),
+        }
     }
 
     /// Removes an edge from the graph by ID, reporting WHY when it does not
     /// happen.
     pub(crate) fn remove_edge_detailed(&self, edge_id: u64) -> EdgeRemoval {
         self.inner.remove_edge_detailed(edge_id)
+    }
+
+    /// Removes every edge, then every node; returns `(edges, nodes)` removed.
+    ///
+    /// The one rule VelesQL `TRUNCATE` and the bindings' `clear` follow. Every
+    /// edge is attempted even after a failure, and the nodes are removed only
+    /// once no edge removal failed: deleting them anyway is what turns a
+    /// surviving edge into a dangling one pointing at ids that no longer
+    /// exist. It is not atomic and makes no rollback promise: removals that
+    /// succeeded before a failure stay applied, and the error counts them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Storage`](crate::Error::Storage) (`VELES-006`) naming
+    /// the first edge whose removal failed and how many edges were removed,
+    /// the nodes left in place; or the node deletion's own error.
+    pub fn truncate(&self) -> Result<(usize, usize)> {
+        let edges = self.get_edges(None);
+        let (edge_count, failure) =
+            remove_edges_reporting_failure(edges.iter().map(GraphEdge::id), |id| {
+                self.remove_edge_detailed(id)
+            });
+        if let Some((edge_id, reason)) = failure {
+            return Err(crate::Error::Storage(format!(
+                "TRUNCATE removed {edge_count} of {} edges, then failed on edge {edge_id}: \
+                 {reason}. The nodes were left in place; the collection is NOT empty.",
+                edges.len()
+            )));
+        }
+        let node_ids = self.all_node_ids();
+        if !node_ids.is_empty() {
+            self.delete(&node_ids)?;
+        }
+        Ok((edge_count, node_ids.len()))
     }
 
     /// Test-only fault injection — makes the edge write-ahead log unwritable so
@@ -355,6 +416,15 @@ impl GraphCollection {
     #[must_use]
     pub fn has_edge(&self, edge_id: u64) -> bool {
         self.inner.edge_exists(edge_id)
+    }
+
+    /// Returns the edge with `edge_id`, if any.
+    ///
+    /// A point lookup: unlike filtering [`get_edges`](Self::get_edges), it
+    /// clones only the one edge asked for.
+    #[must_use]
+    pub fn get_edge(&self, edge_id: u64) -> Option<GraphEdge> {
+        self.inner.get_edge(edge_id)
     }
 
     /// Performs BFS traversal from a source node.
@@ -458,16 +528,6 @@ impl GraphCollection {
         }
     }
 
-    /// Inserts or updates node payload (properties).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if storage fails.
-    #[deprecated(since = "1.6.0", note = "Use upsert_node_payload() instead")]
-    pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
-        self.upsert_node_payload(node_id, payload)
-    }
-
     /// Retrieves node payload.
     ///
     /// # Errors
@@ -502,6 +562,34 @@ impl GraphCollection {
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
         self.search_by_embedding(query, k)
     }
+}
+
+/// Removes every id via the injected `remove` closure, returning how many were
+/// actually removed together with the FIRST genuine failure, if any.
+///
+/// Every id is attempted even after a failure — the loop never short-circuits —
+/// so a failure partway through still lets the remaining ids be removed rather
+/// than stranding them. [`EdgeRemoval::Absent`] is deliberately NOT a failure:
+/// removing an edge that is already gone is a documented no-op that callers
+/// rely on.
+pub(crate) fn remove_edges_reporting_failure(
+    ids: impl Iterator<Item = u64>,
+    mut remove: impl FnMut(u64) -> EdgeRemoval,
+) -> (usize, Option<(u64, String)>) {
+    let mut removed = 0usize;
+    let mut first_failure: Option<(u64, String)> = None;
+    for id in ids {
+        match remove(id) {
+            EdgeRemoval::Removed => removed += 1,
+            EdgeRemoval::Absent => {}
+            EdgeRemoval::Failed(reason) => {
+                if first_failure.is_none() {
+                    first_failure = Some((id, reason));
+                }
+            }
+        }
+    }
+    (removed, first_failure)
 }
 
 #[cfg(test)]

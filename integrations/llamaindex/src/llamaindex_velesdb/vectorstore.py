@@ -32,6 +32,7 @@ from llamaindex_velesdb.security import (
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
 from velesdb_common.ids import stable_hash_id as _stable_hash_id
+from velesdb_common.scores import metric_higher_is_better, to_similarity
 from llamaindex_velesdb._common import open_database as _open_database
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.node_builder import (
@@ -65,11 +66,6 @@ logger = logging.getLogger(__name__)
 # Page size for the delete(ref_doc_id) payload scan (VelesQL SELECT
 # defaults to LIMIT 10, far too small for chunked documents).
 _REF_DOC_SCAN_BATCH = 1000
-
-# Metrics for which VelesDB returns a raw distance (lower = closer). LlamaIndex
-# treats `similarities` as higher-is-better, so these are mapped to a bounded,
-# monotonically-decreasing similarity; cosine/dot-product are already similarities.
-_DISTANCE_METRICS = frozenset({"euclidean", "hamming", "jaccard"})
 
 
 class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, ScrollOpsMixin, BasePydanticVectorStore):
@@ -225,22 +221,32 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         node = cls._node_from_result(result)
         return node, result.get("score", 0.0), node.node_id
 
-    def _score_to_similarity(self, score: float) -> float:
-        """Map a raw VelesDB score to a LlamaIndex similarity (higher = closer).
+    def _metric_higher_is_better(self) -> bool:
+        """Whether a raw single-metric score on this store is higher-is-closer.
 
-        VelesDB returns a raw *distance* for distance metrics (euclidean, hamming,
-        jaccard — lower is closer) and a *similarity* for cosine/dot-product
-        (higher is closer). LlamaIndex treats ``similarities`` as higher-is-better
-        (``similarity_cutoff``, node postprocessors), so distances are mapped to a
-        bounded, monotonically-decreasing similarity; similarity metrics pass
-        through unchanged.
+        Read from velesdb-core through
+        :func:`velesdb_common.scores.metric_higher_is_better`: ``True`` for
+        cosine, dot and jaccard, ``False`` for the distances (euclidean,
+        hamming).
         """
-        if self.metric.lower() in _DISTANCE_METRICS:
-            return 1.0 / (1.0 + max(score, 0.0))
-        return score
+        return metric_higher_is_better(self.metric)
 
-    def _build_query_result(self, results: list[dict]) -> VectorStoreQueryResult:
-        """Build a VectorStoreQueryResult from raw VelesDB result dictionaries."""
+    def _build_query_result(
+        self, results: list[dict], *, higher_is_better: bool
+    ) -> VectorStoreQueryResult:
+        """Build a VectorStoreQueryResult from raw VelesDB result dictionaries.
+
+        LlamaIndex treats ``similarities`` as higher-is-better
+        (``similarity_cutoff``, node postprocessors). Each caller states the
+        direction of the scores it hands in, since it depends on the search
+        that produced them, not only on the metric: the metric's own
+        (:meth:`_metric_higher_is_better`) for a raw single-metric search, the
+        strategy's for multi-query fusion, ``True`` for BM25 and rank-fused
+        hybrid scores. A lower-is-better score is mapped to a bounded,
+        monotonically decreasing similarity
+        (:func:`velesdb_common.scores.to_similarity`); a higher-is-better one
+        passes through unchanged.
+        """
         nodes: List[TextNode] = []
         similarities: List[float] = []
         ids: List[str] = []
@@ -248,7 +254,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         for result in results:
             node, score, node_id = self._result_to_parts(result)
             nodes.append(node)
-            similarities.append(self._score_to_similarity(score))
+            similarities.append(to_similarity(score, higher_is_better))
             ids.append(node_id)
 
         return VectorStoreQueryResult(nodes=nodes, similarities=similarities, ids=ids)
@@ -397,7 +403,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
         """Delete every node whose payload ``ref_doc_id`` matches."""
         # Parameter binding ($ref) keeps the user value out of the query text
         # entirely. It was a no-op on published wheels <= 1.18.0 (scalar-equality
-        # bug); the package now pins velesdb >= 3.8.0 where it works. The only
+        # bug); the velesdb floor in pyproject.toml is far above it. The only
         # interpolated token is collection_name, regex-validated at construction.
         query_str = (
             f"SELECT * FROM {self.collection_name} "  # nosec B608 — identifier regex-validated

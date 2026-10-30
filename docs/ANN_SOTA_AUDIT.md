@@ -39,7 +39,7 @@ Short answer: **partially yes**.
    - `index/hnsw/native/mod.rs` still labels itself as **PROTOTYPE**, which conflicts with “production-grade” positioning and makes maturity status unclear.
 
 3. **Insertion path has avoidable vector cloning**
-   - `get_vector()` clones vectors (`Vec<f32>`) and is called repeatedly in insert/neighbor logic.
+   - At the time of this audit, `get_vector()` cloned vectors (`Vec<f32>`) and was called repeatedly in insert/neighbor logic. That accessor is gone: the native graph reads vectors by borrowed slice from its `ContiguousVectors` arena.
    - This creates allocation/copy overhead and reduces competitiveness during high-throughput builds.
 
 4. **Lock granularity / contention risk**
@@ -53,7 +53,7 @@ Short answer: **partially yes**.
 ## Recommendation roadmap
 
 ### P0 (high impact, low/medium risk)
-- Replace clone-heavy `get_vector()` usage in native HNSW hot paths with borrowed/snapshot-based access.
+- ~~Replace clone-heavy `get_vector()` usage in native HNSW hot paths with borrowed/snapshot-based access.~~ Done: `get_vector()` no longer exists; hot paths borrow from the arena.
 - Profile and rebalance lock scope in insert/search (especially neighbor update paths).
 - Clarify production status in docs/comments for native HNSW module.
 
@@ -94,4 +94,4 @@ Short answer: **partially yes**.
 - A latency-aware rerank controller is in place (`rerank_latency_target_us` + `adapt_rerank_k_to_latency`); a full benchmark-driven, recall-aware SLO controller is still future work.
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0

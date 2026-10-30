@@ -1,6 +1,6 @@
 # VelesDB Frequently Asked Questions
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-08-08 · Applies to: velesdb-core 8.0.0
 
 ---
 
@@ -39,7 +39,7 @@ For example, the legacy `Collection` type was deprecated in v1.4 and marked `#[d
 
 ### Are on-disk formats stable?
 
-On-disk format stability is guaranteed within a major version. If a format change is required in a minor release (as happened in v1.5 with the bincode-to-postcard migration), a migration path is provided. Migration guides ship in `docs/guides/` — the most recent is [`MIGRATION_v4.0.0.md`](guides/MIGRATION_v4.0.0.md).
+On-disk format stability is guaranteed within a major version. If a format change is required in a minor release (as happened in v1.5 with the bincode-to-postcard migration), a migration path is provided. Migration guides ship in `docs/guides/` — the most recent is [`MIGRATION_v8.0.0.md`](guides/MIGRATION_v8.0.0.md).
 
 ---
 

@@ -3,7 +3,7 @@
 //! Provides PyO3 wrappers for graph operations including:
 //! - Edge management (add, get, remove)
 //! - Label-based queries (US-030)
-//! - BFS streaming traversal (US-032)
+//! - BFS streaming traversal (US-032) and DFS traversal, both core's
 //!
 //! [EPIC-016/US-030, US-032]
 
@@ -17,8 +17,11 @@ use crate::collection_helpers::core_err;
 use crate::graph::{dict_to_edge, edge_to_dict};
 use velesdb_core::collection::graph::EdgeStore;
 
-// FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
-use velesdb_core::collection::graph::{bfs_stream, StreamingConfig as CoreStreamingConfig};
+// FLAG-1 FIX: Use core's traversals instead of re-implementing BFS or DFS.
+use velesdb_core::collection::graph::{
+    bfs_stream, dfs_traverse, StreamingConfig as CoreStreamingConfig,
+    TraversalConfig as CoreTraversalConfig, TraversalResult as CoreTraversalResult,
+};
 
 /// Configuration for streaming BFS traversal.
 ///
@@ -31,7 +34,8 @@ pub struct StreamingConfig {
     /// Maximum traversal depth (default: 3).
     #[pyo3(get, set)]
     pub max_depth: usize,
-    /// Maximum nodes to visit (memory bound, default: 10000).
+    /// Maximum number of results (default: 10000). The memory bound of a
+    /// traversal is core's own visited-set cap, `MAX_VISITED_SIZE`.
     #[pyo3(get, set)]
     pub max_visited: usize,
     /// Optional filter by relationship types.
@@ -245,32 +249,10 @@ impl GraphStore {
         py.detach(|| {
             let store = self.inner.read();
 
-            // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS
-            let iterator = bfs_stream(&store, start_node, core_config);
-
-            // Collect results, converting from core TraversalResult to Python TraversalResult.
-            // FLAG-2 FIX: Handle empty path correctly instead of using unwrap_or(0)
-            // which could collide with a real edge_id=0.
-            // Note: core's bfs_stream already respects config.limit, so no `.take()` needed.
-            let results: Vec<TraversalResult> = iterator
-                .filter_map(|r| {
-                    // Get edge info from the path — skip results with empty path
-                    let edge_id = r.path.last().copied()?;
-                    let edge = store.get_edge(edge_id);
-                    let (source, label) = edge
-                        .map(|e| (e.source(), e.label().to_string()))
-                        .unwrap_or((start_node, String::new()));
-
-                    // Reason: depth is bounded by SAFETY_MAX_DEPTH (100), always fits in usize.
-                    #[allow(clippy::cast_possible_truncation)]
-                    Some(TraversalResult {
-                        depth: r.depth as usize,
-                        source,
-                        target: r.target_id,
-                        label,
-                        edge_id,
-                    })
-                })
+            // FLAG-1 FIX: Use core's BfsIterator instead of re-implementing BFS.
+            // Core's bfs_stream already respects config.limit.
+            let results: Vec<TraversalResult> = bfs_stream(&store, start_node, core_config)
+                .filter_map(|r| to_py_result(&store, start_node, &r))
                 .collect();
 
             Ok(results)
@@ -340,14 +322,17 @@ impl GraphStore {
         }))
     }
 
-    /// Performs DFS traversal from a source node.
+    /// Performs DFS traversal from a source node, with core's DFS
+    /// (`velesdb_core::collection::graph::dfs_traverse`).
     ///
     /// Args:
     ///     source_id: Starting node ID
-    ///     config: StreamingConfig with max_depth, max_visited, relationship_types
+    ///     config: StreamingConfig with max_depth, max_visited (the result
+    ///         cap, as for `traverse_bfs_streaming`), relationship_types
     ///
     /// Returns:
-    ///     List of TraversalResult objects for each edge visited.
+    ///     One TraversalResult per node reached, in depth-first order, each
+    ///     describing the edge that reached it.
     ///
     /// Example:
     ///     >>> results = store.traverse_dfs(100, StreamingConfig(max_depth=3))
@@ -360,77 +345,49 @@ impl GraphStore {
         source_id: u64,
         config: &StreamingConfig,
     ) -> PyResult<Vec<TraversalResult>> {
-        let max_visited = config.max_visited;
-        let max_depth = config.max_depth;
-        let relationship_types = config.relationship_types.clone();
+        let core_config = CoreTraversalConfig {
+            min_depth: 1,
+            max_depth: u32::try_from(config.max_depth)
+                .map_err(|_| PyRuntimeError::new_err("max_depth exceeds u32::MAX"))?,
+            limit: config.max_visited,
+            rel_types: config.relationship_types.clone().unwrap_or_default(),
+            deadline: None,
+        };
 
         py.detach(|| {
             let store = self.inner.read();
-            Ok(dfs_collect(
-                &store,
-                source_id,
-                max_depth,
-                max_visited,
-                relationship_types.as_ref(),
-            ))
+            Ok(dfs_traverse(&store, source_id, &core_config)
+                .iter()
+                .filter_map(|r| to_py_result(&store, source_id, r))
+                .collect())
         })
     }
 }
 
-/// Returns true when an edge passes the optional relationship-type filter.
-fn label_matches(label: &str, relationship_types: Option<&Vec<String>>) -> bool {
-    match relationship_types {
-        Some(types) => types.contains(&label.to_string()),
-        None => true,
-    }
-}
-
-/// Collects DFS traversal results from `store` starting at `source_id`.
-///
-/// Pure logic extracted from `traverse_dfs` so the PyO3 binding stays thin.
-fn dfs_collect(
+/// Maps a core traversal result to the edge-shaped Python result: the last
+/// edge of its path. A result with an empty path (the source itself) has no
+/// edge and is skipped rather than given a fabricated `edge_id` of 0, which
+/// could collide with a real edge (FLAG-2).
+fn to_py_result(
     store: &EdgeStore,
-    source_id: u64,
-    max_depth: usize,
-    max_visited: usize,
-    relationship_types: Option<&Vec<String>>,
-) -> Vec<TraversalResult> {
-    use std::collections::HashSet;
-
-    let mut results = Vec::new();
-    let mut visited: HashSet<u64> = HashSet::new();
-    let mut stack: Vec<(u64, usize)> = vec![(source_id, 0)];
-
-    while let Some((node_id, depth)) = stack.pop() {
-        if visited.len() >= max_visited {
-            break;
-        }
-        if !visited.insert(node_id) {
-            continue;
-        }
-        if depth >= max_depth {
-            continue;
-        }
-        let filtered: Vec<_> = store
-            .get_outgoing(node_id)
-            .into_iter()
-            .filter(|e| {
-                label_matches(e.label(), relationship_types) && !visited.contains(&e.target())
-            })
-            .collect();
-        for edge in filtered.into_iter().rev() {
-            results.push(TraversalResult {
-                depth: depth + 1,
-                source: edge.source(),
-                target: edge.target(),
-                label: edge.label().to_string(),
-                edge_id: edge.id(),
-            });
-            stack.push((edge.target(), depth + 1));
-        }
-    }
-
-    results
+    start_node: u64,
+    r: &CoreTraversalResult,
+) -> Option<TraversalResult> {
+    let edge_id = r.path.last().copied()?;
+    let (source, label) = store
+        .get_edge(edge_id)
+        .map_or((start_node, String::new()), |e| {
+            (e.source(), e.label().to_string())
+        });
+    // Reason: depth is a u32, which fits in usize on every supported target.
+    #[allow(clippy::cast_possible_truncation)]
+    Some(TraversalResult {
+        depth: r.depth as usize,
+        source,
+        target: r.target_id,
+        label,
+        edge_id,
+    })
 }
 
 #[cfg(test)]

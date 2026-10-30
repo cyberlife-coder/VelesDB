@@ -222,10 +222,10 @@ for r in results:
 | `label` | `str` | Edge relationship type |
 | `edge_id` | `int` | Edge identifier |
 
-Note: `Collection.get_graph_store()` returns a **standalone** in-memory graph
-that is not connected to the collection's data; it emits a
-`DeprecationWarning`. Use `Database.create_graph_collection()` /
-`Database.get_graph_collection()` for persistent graph work.
+For persistent graph work use `Database.create_graph_collection()` /
+`Database.get_graph_collection()`. (`Collection.get_graph_store()`, which
+returned a standalone in-memory graph unrelated to the collection, was
+removed in 8.0.0.)
 
 Runnable example:
 [`examples/python/graph_traversal.py`](https://github.com/cyberlife-coder/VelesDB/blob/develop/examples/python/graph_traversal.py).
@@ -233,4 +233,4 @@ Query patterns: [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md).
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 8.0.0

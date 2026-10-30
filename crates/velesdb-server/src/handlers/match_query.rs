@@ -170,6 +170,9 @@ fn run_match(
             "scope narrowing is not supported for MATCH queries".to_string(),
         ));
     }
+    // Counted once the read is admitted (parsed, validated, authorized), as
+    // on the traversal handlers.
+    state.operational_metrics.record_graph_query();
 
     let results = execute_match(&collection, &match_clause, request)?;
 

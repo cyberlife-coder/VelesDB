@@ -384,7 +384,7 @@ fn not(inner: Condition) -> Condition {
 }
 
 #[test]
-fn test_extract_vector_search_looks_through_and_and_group_but_not_or() {
+fn test_extract_vector_search_looks_through_and_or_and_group_but_not_not() {
     let params = params();
     let extract = |condition: Condition| {
         Collection::extract_vector_search(&condition, &params).expect("test: resolves")
@@ -408,10 +408,18 @@ fn test_extract_vector_search_looks_through_and_and_group_but_not_or() {
         )),
         Some(W.to_vec())
     );
+    // A NEAR under OR is still the ranking vector: the leaf is TRUE as a
+    // boolean, so the disjunction never restricts what it ranks.
     assert_eq!(
-        extract(or(vector_search_on("v"), vector_search_on("w"))),
+        extract(or(make_comparison("a", 1), vector_search_on("w"))),
+        Some(W.to_vec()),
+        "an OR is looked through"
+    );
+    // A negated vector leaf takes the full-scan path instead.
+    assert_eq!(
+        extract(not(vector_search_on("v"))),
         None,
-        "an OR is not looked through"
+        "a NOT is not looked through"
     );
     assert_eq!(extract(make_comparison("a", 1)), None);
 }

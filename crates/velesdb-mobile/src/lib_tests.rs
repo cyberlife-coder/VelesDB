@@ -105,6 +105,19 @@ fn test_search_quality_adaptive_conversion() {
 }
 
 #[test]
+fn test_search_quality_adaptive_out_of_order_is_rejected() {
+    let q = SearchQuality::Adaptive {
+        min_ef: 512,
+        max_ef: 32,
+    };
+    let err: Result<CoreSearchQuality, _> = q.try_into();
+    assert!(
+        err.is_err(),
+        "core's parser refuses adaptive:512:32; the typed form must too"
+    );
+}
+
+#[test]
 fn test_search_quality_adaptive_out_of_range_is_rejected() {
     let q = SearchQuality::Adaptive {
         min_ef: 32,
@@ -502,13 +515,33 @@ fn test_collection_guardrails_update_and_read() {
         rate_limit_qps: 50,
         circuit_failure_threshold: 3,
         circuit_recovery_seconds: 30,
-    });
+    })
+    .unwrap();
 
     let read = col.guard_rails();
     assert_eq!(read.max_depth, 7);
     assert_eq!(read.timeout_ms, 5000);
     assert_eq!(read.rate_limit_qps, 50);
     assert_eq!(read.memory_limit_bytes, 1_048_576);
+}
+
+#[test]
+fn test_update_guardrails_refuses_a_zero_rate_limit_and_changes_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let db = VelesDatabase::open(tmp.path().to_str().unwrap().to_string()).unwrap();
+    db.create_collection("gr".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("gr".to_string()).unwrap().unwrap();
+    let before = col.guard_rails();
+
+    let refused = db.update_guardrails(MobileQueryLimits {
+        rate_limit_qps: 0,
+        timeout_ms: 1,
+        ..before.clone()
+    });
+
+    assert!(refused.is_err());
+    assert_eq!(col.guard_rails().timeout_ms, before.timeout_ms);
 }
 
 #[test]
@@ -582,6 +615,9 @@ fn test_collection_apply_advanced_config() {
         async_index_builder: None,
     })
     .unwrap();
+
+    // Both streaming components were installed live (none ran before).
+    assert!(col.pending_reopen().is_empty());
 
     let cfg2 = col.inner.config();
     assert_eq!(cfg2.pq_rescore_oversampling, Some(8));
@@ -828,6 +864,64 @@ fn test_sparse_leaves_return_their_hits_without_payload() {
         .unwrap();
     assert_eq!(ids(&filtered), [1, 3]);
     assert_mapped(&filtered);
+}
+
+/// A core error on the sparse and multi-query leaves of
+/// `collection_sparse.rs` reaches the caller through core's taxonomy: a
+/// `Config` failure keeps VELES-009, a dimension mismatch stays typed.
+#[test]
+fn test_sparse_and_multi_query_leaves_keep_core_error_codes() {
+    let tmp = TempDir::new().unwrap();
+    let db = VelesDatabase::open(tmp.path().to_str().unwrap().to_string()).unwrap();
+    db.create_collection("codes".to_string(), 4, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_collection("codes".to_string()).unwrap().unwrap();
+    let query = || VelesSparseVector {
+        indices: vec![0],
+        values: vec![1.0],
+    };
+
+    let err = col
+        .sparse_search(query(), 3, Some("missing".to_string()))
+        .expect_err("unknown sparse index");
+    let VelesError::Database {
+        code, recoverable, ..
+    } = &err
+    else {
+        panic!("expected VelesError::Database, got {err:?}");
+    };
+    assert_eq!(code, "VELES-009", "{err:?}");
+    assert!(*recoverable, "{err:?}");
+
+    let short = || vec![vec![1.0, 0.0]];
+    let is_mismatch = |err: &VelesError| {
+        matches!(
+            err,
+            VelesError::DimensionMismatch {
+                expected: 4,
+                actual: 2,
+                code,
+                ..
+            } if code == "VELES-004"
+        )
+    };
+    let err = col
+        .multi_query_search(short(), 3, FusionStrategy::Average)
+        .expect_err("short vector");
+    assert!(is_mismatch(&err), "{err:?}");
+    let err = col
+        .multi_query_search_ids(short(), 3, FusionStrategy::Average)
+        .expect_err("short vector");
+    assert!(is_mismatch(&err), "{err:?}");
+    let err = col
+        .multi_query_search_with_filter(
+            short(),
+            3,
+            FusionStrategy::Average,
+            r#"{"condition": {"type": "eq", "field": "category", "value": "a"}}"#.to_string(),
+        )
+        .expect_err("short vector");
+    assert!(is_mismatch(&err), "{err:?}");
 }
 
 // =========================================================================

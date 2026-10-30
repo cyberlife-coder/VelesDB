@@ -62,7 +62,7 @@ impl Collection {
 
     /// Validates a vector-collection upsert batch at the cold boundary:
     /// runtime ingest limits (parity item E) followed by the per-point
-    /// dimension check. Shared by [`Self::upsert`] and `upsert_bulk_inner`
+    /// dimension check. Shared by [`Self::upsert`] and [`Self::upsert_bulk`]
     /// so both ingest paths apply the identical pre-storage validation.
     ///
     /// # Errors
@@ -175,46 +175,62 @@ impl Collection {
     ///   (HNSW insertion). There is no ordering dependency between payload
     ///   and vector WAL writes — gap detection on `Collection::open()` handles
     ///   any partial write scenario.
-    /// - `old_payloads` collection is completed and the payload lock is
-    ///   released before these writes, so both start from clean state.
+    /// - The payload write holds the payload lock from reading the old
+    ///   payloads to updating the label and range indexes, and releases it
+    ///   before the vector write, so neither write holds both locks.
     ///
     /// Returns the old payloads for Phase 2.
     fn batch_store_all(&self, points: &[Point]) -> Result<Vec<Option<serde_json::Value>>> {
-        // Collect old payloads under the payload write lock, then release.
-        // The write lock prevents concurrent payload mutations during the read.
-        let old_payloads = {
-            let payload_storage = self.storage.payload_storage.write();
-            let result = Self::collect_old_payloads(points, &payload_storage);
-            drop(payload_storage);
-            result
-        };
-
         // Issue #425: Build the dedup map once and share it across both
         // write paths, avoiding redundant HashMap construction.
         let dedup_map = Self::build_dedup_map(points);
 
         // Sequential: see the "Sequential I/O" doc section above for why this
         // is no longer `rayon::join` (deadlock under concurrent load).
-        self.write_and_flush_payloads(points, &dedup_map)?;
+        let old_payloads = self.write_and_flush_payloads(points, &dedup_map)?;
         self.write_deduped_vectors(points, &dedup_map)?;
 
         Ok(old_payloads)
     }
 
-    /// Writes deduped payloads and flushes the storage.
+    /// Writes deduped payloads, flushes the storage, and brings the label and
+    /// range indexes in line with what it stored; returns the old payloads.
     ///
     /// Called sequentially from [`Self::batch_store_all`] (previously via
-    /// `rayon::join`, reverted — see that method's doc comment). Acquires the
-    /// `payload_storage` write lock internally.
+    /// `rayon::join`, reverted — see that method's doc comment). One
+    /// `payload_storage` write guard spans the old-payload read, the write and
+    /// the index update, so a concurrent writer cannot store a payload for
+    /// these ids in between: the indexes end up describing what storage holds.
+    /// A payload-less point deletes the stored payload here, and the indexes
+    /// follow — on an error too: a failed write or flush can leave part or all
+    /// of the batch readable, and the indexes are then rebuilt for these ids
+    /// from what storage holds before the error is returned.
     ///
     /// Issue #425: Accepts a pre-computed `dedup_map` to avoid rebuilding
     /// the last-writer-wins map redundantly.
-    fn write_and_flush_payloads(&self, points: &[Point], dedup_map: &DedupMap) -> Result<()> {
+    ///
+    /// LOCK ORDER: payload_storage(3) → label_index(7), released →
+    /// graph_range_indexes(7).
+    fn write_and_flush_payloads(
+        &self,
+        points: &[Point],
+        dedup_map: &DedupMap,
+    ) -> Result<Vec<Option<serde_json::Value>>> {
         let mut payload_storage = self.storage.payload_storage.write();
-        Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)?;
-        payload_storage.flush()?;
+        let old_payloads = Self::collect_old_payloads(points, &payload_storage);
+        let written = Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)
+            .and_then(|()| payload_storage.flush().map_err(Into::into));
+        if let Err(error) = written {
+            let ids: Vec<u64> = points.iter().map(|p| p.id).collect();
+            self.index_payloads_after_failed_write(&payload_storage, &ids, &old_payloads);
+            return Err(error);
+        }
+        self.index_payload_writes(
+            points.iter().map(|p| (p.id, p.payload.as_ref())),
+            &old_payloads,
+        );
         drop(payload_storage);
-        Ok(())
+        Ok(old_payloads)
     }
 
     /// Retrieves pre-batch payloads, querying storage only once per unique ID.
@@ -225,18 +241,24 @@ impl Collection {
         points: &[Point],
         storage: &LogPayloadStorage,
     ) -> Vec<Option<serde_json::Value>> {
-        let mut seen = std::collections::HashSet::with_capacity(points.len());
-        points
-            .iter()
-            .map(|p| {
-                if seen.insert(p.id) {
-                    // First occurrence — retrieve pre-batch payload from storage
-                    storage.retrieve(p.id).ok().flatten()
-                } else {
-                    None // Duplicate — Phase 2 uses seen_payloads instead
-                }
-            })
-            .collect()
+        Self::collect_old_payloads_by_id(points.iter().map(|p| p.id), storage)
+    }
+
+    /// [`Self::collect_old_payloads`] over the ids of a batch, in order.
+    pub(super) fn collect_old_payloads_by_id(
+        ids: impl ExactSizeIterator<Item = u64>,
+        storage: &LogPayloadStorage,
+    ) -> Vec<Option<serde_json::Value>> {
+        let mut seen = std::collections::HashSet::with_capacity(ids.len());
+        ids.map(|id| {
+            if seen.insert(id) {
+                // First occurrence — retrieve pre-batch payload from storage
+                storage.retrieve(id).ok().flatten()
+            } else {
+                None // Duplicate — Phase 2 uses seen_payloads instead
+            }
+        })
+        .collect()
     }
 
     /// Builds a last-writer-wins dedup map: `point_id -> index_of_last_occurrence`.
@@ -337,12 +359,6 @@ impl Collection {
             return false;
         }
 
-        // Label index: when populated, old payloads may contain `_labels`
-        // that need cleanup. Phase 2 must run to call `apply_label_updates`.
-        if !self.graph.label_index.read().is_empty() {
-            return false;
-        }
-
         // Sparse vectors require collection into the sparse batch buffer
         let any_sparse = points.iter().any(Point::has_sparse_vectors);
         !any_sparse
@@ -382,7 +398,9 @@ impl Collection {
     }
 
     /// Runs the sequential per-point loop for secondary indexes, BM25, sparse
-    /// vectors, labels, and (when not pre-computed) quantization.
+    /// vectors, and (when not pre-computed) quantization. The label and range
+    /// indexes are not phase-2 work: `write_and_flush_payloads` updates them
+    /// under the payload lock.
     ///
     /// Extracted from `per_point_updates` to keep each function under 50 NLOC.
     fn per_point_sequential_updates(
@@ -404,8 +422,6 @@ impl Collection {
         if !skip_bm25 {
             self.bulk_update_text_index(points, old_payloads)?;
         }
-        let needs_label_updates = Self::needs_label_updates(points, old_payloads);
-        let mut label_updates = Self::alloc_label_buffer(needs_label_updates, points.len());
 
         for (point, pre_batch_old) in points.iter().zip(old_payloads) {
             let effective_old =
@@ -417,13 +433,9 @@ impl Collection {
                 point.payload.as_ref(),
             );
             Self::collect_sparse_vectors(point, &mut sparse_batch);
-            if needs_label_updates {
-                label_updates.push((point.id, effective_old.cloned(), point.payload.clone()));
-            }
             seen_payloads.insert(point.id, point.payload.as_ref());
         }
 
-        Self::apply_label_updates(&self.graph.label_index, &label_updates);
         Ok(sparse_batch)
     }
 
@@ -453,10 +465,18 @@ impl Collection {
         // so the old value is decremented exactly once.
         let old_payloads_for_hist = Self::collect_old_payloads(&points, &payload_storage);
 
-        self.apply_metadata_point_writes(&points, &mut payload_storage, &mut label_idx)?;
+        let effective_olds =
+            self.apply_metadata_point_writes(&points, &mut payload_storage, &mut label_idx)?;
 
-        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12).
+        // LOCK ORDER: drop label_index(7) before acquiring config(1) and stats_io_mutex(12),
+        // and before graph_range_indexes(7), which shares its rank.
         drop(label_idx);
+        self.apply_range_index_changes(
+            points
+                .iter()
+                .zip(&effective_olds)
+                .map(|(point, old)| (point.id, old.as_ref(), point.payload.as_ref())),
+        );
 
         // LOCK ORDER: flush while payload_storage(3) still held, then drop before acquiring config(1).
         let point_count = payload_storage.ids().len();
@@ -486,12 +506,15 @@ impl Collection {
     /// Extracted from [`Self::upsert_metadata`] so each function stays within
     /// the complexity budget. Both write guards are passed in by the caller,
     /// which holds them across the whole batch in lock order (3 → 7).
+    ///
+    /// Returns the effective old payload of each point, in order, for the
+    /// caller's graph range index update once `label_idx` is released.
     fn apply_metadata_point_writes(
         &self,
         points: &[Point],
         payload_storage: &mut LogPayloadStorage,
         label_idx: &mut crate::collection::graph::LabelIndex,
-    ) -> Result<()> {
+    ) -> Result<Vec<Option<serde_json::Value>>> {
         // Pass 1: resolve the old payload each occurrence would have seen in
         // the sequential loop. Intra-batch duplicates observe the previous
         // occurrence's payload (via `seen`), not the pre-batch value, exactly
@@ -532,6 +555,6 @@ impl Collection {
                 label_idx.index_from_payload(point.id, payload);
             }
         }
-        Ok(())
+        Ok(effective_olds)
     }
 }

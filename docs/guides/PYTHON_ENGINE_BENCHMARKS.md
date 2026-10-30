@@ -34,4 +34,4 @@ figures from the i9-14900KF, the recall from an Apple M5 Pro (2026-09-10). See
 
 ---
 
-Last updated: 2026-09-10 · Applies to: velesdb-core 7.1.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 8.0.0

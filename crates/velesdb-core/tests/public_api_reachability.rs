@@ -6,7 +6,7 @@
 //! This suite exercises four shared capabilities — VelesQL/JOIN, hybrid BM25
 //! search, product quantization, and mmap storage — **strictly through
 //! `velesdb-core`'s public API surface**, exactly as a downstream consumer
-//! (e.g. `velesdb-premium`) would. No private module is touched: every symbol
+//! (e.g. an out-of-tree policy layer) would. No private module is touched: every symbol
 //! is reached via `velesdb_core::...` re-exports. The goal is to prove these
 //! capabilities are reachable (and behave sanely) for de-duplication, so
 //! premium can call core instead of forking it.
