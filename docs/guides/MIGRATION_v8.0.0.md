@@ -81,12 +81,18 @@ a v3 blob with `Unsupported version: 3`.
 | WASM: `USING FUSION` over a single `NEAR` | accepted | `V012` |
 | WASM: `NEAR_FUSED ... USING FUSION 'weighted'` or `'rsf'` | ran as `rrf` | `V012` |
 | `rate_limit_qps = 0` or `circuit_failure_threshold = 0` in a guard-rail update | accepted, never applied | `400` / `VELES-009` (REST, Tauri), `ValueError` (Python), `VelesError` (mobile) |
+| `enable_streaming` with `buffer_size = 0`, a `buffer_size` past `tokio::sync::Semaphore::MAX_PERMITS`, or `flush_interval_ms = 0` | process aborted | `Error::Config` / `VELES-009` (Rust, Tauri, mobile), `400` (REST), `ValueError` (Python) |
+| Python: a payload or edge properties nested past 127 levels of lists and dicts, or containing themselves | segmentation fault | `ValueError` |
 
 **Fix:**
 - Run one query per sparse vector and fuse the results.
 - Send a dense vector of the collection's dimension.
 - Drop `USING FUSION` from a single-`NEAR` query.
 - Use `rrf`, `average` or `maximum` with `NEAR_FUSED`.
+- Give streaming a `buffer_size` of at least 1 and a `flush_interval_ms` of at
+  least 1.
+- Flatten a Python value nested past 127 levels. Core refuses past 124 levels
+  anyway, with `VELES-017` (section 1).
 
 The guard-rail limits are also applied now, where 7.1.0 returned them without
 applying them: `rate_limit_qps`, `circuit_failure_threshold` and
@@ -125,6 +131,13 @@ requests.
   store with `to_bytes`/`from_bytes` or `save_to_file`/`load_from_file`.
 - **`Database::notify_upsert` and `notify_query` stay**, still deprecated.
   Several server routes have no other source of observer telemetry.
+
+### Changed
+
+- **`Collection::enable_streaming` and `VectorCollection::enable_streaming`
+  return `Result<()>`.** They refuse a config the pipeline cannot run with
+  (section 2) with `Error::Config`, and leave the current ingester running.
+  Handle the result or `?` it.
 
 ### Added
 
@@ -280,6 +293,20 @@ Rejections carry core's codes and a new `recoverable` field:
   - `weighted` fusion uses core's 0.6 / 0.3 / 0.1 weights, so its results may
     be ordered differently.
   - `query execute --format json` prints `[]` for an empty result.
+- **Stored floats read back bit for bit.** `velesdb-core` enables
+  `serde_json`'s `float_roundtrip` feature, so a payload or edge-property
+  float reads back as written after a reopen. A value an earlier version
+  already read one ULP off and wrote back keeps that value.
+  - Cargo unifies the feature across a build: every `serde_json` float parse
+    in a binary that links core pays it, your own included. On a
+    768-dimension body it costs about 20 µs per vector.
+  - An `f32` is parsed directly, so a vector component can differ from 7.1.0
+    by one `f32` ULP, toward the exact value.
+- **Caller-chosen sizes no longer abort the process.** A huge scroll
+  `batch_size`, streaming `batch_size` or HNSW `max_elements` reserved that
+  much memory up front. They are now capacity hints: an HNSW index reserves
+  at most 2 000 000 slots before its first insert and grows past them as
+  nodes arrive.
 - **WASM `SELECT DISTINCT`** applies `ORDER BY` and the default `LIMIT`.
 - **Error messages:** REST and WASM report core's wording for an unknown fusion
   strategy or search mode.
