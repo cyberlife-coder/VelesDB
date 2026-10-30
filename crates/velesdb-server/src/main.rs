@@ -131,6 +131,21 @@ fn log_startup(cfg: &ServerConfig) {
         tracing::info!("Rate limiting disabled");
     }
     log_cors_config(&cfg.cors);
+    log_host_policy(cfg);
+}
+
+/// Says when the `Host` check will refuse clients that a wildcard bind lets
+/// in: the usual cause of a `421` in a compose or Kubernetes deployment.
+fn log_host_policy(cfg: &ServerConfig) {
+    if cfg.answers_only_loopback_names_on_a_wildcard_bind() {
+        tracing::warn!(
+            "Bound to {} with no allowed_hosts: only requests addressed to localhost, \
+             127.0.0.0/8 or [::1] are answered, any other Host gets 421. List the names \
+             clients use (a compose service name, a DNS name, a LAN address) in \
+             [server] allowed_hosts, --allowed-hosts or VELESDB_ALLOWED_HOSTS.",
+            cfg.host
+        );
+    }
 }
 
 fn log_cors_config(cors: &CorsConfig) {

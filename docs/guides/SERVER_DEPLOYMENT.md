@@ -53,6 +53,10 @@ It runs as the non-root `velesdb` user, exposes port 8080, and declares a
 > `HEALTHCHECK` work as they are; a client using a DNS name or a LAN address
 > needs it listed: `-e VELESDB_ALLOWED_HOSTS=velesdb.example.com,192.168.1.20`.
 > `/health` and `/ready` answer any `Host`, so Kubernetes probes need nothing.
+> **In Docker Compose**, another service calling the server by its service name
+> (`http://velesdb:8080`) needs that name listed:
+> `environment: { VELESDB_ALLOWED_HOSTS: velesdb }` — see
+> `examples/node-express-rag/docker-compose.yml`.
 
 ### Behind a reverse proxy
 
@@ -92,6 +96,18 @@ readinessProbe:
     port: 8080
   initialDelaySeconds: 2
   periodSeconds: 5
+```
+
+Clients inside the cluster address the server by its Service name, which
+must be in `allowed_hosts`; Prometheus scrapes `/metrics` by pod IP, which is
+dynamic, so pass it through the downward API:
+
+```yaml
+env:
+  - name: POD_IP
+    valueFrom: { fieldRef: { fieldPath: status.podIP } }
+  - name: VELESDB_ALLOWED_HOSTS
+    value: "velesdb,velesdb.default.svc.cluster.local,$(POD_IP)"
 ```
 
 Because the engine takes an exclusive OS-level lock on its data directory

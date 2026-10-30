@@ -435,6 +435,14 @@ impl ServerConfig {
         self.rate_limit > 0
     }
 
+    /// Returns `true` when the server is bound to a wildcard address with no
+    /// `allowed_hosts`: reachable from everywhere, yet answering only the
+    /// loopback names — worth saying at startup, since a client using any
+    /// other name gets `421`.
+    pub fn answers_only_loopback_names_on_a_wildcard_bind(&self) -> bool {
+        self.allowed_hosts.is_empty() && crate::host_guard::binds_wildcard(&self.host)
+    }
+
     /// Returns `true` when the bind host is reachable beyond the local machine.
     ///
     /// A loopback host is treated as private: `localhost`, any `127.0.0.0/8`

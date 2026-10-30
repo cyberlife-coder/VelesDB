@@ -125,9 +125,12 @@ requests.
   `Host`, which let a DNS-rebinding page read and write a loopback server.
   `/health` and `/ready` are exempt. A server bound to `0.0.0.0` (the Docker
   image) and reached under a DNS name or a LAN address now refuses those
-  clients. **Fix:** list every name clients use in `allowed_hosts` (or
-  `VELESDB_ALLOWED_HOSTS=a,b`); behind a reverse proxy, forward the original
-  `Host` and list the public name. `X-Forwarded-Host` is not read.
+  clients — and so does a container reached by its Compose or Kubernetes
+  service name (`http://velesdb:8080` → `421`). **Fix:** list every name clients use in `allowed_hosts` (or
+  `VELESDB_ALLOWED_HOSTS=a,b`); a container reached by its service name needs
+  that name, e.g. `VELESDB_ALLOWED_HOSTS: velesdb` in the server's compose
+  `environment`; behind a reverse proxy, forward the original `Host` and list
+  the public name. `X-Forwarded-Host` is not read.
 - **Engine variables apply with no config file** (server and CLI). 7.1.0
   ignored every `VELESDB_LIMITS_*`, `VELESDB_HNSW_*`, `VELESDB_SEARCH_*`, ...
   variable unless a config file was loaded; now a stray one changes the

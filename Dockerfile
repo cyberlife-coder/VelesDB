@@ -66,6 +66,10 @@ EXPOSE 8080
 ENV VELESDB_DATA_DIR=/data
 ENV VELESDB_HOST=0.0.0.0
 ENV VELESDB_PORT=8080
+# Bound to 0.0.0.0, the server still answers only Host names it knows:
+# localhost/127.0.0.0/8/[::1] (the HEALTHCHECK, `-p 8080:8080` from the host).
+# A client using another name (a compose service name, a DNS name, a LAN
+# address) needs it in VELESDB_ALLOWED_HOSTS, e.g. `-e VELESDB_ALLOWED_HOSTS=velesdb`.
 # No RUST_LOG here: it outranks VELESDB_LOGGING_LEVEL and a mounted
 # velesdb.toml's [logging] level. Unset, the server logs at its default
 # (info, plus tower_http's per-request debug lines).

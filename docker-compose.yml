@@ -11,6 +11,10 @@ services:
       - velesdb_data:/data
     environment:
       - VELESDB_DATA_DIR=/data
+      # Reached from the host as localhost:8080, the server needs nothing more.
+      # Another container calling it as `velesdb:8080` (or a client using a DNS
+      # name / LAN address) must be listed, or it gets 421:
+      # - VELESDB_ALLOWED_HOSTS=velesdb
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]

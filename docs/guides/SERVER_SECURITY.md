@@ -253,6 +253,7 @@ curl -k https://localhost:8080/health
 [server]
 host = "0.0.0.0"
 port = 8443
+allowed_hosts = ["velesdb.example.com"]  # the name clients use; others get 421
 
 [auth]
 api_keys = ["my-secure-key"]

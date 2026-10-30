@@ -844,6 +844,7 @@ storage_mode = "mmap"  # reserved (#2087), not yet applied
 host = "0.0.0.0"
 port = 8080
 workers = 16
+allowed_hosts = ["velesdb.internal"]  # the names clients use (see below)
 
 [logging]
 level = "warn"
@@ -898,6 +899,9 @@ max_dimensions = 768
 host = "0.0.0.0"  # Écouter sur toutes les interfaces
 port = 8080
 data_dir = "/data"  # Volume monté
+# Noms sous lesquels les clients appellent le serveur (nom de service
+# compose/Kubernetes) ; sinon 421. /health et /ready répondent à tout Host.
+allowed_hosts = ["velesdb", "velesdb.default.svc.cluster.local"]
 
 [logging]
 level = "info"

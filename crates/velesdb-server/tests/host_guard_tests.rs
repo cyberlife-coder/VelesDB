@@ -219,3 +219,39 @@ async fn test_same_origin_normalises_default_ports() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{origin} / {host}");
     }
 }
+
+/// The refusal says what to do about it: a compose service reached as
+/// `velesdb:8080` must learn the host name it was refused under and every
+/// way to allow it.
+#[tokio::test]
+async fn test_the_refusal_names_the_host_and_every_way_to_allow_it() {
+    let temp_dir = TempDir::new().expect("test: tempdir");
+    let app = default_app(&temp_dir);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/collections")
+                .header("host", "velesdb:8080")
+                .body(Body::empty())
+                .expect("test: build"),
+        )
+        .await
+        .expect("test: request");
+    assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: body");
+    let message = String::from_utf8_lossy(&body);
+    for needle in [
+        "velesdb",
+        "[server] allowed_hosts",
+        "--allowed-hosts",
+        "VELESDB_ALLOWED_HOSTS",
+    ] {
+        assert!(
+            message.contains(needle),
+            "{needle:?} missing from {message}"
+        );
+    }
+}

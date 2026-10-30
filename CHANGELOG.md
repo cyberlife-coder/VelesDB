@@ -74,7 +74,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read. The origin guard's same-origin comparison now normalises default
   ports and is trusted only after the `Host` check. One function,
   `config::apply_browser_policy`, installs the `Host` check, the origin guard
-  and the CORS layer.
+  and the CORS layer. The `421` body names the refused host and the three
+  ways to allow it, and a server bound to `0.0.0.0`/`::` with no
+  `allowed_hosts` says at startup that it answers only loopback names. A
+  container reached by its service name needs that name listed:
+  `examples/node-express-rag/docker-compose.yml` now sets
+  `VELESDB_ALLOWED_HOSTS: velesdb`, and the root `docker-compose.yml`, the
+  `Dockerfile` and the deployment guides show how.
 
 ### Fixed
 

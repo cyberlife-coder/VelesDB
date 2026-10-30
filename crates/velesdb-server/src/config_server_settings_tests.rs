@@ -381,3 +381,24 @@ fn test_allowed_hosts_entries_must_be_bare_hosts() {
         assert!(cfg.validate().is_err(), "{bad:?} must be refused");
     }
 }
+
+#[test]
+fn test_a_wildcard_bind_without_allowed_hosts_is_flagged() {
+    for host in ["0.0.0.0", "::"] {
+        let cfg = ServerConfig {
+            host: host.to_string(),
+            ..ServerConfig::default()
+        };
+        assert!(
+            cfg.answers_only_loopback_names_on_a_wildcard_bind(),
+            "{host}"
+        );
+    }
+    let listed = ServerConfig {
+        host: "0.0.0.0".to_string(),
+        allowed_hosts: vec!["velesdb".to_string()],
+        ..ServerConfig::default()
+    };
+    assert!(!listed.answers_only_loopback_names_on_a_wildcard_bind());
+    assert!(!ServerConfig::default().answers_only_loopback_names_on_a_wildcard_bind());
+}

@@ -98,6 +98,13 @@ fn as_host_header(host: &str) -> String {
     }
 }
 
+/// Whether the bind host is a wildcard (`0.0.0.0`, `::`), which names no
+/// host: a server bound to it answers only the loopback names and
+/// `allowed_hosts`.
+pub(crate) fn binds_wildcard(host: &str) -> bool {
+    is_wildcard(&as_host_header(host))
+}
+
 fn is_wildcard(name: &str) -> bool {
     matches!(name, "0.0.0.0" | "[::]")
 }
@@ -143,12 +150,15 @@ async fn host_guard(
         .or_else(|| request.uri().authority().map(|a| a.as_str().to_owned()));
     match host {
         Some(host) if !is_probe(request.uri().path()) && !allowlist.admits(&host) => {
+            let name = host_name(&host);
             crate::handlers::helpers::error_response(
                 StatusCode::MISDIRECTED_REQUEST,
                 format!(
-                    "this server does not answer to host {host}; add it to [server] \
-                     allowed_hosts (VELESDB_ALLOWED_HOSTS) if it is yours \
-                     (see docs/guides/SERVER_SECURITY.md)"
+                    "this server does not answer to host '{name}' (DNS-rebinding \
+                     protection). If clients reach it under that name, allow it with \
+                     [server] allowed_hosts = [\"{name}\"], --allowed-hosts {name} or \
+                     VELESDB_ALLOWED_HOSTS={name} \
+                     (see docs/guides/SERVER_SECURITY.md#dns-rebinding-and-the-host-check)"
                 ),
             )
         }
