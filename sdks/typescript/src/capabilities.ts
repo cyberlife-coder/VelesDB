@@ -126,7 +126,6 @@ export const COLLECTION_CONFIG_FIELDS = everyMemberOf<keyof CollectionConfig>()(
   'metric',
   'storageMode',
   'collectionType',
-  'description',
   'hnsw',
   'pqRescoreOversampling',
   'deferredIndexing',
@@ -254,10 +253,12 @@ export const CAPABILITY_LIST_UNIVERSES: Readonly<Record<ListCapability, readonly
 
 /**
  * Capability map for the REST backend — assumes a server of the
- * same minor version as the SDK. Every feature the SDK wraps is
- * advertised; individual endpoints may still surface a typed
- * `VelesError` at runtime if the server was built with a feature
- * flag disabled.
+ * same minor version as the SDK. Every feature the server applies is
+ * advertised; an option core's request types have no field for
+ * (`includeVectors`, `queryOptions`) is refused with `NOT_SUPPORTED`
+ * instead of being sent and dropped. Individual endpoints may still
+ * surface a typed `VelesError` at runtime if the server was built with
+ * a feature flag disabled.
  */
 export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   vectorSearch: true,
@@ -272,12 +273,16 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   ),
   multiQueryFusionParams: FUSION_PARAM_NAMES,
   namedSparseIndexes: true,
-  includeVectors: true,
+  // Core's search response carries no vectors (`SearchResultResponse` is
+  // id, score, payload), so `includeVectors: true` is refused.
+  includeVectors: false,
   idOnlySearch: true,
   storageModes: STORAGE_MODES,
   collectionTypes: COLLECTION_TYPES,
   collectionConfig: COLLECTION_CONFIG_FIELDS,
-  queryOptions: QUERY_OPTION_NAMES,
+  // Core's `QueryRequest` carries no timeout and no streaming flag; the
+  // server's query timeout is its guard-rails setting (`updateGuardRails`).
+  queryOptions: Object.freeze<(keyof QueryOptions)[]>([]),
   scroll: true,
   graphTraversal: true,
   secondaryIndexes: true,
@@ -360,7 +365,6 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
     'metric',
     'storageMode',
     'collectionType',
-    'description',
   ]),
   // `query()` runs in process and answers at once: no timeout, no stream.
   queryOptions: Object.freeze<(keyof QueryOptions)[]>([]),

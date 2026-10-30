@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (behavior) — the TypeScript SDK refuses a filter that is not
+  core-shaped.** `normalizeFilter`, now called on every filter before it
+  leaves the SDK (REST search, batch, text, hybrid, multi-query, sparse,
+  ids and scroll; the WASM filtered search and its batch pre-loop), throws
+  `ValidationError` unless the filter is `{ condition: {...} }`, the shape of
+  `velesdb_core::filter::Filter`. A flat map such as `{ category: 'tech' }`
+  used to reach velesdb-server, which answered `400 missing field condition`,
+  or velesdb-wasm, whose `matches_filter` reads a filter without `condition`
+  as "no filter" and returned unfiltered neighbours. `null` still means no
+  filter. Migration: build filters with `f.*`.
+- **BREAKING (behavior) — the SDK's REST backend refuses options core has no
+  field for, instead of sending them to be dropped.** `search({ includeVectors:
+  true })` throws `NOT_SUPPORTED` (core's `SearchRequest` has no
+  `include_vectors` and `SearchResultResponse` no vector), and `query()`
+  refuses `timeoutMs` and `stream: true` (core's `QueryRequest` is `query`,
+  `params` and `collection`; the server's timeout is its guard-rails
+  setting). `REST_CAPABILITIES.includeVectors` is now `false` and
+  `REST_CAPABILITIES.queryOptions` empty, which they claimed otherwise.
+- **BREAKING — the TypeScript SDK requires Node.js 22 or later**
+  (`engines.node`, was `>=18.0.0`). CI builds and tests the SDK on Node 22
+  only, its test toolchain needs 22.12+, and Node 18 and 20 are end-of-life.
+  The SDK README, `docs/guides/INSTALL_OPTIONS.md` and the velesdb-wasm
+  README now state the same floor (the wasm README said 20+, the SDK 18).
+
+### Removed
+
+- **BREAKING — `CollectionConfig.description` (TypeScript SDK).** Core has no
+  collection description: `CreateCollectionRequest` has no such field, so the
+  REST server dropped it silently, and the WASM backend stored it where
+  nothing read it. It is gone from the type, the REST request and
+  `capabilities().collectionConfig`.
+- **BREAKING — `HnswParams.storageMode` (TypeScript SDK).** Nothing read it;
+  the REST request takes `CollectionConfig.storageMode` only, which is the
+  field to set.
+
+### Fixed
+
+- **The TypeScript SDK's agent memory works over REST.**
+  `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`,
+  `recallRecentEvents` and `recallOlderThanEvents` sent a flat
+  `{ _memory_type: '...' }` filter that velesdb-server refuses with a `400`,
+  so every recall failed while `REST_CAPABILITIES.agentMemory` advertised
+  them. They now send core filters built by one pair of helpers
+  (`memoryTypeFilter`, `episodicWindowFilter`), and the temporal recalls let
+  the server apply their `timestamp` window (`gte` since, `lt` before)
+  instead of scrolling every episodic point to filter it client-side. The
+  exact JSON is pinned by `conformance/filter_wire_cases.json`, shared by a
+  velesdb-core test that parses each case as `Filter` and checks which
+  payloads it selects (`tests/filter_wire_conformance.rs`) and an SDK test
+  that asserts the requests carry those bodies
+  (`sdks/typescript/tests/filter-wire-contract.test.ts`).
+
+### Documentation
+
+- **TypeScript SDK README:** the stale "What's New in v3.12.0" section under
+  the v8.0.0 banner is replaced by what 8.0.0 changes; filters, the HNSW
+  options, `includeVectors`, the query options and the supported Node.js
+  versions describe what the SDK does. `docs/guides/AGENT_MEMORY.md` states
+  the filters agent memory sends, and `docs/guides/MIGRATION_v8.0.0.md` gains
+  a TypeScript SDK section.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

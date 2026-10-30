@@ -20,7 +20,7 @@ import {
   wasmMultiQuerySearch,
   wasmQuery,
 } from '../src/backends/wasm-search';
-import { NotFoundError, VelesDBError } from '../src/types';
+import { NotFoundError, ValidationError, VelesDBError } from '../src/types';
 import type { SearchQuality } from '../src/types';
 import { newSparseIds, sparseHits } from '../src/backends/wasm-sparse';
 import type {
@@ -245,7 +245,7 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
   // refuses. The fake only refuses; the grammar stays in velesdb-wasm.
   it.each([
     ['dense', {}],
-    ['filtered', { filter: { tenant: 'a' } }],
+    ['filtered', { filter: { condition: { type: 'eq', field: 'tenant', value: 'a' } } }],
     ['sparse-only', { sparseVector: { 1: 0.5 } }],
     ['k <= 0', { k: 0 }],
   ] as const)(
@@ -324,6 +324,18 @@ describe('wasmSearchBatch — an unparseable preset stops the batch before it st
 describe('wasmSearch — filter / sparse / hybrid branches', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // velesdb-wasm reads a filter without `condition` as "no filter" and would
+  // return unfiltered neighbours; the server answers the same body with 400.
+  it('refuses a flat filter map before velesdb-wasm can ignore it', async () => {
+    const store = buildStore({ search_with_filter: vi.fn(() => []) });
+    const ctx = buildCtx('docs', store);
+
+    await expect(
+      wasmSearch(ctx, 'docs', [0.1, 0.2], { filter: { category: 'x' } })
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(store.search_with_filter).not.toHaveBeenCalled();
+  });
+
   it('filter branch uses search_with_filter and preserves r.payload', async () => {
     const payloads = new Map<string, Record<string, unknown>>([
       ['9', { fallback: true }],
@@ -337,7 +349,7 @@ describe('wasmSearch — filter / sparse / hybrid branches', () => {
     const ctx = buildCtx('docs', store, { payloads });
 
     const result = await wasmSearch(ctx, 'docs', [0.1, 0.2], {
-      filter: { category: 'x' },
+      filter: { condition: { type: 'eq', field: 'category', value: 'x' } },
     });
 
     expect(store.search_with_filter).toHaveBeenCalled();

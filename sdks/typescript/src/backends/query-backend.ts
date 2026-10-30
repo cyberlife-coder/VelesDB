@@ -11,6 +11,7 @@ import type {
   ExplainResponse,
   CollectionSanityResponse,
 } from '../types';
+import { VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
 
@@ -111,6 +112,18 @@ export async function query(
   params?: Record<string, unknown>,
   options?: QueryOptions
 ): Promise<QueryApiResponse> {
+  // Core's `QueryRequest` (`/query`, `/aggregate`) is query + params +
+  // collection: no per-query timeout, no streaming. A requested option is
+  // refused rather than sent and dropped (`capabilities().queryOptions`).
+  const requested = Object.entries(options ?? {}).find(
+    ([, value]) => value !== undefined && value !== false
+  );
+  if (requested !== undefined) {
+    throw new VelesDBError(
+      `query option '${requested[0]}': velesdb-server takes no per-query options (capability 'queryOptions' is empty)`,
+      'NOT_SUPPORTED'
+    );
+  }
   const endpoint = isLikelyDdlOrMutationQuery(queryString)
     ? '/query'
     : isLikelyAggregationQuery(queryString)
@@ -123,8 +136,6 @@ export async function query(
       query: queryString,
       params: params ?? {},
       collection,
-      timeout_ms: options?.timeoutMs,
-      stream: options?.stream ?? false,
     }
   );
 

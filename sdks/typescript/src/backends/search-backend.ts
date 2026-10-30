@@ -15,9 +15,11 @@ import type {
   SearchQuality,
 } from '../types';
 import type { FilterInput } from '../filter';
+import { normalizeFilter } from '../filter';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath, toNumberArray } from './shared';
 import { searchQualityToMode } from '../search-quality';
+import { VelesDBError } from '../types';
 
 /** Batch search response structure (mirrors rest.ts private type). */
 interface BatchSearchResponse {
@@ -35,13 +37,20 @@ export async function search(
   query: number[] | Float32Array,
   options?: SearchOptions
 ): Promise<SearchResult[]> {
+  // Core's `SearchRequest` has no `include_vectors` and its search response
+  // carries no vectors, so `true` is refused rather than dropped.
+  if (options?.includeVectors === true) {
+    throw new VelesDBError(
+      "search with includeVectors: true: velesdb-server returns no vectors (capability 'includeVectors' is false)",
+      'NOT_SUPPORTED'
+    );
+  }
   const queryVector = toNumberArray(query);
 
   const body: Record<string, unknown> = {
     vector: queryVector,
     top_k: options?.k ?? 10,
-    filter: options?.filter,
-    include_vectors: options?.includeVectors ?? false,
+    filter: normalizeFilter(options?.filter),
     ...searchQualityToMode(options?.quality),
   };
 
@@ -76,7 +85,7 @@ export async function searchBatch(
   const formattedSearches = searches.map((s) => ({
     vector: toNumberArray(s.vector),
     top_k: s.k ?? 10,
-    filter: s.filter,
+    filter: normalizeFilter(s.filter),
     ...searchQualityToMode(s.quality),
   }));
 
@@ -103,7 +112,7 @@ export async function textSearch(
     {
       query,
       top_k: options?.k ?? 10,
-      filter: options?.filter,
+      filter: normalizeFilter(options?.filter),
     }
   );
 
@@ -129,7 +138,7 @@ export async function hybridSearch(
       query: textQuery,
       top_k: options?.k ?? 10,
       vector_weight: options?.vectorWeight ?? 0.5,
-      filter: options?.filter,
+      filter: normalizeFilter(options?.filter),
     }
   );
 
@@ -160,7 +169,7 @@ function multiQueryBody(
     hit_weight: options?.fusionParams?.hitWeight,
     dense_weight: options?.fusionParams?.denseWeight,
     sparse_weight: options?.fusionParams?.sparseWeight,
-    filter: options?.filter,
+    filter: normalizeFilter(options?.filter),
   };
 }
 
@@ -220,7 +229,7 @@ export async function sparseSearchNamed(
     sparse_vectors: { [indexName]: transport.sparseToRest(query) },
     sparse_index: indexName,
     top_k: options?.k ?? 10,
-    filter: options?.filter,
+    filter: normalizeFilter(options?.filter),
     ...searchQualityToMode(options?.quality),
   };
 
@@ -255,7 +264,7 @@ export async function searchIds(
     {
       vector: queryVector,
       top_k: options?.k ?? 10,
-      filter: options?.filter,
+      filter: normalizeFilter(options?.filter),
       ...searchQualityToMode(options?.quality),
     }
   );

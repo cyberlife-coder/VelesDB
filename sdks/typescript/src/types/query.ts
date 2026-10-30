@@ -126,11 +126,19 @@ export interface CollectionConfigResponse {
 // VelesQL Multi-Model Query Types (EPIC-031 US-011)
 // ============================================================================
 
-/** VelesQL query options */
+/**
+ * VelesQL query options.
+ *
+ * Neither backend applies either field: velesdb-server's `/query` takes no
+ * per-query options (its timeout is the guard-rails `timeoutMs`), and the
+ * WASM backend answers in process. Setting one — `stream: false` asks for
+ * nothing — is refused with `NOT_SUPPORTED`; `capabilities().queryOptions`
+ * is empty on both.
+ */
 export interface QueryOptions {
-  /** Timeout in milliseconds (default: 30000) */
+  /** Per-query timeout in milliseconds. Refused by both backends. */
   timeoutMs?: number;
-  /** Enable streaming response */
+  /** Streaming response. Refused by both backends. */
   stream?: boolean;
 }
 

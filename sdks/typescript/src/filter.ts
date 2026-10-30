@@ -4,7 +4,8 @@
  * Typed mirror of `velesdb_core::filter::Condition` (20 operators).
  * Provides a fluent builder API (`f.*`) for ergonomic filter construction
  * and accepts raw `Record<string, unknown>` objects for backward compatibility
- * with pre-v1.13 code.
+ * with pre-v1.13 code. Either way the object must have core's shape — a root
+ * `condition` object; anything else is refused by {@link normalizeFilter}.
  *
  * @example Typed builder
  * ```typescript
@@ -18,7 +19,7 @@
  * const results = await db.search('docs', query, { filter });
  * ```
  *
- * @example Legacy JSON (backward-compat, no compile-time checking)
+ * @example Raw JSON in core's shape (no compile-time checking)
  * ```typescript
  * const filter = {
  *   condition: { type: 'eq', field: 'category', value: 'tech' }
@@ -28,6 +29,8 @@
  *
  * @packageDocumentation
  */
+
+import { ValidationError } from './types/errors';
 
 // ============================================================================
 // Core types — exact mirror of velesdb-core::filter::Condition
@@ -114,7 +117,9 @@ export interface Filter {
  *
  * - `Filter`: typed filter produced by the `f.*` builders. **Recommended.**
  * - `Record<string, unknown>`: raw JSON object for backward compatibility
- *   with pre-v1.13 code. The payload is forwarded verbatim to the server.
+ *   with pre-v1.13 code. It must still be core-shaped (`{ condition: {...} }`):
+ *   it is forwarded verbatim once {@link normalizeFilter} has checked that,
+ *   and a flat map such as `{ category: 'tech' }` is refused.
  */
 export type FilterInput = Filter | Record<string, unknown>;
 
@@ -144,14 +149,23 @@ export function isTypedFilter(input: FilterInput): input is Filter {
 }
 
 /**
- * Normalizes a filter input to the wire format expected by velesdb-server.
+ * Checks a filter input against core's wire shape and returns it unchanged.
  *
- * The SDK never rewrites filter payloads — it forwards them verbatim. This
- * helper exists to keep backend code agnostic of whether the caller passed
- * a typed `Filter` or a legacy `Record<string, unknown>`.
+ * `velesdb_core::filter::Filter` is `{ condition: Condition }`. The server
+ * refuses anything else with a `400`, and velesdb-wasm reads a filter without
+ * a `condition` key as "no filter" and returns unfiltered neighbours — so a
+ * flat map such as `{ category: 'tech' }` failed loudly on one backend and
+ * silently on the other. Every backend calls this before a filter leaves the
+ * SDK, which makes both refuse it the same way.
  *
- * Passing `undefined` returns `undefined`, signalling the server should
- * apply no filter.
+ * Only the root is checked (a `condition` that is a non-null object, see
+ * {@link isTypedFilter}); the condition itself is validated by core.
+ *
+ * Passing `undefined` (or `null` from untyped JavaScript, which both
+ * backends already read as "no filter") returns `undefined`, signalling the
+ * server should apply no filter.
+ *
+ * @throws {ValidationError} when `input` is not `{ condition: {...} }`.
  */
 export function normalizeFilter(input: FilterInput): Record<string, unknown>;
 export function normalizeFilter(input: undefined): undefined;
@@ -161,10 +175,16 @@ export function normalizeFilter(
 export function normalizeFilter(
   input: FilterInput | undefined
 ): Record<string, unknown> | undefined {
-  if (input === undefined) {
+  if (input === undefined || (input as unknown) === null) {
     return undefined;
   }
-  return input as Record<string, unknown>;
+  if (!isTypedFilter(input)) {
+    throw new ValidationError(
+      'Filter must have the shape { condition: { type: ..., ... } } (velesdb_core::filter::Filter); ' +
+        "build one with f.*, e.g. f.eq('category', 'tech')"
+    );
+  }
+  return input as unknown as Record<string, unknown>;
 }
 
 // ============================================================================

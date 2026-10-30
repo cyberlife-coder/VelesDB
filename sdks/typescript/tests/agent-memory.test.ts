@@ -529,21 +529,35 @@ describe('Agent Memory REST methods', () => {
       expect(events.map((e) => e.id)).toEqual(['2', '3', '1']);
     });
 
-    it('recallRecent honours the since lower bound (inclusive)', async () => {
+    // The window is applied by core's filter on the server (its bounds are
+    // pinned by conformance/filter_wire_cases.json); the SDK only sorts.
+    const episodic = { type: 'eq', field: '_memory_type', value: 'episodic' };
+    const sentFilter = () => JSON.parse(mockFetch.mock.calls[0][1].body).filter;
+
+    it('recallRecent sends the since lower bound (inclusive) to the server', async () => {
       mockFetch.mockResolvedValueOnce(scrollPage);
 
-      const events = await backend.recallRecentEvents('events', 200);
+      await backend.recallRecentEvents('events', 200);
 
-      expect(events.map((e) => e.timestamp)).toEqual([300, 200]);
+      expect(sentFilter()).toEqual({
+        condition: {
+          type: 'and',
+          conditions: [episodic, { type: 'gte', field: 'timestamp', value: 200 }],
+        },
+      });
     });
 
-    it('recallOlderThan returns events strictly below the threshold', async () => {
+    it('recallOlderThan sends the strict upper bound to the server', async () => {
       mockFetch.mockResolvedValueOnce(scrollPage);
 
-      const events = await backend.recallOlderThanEvents('events', 200);
+      await backend.recallOlderThanEvents('events', 200);
 
-      // 200 is excluded (strict <), 100 included.
-      expect(events.map((e) => e.timestamp)).toEqual([100]);
+      expect(sentFilter()).toEqual({
+        condition: {
+          type: 'and',
+          conditions: [episodic, { type: 'lt', field: 'timestamp', value: 200 }],
+        },
+      });
     });
 
     it('paginates across scroll cursors', async () => {

@@ -1,0 +1,76 @@
+{
+  "description": "Metadata filter wire shapes shared by velesdb-core (tests/filter_wire_conformance.rs) and the TypeScript SDK (sdks/typescript/tests/filter-wire-contract.test.ts). Every `valid` case must deserialize as velesdb_core::Filter and match exactly the `matches` payloads; every `invalid` case must be refused by core and by the SDK's normalizeFilter. The `agent_memory_*` cases are the exact filters the SDK's agent-memory REST calls send.",
+  "valid": [
+    {
+      "id": "agent_memory_semantic",
+      "filter": { "condition": { "type": "eq", "field": "_memory_type", "value": "semantic" } },
+      "matches": [{ "_memory_type": "semantic", "content": "x" }],
+      "rejects": [{ "_memory_type": "episodic", "timestamp": 1 }, {}]
+    },
+    {
+      "id": "agent_memory_episodic",
+      "filter": { "condition": { "type": "eq", "field": "_memory_type", "value": "episodic" } },
+      "matches": [{ "_memory_type": "episodic", "timestamp": 1 }],
+      "rejects": [{ "_memory_type": "semantic" }, {}]
+    },
+    {
+      "id": "agent_memory_procedural",
+      "filter": { "condition": { "type": "eq", "field": "_memory_type", "value": "procedural" } },
+      "matches": [{ "_memory_type": "procedural", "name": "deploy" }],
+      "rejects": [{ "_memory_type": "semantic" }]
+    },
+    {
+      "id": "agent_memory_episodic_since_200",
+      "filter": {
+        "condition": {
+          "type": "and",
+          "conditions": [
+            { "type": "eq", "field": "_memory_type", "value": "episodic" },
+            { "type": "gte", "field": "timestamp", "value": 200 }
+          ]
+        }
+      },
+      "matches": [
+        { "_memory_type": "episodic", "timestamp": 200 },
+        { "_memory_type": "episodic", "timestamp": 300 }
+      ],
+      "rejects": [
+        { "_memory_type": "episodic", "timestamp": 199 },
+        { "_memory_type": "episodic" },
+        { "_memory_type": "semantic", "timestamp": 300 }
+      ]
+    },
+    {
+      "id": "agent_memory_episodic_before_200",
+      "filter": {
+        "condition": {
+          "type": "and",
+          "conditions": [
+            { "type": "eq", "field": "_memory_type", "value": "episodic" },
+            { "type": "lt", "field": "timestamp", "value": 200 }
+          ]
+        }
+      },
+      "matches": [{ "_memory_type": "episodic", "timestamp": 199 }],
+      "rejects": [
+        { "_memory_type": "episodic", "timestamp": 200 },
+        { "_memory_type": "episodic" },
+        { "_memory_type": "procedural", "timestamp": 100 }
+      ]
+    }
+  ],
+  "invalid": [
+    {
+      "id": "flat_equality_map",
+      "filter": { "_memory_type": "semantic" }
+    },
+    {
+      "id": "empty_object",
+      "filter": {}
+    },
+    {
+      "id": "condition_not_an_object",
+      "filter": { "condition": "eq" }
+    }
+  ]
+}

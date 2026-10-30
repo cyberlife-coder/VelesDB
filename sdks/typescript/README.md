@@ -4,14 +4,15 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 > The TypeScript engine behind **VelesDB — the explainable, local-first memory engine for AI agents.** It ships the `MemoryService` memory wedge (`remember`/`recall`/`recallFused`/`recallFusedDated`/`relate`/`unrelate`/`forget`/`entity`/`rememberExtracted`/[`why()`](../../crates/velesdb-memory/README.md)) in the browser or Node.js — `why()` returns the evidence path behind every recall. The deterministic context compiler (`compileContext`) runs here too — fully in the browser (WASM), media fragments included, with `retrieveContextSource` for externalized-source retrieval — and in the native Node binding, [`@wiscale/velesdb-memory-node`](../../crates/velesdb-node/README.md).
 
-**v8.0.0** | Node.js >= 18 | Browser (WASM) | VelesDB Core License 1.0
+**v8.0.0** | Node.js >= 22 | Browser (WASM) | VelesDB Core License 1.0
 
-## What's New in v3.12.0
+## What's New in v8.0.0
 
-- **Dated recall**: `recallFusedDated(query, …, dateField)` returns fused recall plus a chronological `dated_context` timeline with a `now` anchor. Pairs with `velesdb-memory` 0.11.0's automatic `_veles_date` stamp (every `remember` stores today's date as a `YYYYMMDD` integer under the reserved `_veles_date` metadata key unless you set it yourself) — pass `"_veles_date"` as the date field and a zero-setup timeline comes back. `_veles_date` is now typed (`MemoryMetadata`) and documented directly on `recallFusedDated`.
-- **Full context-compiler tool surface in the browser**: `compileTranscript` (segment a raw agent-session transcript into turns, then compile it in one call), `explainCompilation` (why one fragment was preserved/dropped/…), `contextSavings` (aggregated token/cost savings), and `suggestBudget` (a starting `token_budget` for a named model) now all run in WASM, matching the Node binding's surface. `feedback` (RL Memory) stays Node/Python-only by design — see the `MemoryService` class doc comment for why. `rememberExtracted` was in that sentence too until a deterministic, network-free extraction backend removed the reason (a generative model meant a network call in the WASM bundle); it now runs here as well.
-- **Compiler read tools in the browser**: `retrieveContextSource` retrieves the exact original content behind a compiled fragment (externalized sources included), directly from the WASM engine.
-- **Since 3.6.0 (3.7–3.11 recap)**: `compileContext` on the `MemoryService` (deterministic context compression, media fragments included), working-context `save`/`load`/`list` for cross-session resumption, `bulkDelete` over `POST points/delete`, and automatic retry with exponential backoff on 429/503 (idempotent methods only, capped `Retry-After`).
+- **Agent memory works over REST.** `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`, `recallRecent` and `recallOlderThan` sent a flat `{ _memory_type: ... }` filter that velesdb-server refuses with a `400`; they now send core's `{ condition: ... }` shape, and `recallRecent`/`recallOlderThan` let the server apply the timestamp window.
+- **A filter must be core-shaped on both backends.** A flat field map such as `{ category: 'tech' }` is refused with `VALIDATION_ERROR` before it leaves the SDK. REST used to answer it with a `400`; WASM read it as "no filter" and returned unfiltered results. Build filters with `f.*` (see [Filters](#filters)).
+- **Nothing accepted and dropped on REST.** `includeVectors: true` and the `query()` options `timeoutMs`/`stream` are refused with `NOT_SUPPORTED` (core's search response carries no vectors and `/query` takes no per-query options), and `CollectionConfig.description` and `HnswParams.storageMode` are gone: core has no collection description, and the storage mode is `CollectionConfig.storageMode`.
+- **The WASM backend creates `pq` and `rabitq` collections**, returning core's results for every storage mode.
+- **Node.js 22 or later** (`engines.node`): the version CI builds and tests on. Node 18 and 20 are end-of-life.
 
 ### What a fragment carries, and the one field that is daemon-only
 
@@ -44,11 +45,11 @@ npm install @wiscale/velesdb-sdk
 
 | Node.js | TS SDK | Browser (WASM) | Notes |
 |---------|--------|----------------|-------|
-| 18 LTS  | ✅      | ✅              | minimum supported |
-| 20 LTS  | ✅ (CI) | ✅              | tested matrix on every PR |
-| 22 LTS  | ✅      | ✅              | latest LTS |
+| 22 LTS  | ✅ (CI) | ✅              | minimum supported; CI builds and tests the SDK on it |
+| 24 LTS  | ✅      | ✅              | not run by CI |
+| 18, 20  | ❌      | ❌              | end-of-life; not tested (the test toolchain itself needs 22.12+) |
 
-The Node.js WASM `init()` path was fixed in v1.13.7 to read `velesdb_wasm_bg.wasm` bytes from disk via `fs.readFile` instead of the broken `fetch('file://')` URL — Node ≥ 18 now works out-of-the-box. Browsers were never affected.
+On Node.js the WASM backend's `init()` reads `velesdb_wasm_bg.wasm` from disk with `fs.readFile` (the `fetch('file://')` URL it used before v1.13.7 does not work on Node). Browsers were never affected.
 
 ## Quick Start
 
@@ -141,7 +142,7 @@ const results = await db.search('products', queryVector, { k: 10 });
 The SDK ships an optional `OpenAIEmbedder` so you can turn text into vectors without
 writing the HTTP call yourself. It targets any OpenAI-compatible `/embeddings`
 endpoint (OpenAI, Azure OpenAI, vLLM, …) using the global `fetch` API, so it adds
-**no extra runtime dependency** and runs in Node.js ≥ 18, browsers, and Deno.
+**no extra runtime dependency** and runs in Node.js 22+, browsers, and Deno.
 
 ```typescript
 import { VelesDB, OpenAIEmbedder } from '@wiscale/velesdb-sdk';
@@ -257,8 +258,7 @@ Create a vector collection.
 | `dimension` | `number` | Required | Vector dimension |
 | `metric` | `'cosine' \| 'euclidean' \| 'dot' \| 'hamming' \| 'jaccard'` | `'cosine'` | Distance metric (aliases: `'ip'`/`'inner'`/`'dotproduct'` for dot) |
 | `storageMode` | `'full' \| 'sq8' \| 'binary' \| 'pq' \| 'rabitq'` | `'full'` | Quantization mode (aliases: `'f32'` for full, `'int8'` for sq8, `'bit'` for binary) |
-| `hnsw` | `{ m?: number, efConstruction?: number }` | - | HNSW index tuning |
-| `description` | `string` | - | Optional description |
+| `hnsw` | `{ m?: number, efConstruction?: number, alpha?: number, maxElements?: number }` | - | HNSW index tuning |
 
 > **WASM backend:** `storageMode` takes `full`, `sq8`, `binary`, `pq` or `rabitq`, by those names. Each returns the same results as the same mode in velesdb-core, and none saves memory: velesdb-wasm keeps f32 vectors in every mode (3 KB per 768-D vector; the table below does not apply to it), so `pq` needs no training there. Any `collectionType` other than `vector` is refused with `NOT_SUPPORTED`. `hnsw`, `pqRescoreOversampling`, `deferredIndexing` and `asyncIndexBuilder` are refused too: WASM builds no HNSW graph and scans every stored vector, so they have nowhere to go. `db.capabilities()` lists what applies (`storageModes`, `collectionTypes`, `collectionConfig`).
 
@@ -383,8 +383,8 @@ Vector similarity search.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
-| `filter` | `object` | - | Payload filter expression |
-| `includeVectors` | `boolean` | `false` | Include vectors in results |
+| `filter` | `Filter` | - | Payload filter, core-shaped (`{ condition: ... }`); see [Filters](#filters) |
+| `includeVectors` | `boolean` | `false` | Refused with `NOT_SUPPORTED` when `true` on both backends: search hits carry no vectors (use `get()`) |
 | `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
 | `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
 
@@ -394,10 +394,30 @@ Vector similarity search.
 const results = await db.search('docs', queryVector, {
   k: 10,
   filter: { condition: { type: 'eq', field: 'category', value: 'tech' } },
-  includeVectors: true
 });
-// Returns: SearchResult[] = [{ id, score, payload?, vector? }, ...]
+// Returns: SearchResult[] = [{ id, score, payload? }, ...]
 ```
+
+#### Filters
+
+A filter is `velesdb_core::filter::Filter`: an object with one root
+`condition`, whose `type` names one of core's 20 operators. The `f` builder
+produces exactly that shape, typed:
+
+```typescript
+import { f } from '@wiscale/velesdb-sdk';
+
+const filter = f.and([f.eq('category', 'tech'), f.gte('price', 100)]);
+// { condition: { type: 'and', conditions: [
+//     { type: 'eq', field: 'category', value: 'tech' },
+//     { type: 'gte', field: 'price', value: 100 } ] } }
+```
+
+Raw JSON in that shape is accepted too and sent verbatim. A flat field map
+such as `{ category: 'tech' }` is not a filter: every backend refuses it with
+`VALIDATION_ERROR` before it leaves the SDK (`normalizeFilter`), where
+velesdb-server would have answered `400` and velesdb-wasm would have read it
+as "no filter".
 
 #### `db.searchBatch(collection, searches)`
 
@@ -639,9 +659,11 @@ Query options:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `timeoutMs` | `number` | `30000` | Query timeout in milliseconds |
-| `stream` | `boolean` | `false` | Enable streaming response |
+| `timeoutMs` | `number` | - | Refused with `NOT_SUPPORTED` on both backends |
+| `stream` | `boolean` | `false` | Refused with `NOT_SUPPORTED` when `true` on both backends |
 
+> **REST backend:** core's `QueryRequest` is `query`, `params` and `collection` only, so `timeoutMs` and `stream: true` are refused rather than sent and dropped; the server's query timeout is its guard-rails `timeoutMs` (`db.updateGuardRails`). `db.capabilities().queryOptions` is empty.
+>
 > **WASM backend:** `timeoutMs` and `stream: true` are refused with `NOT_SUPPORTED`: `query()` runs in process and answers at once (`db.capabilities().queryOptions` is empty). The number of rows is the statement's `LIMIT`, capped at core's 100,000, or core's default of 10: `params.k` is not read, as on REST. A `LIMIT` too large for a u64 is refused with `BAD_REQUEST`, as core's parser refuses it.
 
 #### `db.queryExplain(queryString, params?)`
@@ -963,6 +985,11 @@ Each similarity-recall method (`searchFacts`, `recallEvents`,
 
 The temporal-recall methods (`recallRecent`, `recallOlderThan`) return
 `EpisodicRecord[]` instead — see [Episodic Memory](#episodic-memory-events-and-experiences).
+
+Every recall selects its memory type on the server with a core filter on the
+reserved `_memory_type` key (`f.eq('_memory_type', 'semantic')`, and so on);
+`recallRecent` / `recallOlderThan` add the timestamp bound to that filter, so
+the server returns only the window asked for.
 
 - `score` is the cosine similarity in `[0, 1]` (for a `cosine` collection);
   higher means more similar.

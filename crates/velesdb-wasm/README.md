@@ -36,7 +36,7 @@ the cases where it cannot.
 | Requirement | Minimum version | Note |
 |---|---|---|
 | Browser | Any with WebAssembly + ES modules + `BigInt` | IndexedDB is additionally required for `save()` / `load()`. |
-| Node.js | 20+ | Only to install the package and serve files. Verified on Node 26.3.0. |
+| Node.js | 22+ | Only to install the package and serve files. 22 is the line CI runs the TypeScript SDK on (18 and 20 are end-of-life); verified on Node 26.3.0. |
 | Rust | 1.90 | Only to build from source (`rust-toolchain.toml`). |
 | wasm-pack | 0.12+ | Only to build from source. |
 
@@ -194,7 +194,7 @@ The full list of rejected VelesQL shapes, with their exact messages, is in the
 | Firefox | Supported | |
 | Safari / iOS WebKit | Supported | Needs a version with WebAssembly SIMD; older WebKit may reject the binary. |
 | Electron / Tauri | Supported | Same engine as the browser target. |
-| Node.js 20+ | Supported with one adjustment | The `--target web` build resolves the `.wasm` via `fetch`, which has no `file://` support. Pass the bytes yourself — see [Loading the module](../../docs/guides/WASM_API.md#loading-the-module) — or build with `--target nodejs`. Verified on Node 26.3.0. |
+| Node.js 22+ | Supported with one adjustment | The `--target web` build resolves the `.wasm` via `fetch`, which has no `file://` support. Pass the bytes yourself — see [Loading the module](../../docs/guides/WASM_API.md#loading-the-module) — or build with `--target nodejs`. Verified on Node 26.3.0. |
 | Vite / webpack / Rollup | Supported | The React example uses `vite-plugin-wasm` + top-level-await; see [`examples/react-wasm-search/vite.config.ts`](../../examples/react-wasm-search/vite.config.ts). |
 | Web Worker | Supported | Import and `init()` inside the worker; a `VectorStore` cannot be transferred across the worker boundary. |
 | Deno / Bun | Untested | No CI coverage. |

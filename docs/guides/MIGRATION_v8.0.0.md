@@ -311,3 +311,29 @@ Rejections carry core's codes and a new `recoverable` field:
 - **WASM `SELECT DISTINCT`** applies `ORDER BY` and the default `LIMIT`.
 - **Error messages:** REST and WASM report core's wording for an unknown fusion
   strategy or search mode.
+
+## 10. TypeScript SDK (`@wiscale/velesdb-sdk`)
+
+The SDK's 8.0.0 refuses what velesdb-server would drop or refuse, instead of
+sending it. Each item is in the `[Unreleased]` section of the CHANGELOG until
+the npm package ships.
+
+- **Filters must be core-shaped.** A `filter` is `{ condition: { type, ... } }`
+  (`velesdb_core::filter::Filter`); build it with `f.*`. A flat field map such
+  as `{ category: 'tech' }` throws `ValidationError` on both backends. Over
+  REST the server already answered it with a `400`; on WASM it used to match
+  every point. `normalizeFilter` performs the check and is exported.
+- **`CollectionConfig.description` is removed.** Core has no collection
+  description; the REST server dropped the field. On WASM, an untyped caller
+  that still passes it gets `NOT_SUPPORTED`.
+- **`HnswParams.storageMode` is removed.** Nothing read it. Set the top-level
+  `CollectionConfig.storageMode`.
+- **REST `search({ includeVectors: true })` throws `NOT_SUPPORTED`**, as WASM
+  already did: search hits carry no vectors. Read a vector with `get()`.
+  `capabilities().includeVectors` is `false` on both backends.
+- **REST `query()` refuses `timeoutMs` and `stream: true`** with
+  `NOT_SUPPORTED`: `/query` takes neither, and the server's timeout is its
+  guard-rails `timeoutMs` (`updateGuardRails`). `capabilities().queryOptions`
+  is empty on both backends.
+- **Node.js 22 or later** (`engines.node`). CI builds and tests the SDK on 22;
+  18 and 20 are end-of-life.

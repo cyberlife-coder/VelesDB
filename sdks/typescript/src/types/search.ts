@@ -40,8 +40,10 @@ export interface SearchOptions {
   /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
   filter?: FilterInput;
   /**
-   * Include vectors in results (default: false). The WASM backend refuses
-   * `true` with `NOT_SUPPORTED` (`capabilities().includeVectors` is `false`).
+   * Include vectors in results (default: false). Neither backend returns
+   * search hits with their vectors: both refuse `true` with `NOT_SUPPORTED`
+   * (`capabilities().includeVectors` is `false`). Read a point's vector with
+   * `get()` instead.
    */
   includeVectors?: boolean;
   /** Optional sparse vector for hybrid sparse+dense search */

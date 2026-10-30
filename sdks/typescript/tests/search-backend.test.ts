@@ -4,7 +4,7 @@
  * Covers `src/backends/search-backend.ts`: search, searchBatch,
  * textSearch, hybridSearch, multiQuerySearch, multiQuerySearchIds,
  * searchIds, sparseSearchNamed. Exercises
- * body shape (top_k, filter, include_vectors, fusion params), vector
+ * body shape (top_k, filter, fusion params), vector
  * normalisation (Float32Array → number[]), sparse-vector routing via
  * `transport.sparseToRest`, the `searchQualityToMode` integration, and
  * error routing.
@@ -24,6 +24,7 @@ import {
 } from '../src/backends/search-backend';
 import type { TransportResponse } from '../src/backends/shared';
 import { CollectionNotFoundError } from '../src/errors';
+import { ValidationError } from '../src/types';
 
 function buildTransport(
   overrides: Partial<SearchTransport> = {}
@@ -52,7 +53,7 @@ function typedError(
 describe('search', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('POSTs to /search with defaults (top_k=10, include_vectors=false)', async () => {
+  it('POSTs to /search with defaults (top_k=10, no include_vectors)', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: { results: [{ id: 1, score: 0.9 }] },
@@ -68,7 +69,7 @@ describe('search', () => {
     expect(body.vector).toEqual([0.1, 0.2]);
     expect(body.top_k).toBe(10);
     expect(body.filter).toBeUndefined();
-    expect(body.include_vectors).toBe(false);
+    expect(body).not.toHaveProperty('include_vectors');
     expect(result).toEqual([{ id: 1, score: 0.9 }]);
   });
 
@@ -86,7 +87,16 @@ describe('search', () => {
     expect(body.vector).toEqual([0.5, 0.5]);
   });
 
-  it('forwards k / filter / includeVectors / quality', async () => {
+  it('refuses includeVectors: true, which the server cannot honour', async () => {
+    const transport = buildTransport();
+
+    await expect(
+      search(transport, 'docs', [0.1], { includeVectors: true })
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+    expect(transport.requestJson).not.toHaveBeenCalled();
+  });
+
+  it('forwards k / filter / quality', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: { results: [] },
@@ -94,16 +104,15 @@ describe('search', () => {
 
     await search(transport, 'docs', [0.1], {
       k: 42,
-      filter: { category: 'x' },
-      includeVectors: true,
+      filter: { condition: { type: 'eq', field: 'category', value: 'x' } },
       quality: 'fast',
     });
 
     const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
       .calls[0]![2] as Record<string, unknown>;
     expect(body.top_k).toBe(42);
-    expect(body.filter).toEqual({ category: 'x' });
-    expect(body.include_vectors).toBe(true);
+    expect(body.filter).toEqual({ condition: { type: 'eq', field: 'category', value: 'x' } });
+    expect(body).not.toHaveProperty('include_vectors');
     // searchQualityToMode spreads additional fields; verify it merged
     expect(body).toHaveProperty('mode');
   });
@@ -225,6 +234,17 @@ describe('searchBatch', () => {
   });
 });
 
+describe('filter shape', () => {
+  it('refuses a flat filter map before any request is sent', async () => {
+    const transport = buildTransport();
+
+    await expect(
+      search(transport, 'docs', [0.1], { filter: { category: 'x' } })
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(transport.requestJson).not.toHaveBeenCalled();
+  });
+});
+
 describe('textSearch', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -252,11 +272,11 @@ describe('textSearch', () => {
       data: { results: [] },
     });
 
-    await textSearch(transport, 'docs', 'q', { k: 3, filter: { f: 1 } });
+    await textSearch(transport, 'docs', 'q', { k: 3, filter: { condition: { type: 'eq', field: 'f', value: 1 } } });
     const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
       .calls[0]![2] as Record<string, unknown>;
     expect(body.top_k).toBe(3);
-    expect(body.filter).toEqual({ f: 1 });
+    expect(body.filter).toEqual({ condition: { type: 'eq', field: 'f', value: 1 } });
   });
 
   it('returns [] when data.results is missing', async () => {
@@ -310,14 +330,14 @@ describe('hybridSearch', () => {
       'docs',
       new Float32Array([0.3, 0.7]),
       'q',
-      { k: 5, vectorWeight: 0.8, filter: { a: 1 } }
+      { k: 5, vectorWeight: 0.8, filter: { condition: { type: 'eq', field: 'a', value: 1 } } }
     );
 
     const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
       .calls[0]![2] as Record<string, unknown>;
     expect(body.top_k).toBe(5);
     expect(body.vector_weight).toBe(0.8);
-    expect(body.filter).toEqual({ a: 1 });
+    expect(body.filter).toEqual({ condition: { type: 'eq', field: 'a', value: 1 } });
     expect(Array.isArray(body.vector)).toBe(true);
   });
 
@@ -381,7 +401,7 @@ describe('multiQuerySearch', () => {
           maxWeight: 0.7,
           hitWeight: 0.5,
         },
-        filter: { a: 1 },
+        filter: { condition: { type: 'eq', field: 'a', value: 1 } },
       }
     );
 
@@ -392,7 +412,7 @@ describe('multiQuerySearch', () => {
     expect(body.avg_weight).toBe(0.3);
     expect(body.max_weight).toBe(0.7);
     expect(body.hit_weight).toBe(0.5);
-    expect(body.filter).toEqual({ a: 1 });
+    expect(body.filter).toEqual({ condition: { type: 'eq', field: 'a', value: 1 } });
     expect(result).toEqual([{ id: 1, score: 1 }]);
   });
 
@@ -554,14 +574,14 @@ describe('searchIds', () => {
 
     await searchIds(transport, 'docs', new Float32Array([0.1]), {
       k: 3,
-      filter: { a: 1 },
+      filter: { condition: { type: 'eq', field: 'a', value: 1 } },
       quality: 'accurate',
     });
 
     const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
       .calls[0]![2] as Record<string, unknown>;
     expect(body.top_k).toBe(3);
-    expect(body.filter).toEqual({ a: 1 });
+    expect(body.filter).toEqual({ condition: { type: 'eq', field: 'a', value: 1 } });
     expect(Array.isArray(body.vector)).toBe(true);
   });
 
@@ -618,7 +638,7 @@ describe('sparseSearchNamed', () => {
 
     await sparseSearchNamed(transport, 'docs', { 5: 0.9 }, 'splade', {
       k: 3,
-      filter: { a: 1 },
+      filter: { condition: { type: 'eq', field: 'a', value: 1 } },
       quality: 'accurate',
       vector: new Float32Array([0.25]),
     });
@@ -626,7 +646,7 @@ describe('sparseSearchNamed', () => {
     const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
       .calls[0]![2] as Record<string, unknown>;
     expect(body.top_k).toBe(3);
-    expect(body.filter).toEqual({ a: 1 });
+    expect(body.filter).toEqual({ condition: { type: 'eq', field: 'a', value: 1 } });
     expect(body.mode).toBe('accurate');
     expect(body.vector).toEqual([0.25]);
   });

@@ -17,6 +17,7 @@ import type {
   SearchQuality,
 } from '../types';
 import type { FilterInput } from '../filter';
+import { normalizeFilter } from '../filter';
 import { NotFoundError, VelesDBError } from '../types';
 import { wasmNotSupported } from './shared';
 import {
@@ -92,8 +93,10 @@ function searchWithFilter(
   k: number,
   filter: FilterInput
 ): SearchResult[] {
+  // velesdb-wasm reads a filter without a `condition` key as "no filter";
+  // normalizeFilter refuses that shape here, as the server does over REST.
   const results: WasmFilteredResult[] = collection!.store.search_with_filter(
-    queryVector, k, filter
+    queryVector, k, normalizeFilter(filter)
   );
 
   return results.map(r => ({
@@ -361,6 +364,7 @@ export async function wasmSearchBatch(
   for (const s of searches) {
     validateSearchInputs(collection, [s.vector], s.k ?? 10);
     requireWasmFilterSupport('searchBatch', s.filter);
+    normalizeFilter(s.filter);
     requireParsableQuality(ctx, s.quality);
   }
   const results: SearchResult[][] = [];

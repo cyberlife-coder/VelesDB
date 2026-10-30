@@ -195,10 +195,6 @@ const CONFIG_PROBES: Record<string, { config: Record<string, unknown>; applied: 
     config: { collectionType: 'vector' },
     applied: (_r, b) => collectionOf(b, 'f') !== undefined,
   },
-  description: {
-    config: { description: 'probe' },
-    applied: (_r, b) => collectionOf(b, 'f')?.config.description === 'probe',
-  },
   hnsw: { config: { hnsw: { m: 16 } }, applied: neverApplied },
   pqRescoreOversampling: { config: { pqRescoreOversampling: 4 }, applied: neverApplied },
   deferredIndexing: { config: { deferredIndexing: { enabled: true } }, applied: neverApplied },
