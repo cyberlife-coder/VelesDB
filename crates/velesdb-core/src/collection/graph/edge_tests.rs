@@ -1265,6 +1265,7 @@ fn test_edge_float_properties_round_trip_exactly() {
     let mut store = EdgeStore::new();
     store.add_edge(edge.clone()).unwrap();
 
+    // The edge WAL record is the edge's own serde_json form.
     let from_wal: GraphEdge = serde_json::from_slice(&serde_json::to_vec(&edge).unwrap()).unwrap();
     let from_snapshot = EdgeStore::from_bytes(&store.to_bytes().unwrap()).unwrap();
 

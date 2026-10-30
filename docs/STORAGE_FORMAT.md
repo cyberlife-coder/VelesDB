@@ -202,8 +202,9 @@ DELETE entry:
 The CRC32 covers all preceding fields of the record.
 
 The JSON data is the payload as one document, read back with `serde_json`,
-which parses at most 127 nested arrays and objects, and, with the
-`float_roundtrip` feature core enables, returns every float bit for bit. Every ingest path
+which parses at most 127 nested arrays and objects and, with the
+`float_roundtrip` feature core enables, returns every float bit for bit
+(edge-WAL records and snapshot properties are read the same way). Every ingest path
 refuses, with `VELES-017` and before writing anything, a payload nested
 deeper than `MAX_VALUE_DEPTH` (124, the payload counting as the first
 level): the payload log itself would read back up to 127, but the deepest
