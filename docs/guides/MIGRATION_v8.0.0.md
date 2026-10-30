@@ -83,6 +83,7 @@ a v3 blob with `Unsupported version: 3`.
 | `rate_limit_qps = 0` or `circuit_failure_threshold = 0` in a guard-rail update | accepted, never applied | `400` / `VELES-009` (REST, Tauri), `ValueError` (Python), `VelesError` (mobile) |
 | `enable_streaming` with `buffer_size = 0`, a `buffer_size` past `tokio::sync::Semaphore::MAX_PERMITS`, or `flush_interval_ms = 0` | process aborted | `Error::Config` / `VELES-009` (Rust, Tauri, mobile), `400` (REST), `ValueError` (Python) |
 | Python: a payload or edge properties nested past 127 levels of lists and dicts, or containing themselves | segmentation fault | `ValueError` |
+| MATCH `ORDER BY` an aggregate (`COUNT(*)`, `MAX(year)`) or a bare name (a pattern alias, a `RETURN` alias, an unqualified property) | `VELES-018` after the traversal ran | `V015` before it: `VELES-010` (Rust, `/collections/{name}/match` `400`), `422 VELESQL_VALIDATION_ERROR` (`/query`), an error (WASM) |
 
 **Fix:**
 - Run one query per sparse vector and fuse the results.
@@ -98,6 +99,27 @@ The guard-rail limits are also applied now, where 7.1.0 returned them without
 applying them: `rate_limit_qps`, `circuit_failure_threshold` and
 `circuit_recovery_seconds`. A limit you configured can start rejecting
 requests.
+
+**Fix** a MATCH `ORDER BY`: qualify a property with its pattern alias
+(`ORDER BY d.year`), or order by `similarity()`, `similarity(field, $v)`,
+`depth` or arithmetic over a property (`year - 2000`).
+
+### REST statuses
+
+| Failure | 7.1.0 | 8.0.0 |
+|---|---|---|
+| A depth, cardinality or capacity ceiling (`max_collections`, `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`, `max_perfect_mode_vectors`), on routes answering with the canonical mapping (`/collections/{name}/match`, collection and point routes) | `503` | `400` |
+| The rate limit, on `/collections/{name}/match` | `503` | `429` |
+| A storage, I/O or internal fault in a statement on `/query`, `/aggregate` or `/query/explain` | `422` | `500` |
+| A timeout under the server's `timeout_ms` on `/query`, `/aggregate` or `/query/explain` | `422` | `503` |
+
+Every body keeps its code (`VELES-027`, or the endpoint's `VELESQL_*`).
+Retry only a `5xx`: a `4xx` is refused the same way until the request
+changes.
+
+The circuit breaker counts only the engine's failures. A client's own
+error — a `4xx` above, its own `timeout_ms` or `WITH (timeout_ms = N)`, a read
+the access gate denied — no longer opens it for every caller.
 
 ## 3. Rust API
 
@@ -134,6 +156,12 @@ requests.
 
 ### Changed
 
+- **`Error::GuardRail` is `GuardRail { kind, message }`**, where it was
+  `GuardRail(String)`. `kind` is a `GuardRailKind` (`Timeout(TimeoutBudget)`,
+  `Depth`, `Cardinality`, `Memory`, `Capacity`, `RateLimit`, `CircuitOpen`),
+  and `Error::is_caller_error()` reads it. Match `Error::GuardRail { .. }`
+  where you matched `Error::GuardRail(_)`, and read `message` where you read
+  the string. `GuardRailViolation::Timeout` gains a `budget` field.
 - **`Collection::enable_streaming` and `VectorCollection::enable_streaming`
   return `Result<()>`.** They refuse a config the pipeline cannot run with
   (section 2) with `Error::Config`, and leave the current ingester running.
@@ -142,7 +170,9 @@ requests.
 ### Added
 
 `velesdb_core::MAX_JSON_NESTING` (127) and `MAX_VALUE_DEPTH` (124), also
-under `validation`.
+under `validation`. `GuardRailKind`, `TimeoutBudget`, `Error::is_caller_error`,
+`CircuitBreaker::record_error`, `QueryValidator::validate_match_clause` and
+`Database::gated_search_outcome`.
 
 ## 4. Python and the integrations
 

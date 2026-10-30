@@ -3426,6 +3426,70 @@ async fn test_dimension_mismatch_does_not_open_the_circuit_breaker() {
     }
 }
 
+/// A search's `timeout_ms` is the client's own budget: a `0` times out at
+/// once (`408`), and however often a client sends one, to `/search` or to
+/// `/search/ids`, it records no circuit-breaker failure, so the collection
+/// keeps answering everyone else.
+#[tokio::test]
+async fn test_a_client_timeout_does_not_open_the_circuit_breaker() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "timeout_breaker", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/timeout_breaker/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let threshold = state
+        .db
+        .get_vector_collection("timeout_breaker")
+        .expect("the collection exists")
+        .guard_rails()
+        .limits()
+        .circuit_failure_threshold;
+    let uris = [
+        "/collections/timeout_breaker/search",
+        "/collections/timeout_breaker/search/ids",
+    ];
+    let timed_out = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "timeout_ms": 0});
+    let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1});
+    for uri in uris {
+        for _ in 0..threshold {
+            let response = app
+                .clone()
+                .oneshot(post(uri, &timed_out))
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT, "{uri}");
+        }
+    }
+    for uri in uris {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &good))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+}
+
 /// An `ef_search` that is not a non-negative integer fails the body's JSON
 /// parsing: axum answers a plain-text `422` on every path whose body carries
 /// one, and the OpenAPI document declares that answer, in that content type,

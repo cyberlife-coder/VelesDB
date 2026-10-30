@@ -399,11 +399,14 @@ impl Collection {
         let cap = self.runtime_limits().max_perfect_mode_vectors;
         let size = self.storage.index.len();
         if size > cap {
-            return Err(Error::GuardRail(format!(
-                "Perfect (brute-force) search rejected: collection has {size} vectors, \
+            return Err(Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                message: format!(
+                    "Perfect (brute-force) search rejected: collection has {size} vectors, \
                  exceeding max_perfect_mode_vectors cap of {cap}; raise \
                  `limits.max_perfect_mode_vectors` in VelesConfig or use a lower quality mode"
-            )));
+                ),
+            });
         }
         Ok(())
     }

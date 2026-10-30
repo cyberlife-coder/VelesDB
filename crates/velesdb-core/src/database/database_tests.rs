@@ -1434,7 +1434,10 @@ fn test_max_collections_limit_refuses_excess_with_guard_rail_error() {
         .create_collection("three", 4, DistanceMetric::Cosine)
         .unwrap_err();
     match err {
-        Error::GuardRail(msg) => {
+        Error::GuardRail {
+            kind: crate::error::GuardRailKind::Capacity,
+            message: msg,
+        } => {
             assert!(msg.contains("max_collections"));
             assert!(msg.contains("2 / 2"));
         }
@@ -1466,7 +1469,13 @@ fn test_max_collections_limit_counts_across_all_registries() {
 
     // Fourth collection of any kind must be refused.
     let err = db.create_metadata_collection("m2").unwrap_err();
-    assert!(matches!(err, Error::GuardRail(_)));
+    assert!(matches!(
+        err,
+        Error::GuardRail {
+            kind: crate::error::GuardRailKind::Capacity,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -1497,7 +1506,10 @@ fn test_max_dimensions_limit_refuses_oversize_vector() {
         )
         .unwrap_err();
     match err {
-        Error::GuardRail(msg) => {
+        Error::GuardRail {
+            kind: crate::error::GuardRailKind::Capacity,
+            message: msg,
+        } => {
             assert!(msg.contains("513"));
             assert!(msg.contains("512"));
             assert!(msg.contains("max_dimensions"));
@@ -1535,7 +1547,13 @@ fn test_max_dimensions_limit_applies_to_graph_with_embeddings() {
             DistanceMetric::Cosine,
         )
         .unwrap_err();
-    assert!(matches!(err, Error::GuardRail(_)));
+    assert!(matches!(
+        err,
+        Error::GuardRail {
+            kind: crate::error::GuardRailKind::Capacity,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -1593,7 +1611,16 @@ fn test_raw_bulk_upsert_enforces_vector_count_cap() {
     let err = coll
         .upsert_bulk_from_raw(&vectors, &ids, 4, None)
         .unwrap_err();
-    assert!(matches!(err, Error::GuardRail(_)), "got {err:?}");
+    assert!(
+        matches!(
+            err,
+            Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -1620,7 +1647,16 @@ fn test_raw_bulk_upsert_enforces_payload_size_cap() {
     let err = coll
         .upsert_bulk_from_raw(&vectors, &ids, 4, Some(&payloads))
         .unwrap_err();
-    assert!(matches!(err, Error::GuardRail(_)), "got {err:?}");
+    assert!(
+        matches!(
+            err,
+            Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -1644,7 +1680,16 @@ fn test_graph_node_payload_enforces_payload_size_cap() {
     // gate must cover — an oversized payload is rejected.
     let big = serde_json::json!({ "text": "x".repeat(64) });
     let err = graph.upsert_node_payload(1, &big).unwrap_err();
-    assert!(matches!(err, Error::GuardRail(_)), "got {err:?}");
+    assert!(
+        matches!(
+            err,
+            Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
 
     // A small payload still succeeds on the same path.
     let small = serde_json::json!({ "k": 1 });

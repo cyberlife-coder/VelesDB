@@ -10,8 +10,9 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
-use axum::http::StatusCode;
+use super::velesql_helpers::{
+    parse_and_validate, velesql_collection_not_found, velesql_execution_error,
+};
 use velesdb_core::Error as CoreError;
 
 /// Explain a VelesQL query, optionally executing it with instrumentation.
@@ -166,12 +167,10 @@ fn run_analyze_query(
         Err(CoreError::CollectionNotFound(name)) => {
             Err(Box::new(velesql_collection_not_found(&name)))
         }
-        Err(e) => Err(Box::new(velesql_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
+        Err(e) => Err(Box::new(velesql_execution_error(
+            &e,
             "VELESQL_EXPLAIN_ANALYZE_ERROR",
-            &e.to_string(),
             "Validate query semantics and parameter types against the target collection",
-            None,
         ))),
     }
 }

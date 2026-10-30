@@ -13,7 +13,9 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
+use super::velesql_helpers::{
+    parse_and_validate, velesql_collection_not_found, velesql_error, velesql_execution_error,
+};
 
 fn aggregation_result_count(result: &serde_json::Value) -> usize {
     match result {
@@ -44,12 +46,10 @@ pub(crate) fn execute_aggregation_query(
         Ok(r) => r,
         Err(e) => {
             state.operational_metrics.inc_errors();
-            return velesql_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
+            return velesql_execution_error(
+                &e,
                 "VELESQL_AGGREGATION_ERROR",
-                &e.to_string(),
                 "Verify GROUP BY/HAVING clauses and aggregate function arguments",
-                None,
             );
         }
     };

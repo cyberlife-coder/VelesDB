@@ -175,14 +175,15 @@ impl Collection {
 
         let mut ctx = self.runtime.guard_rails.create_context();
 
-        // WITH (timeout_ms=N) overrides the collection-level timeout for this query.
+        // WITH (timeout_ms=N) overrides the collection-level timeout for this
+        // query; the context records the budget as the client's.
         if let Some(override_ms) = query
             .select
             .with_clause
             .as_ref()
             .and_then(crate::velesql::WithClause::get_timeout_ms)
         {
-            ctx.limits.timeout_ms = override_ms;
+            ctx.set_client_timeout_ms(override_ms);
         }
 
         crate::velesql::QueryValidator::validate(query)

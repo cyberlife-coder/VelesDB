@@ -10,7 +10,8 @@
 //!
 //! The two refusal sets must stay equal: this rule refusing less lets the
 //! query reach the executor's error again, refusing more turns away a query
-//! the engine can run. `collection/match_order_by_validation_parity_tests.rs`
+//! the engine can run.
+//! `collection/search/query/match_order_by_validation_parity_tests.rs`
 //! runs every form through both and fails when they disagree.
 
 use super::ast::OrderByExpr;

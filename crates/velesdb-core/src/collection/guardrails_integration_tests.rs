@@ -140,12 +140,14 @@ fn test_query_context_timeout_fires_after_elapsed() {
 }
 
 #[test]
-fn test_execute_query_circuit_breaker_opens_after_failures() {
+fn test_execute_query_cardinality_violations_leave_circuit_breaker_closed() {
     let dir = TempDir::new().unwrap();
     let mut col = create_test_collection(&dir);
 
-    // Use a very low cardinality limit (1) with threshold=2 so cardinality violations
-    // trigger circuit breaker. Cardinality check runs on every SELECT query result.
+    // A cardinality ceiling the query crosses is the caller's error (the same
+    // query is refused however healthy the collection is), so repeated
+    // violations must not open the breaker. Engine-side failures still do:
+    // see `tests/bdd/circuit_breaker_contract.rs`.
     let limits = QueryLimits {
         max_cardinality: 1, // collection has 10 points — scan exceeds this
         circuit_failure_threshold: 2,
@@ -158,16 +160,15 @@ fn test_execute_query_circuit_breaker_opens_after_failures() {
     let query = Parser::parse(sql).expect("parse failed");
     let params = HashMap::new();
 
-    // Trigger failures until circuit opens
-    let _ = col.execute_query(&query, &params); // failure 1
-    let _ = col.execute_query(&query, &params); // failure 2 → circuit opens
+    for _ in 0..4 {
+        let err = col.execute_query(&query, &params).unwrap_err();
+        assert_eq!(err.code(), "VELES-027", "{err}");
+    }
 
-    // After 2 cardinality violations, the circuit breaker should be Open
-    let state = col.runtime.guard_rails.circuit_breaker.state();
     assert_eq!(
-        state,
-        CircuitState::Open,
-        "Circuit breaker should be Open after repeated failures"
+        col.runtime.guard_rails.circuit_breaker.state(),
+        CircuitState::Closed,
+        "cardinality violations are the caller's and must not open the breaker"
     );
 }
 

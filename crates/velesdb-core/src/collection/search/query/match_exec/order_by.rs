@@ -20,9 +20,10 @@ impl Collection {
     /// over a property (e.g. `year - 2000`). Aggregates (no GROUP BY) and bare
     /// aliases are rejected. `QueryValidator` refuses the same forms first, as
     /// V015 (`velesql/validation_match_order.rs`, kept equal to this set by
-    /// `collection/match_order_by_validation_parity_tests.rs`); this refusal
-    /// still answers the surfaces that take a `MatchClause` without
-    /// validating it (`match_query_ordered`, `execute_match`).
+    /// `collection/search/query/match_order_by_validation_parity_tests.rs`),
+    /// and every public MATCH entry point validates before it traverses
+    /// (`match_dispatch::validate_match_clause`), so this refusal is the
+    /// exhaustive fallback of the match below, not what a caller sees.
     ///
     /// # Errors
     ///

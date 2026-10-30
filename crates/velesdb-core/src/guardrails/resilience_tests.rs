@@ -1,7 +1,7 @@
 //! Tests for `RateLimiter` and `CircuitBreaker` resilience primitives.
 
 use super::resilience::{CircuitBreaker, CircuitState, RateLimiter};
-use crate::error::Error;
+use crate::error::{Error, GuardRailKind, TimeoutBudget};
 use crate::guardrails::limits::GuardRailViolation;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -343,8 +343,62 @@ fn circuit_record_error_counts_engine_failures() {
     let cb = CircuitBreaker::new(2, 60);
     cb.record_error(&Error::Io(std::io::Error::other("disk gone")));
     assert_eq!(cb.state(), CircuitState::Closed);
-    cb.record_error(&Error::GuardRail("Query timed out".into()));
+    cb.record_error(&guard_rail(GuardRailKind::Timeout(
+        TimeoutBudget::Configured,
+    )));
     assert_eq!(cb.state(), CircuitState::Open);
+}
+
+fn guard_rail(kind: GuardRailKind) -> Error {
+    Error::GuardRail {
+        kind,
+        message: format!("{kind:?}"),
+    }
+}
+
+#[test]
+fn circuit_record_error_ignores_the_callers_guard_rails_and_its_own_refusal() {
+    let cb = CircuitBreaker::new(2, 60);
+    for kind in [
+        GuardRailKind::Timeout(TimeoutBudget::Client),
+        GuardRailKind::Cardinality,
+        GuardRailKind::Depth,
+        GuardRailKind::Capacity,
+        GuardRailKind::RateLimit,
+        GuardRailKind::CircuitOpen,
+    ] {
+        for _ in 0..5 {
+            cb.record_error(&guard_rail(kind));
+        }
+        assert_eq!(cb.failure_count(), 0, "{kind:?} must not count");
+    }
+    assert_eq!(cb.state(), CircuitState::Closed);
+    cb.record_error(&guard_rail(GuardRailKind::Memory));
+    assert_eq!(
+        cb.failure_count(),
+        1,
+        "the memory budget is load and counts"
+    );
+}
+
+#[test]
+fn circuit_caller_error_while_half_open_leaves_it_half_open() {
+    // The probe a half-open breaker lets through fails on the caller's
+    // mistake: that says nothing about the engine, so the breaker neither
+    // reopens nor closes, and the count it reopens on is unchanged.
+    let cb = CircuitBreaker::new(2, 0);
+    cb.record_error(&Error::Storage("short write".into()));
+    cb.record_error(&Error::Storage("short write".into()));
+    assert_eq!(cb.state(), CircuitState::Open);
+    assert!(cb.check().is_ok(), "recovery 0 s: the probe is let through");
+    assert_eq!(cb.state(), CircuitState::HalfOpen);
+    let counted = cb.failure_count();
+
+    cb.record_error(&Error::Query("typo".into()));
+    cb.record_error(&guard_rail(GuardRailKind::Timeout(TimeoutBudget::Client)));
+
+    assert_eq!(cb.state(), CircuitState::HalfOpen);
+    assert_eq!(cb.failure_count(), counted);
 }
 
 #[test]

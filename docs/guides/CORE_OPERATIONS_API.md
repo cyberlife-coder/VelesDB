@@ -193,8 +193,11 @@ assert_eq!(docs.guard_rails().limits().max_depth, 5);
 opening after 5 consecutive failures for 30 s. Only engine failures count:
 query execution records a failed query with `CircuitBreaker::record_error`,
 which skips every error `Error::is_caller_error()` classifies as the caller's
-(a bad query, a missing parameter, a wrong dimension), so a client repeating
-its own mistake never opens the breaker for everyone. `Database::update_guardrails`
+(a bad query, a missing parameter, a wrong dimension, the query's own
+`WITH (timeout_ms)` budget, a depth, cardinality or capacity ceiling) and the
+breaker's own refusal, so a client repeating its own mistake never opens the
+breaker for everyone. `Error::GuardRail` carries a `GuardRailKind` saying
+which limit was crossed. `Database::update_guardrails`
 replaces all seven fields, and every one of them reaches every collection:
 
 - `max_depth`, `max_cardinality`, `memory_limit_bytes` and `timeout_ms` apply

@@ -1,13 +1,12 @@
 //! Parity between the V015 validation rule and the MATCH executor.
 //!
 //! `velesql/validation_match_order.rs` refuses, before execution, the MATCH
-//! `ORDER BY` forms `Collection::order_match_results` refuses with VELES-018
-//! after traversal. Each form below goes through both — the executor through
-//! `match_query_ordered`, which takes a `MatchClause` and never meets the
-//! validator — and the two verdicts must agree.
+//! `ORDER BY` forms `Collection::order_match_results` refuses with VELES-018.
+//! Every public MATCH entry point now validates first, so the executor's own
+//! refusal is reached here directly, through `apply_match_order_by`, and the
+//! two verdicts must agree for every form.
 
 use crate::collection::types::Collection;
-use crate::point::Point;
 use crate::velesql::{Parser, QueryValidator};
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -35,21 +34,15 @@ fn validator_refuses_exactly_what_the_match_executor_refuses() {
         crate::distance::DistanceMetric::Cosine,
     )
     .expect("test: create collection");
-    col.upsert(vec![Point::new(
-        1,
-        vec![1.0, 0.0, 0.0, 0.0],
-        Some(serde_json::json!({ "_labels": ["Doc"], "year": 2001 })),
-    )])
-    .expect("test: upsert");
     let params = HashMap::from([("q".to_string(), serde_json::json!([1.0, 0.0, 0.0, 0.0]))]);
 
     let mut refused = 0;
     for sql in FORMS {
         let query = Parser::parse(sql).unwrap_or_else(|e| panic!("{sql} must parse: {e}"));
-        let validator_refuses = QueryValidator::validate(&query).is_err();
         let clause = query.match_clause.expect("test: MATCH clause");
-        let executor_refuses = match col.match_query_ordered(&clause, &params) {
-            Ok(_) => false,
+        let validator_refuses = QueryValidator::validate_match_clause(&clause).is_err();
+        let executor_refuses = match col.apply_match_order_by(&mut [], &clause, &params) {
+            Ok(()) => false,
             Err(e) if e.code() == "VELES-018" => true,
             Err(e) => panic!("{sql}: unexpected executor error {e}"),
         };

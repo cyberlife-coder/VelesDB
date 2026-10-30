@@ -194,6 +194,26 @@ fn test_caller_errors_are_classified_as_the_callers() {
         Error::GraphNotSupported("MATCH ORDER BY expression 'd'".into()),
         Error::Config("bad option".into()),
         Error::NodeNotFound(7),
+        Error::GuardRail {
+            kind: GuardRailKind::Timeout(TimeoutBudget::Client),
+            message: "Query timed out".into(),
+        },
+        Error::GuardRail {
+            kind: GuardRailKind::Cardinality,
+            message: "Cardinality exceeded".into(),
+        },
+        Error::GuardRail {
+            kind: GuardRailKind::Depth,
+            message: "Traversal depth exceeded".into(),
+        },
+        Error::GuardRail {
+            kind: GuardRailKind::Capacity,
+            message: "max_collections limit reached".into(),
+        },
+        Error::GuardRail {
+            kind: GuardRailKind::RateLimit,
+            message: "Rate limit exceeded".into(),
+        },
     ];
     for err in &caller {
         assert!(err.is_caller_error(), "{err} must be the caller's error");
@@ -201,14 +221,25 @@ fn test_caller_errors_are_classified_as_the_callers() {
 }
 
 #[test]
-fn test_engine_failures_and_guard_rail_stops_are_not_caller_errors() {
+fn test_engine_failures_and_load_guard_rails_are_not_caller_errors() {
     let engine = [
         Error::Io(std::io::Error::other("disk gone")),
         Error::Storage("short write".into()),
         Error::IndexCorrupted("checksum mismatch".into()),
         Error::Internal("unexpected state".into()),
         Error::AllocationFailed("oom".into()),
-        Error::GuardRail("Query timed out".into()),
+        Error::GuardRail {
+            kind: GuardRailKind::Timeout(TimeoutBudget::Configured),
+            message: "Query timed out".into(),
+        },
+        Error::GuardRail {
+            kind: GuardRailKind::Memory,
+            message: "Memory limit exceeded".into(),
+        },
+        Error::GuardRail {
+            kind: GuardRailKind::CircuitOpen,
+            message: "Circuit breaker open".into(),
+        },
     ];
     for err in &engine {
         assert!(!err.is_caller_error(), "{err} must count as the engine's");

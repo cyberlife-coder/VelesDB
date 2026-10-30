@@ -10,7 +10,7 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::{
@@ -273,6 +273,87 @@ async fn read_gate_denies_rest_search_end_to_end() {
         !status.is_success(),
         "denied hybrid read must not return success, got {status}"
     );
+}
+
+/// Denies reads while `deny` is set, with an error core classifies as the
+/// engine's (`VELES-013`): what a policy engine chooses to answer a denial
+/// with is its own business, and must not decide whether it counts.
+#[derive(Default)]
+struct SwitchableDenyObserver {
+    deny: AtomicBool,
+}
+impl DatabaseObserver for SwitchableDenyObserver {
+    fn on_query_request(
+        &self,
+        _ctx: &velesdb_core::observer::QueryAccessContext,
+    ) -> velesdb_core::Result<velesdb_core::observer::AccessDecision> {
+        if self.deny.load(Ordering::SeqCst) {
+            return Ok(velesdb_core::observer::AccessDecision::Deny(
+                velesdb_core::Error::Internal("policy engine refused the read".to_string()),
+            ));
+        }
+        Ok(velesdb_core::observer::AccessDecision::Allow)
+    }
+}
+
+/// A read-gate denial is the policy's answer, not a sign the collection is
+/// unhealthy: however many reads `/search`, `/search/ids`, `/search/text`
+/// and `/search/hybrid` refuse, the circuit breaker stays closed and the
+/// collection answers the next allowed read.
+#[tokio::test]
+async fn read_gate_denials_never_open_the_circuit_breaker() {
+    let dir = TempDir::new().expect("test: dir");
+    let observer = Arc::new(SwitchableDenyObserver::default());
+    let app =
+        create_test_app_with_observer(&dir, Arc::clone(&observer) as Arc<dyn DatabaseObserver>);
+    let status = post(
+        &app,
+        "/collections",
+        json!({"name": COLLECTION, "dimension": DIM, "metric": "cosine"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let status = post(
+        &app,
+        &format!("/collections/{COLLECTION}/points"),
+        json!({"points": [{"id": 1, "vector": QUERY, "payload": {"k": "hello"}}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    observer.deny.store(true, Ordering::SeqCst);
+    let reads = [
+        ("search", json!({"vector": QUERY, "top_k": 1})),
+        ("search/ids", json!({"vector": QUERY, "top_k": 1})),
+        ("search/text", json!({"query": "hello", "top_k": 1})),
+        (
+            "search/hybrid",
+            json!({"vector": QUERY, "query": "hello", "top_k": 1, "vector_weight": 0.5}),
+        ),
+    ];
+    // Ten denials per endpoint: twice the default threshold of five.
+    for (path, body) in &reads {
+        for _ in 0..10 {
+            let status = post(
+                &app,
+                &format!("/collections/{COLLECTION}/{path}"),
+                body.clone(),
+            )
+            .await;
+            assert_denied(status, path);
+        }
+    }
+
+    observer.deny.store(false, Ordering::SeqCst);
+    for (path, body) in &reads {
+        let status = post(
+            &app,
+            &format!("/collections/{COLLECTION}/{path}"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path} after the denials");
+    }
 }
 
 async fn put(app: &axum::Router, uri: &str, body: Value) -> StatusCode {

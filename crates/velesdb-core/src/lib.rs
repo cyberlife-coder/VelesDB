@@ -246,7 +246,7 @@ pub use collection::{
 };
 pub use contiguous_ops::pad_to_simd_width;
 pub use distance::{DistanceMetric, CONDITION_TYPE_NAMES, DISTANCE_METRIC_NAMES};
-pub use error::{Error, Result};
+pub use error::{Error, GuardRailKind, Result, TimeoutBudget};
 pub use filter::{Condition, Filter};
 pub use lock_rank::{assert_lock_order, LockRank};
 pub use point::{ComponentScores, Point, SearchResult};

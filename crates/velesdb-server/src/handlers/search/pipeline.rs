@@ -291,8 +291,10 @@ pub(crate) fn execute_dense_search(
         quality: quality_mode,
         filter: filter.as_ref(),
     };
-    let result = state.db.gated_search(name, None, None, read);
-    Ok(result)
+    state
+        .db
+        .gated_search_outcome(name, None, None, read)
+        .map_err(|refusal| read_refused(StatusCode::BAD_REQUEST, &refusal))
 }
 
 /// Builds payload-less [`SearchResult`]s from id/score pairs.
@@ -357,21 +359,34 @@ pub(crate) fn execute_dense_search_ids(
     // Gate the read (CORE-2). The ids fast path is only taken for filter-free
     // dense requests, so a scope decision fails closed rather than silently
     // running unscoped.
-    let result = match state.db.authorize_read(
+    match state.db.authorize_read(
         name,
         velesdb_core::observer::QueryOperationKind::VectorSearch,
         None,
         None,
     ) {
-        Ok(None) => collection
+        Ok(None) => Ok(collection
             .search_ids(&req.vector, req.top_k)
-            .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score)))),
-        Ok(Some(_)) => Err(velesdb_core::Error::Config(
+            .map(|scored| id_score_results(scored.into_iter().map(|s| (s.id, s.score))))),
+        Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
             "scope narrowing is not supported on the ids fast path".to_string(),
-        )),
-        Err(e) => Err(e),
-    };
-    Ok(result)
+        ))),
+        Err(refusal) => Err(read_refused(StatusCode::BAD_REQUEST, &refusal)),
+    }
+}
+
+/// The response for a read the control-plane gate refused (the observer's
+/// `AccessDecision::Deny`, or its own failure), shaped as the search error
+/// response the endpoint gives (`status` + actionable body).
+///
+/// Returned on the `Err` side of the execute functions, which the handlers
+/// never record with the circuit breaker: a denial is the policy's answer,
+/// not a sign the collection is unhealthy, whatever error carries it.
+pub(crate) fn read_refused(
+    status: StatusCode,
+    refusal: &velesdb_core::Error,
+) -> axum::response::Response {
+    (status, Json(actionable_search_error(refusal))).into_response()
 }
 
 /// Search mode classification used by [`execute_search_request`] to
@@ -472,7 +487,7 @@ pub(crate) fn execute_search_request(
             Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
                 "scope narrowing is not supported for sparse-only search".to_string(),
             ))),
-            Err(e) => Ok(Err(e)),
+            Err(refusal) => Err(read_refused(StatusCode::BAD_REQUEST, &refusal)),
         },
     }
 }
@@ -518,7 +533,7 @@ fn execute_hybrid_sparse(
         Ok(Some(_)) => Ok(Err(velesdb_core::Error::Config(
             "scope narrowing is not supported for hybrid dense+sparse search".to_string(),
         ))),
-        Err(e) => Ok(Err(e)),
+        Err(refusal) => Err(read_refused(StatusCode::BAD_REQUEST, &refusal)),
     }
 }
 
@@ -665,21 +680,36 @@ pub(crate) fn finish_search_with_status(
     })
 }
 
-/// Builds the 408 Request Timeout response returned when a search
-/// exceeds the per-request `timeout_ms` budget. Includes the collection
-/// name and the budget in milliseconds so that clients can log
+/// Handles a search that ran past the request's own `timeout_ms` budget:
+/// records it with the circuit breaker as what it is — the client's timeout
+/// ([`TimeoutBudget::Client`](velesdb_core::TimeoutBudget::Client)), which
+/// `record_error` does not count — and builds the 408 Request Timeout
+/// response, naming the collection and the budget so that clients can log
 /// actionable diagnostics.
-pub(crate) fn timeout_response(collection_name: &str, timeout_ms: u64) -> axum::response::Response {
+pub(crate) fn client_timeout_response(
+    collection: &VectorCollection,
+    collection_name: &str,
+    timeout_ms: u64,
+) -> axum::response::Response {
+    let message = format!(
+        "Search on collection '{collection_name}' exceeded the \
+         requested timeout of {timeout_ms}ms. The server returned \
+         early; the in-flight query may continue in the background \
+         until completion.",
+    );
+    let timeout = velesdb_core::Error::GuardRail {
+        kind: velesdb_core::GuardRailKind::Timeout(velesdb_core::TimeoutBudget::Client),
+        message: message.clone(),
+    };
+    collection
+        .guard_rails()
+        .circuit_breaker
+        .record_error(&timeout);
     (
-        StatusCode::REQUEST_TIMEOUT,
+        crate::handlers::helpers::http_status_for_error(&timeout),
         Json(ErrorResponse {
-            error: format!(
-                "Search on collection '{collection_name}' exceeded the \
-                 requested timeout of {timeout_ms}ms. The server returned \
-                 early; the in-flight query may continue in the background \
-                 until completion.",
-            ),
-            code: Some("VELES-027".to_string()),
+            error: message,
+            code: Some(timeout.code().to_string()),
         }),
     )
         .into_response()

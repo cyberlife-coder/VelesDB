@@ -718,7 +718,7 @@ containing the structured VELES-XXX error code (when applicable):
 The `code` field is omitted when no structured error code applies (e.g., generic
 validation errors). See [ERROR_CODES.md](ERROR_CODES.md) for the full list of codes.
 
-For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized:
+For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized. A statement that fails during execution answers `422` when the failure is the client's, and the engine's own status otherwise (`500` for a storage, I/O or internal fault, `503` for a timeout under the server's limit):
 
 ```json
 {
@@ -738,8 +738,11 @@ For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), 
 | 201 | Created |
 | 400 | Bad Request (invalid input) |
 | 404 | Not Found |
+| 408 | Request Timeout (the request's own `timeout_ms` ran out) |
+| 422 | Unprocessable Entity (a VelesQL statement the client got wrong) |
 | 429 | Too Many Requests (rate limit exceeded or streaming backpressure) |
 | 500 | Internal Server Error |
+| 503 | Service Unavailable (circuit breaker open, a timeout under the server's limit, the memory budget) |
 
 ---
 
@@ -1315,9 +1318,11 @@ The values above are the defaults a server starts with
 (`velesdb_core::QueryLimits::default()`): depth 10, 100 000 intermediate
 results, 100 MiB per query, 30 s, a rate limit of 100 000 queries per second
 per client, and a circuit breaker that opens after 5 consecutive failures for
-30 s. Only engine failures count (storage, I/O, internal errors, guard-rail
-stops, request timeouts); a `4xx` — the client's own error — never does. A
-`timeout_ms` of `0` disables the timeout.
+30 s. Only engine failures count — storage, I/O and internal errors, a
+timeout under this `timeout_ms`, the memory budget; an error answered with a
+`4xx` (the client's own, its request's own `timeout_ms` included) never
+does, nor does a read the access gate denied. A `timeout_ms` of `0` disables
+the timeout.
 
 ### PUT /guardrails
 

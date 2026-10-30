@@ -48,9 +48,8 @@ impl QueryValidator {
         // clause (SELECT, compound operands, or DML) before further validation.
         reject_subqueries(query)?;
 
-        // V015 rule lives in `validation_match_order.rs`.
         if let Some(ref match_clause) = query.match_clause {
-            super::validation_match_order::validate_match_order_by(match_clause)?;
+            Self::validate_match_clause(match_clause)?;
         }
 
         // Non-SELECT statements: only check LET bindings.
@@ -67,6 +66,22 @@ impl QueryValidator {
         }
 
         Ok(())
+    }
+
+    /// Validates a bare MATCH clause: the rules [`validate`](Self::validate)
+    /// applies to the MATCH part of a statement, for the surfaces that take a
+    /// [`MatchClause`](super::MatchClause) rather than a whole query
+    /// (`Collection::match_query_ordered`, `execute_match`,
+    /// `execute_match_with_similarity`). One rule set, so the same MATCH gets
+    /// the same answer on every surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationErrorKind::UnsupportedMatchOrderBy`] (`V015`) for
+    /// an `ORDER BY` the MATCH executor cannot sort by (the rule lives in
+    /// `validation_match_order.rs`).
+    pub fn validate_match_clause(clause: &super::MatchClause) -> Result<(), ValidationError> {
+        super::validation_match_order::validate_match_order_by(clause)
     }
 
     /// Validates a single SELECT statement (main or compound operand).

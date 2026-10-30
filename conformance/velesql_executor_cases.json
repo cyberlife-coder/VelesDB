@@ -469,6 +469,31 @@
       "id": "R004",
       "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'weighted')",
       "note": "same as R003 for a weight-sensitive strategy"
+    },
+    {
+      "id": "R005",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY COUNT(*) DESC LIMIT 3",
+      "note": "a MATCH ORDER BY aggregate has no GROUP BY to rank (V015, refused at validation by both engines)"
+    },
+    {
+      "id": "R006",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY MAX(year) LIMIT 3",
+      "note": "same as R005 for an aggregate over a property (V015)"
+    },
+    {
+      "id": "R007",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY d LIMIT 3",
+      "note": "a bare pattern alias names a node, not a sortable value (V015)"
+    },
+    {
+      "id": "R008",
+      "query": "MATCH (d:Doc) RETURN d.year AS y ORDER BY y LIMIT 3",
+      "note": "a RETURN alias is not a property path MATCH can sort by (V015)"
+    },
+    {
+      "id": "R009",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY year LIMIT 3",
+      "note": "an unqualified property is not a property path MATCH can sort by; qualify it as d.year (V015)"
     }
   ],
   "dml_cases": [

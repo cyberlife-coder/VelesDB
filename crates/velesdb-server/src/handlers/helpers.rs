@@ -88,7 +88,7 @@ pub(crate) fn core_error_response(
 /// circuit breaker counts by, so a `4xx` answer and "does not open the
 /// breaker" cannot drift apart.
 pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
-    use velesdb_core::Error;
+    use velesdb_core::{Error, GuardRailKind, TimeoutBudget};
     match e {
         // 404 Not Found
         Error::CollectionNotFound(_)
@@ -99,11 +99,26 @@ pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
         // 409 Conflict
         Error::CollectionExists(_) | Error::EdgeExists(_) => StatusCode::CONFLICT,
 
-        // 400 Bad Request — every other client input error
+        // 408 Request Timeout — the request's own time budget ran out
+        Error::GuardRail {
+            kind: GuardRailKind::Timeout(TimeoutBudget::Client),
+            ..
+        } => StatusCode::REQUEST_TIMEOUT,
+
+        // 429 Too Many Requests — the client's rate limit
+        Error::GuardRail {
+            kind: GuardRailKind::RateLimit,
+            ..
+        } => StatusCode::TOO_MANY_REQUESTS,
+
+        // 400 Bad Request — every other client error, a depth, cardinality
+        // or capacity ceiling the request crossed included
         e if e.is_caller_error() => StatusCode::BAD_REQUEST,
 
-        // 503 Service Unavailable
-        Error::DatabaseLocked(_) | Error::GuardRail(_) => StatusCode::SERVICE_UNAVAILABLE,
+        // 503 Service Unavailable — a locked database, an open breaker, and
+        // load the engine could not carry (the server's own time limit, the
+        // memory budget)
+        Error::DatabaseLocked(_) | Error::GuardRail { .. } => StatusCode::SERVICE_UNAVAILABLE,
 
         // 500 Internal Server Error — everything else
         _ => StatusCode::INTERNAL_SERVER_ERROR,

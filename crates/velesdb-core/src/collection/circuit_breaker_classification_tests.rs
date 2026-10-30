@@ -1,12 +1,13 @@
 //! The circuit breaker counts only failures that say the engine is unhealthy.
 //!
-//! A caller's mistake — an unsupported `ORDER BY`, a missing bind parameter, a
-//! vector of the wrong dimension — says nothing about the collection's health.
-//! Counted, five of them in a row opened the breaker and refused every query
-//! on the collection for the recovery window: a client typo took the
-//! collection down. These scenarios drive two execution paths that record
-//! breaker outcomes (MATCH ordering, SELECT vector dispatch) with caller errors, then with a genuine overload, and
-//! check the breaker against each.
+//! A caller's mistake — an unbound parameter, a vector of the wrong
+//! dimension, a query too broad for the cardinality ceiling — says nothing
+//! about the collection's health. Counted, five of them in a row opened the
+//! breaker and refused every query on the collection for the recovery window:
+//! a client typo took the collection down. These scenarios drive two
+//! execution paths that record breaker outcomes (MATCH ordering and
+//! finalizing, SELECT vector dispatch) with caller errors and check the
+//! breaker stays closed.
 
 use crate::collection::types::Collection;
 use crate::guardrails::{CircuitState, GuardRails, QueryLimits};
@@ -56,22 +57,24 @@ fn breaker_state(col: &Collection) -> CircuitState {
     col.runtime.guard_rails.circuit_breaker.state()
 }
 
-/// A MATCH whose `ORDER BY` the executor cannot run fails with VELES-018 on
-/// the ordered-MATCH surface (which takes a `MatchClause` and so never meets
-/// the validator) — and leaves the breaker closed however often it is sent.
+/// A MATCH ordered by `similarity(field, $q)` with `$q` unbound passes
+/// validation and fails with VELES-010 inside the MATCH ordering step, a
+/// recording site — and leaves the breaker closed however often it is sent.
 #[test]
-fn unsupported_match_order_by_never_opens_the_breaker() {
+fn unbound_order_by_parameter_never_opens_the_breaker() {
     let dir = TempDir::new().expect("test: tempdir");
     let col = collection_with_breaker(&dir, 100_000);
-    let query =
-        Parser::parse("MATCH (d:Doc) RETURN d.year ORDER BY d LIMIT 3").expect("test: parse");
+    let query = Parser::parse(
+        "MATCH (d:Doc) RETURN d.year ORDER BY similarity(d.embedding, $q) DESC LIMIT 3",
+    )
+    .expect("test: parse");
     let clause = query.match_clause.expect("test: MATCH clause");
 
     for _ in 0..CALLER_ERRORS {
         let err = col
             .match_query_ordered(&clause, &HashMap::new())
-            .expect_err("test: ORDER BY a bare alias is unsupported");
-        assert_eq!(err.code(), "VELES-018", "{err}");
+            .expect_err("test: $q is not bound");
+        assert_eq!(err.code(), "VELES-010", "{err}");
     }
 
     assert_eq!(breaker_state(&col), CircuitState::Closed);
@@ -101,24 +104,27 @@ fn dimension_mismatch_never_opens_the_breaker() {
     assert_eq!(breaker_state(&col), CircuitState::Closed);
 }
 
-/// Positive control: a guard-rail stop (here, the cardinality ceiling a
-/// runaway MATCH crosses) is load on the engine and still opens the breaker
-/// after [`THRESHOLD`] failures, on the same MATCH surface as above.
+/// A cardinality ceiling a MATCH crosses is the caller's (its query is too
+/// broad for the configured limit): refused every time, it never opens the
+/// breaker. The engine-side positive controls — a timeout under the server's
+/// limit, in a SELECT and inside a MATCH traversal — live in the BDD contract
+/// (`tests/bdd/circuit_breaker_contract.rs`), driven through
+/// `Database::execute_query`.
 #[test]
-fn guard_rail_stops_still_open_the_breaker() {
+fn cardinality_stops_never_open_the_breaker() {
     let dir = TempDir::new().expect("test: tempdir");
     let col = collection_with_breaker(&dir, 1);
     let query =
         Parser::parse("MATCH (d:Doc) RETURN d.year ORDER BY d.year LIMIT 10").expect("test: parse");
     let clause = query.match_clause.expect("test: MATCH clause");
 
-    for _ in 0..THRESHOLD {
+    for _ in 0..CALLER_ERRORS {
         let err = col
             .match_query_ordered(&clause, &HashMap::new())
             .expect_err("test: ten rows against a ceiling of one");
         assert_eq!(err.code(), "VELES-027", "{err}");
-        assert!(!err.is_caller_error(), "{err}");
+        assert!(err.is_caller_error(), "{err}");
     }
 
-    assert_eq!(breaker_state(&col), CircuitState::Open);
+    assert_eq!(breaker_state(&col), CircuitState::Closed);
 }

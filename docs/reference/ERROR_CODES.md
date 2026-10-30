@@ -280,10 +280,11 @@ version incompatibility, or internal bugs:
 
 ### VELES-027: GuardRail
 
-- **Variant**: `GuardRail(String)`
-- **Message**: `Guard-rail violation: {details}`
-- **Cause**: A query or operation exceeded a configured limit. Guard-rails include: query timeout, traversal depth limit, result cardinality cap, memory budget, rate limit, and circuit breaker thresholds. The circuit breaker counts only failures that say the engine is unhealthy — the errors for which `Error::is_caller_error()` is `false` (storage, I/O, corruption, internal errors, and guard-rail stops) — so a client repeating its own mistake (a `VELES-010` query error, a `VELES-004` dimension mismatch, …) never opens it.
-- **Resolution**: Reduce the scope of the query (e.g., lower LIMIT, add filters). If the limit is too restrictive for your workload, adjust the guard-rail configuration.
+- **Variant**: `GuardRail { kind: GuardRailKind, message: String }`
+- **Message**: `Guard-rail violation: {message}`
+- **Cause**: A request crossed a configured limit. `kind` names it: `Timeout(TimeoutBudget::Client)` (the request's own budget — VelesQL `WITH (timeout_ms = N)` tighter than the server's limit, a REST search's `timeout_ms`), `Timeout(TimeoutBudget::Configured)` (the server's `timeout_ms`), `Depth`, `Cardinality`, `Memory`, `Capacity` (`max_collections`, `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`, `max_perfect_mode_vectors`), `RateLimit` and `CircuitOpen`.
+- **Whose failure**: the client's own timeout, a depth, cardinality or capacity ceiling and the rate limit are the caller's (`Error::is_caller_error()` is `true`; REST answers `408`, `400` or `429`). A timeout under the server's limit and the memory budget are load the engine could not carry, and an open breaker is the breaker's own answer (`503`). The circuit breaker counts only failures that say the engine is unhealthy — storage, I/O, corruption, internal errors, a timeout under the server's limit, the memory budget — so a client repeating its own mistake (a `VELES-010` query error, a `VELES-004` dimension mismatch, its own timeout, …) never opens it, and neither does a read the access gate denied.
+- **Resolution**: Reduce the scope of the query (e.g., lower LIMIT, add filters), or give it a larger time budget. If the limit is too restrictive for your workload, adjust the guard-rail configuration.
 - **Recoverable**: Yes
 
 ### VELES-028: InvalidQuantizerConfig

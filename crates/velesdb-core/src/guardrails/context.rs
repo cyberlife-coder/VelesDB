@@ -27,6 +27,9 @@ fn exceeded(limit: LimitType, violation: GuardRailViolation) -> GuardRailViolati
 pub struct QueryContext {
     /// Query limits configuration.
     pub limits: QueryLimits,
+    /// Whose budget `limits.timeout_ms` is; set by
+    /// [`set_client_timeout_ms`](Self::set_client_timeout_ms).
+    timeout_budget: crate::error::TimeoutBudget,
     /// Query start time.
     start_time: Instant,
     /// Current traversal depth.
@@ -93,6 +96,7 @@ impl QueryContext {
     pub fn new(limits: QueryLimits) -> Self {
         Self {
             limits,
+            timeout_budget: crate::error::TimeoutBudget::Configured,
             start_time: Instant::now(),
             current_depth: AtomicU64::new(0),
             current_cardinality: AtomicUsize::new(0),
@@ -118,6 +122,27 @@ impl QueryContext {
         self.executed_filter_strategy.get()
     }
 
+    /// Replaces the time budget with one the request chose (`VelesQL`
+    /// `WITH (timeout_ms = N)`); `0` disables the timeout, as in
+    /// [`QueryLimits::timeout_ms`].
+    ///
+    /// A timeout under that budget is the client's
+    /// ([`TimeoutBudget::Client`](crate::error::TimeoutBudget::Client)) only
+    /// when the budget is tighter than the server's limit — or the server
+    /// sets none. A budget at or above the limit means the query also ran
+    /// past the server's own limit, which is load on the engine
+    /// ([`TimeoutBudget::Configured`](crate::error::TimeoutBudget::Configured)).
+    pub fn set_client_timeout_ms(&mut self, timeout_ms: u64) {
+        use crate::error::TimeoutBudget;
+        let configured = self.limits.timeout_ms;
+        self.timeout_budget = if configured == 0 || timeout_ms < configured {
+            TimeoutBudget::Client
+        } else {
+            TimeoutBudget::Configured
+        };
+        self.limits.timeout_ms = timeout_ms;
+    }
+
     /// Checks if the query has timed out (US-001).
     ///
     /// # Errors
@@ -136,6 +161,7 @@ impl QueryContext {
                 GuardRailViolation::Timeout {
                     max_ms: self.limits.timeout_ms,
                     elapsed_ms,
+                    budget: self.timeout_budget,
                 },
             ));
         }

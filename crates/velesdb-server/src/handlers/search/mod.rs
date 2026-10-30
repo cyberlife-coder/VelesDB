@@ -25,9 +25,10 @@ use crate::AppState;
 
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use pipeline::{
-    execute_dense_search_ids, execute_search_request, finish_search_ids_with_cb,
-    finish_search_with_cb, finish_search_with_status, ids_fast_path_eligible, parse_mode_or_400,
-    parse_optional_filter, timeout_response, validate_ef_search_or_400, validate_query_dimension,
+    client_timeout_response, execute_dense_search_ids, execute_search_request,
+    finish_search_ids_with_cb, finish_search_with_cb, finish_search_with_status,
+    ids_fast_path_eligible, parse_mode_or_400, parse_optional_filter, read_refused,
+    validate_ef_search_or_400, validate_query_dimension,
 };
 use workers::{run_blocking_search, run_search_with_optional_timeout};
 
@@ -151,19 +152,15 @@ pub async fn search(
 
     let search_result = match execution {
         Ok(Ok(inner)) => inner,
-        // A `400` refusing the request itself: the client's error, so it
-        // records no circuit-breaker failure.
+        // The request refused before any search ran (a bad body, a read the
+        // gate denied): not the collection's failure, so nothing is recorded.
         Ok(Err(resp)) => {
             state.operational_metrics.inc_errors();
             return resp;
         }
         Err(workers::TimeoutElapsed) => {
             state.operational_metrics.inc_errors();
-            // Timeout elapsed: record the circuit-breaker failure and
-            // return a 408 with the budget echoed back to the caller.
-            collection.guard_rails().circuit_breaker.record_failure();
-            let ms = timeout_ms.unwrap_or_default();
-            return timeout_response(&name, ms);
+            return client_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
         }
     };
 
@@ -174,11 +171,12 @@ pub async fn search(
 /// (no payload hydration) for plain dense requests, otherwise falls back to
 /// the generic pipeline.
 ///
-/// Neither path touches the circuit breaker. Their `Err` is a `400` refusing
-/// the request itself (a wrong dimension, a bad filter, sparse input or
-/// fusion), the client's error and never the collection's; the core outcome
-/// in `Ok` is recorded by [`finish_search_ids_with_cb`], which counts only an
-/// engine failure (`CircuitBreaker::record_error`).
+/// Neither path touches the circuit breaker. Their `Err` refuses the request
+/// before any search runs — a bad body (a wrong dimension, a bad filter,
+/// sparse input or fusion) or a read the gate denied ([`read_refused`]) —
+/// and is never the collection's failure; the core outcome in `Ok` is
+/// recorded by [`finish_search_ids_with_cb`], which counts only an engine
+/// failure (`CircuitBreaker::record_error`).
 #[allow(clippy::result_large_err)]
 fn execute_search_ids_owned(
     state: &AppState,
@@ -250,9 +248,10 @@ pub async fn text_search(
             k: top_k,
             filter: filter.as_ref(),
         };
-        Ok(state_for_work
+        state_for_work
             .db
-            .gated_search(&name_for_work, None, None, read))
+            .gated_search_outcome(&name_for_work, None, None, read)
+            .map_err(|refusal| read_refused(StatusCode::INTERNAL_SERVER_ERROR, &refusal))
     })
     .await;
 
@@ -342,9 +341,10 @@ pub async fn hybrid_search(
             alpha: Some(vector_weight),
             filter: filter.as_ref(),
         };
-        Ok(state_for_work
+        state_for_work
             .db
-            .gated_search(&name_for_work, None, None, read))
+            .gated_search_outcome(&name_for_work, None, None, read)
+            .map_err(|refusal| read_refused(StatusCode::BAD_REQUEST, &refusal))
     })
     .await;
 
@@ -428,9 +428,7 @@ pub async fn search_ids(
         }
         Err(workers::TimeoutElapsed) => {
             state.operational_metrics.inc_errors();
-            collection.guard_rails().circuit_breaker.record_failure();
-            let ms = timeout_ms.unwrap_or_default();
-            return timeout_response(&name, ms);
+            return client_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
         }
     };
 

@@ -7,31 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (Rust API) — `Error::GuardRail` says which limit was crossed.**
+  The variant is `GuardRail { kind: GuardRailKind, message: String }`, where it
+  was `GuardRail(String)`; `GuardRailKind` (`Timeout(TimeoutBudget)`, `Depth`,
+  `Cardinality`, `Memory`, `Capacity`, `RateLimit`, `CircuitOpen`) and
+  `TimeoutBudget` (`Client`, `Configured`) are exported at the crate root,
+  `GuardRailViolation::Timeout` carries a `budget`, `GuardRailViolation::kind`
+  maps a violation to its kind, and `QueryContext::set_client_timeout_ms`
+  applies a request's own budget. The code stays `VELES-027` and the message
+  is unchanged. Match `Error::GuardRail { .. }`, or on `kind`, where you
+  matched `Error::GuardRail(_)`.
+- **REST statuses follow whose a guard-rail stop is.** Through
+  `/collections/{name}/match` and every handler answering with the canonical
+  error mapping, a depth, cardinality or capacity ceiling (`max_collections`,
+  `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`,
+  `max_perfect_mode_vectors`) is `400` and the rate limit `429`, where all
+  were `503`; a timeout under the request's own budget is `408`. An open
+  breaker, the memory budget and a timeout under the server's limit stay
+  `503`.
+- **`/query`, `/aggregate` and `/query/explain` answer an engine fault with
+  a `5xx`.** A statement that failed during execution was `422` whatever the
+  cause; a storage, I/O or internal fault is now `500` and a timeout under the
+  server's limit `503`, keeping the `VELESQL_*` code. The client's own errors
+  stay `422`.
+- **An unsupported MATCH `ORDER BY` is refused at validation, with `V015`
+  instead of `VELES-018`.** `ORDER BY COUNT(*)`, `ORDER BY MAX(year)`, a bare
+  pattern alias (`ORDER BY d`), a `RETURN` alias (`RETURN d.year AS y ORDER BY
+  y`) and an unqualified property (`ORDER BY year`) passed
+  `QueryValidator::validate` and failed after traversal with `VELES-018`
+  (`GraphNotSupported`; REST `/query` `422 VELESQL_EXECUTION_ERROR`,
+  `/collections/{name}/match` `400 VELES-018`). They are now refused before
+  traversal with `V015` (`UnsupportedMatchOrderBy`): `VELES-010` from the
+  Rust API and `/collections/{name}/match` (`400`), `422
+  VELESQL_VALIDATION_ERROR` from `/query`, and an error from the WASM
+  executor. `QueryValidator::validate_match_clause` holds the one rule set,
+  and `match_query_ordered`, `execute_match` and
+  `execute_match_with_similarity` run it on the clause they receive, so the
+  same MATCH gets the same answer on every surface. A test runs every form
+  through the validator and the executor and fails if their verdicts differ;
+  `rejected_cases` R005–R009 lock the refusal in both engines.
+
+### Added
+
+- `Database::gated_search_outcome`: `gated_search` with the read gate's
+  refusal kept apart from the search's own outcome.
+
 ### Fixed
 
 - **A client's error no longer opens a collection's circuit breaker.** Every
   failed query counted toward the breaker, so five in a row of one client's
   mistake — a MATCH `ORDER BY` the executor cannot run, a query vector of the
-  wrong dimension, a bad REST search body — opened it, and every query on the
-  collection then failed with `VELES-027` for the 30 s recovery window. The
-  breaker now counts only failures that say the engine is unhealthy:
-  `Error::is_caller_error` is the single classification (exhaustive over the
-  variants), every core execution path records through the new
-  `CircuitBreaker::record_error`, the REST search handlers record the core
-  outcome through it and no longer record a `400` that refuses the request
-  body, and the server's `4xx`/`5xx` choice reads the same classification.
-  Storage, I/O, corruption and internal errors still count, as do guard-rail
-  stops (timeout, cardinality, memory, depth) and the REST request timeout.
-- **An unsupported MATCH `ORDER BY` is refused at validation.**
-  `ORDER BY COUNT(*)`, `ORDER BY MAX(year)`, a bare pattern alias
-  (`ORDER BY d`), a `RETURN` alias (`RETURN d.year AS y ORDER BY y`) and an
-  unqualified property (`ORDER BY year`) passed `QueryValidator::validate` and
-  failed only after traversal, with `VELES-018`. `QueryValidator` now refuses
-  them with `V015` (`UnsupportedMatchOrderBy`; `VELES-010` from the Rust API,
-  `422` from REST `/query`), naming the forms MATCH can order by: `similarity()`,
-  `similarity(field, $v)`, `depth`, `alias.property` and arithmetic over a
-  property (`year - 2000`). A test runs every form through the validator and
-  the executor and fails if their verdicts differ.
+  wrong dimension, a bad REST search body, a `timeout_ms` of `0` or a
+  `WITH (timeout_ms = 1)`, a query too broad for `max_cardinality`, a read the
+  access gate denied — opened it, and every query on the collection then
+  failed with `VELES-027` for the 30 s recovery window. The breaker now counts
+  only failures that say the engine is unhealthy: storage, I/O, corruption and
+  internal errors, a timeout under the server's own limit, the memory budget.
+  `Error::is_caller_error` is the one classification (exhaustive over the
+  variants and over `GuardRailKind`); a request's own time budget is the
+  client's when it is tighter than the server's limit. Every recording site
+  calls `CircuitBreaker::record_error`, which also never counts the breaker's
+  own refusal: 19 in core (3 in `early_return`, 8 in `match_dispatch` — the
+  MATCH traversal failure, which was not recorded at all, among them — 2 in
+  `query_pipeline`, 2 in `select_dispatch`, 4 in `sparse_dispatch`) and 2 in
+  the server (the REST search outcome, and the REST search timeout, which
+  called `record_failure` unconditionally). The REST search handlers no longer
+  record a `400` refusing the request body, nor a read the access gate denied
+  (`AccessDecision::Deny`, whatever error carries it). The server's
+  `4xx`/`5xx` choice reads the same classification.
 
 ## [8.0.0] - 2026-10-30
 

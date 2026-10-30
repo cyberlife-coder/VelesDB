@@ -155,6 +155,8 @@ pub enum GuardRailViolation {
         max_ms: u64,
         /// Actual elapsed time in milliseconds.
         elapsed_ms: u64,
+        /// Whose budget `max_ms` is: the client's own, or the server's limit.
+        budget: crate::error::TimeoutBudget,
     },
     /// Rate limit exceeded (US-005).
     RateLimitExceeded {
@@ -166,6 +168,23 @@ pub enum GuardRailViolation {
         /// Time until recovery in seconds.
         recovery_in_seconds: u64,
     },
+}
+
+impl GuardRailViolation {
+    /// The [`GuardRailKind`](crate::error::GuardRailKind) this violation is
+    /// surfaced as in [`Error::GuardRail`](crate::error::Error::GuardRail).
+    #[must_use]
+    pub const fn kind(&self) -> crate::error::GuardRailKind {
+        use crate::error::GuardRailKind as K;
+        match self {
+            Self::DepthExceeded { .. } => K::Depth,
+            Self::CardinalityExceeded { .. } => K::Cardinality,
+            Self::MemoryExceeded { .. } => K::Memory,
+            Self::Timeout { budget, .. } => K::Timeout(*budget),
+            Self::RateLimitExceeded { .. } => K::RateLimit,
+            Self::CircuitOpen { .. } => K::CircuitOpen,
+        }
+    }
 }
 
 impl std::fmt::Display for GuardRailViolation {
@@ -188,7 +207,9 @@ impl std::fmt::Display for GuardRailViolation {
                     used_bytes / (1024 * 1024)
                 )
             }
-            Self::Timeout { max_ms, elapsed_ms } => {
+            Self::Timeout {
+                max_ms, elapsed_ms, ..
+            } => {
                 write!(f, "Query timed out: max={max_ms}ms, elapsed={elapsed_ms}ms")
             }
             Self::RateLimitExceeded { limit_qps } => {
