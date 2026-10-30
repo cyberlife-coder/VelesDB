@@ -261,7 +261,7 @@ fn every_sql_fence_in_user_docs_is_accepted_by_the_engine() {
     );
 }
 
-/// A VelesQL block under a near-miss tag (`SQL`, `velesql`, ...) would skip
+/// A `VelesQL` block under a near-miss tag (`SQL`, `velesql`, ...) would skip
 /// the check above without anyone noticing.
 #[test]
 fn no_velesql_block_hides_under_a_near_miss_fence_tag() {
