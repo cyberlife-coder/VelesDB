@@ -116,6 +116,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   architecture reference ran `USING FUSION` with no branch to fuse, and the
   CLI cookbook's weighted, maximum and default fusion samples with a single
   `NEAR`: each fails with `V012`. They fuse `NEAR` with a `MATCH`.
+- **Every `sql` block in the docs is VelesQL the engine accepts.** 60 statements
+  in the spec and the guides were refused: `MATCH` without `RETURN` (or with
+  `ORDER BY` before it), `HAVING` on a SELECT alias, `IN (SELECT ...)`, a comma
+  join, `DATE()`, a PostgreSQL `CREATE TABLE`, and grammar notation or
+  consecutive statements with no `;`. They are rewritten in supported syntax,
+  or the guide now says the feature does not exist (comma joins, `DATE()`,
+  set-membership subqueries — also listed in the spec and the conformance
+  matrix); the cookbook no longer calls scalar subqueries and outer joins
+  unexecutable. The cheat-sheet test became `velesql_doc_samples`, which parses
+  and validates every `sql` block of the user-facing markdown; the fence
+  convention it enforces (`postgresql`, `text`, `velesql-error`) is in
+  `CONTRIBUTING.md`. The MATCH `ORDER BY` forms the engine refuses (an
+  aggregate, a lone bare identifier) are now documented in the spec, the graph
+  patterns guide and the conformance matrix.
 - **Docs that named a missing API or a wrong version.**
   - The concurrency guide configured a collection with
     `CollectionConfig::new(..).with_durability(..)`, which does not exist: a

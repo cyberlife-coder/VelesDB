@@ -448,7 +448,9 @@ score_rrf(d) = 1/(k + rank_dense(d)) + 1/(k + rank_sparse(d))
 
 **VelesQL:**
 ```sql
-USING FUSION(strategy = 'rrf', k = 60)
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+LIMIT 10 USING FUSION(strategy = 'rrf', k = 60)
 ```
 
 ### RSF (Reciprocal Score Fusion)
@@ -472,7 +474,9 @@ Normalization is min-max per branch. `dense_weight + sparse_weight` must equal 1
 
 **VelesQL:**
 ```sql
-USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
+SELECT * FROM docs
+WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
+LIMIT 10 USING FUSION(strategy = 'rsf', dense_weight = 0.7, sparse_weight = 0.3)
 ```
 
 ### RRF vs RSF Comparison
