@@ -76,10 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deferred indexer: by id, the pending score winning, in the metric's order,
   truncated to `k`. A flush keeps what it indexes in its queue until it is
   indexed, so a search racing it never finds a point in neither place, and a
-  failed link no longer needs to put its ids back. The cost is an exact scan
+  failed link leaves its points queued for the next flush. The cost is an exact scan
   of the held points on each search, up to `merge_threshold` (default 10 000)
-  of them; the `bulk_insert_v2_benchmark` bench `search_with_10k_pending`
-  measures it, with no recorded figure yet.
+  of them: 3.08 ms per search at 10 000 pending 768-d points
+  (`bulk_insert_v2_benchmark`'s `search_with_10k_pending_768d`, on a shared
+  4-vCPU cloud sandbox, not the reference machine), paid only until a flush
+  or the threshold links them.
 
 ### Documentation
 

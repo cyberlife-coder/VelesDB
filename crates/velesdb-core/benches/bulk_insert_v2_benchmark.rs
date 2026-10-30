@@ -3,8 +3,8 @@
 //! Compares insertion paths and measures `AsyncIndexBuilder` overhead:
 //! - `upsert_bulk` standard path (baseline)
 //! - `upsert_bulk` V2 path (WAL + `DirectVectorWriter` + builder queue)
-//! - search while the builder holds 10K points (the exact scan every search
-//!   merges until a flush links them)
+//! - search while the builder holds 10K 768-d points (the exact scan every
+//!   search merges until a flush links them)
 
 #![allow(
     clippy::cast_precision_loss,
@@ -21,6 +21,9 @@ use velesdb_core::{Database, Point};
 const VECTOR_COUNT: usize = 10_000;
 const DIMENSION: usize = 16;
 const BATCH_SIZE: usize = 1_000;
+/// The pending-search case runs at a production embedding width: its cost is
+/// one exact distance per pending point, so it scales with the dimension.
+const PENDING_DIMENSION: usize = 768;
 
 /// Generates deterministic points for benchmarking.
 fn generate_points(count: usize, dim: usize) -> Vec<Point> {
@@ -70,7 +73,8 @@ fn bench_upsert_bulk_standard(c: &mut Criterion) {
 ///
 /// `upsert_bulk`'s V2 path returns before the graph links its points, so each
 /// search scores everything the builder holds exactly and merges it: this is
-/// that cost at 10K pending points, the default `merge_threshold`.
+/// that cost at 10K pending 768-dimensional points, the default
+/// `merge_threshold`.
 fn bench_search_with_pending(c: &mut Criterion) {
     let mut group = c.benchmark_group("bulk_insert_v2");
     group.sample_size(50);
@@ -82,18 +86,20 @@ fn bench_search_with_pending(c: &mut Criterion) {
     };
     let coll = velesdb_core::VectorCollection::create_with_async_builder(
         dir.path().join("bench_pending"),
-        DIMENSION,
+        PENDING_DIMENSION,
         DistanceMetric::Cosine,
         config,
     )
     .unwrap();
-    for batch in generate_points(VECTOR_COUNT, DIMENSION).chunks(BATCH_SIZE) {
+    for batch in generate_points(VECTOR_COUNT, PENDING_DIMENSION).chunks(BATCH_SIZE) {
         coll.upsert_bulk(batch).unwrap();
     }
 
-    let query: Vec<f32> = (0..DIMENSION).map(|j| (j % 1000) as f32 / 1000.0).collect();
+    let query: Vec<f32> = (0..PENDING_DIMENSION)
+        .map(|j| (j % 1000) as f32 / 1000.0)
+        .collect();
 
-    group.bench_function("search_with_10k_pending", |b| {
+    group.bench_function("search_with_10k_pending_768d", |b| {
         b.iter(|| black_box(coll.search(&query, 10).unwrap()));
     });
 

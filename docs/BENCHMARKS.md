@@ -300,9 +300,19 @@ execution.
 
 The two rows this table also carried measured the builder's buffer alone —
 `drain_buffer` and `search_buffer`, which no longer exist as public calls.
-What a caller pays instead is `search_with_10k_pending`: a search while the
-builder still holds 10K bulk-loaded points, each of which every search scores
-exactly until a flush links it. It has no recorded figure yet.
+What a caller pays instead is `search_with_10k_pending_768d`: a search while
+the builder still holds 10K bulk-loaded 768-dimensional points, each of which
+every search scores exactly until a flush links it.
+
+| Operation | Latency |
+|-----------|---------|
+| **Search, 10K × 768-d points pending (Cosine, k=10)** | 3.08 ms (95% CI 2.93–3.23 ms) |
+
+*Measured 2026-10-30 on a shared 4-vCPU cloud sandbox (Intel Xeon @ 2.10 GHz)
+while other builds ran, criterion with 50 samples: an order-of-magnitude
+figure, not the reference machine. The scan is single-threaded and linear in
+both the pending count and the dimension; it stops once a flush, or the
+`merge_threshold`-th pending point, links them into the graph.*
 
 ---
 
