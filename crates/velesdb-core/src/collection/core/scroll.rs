@@ -91,9 +91,7 @@ impl Collection {
         // `usize::MAX` used to be reserved up front and abort the process.
         candidate_ids
             .iter()
-            .filter_map(|&id| {
-                Self::build_point(id, is_metadata_only, &*payload_storage, &*vector_storage)
-            })
+            .map(|&id| Self::build_point(id, is_metadata_only, &*payload_storage, &*vector_storage))
             .filter(|point| {
                 !is_payload_expired(point.payload.as_ref(), now_secs)
                     && Self::passes_filter(point, filter)
@@ -102,15 +100,14 @@ impl Collection {
             .collect()
     }
 
-    /// Builds a `Point` from storage. Always returns `Some`; points without a
-    /// stored vector get an empty vector slice.
-    #[allow(clippy::unnecessary_wraps)] // Reason: Option return used by caller's if-let pattern
+    /// Builds a `Point` from storage; a point without a stored vector gets an
+    /// empty vector.
     fn build_point(
         id: u64,
         is_metadata_only: bool,
         payload_storage: &dyn PayloadStorage,
         vector_storage: &dyn VectorStorage,
-    ) -> Option<Point> {
+    ) -> Point {
         let payload = payload_storage.retrieve(id).ok().flatten();
         // Graph nodes inserted via upsert_node_payload() have no vector in storage.
         // Use unwrap_or_default() so payload-only nodes are included, not silently skipped.
@@ -123,12 +120,12 @@ impl Collection {
                 .flatten()
                 .unwrap_or_default()
         };
-        Some(Point {
+        Point {
             id,
             vector,
             payload,
             sparse_vectors: None,
-        })
+        }
     }
 
     /// Returns `true` if the point passes the optional filter.

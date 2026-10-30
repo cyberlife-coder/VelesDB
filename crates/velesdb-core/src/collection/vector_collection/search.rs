@@ -499,9 +499,18 @@ impl VectorCollection {
     ///
     /// Calling this when streaming is already active replaces the existing
     /// ingester (the old drain task is aborted via `Drop`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`](crate::error::Error::Config) for a config
+    /// [`StreamingConfig::validate`](crate::collection::streaming::StreamingConfig::validate)
+    /// refuses; the current ingester, if any, is left running.
     #[cfg(feature = "persistence")]
-    pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
-        self.inner.enable_streaming(config);
+    pub fn enable_streaming(
+        &self,
+        config: crate::collection::streaming::StreamingConfig,
+    ) -> crate::error::Result<()> {
+        self.inner.enable_streaming(config)
     }
 
     /// Executes a raw VelesQL string, parsing it before execution.

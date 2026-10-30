@@ -480,7 +480,7 @@ impl Collection {
                 Some(SearchResult::new(point, score))
             })
             .collect();
-        // The loop is both guards' last use; nothing below reads storage.
+        // The collect is both guards' last use; nothing below reads storage.
         drop(payload_storage);
         drop(vector_storage);
         out

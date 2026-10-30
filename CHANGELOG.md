@@ -517,12 +517,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Collection::scroll_batch` reserved `batch_size` points up front, and the
   streaming ingester's drain task reserved its configured `batch_size`, so a
   caller's `usize::MAX` (or any size past memory) overflowed the capacity and
-  aborted the process; the Python and Tauri `scroll_batch`, the CLI and
-  `enable_streaming` pass the size through (REST caps a scroll at 10 000).
-  Both now grow with the points they actually
-  hold. The sparse, hybrid and filtered search resolvers and the GPU
-  multi-probe merge are sized the same way, by the hits found rather than by
-  `k` or `limit`, which the searches already bounded.
+  aborted the process. The Python `scroll` iterator and `scroll_batch`, the
+  Tauri `scroll_batch` and the CLI pass a scroll size through (REST caps one
+  at 10 000); REST `/stream/enable` and the Python, Tauri and mobile
+  `enable_streaming` pass a streaming `batch_size` through, the mobile one
+  turning a `u64` past `usize` into `usize::MAX`. Both now grow with the
+  points they actually hold. The sparse, hybrid and filtered search
+  resolvers and the GPU multi-probe merge are sized the same way, by the hits
+  found rather than by `k` or `limit`, which the searches already bounded.
+- **BREAKING (Rust API) — `enable_streaming` refuses a config the pipeline
+  cannot run with.** A streaming `buffer_size` of 0 or past
+  `tokio::sync::Semaphore::MAX_PERMITS`, or a `flush_interval_ms` of 0, hit an
+  assertion in tokio's channel or interval and aborted the process (release
+  builds abort on panic), reachable from a REST request. The new
+  `StreamingConfig::validate` refuses them, and `Collection::enable_streaming`
+  and `VectorCollection::enable_streaming` now return `Result<()>`, with
+  `Error::Config` (`VELES-009`) and the current ingester left running.
+  REST `/stream/enable` answers `400`, Python raises `ValueError`, Tauri and
+  mobile reject with `VELES-009`. *Migration*: handle or `?` the result.
 - **Graph edges with properties survive a flush and a reopen.** `flush()`
   writes every edge to the `edge_store.bin` snapshot, encoded with postcard,
   and then truncates the edge WAL. An edge's properties are

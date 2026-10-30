@@ -542,8 +542,9 @@ impl VelesCollection {
         // streaming runtime so the task is scheduled on it and survives this call.
         let rt = crate::streaming_runtime::stream_runtime()?;
         let _guard = rt.enter();
-        self.inner.enable_streaming(core_config);
-        Ok(())
+        self.inner
+            .enable_streaming(core_config)
+            .map_err(|e| VelesError::from_core("Enable streaming failed", e))
     }
 
     /// Queues a batch of points for streaming ingestion.

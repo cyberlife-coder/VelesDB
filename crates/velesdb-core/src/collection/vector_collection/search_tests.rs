@@ -406,6 +406,34 @@ fn test_execute_query_str_returns_consistent_results() {
 
 // ─── enable_streaming() ────────────────────────────────────────────────────
 
+/// A config the channel or the flush timer cannot run with is refused before
+/// anything is spawned: tokio asserts on each of them, so they aborted the
+/// process, and a refusal leaves no ingester behind.
+#[tokio::test]
+async fn test_enable_streaming_refuses_a_config_the_pipeline_cannot_run() {
+    use crate::collection::streaming::StreamingConfig;
+    let (coll, _dir) = create_test_vc();
+    for (config, field) in [
+        (StreamingConfig::new(0, 4, 50), "buffer_size"),
+        (
+            StreamingConfig::new(tokio::sync::Semaphore::MAX_PERMITS + 1, 4, 50),
+            "buffer_size",
+        ),
+        (StreamingConfig::new(100, 4, 0), "flush_interval_ms"),
+    ] {
+        let err = coll
+            .enable_streaming(config)
+            .expect_err("test: an unusable config must be refused");
+        assert!(matches!(err, crate::error::Error::Config(_)), "{err}");
+        assert!(err.to_string().contains(field), "{err}");
+    }
+    assert!(
+        coll.stream_insert(Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None))
+            .is_err(),
+        "a refused config must not leave an ingester"
+    );
+}
+
 /// A configured `batch_size` larger than memory streams like any other: the
 /// drain task used to reserve the whole batch up front, which aborted the
 /// process on `usize::MAX`.
@@ -416,7 +444,8 @@ async fn test_enable_streaming_with_a_huge_batch_size_flushes_on_the_timer() {
         buffer_size: 100,
         batch_size: usize::MAX,
         flush_interval_ms: 20,
-    });
+    })
+    .expect("test: valid streaming config");
 
     coll.stream_insert(Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None))
         .expect("test: stream_insert ok");
@@ -441,7 +470,8 @@ async fn test_enable_streaming_sends_and_searches() {
         batch_size: 4,
         flush_interval_ms: 50,
     };
-    coll.enable_streaming(config);
+    coll.enable_streaming(config)
+        .expect("test: valid streaming config");
 
     // Send points through the streaming channel.
     for i in 1..=4u64 {

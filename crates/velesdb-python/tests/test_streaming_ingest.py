@@ -63,6 +63,20 @@ def test_enable_streaming_then_stream_insert_lands_points(temp_db):
     assert results[0]["id"] == 1
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        StreamingIngestConfig(buffer_size=0),
+        StreamingIngestConfig(flush_interval_ms=0),
+    ],
+)
+def test_enable_streaming_refuses_a_config_it_cannot_run(temp_db, config):
+    """A zero buffer or flush interval raises; before 8.0 it aborted the process."""
+    collection = temp_db.create_collection("stream_bad_config", dimension=4)
+    with pytest.raises(ValueError, match="streaming"):
+        collection.enable_streaming(config)
+
+
 def test_enable_streaming_uses_engine_defaults_when_unconfigured(temp_db):
     """enable_streaming() with no argument applies the engine defaults."""
     collection = temp_db.create_collection("stream_default", dimension=4)

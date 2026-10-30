@@ -824,11 +824,22 @@ impl Collection {
     /// ingester (the old drain task is aborted via `Drop`).
     ///
     /// Future: auto-enable from persisted StreamingConfig on open (STREAM-01)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`](crate::error::Error::Config) for a config
+    /// [`StreamingConfig::validate`](crate::collection::streaming::StreamingConfig::validate)
+    /// refuses; the current ingester, if any, is left running.
     #[cfg(feature = "persistence")]
-    pub fn enable_streaming(&self, config: crate::collection::streaming::StreamingConfig) {
+    pub fn enable_streaming(
+        &self,
+        config: crate::collection::streaming::StreamingConfig,
+    ) -> crate::error::Result<()> {
         use crate::collection::streaming::StreamIngester;
+        config.validate()?;
         let ingester = StreamIngester::new(self.clone(), config);
         *self.streaming.stream_ingester.write() = Some(ingester);
+        Ok(())
     }
 
     /// Pushes entries into the delta buffer if it is currently active.

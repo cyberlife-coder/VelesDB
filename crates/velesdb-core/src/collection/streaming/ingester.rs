@@ -64,6 +64,36 @@ impl Default for StreamingConfig {
 }
 
 impl StreamingConfig {
+    /// Checks the values the pipeline cannot run with.
+    ///
+    /// The tokio channel and interval behind the drain task assert on them,
+    /// so before this check a REST, Python, Tauri or mobile caller could abort
+    /// the process with a zero `buffer_size`, one past
+    /// [`tokio::sync::Semaphore::MAX_PERMITS`], or a zero
+    /// `flush_interval_ms`. `batch_size` takes any value: 0 flushes every
+    /// point, and a size past memory is never reserved up front.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Config`](crate::error::Error::Config) naming the
+    /// first field out of range.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        use crate::error::Error;
+        if self.buffer_size == 0 || self.buffer_size > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err(Error::Config(format!(
+                "streaming buffer_size must be between 1 and {}, got {}",
+                tokio::sync::Semaphore::MAX_PERMITS,
+                self.buffer_size
+            )));
+        }
+        if self.flush_interval_ms == 0 {
+            return Err(Error::Config(
+                "streaming flush_interval_ms must be at least 1".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Constructs a config from explicit pipeline parameters.
     ///
     /// Provided because the struct is `#[non_exhaustive]` (future fields use
