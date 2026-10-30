@@ -329,7 +329,8 @@ def bump_file(path: Path, fmt: str, ver: str, date: "datetime.date") -> int:
         # and the table `velesdb-core = { version = "X.Y.Z", features = [...] }`.
         text, n = _sub_all(
             text,
-            r'(velesdb-core\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?")' + VERSION_RE + r'(")',
+            r'((?:velesdb-(?:core|server|cli|migrate|mobile)|tauri-plugin-velesdb)'
+            r'\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?")' + VERSION_RE + r'(")',
             r"\g<1>" + ver + r"\g<2>",
         )
     elif fmt == "ghcr_image":

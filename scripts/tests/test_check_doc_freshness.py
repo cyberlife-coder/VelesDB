@@ -287,6 +287,13 @@ class VersionGuardTests(FreshnessGuardTestCase):
         self.write("docs/ALPHA.md", ALPHA_CLEAN)
         self.assertGuardPasses("versions")
 
+    def test_a_sibling_crate_pinned_a_major_behind_fails(self) -> None:
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + '\n```toml\ntauri-plugin-velesdb = "3.2.0"\n```\n',
+        )
+        self.assertGuardFails("versions", "[cargo-pin-core]", "says 3.2.0")
+
     def test_stale_memory_tag_fails_then_passes(self) -> None:
         self.write("docs/ALPHA.md", ALPHA_CLEAN.replace(
             f"velesdb-memory-v{MEMORY_VERSION}", "velesdb-memory-v0.11.0"

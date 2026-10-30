@@ -291,3 +291,23 @@ class IntegrationCommonFloorTests(unittest.TestCase):
             path = Path(tmp) / "pyproject.toml"
             path.write_text(self.PYPROJECT, encoding="utf-8")
             self.assertEqual(guard._read_pip_common_floor(path), "4.0.0")
+
+
+class SiblingCratePinTests(unittest.TestCase):
+    def test_moves_every_workspace_crate_pin_and_no_other_crate(self) -> None:
+        snippet = (
+            'tauri-plugin-velesdb = "4.3.0"\n'
+            'velesdb-core = { version = "4.3.0", features = ["persistence"] }\n'
+            'velesdb-memory = "0.16.0"\n'
+            'serde = "1.0.200"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "README.md"
+            path.write_text(snippet, encoding="utf-8")
+            n = bump.bump_file(path, "cargo_dep_pin", "8.0.0", datetime.date(2026, 10, 30))
+            out = path.read_text(encoding="utf-8")
+        self.assertEqual(n, 2)
+        self.assertIn('tauri-plugin-velesdb = "8.0.0"', out)
+        self.assertIn('velesdb-core = { version = "8.0.0"', out)
+        self.assertIn('velesdb-memory = "0.16.0"', out)
+        self.assertIn('serde = "1.0.200"', out)
