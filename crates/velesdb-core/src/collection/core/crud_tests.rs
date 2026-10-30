@@ -1069,8 +1069,8 @@ fn test_phase2_does_not_skip_with_sparse_vectors() {
 
 /// Issue #425: BM25 skip in bulk path must still index text when payloads exist.
 ///
-/// Regression: the BM25 skip optimization in `bulk_store_payloads` must
-/// NOT skip when at least one point has a payload containing text.
+/// Regression: the bulk path's BM25 update (`update_text_index_for_entries`)
+/// must NOT be skipped when at least one point has a payload containing text.
 #[test]
 fn test_bulk_bm25_skip_does_not_lose_text() {
     let dir = tempfile::tempdir().unwrap();

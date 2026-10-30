@@ -81,12 +81,20 @@ impl Collection {
         ids: &[u64],
         old_payloads: &[Option<Value>],
     ) {
-        let held: Vec<Option<Value>> = ids
-            .iter()
-            .map(|&id| storage.retrieve(id).ok().flatten())
-            .collect();
+        let held = Self::read_back_payloads(storage, ids);
         let writes = ids.iter().copied().zip(held.iter().map(Option::as_ref));
         self.index_payload_writes(writes, old_payloads);
+    }
+
+    /// What `storage` holds for each of `ids`, in order: `None` where it holds
+    /// no payload or the read fails.
+    pub(super) fn read_back_payloads(
+        storage: &LogPayloadStorage,
+        ids: &[u64],
+    ) -> Vec<Option<Value>> {
+        ids.iter()
+            .map(|&id| storage.retrieve(id).ok().flatten())
+            .collect()
     }
 
     /// Pairs each write of a batch with the payload it replaces: the previous

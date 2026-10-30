@@ -572,6 +572,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concurrent write to the same ids can no longer leave them describing a
   payload storage no longer holds.
 
+- **A payload write that fails part-way leaves the indexes describing what
+  was stored.** A batch write to payload storage is not all-or-nothing: the
+  records written before the error, or all of them when only the sync fails,
+  are readable. `upsert`, both bulk paths and `upsert_node_payloads` now read
+  those ids back on the error and index what storage holds; the node-payload
+  write used to remove the old label, range and composite entries before the
+  write and index nothing on an error, so a node it had rewritten sat in
+  storage under no label at all. A bulk upsert whose vector write fails now
+  also updates BM25, the secondary indexes and the histograms for the
+  payloads it stored before returning the error, where it used to return
+  first and leave those payloads out of them.
+
 - **`GraphCollection::traverse_bfs_parallel` counts only results against
   `limit`.** The traverser emitted each start node at depth 0, which took a
   slot of `limit` before the `min_depth` filter dropped it, so

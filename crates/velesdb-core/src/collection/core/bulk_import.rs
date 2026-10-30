@@ -35,10 +35,9 @@ impl Collection {
         dimension: usize,
         payloads: Option<&[Option<serde_json::Value>]>,
     ) -> Result<usize> {
-        // LOCK ORDER: config(1, read) →
-        //   store_vectors_and_payload_entries (vector_storage(2) ‖
-        //   payload_storage(3) → label_index(7), released → graph_range_indexes(7)) →
-        //   secondary_indexes(6, read) → HNSW index (internal) → config(1, write).
+        // LOCK ORDER: config(1, read) → store_vectors_and_payloads (see its
+        //   doc: the storage locks, then the indexes derived from payloads) →
+        //   HNSW index (internal) → vector_storage(2, read) → config(1, write).
         let n = ids.len();
         if n == 0 {
             return Ok(0);
@@ -68,13 +67,7 @@ impl Collection {
             })
             .collect();
 
-        // Bug #46: the pre-batch payload of each id's first entry only, so an
-        // old value is decremented exactly once.
-        let old_payloads =
-            self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
-
-        self.update_text_index_for_entries(&payload_entries, &old_payloads)?;
-        self.update_secondary_indexes_for_entries(&payload_entries, &old_payloads);
+        self.store_vectors_and_payloads(&vector_refs, &payload_entries)?;
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
         // Two statements so the guards never overlap: the one-liner form
@@ -82,8 +75,6 @@ impl Collection {
         // acquiring config (rank 1) — a decreed-order inversion.
         let point_count = self.storage.vector_storage.read().len();
         self.storage.config.write().point_count = point_count;
-
-        self.apply_histogram_replace_for_entries(&payload_entries, &old_payloads);
 
         self.invalidate_caches_and_bump_generation();
 
@@ -97,11 +88,19 @@ impl Collection {
     /// per ID is counted for new payloads to match last-writer-wins storage
     /// semantics. Shared by `upsert_bulk` and `upsert_bulk_from_raw`, whose
     /// entries leave out the points without a payload: those keep theirs.
+    /// Bug #46: `old_payloads` holds the pre-batch payload of each id's first
+    /// entry only, so an old value is decremented exactly once.
+    ///
+    /// A batch without payloads changes no histogram, and returns before
+    /// reading the statistics file.
     pub(super) fn apply_histogram_replace_for_entries(
         &self,
         entries: &[(u64, &serde_json::Value)],
         old_payloads: &[Option<serde_json::Value>],
     ) {
+        if entries.is_empty() {
+            return;
+        }
         let mut last: HashMap<u64, usize> = HashMap::with_capacity(entries.len());
         for (i, &(id, _)) in entries.iter().enumerate() {
             last.insert(id, i);
@@ -172,34 +171,6 @@ impl Collection {
         validate_dimension_match(collection_dim, dimension)?;
         self.enforce_raw_upsert_limits(ids, payloads)?;
         Ok(())
-    }
-
-    /// Writes vectors and raw payload entries to storage (parallel when
-    /// available), returning the entries' pre-batch payloads (see
-    /// [`Self::store_payload_entries`]).
-    fn store_vectors_and_payload_entries(
-        &self,
-        vector_refs: &[(u64, &[f32])],
-        payload_entries: &[(u64, &serde_json::Value)],
-    ) -> Result<Vec<Option<serde_json::Value>>> {
-        // LOCK ORDER: vector_storage(2, write, parallel) ‖ payload_storage(3, write, parallel).
-        //   Each rayon closure takes only its own storage lock; the payload one
-        //   then takes label_index(7) and graph_range_indexes(7) in turn.
-        #[cfg(feature = "persistence")]
-        {
-            let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors(vector_refs),
-                || self.store_payload_entries(payload_entries),
-            );
-            vec_result?;
-            pay_result
-        }
-
-        #[cfg(not(feature = "persistence"))]
-        {
-            self.bulk_store_vectors(vector_refs)?;
-            self.store_payload_entries(payload_entries)
-        }
     }
 
     /// Batch-updates secondary indexes from bulk payload entries.

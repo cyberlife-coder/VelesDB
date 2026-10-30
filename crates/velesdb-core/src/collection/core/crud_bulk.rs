@@ -2,7 +2,7 @@
 //!
 //! Extracted from `crud.rs` (Issue #425) to keep each file under 500 NLOC.
 //! These methods are optimized for high-throughput import with parallel I/O.
-//! Raw import path (`upsert_bulk_from_raw`) is in `crud_bulk_raw.rs`.
+//! Raw import path (`upsert_bulk_from_raw`) is in `bulk_import.rs`.
 //!
 //! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
 //! V2 path: `DirectVectorWriter` places each vector in the graph's
@@ -87,7 +87,7 @@ impl Collection {
     ) -> Result<usize> {
         // WAL + payload write (same durability guarantees as standard path).
         let entries = Self::payload_entries(points);
-        let old_payloads = self.store_vectors_and_payloads(vector_refs, &entries)?;
+        self.store_vectors_and_payloads(vector_refs, &entries)?;
 
         // Place each vector in the graph's ContiguousVectors, where rerank and
         // brute force see it at once, and queue its id for the builder to link
@@ -105,7 +105,7 @@ impl Collection {
         }
 
         let count = vector_refs.len();
-        self.finalize_bulk_upsert(points, &entries, &old_payloads, sparse_batch)?;
+        self.finalize_bulk_upsert(points, entries.len(), sparse_batch)?;
 
         // Track inserts for periodic HNSW save (Issue #423 Component 3).
         #[allow(clippy::cast_possible_truncation)]
@@ -128,25 +128,24 @@ impl Collection {
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
     ) -> Result<usize> {
         let entries = Self::payload_entries(points);
-        let old_payloads = self.store_vectors_and_payloads(vector_refs, &entries)?;
+        self.store_vectors_and_payloads(vector_refs, &entries)?;
 
         let inserted = self.bulk_index_or_defer(vector_refs);
-        self.finalize_bulk_upsert(points, &entries, &old_payloads, sparse_batch)?;
+        self.finalize_bulk_upsert(points, entries.len(), sparse_batch)?;
 
         Ok(inserted)
     }
 
     /// Post-write bookkeeping shared by the V2 and standard bulk paths:
-    /// refreshes the point count, applies the sparse batch, replaces payload
-    /// histograms (dedup by id), and invalidates caches.
+    /// refreshes the point count, applies the sparse batch, and invalidates
+    /// caches.
     ///
-    /// `entries` and `old_payloads` cover only the points that carry a
-    /// payload: a bulk point without one leaves the stored payload as it is.
+    /// `payload_count` is how many of `points` carry a payload: a bulk point
+    /// without one leaves the stored payload as it is.
     fn finalize_bulk_upsert(
         &self,
         points: &[Point],
-        entries: &[(u64, &serde_json::Value)],
-        old_payloads: &[Option<serde_json::Value>],
+        payload_count: usize,
         sparse_batch: &BTreeMap<String, Vec<(u64, crate::index::sparse::SparseVector)>>,
     ) -> Result<()> {
         // Two statements so the guards never overlap: the one-liner form
@@ -155,10 +154,7 @@ impl Collection {
         let point_count = self.storage.vector_storage.read().len();
         self.storage.config.write().point_count = point_count;
         self.apply_sparse_batch_bulk(sparse_batch)?;
-        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
-        // so only the final payload counts, then atomic decrement + increment.
-        self.apply_histogram_replace_for_entries(entries, old_payloads);
-        if entries.len() == points.len() {
+        if payload_count == points.len() {
             self.bump_generation_with_mirror_upserts(points);
         } else {
             // The mirror's incremental upsert reads a missing payload as an
@@ -169,38 +165,44 @@ impl Collection {
     }
 
     /// Writes vectors and payloads, each store paying one durability barrier
-    /// for the whole batch.
+    /// for the whole batch, then brings every index derived from the payloads
+    /// in line with them. Shared by `upsert_bulk` and `upsert_bulk_from_raw`.
     ///
-    /// Returns the pre-batch payloads of `entries`, positionally (see
-    /// [`Self::store_payload_entries`]).
-    fn store_vectors_and_payloads(
+    /// The two stores run in parallel and both complete even when one fails.
+    /// Stored payloads are readable whatever happened to the vectors, so the
+    /// secondary indexes, the histograms and BM25 follow them before a vector
+    /// error is returned; returning it first left stored payloads unindexed.
+    ///
+    /// LOCK ORDER: vector_storage(2) ‖ payload_storage(3) → label_index(7),
+    /// released → graph_range_indexes(7); then, with both storage locks
+    /// released, secondary_indexes(6), stats_io_mutex(12), the BM25 WAL.
+    pub(super) fn store_vectors_and_payloads(
         &self,
         vector_refs: &[(u64, &[f32])],
         entries: &[(u64, &serde_json::Value)],
-    ) -> Result<Vec<Option<serde_json::Value>>> {
+    ) -> Result<()> {
         #[cfg(feature = "persistence")]
-        let old_payloads = {
-            let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors(vector_refs),
-                || self.store_payload_entries(entries),
-            );
-            vec_result?;
-            pay_result?
-        };
-
+        let (vectors_stored, old_payloads) = rayon::join(
+            || self.bulk_store_vectors(vector_refs),
+            || self.store_payload_entries(entries),
+        );
         #[cfg(not(feature = "persistence"))]
-        let old_payloads = {
-            self.bulk_store_vectors(vector_refs)?;
-            self.store_payload_entries(entries)?
-        };
+        let (vectors_stored, old_payloads) = (
+            self.bulk_store_vectors(vector_refs),
+            self.store_payload_entries(entries),
+        );
 
-        // Issue #1797: one BM25 WAL barrier for the whole batch, after the
-        // payloads it describes are stored.
-        self.update_text_index_for_entries(entries, &old_payloads)?;
+        let old_payloads = old_payloads?;
         // The raw bulk path always maintained the secondary indexes; this one
         // never did, so an equality lookup missed every bulk-upserted point.
         self.update_secondary_indexes_for_entries(entries, &old_payloads);
-        Ok(old_payloads)
+        // Incremental histogram maintenance (Bug #47 + Bug #49): dedup by id
+        // so only the final payload counts, then atomic decrement + increment.
+        self.apply_histogram_replace_for_entries(entries, &old_payloads);
+        // Issue #1797: one BM25 WAL barrier for the whole batch, after the
+        // payloads it describes are stored.
+        self.update_text_index_for_entries(entries, &old_payloads)?;
+        vectors_stored
     }
 
     /// The `(id, payload)` of every point that carries a payload, in order.

@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use crate::collection::types::Collection;
 use crate::error::Result;
-use crate::storage::{LogPayloadStorage, PayloadStorage};
+use crate::storage::LogPayloadStorage;
 
 use super::graph_property_index_wiring::extract_labels;
 
@@ -67,28 +67,38 @@ impl Collection {
         let deduped = dedup_last_wins(entries);
         self.validate_node_payload_batch(&deduped)?;
 
-        // LOCK ORDER: payload_storage(3) → label_index(7) → graph_range_indexes(7).
+        // LOCK ORDER: payload_storage(3) → label_index(7), released →
+        // graph_range_indexes(7), released → composite_index_manager.
         //
         // `payload_storage` is held across the whole batch, which the single
         // write did not do between its store and its property indexing. The
         // window it closes matters more here: with the guard dropped, another
         // writer could store and index a newer payload for one of these nodes
-        // before this call's `index_node_payload_batch` runs, and this call would
-        // then index the payload it just superseded.
+        // before this call reindexes them, and this call would then index the
+        // payload it just superseded. The old payloads are all read before
+        // any index lock is taken: the reads hit the WAL, and holding
+        // `label_index` across N of them would block its readers for the I/O.
+        let ids: Vec<u64> = deduped.iter().map(|&(node_id, _)| node_id).collect();
         let mut storage = self.storage.payload_storage.write();
-
-        self.unindex_superseded_payloads(&storage, &deduped);
+        let old_payloads = Self::collect_old_payloads_by_id(ids.iter().copied(), &storage);
 
         // The one barrier. `store_batch` applies the configured durability
         // mode once for the group, where N calls to `store` applied it N times.
-        storage.store_batch(&deduped)?;
-
-        self.index_node_payload_batch(&deduped);
+        let stored = storage.store_batch(&deduped);
+        if stored.is_ok() {
+            let written = deduped
+                .iter()
+                .map(|&(node_id, payload)| (node_id, Some(payload)));
+            self.reindex_node_payloads(written, &old_payloads);
+        } else {
+            self.reindex_after_failed_node_write(&storage, &ids, &old_payloads);
+        }
         drop(storage);
 
         // Node payload writes bypass the upsert mirror hooks — drop the
         // payload mirror so it can never serve stale columnar data. Once for
-        // the batch, not once per node.
+        // the batch, not once per node, and after a failed write too: the
+        // records it left readable are new.
         self.storage.payload_mirror.invalidate();
 
         // Bump write generation so any cached plan for this collection is
@@ -96,7 +106,7 @@ impl Collection {
         self.generations
             .write_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(())
+        stored.map_err(Into::into)
     }
 
     /// Rejects the batch before any mutation, so a bad entry commits nothing.
@@ -119,46 +129,40 @@ impl Collection {
         Ok(())
     }
 
-    /// Strips the label and property entries these ids carried before.
-    ///
-    /// Must complete before the write that replaces the payloads it reads.
-    /// Reads first and un-indexes second rather than interleaving the two: the
-    /// retrieves hit the WAL, and holding `label_index` across N of them would
-    /// block every reader of the label index for the whole I/O pass. The guard
-    /// is taken once for the removals, not once per node — taking it per node
-    /// is part of the cost this batch exists to remove.
-    fn unindex_superseded_payloads(&self, storage: &LogPayloadStorage, deduped: &[(u64, &Value)]) {
-        let mut superseded: Vec<(u64, Value)> = Vec::new();
-        for &(node_id, _) in deduped {
-            if let Ok(Some(old_payload)) = storage.retrieve(node_id) {
-                superseded.push((node_id, old_payload));
+    /// Moves these nodes' label, range and composite index entries from the
+    /// payloads they carried before the batch to `held`, what storage now
+    /// holds for each (`None`: nothing).
+    fn reindex_node_payloads<'a, I>(&self, held: I, old_payloads: &'a [Option<Value>])
+    where
+        I: Iterator<Item = (u64, Option<&'a Value>)> + Clone,
+    {
+        self.index_payload_writes(held.clone(), old_payloads);
+        for ((node_id, new), old) in held.zip(old_payloads) {
+            if let Some(old) = old {
+                self.deindex_node_composites(node_id, old);
             }
-        }
-
-        // One guard each for the label index and the range indexes, released
-        // between the two: both sit at lock order 7, with no ordering between
-        // them.
-        self.apply_payload_index_changes(
-            superseded
-                .iter()
-                .map(|(node_id, old_payload)| (*node_id, Some(old_payload), None)),
-        );
-        for (node_id, old_payload) in &superseded {
-            self.deindex_node_composites(*node_id, old_payload);
+            if let Some(new) = new {
+                self.index_node_composites(node_id, new);
+            }
         }
     }
 
-    /// Indexes the batch's new payloads, mirroring
-    /// [`Self::unindex_superseded_payloads`] and holding `label_index` once.
-    fn index_node_payload_batch(&self, deduped: &[(u64, &Value)]) {
-        self.apply_payload_index_changes(
-            deduped
-                .iter()
-                .map(|&(node_id, payload)| (node_id, None, Some(payload))),
-        );
-        for &(node_id, payload) in deduped {
-            self.index_node_composites(node_id, payload);
-        }
+    /// Reindexes the nodes of a batch whose write returned an error.
+    ///
+    /// A failed batch is not all-or-nothing: `LogPayloadStorage` makes each
+    /// record readable as it writes it, so the records before the error are
+    /// readable, and all of them when only the sync failed. The indexes follow
+    /// what storage now holds, read back per node; a node the write never
+    /// reached reads back its old payload and keeps its entries.
+    fn reindex_after_failed_node_write(
+        &self,
+        storage: &LogPayloadStorage,
+        ids: &[u64],
+        old_payloads: &[Option<Value>],
+    ) {
+        let held = Self::read_back_payloads(storage, ids);
+        let held = ids.iter().copied().zip(held.iter().map(Option::as_ref));
+        self.reindex_node_payloads(held, old_payloads);
     }
 
     /// Enforces strict-schema node-type validation for a node payload write.
