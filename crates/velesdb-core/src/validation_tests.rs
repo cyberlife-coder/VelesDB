@@ -96,3 +96,65 @@ fn error_is_recoverable() {
     let err = validate_collection_name("").unwrap_err();
     assert!(err.is_recoverable());
 }
+
+// -- payload depth: the boundary is serde_json's own --
+#[cfg(feature = "persistence")] // validate_payload_depth is.
+mod payload_depth {
+    use super::*;
+
+    fn nested_arrays(depth: usize) -> serde_json::Value {
+        let mut value = serde_json::json!(1);
+        for _ in 0..depth {
+            value = serde_json::json!([value]);
+        }
+        value
+    }
+
+    /// The deepest JSON document core writes a payload into: the agent-memory
+    /// snapshot's envelope, its point list, then the point.
+    fn in_memory_snapshot(payload: &serde_json::Value) -> String {
+        serde_json::to_string(&serde_json::json!({ "points": [{ "id": 1, "payload": payload }] }))
+            .unwrap()
+    }
+
+    #[test]
+    fn test_the_deepest_accepted_payload_reads_back_from_every_document() {
+        let payload = nested_arrays(MAX_VALUE_DEPTH);
+
+        validate_payload_depth(1, &payload).unwrap();
+        let log_record = serde_json::to_string(&payload).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&log_record).unwrap(),
+            payload
+        );
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&in_memory_snapshot(&payload)).unwrap();
+        assert_eq!(snapshot["points"][0]["payload"], payload);
+    }
+
+    #[test]
+    fn test_one_level_deeper_is_refused_and_is_what_the_memory_snapshot_cannot_read() {
+        let payload = nested_arrays(MAX_VALUE_DEPTH + 1);
+
+        let err = validate_payload_depth(7, &payload).unwrap_err();
+
+        assert!(
+            matches!(err, Error::SchemaValidation(ref m) if m.contains("point 7")),
+            "{err}"
+        );
+        assert!(serde_json::from_str::<serde_json::Value>(&in_memory_snapshot(&payload)).is_err());
+    }
+
+    #[test]
+    fn test_payload_depth_follows_the_deepest_branch_through_objects() {
+        let mut deep = serde_json::json!({});
+        for _ in 1..=MAX_VALUE_DEPTH {
+            deep = serde_json::json!({ "next": deep });
+        }
+        let payload = serde_json::json!({ "shallow": [1, 2], "deep": deep });
+
+        assert!(validate_payload_depth(1, &payload).is_err());
+        assert!(validate_payload_depth(1, &serde_json::json!({"a": [1, {"b": null}]})).is_ok());
+        assert!(validate_payload_depth(1, &serde_json::json!("scalar")).is_ok());
+    }
+}

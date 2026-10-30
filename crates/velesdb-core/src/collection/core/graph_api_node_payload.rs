@@ -113,7 +113,7 @@ impl Collection {
             // shared payload-size gate here. `max_vectors_per_collection` is
             // deliberately not checked: vector-less node writes never touch
             // `config.point_count`, so a projected count would be meaningless.
-            Self::enforce_payload_value_size(node_id, payload, max_payload_size)?;
+            Self::enforce_payload_limits(node_id, payload, max_payload_size)?;
             self.validate_node_labels_against_schema(payload)?;
         }
         Ok(())
