@@ -110,7 +110,7 @@ coll.upsert([
 ])
 
 # Dense vector search
-results = coll.search_request(velesdb.SearchOptions(vector=[0.1] * 384, top_k=10))
+results = coll.search_request(velesdb.SearchOptions(vector=[0.1] * 384, k=10))
 
 # VelesQL query
 results = coll.query(
