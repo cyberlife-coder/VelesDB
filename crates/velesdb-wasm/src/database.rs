@@ -408,7 +408,7 @@ impl WasmDatabase {
     /// COLLECTION), and admin (FLUSH as no-op). Unsupported surfaces such as
     /// MATCH, TRAIN QUANTIZER, FUSION clauses, compound queries and graph
     /// DML return a descriptive error instead of crashing. See the
-    /// [`velesql_exec`](crate::velesql_exec) module rustdoc for the full
+    /// `velesql_exec` module rustdoc for the full
     /// statement matrix.
     ///
     /// # Parameters

@@ -85,7 +85,7 @@ fn drop_collection(db: &mut DatabaseInner, stmt: &DropCollectionStatement) -> Re
 ///
 /// # Handle semantics (Devin Review Finding F12)
 ///
-/// TRUNCATE clears the existing [`VectorStore`] through the shared `Rc`
+/// TRUNCATE clears the existing [`VectorStore`](crate::vector_store::VectorStore) through the shared `Rc`
 /// instead of dropping and recreating the collection. This guarantees
 /// that any `WasmCollectionHandle` obtained *before* the TRUNCATE still
 /// observes the emptied store (its `Rc` has not been swapped out).

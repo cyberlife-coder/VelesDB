@@ -249,6 +249,16 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p velesdb-core --no-deps --all-features --document-private-items
 
+      # Same gate for velesdb-wasm. It ships on npm, not crates.io, but its
+      # rustdoc is the reference for the code behind every JS export, and 22
+      # broken links had accumulated there unseen — most pointing at core
+      # items that only exist under `persistence`, which the wasm build never
+      # enables, so they can only ever be code spans, never links.
+      - name: Rustdoc intra-doc links (velesdb-wasm)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p velesdb-wasm --no-deps --document-private-items
+
       # The extraction backend's unit tests are pure parsing and prompt
       # building: none opens a socket. Run them under the canonical role name
       # and its compatibility alias so neither path can silently stop enabling
