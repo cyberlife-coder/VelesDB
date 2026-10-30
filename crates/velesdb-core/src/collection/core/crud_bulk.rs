@@ -7,7 +7,8 @@
 //! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
 //! V2 path: `DirectVectorWriter` places each vector in the graph's
 //! `ContiguousVectors`, and `AsyncIndexBuilder` defers linking it into the
-//! graph for higher throughput.
+//! graph for higher throughput. Until it is linked, every vector search finds
+//! the point through the builder (`AsyncIndexBuilder::search_pending`).
 
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -91,8 +92,9 @@ impl Collection {
 
         // Place each vector in the graph's ContiguousVectors, where rerank and
         // brute force see it at once, and queue its id for the builder to link
-        // that slot. An index with its exact-distance features off gives the
-        // writer no slot to fill: the builder then places the vectors itself.
+        // that slot; until then every search scores it through the builder.
+        // An index with its exact-distance features off gives the writer no
+        // slot to fill: the builder then places the vectors itself.
         let writer = DirectVectorWriter::new(&self.storage.index);
         let needs_flush = match writer.write_batch_direct(vector_refs)? {
             Some(_) => aib.enqueue_placed(vector_refs.iter().map(|&(id, _)| id)),

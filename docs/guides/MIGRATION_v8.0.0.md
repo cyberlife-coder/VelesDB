@@ -114,6 +114,7 @@ requests.
 | `TraversalMetrics` (crate root and `metrics::`) | `GraphCollection::metrics()`, `Database::graph_metrics_prometheus()` |
 | `velesdb-migrate` `PineconeConfig::environment` | drop the field |
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
+| `AsyncIndexBuilder::{search_buffer, drain_buffer, buffer_len, is_building, trigger_build_async}` | search the collection; `VectorCollection::flush` indexes what the builder holds |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a
   `usize`. The removed helper returned `usize::MAX` for `perfect`. Without the

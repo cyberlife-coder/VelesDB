@@ -82,7 +82,7 @@ fn enabling_the_async_builder_on_an_open_collection_takes_effect_now() {
     coll.upsert_bulk(&three_points())
         .expect("test: upsert_bulk");
     assert_eq!(
-        live.placed_len() + live.buffer_len(),
+        live.pending_len(),
         3,
         "the next bulk write takes the V2 path through the builder just installed"
     );

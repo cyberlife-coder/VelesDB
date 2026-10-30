@@ -4,7 +4,7 @@
 //! Validates the `AsyncIndexBuilder` + `DirectVectorWriter` pipeline:
 //! - Enqueue vectors into the async builder
 //! - Flush synchronously into the HNSW index
-//! - Verify search returns correct results
+//! - Verify search returns correct results, before a flush as after it
 
 #![allow(
     clippy::cast_precision_loss,
@@ -44,34 +44,6 @@ fn create_test_collection(
 // ── AsyncIndexBuilder standalone integration ────────────────────────────
 
 #[test]
-fn async_builder_enqueue_and_buffer_search() {
-    let config = AsyncIndexBuilderConfig {
-        merge_threshold: 100_000,
-        segment_count: Some(2),
-    };
-    let builder = AsyncIndexBuilder::new(config);
-
-    let dim = 16;
-    // Enqueue vectors into the async builder buffer.
-    let vectors: Vec<(u64, Vec<f32>)> = (0..100).map(|i| (i, make_vector(i, dim))).collect();
-    let threshold_reached = builder.enqueue(vectors);
-    assert!(
-        !threshold_reached,
-        "threshold should not be reached for 100 vectors"
-    );
-    assert_eq!(builder.buffer_len(), 100);
-
-    // Brute-force search in the buffer should find results.
-    let query = make_vector(0, dim);
-    let buffer_results = builder.search_buffer(&query, 5, DistanceMetric::Cosine);
-    assert!(
-        !buffer_results.is_empty(),
-        "buffer search must return results"
-    );
-    assert_eq!(buffer_results[0].0, 0, "closest vector should be id=0");
-}
-
-#[test]
 fn async_builder_threshold_triggers_correctly() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 50,
@@ -86,21 +58,6 @@ fn async_builder_threshold_triggers_correctly() {
     // Enqueue 1 more — should trigger (total = 50).
     let batch2: Vec<(u64, Vec<f32>)> = vec![(49, make_vector(49, 4))];
     assert!(builder.enqueue(batch2), "50 >= 50, should trigger");
-}
-
-#[test]
-fn async_builder_drain_returns_all_vectors() {
-    let config = AsyncIndexBuilderConfig::default();
-    let builder = AsyncIndexBuilder::new(config);
-
-    let dim = 8;
-    let vectors: Vec<(u64, Vec<f32>)> = (0..25).map(|i| (i, make_vector(i, dim))).collect();
-    builder.enqueue(vectors);
-    assert_eq!(builder.buffer_len(), 25);
-
-    let drained = builder.drain_buffer();
-    assert_eq!(drained.len(), 25, "drain must return all buffered vectors");
-    assert_eq!(builder.buffer_len(), 0, "buffer must be empty after drain");
 }
 
 // ── Collection upsert_bulk + flush consistency ──────────────────────────
@@ -388,4 +345,128 @@ fn v2_path_maintains_recall() {
         recall >= 0.90,
         "V2 path search must match standard path within parity floor: got {recall:.2}"
     );
+}
+
+// ── Visibility before the builder drains ────────────────────────────────
+
+/// Points per batch: above the 100-point brute-force shortcut, so a search
+/// walks the graph.
+const VISIBILITY_BATCH: u64 = 300;
+/// A point of the second batch, which the builder still holds.
+const PENDING_TARGET: u64 = VISIBILITY_BATCH + VISIBILITY_BATCH / 2;
+
+/// Dispersed values (xorshift), so every point is its own nearest neighbour.
+fn dispersed(id: u64) -> Vec<f32> {
+    let mut state = id.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    (0..16)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        })
+        .collect()
+}
+
+/// A collection whose first batch a flush linked and whose second batch the
+/// builder still holds: `upsert_bulk` has returned for both. Only the linked
+/// batch carries the text the hybrid test searches for, so a hit on the
+/// pending target there comes from its vector.
+fn collection_with_pending_batch(dir: &std::path::Path) -> VectorCollection {
+    let config = AsyncIndexBuilderConfig {
+        merge_threshold: 10_000,
+        segment_count: None,
+    };
+    let coll = VectorCollection::create_with_async_builder(
+        dir.join("pending"),
+        16,
+        DistanceMetric::Euclidean,
+        config,
+    )
+    .expect("create collection with async builder");
+    let batch = |ids: std::ops::Range<u64>, cat: &str, title: &str| -> Vec<Point> {
+        ids.map(|id| {
+            let payload = serde_json::json!({ "cat": cat, "title": title });
+            Point::new(id, dispersed(id), Some(payload))
+        })
+        .collect()
+    };
+    coll.upsert_bulk(&batch(0..VISIBILITY_BATCH, "linked", "zebra"))
+        .expect("first upsert_bulk");
+    coll.flush().expect("flush links the first batch");
+    coll.upsert_bulk(&batch(
+        VISIBILITY_BATCH..2 * VISIBILITY_BATCH,
+        "pending",
+        "okapi",
+    ))
+    .expect("second upsert_bulk");
+    coll
+}
+
+fn ids(results: &[velesdb_core::SearchResult]) -> Vec<u64> {
+    results.iter().map(|r| r.point.id).collect()
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_dense_search() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let hits = coll
+        .search(&dispersed(PENDING_TARGET), 5)
+        .expect("dense search");
+    assert_eq!(
+        ids(&hits).first(),
+        Some(&PENDING_TARGET),
+        "got {:?}",
+        ids(&hits)
+    );
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_filtered_search() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let filter = velesdb_core::Filter::new(velesdb_core::Condition::eq("cat", "pending"));
+    let hits = coll
+        .search_with_filter(&dispersed(PENDING_TARGET), 5, &filter)
+        .expect("filtered search");
+    assert_eq!(
+        ids(&hits).first(),
+        Some(&PENDING_TARGET),
+        "got {:?}",
+        ids(&hits)
+    );
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_velesql_near() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "v".to_string(),
+        serde_json::json!(dispersed(PENDING_TARGET)),
+    );
+    for sql in [
+        "SELECT * FROM pending WHERE vector NEAR $v LIMIT 5",
+        "SELECT * FROM pending WHERE vector NEAR $v AND cat = 'pending' LIMIT 5",
+    ] {
+        let hits = coll.execute_query_str(sql, &params).expect("VelesQL NEAR");
+        assert_eq!(
+            ids(&hits).first(),
+            Some(&PENDING_TARGET),
+            "{sql}: got {:?}",
+            ids(&hits)
+        );
+    }
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_hybrid_search() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let hits = coll
+        .hybrid_search(&dispersed(PENDING_TARGET), "zebra", 5, Some(0.5))
+        .expect("hybrid search");
+    assert!(ids(&hits).contains(&PENDING_TARGET), "got {:?}", ids(&hits));
 }

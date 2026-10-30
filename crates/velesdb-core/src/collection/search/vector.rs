@@ -106,10 +106,12 @@ impl Collection {
         rescored
     }
 
-    /// Merges HNSW results with delta buffer and deferred indexer (if active).
+    /// Merges HNSW results with what is written but not indexed yet: the
+    /// delta buffer, the deferred indexer and the async index builder's
+    /// queues (each if active).
     ///
-    /// When both the delta buffer and deferred indexer are inactive, this is
-    /// a no-op that returns results unchanged.
+    /// When all three hold nothing, this is a no-op that returns results
+    /// unchanged.
     #[cfg(feature = "persistence")]
     #[inline]
     pub(crate) fn merge_delta(
@@ -126,7 +128,29 @@ impl Collection {
             k,
             metric,
         );
-        self.merge_deferred_search(after_delta, query, k, metric)
+        let after_deferred = self.merge_deferred_search(after_delta, query, k, metric);
+        self.merge_async_pending(after_deferred, query, k, metric)
+    }
+
+    /// Merges search results with what the async index builder still holds:
+    /// `upsert_bulk`'s V2 path returns before the graph links its points, and
+    /// a graph walk cannot reach them until a flush does.
+    ///
+    /// No-op when no async index builder is configured or it holds nothing.
+    #[cfg(feature = "persistence")]
+    fn merge_async_pending(
+        &self,
+        results: Vec<ScoredResult>,
+        query: &[f32],
+        k: usize,
+        metric: DistanceMetric,
+    ) -> Vec<ScoredResult> {
+        let slot = self.streaming.async_index_builder.load();
+        let Some(aib) = slot.as_ref() else {
+            return results;
+        };
+        let pending = aib.search_pending(&self.storage.index, query, k, metric);
+        crate::collection::streaming::merge_pending_scored(results, pending, k, metric)
     }
 
     /// Merges search results with the deferred indexer buffer.

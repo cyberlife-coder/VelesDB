@@ -57,6 +57,26 @@ impl HnswIndex {
         Ok(results)
     }
 
+    /// Exact scores of the given ids' vectors, the top `k` by the index
+    /// metric, in the same score space as [`Self::full_scan_with_bitmap`].
+    ///
+    /// It reads each id's slot in the arena whether or not the graph links
+    /// it, so it scores what a graph walk cannot reach yet: the slots
+    /// `upsert_bulk`'s direct writer placed and the async index builder has
+    /// still to link. An id with no mapping (deleted since) is skipped.
+    #[cfg(feature = "persistence")]
+    pub(crate) fn score_ids(&self, query: &[f32], ids: &[u64], k: usize) -> Vec<ScoredResult> {
+        let inner = self.inner.read();
+        let results = inner.with_contiguous_vectors(|vectors| {
+            let mut scored = Vec::with_capacity(ids.len());
+            self.score_mapped_ids(query, ids.iter().copied(), vectors, &mut scored);
+            self.metric.top_k_scored_results(&mut scored, k);
+            scored
+        });
+        drop(inner);
+        results
+    }
+
     /// Scores vectors whose IDs are present in the bitmap (u32 range).
     fn score_bitmap_ids(
         &self,
@@ -65,8 +85,19 @@ impl HnswIndex {
         vectors: &crate::perf_optimizations::ContiguousVectors,
         scored: &mut Vec<ScoredResult>,
     ) {
-        for id32 in allowed_ids {
-            let id = u64::from(id32);
+        self.score_mapped_ids(query, allowed_ids.iter().map(u64::from), vectors, scored);
+    }
+
+    /// Scores the vector each mapped id's slot holds; an unmapped id is
+    /// skipped.
+    fn score_mapped_ids(
+        &self,
+        query: &[f32],
+        ids: impl Iterator<Item = u64>,
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        scored: &mut Vec<ScoredResult>,
+    ) {
+        for id in ids {
             if let Some(idx) = self.mappings.get_idx(id) {
                 if let Some(vec) = vectors.get(idx) {
                     let dist = self.compute_distance(query, vec);

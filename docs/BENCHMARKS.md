@@ -297,8 +297,12 @@ execution.
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
 | **upsert_bulk standard** | 77 ms / 10K | 130K vec/s |
-| **AsyncIndexBuilder enqueue+drain** | 108 µs / 10K | 90M vec/s (buffer only) |
-| **Buffer brute-force search (10K)** | 213 µs | — |
+
+The two rows this table also carried measured the builder's buffer alone —
+`drain_buffer` and `search_buffer`, which no longer exist as public calls.
+What a caller pays instead is `search_with_10k_pending`: a search while the
+builder still holds 10K bulk-loaded points, each of which every search scores
+exactly until a flush links it. It has no recorded figure yet.
 
 ---
 

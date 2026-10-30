@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING — `AsyncIndexBuilder`'s test-only calls.** `search_buffer`,
+  `drain_buffer`, `buffer_len`, `is_building` and `trigger_build_async` had
+  no caller in core, the server or any binding: only tests reached them.
+  `trigger_build_async` spawned a thread that drained one of the builder's
+  two queues and could report a build done with slots still unlinked;
+  `drain_buffer`, `buffer_len` and `is_building` served it or its tests, and
+  `search_buffer` was the scan no search called (now private, see Fixed).
+  `enqueue`, `flush_sync` and `merge_threshold` stay.
+  *Migration*: `VectorCollection::flush` indexes what the builder holds;
+  searching the collection already finds it (see Fixed).
+
+### Fixed
+
+- **`upsert_bulk` with an async index builder returned before its points
+  could be found.** Its V2 path places each vector in the graph's arena and
+  leaves linking it to the builder until `merge_threshold` points wait or a
+  flush runs. A graph walk cannot reach an unlinked slot, and no search read
+  what the builder held — the module doc said its buffer was "searchable via
+  brute-force scan", but that scan had no caller — so dense, filtered, VelesQL
+  `NEAR` and hybrid search all missed such a point (on a collection over the
+  100-point exhaustive shortcut) until the next flush. Every vector search now
+  scores what the builder holds exactly and merges it with the index's
+  results, through the seam that already merges the delta buffer and the
+  deferred indexer: by id, the pending score winning, in the metric's order,
+  truncated to `k`. A flush keeps what it indexes in its queue until it is
+  indexed, so a search racing it never finds a point in neither place, and a
+  failed link no longer needs to put its ids back. The cost is an exact scan
+  of the held points on each search, up to `merge_threshold` (default 10 000)
+  of them; the `bulk_insert_v2_benchmark` bench `search_with_10k_pending`
+  measures it, with no recorded figure yet.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

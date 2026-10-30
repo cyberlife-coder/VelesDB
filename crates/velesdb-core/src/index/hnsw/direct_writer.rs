@@ -15,7 +15,8 @@ use crate::validation::validate_dimension_match;
 /// Used exclusively during `upsert_bulk` so vectors are immediately
 /// available for SIMD re-ranking and brute-force search while linking them
 /// into the graph is deferred to `AsyncIndexBuilder`, which links each slot
-/// placed here where it is (#2264).
+/// placed here where it is (#2264). Until then a graph walk cannot reach
+/// them, and every collection search scores them through the builder.
 // Reason: only the persistence-gated bulk path (collection::core::crud_bulk)
 // writes directly.
 #[cfg_attr(not(feature = "persistence"), allow(dead_code))]

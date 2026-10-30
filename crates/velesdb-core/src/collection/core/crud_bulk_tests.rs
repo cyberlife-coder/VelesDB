@@ -216,8 +216,124 @@ fn a_bulk_load_into_an_index_with_exact_features_off_is_indexed_at_the_drain() {
 
     coll.upsert_bulk(&points(0..300))
         .expect("test: upsert_bulk");
+    assert_eq!(
+        first_hit(&coll, 150),
+        Some(150),
+        "a buffered point is searchable before the drain"
+    );
     coll.flush().expect("test: flush drains the builder");
     assert_eq!(coll.storage.index.mappings.len(), 300);
     assert_eq!(slots_and_nodes(&coll), (300, 300));
     assert_eq!(unlinked_slots(&coll), Vec::<usize>::new());
+}
+
+/// The id of `id`'s own vector's nearest neighbour, by graph search.
+fn first_hit(coll: &Collection, id: u64) -> Option<u64> {
+    coll.search(&vector(id), 1)
+        .expect("test: search")
+        .first()
+        .map(|hit| hit.point.id)
+}
+
+/// `upsert_bulk` returns before the builder links its points, and a graph
+/// walk cannot reach an unlinked slot: search merges what the builder holds.
+#[test]
+fn a_point_the_builder_holds_is_found_by_search() {
+    let (_dir, coll) = bulk_loaded(300);
+    assert_eq!(
+        unlinked_slots(&coll).len(),
+        300,
+        "premise: the builder holds every point, and the graph links none"
+    );
+    for id in [0, 150, 299] {
+        assert_eq!(first_hit(&coll, id), Some(id));
+    }
+}
+
+/// A point linked by a vacuum while still queued is reachable both ways at
+/// once — through the graph and through the builder — and is returned once.
+#[test]
+fn a_point_both_linked_and_queued_is_returned_once() {
+    let (_dir, coll) = bulk_loaded(300);
+    coll.vacuum_hnsw_index().expect("test: vacuum");
+    assert_eq!(
+        coll.async_index_builder()
+            .expect("premise: a V2 collection")
+            .pending_len(),
+        300,
+        "premise: the vacuum linked the points and the builder still holds them"
+    );
+    let hits = coll.search(&vector(7), 10).expect("test: search");
+    let mut ids: Vec<u64> = hits.iter().map(|hit| hit.point.id).collect();
+    assert_eq!(ids.first(), Some(&7));
+    let returned = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), returned, "an id was returned twice");
+}
+
+/// Concurrent `upsert_bulk` and `upsert` must never give one arena slot to
+/// two ids (#2246). With the builder holding every bulk id, each one is still
+/// mapped to the slot the direct writer gave it, and those slots are the
+/// ones the exhaustive search reads (`tests/concurrent_bulk_slots.rs` runs
+/// the same race with the builder draining as it goes).
+#[test]
+fn direct_written_slots_hold_their_own_vectors_while_the_builder_holds_them() {
+    const ROUNDS: u64 = 400;
+    const BATCH: u64 = 8;
+    const BULK_BASE: u64 = 30_000;
+    let batch = |base: u64, round: u64| points(base + round * BATCH..base + (round + 1) * BATCH);
+
+    let (_dir, coll) = {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let coll = v2_collection(dir.path().join("v2"), HOLD_ALL);
+        (dir, coll)
+    };
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for round in 0..ROUNDS {
+                coll.upsert_bulk(&batch(BULK_BASE, round))
+                    .expect("test: upsert_bulk");
+            }
+        });
+        scope.spawn(|| {
+            for round in 0..ROUNDS {
+                coll.upsert(batch(0, round)).expect("test: upsert");
+            }
+        });
+    });
+
+    let bulk_ids = BULK_BASE..BULK_BASE + ROUNDS * BATCH;
+    let unlinked = unlinked_slots(&coll);
+    let linked: Vec<u64> = bulk_ids
+        .clone()
+        .filter(|&id| {
+            coll.storage
+                .index
+                .mappings
+                .get_idx(id)
+                .is_some_and(|slot| !unlinked.contains(&slot))
+        })
+        .collect();
+    assert!(
+        linked.is_empty(),
+        "premise: the builder already linked {} bulk ids, e.g. {:?}",
+        linked.len(),
+        &linked[..linked.len().min(8)]
+    );
+    let lost: Vec<u64> = (0..ROUNDS * BATCH)
+        .chain(bulk_ids)
+        .filter(|&id| {
+            let hits = coll
+                .search_with_quality(&vector(id), 1, crate::SearchQuality::Perfect)
+                .expect("test: exhaustive search");
+            hits.first().map(|hit| hit.point.id) != Some(id)
+        })
+        .collect();
+    assert!(
+        lost.is_empty(),
+        "{} ids no longer find their own vector before the drain, e.g. {:?}",
+        lost.len(),
+        &lost[..lost.len().min(8)]
+    );
 }

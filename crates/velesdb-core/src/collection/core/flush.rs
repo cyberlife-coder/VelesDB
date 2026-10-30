@@ -42,8 +42,9 @@ impl Collection {
         // Drain deferred indexer into HNSW (position 11, after delta at 10).
         self.drain_deferred_into_index();
         // Drain async index builder buffer (V2 bulk insert path) into HNSW.
-        // Without this, sub-threshold batches from upsert_bulk would remain
-        // invisible to search until the buffer reaches merge_threshold.
+        // Without this, sub-threshold batches from upsert_bulk would stay out
+        // of the graph, scored exactly on every search, until the buffer
+        // reaches merge_threshold.
         self.drain_async_index_builder()?;
         // Issue #423 Component 3: Save HNSW only when insert threshold
         // exceeded. Otherwise defer to flush_full() (shutdown/compaction).
@@ -265,10 +266,11 @@ impl Collection {
 
     /// Drains the async index builder buffer into the HNSW index.
     ///
-    /// Ensures sub-threshold batches from the V2 `upsert_bulk` path are
-    /// indexed into HNSW, making them visible to search. Without this,
-    /// vectors written via `DirectVectorWriter` but not yet flushed by
-    /// `AsyncIndexBuilder` would be stored but invisible to ANN search.
+    /// Links sub-threshold batches from the V2 `upsert_bulk` path into
+    /// HNSW. Search finds them before this too, but by scoring every one
+    /// the builder holds on each query (`AsyncIndexBuilder::search_pending`);
+    /// once linked, a graph walk reaches them, and a save persists a graph
+    /// that has them.
     ///
     /// No-op when the async index builder is not configured.
     ///

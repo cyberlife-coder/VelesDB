@@ -409,6 +409,17 @@ two writers to the same id cannot interleave and leave the indexes describing
 a payload storage no longer holds. BM25, the secondary indexes and the
 histograms are still updated after that guard is released.
 
+**Async index builder queues.** `buffer` and `placed` (position 11) are taken
+on the search path as well as the write path: every vector search scores what
+the builder still holds (`AsyncIndexBuilder::search_pending`, merged by
+`Collection::merge_delta` as the delta buffer and the deferred indexer are),
+so a point `upsert_bulk`'s V2 path has returned for is found before a flush
+links it. A queue's lock is held only to copy the queue out; scoring the
+placed ids then takes the HNSW index guard with no queue lock held. A flush
+removes from a queue only what it has already indexed, so a search racing it
+finds each point in the graph, in the queue, or in both (deduplicated by id),
+never in neither.
+
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 
 ### Lock Layout

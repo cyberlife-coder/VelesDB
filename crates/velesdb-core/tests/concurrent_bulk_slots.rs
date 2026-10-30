@@ -7,9 +7,13 @@
 //! insert landed between a direct write's registration and its write, both
 //! ids pointed at one slot and the later write overwrote the earlier vector.
 //! Checked through the exhaustive search, which reads the arena: every id must
-//! find its own vector — once with the builder draining as it goes, and once
-//! with it holding every bulk id, so the direct writer's own slots are the
-//! ones read.
+//! find its own vector, here with the builder draining as it goes. The same
+//! race with the builder holding every bulk id, so that the direct writer's
+//! own slots are the ones read, is
+//! `direct_written_slots_hold_their_own_vectors_while_the_builder_holds_them`
+//! in `src/collection/core/crud_bulk_tests.rs`: only there can its premise —
+//! no bulk id linked yet — be checked, since every search now also reads
+//! what the builder holds.
 
 #![cfg(feature = "persistence")]
 
@@ -113,39 +117,6 @@ fn concurrent_bulk_and_plain_upserts_keep_every_vector_in_its_own_slot() {
     assert!(
         lost.is_empty(),
         "{} ids no longer find their own vector, e.g. {:?}",
-        lost.len(),
-        &lost[..lost.len().min(8)]
-    );
-}
-
-/// With the builder holding every bulk id, each one is still mapped to the
-/// slot the direct writer gave it: those slots are the ones read here.
-#[test]
-fn direct_written_slots_hold_their_own_vectors_before_the_builder_drains() {
-    let dir = TempDir::new().expect("test: tempdir");
-    let bulk_total = usize::try_from(ROUNDS * BATCH).expect("test: fits a usize");
-    let collection = race(&dir, bulk_total + 1);
-    // Precondition: no bulk id is a graph node yet, so the slots read below
-    // are the direct writer's. A graph walk only ever returns nodes.
-    let linked: Vec<u64> = (BULK_BASE..BULK_BASE + ROUNDS * BATCH)
-        .filter(|&id| {
-            collection
-                .search_with_quality(&vector(id), 1, SearchQuality::Custom(64))
-                .expect("test: graph search")
-                .first()
-                .is_some_and(|hit| hit.point.id == id)
-        })
-        .collect();
-    assert!(
-        linked.is_empty(),
-        "the builder already linked {} bulk ids, e.g. {:?}",
-        linked.len(),
-        &linked[..linked.len().min(8)]
-    );
-    let lost = lost(&collection);
-    assert!(
-        lost.is_empty(),
-        "{} ids no longer find their own vector before the drain, e.g. {:?}",
         lost.len(),
         &lost[..lost.len().min(8)]
     );
