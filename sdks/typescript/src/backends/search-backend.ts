@@ -19,7 +19,6 @@ import { normalizeFilter } from '../filter';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath, toNumberArray } from './shared';
 import { searchQualityToMode } from '../search-quality';
-import { VelesDBError } from '../types';
 
 /** Batch search response structure (mirrors rest.ts private type). */
 interface BatchSearchResponse {
@@ -37,14 +36,6 @@ export async function search(
   query: number[] | Float32Array,
   options?: SearchOptions
 ): Promise<SearchResult[]> {
-  // Core's `SearchRequest` has no `include_vectors` and its search response
-  // carries no vectors, so `true` is refused rather than dropped.
-  if (options?.includeVectors === true) {
-    throw new VelesDBError(
-      "search with includeVectors: true: velesdb-server returns no vectors (capability 'includeVectors' is false)",
-      'NOT_SUPPORTED'
-    );
-  }
   const queryVector = toNumberArray(query);
 
   const body: Record<string, unknown> = {

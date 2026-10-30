@@ -28,22 +28,36 @@ use serde_json::Value;
 /// - `and`: All conditions must match
 /// - `or`: Any condition must match
 /// - `not`: Negates inner condition
+///
+/// A filter without a `condition` key matches nothing: it is not "no filter"
+/// (that is the caller not passing one), and [`validate_filter`] refuses it
+/// before a search runs.
 pub fn matches_filter(payload: &Value, filter: &Value) -> bool {
-    let condition = match filter.get("condition") {
-        Some(c) => c,
-        None => return true,
-    };
+    filter
+        .get("condition")
+        .is_some_and(|condition| evaluate_condition(payload, condition))
+}
 
-    evaluate_condition(payload, condition)
+/// Refuses a filter that is not `velesdb_core::filter::Filter`, with core's
+/// own error message.
+///
+/// Core parses the filter here, so `velesdb-wasm` refuses exactly the JSON
+/// velesdb-server answers with `400`, `{}` and a flat field map such as
+/// `{"category": "tech"}` among it ("Invalid filter: missing field
+/// \`condition\`"). [`matches_filter`] then evaluates the accepted filter.
+///
+/// # Errors
+///
+/// Returns core's `Invalid filter: …` message when `filter` does not
+/// deserialize as a core `Filter`.
+pub fn validate_filter(filter: &Value) -> Result<(), String> {
+    velesdb_core::Filter::from_json_value(filter.clone()).map(|_| ())
 }
 
 /// Evaluates a single condition against a payload.
 ///
 /// Fails closed on any condition it cannot interpret: an unrecognized
 /// `"type"`, a missing `"type"`, or a non-string one all match nothing.
-/// The permissive case is reserved for [`matches_filter`]'s *absent*
-/// `condition` key — "no filter" and "a filter this evaluator cannot
-/// interpret" are different claims, and only the second is an error.
 pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
     // A missing or non-string "type" funnels into the fail-closed arm below.
     let cond_type = condition.get("type").and_then(|t| t.as_str()).unwrap_or("");

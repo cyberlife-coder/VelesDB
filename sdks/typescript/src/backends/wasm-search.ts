@@ -9,7 +9,6 @@ import type {
   SearchOptions,
   SearchResult,
   MultiQuerySearchOptions,
-  QueryOptions,
   QueryApiResponse,
   FusionParams,
   FusionParamName,
@@ -182,9 +181,6 @@ function requireParsableQuality(ctx: WasmContext, quality: unknown): void {
  * preset is refused here as the REST server refuses it.
  */
 function refuseUnhonouredSearchOptions(options: SearchOptions | undefined): void {
-  if (options?.includeVectors === true) {
-    requireWasmCapability('includeVectors', 'search with includeVectors: true');
-  }
   if (isSet(options?.sparseIndexName)) {
     requireWasmCapability('namedSparseIndexes', 'search with a sparseIndexName');
   }
@@ -714,14 +710,12 @@ export async function wasmQuery(
   ctx: WasmContext,
   collectionName: string,
   queryString: string,
-  params?: Record<string, unknown>,
-  options?: QueryOptions
+  params?: Record<string, unknown>
 ): Promise<QueryApiResponse> {
   const collection = ctx.getCollection(collectionName);
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
-  requireWasmFieldsListed('queryOptions', 'query', options);
   const parsed = parsePureNearQuery(queryString);
   if (parsed.from !== collectionName) {
     throw new VelesDBError(

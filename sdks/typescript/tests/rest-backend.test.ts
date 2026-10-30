@@ -660,27 +660,6 @@ describe('RestBackend', () => {
       );
     });
 
-    it.each([
-      ['timeoutMs', { timeoutMs: 1500 }],
-      ['stream', { stream: true }],
-    ] as const)('refuses query option %s, which the server does not read', async (name, options) => {
-      await expect(
-        backend.query('docs', 'SELECT * FROM docs LIMIT 1', {}, options)
-      ).rejects.toMatchObject({ code: 'NOT_SUPPORTED', message: expect.stringContaining(name) });
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it('accepts stream: false, which asks for nothing', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ results: [], timing_ms: 0.2, rows_returned: 0 }),
-      });
-
-      await backend.query('docs', 'SELECT * FROM docs LIMIT 1', {}, { stream: false });
-
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
     it('should map aggregation response from /query', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

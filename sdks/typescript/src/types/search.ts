@@ -39,13 +39,6 @@ export interface SearchOptions {
   k?: number;
   /** Filter expression (optional). Accepts typed `Filter` (recommended) or legacy raw JSON. */
   filter?: FilterInput;
-  /**
-   * Include vectors in results (default: false). Neither backend returns
-   * search hits with their vectors: both refuse `true` with `NOT_SUPPORTED`
-   * (`capabilities().includeVectors` is `false`). Read a point's vector with
-   * `get()` instead.
-   */
-  includeVectors?: boolean;
   /** Optional sparse vector for hybrid sparse+dense search */
   sparseVector?: SparseVector;
   /**
@@ -110,6 +103,4 @@ export interface SearchResult {
   score: number;
   /** Document payload (if requested) */
   payload?: Record<string, unknown>;
-  /** Vector data (if includeVectors is true) */
-  vector?: number[];
 }

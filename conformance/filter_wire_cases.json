@@ -26,16 +26,16 @@
           "type": "and",
           "conditions": [
             { "type": "eq", "field": "_memory_type", "value": "episodic" },
-            { "type": "gte", "field": "timestamp", "value": 200 }
+            { "type": "gt", "field": "timestamp", "value": 200 }
           ]
         }
       },
       "matches": [
-        { "_memory_type": "episodic", "timestamp": 200 },
+        { "_memory_type": "episodic", "timestamp": 201 },
         { "_memory_type": "episodic", "timestamp": 300 }
       ],
       "rejects": [
-        { "_memory_type": "episodic", "timestamp": 199 },
+        { "_memory_type": "episodic", "timestamp": 200 },
         { "_memory_type": "episodic" },
         { "_memory_type": "semantic", "timestamp": 300 }
       ]

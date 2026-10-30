@@ -25,7 +25,6 @@ import type {
   TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -284,9 +283,9 @@ export class VelesDB {
     return searchMethods.sparseSearchNamed(this.backend, collection, query, indexName, options);
   }
 
-  async query(collection: string, queryString: string, params?: Record<string, unknown>, options?: QueryOptions): Promise<QueryApiResponse> {
+  async query(collection: string, queryString: string, params?: Record<string, unknown>): Promise<QueryApiResponse> {
     this.ensureInitialized();
-    return searchMethods.query(this.backend, collection, queryString, params, options);
+    return searchMethods.query(this.backend, collection, queryString, params);
   }
 
   async queryExplain(queryString: string, params?: Record<string, unknown>, options?: { analyze?: boolean }): Promise<ExplainResponse> {

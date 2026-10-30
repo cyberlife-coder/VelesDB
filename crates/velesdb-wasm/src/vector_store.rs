@@ -175,6 +175,7 @@ impl VectorStore {
         store_search::validate_dimension(query.len(), self.dimension)?;
         let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
+        filter::validate_filter(&filter_obj).map_err(|e| JsValue::from_str(&e))?;
         store_search::search_with_filter_impl(
             query,
             &self.ids,

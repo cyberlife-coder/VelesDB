@@ -87,15 +87,6 @@ describe('search', () => {
     expect(body.vector).toEqual([0.5, 0.5]);
   });
 
-  it('refuses includeVectors: true, which the server cannot honour', async () => {
-    const transport = buildTransport();
-
-    await expect(
-      search(transport, 'docs', [0.1], { includeVectors: true })
-    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
-    expect(transport.requestJson).not.toHaveBeenCalled();
-  });
-
   it('forwards k / filter / quality', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({

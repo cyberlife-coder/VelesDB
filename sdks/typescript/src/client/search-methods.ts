@@ -26,7 +26,6 @@ import type {
   GuardRailsConfigResponse,
   AggregateQueryOptions,
   AggregateResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -228,12 +227,11 @@ export function query(
   backend: IVelesDBBackend,
   collection: string,
   queryString: string,
-  params?: Record<string, unknown>,
-  options?: QueryOptions
+  params?: Record<string, unknown>
 ): Promise<QueryApiResponse> {
   requireNonEmptyString(collection, 'Collection name');
   requireNonEmptyString(queryString, 'Query string');
-  return backend.query(collection, queryString, params, options);
+  return backend.query(collection, queryString, params);
 }
 
 /** Explain the execution plan for a VelesQL query. */

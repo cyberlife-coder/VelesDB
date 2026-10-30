@@ -534,7 +534,7 @@ describe('Agent Memory REST methods', () => {
     const episodic = { type: 'eq', field: '_memory_type', value: 'episodic' };
     const sentFilter = () => JSON.parse(mockFetch.mock.calls[0][1].body).filter;
 
-    it('recallRecent sends the since lower bound (inclusive) to the server', async () => {
+    it('recallRecent sends the since lower bound (exclusive, as core) to the server', async () => {
       mockFetch.mockResolvedValueOnce(scrollPage);
 
       await backend.recallRecentEvents('events', 200);
@@ -542,7 +542,7 @@ describe('Agent Memory REST methods', () => {
       expect(sentFilter()).toEqual({
         condition: {
           type: 'and',
-          conditions: [episodic, { type: 'gte', field: 'timestamp', value: 200 }],
+          conditions: [episodic, { type: 'gt', field: 'timestamp', value: 200 }],
         },
       });
     });

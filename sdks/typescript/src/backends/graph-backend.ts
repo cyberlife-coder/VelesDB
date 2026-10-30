@@ -16,6 +16,7 @@ import type {
   TraverseResponse,
   DegreeResponse,
   GraphCollectionConfig,
+  GraphSchemaMode,
   RelateRequest,
   RelateResponse,
   RelationsResponse,
@@ -82,7 +83,6 @@ function toGraphEdge(e: EdgeWire): GraphEdge {
  */
 interface TraverseWire {
   results: Array<{ target_id: number | string; depth: number; path: Array<number | string> }>;
-  next_cursor: string | null;
   has_more: boolean;
   stats: { visited: number; depth_reached: number };
 }
@@ -95,7 +95,6 @@ function toTraverseResponse(data: TraverseWire): TraverseResponse {
       depth: r.depth,
       path: r.path,
     })),
-    nextCursor: data.next_cursor ?? undefined,
     hasMore: data.has_more,
     stats: {
       visited: data.stats.visited,
@@ -134,7 +133,6 @@ export async function traverseGraph(
       strategy: request.strategy ?? 'bfs',
       max_depth: request.maxDepth ?? 3,
       limit: request.limit ?? 100,
-      cursor: request.cursor,
       rel_types: request.relTypes ?? [],
     }
   );
@@ -162,6 +160,15 @@ export async function getNodeDegree(
   };
 }
 
+/**
+ * The `graph_schema` velesdb-server deserializes as `velesdb_core::GraphSchema`
+ * for a schema mode (pinned by `conformance/graph_schema_wire_cases.json`).
+ * The SDK declares no node or edge types, so a strict schema allows none.
+ */
+function graphSchemaWire(mode: GraphSchemaMode): Record<string, unknown> {
+  return { schemaless: mode === 'schemaless', node_types: [], edge_types: [] };
+}
+
 export async function createGraphCollection(
   transport: GraphTransport,
   name: string,
@@ -172,7 +179,7 @@ export async function createGraphCollection(
     collection_type: 'graph',
     dimension: config?.dimension,
     metric: config?.metric ?? 'cosine',
-    schema_mode: config?.schemaMode ?? 'schemaless',
+    graph_schema: graphSchemaWire(config?.schemaMode ?? 'schemaless'),
   });
 
   throwOnError(response);

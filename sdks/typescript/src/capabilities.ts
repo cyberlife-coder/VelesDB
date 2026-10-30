@@ -34,7 +34,6 @@ import type {
   CollectionType,
   FusionParamName,
   IVelesDBBackend,
-  QueryOptions,
   StorageMode,
 } from './types';
 
@@ -132,8 +131,6 @@ export const COLLECTION_CONFIG_FIELDS = everyMemberOf<keyof CollectionConfig>()(
   'asyncIndexBuilder',
 ]);
 
-/** Every `QueryOptions` field. */
-export const QUERY_OPTION_NAMES = everyMemberOf<keyof QueryOptions>()(['timeoutMs', 'stream']);
 
 /** `USING FUSION(strategy='...')` names the core SQL parser accepts. */
 const VELESQL_FUSION_STRATEGIES: readonly string[] = Object.freeze([
@@ -183,8 +180,6 @@ export interface CapabilityMap {
   multiQueryFusionParams: readonly FusionParamName[];
   /** Named sparse indexes: `search({ sparseIndexName })` and `sparseSearchNamed`. */
   namedSparseIndexes: boolean;
-  /** `search({ includeVectors: true })` returns each hit's vector. */
-  includeVectors: boolean;
   /** ID-and-score searches that skip payloads (`searchIds`, `multiQuerySearchIds`). */
   idOnlySearch: boolean;
   /** `storageMode` values `createCollection` stores vectors in; another is refused with `NOT_SUPPORTED`. */
@@ -193,8 +188,6 @@ export interface CapabilityMap {
   collectionTypes: readonly CollectionType[];
   /** `CollectionConfig` fields `createCollection` applies; another one, set, is refused with `NOT_SUPPORTED`. */
   collectionConfig: readonly (keyof CollectionConfig)[];
-  /** `QueryOptions` fields `query` applies; another one, set, is refused with `NOT_SUPPORTED`. */
-  queryOptions: readonly (keyof QueryOptions)[];
   /** Cursor-based scroll pagination over a collection (`scroll`). */
   scroll: boolean;
   /** Knowledge graph edge CRUD + traversal (`addEdge`, `traverseGraph`, `traverseParallel`, `getNodeDegree`). */
@@ -247,18 +240,14 @@ export const CAPABILITY_LIST_UNIVERSES: Readonly<Record<ListCapability, readonly
     storageModes: STORAGE_MODES,
     collectionTypes: COLLECTION_TYPES,
     collectionConfig: COLLECTION_CONFIG_FIELDS,
-    queryOptions: QUERY_OPTION_NAMES,
     velesqlFusionStrategies: VELESQL_FUSION_STRATEGIES,
   });
 
 /**
  * Capability map for the REST backend — assumes a server of the
  * same minor version as the SDK. Every feature the server applies is
- * advertised; an option core's request types have no field for
- * (`includeVectors`, `queryOptions`) is refused with `NOT_SUPPORTED`
- * instead of being sent and dropped. Individual endpoints may still
- * surface a typed `VelesError` at runtime if the server was built with
- * a feature flag disabled.
+ * advertised. Individual endpoints may still surface a typed `VelesError`
+ * at runtime if the server was built with a feature flag disabled.
  */
 export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   vectorSearch: true,
@@ -273,16 +262,10 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   ),
   multiQueryFusionParams: FUSION_PARAM_NAMES,
   namedSparseIndexes: true,
-  // Core's search response carries no vectors (`SearchResultResponse` is
-  // id, score, payload), so `includeVectors: true` is refused.
-  includeVectors: false,
   idOnlySearch: true,
   storageModes: STORAGE_MODES,
   collectionTypes: COLLECTION_TYPES,
   collectionConfig: COLLECTION_CONFIG_FIELDS,
-  // Core's `QueryRequest` carries no timeout and no streaming flag; the
-  // server's query timeout is its guard-rails setting (`updateGuardRails`).
-  queryOptions: Object.freeze<(keyof QueryOptions)[]>([]),
   scroll: true,
   graphTraversal: true,
   secondaryIndexes: true,
@@ -310,7 +293,7 @@ export const REST_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
  * before it uses an option (`backends/wasm-capability-guards.ts`) and
  * refuses with `NOT_SUPPORTED` what it withholds, rather than dropping it:
  * a `filter` on an operation `filteredSearch` does not list; a
- * `fusionParams`, `CollectionConfig` or `QueryOptions` field its list leaves
+ * `fusionParams` or `CollectionConfig` field its list leaves
  * out; a storage mode or collection type it cannot create. Search `quality`
  * is the one option this map does not decide: velesdb-wasm's own parser
  * reads it, and a preset it cannot read is refused with `BAD_REQUEST`
@@ -351,7 +334,6 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
     'hitWeight',
   ]),
   namedSparseIndexes: false,
-  includeVectors: false,
   idOnlySearch: false,
   // velesdb-wasm accepts every core storage mode, keeps f32 vectors in each
   // and returns the top-k and scores a core collection created with that
@@ -366,8 +348,6 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
     'storageMode',
     'collectionType',
   ]),
-  // `query()` runs in process and answers at once: no timeout, no stream.
-  queryOptions: Object.freeze<(keyof QueryOptions)[]>([]),
   scroll: false,
   graphTraversal: false,
   secondaryIndexes: false,

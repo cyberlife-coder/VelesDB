@@ -48,14 +48,13 @@ function memoryTypeFilter(memoryType: MemoryType): Filter {
 }
 
 /**
- * Episodic events inside an optional timestamp window: `since` is an
- * inclusive lower bound (the SDK's documented `recallRecent` contract; core's
- * `TemporalIndex::recent` excludes `since`), `before` an exclusive upper
- * bound, as in core's `EpisodicMemory::older_than`.
+ * Episodic events inside an optional timestamp window. Both bounds are
+ * exclusive, as in core: `TemporalIndex::recent` skips `ts <= since` and
+ * `TemporalIndex::older_than` skips `ts >= before`.
  */
 function episodicWindowFilter(window: { since?: number; before?: number }): Filter {
   const bounds: Filter[] = [];
-  if (window.since !== undefined) bounds.push(f.gte('timestamp', window.since));
+  if (window.since !== undefined) bounds.push(f.gt('timestamp', window.since));
   if (window.before !== undefined) bounds.push(f.lt('timestamp', window.before));
   const episodic = memoryTypeFilter('episodic');
   return bounds.length === 0 ? episodic : f.and([episodic, ...bounds]);
@@ -290,8 +289,8 @@ async function scrollEpisodicRecords(
 
 /**
  * Recall episodic events most-recent-first, optionally bounded below by
- * `since` (inclusive). Counterpart of `EpisodicMemory::recent(since_timestamp)`,
- * whose `since` bound is exclusive in core.
+ * `since` (exclusive: strictly newer). Mirrors
+ * `EpisodicMemory::recent(since_timestamp)`.
  */
 export async function recallRecentEvents(
   transport: AgentMemoryTransport,

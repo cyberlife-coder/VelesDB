@@ -1,0 +1,15 @@
+{
+  "description": "The `graph_schema` value the TypeScript SDK's createGraphCollection sends in POST /collections for each schemaMode. velesdb-server deserializes it as velesdb_core::GraphSchema (crates/velesdb-server/src/handlers/collections.rs, parse_graph_schema); crates/velesdb-core/tests/graph_schema_wire_conformance.rs proves each case does and yields the stated mode, sdks/typescript/tests/graph-backend.test.ts that the SDK sends exactly these values.",
+  "cases": [
+    {
+      "schema_mode": "schemaless",
+      "graph_schema": { "schemaless": true, "node_types": [], "edge_types": [] },
+      "is_schemaless": true
+    },
+    {
+      "schema_mode": "strict",
+      "graph_schema": { "schemaless": false, "node_types": [], "edge_types": [] },
+      "is_schemaless": false
+    }
+  ]
+}

@@ -59,8 +59,6 @@ export interface TraverseRequest {
   maxDepth?: number;
   /** Maximum number of results to return */
   limit?: number;
-  /** Optional cursor for pagination */
-  cursor?: string;
   /** Filter by relationship types (empty = all types) */
   relTypes?: string[];
 }
@@ -99,9 +97,10 @@ export interface TraversalStats {
 export interface TraverseResponse {
   /** List of traversal results */
   results: TraversalResultItem[];
-  /** Cursor for next page (if applicable) */
-  nextCursor?: string;
-  /** Whether more results are available */
+  /**
+   * Whether the traversal stopped at `limit` (more nodes may be reachable).
+   * There is no traversal cursor: raise `limit` to see further.
+   */
   hasMore: boolean;
   /** Traversal statistics */
   stats: TraversalStats;
@@ -172,6 +171,12 @@ export interface GraphCollectionConfig {
   dimension?: number;
   /** Distance metric for embeddings (default: 'cosine') */
   metric?: DistanceMetric;
-  /** Schema mode (default: 'schemaless') */
+  /**
+   * Schema mode (default: 'schemaless'). Sent as core's `graph_schema`.
+   * `'strict'` creates a schema with no declared node or edge types — the SDK
+   * cannot declare any — so the collection refuses every typed node and
+   * edge (`velesdb_core::GraphSchema::validate_node_type` /
+   * `validate_edge_type`).
+   */
   schemaMode?: GraphSchemaMode;
 }

@@ -717,30 +717,3 @@ describe('WasmBackend — createCollection applies or refuses each option (#2095
   });
 });
 
-describe('WasmBackend — query refuses the QueryOptions it cannot apply (#2095)', () => {
-  let backend: WasmBackend;
-  const NEAR = 'SELECT * FROM vectors WHERE vector NEAR $v LIMIT 5';
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    backend = new WasmBackend();
-    await backend.init();
-    await backend.createCollection('vectors', { dimension: 4 });
-  });
-
-  it.each([
-    ['timeoutMs', { timeoutMs: 500 }],
-    ['stream', { stream: true }],
-  ] as const)('refuses %s', async (_name, options) => {
-    expectRefusal(
-      await settle(backend.query('vectors', NEAR, { v: [1, 0, 0, 0] }, options)),
-      'queryOptions'
-    );
-  });
-
-  it('accepts stream: false, which asks for nothing', async () => {
-    const response = await backend.query('vectors', NEAR, { v: [1, 0, 0, 0] }, { stream: false });
-
-    expect(response.results).toHaveLength(1);
-  });
-});

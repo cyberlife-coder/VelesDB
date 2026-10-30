@@ -1144,7 +1144,7 @@ const procId = await memory.learnProcedure('procedures', {
 await memory.deleteMemory('procedures', procId);
 ```
 
-Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
+Each recall returns `SearchResult[]` = `{ id, score, payload? }`:
 
 - **`score`** is cosine similarity in `[0, 1]` for a `cosine` collection;
   higher is more similar.
@@ -1162,7 +1162,8 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
 - **Each memory type is selected on the server** with a core filter on the
   reserved `_memory_type` payload key (`{ condition: { type: 'eq', field:
   '_memory_type', value: 'semantic' } }`, and so on); `recallRecent` and
-  `recallOlderThan` AND that with a `gte` / `lt` bound on `timestamp`. The
+  `recallOlderThan` AND that with a `gt` / `lt` bound on `timestamp` — both
+  exclusive, as core's `episodic.recent()` / `episodic.older_than()` are. The
   exact JSON is pinned by `conformance/filter_wire_cases.json`, which
   velesdb-core parses as its own `Filter` in
   `tests/filter_wire_conformance.rs`. (Before 8.0.0 the SDK sent a flat

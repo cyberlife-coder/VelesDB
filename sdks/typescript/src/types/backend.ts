@@ -42,7 +42,6 @@ import type {
   ScrollResponse,
   CollectionStatsResponse,
   CollectionConfigResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -167,8 +166,7 @@ export interface IVelesDBBackend {
   query(
     collection: string,
     queryString: string,
-    params?: Record<string, unknown>,
-    options?: QueryOptions
+    params?: Record<string, unknown>
   ): Promise<QueryApiResponse>;
 
   /** Explain a VelesQL query without executing it */
@@ -327,7 +325,7 @@ export interface IVelesDBBackend {
 
   /**
    * Recall episodic events most-recent-first, optionally bounded below by
-   * `since` (inclusive unix-seconds). Mirrors core `episodic.recent(since)`.
+   * `since` (exclusive unix-seconds: strictly newer). Mirrors core `episodic.recent(since)`.
    */
   recallRecentEvents(collection: string, since?: number): Promise<EpisodicRecord[]>;
 

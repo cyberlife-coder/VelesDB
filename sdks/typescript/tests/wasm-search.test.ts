@@ -871,26 +871,6 @@ describe('WASM search — options it has no way to honour are refused (#2095)', 
     expectRefusal(outcome, 'namedSparseIndexes');
     expect(sparse_search).not.toHaveBeenCalled();
   });
-
-  it('search refuses includeVectors: true, since its results carry no vector', async () => {
-    const search = vi.fn(() => [[1n, 0.9]]);
-    const ctx = buildCtx('docs', buildStore({ search }));
-
-    const outcome = await settle(
-      wasmSearch(ctx, 'docs', [0.1, 0.2], { includeVectors: true })
-    );
-
-    expectRefusal(outcome, 'includeVectors');
-  });
-
-  it('search accepts includeVectors: false, which asks for nothing', async () => {
-    const search = vi.fn(() => [[1n, 0.9]]);
-    const ctx = buildCtx('docs', buildStore({ search }));
-
-    const rows = await wasmSearch(ctx, 'docs', [0.1, 0.2], { includeVectors: false });
-
-    expect(rows).toEqual([{ id: '1', score: 0.9 }]);
-  });
 });
 
 describe('wasmMultiQuerySearch — fusionParams reach the binding or are refused (#2095)', () => {

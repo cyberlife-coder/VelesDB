@@ -19,14 +19,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or velesdb-wasm, whose `matches_filter` reads a filter without `condition`
   as "no filter" and returned unfiltered neighbours. `null` still means no
   filter. Migration: build filters with `f.*`.
-- **BREAKING (behavior) — the SDK's REST backend refuses options core has no
-  field for, instead of sending them to be dropped.** `search({ includeVectors:
-  true })` throws `NOT_SUPPORTED` (core's `SearchRequest` has no
-  `include_vectors` and `SearchResultResponse` no vector), and `query()`
-  refuses `timeoutMs` and `stream: true` (core's `QueryRequest` is `query`,
-  `params` and `collection`; the server's timeout is its guard-rails
-  setting). `REST_CAPABILITIES.includeVectors` is now `false` and
-  `REST_CAPABILITIES.queryOptions` empty, which they claimed otherwise.
+- **BREAKING (behavior) — `recallRecent(collection, since)` is exclusive in
+  the TypeScript SDK**, returning events with `timestamp > since` as core's
+  `TemporalIndex::recent` does (it skips `ts <= since`); it was `>=`. The
+  shared fixture's `since` case now pins `gt`. `recallOlderThan` already
+  matched core's strict `older_than`. Migration: pass `since - 1` to keep an
+  event stamped exactly `since`.
+- **BREAKING (behavior) — `createGraphCollection({ schemaMode: 'strict' })`
+  creates a strict graph** (TypeScript SDK). The SDK sent `schema_mode`, a
+  field velesdb-server never read, so every graph collection came out
+  schemaless; it now sends core's `graph_schema`
+  (`{ schemaless, node_types: [], edge_types: [] }`), pinned by
+  `conformance/graph_schema_wire_cases.json` and parsed as `GraphSchema` by
+  `crates/velesdb-core/tests/graph_schema_wire_conformance.rs`. The SDK
+  declares no node or edge types, so a strict collection refuses every typed
+  node and edge. Migration: drop `schemaMode: 'strict'` to keep the old
+  behaviour.
+- **BREAKING (behavior) — velesdb-wasm refuses a metadata filter core cannot
+  parse.** `VectorStore.search_with_filter` validates the filter with
+  `velesdb_core::Filter::from_json_value` (new `filter::validate_filter`) and
+  returns core's message (`Invalid filter: missing field \`condition\``),
+  and `matches_filter` matches nothing for a filter without `condition`. A
+  flat `{ "category": "tech" }` used to read as "no filter" and return
+  every point.
 - **BREAKING — the TypeScript SDK requires Node.js 22 or later**
   (`engines.node`, was `>=18.0.0`). CI builds and tests the SDK on Node 22
   only, its test toolchain needs 22.12+, and Node 18 and 20 are end-of-life.
@@ -43,6 +58,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING — `HnswParams.storageMode` (TypeScript SDK).** Nothing read it;
   the REST request takes `CollectionConfig.storageMode` only, which is the
   field to set.
+- **BREAKING — `SearchOptions.includeVectors` and `SearchResult.vector`
+  (TypeScript SDK).** No search returns vectors on either backend: core's
+  `SearchRequest` has no `include_vectors` and `SearchResultResponse` is id,
+  score and payload. REST sent the flag to be dropped (while
+  `REST_CAPABILITIES.includeVectors` claimed `true`); WASM refused it. Read a
+  vector with `get()`.
+- **BREAKING — `QueryOptions` and `query()`'s `options` argument (TypeScript
+  SDK).** Core's `QueryRequest` (`/query`, `/aggregate`) is `query`,
+  `params` and `collection`: REST sent `timeout_ms` and `stream` to be
+  dropped, WASM refused them. The server's query timeout is its guard-rails
+  `timeoutMs` (`updateGuardRails`).
+- **BREAKING — the `includeVectors` and `queryOptions` capabilities**, which
+  described the two removed options, leave `CapabilityMap`,
+  `CAPABILITY_LIST_UNIVERSES` and `QUERY_OPTION_NAMES` with them.
+- **BREAKING — `TraverseRequest.cursor` and `TraverseResponse.nextCursor`
+  (TypeScript SDK).** velesdb-server's `TraverseRequest` and
+  `TraverseResponse` have no cursor (the WASM backend has no traversal), so
+  the request field was dropped and the response field always `undefined`.
+  `hasMore` says the traversal stopped at `limit`.
 
 ### Fixed
 
@@ -53,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so every recall failed while `REST_CAPABILITIES.agentMemory` advertised
   them. They now send core filters built by one pair of helpers
   (`memoryTypeFilter`, `episodicWindowFilter`), and the temporal recalls let
-  the server apply their `timestamp` window (`gte` since, `lt` before)
+  the server apply their `timestamp` window (`gt` since, `lt` before)
   instead of scrolling every episodic point to filter it client-side. The
   exact JSON is pinned by `conformance/filter_wire_cases.json`, shared by a
   velesdb-core test that parses each case as `Filter` and checks which
@@ -65,7 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **TypeScript SDK README:** the stale "What's New in v3.12.0" section under
   the v8.0.0 banner is replaced by what 8.0.0 changes; filters, the HNSW
-  options, `includeVectors`, the query options and the supported Node.js
+  options, the search and query options, graph schema mode, traversal and
+  the supported Node.js
   versions describe what the SDK does. `docs/guides/AGENT_MEMORY.md` states
   the filters agent memory sends, and `docs/guides/MIGRATION_v8.0.0.md` gains
   a TypeScript SDK section.

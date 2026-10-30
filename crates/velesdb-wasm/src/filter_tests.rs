@@ -94,10 +94,35 @@ fn test_nested_field() {
 }
 
 #[test]
-fn test_no_filter_matches_all() {
-    let payload = json!({"anything": "value"});
-    let filter = json!({});
-    assert!(matches_filter(&payload, &filter));
+fn test_filter_without_condition_matches_nothing() {
+    // A flat field map is not a filter. It used to read as "no filter" and
+    // match every payload, where velesdb-server refuses the same JSON.
+    let payload = json!({"category": "tech"});
+    assert!(!matches_filter(&payload, &json!({})));
+    assert!(!matches_filter(&payload, &json!({"category": "tech"})));
+}
+
+#[test]
+fn test_validate_filter_refuses_what_core_refuses_with_its_message() {
+    for filter in [
+        json!({}),
+        json!({"category": "tech"}),
+        json!({"condition": "eq"}),
+    ] {
+        let err = validate_filter(&filter).expect_err("core refuses this filter");
+        let core = velesdb_core::Filter::from_json_value(filter.clone())
+            .expect_err("core refuses this filter");
+        assert_eq!(err, core, "same message as core for {filter}");
+    }
+    assert!(validate_filter(&json!({}))
+        .unwrap_err()
+        .contains("missing field `condition`"));
+}
+
+#[test]
+fn test_validate_filter_accepts_a_core_filter() {
+    let filter = json!({"condition": {"type": "eq", "field": "category", "value": "tech"}});
+    assert!(validate_filter(&filter).is_ok());
 }
 
 #[test]
@@ -117,7 +142,8 @@ fn test_unknown_condition_type_fails_closed() {
 fn test_missing_condition_type_fails_closed() {
     // A condition OBJECT with no "type" is an uninterpretable filter, not an
     // absent one — it funnels into the same fail-closed arm as a typo'd type.
-    // (An absent `condition` key stays permissive: test_no_filter_matches_all.)
+    // (An absent `condition` key fails closed too: see
+    // test_filter_without_condition_matches_nothing.)
     let payload = json!({"category": "tech"});
     let filter = json!({
         "condition": {

@@ -80,7 +80,6 @@ vi.mock('@wiscale/velesdb-wasm', () => mockWasmModule);
 const C = 'c';
 const V = [0.1, 0.2];
 const FILTER = { condition: { type: 'eq', field: 'tenant', value: 'mine' } };
-const NEAR = 'SELECT * FROM c WHERE vector NEAR $v LIMIT 5';
 
 type Call = (backend: WasmBackend) => Promise<unknown>;
 /** Whether the option under test took effect, judged from the binding's calls, the result or the store. */
@@ -132,11 +131,6 @@ const returnsPoint =
   (id: string): Applied =>
   (result) =>
     Array.isArray(result) && result.some((row) => (row as { id?: unknown }).id === id);
-
-const returnsVectors: Applied = (result) =>
-  Array.isArray(result) &&
-  result.length > 0 &&
-  result.every((row) => (row as { vector?: unknown }).vector !== undefined);
 
 /** velesdb-wasm has nowhere to put this option: were it granted, it would be dropped. */
 const neverApplied: Applied = () => false;
@@ -201,12 +195,6 @@ const CONFIG_PROBES: Record<string, { config: Record<string, unknown>; applied: 
   asyncIndexBuilder: { config: { asyncIndexBuilder: { segmentCount: 2 } }, applied: neverApplied },
 };
 
-/** A `QueryOptions` setting for each field. velesdb-wasm's `query(vector, k)` takes neither. */
-const QUERY_OPTIONS: Record<string, Record<string, unknown>> = {
-  timeoutMs: { timeoutMs: 4321 },
-  stream: { stream: true },
-};
-
 /** Probes for each boolean capability. */
 const BOOLEAN_PROBES: Record<string, readonly Probe[]> = {
   vectorSearch: [
@@ -231,7 +219,6 @@ const BOOLEAN_PROBES: Record<string, readonly Probe[]> = {
     ),
     operation((b) => b.sparseSearchNamed(C, { 1: 0.5 }, 'splade_v2')),
   ],
-  includeVectors: [option((b) => b.search(C, V, { includeVectors: true }), returnsVectors)],
   idOnlySearch: [
     operation((b) => b.searchIds(C, V)),
     operation((b) => b.multiQuerySearchIds(C, [V])),
@@ -311,11 +298,6 @@ const LIST_PROBES: Record<ListCapability, (value: string) => Probe> = {
     const { config, applied } = entryFor(CONFIG_PROBES, 'collectionConfig', field);
     return option((b) => b.createCollection('f', { dimension: 2, ...config }), applied);
   },
-  queryOptions: (name) =>
-    option(
-      (b) => b.query(C, NEAR, { v: V }, entryFor(QUERY_OPTIONS, 'queryOptions', name)),
-      neverApplied
-    ),
 };
 
 type Outcome = 'honoured' | 'refused' | 'dropped';

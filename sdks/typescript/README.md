@@ -8,9 +8,9 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 ## What's New in v8.0.0
 
-- **Agent memory works over REST.** `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`, `recallRecent` and `recallOlderThan` sent a flat `{ _memory_type: ... }` filter that velesdb-server refuses with a `400`; they now send core's `{ condition: ... }` shape, and `recallRecent`/`recallOlderThan` let the server apply the timestamp window.
+- **Agent memory works over REST.** `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`, `recallRecent` and `recallOlderThan` sent a flat `{ _memory_type: ... }` filter that velesdb-server refuses with a `400`; they now send core's `{ condition: ... }` shape, and `recallRecent`/`recallOlderThan` let the server apply the timestamp window. `recallRecent(since)` is now exclusive (`timestamp > since`), as core's `episodic.recent()` is.
 - **A filter must be core-shaped on both backends.** A flat field map such as `{ category: 'tech' }` is refused with `VALIDATION_ERROR` before it leaves the SDK. REST used to answer it with a `400`; WASM read it as "no filter" and returned unfiltered results. Build filters with `f.*` (see [Filters](#filters)).
-- **Nothing accepted and dropped on REST.** `includeVectors: true` and the `query()` options `timeoutMs`/`stream` are refused with `NOT_SUPPORTED` (core's search response carries no vectors and `/query` takes no per-query options), and `CollectionConfig.description` and `HnswParams.storageMode` are gone: core has no collection description, and the storage mode is `CollectionConfig.storageMode`.
+- **No option the server drops.** Removed: `SearchOptions.includeVectors` and `SearchResult.vector` (no search returns vectors; read one with `get()`), `query()`'s `options` argument and `QueryOptions` (`/query` takes no per-query timeout or stream; the server's timeout is its guard-rails `timeoutMs`), the `includeVectors` and `queryOptions` capabilities, `CollectionConfig.description` (core has no collection description), `HnswParams.storageMode` (use `CollectionConfig.storageMode`), and the traversal `cursor` / `nextCursor` (core has no traversal cursor). `createGraphCollection`'s `schemaMode` now reaches the server, as core's `graph_schema`.
 - **The WASM backend creates `pq` and `rabitq` collections**, returning core's results for every storage mode.
 - **Node.js 22 or later** (`engines.node`): the version CI builds and tests on. Node 18 and 20 are end-of-life.
 
@@ -291,6 +291,13 @@ await db.createGraphCollection('social', {
 });
 ```
 
+`schemaMode` is sent as core's `graph_schema`. `'strict'` declares no node or
+edge types (the SDK has no option for them), so a strict collection refuses
+every typed node and edge; leave it `'schemaless'` unless that is what you
+want. Over REST, velesdb-server builds a graph collection from its name and
+schema alone: it does not read `dimension` or `metric` for
+`collection_type: 'graph'`.
+
 #### `db.createMetadataCollection(name)`
 
 Create a metadata-only collection (no vectors). Useful for reference tables that can be JOINed with vector collections via VelesQL.
@@ -384,11 +391,10 @@ Vector similarity search.
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
 | `filter` | `Filter` | - | Payload filter, core-shaped (`{ condition: ... }`); see [Filters](#filters) |
-| `includeVectors` | `boolean` | `false` | Refused with `NOT_SUPPORTED` when `true` on both backends: search hits carry no vectors (use `get()`) |
 | `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
 | `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
 
-> **WASM backend:** `filter` applies to dense search only (with velesdb-wasm 6.0.0, filtered results are affected by #2332). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so are `sparseIndexName` and `includeVectors: true`; none of them is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`, `includeVectors`).
+> **WASM backend:** `filter` applies to dense search only (with velesdb-wasm 6.0.0, filtered results are affected by #2332). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so is `sparseIndexName`; neither is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`).
 
 ```typescript
 const results = await db.search('docs', queryVector, {
@@ -655,16 +661,9 @@ const fused = await db.query('docs',
 );
 ```
 
-Query options:
+`query()` takes no options: core's `QueryRequest` is `query`, `params` and `collection`. The server's query timeout is its guard-rails `timeoutMs` (`db.updateGuardRails`).
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `timeoutMs` | `number` | - | Refused with `NOT_SUPPORTED` on both backends |
-| `stream` | `boolean` | `false` | Refused with `NOT_SUPPORTED` when `true` on both backends |
-
-> **REST backend:** core's `QueryRequest` is `query`, `params` and `collection` only, so `timeoutMs` and `stream: true` are refused rather than sent and dropped; the server's query timeout is its guard-rails `timeoutMs` (`db.updateGuardRails`). `db.capabilities().queryOptions` is empty.
->
-> **WASM backend:** `timeoutMs` and `stream: true` are refused with `NOT_SUPPORTED`: `query()` runs in process and answers at once (`db.capabilities().queryOptions` is empty). The number of rows is the statement's `LIMIT`, capped at core's 100,000, or core's default of 10: `params.k` is not read, as on REST. A `LIMIT` too large for a u64 is refused with `BAD_REQUEST`, as core's parser refuses it.
+> **WASM backend:** The number of rows is the statement's `LIMIT`, capped at core's 100,000, or core's default of 10: `params.k` is not read, as on REST. A `LIMIT` too large for a u64 is refused with `BAD_REQUEST`, as core's parser refuses it.
 
 #### `db.queryExplain(queryString, params?)`
 
@@ -807,6 +806,9 @@ for (const node of result.results) {
 }
 ```
 
+A traversal has no cursor: `result.hasMore` is `true` when it stopped at
+`limit`, and a larger `limit` reaches further.
+
 #### `db.getNodeDegree(collection, nodeId)`
 
 Get the in-degree and out-degree of a node.
@@ -832,6 +834,9 @@ for (const node of result.results) {
   console.log(`Node ${node.targetId} at depth ${node.depth}`);
 }
 ```
+
+A traversal has no cursor: `result.hasMore` is `true` when it stopped at
+`limit`, and a larger `limit` reaches further.
 
 #### `db.relate(collection, request)`
 
@@ -980,7 +985,7 @@ Each similarity-recall method (`searchFacts`, `recallEvents`,
 `recallProcedures`) returns `SearchResult[]`:
 
 ```typescript
-// SearchResult = { id: number; score: number; payload?: Record<string, unknown>; vector?: number[] }
+// SearchResult = { id: number; score: number; payload?: Record<string, unknown> }
 ```
 
 The temporal-recall methods (`recallRecent`, `recallOlderThan`) return
@@ -988,7 +993,8 @@ The temporal-recall methods (`recallRecent`, `recallOlderThan`) return
 
 Every recall selects its memory type on the server with a core filter on the
 reserved `_memory_type` key (`f.eq('_memory_type', 'semantic')`, and so on);
-`recallRecent` / `recallOlderThan` add the timestamp bound to that filter, so
+`recallRecent` / `recallOlderThan` add the timestamp bound to that filter
+(`timestamp > since`, `timestamp < before`: both exclusive, as in core), so
 the server returns only the window asked for.
 
 - `score` is the cosine similarity in `[0, 1]` (for a `cosine` collection);
@@ -1030,8 +1036,9 @@ const eventId = await memory.recordEvent('events', {
 const events = await memory.recallEvents('events', queryEmbedding, 5);
 
 // Temporal recall — no embedding needed, most-recent-first.
-// recallRecent(collection, since?): events with timestamp >= since
-// (inclusive, unix-seconds); recallOlderThan(collection, before): strictly older.
+// recallRecent(collection, since?): events with timestamp > since
+// (exclusive, unix-seconds, as core's episodic.recent);
+// recallOlderThan(collection, before): strictly older.
 const nowSecs = Math.floor(Date.now() / 1000);
 const allRecent = await memory.recallRecent('events');
 const lastHour = await memory.recallRecent('events', nowSecs - 3600);

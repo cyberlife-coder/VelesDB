@@ -254,6 +254,10 @@ Rejections carry core's codes and a new `recoverable` field:
 - **Trained PQ collections differ from core:** once a PQ collection has
   trained, core's default `search()` returns ADC-approximated scores. The
   browser returns exact ones.
+- **`VectorStore.search_with_filter` refuses a filter core cannot parse**,
+  with core's message (`Invalid filter: missing field \`condition\``, for one).
+  A filter without a `condition` key, such as a flat `{ category: 'tech' }`,
+  used to match every point; it is now an error, as on REST.
 
 ## 8. Observability
 
@@ -328,12 +332,25 @@ the npm package ships.
   that still passes it gets `NOT_SUPPORTED`.
 - **`HnswParams.storageMode` is removed.** Nothing read it. Set the top-level
   `CollectionConfig.storageMode`.
-- **REST `search({ includeVectors: true })` throws `NOT_SUPPORTED`**, as WASM
-  already did: search hits carry no vectors. Read a vector with `get()`.
-  `capabilities().includeVectors` is `false` on both backends.
-- **REST `query()` refuses `timeoutMs` and `stream: true`** with
-  `NOT_SUPPORTED`: `/query` takes neither, and the server's timeout is its
-  guard-rails `timeoutMs` (`updateGuardRails`). `capabilities().queryOptions`
-  is empty on both backends.
+- **`SearchOptions.includeVectors` and `SearchResult.vector` are removed.** No
+  search, on either backend, returns vectors (core's `SearchResultResponse` is
+  id, score, payload). Read a vector with `get()`.
+- **`query()` loses its `options` argument and `QueryOptions` is removed**
+  (`timeoutMs`, `stream`): core's `QueryRequest` takes neither. The server's
+  timeout is its guard-rails `timeoutMs` (`updateGuardRails`).
+- **`capabilities()` drops the `includeVectors` and `queryOptions` keys**,
+  which described those fields.
+- **`TraverseRequest.cursor` and `TraverseResponse.nextCursor` are removed.**
+  Core has no traversal cursor; `hasMore` says the traversal stopped at
+  `limit`. Raise `limit` to reach further.
+- **`recallRecent(collection, since)` is exclusive:** it returns events with
+  `timestamp > since`, as core's `episodic.recent()` does (it was `>=`).
+  Pass `since - 1` to keep an event stamped exactly `since`.
+  `recallOlderThan` was already strict (`<`), as core's `older_than()` is.
+- **`createGraphCollection({ schemaMode: 'strict' })` now takes effect.** The
+  SDK sent `schema_mode`, which the server never read, so every graph
+  collection was schemaless. It now sends core's `graph_schema`. The SDK
+  declares no node or edge types, so a strict collection refuses every typed
+  node and edge; drop `schemaMode: 'strict'` to keep the old behaviour.
 - **Node.js 22 or later** (`engines.node`). CI builds and tests the SDK on 22;
   18 and 20 are end-of-life.
