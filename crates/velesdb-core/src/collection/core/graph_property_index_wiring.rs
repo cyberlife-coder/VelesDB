@@ -1,7 +1,7 @@
 //! Wiring logic for graph property indexes (EPIC-047 Wave 7).
 //!
-//! Populates `CompositeRangeIndex`, `EdgePropertyIndex` and
-//! `CompositeIndexManager` when nodes and edges are mutated.
+//! Populates `CompositeRangeIndex` and `EdgePropertyIndex` when nodes and
+//! edges are mutated.
 //!
 //! # The node range indexes are derived from the payloads
 //!
@@ -47,20 +47,6 @@ pub(crate) fn extract_labels(payload: &Value) -> Vec<String> {
             arr.iter()
                 .filter_map(Value::as_str)
                 .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Returns a vec of `(property_name, value)` from a payload,
-/// excluding the internal `_labels` key.
-fn indexable_properties(payload: &Value) -> Vec<(&str, &Value)> {
-    payload
-        .as_object()
-        .map(|obj| {
-            obj.iter()
-                .filter(|(k, _)| *k != "_labels")
-                .map(|(k, v)| (k.as_str(), v))
                 .collect()
         })
         .unwrap_or_default()
@@ -184,60 +170,6 @@ impl Collection {
         }
     }
 
-    /// Adds a stored node payload to the composite indexes.
-    ///
-    /// Unlike the range indexes, the composite indexes are fed by the
-    /// node-payload path only and start empty on open. That is harmless only
-    /// because no production path creates one: `CompositeIndexManager::create_index`
-    /// has no caller outside its unit tests, so the manager stays empty and
-    /// the emptiness check below returns. A path that creates one must first
-    /// derive them from every payload write, as `apply_range_index_changes` does.
-    pub(crate) fn index_node_composites(&self, node_id: u64, payload: &Value) {
-        let labels = extract_labels(payload);
-        let properties = indexable_properties(payload);
-
-        if labels.is_empty() || properties.is_empty() {
-            return;
-        }
-
-        let mut composite_mgr = self.graph.composite_index_manager.write();
-        // Composite indexes are DDL-created and usually absent; the owned
-        // props map (String key + Value clone per property) is only worth
-        // building when at least one index exists — and once, not once
-        // per label.
-        if !composite_mgr.is_empty() {
-            let props_map: HashMap<String, Value> = properties
-                .iter()
-                .map(|&(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            for label in &labels {
-                composite_mgr.on_add_node(label, node_id, &props_map);
-            }
-        }
-    }
-
-    /// Removes a node's superseded payload from the composite indexes.
-    pub(crate) fn deindex_node_composites(&self, node_id: u64, old_payload: &Value) {
-        let labels = extract_labels(old_payload);
-        let properties = indexable_properties(old_payload);
-
-        if labels.is_empty() || properties.is_empty() {
-            return;
-        }
-
-        let mut composite_mgr = self.graph.composite_index_manager.write();
-        // Same guard as the add path: no composite index, no owned map.
-        if !composite_mgr.is_empty() {
-            let props_map: HashMap<String, Value> = properties
-                .iter()
-                .map(|&(k, v)| (k.to_string(), v.clone()))
-                .collect();
-            for label in &labels {
-                composite_mgr.on_remove_node(label, node_id, &props_map);
-            }
-        }
-    }
-
     /// Populates edge property indexes after an edge is added.
     pub(crate) fn index_edge_properties(
         &self,
@@ -316,22 +248,5 @@ impl Collection {
         value: &Value,
     ) -> Option<Vec<u64>> {
         self.with_range_index(label, property, |idx| idx.lookup_exact(value).to_vec())
-    }
-
-    /// Looks up node IDs via composite index for multi-property equality.
-    #[must_use]
-    pub(crate) fn composite_index_lookup(
-        &self,
-        label: &str,
-        properties: &[&str],
-        values: &[Value],
-    ) -> Option<Vec<u64>> {
-        let mgr = self.graph.composite_index_manager.read();
-        let covering = mgr.find_covering_indexes(label, properties);
-        let index_name = covering.first()?;
-        let idx = mgr.get(index_name)?;
-        let result = idx.lookup(values).to_vec();
-        drop(mgr);
-        Some(result)
     }
 }

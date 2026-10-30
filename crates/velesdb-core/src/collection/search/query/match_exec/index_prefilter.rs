@@ -1,4 +1,4 @@
-//! Index pre-filter for MATCH WHERE evaluation (S4-08, S4-09).
+//! Index pre-filter for MATCH WHERE evaluation (S4-08).
 //!
 //! Extracts simple predicates from a WHERE clause and resolves them
 //! against graph property indexes. When an index covers a predicate,
@@ -48,10 +48,6 @@ enum PredicateKind {
 /// indexed predicates (intersection). Returns `None` when no predicate
 /// could be accelerated by an index, signalling the caller to fall back
 /// to brute-force per-node evaluation.
-///
-/// **S4-09**: When multiple equality predicates target the same label,
-/// `composite_index_lookup` is attempted first. Individual single-property
-/// lookups are used as fallback.
 pub(super) fn compute_index_prefilter(
     collection: &Collection,
     pattern: &GraphPattern,
@@ -65,17 +61,9 @@ pub(super) fn compute_index_prefilter(
 
     let alias_to_labels = build_alias_label_map(pattern);
 
-    // S4-09: group equality predicates by (alias, label) for composite lookup.
-    let composite_result = try_composite_lookup(collection, &predicates, &alias_to_labels);
-
-    let mut result_set: Option<HashSet<u64>> = composite_result;
+    let mut result_set: Option<HashSet<u64>> = None;
 
     for pred in &predicates {
-        // Skip equality predicates already covered by composite lookup.
-        if matches!(pred.kind, PredicateKind::Exact(_)) && result_set.is_some() {
-            continue;
-        }
-
         let label = resolve_label(&pred.alias, &alias_to_labels)?;
         let ids = execute_single_lookup(collection, label, &pred.property, &pred.kind)?;
         let id_set: HashSet<u64> = ids.into_iter().collect();
@@ -116,41 +104,6 @@ fn intersect_sets(acc: Option<HashSet<u64>>, new: HashSet<u64>) -> HashSet<u64> 
         Some(existing) => existing.intersection(&new).copied().collect(),
         None => new,
     }
-}
-
-/// S4-09: attempts a composite index lookup for multiple equality predicates
-/// on the same label. Returns `Some(set)` if a composite index exists and
-/// covers all equality predicates for at least one label.
-fn try_composite_lookup(
-    collection: &Collection,
-    predicates: &[ExtractedPredicate],
-    alias_to_labels: &HashMap<String, Vec<String>>,
-) -> Option<HashSet<u64>> {
-    // Group equality predicates by alias.
-    let mut eq_by_alias: HashMap<&str, Vec<(&str, &serde_json::Value)>> = HashMap::new();
-    for pred in predicates {
-        if let PredicateKind::Exact(ref val) = pred.kind {
-            eq_by_alias
-                .entry(&pred.alias)
-                .or_default()
-                .push((&pred.property, val));
-        }
-    }
-
-    // Only attempt composite lookup when 2+ equality predicates share an alias.
-    for (alias, props) in &eq_by_alias {
-        if props.len() < 2 {
-            continue;
-        }
-        let label = resolve_label(alias, alias_to_labels)?;
-        let prop_names: Vec<&str> = props.iter().map(|(name, _)| *name).collect();
-        let values: Vec<serde_json::Value> = props.iter().map(|(_, v)| (*v).clone()).collect();
-
-        if let Some(ids) = collection.composite_index_lookup(label, &prop_names, &values) {
-            return Some(ids.into_iter().collect());
-        }
-    }
-    None
 }
 
 /// Executes a single-property index lookup.

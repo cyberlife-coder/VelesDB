@@ -3,9 +3,7 @@
 //! Configuration types (`CollectionConfig`, `CURRENT_SCHEMA_VERSION`) live in
 //! the sibling `collection_config` module.
 
-use crate::collection::graph::property_index::{
-    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex,
-};
+use crate::collection::graph::property_index::{CompositeRangeIndex, EdgePropertyIndex};
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
 };
@@ -329,11 +327,6 @@ pub(crate) struct GraphStore {
     /// Populated automatically when edges with properties are added.
     /// Lock order position: **7** (same tier as `property_index` / `range_index`).
     pub(crate) edge_range_indexes: Arc<RwLock<HashMap<String, EdgePropertyIndex>>>,
-
-    /// Composite index manager for multi-property lookups (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) composite_index_manager: Arc<RwLock<CompositeIndexManager>>,
 
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///

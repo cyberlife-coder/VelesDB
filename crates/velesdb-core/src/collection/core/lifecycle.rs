@@ -1,6 +1,5 @@
 //! Collection lifecycle methods (create, open, flush).
 
-use crate::collection::graph::property_index::CompositeIndexManager;
 use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig};
 use crate::error::Result;
@@ -163,7 +162,7 @@ impl Collection {
     }
 
     /// Builds the graph half of a `Collection` from its persisted indexes and
-    /// the ones rebuilt from the payloads; the edge property, composite and
+    /// the ones rebuilt from the payloads; the edge property and
     /// query-tracking indexes start empty.
     fn build_graph_store(parts: GraphParts) -> Arc<crate::collection::types::GraphStore> {
         let GraphParts {
@@ -183,7 +182,6 @@ impl Collection {
             range_index_dirty: std::sync::atomic::AtomicBool::new(true),
             graph_range_indexes: Arc::new(RwLock::new(graph_range_indexes)),
             edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
-            composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
             edge_store: Arc::new(edge_store),
             edge_wal_lock: Arc::new(Mutex::new(())),
         })

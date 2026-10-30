@@ -1,7 +1,7 @@
 //! Property index for fast graph node lookups.
 //!
 //! Provides O(1) lookups on (label, property_name, value) instead of O(n) scans.
-//! Also includes composite indexes for (label, property1, property2, ...) lookups.
+//! Also holds the ordered range indexes for node and edge properties.
 
 // Reason: Numeric casts in property indexing are intentional:
 // - u128->u64 for millisecond timestamps: values fit within u64 range
@@ -11,17 +11,9 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
 
-mod composite;
 mod range;
 
-#[allow(unused_imports)]
-// Reason: Used by property_index_tests; not referenced from production code yet
-pub(crate) use composite::CompositeIndexType;
-#[allow(unused_imports)] // Reason: CompositeGraphIndex used by property_index_tests
-pub use composite::{CompositeGraphIndex, CompositeIndexManager};
-#[allow(unused_imports)]
-// Reason: OrderedValue used by property_index_tests
-pub use range::{CompositeRangeIndex, EdgePropertyIndex, OrderedValue};
+pub use range::{CompositeRangeIndex, EdgePropertyIndex};
 
 use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};
 use roaring::RoaringBitmap;

@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checked that the grammar shares are now tested against `Parser::parse`, and
   `match_parser_benchmark` times whole statements under new ids.
   *Migration*: `velesql::Parser::parse("MATCH ...")?.match_clause`.
+- **The composite graph index (`CompositeGraphIndex`,
+  `CompositeIndexManager`).** No path created one, so the manager every
+  collection carried stayed empty: every labelled node payload write took its
+  write lock to find that out, and every MATCH with two equality predicates on one alias
+  asked it for a lookup it could never answer. Both calls are gone, and the
+  MATCH pre-filter now intersects every indexed predicate rather than skipping
+  the equality ones a composite lookup was assumed to cover. Crate-private;
+  no public API changes.
 
 ### Fixed
 
