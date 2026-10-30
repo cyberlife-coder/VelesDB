@@ -513,6 +513,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A huge `batch_size` no longer aborts the process.**
+  `Collection::scroll_batch` reserved `batch_size` points up front, and the
+  streaming ingester's drain task reserved its configured `batch_size`, so a
+  caller's `usize::MAX` (or any size past memory) overflowed the capacity and
+  aborted the process; the Python and Tauri `scroll_batch`, the CLI and
+  `enable_streaming` pass the size through (REST caps a scroll at 10 000).
+  Both now grow with the points they actually
+  hold. The sparse, hybrid and filtered search resolvers and the GPU
+  multi-probe merge are sized the same way, by the hits found rather than by
+  `k` or `limit`, which the searches already bounded.
 - **Graph edges with properties survive a flush and a reopen.** `flush()`
   writes every edge to the `edge_store.bin` snapshot, encoded with postcard,
   and then truncates the edge WAL. An edge's properties are

@@ -453,31 +453,33 @@ impl Collection {
         &self,
         pairs: impl Iterator<Item = (u64, f32)>,
         limit: usize,
-        capacity_hint: usize,
     ) -> Vec<SearchResult> {
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
-        let mut out = Vec::with_capacity(capacity_hint.min(limit));
-        for (id, score) in pairs.take(limit) {
-            let vector = vector_storage
-                .retrieve(id)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let payload = payload_storage.retrieve(id).ok().flatten();
-            if is_payload_expired(payload.as_ref(), now_secs) {
-                continue;
-            }
-            let point = Point {
-                id,
-                vector,
-                payload,
-                sparse_vectors: None,
-            };
-            out.push(SearchResult::new(point, score));
-        }
+        // Sized by the hits resolved, never by the caller's `limit`.
+        let out: Vec<SearchResult> = pairs
+            .take(limit)
+            .filter_map(|(id, score)| {
+                let vector = vector_storage
+                    .retrieve(id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                let payload = payload_storage.retrieve(id).ok().flatten();
+                if is_payload_expired(payload.as_ref(), now_secs) {
+                    return None;
+                }
+                let point = Point {
+                    id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                };
+                Some(SearchResult::new(point, score))
+            })
+            .collect();
         // The loop is both guards' last use; nothing below reads storage.
         drop(payload_storage);
         drop(vector_storage);
@@ -490,11 +492,7 @@ impl Collection {
         results: &[crate::index::sparse::ScoredDoc],
         limit: usize,
     ) -> Vec<SearchResult> {
-        self.resolve_id_score_pairs(
-            results.iter().map(|sd| (sd.doc_id, sd.score)),
-            limit,
-            results.len(),
-        )
+        self.resolve_id_score_pairs(results.iter().map(|sd| (sd.doc_id, sd.score)), limit)
     }
 
     /// Resolve fused `(id, score)` tuples to `SearchResult`.
@@ -503,6 +501,6 @@ impl Collection {
         fused: &[(u64, f32)],
         limit: usize,
     ) -> Vec<SearchResult> {
-        self.resolve_id_score_pairs(fused.iter().copied(), limit, fused.len())
+        self.resolve_id_score_pairs(fused.iter().copied(), limit)
     }
 }

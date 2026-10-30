@@ -170,24 +170,22 @@ impl Collection {
         // Phase 2 — hydrate vectors in sorted order until k results stand. A
         // candidate whose vector is missing is skipped and the next one takes
         // its place, exactly as the eager filter_map dropped it pre-truncate.
-        let mut results: Vec<SearchResult> = Vec::with_capacity(k.min(passing.len()));
-        for (id, score, payload) in passing {
-            if results.len() >= k {
-                break;
-            }
-            let Some(vector) = vector_storage.retrieve(id).ok().flatten() else {
-                continue;
-            };
-            results.push(SearchResult::new(
-                crate::point::Point {
-                    id,
-                    vector,
-                    payload,
-                    sparse_vectors: None,
-                },
-                score,
-            ));
-        }
+        let mut results: Vec<SearchResult> = passing
+            .into_iter()
+            .filter_map(|(id, score, payload)| {
+                let vector = vector_storage.retrieve(id).ok().flatten()?;
+                Some(SearchResult::new(
+                    crate::point::Point {
+                        id,
+                        vector,
+                        payload,
+                        sparse_vectors: None,
+                    },
+                    score,
+                ))
+            })
+            .take(k)
+            .collect();
         drop(vector_storage);
         super::vector::tag_vector_component_scores(&mut results);
         results

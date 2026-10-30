@@ -231,7 +231,10 @@ async fn drain_loop(
     flush_interval_ms: u64,
     shutdown: Arc<Notify>,
 ) {
-    let mut batch: Vec<Point> = Vec::with_capacity(batch_size);
+    // Grows with the points received. `flush_batch` takes the vector, so a
+    // reservation of `batch_size` only ever served the first batch, and a
+    // configured `batch_size` of `usize::MAX` aborted the process here.
+    let mut batch: Vec<Point> = Vec::new();
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(flush_interval_ms));
     // The first tick completes immediately; consume it.
     interval.tick().await;

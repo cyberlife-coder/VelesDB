@@ -406,6 +406,31 @@ fn test_execute_query_str_returns_consistent_results() {
 
 // ─── enable_streaming() ────────────────────────────────────────────────────
 
+/// A configured `batch_size` larger than memory streams like any other: the
+/// drain task used to reserve the whole batch up front, which aborted the
+/// process on `usize::MAX`.
+#[tokio::test]
+async fn test_enable_streaming_with_a_huge_batch_size_flushes_on_the_timer() {
+    let (coll, _dir) = create_test_vc();
+    coll.enable_streaming(crate::collection::streaming::StreamingConfig {
+        buffer_size: 100,
+        batch_size: usize::MAX,
+        flush_interval_ms: 20,
+    });
+
+    coll.stream_insert(Point::new(1, vec![1.0, 0.0, 0.0, 0.0], None))
+        .expect("test: stream_insert ok");
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while coll.get(&[1])[0].is_none() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the timer flush never stored the point"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn test_enable_streaming_sends_and_searches() {
     let (coll, _dir) = create_test_vc();

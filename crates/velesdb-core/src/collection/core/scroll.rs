@@ -85,25 +85,21 @@ impl Collection {
         let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
-        let mut points = Vec::with_capacity(batch_size);
-        for &id in candidate_ids {
-            if points.len() >= batch_size {
-                break;
-            }
-            if let Some(point) =
+        // TTL-expired points are invisible; the scan keeps going until
+        // `batch_size` live points are collected (or ids run out). The vector
+        // grows with the points found, not with `batch_size`: a caller's
+        // `usize::MAX` used to be reserved up front and abort the process.
+        candidate_ids
+            .iter()
+            .filter_map(|&id| {
                 Self::build_point(id, is_metadata_only, &*payload_storage, &*vector_storage)
-            {
-                // TTL-expired points are invisible; the scan keeps going until
-                // `batch_size` live points are collected (or ids run out).
-                if is_payload_expired(point.payload.as_ref(), now_secs) {
-                    continue;
-                }
-                if Self::passes_filter(&point, filter) {
-                    points.push(point);
-                }
-            }
-        }
-        points
+            })
+            .filter(|point| {
+                !is_payload_expired(point.payload.as_ref(), now_secs)
+                    && Self::passes_filter(point, filter)
+            })
+            .take(batch_size)
+            .collect()
     }
 
     /// Builds a `Point` from storage. Always returns `Some`; points without a
