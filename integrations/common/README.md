@@ -105,7 +105,8 @@ direct use by end users.
 | Export | Type | Description |
 |--------|------|-------------|
 | `build_graph_rest_payload` | function | Constructs the JSON body for REST-backed graph traversal calls |
-| `parse_graph_traverse_response` | function | Decodes a graph traversal REST response into the shared result shape |
+| `parse_graph_traverse_response` | function | Decodes a graph traversal REST response into the integer ids it reached |
+| `parse_graph_traverse_results` | function | Decodes a graph traversal REST response into `(target_id, depth)` pairs, in the server's order |
 | `open_native_graph` | function | Opens (or attaches to) a native-backend graph collection |
 | `is_timeout_exception` | function | Cross-backend timeout-error predicate |
 

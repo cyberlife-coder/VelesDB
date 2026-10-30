@@ -3,10 +3,9 @@ velesdb>=8.0.0
 numpy>=1.22.0
 
 # Optional: LangChain integration (for examples/langchain/ and graphrag_langchain.py)
-# pip install langchain-core langchain-openai
+# pip install langchain-velesdb langchain-core
+# pip install langchain-openai  # OpenAI embeddings and LLM; --offline needs none
 
 # Optional: LlamaIndex integration (for examples/llamaindex/ and graphrag_llamaindex.py)
-# pip install llama-index-core llama-index-llms-openai llama-index-embeddings-openai
-
-# Optional: HTTP client (used by GraphRAG examples for graph edge API calls)
-# pip install httpx requests
+# pip install llama-index-vector-stores-velesdb llama-index-core
+# pip install llama-index-llms-openai llama-index-embeddings-openai  # OpenAI; --offline needs none
