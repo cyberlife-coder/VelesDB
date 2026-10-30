@@ -81,7 +81,7 @@ fn aggregate(
     let groups = materialize_groups(&group_cols, rows, &stmt.columns);
     let aggregates = extract_aggregates(&stmt.columns);
     let plain_cols = extract_plain_columns(&stmt.columns);
-    let mut json_rows: Vec<serde_json::Value> = Vec::with_capacity(groups.len());
+    let mut finished = Vec::with_capacity(groups.len());
     for (key, group_rows) in groups {
         if let Some(row) = finalize_group(
             stmt,
@@ -92,18 +92,33 @@ fn aggregate(
             &group_rows,
             params,
         )? {
-            json_rows.push(row);
+            finished.push((row, group_rows));
         }
     }
-    // Without GROUP BY the aggregates collapse into one row: there is nothing
-    // to order, and core ignores that ORDER BY too.
-    if stmt.group_by.is_some() {
-        sort_aggregate_rows(&mut json_rows, stmt)?;
-    }
+    let json_rows = order_groups(stmt, &aggregates, finished)?;
     json_rows
         .into_iter()
         .map(QueryResultRow::synthetic)
         .collect()
+}
+
+/// Orders the finished group rows: a vector GROUP BY as core orders its
+/// search results (`velesql_vector_group`), any other GROUP BY by the row
+/// fields its ORDER BY names. Without GROUP BY the aggregates collapse into one
+/// row: there is nothing to order, and core ignores that ORDER BY too.
+fn order_groups(
+    stmt: &SelectStatement,
+    aggregates: &[AggregateFunction],
+    groups: Vec<(serde_json::Value, Vec<ScannedRow<'_>>)>,
+) -> Result<Vec<serde_json::Value>, String> {
+    if stmt.is_vector_group_by() {
+        return crate::velesql_vector_group::order_groups(stmt, aggregates, groups);
+    }
+    let mut rows: Vec<serde_json::Value> = groups.into_iter().map(|(row, _)| row).collect();
+    if stmt.group_by.is_some() {
+        sort_aggregate_rows(&mut rows, stmt)?;
+    }
+    Ok(rows)
 }
 
 /// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved by core's
@@ -121,7 +136,7 @@ fn sort_aggregate_rows(
     stmt: &SelectStatement,
 ) -> Result<(), String> {
     let keys: Vec<(String, bool)> = stmt
-        .grouped_sort_keys()
+        .grouped_sort_keys(output_name)
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|(key, descending)| {
@@ -309,7 +324,7 @@ fn write_aggregates(
 
 /// The field a group row stores an aggregate under: its alias, else its
 /// function-call-shaped default name.
-fn output_name(agg: &AggregateFunction) -> String {
+pub(crate) fn output_name(agg: &AggregateFunction) -> String {
     agg.alias
         .clone()
         .unwrap_or_else(|| aggregate_default_name(agg))

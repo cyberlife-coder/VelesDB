@@ -405,16 +405,25 @@ impl SelectStatement {
             SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
             _ => false,
         };
-        let is_agg_query = has_aggs || self.group_by.is_some();
-        if is_agg_query && self.group_by.is_some() {
-            let has_vector_near = self
+        if self.is_vector_group_by() {
+            return false;
+        }
+        has_aggs || self.group_by.is_some()
+    }
+
+    /// Returns `true` for a vector `GROUP BY`: `GROUP BY` over the results of
+    /// a vector `NEAR` search, which groups search results (one per group,
+    /// scored) rather than aggregating rows. The single test every surface
+    /// routes and validates such a query by — core's query pipeline, its
+    /// ORDER BY validation, and the WASM aggregate pipeline.
+    #[must_use]
+    pub fn is_vector_group_by(&self) -> bool {
+        self.group_by
+            .as_ref()
+            .is_some_and(|group_by| !group_by.columns.is_empty())
+            && self
                 .where_clause
                 .as_ref()
-                .is_some_and(Condition::has_vector_search);
-            if has_vector_near {
-                return false;
-            }
-        }
-        is_agg_query
+                .is_some_and(Condition::has_vector_search)
     }
 }

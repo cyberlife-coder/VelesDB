@@ -65,6 +65,8 @@ mod graph_pattern_tests;
 mod groupby_tests;
 mod grouped_order;
 #[cfg(test)]
+mod grouped_order_tests;
+#[cfg(test)]
 mod having_tests;
 #[cfg(test)]
 mod join_extended_tests;
@@ -288,7 +290,7 @@ pub use explain::{
     DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD, EXACT_FULL_SCAN_MAX_SELECTIVITY,
     EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
-pub use grouped_order::GroupedSortKey;
+pub use grouped_order::{vector_group_score_is_average, GroupedSortKey};
 pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{

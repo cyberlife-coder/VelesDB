@@ -1,5 +1,6 @@
 use super::*;
 use crate::point::Point;
+use crate::velesql::SelectStatement;
 
 /// Creates a `SearchResult` with the given id, score, and payload.
 fn make_result(id: u64, score: f32, payload: serde_json::Value) -> SearchResult {
@@ -131,7 +132,7 @@ fn test_first_null_when_column_missing() {
 }
 
 #[test]
-fn test_is_vector_group_by_query_true() {
+fn test_is_vector_group_by_true() {
     let stmt = SelectStatement {
         group_by: Some(crate::velesql::GroupByClause {
             columns: vec!["parent".to_string()],
@@ -143,11 +144,11 @@ fn test_is_vector_group_by_query_true() {
         )),
         ..SelectStatement::empty()
     };
-    assert!(is_vector_group_by_query(&stmt));
+    assert!(stmt.is_vector_group_by());
 }
 
 #[test]
-fn test_is_vector_group_by_query_false_no_near() {
+fn test_is_vector_group_by_false_no_near() {
     let stmt = SelectStatement {
         group_by: Some(crate::velesql::GroupByClause {
             columns: vec!["parent".to_string()],
@@ -155,11 +156,11 @@ fn test_is_vector_group_by_query_false_no_near() {
         where_clause: None,
         ..SelectStatement::empty()
     };
-    assert!(!is_vector_group_by_query(&stmt));
+    assert!(!stmt.is_vector_group_by());
 }
 
 #[test]
-fn test_is_vector_group_by_query_false_no_group_by() {
+fn test_is_vector_group_by_false_no_group_by() {
     let stmt = SelectStatement {
         group_by: None,
         where_clause: Some(crate::velesql::Condition::VectorSearch(
@@ -169,7 +170,7 @@ fn test_is_vector_group_by_query_false_no_group_by() {
         )),
         ..SelectStatement::empty()
     };
-    assert!(!is_vector_group_by_query(&stmt));
+    assert!(!stmt.is_vector_group_by());
 }
 
 #[test]

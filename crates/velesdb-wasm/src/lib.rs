@@ -106,6 +106,7 @@ mod velesql_setops;
 mod velesql_similarity;
 mod velesql_update;
 mod velesql_value;
+mod velesql_vector_group;
 mod velesql_where;
 mod wasm_error;
 

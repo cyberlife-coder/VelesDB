@@ -331,3 +331,77 @@ fn test_having_filters_groups() {
     assert_eq!(out.len(), 1);
     assert!(out[0].data_json_ref().contains("\"cat\":\"a\""));
 }
+
+/// Parses `sql` into its SELECT statement.
+fn select(sql: &str) -> SelectStatement {
+    velesdb_core::velesql::Parser::parse(sql)
+        .expect("test: parse")
+        .select
+}
+
+/// Group names of `out`, in row order, read from field `column`.
+fn column_values(out: &[crate::velesql_result::QueryResultRow], column: &str) -> Vec<String> {
+    out.iter()
+        .map(|r| {
+            let row: serde_json::Value =
+                serde_json::from_str(r.data_json_ref()).expect("test: row JSON");
+            row[column].to_string()
+        })
+        .collect()
+}
+
+/// Rows of a vector search, best first: cat "a" scores 0.9 and 0.2, "c" 0.7
+/// and 0.6, "b" 0.5.
+fn ranked_rows() -> Vec<(u64, f32, serde_json::Value)> {
+    [
+        (1, 0.9, "a"),
+        (2, 0.7, "c"),
+        (3, 0.6, "c"),
+        (4, 0.5, "b"),
+        (5, 0.2, "a"),
+    ]
+    .iter()
+    .map(|&(id, score, cat)| row(id, score, &serde_json::json!({ "cat": cat })))
+    .collect()
+}
+
+#[test]
+fn test_vector_group_by_order_by_similarity_sorts_groups_by_their_best_score() {
+    // A vector GROUP BY orders groups by score, as core does, instead of
+    // refusing ORDER BY similarity() like a plain GROUP BY.
+    let raw = ranked_rows();
+    let s = select(
+        "SELECT cat, MAX(score) AS best FROM t WHERE vector NEAR $v \
+         GROUP BY cat ORDER BY similarity() ASC",
+    );
+    let out = apply(&s, &scanned(&raw), &Params::new()).expect("test: vector group by");
+    assert_eq!(column_values(&out, "cat"), ["\"b\"", "\"c\"", "\"a\""]);
+}
+
+#[test]
+fn test_vector_group_by_order_by_similarity_uses_the_average_when_only_avg_score_is_selected() {
+    // Core scores a group by its average when the SELECT asks for AVG(score)
+    // and not MAX(score): a averages 0.55, c 0.65, b 0.5.
+    let raw = ranked_rows();
+    let s = select(
+        "SELECT cat, AVG(score) AS mean FROM t WHERE vector NEAR $v \
+         GROUP BY cat ORDER BY similarity() DESC",
+    );
+    let out = apply(&s, &scanned(&raw), &Params::new()).expect("test: vector group by avg");
+    assert_eq!(column_values(&out, "cat"), ["\"c\"", "\"a\"", "\"b\""]);
+}
+
+#[test]
+fn test_group_by_order_by_a_name_the_group_column_and_core_default_share_sorts_by_the_column() {
+    // WASM stores COUNT(*) under `count(*)`, so `ORDER BY count` names the
+    // GROUP BY column `count`, not core's default name for COUNT(*).
+    let raw = vec![
+        row(1, 0.0, &serde_json::json!({"count": "z"})),
+        row(2, 0.0, &serde_json::json!({"count": "a"})),
+        row(3, 0.0, &serde_json::json!({"count": "a"})),
+        row(4, 0.0, &serde_json::json!({"count": "a"})),
+    ];
+    let s = select("SELECT count, COUNT(*) FROM t GROUP BY count ORDER BY count ASC");
+    let out = apply(&s, &scanned(&raw), &Params::new()).expect("test: name collision");
+    assert_eq!(column_values(&out, "count"), ["\"a\"", "\"z\""]);
+}

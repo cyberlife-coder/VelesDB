@@ -285,7 +285,7 @@ impl Collection {
 
         // When vector GROUP BY is active, fetch more results from vector search
         // so grouping has enough chunks to work with.
-        let is_vgb = vector_group_by::is_vector_group_by_query(stmt);
+        let is_vgb = stmt.is_vector_group_by();
         let effective_fetch_limit = if is_vgb { MAX_LIMIT } else { fetch_limit };
 
         // Early-return paths or LET-binding guard for special query shapes.
@@ -333,7 +333,8 @@ impl Collection {
         // groups on the payload fields their aggregates landed in.
         let stmt = if args.is_vgb {
             results = self.apply_vector_group_by(stmt, &results);
-            vector_group_by::order_by_on_group_fields(stmt)?
+            stmt.order_by_aggregates_as_fields(vector_group_by::aggregation_result_key)
+                .map_err(|e| crate::error::Error::Query(e.to_string()))?
         } else {
             std::borrow::Cow::Borrowed(stmt)
         };

@@ -5,11 +5,9 @@
 //! This is architecturally distinct from `execute_aggregate` which scans
 //! all payloads and returns `serde_json::Value`.
 
-use std::borrow::Cow;
-
 use crate::point::SearchResult;
 use crate::velesql::{
-    AggregateArg, AggregateFunction, AggregateType, OrderByExpr, SelectStatement,
+    vector_group_score_is_average, AggregateArg, AggregateFunction, AggregateType,
 };
 use rustc_hash::FxHashMap;
 
@@ -59,80 +57,6 @@ impl GroupAccumulator {
     }
 }
 
-/// Detects whether a query requires vector-search GROUP BY post-processing.
-///
-/// Returns `true` when the SELECT has a `group_by` clause AND the WHERE clause
-/// contains a vector NEAR search condition.
-pub(crate) fn is_vector_group_by_query(stmt: &SelectStatement) -> bool {
-    let has_group_by = stmt
-        .group_by
-        .as_ref()
-        .is_some_and(|g| !g.columns.is_empty());
-    let has_vector_near = stmt
-        .where_clause
-        .as_ref()
-        .is_some_and(crate::velesql::Condition::has_vector_search);
-    has_group_by && has_vector_near
-}
-
-/// Rewrites each `ORDER BY <aggregate>` of a vector GROUP BY into the payload
-/// field the grouped results carry that aggregate in, so the SELECT pipeline's
-/// field ORDER BY sorts on it. The aggregate is matched to its SELECT item
-/// through [`SelectStatement::order_by_aggregate_target`], the resolution the
-/// SQL aggregation path uses too; left as is, an aggregate item compared every
-/// group as equal. Borrows the statement unchanged when no item is one.
-///
-/// # Errors
-///
-/// `V016` when an ORDER BY aggregate is not in the SELECT list.
-pub(crate) fn order_by_on_group_fields(
-    stmt: &SelectStatement,
-) -> crate::error::Result<Cow<'_, SelectStatement>> {
-    let has_aggregate_item = stmt
-        .order_by
-        .iter()
-        .flatten()
-        .any(|item| matches!(item.expr, OrderByExpr::Aggregate(_)));
-    if !has_aggregate_item {
-        return Ok(Cow::Borrowed(stmt));
-    }
-    let mut rewritten = stmt.clone();
-    for item in rewritten.order_by.iter_mut().flatten() {
-        if let OrderByExpr::Aggregate(wanted) = &item.expr {
-            let target = stmt
-                .order_by_aggregate_target(wanted)
-                .map_err(|e| crate::error::Error::Query(e.to_string()))?;
-            item.expr = OrderByExpr::Field(aggregation_result_key(target));
-        }
-    }
-    Ok(Cow::Owned(rewritten))
-}
-
-/// Extracts the score aggregation strategy from the aggregate functions.
-///
-/// Scans for `MAX(score)` or `AVG(score)` (detected as `Column("score")`
-/// with `Max` or `Avg` type). Defaults to `Max` if both are present.
-fn extract_score_strategy(aggregations: &[AggregateFunction]) -> Option<AggregateType> {
-    let mut found_max = false;
-    let mut found_avg = false;
-    for agg in aggregations {
-        if is_score_aggregate(agg) {
-            match agg.function_type {
-                AggregateType::Max => found_max = true,
-                AggregateType::Avg => found_avg = true,
-                _ => {}
-            }
-        }
-    }
-    if found_max {
-        Some(AggregateType::Max)
-    } else if found_avg {
-        Some(AggregateType::Avg)
-    } else {
-        None
-    }
-}
-
 /// Returns `true` if this aggregate targets the score pseudo-column.
 fn is_score_aggregate(agg: &AggregateFunction) -> bool {
     matches!(
@@ -168,7 +92,7 @@ pub(crate) fn group_search_results(
         return Vec::new();
     }
 
-    let score_strategy = extract_score_strategy(config.aggregations);
+    let average_score = vector_group_score_is_average(config.aggregations);
     let capacity = config.limit_hint.unwrap_or(64).min(results.len());
     let mut groups: FxHashMap<String, GroupAccumulator> =
         FxHashMap::with_capacity_and_hasher(capacity, rustc_hash::FxBuildHasher);
@@ -199,7 +123,7 @@ pub(crate) fn group_search_results(
                 config.group_by_columns,
                 config.aggregations,
                 results,
-                score_strategy,
+                average_score,
             )
         })
         .collect()
@@ -214,7 +138,7 @@ fn build_grouped_result(
     group_by_columns: &[String],
     aggregations: &[AggregateFunction],
     original_results: &[SearchResult],
-    score_strategy: Option<AggregateType>,
+    average_score: bool,
 ) -> SearchResult {
     let best = &original_results[acc.best_chunk_idx];
     let best_payload = best.point.payload.as_ref();
@@ -234,7 +158,7 @@ fn build_grouped_result(
     insert_aggregation_values(&mut payload, acc, aggregations, best_payload);
 
     // Compute aggregated score.
-    let score = compute_group_score(acc, score_strategy);
+    let score = compute_group_score(acc, average_score);
 
     let mut point = best.point.clone();
     point.payload = Some(serde_json::Value::Object(payload));
@@ -260,8 +184,10 @@ fn insert_aggregation_values(
     }
 }
 
-/// Computes the result key for an aggregation function.
-fn aggregation_result_key(agg: &AggregateFunction) -> String {
+/// The payload field a vector GROUP BY stores an aggregate under: its alias,
+/// else this path's own default name (`max_score`, `first_text`; `Count_*`
+/// for `COUNT(*)`, unlike the SQL aggregation path's `count`).
+pub(crate) fn aggregation_result_key(agg: &AggregateFunction) -> String {
     if let Some(ref alias) = agg.alias {
         return alias.clone();
     }
@@ -329,19 +255,16 @@ fn compute_agg_value(
     serde_json::Value::Null
 }
 
-/// Computes the group score based on the aggregation strategy.
-fn compute_group_score(acc: &GroupAccumulator, strategy: Option<AggregateType>) -> f32 {
-    match strategy {
-        Some(AggregateType::Avg) => {
-            // Reason: count is bounded by result set size, precision loss acceptable
-            #[allow(clippy::cast_precision_loss)]
-            if acc.count > 0 {
-                acc.sum_scores / acc.count as f32
-            } else {
-                0.0
-            }
-        }
-        _ => acc.max_score,
+/// A group's score: the average of its rows' scores when `average`, else its
+/// best row's (see [`vector_group_score_is_average`]).
+// Reason: count is bounded by result set size, precision loss acceptable
+#[allow(clippy::cast_precision_loss)]
+fn compute_group_score(acc: &GroupAccumulator, average: bool) -> f32 {
+    // `count` is at least 1: an accumulator is created by its group's first row.
+    if average {
+        acc.sum_scores / acc.count as f32
+    } else {
+        acc.max_score
     }
 }
 

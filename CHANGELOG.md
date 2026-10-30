@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (behavior) — a `GROUP BY` ORDER BY that names no column of the
+  grouped rows is refused with `V016` (`OrderByNotInResult`).** In 7.1.0 core
+  accepted it and sorted on nothing: `... GROUP BY category ORDER BY
+  category, year` ignored `year`, and an aggregate the SELECT does not list
+  (`ORDER BY SUM(year)` beside `COUNT(*)`), `similarity()` or an arithmetic
+  expression left the groups unsorted. WASM 7.1.0 did the same, except that
+  it sorted on a selected column outside `GROUP BY` (`SELECT category, title,
+  COUNT(*) ... GROUP BY category ORDER BY title`) by each group's first
+  `title`, a column core's rows never carried. 8.0.0 refuses all of these at
+  validation, in both engines; a vector `GROUP BY` (`NEAR` in WHERE) is
+  refused only an ORDER BY aggregate it does not select, and still orders by
+  `similarity()`, arithmetic and its payload fields. WASM also refuses
+  `ORDER BY count` beside an unaliased `COUNT(*)`, which it outputs as
+  `count(*)` (core outputs `count` and sorts on it). Migration: order by a
+  `GROUP BY` column or a SELECT aggregate — add the column to `GROUP BY` or
+  the aggregate to the SELECT list, and alias the aggregate to name it the
+  same way in both engines (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 2).
+
 ### Fixed
 
 - **The Python quickstart and examples run on 8.0.0.** The root README's
@@ -54,12 +75,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MAX(score) AS relevance`). In 8.0.0 an ORDER BY aggregate sorts on the
   SELECT item computing it, whatever its alias, through one resolution
   (`SelectStatement::grouped_sort_keys`) shared by core and WASM.
-  - An ORDER BY that names no column of the grouped rows (an aggregate the
-    SELECT does not list, a column outside `GROUP BY`, `similarity()` or an
-    arithmetic expression) used to leave the groups unsorted with no error;
-    it now fails with the new validation code `V016` (`OrderByNotInResult`).
-    Migration: add the aggregate to the SELECT list, or order by a
-    `GROUP BY` column.
+  - An ORDER BY name resolves to an explicit SELECT alias first, then a
+    `GROUP BY` column, then the executor's own default aggregate name, so
+    WASM no longer sorts `SELECT count, COUNT(*) ... GROUP BY count ORDER BY
+    count` by the aggregate.
+  - A vector `GROUP BY` (`NEAR` + `GROUP BY`) in WASM orders its groups by
+    score for `ORDER BY similarity()`, as core does: the best row's score, or
+    the average when the SELECT asks for `AVG(score)` and not `MAX(score)`.
+    7.1.0 ignored that ORDER BY in WASM.
   - `HAVING` on an aggregate the SELECT does not list
     (`SELECT category, COUNT(*) ... HAVING SUM(amount) > 100`, or
     `HAVING COUNT(*) > 3` beside `SUM(amount)`) dropped every group in core

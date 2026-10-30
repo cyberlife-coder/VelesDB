@@ -67,6 +67,8 @@ struct Fixture {
     dml_cases: Vec<DmlCase>,
     #[serde(default)]
     projection_cases: Vec<ProjectionCase>,
+    #[serde(default)]
+    vector_group_cases: Vec<VectorGroupCase>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +101,18 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
+    /// The validation code (`V0xx`) the refusal must carry.
+    expected_code: String,
+}
+
+/// A vector GROUP BY (`NEAR` + GROUP BY), compared on the order of its
+/// groups: the `group_column` value of each row, in order.
+#[derive(Deserialize)]
+struct VectorGroupCase {
+    id: String,
+    query: String,
+    group_column: String,
+    expect_order: Vec<Value>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -446,11 +460,44 @@ fn test_wasm_velesql_executor_rejected_cases() {
     let mut db = build_dataset(&fixture.dataset);
     let params = params_json(&fixture);
     for case in &fixture.rejected_cases {
+        let Err(err) = execute(&mut db, &case.query, Some(&params)) else {
+            panic!(
+                "WASM accepted rejected case {}: query={:?}",
+                case.id, case.query
+            );
+        };
         assert!(
-            execute(&mut db, &case.query, Some(&params)).is_err(),
-            "WASM accepted rejected case {}: query={:?}",
+            err.contains(&case.expected_code),
+            "WASM refused case {} without {}: {err}",
             case.id,
-            case.query
+            case.expected_code
+        );
+    }
+}
+
+/// Vector GROUP BY: WASM orders the groups as core does (by score, by a
+/// SELECT aggregate).
+#[test]
+fn test_wasm_velesql_executor_vector_group_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    let params = params_json(&fixture);
+    for case in &fixture.vector_group_cases {
+        let result = execute(&mut db, &case.query, Some(&params))
+            .unwrap_or_else(|e| panic!("vector group case {} failed to execute: {e}", case.id));
+        let order: Vec<Value> = result
+            .rows_ref()
+            .iter()
+            .map(|row| {
+                let row: Value =
+                    serde_json::from_str(&row.data_json()).expect("test: parse row JSON");
+                row.get(&case.group_column).cloned().unwrap_or(Value::Null)
+            })
+            .collect();
+        assert_eq!(
+            order, case.expect_order,
+            "WASM vector GROUP BY conformance mismatch for case {}: query={:?}",
+            case.id, case.query
         );
     }
 }

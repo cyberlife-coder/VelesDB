@@ -1,6 +1,6 @@
 {
   "version": "2.1.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows).",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with.",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -288,6 +288,23 @@
         { "category": "tech", "mean_year": 2021.6666666666667 }
       ],
       "note": "same as G006 for AVG"
+    },
+    {
+      "id": "G008",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category HAVING SUM(year) > 5000 ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "HAVING tests an aggregate the SELECT does not list. Core used to accumulate only the SELECT's aggregates, read SUM(year) as absent and drop every group; WASM computed it"
+    },
+    {
+      "id": "G009",
+      "query": "SELECT category, COUNT(*) AS year FROM docs GROUP BY category ORDER BY year DESC",
+      "expect_groups": [
+        { "category": "tech", "year": 3 },
+        { "category": "other", "year": 2 }
+      ],
+      "note": "an ORDER BY name resolves to an explicit SELECT alias first, then a GROUP BY column, then the executor's own default aggregate name: `year` here is the count, not the payload field"
     }
   ],
   "setops_cases": [
@@ -469,26 +486,31 @@
   "rejected_cases": [
     {
       "id": "R001",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted' LIMIT 5",
       "note": "NEAR_FUSED accepts only rrf, average or maximum: weighted is ill-defined over homogeneous query vectors (V012). Was documented_divergences D010"
     },
     {
       "id": "R002",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rsf' LIMIT 5",
       "note": "NEAR_FUSED refuses rsf for the same reason (V012). Was documented_divergences D010"
     },
     {
       "id": "R003",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'rrf')",
       "note": "USING FUSION needs two fusable branches; a single NEAR plus a metadata filter has one (V012). Was documented_divergences D010"
     },
     {
       "id": "R004",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'weighted')",
       "note": "same as R003 for a weight-sensitive strategy"
     },
     {
       "id": "R010",
+      "expected_code": "V016",
       "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY SUM(year) DESC",
       "note": "ORDER BY an aggregate the SELECT does not list names no column of the grouped rows (V016); both engines used to accept it and return the groups unsorted"
     }
@@ -585,13 +607,36 @@
       "note": "named-column projection keeps only the selected fields"
     }
   ],
+  "vector_group_cases": [
+    {
+      "id": "V001",
+      "query": "SELECT category, MAX(score) AS best FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY similarity() DESC",
+      "group_column": "category",
+      "expect_order": ["tech", "other"],
+      "note": "vector GROUP BY (NEAR + GROUP BY) orders groups by their score, the best row's: tech 0.730 (id 4), other 0.548 (id 3)"
+    },
+    {
+      "id": "V002",
+      "query": "SELECT category, MAX(score) AS best FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY similarity() ASC",
+      "group_column": "category",
+      "expect_order": ["other", "tech"],
+      "note": "same as V001 ascending, which first-seen ranking order alone does not give"
+    },
+    {
+      "id": "V003",
+      "query": "SELECT category, MAX(score) AS best FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY MAX(score) ASC",
+      "group_column": "category",
+      "expect_order": ["other", "tech"],
+      "note": "an ORDER BY aggregate of a vector GROUP BY sorts on the SELECT item it repeats"
+    }
+  ],
   "documented_divergences": [
     {
       "id": "D001",
       "area": "aggregate default field naming",
-      "core_behavior": "unaliased aggregates use short names: COUNT(*) -> \"count\", SUM(year) -> \"sum_year\" (Collection::aggregation_result_key)",
+      "core_behavior": "unaliased aggregates use short names: COUNT(*) -> \"count\", SUM(year) -> \"sum_year\" (AggregateFunction::result_key)",
       "wasm_behavior": "unaliased aggregates use function-call-shaped names: COUNT(*) -> \"count(*)\", SUM(year) -> \"sum(year)\" (aggregate_default_name in velesql_aggregate.rs)",
-      "status": "accepted — not a bug; both are internally consistent, but a client selecting an unaliased aggregate across both executors sees a different JSON key. Fixture G001-G004 sidestep this by always using an explicit AS alias, which both engines honor identically",
+      "status": "accepted — not a bug; both are internally consistent, but a client selecting an unaliased aggregate across both executors sees a different JSON key. Fixture G001-G004 sidestep this by always using an explicit AS alias, which both engines honor identically. An ORDER BY name follows the same split: after a SELECT alias and a GROUP BY column, it resolves against the executor's own default names, so ORDER BY count sorts an unaliased COUNT(*) in core and is refused (V016) in WASM",
       "evidence": "SELECT category, COUNT(*) FROM docs GROUP BY category ORDER BY category ASC -> core: [{\"category\":\"other\",\"count\":2},...]; wasm: [{\"category\":\"other\",\"count(*)\":2},...]"
     },
     {

@@ -1387,14 +1387,24 @@ ORDER BY COUNT(*) DESC
 LIMIT 10
 ```
 
-An ORDER BY item of a `GROUP BY` query names a column of the grouped rows: a
-`GROUP BY` column, a SELECT aggregate repeated as an expression (`COUNT(*)`
-above, which sorts on `cnt`), or a SELECT aggregate's alias or default name
-(`ORDER BY cnt`; `ORDER BY count` for an unaliased `COUNT(*)`). An item that
-names none — an aggregate the SELECT does not list, a column outside
-`GROUP BY`, `similarity()` or an arithmetic expression — fails the query with
-`V016` instead of leaving the groups unsorted. `HAVING` may test any aggregate,
+An ORDER BY item of a `GROUP BY` query names a column of the grouped rows:
+a SELECT aggregate repeated as an expression (`COUNT(*)` above, which sorts
+on `cnt`), or a name, resolved first to a SELECT alias (`ORDER BY cnt`), then
+to a `GROUP BY` column, then to the executor's default name for an unaliased
+aggregate (`ORDER BY count` beside `COUNT(*)` in core; WASM names it
+`count(*)`, which no ORDER BY name can match). An item that names none — an
+aggregate the SELECT does not list, a column outside `GROUP BY`,
+`similarity()` or an arithmetic expression — fails validation with `V016`
+instead of leaving the groups unsorted. `HAVING` may test any aggregate,
 listed in SELECT or not.
+
+A vector `GROUP BY` (`NEAR` in WHERE, see
+[Vector-Search GROUP BY](#vector-search-group-by-parent-document-retrieval-v37))
+returns one search result per group, scored by its best row (or by the
+average, when the SELECT asks for `AVG(score)` and not `MAX(score)`). Its
+ORDER BY may use `similarity()` (that group score), arithmetic and the
+group's fields, as a search does; only an ORDER BY aggregate the SELECT does
+not list fails with `V016`.
 
 ### Arithmetic Scoring (v3.0+)
 

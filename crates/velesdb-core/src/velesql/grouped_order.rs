@@ -1,23 +1,27 @@
 //! ORDER BY resolution for grouped aggregation rows.
 //!
 //! A grouped row carries one field per GROUP BY column and one per SELECT
-//! aggregate. An ORDER BY item either names one of those fields — a GROUP BY
-//! column (`ORDER BY category`), an aggregate's alias or default name
-//! (`ORDER BY n`, `ORDER BY count`) — or repeats an aggregate expression
-//! (`ORDER BY COUNT(*)`). The parser gives the repeated expression no alias,
-//! so it carries no name of its own: deriving one from it looked rows up under
-//! `count` while `COUNT(*) AS n` had stored them under `n`, every comparison
-//! came back equal, and LIMIT kept whichever groups came first.
+//! aggregate. An ORDER BY item either names one of those fields or repeats an
+//! aggregate expression (`ORDER BY COUNT(*)`). The parser gives the repeated
+//! expression no alias, so it carries no name of its own: deriving one from it
+//! looked rows up under `count` while `COUNT(*) AS n` had stored them under
+//! `n`, every comparison came back equal, and LIMIT kept whichever groups came
+//! first.
 //!
 //! [`SelectStatement::grouped_sort_keys`] is the one place an item is matched
-//! to the column it means. Core's `execute_aggregate` and the WASM aggregate
-//! pipeline both sort through it, each reading an aggregate under the name it
-//! stored it with (the two name an unaliased aggregate differently — see
-//! `documented_divergences` D001 in `conformance/velesql_executor_cases.json`).
-//! An item that names no column of the rows is refused with `V016` instead of
-//! comparing every row as equal.
+//! to the column it means, and [`SelectStatement::order_by_aggregates_as_fields`]
+//! the one place a vector GROUP BY maps its ORDER BY aggregates to fields.
+//! Core and the WASM executor both go through them, each passing the names it
+//! gives an unaliased aggregate (the two differ — see `documented_divergences`
+//! D001 in `conformance/velesql_executor_cases.json`). An item that names no
+//! column of the rows is refused with `V016` instead of comparing every row as
+//! equal.
 
-use super::ast::{AggregateArg, AggregateFunction, OrderByExpr, SelectColumns, SelectStatement};
+use std::borrow::Cow;
+
+use super::ast::{
+    AggregateArg, AggregateFunction, AggregateType, OrderByExpr, SelectColumns, SelectStatement,
+};
 use super::validation::{ValidationError, ValidationErrorKind};
 
 /// The column of a grouped aggregation row one ORDER BY item sorts on.
@@ -33,36 +37,73 @@ impl SelectStatement {
     /// Resolves the ORDER BY of a GROUP BY aggregation to the row columns it
     /// sorts on, in order, each with its direction (`true` is descending).
     ///
-    /// An item resolves to a SELECT aggregate when it repeats it
-    /// (`ORDER BY COUNT(*)`, whatever its alias) or names its alias or default
-    /// name (`ORDER BY n`, `ORDER BY count`), and to a GROUP BY column when it
-    /// names one. A statement without ORDER BY resolves to no keys.
+    /// An item that repeats a SELECT aggregate (`ORDER BY COUNT(*)`, whatever
+    /// its alias) resolves to it. A name resolves, in this order, to the SELECT
+    /// aggregate it aliases, to a GROUP BY column, then to an unaliased
+    /// aggregate whose `default_name` — the name the calling executor outputs
+    /// it under — it is. A statement without ORDER BY resolves to no keys.
     ///
     /// # Errors
     ///
     /// [`ValidationErrorKind::OrderByNotInResult`] (`V016`) for an item that
     /// names no column of the grouped rows: an aggregate the SELECT does not
-    /// list, a column outside GROUP BY, `similarity()` or an arithmetic
+    /// list, a name none of the above, `similarity()` or an arithmetic
     /// expression.
-    pub fn grouped_sort_keys(&self) -> Result<Vec<(GroupedSortKey<'_>, bool)>, ValidationError> {
+    pub fn grouped_sort_keys(
+        &self,
+        default_name: impl Fn(&AggregateFunction) -> String,
+    ) -> Result<Vec<(GroupedSortKey<'_>, bool)>, ValidationError> {
         self.order_by
             .iter()
             .flatten()
-            .map(|item| Ok((self.grouped_sort_key(&item.expr)?, item.descending)))
+            .map(|item| {
+                Ok((
+                    self.grouped_sort_key(&item.expr, &default_name)?,
+                    item.descending,
+                ))
+            })
             .collect()
+    }
+
+    /// For a vector GROUP BY, whose groups come back as search results: this
+    /// statement with each `ORDER BY <aggregate>` replaced by the field the
+    /// executor stores that SELECT aggregate in (`output_name`), so the search
+    /// ORDER BY sorts on it. Every other item — `similarity()`, arithmetic, a
+    /// field — is the search ORDER BY's to evaluate. Borrows the statement
+    /// unchanged when no item is an aggregate.
+    ///
+    /// # Errors
+    ///
+    /// `V016` for an ORDER BY aggregate the SELECT does not list.
+    pub fn order_by_aggregates_as_fields(
+        &self,
+        output_name: impl Fn(&AggregateFunction) -> String,
+    ) -> Result<Cow<'_, Self>, ValidationError> {
+        let has_aggregate_item = self
+            .order_by
+            .iter()
+            .flatten()
+            .any(|item| matches!(item.expr, OrderByExpr::Aggregate(_)));
+        if !has_aggregate_item {
+            return Ok(Cow::Borrowed(self));
+        }
+        let mut rewritten = self.clone();
+        for item in rewritten.order_by.iter_mut().flatten() {
+            if let OrderByExpr::Aggregate(wanted) = &item.expr {
+                let field = output_name(self.order_by_aggregate_target(wanted)?);
+                item.expr = OrderByExpr::Field(field);
+            }
+        }
+        Ok(Cow::Owned(rewritten))
     }
 
     /// The SELECT aggregate an `ORDER BY <aggregate>` item repeats: the same
     /// function over the same argument, whatever alias either carries.
-    ///
-    /// # Errors
-    ///
-    /// `V016` when the SELECT lists no such aggregate.
-    pub(crate) fn order_by_aggregate_target(
+    fn order_by_aggregate_target(
         &self,
         wanted: &AggregateFunction,
     ) -> Result<&AggregateFunction, ValidationError> {
-        self.aggregations()
+        aggregations(self)
             .iter()
             .find(|agg| {
                 agg.function_type == wanted.function_type && agg.argument == wanted.argument
@@ -75,18 +116,25 @@ impl SelectStatement {
             })
     }
 
-    fn grouped_sort_key(&self, expr: &OrderByExpr) -> Result<GroupedSortKey<'_>, ValidationError> {
+    fn grouped_sort_key(
+        &self,
+        expr: &OrderByExpr,
+        default_name: &impl Fn(&AggregateFunction) -> String,
+    ) -> Result<GroupedSortKey<'_>, ValidationError> {
         match expr {
             OrderByExpr::Aggregate(wanted) => self
                 .order_by_aggregate_target(wanted)
                 .map(GroupedSortKey::Aggregate),
-            OrderByExpr::Field(name) => self.grouped_column_named(name).ok_or_else(|| {
-                not_in_result(
-                    name.clone(),
-                    "order groups by a GROUP BY column, or by a SELECT aggregate, \
-                     its alias or its default name",
-                )
-            }),
+            OrderByExpr::Field(name) => {
+                self.grouped_column_named(name, default_name)
+                    .ok_or_else(|| {
+                        not_in_result(
+                            name.clone(),
+                            "order groups by a GROUP BY column, or by a SELECT aggregate, \
+                             its alias or its default name",
+                        )
+                    })
+            }
             OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare => Err(not_in_result(
                 "similarity()",
                 "grouped rows carry no score: order groups by a GROUP BY column or a \
@@ -100,42 +148,83 @@ impl SelectStatement {
         }
     }
 
-    /// The row column `name` refers to. An aggregate takes precedence over a
-    /// GROUP BY column of the same name, as both executors write aggregates
-    /// into the row after the group keys.
-    fn grouped_column_named(&self, name: &str) -> Option<GroupedSortKey<'_>> {
-        let aggregate = self
-            .aggregations()
+    /// The row column `name` refers to, with SQL's precedence: an explicit
+    /// SELECT alias, then a GROUP BY column, then the executor's default name
+    /// for an unaliased aggregate.
+    fn grouped_column_named(
+        &self,
+        name: &str,
+        default_name: &impl Fn(&AggregateFunction) -> String,
+    ) -> Option<GroupedSortKey<'_>> {
+        let aggregations = aggregations(self);
+        let aliased = aggregations
             .iter()
-            .find(|agg| agg.result_key() == name)
-            .map(GroupedSortKey::Aggregate);
-        aggregate.or_else(|| {
+            .find(|agg| agg.alias.as_deref() == Some(name));
+        let group_column = || {
             self.group_by
                 .iter()
                 .flat_map(|group_by| &group_by.columns)
                 .find(|column| *column == name)
                 .map(|column| GroupedSortKey::GroupColumn(column))
-        })
-    }
-
-    fn aggregations(&self) -> &[AggregateFunction] {
-        match &self.columns {
-            SelectColumns::Aggregations(aggregations)
-            | SelectColumns::Mixed { aggregations, .. } => aggregations,
-            _ => &[],
-        }
+        };
+        let default_named = || {
+            aggregations
+                .iter()
+                .find(|agg| agg.alias.is_none() && default_name(agg) == name)
+                .map(GroupedSortKey::Aggregate)
+        };
+        aliased
+            .map(GroupedSortKey::Aggregate)
+            .or_else(group_column)
+            .or_else(default_named)
     }
 }
 
-/// Validates the ORDER BY of a GROUP BY aggregation against its grouped rows
-/// (`V016`). A vector GROUP BY (`NEAR` in WHERE) is not one: it returns
-/// search results whose ORDER BY may also use `similarity()`, and resolves its
-/// aggregate items when it groups (`vector_group_by::order_by_on_group_fields`).
+/// Whether a vector GROUP BY scores each group by the average of its rows'
+/// scores rather than its best row's: when `aggregations` asks for
+/// `AVG(score)` and not `MAX(score)`. `ORDER BY similarity()` sorts groups on
+/// that score.
+#[must_use]
+pub fn vector_group_score_is_average(aggregations: &[AggregateFunction]) -> bool {
+    let over_score = |function_type: AggregateType| {
+        aggregations
+            .iter()
+            .any(|agg| agg.function_type == function_type && is_score_argument(&agg.argument))
+    };
+    over_score(AggregateType::Avg) && !over_score(AggregateType::Max)
+}
+
+/// The `score` pseudo-column, spelled as the keyword or as a column name in
+/// any letter case.
+fn is_score_argument(argument: &AggregateArg) -> bool {
+    match argument {
+        AggregateArg::Score => true,
+        AggregateArg::Column(column) => column.eq_ignore_ascii_case("score"),
+        AggregateArg::Wildcard => false,
+    }
+}
+
+/// Validates the ORDER BY of a GROUP BY against its grouped rows (`V016`),
+/// with core's names for unaliased aggregates. A vector GROUP BY returns
+/// search results, whose ORDER BY may also use `similarity()`, arithmetic and
+/// payload fields; only its ORDER BY aggregates are checked against the
+/// SELECT list.
 pub(super) fn validate_grouped_order_by(stmt: &SelectStatement) -> Result<(), ValidationError> {
-    if stmt.group_by.is_some() && stmt.is_aggregation_query() {
-        stmt.grouped_sort_keys()?;
+    if stmt.is_vector_group_by() {
+        stmt.order_by_aggregates_as_fields(AggregateFunction::result_key)?;
+    } else if stmt.group_by.is_some() {
+        stmt.grouped_sort_keys(AggregateFunction::result_key)?;
     }
     Ok(())
+}
+
+fn aggregations(stmt: &SelectStatement) -> &[AggregateFunction] {
+    match &stmt.columns {
+        SelectColumns::Aggregations(aggregations) | SelectColumns::Mixed { aggregations, .. } => {
+            aggregations
+        }
+        _ => &[],
+    }
 }
 
 /// A `V016` error naming the unresolved ORDER BY item, which the error's

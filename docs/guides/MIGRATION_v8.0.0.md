@@ -83,6 +83,10 @@ a v3 blob with `Unsupported version: 3`.
 | `rate_limit_qps = 0` or `circuit_failure_threshold = 0` in a guard-rail update | accepted, never applied | `400` / `VELES-009` (REST, Tauri), `ValueError` (Python), `VelesError` (mobile) |
 | `enable_streaming` with `buffer_size = 0`, a `buffer_size` past `tokio::sync::Semaphore::MAX_PERMITS`, or `flush_interval_ms = 0` | process aborted | `Error::Config` / `VELES-009` (Rust, Tauri, mobile), `400` (REST), `ValueError` (Python) |
 | Python: a payload or edge properties nested past 127 levels of lists and dicts, or containing themselves | segmentation fault | `ValueError` |
+| `GROUP BY` ordered by a column outside `GROUP BY` (`... GROUP BY category ORDER BY category, year`) | that key ignored | `V016` |
+| `GROUP BY` ordered by an aggregate the SELECT does not list (a vector `GROUP BY` too), or by `similarity()` or arithmetic outside a vector `GROUP BY` (`NEAR` in WHERE) | groups left unsorted | `V016` |
+| WASM: `GROUP BY` ordered by a selected column outside `GROUP BY` (`SELECT category, title, COUNT(*) ... GROUP BY category ORDER BY title`) | sorted on each group's first `title` | `V016` |
+| WASM: `ORDER BY count` beside an unaliased `COUNT(*)`, which WASM outputs as `count(*)` | ignored | `V016` |
 
 **Fix:**
 - Run one query per sparse vector and fuse the results.
@@ -93,6 +97,11 @@ a v3 blob with `Unsupported version: 3`.
   least 1.
 - Flatten a Python value nested past 127 levels. Core refuses past 124 levels
   anyway, with `VELES-017` (section 1).
+- Order a `GROUP BY` by a `GROUP BY` column or a SELECT aggregate: add the
+  column to `GROUP BY` (or drop it from ORDER BY), add the aggregate to the
+  SELECT list, and alias it (`COUNT(*) AS n ... ORDER BY n`) to name it the
+  same way in core and WASM. Core's grouped rows carry no other field, so
+  there the refused key was never applied.
 
 The guard-rail limits are also applied now, where 7.1.0 returned them without
 applying them: `rate_limit_qps`, `circuit_failure_threshold` and

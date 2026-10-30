@@ -57,6 +57,8 @@ struct Fixture {
     dml_cases: Vec<DmlCase>,
     #[serde(default)]
     projection_cases: Vec<ProjectionCase>,
+    #[serde(default)]
+    vector_group_cases: Vec<VectorGroupCase>,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +91,19 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
+    /// The validation code (`V0xx`) the refusal must carry.
+    expected_code: String,
+}
+
+/// A vector GROUP BY (`NEAR` + GROUP BY), run through
+/// [`Database::execute_query`], compared on the order of its groups: the
+/// `group_column` value of each result row, in order.
+#[derive(Deserialize)]
+struct VectorGroupCase {
+    id: String,
+    query: String,
+    group_column: String,
+    expect_order: Vec<Value>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -252,11 +267,46 @@ fn test_velesql_executor_conformance_rejected_cases() {
                 db.execute_query(&q, &fixture.query_params)
                     .map_err(|e| e.to_string())
             });
-        assert!(
-            outcome.is_err(),
+        let err = outcome.expect_err(&format!(
             "rejected case {} was accepted: query={:?}",
+            case.id, case.query
+        ));
+        assert!(
+            err.contains(&case.expected_code),
+            "rejected case {} refused without {}: {err}",
             case.id,
-            case.query
+            case.expected_code
+        );
+    }
+}
+
+/// Vector GROUP BY: ORDER BY sorts the groups (by score, by a SELECT
+/// aggregate), and both engines agree on the order.
+#[test]
+fn test_velesql_executor_conformance_vector_group_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    for case in &fixture.vector_group_cases {
+        let query = Parser::parse(&case.query)
+            .unwrap_or_else(|e| panic!("case {} failed to parse: {e}", case.id));
+        let results = db
+            .execute_query(&query, &fixture.query_params)
+            .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
+        let order: Vec<Value> = results
+            .iter()
+            .map(|r| {
+                r.point
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get(&case.group_column))
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            })
+            .collect();
+        assert_eq!(
+            order, case.expect_order,
+            "vector GROUP BY conformance mismatch for case {}: query={:?}",
+            case.id, case.query
         );
     }
 }
