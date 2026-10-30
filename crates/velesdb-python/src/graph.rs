@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use std::collections::HashMap;
 
-use crate::utils::{extract_vector, json_to_python, python_to_json};
+use crate::utils::{extract_vector, json_to_python, python_to_json_within};
 use velesdb_core::collection::graph::{GraphEdge, GraphNode, TraversalResult};
 
 /// Parse a Python properties dict into a JSON properties map.
@@ -21,7 +21,8 @@ fn parse_properties(
     let props_dict: HashMap<String, Py<PyAny>> = props_obj.extract(py)?;
     props_dict
         .into_iter()
-        .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+        // The properties map is the first level, as core counts it.
+        .map(|(k, v)| python_to_json_within(py, &v, 1).map(|jv| (k, jv)))
         .collect()
 }
 
