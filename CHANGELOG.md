@@ -543,6 +543,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   REST `/stream/enable` answers `400`, Python raises `ValueError`, Tauri and
   mobile reject with `VELES-009`. *Migration*: handle or `?` the result.
 
+- **Stored floats read back bit for bit.** Payloads, edge-WAL records and
+  edge-snapshot properties are JSON, and `serde_json`'s default parser returns
+  some doubles one ULP off (`127.75015752618465` reads back as
+  `127.75015752618464`): a float written to a payload or an edge property
+  could come back different after a reopen, and an exact-equality filter on
+  it stop matching. `velesdb-core` now enables `serde_json`'s
+  `float_roundtrip` feature, which parses every float exactly. This covers
+  reads: a value an earlier version already read off by one ULP and wrote
+  back (a snapshot, a compaction, a read-modify-write) keeps that value.
+  Cargo unifies the feature across a build, so every `serde_json` float parse
+  in a binary that links core pays it, the application's own and other
+  dependencies' included, REST request bodies too: measured on a
+  768-dimension query body (15.5 KB, release build), parsing went from
+  38-40 µs to 56-63 µs into a typed `Vec<f32>` (about +20 µs per vector,
+  +200 ms per 10 000-vector batch) and from 44-47 µs to 57-61 µs into a
+  `serde_json::Value` (`benches/json_float_parse_benchmark.rs` runs the same
+  parse). An `f32` is now parsed directly and correctly rounded
+  instead of through `f64`, so a vector component can differ from before by
+  one `f32` ULP, toward the exact value.
+
 - **Python: a payload nested too deep raises instead of crashing the
   interpreter.** The conversion of a Python value to JSON recursed once per
   level of lists and dicts with no bound, so a very deep list, or one that
@@ -563,9 +583,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loss permanent. The snapshot now writes each edge's properties as one JSON
   string; `GraphEdge`'s own serde form, which the API and the edge WAL carry,
   is unchanged. A snapshot of edges without properties keeps the same bytes
-  in both directions. Float properties read back through `serde_json`'s
-  default float parser, as they already did from the edge WAL, which can
-  return a double one ULP off. An `edge_store.bin` that cannot be decoded is no longer
+  in both directions. Float properties read back exactly (see "Stored floats
+  read back bit for bit"). An `edge_store.bin` that cannot be decoded is no longer
   left in place to be overwritten: the open logs the decode error, moves the
   file to `edge_store.bin.unreadable-<unix milliseconds>` next to it (never
   replacing an earlier one), and opens the collection with the edges the WAL

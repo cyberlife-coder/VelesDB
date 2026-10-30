@@ -1723,3 +1723,29 @@ fn test_the_deepest_accepted_payload_survives_a_reopen() {
         Some(deep)
     );
 }
+
+/// A stored float reads back bit for bit after a reopen: the default
+/// `serde_json` parser returns some doubles one ULP off.
+#[test]
+fn test_payload_floats_survive_a_reopen_exactly() {
+    // One of the doubles the default parser returns one ULP off.
+    let value = 127.750_157_526_184_65_f64;
+    let dir = tempdir().unwrap();
+    {
+        let db = Database::open(dir.path()).unwrap();
+        db.create_metadata_collection("m").unwrap();
+        let metadata = db.get_metadata_collection("m").unwrap();
+        metadata
+            .upsert([Point::metadata_only(1, serde_json::json!({ "x": value }))])
+            .unwrap();
+        metadata.flush().unwrap();
+    }
+
+    let db = Database::open(dir.path()).unwrap();
+    let point = db.get_metadata_collection("m").unwrap().get(&[1]);
+    let stored = point[0].as_ref().and_then(|p| p.payload.as_ref()).unwrap()["x"]
+        .as_f64()
+        .unwrap();
+
+    assert_eq!(stored.to_bits(), value.to_bits());
+}

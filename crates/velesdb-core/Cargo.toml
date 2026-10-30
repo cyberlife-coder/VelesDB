@@ -15,7 +15,9 @@ authors.workspace = true
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
+# float_roundtrip: payloads, the edge WAL and edge snapshot properties are
+# JSON, and the default parser can return a stored f64 one ULP off.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 postcard = { workspace = true }
@@ -322,6 +324,10 @@ harness = false
 
 [[bench]]
 name = "edge_store_benchmark"
+harness = false
+
+[[bench]]
+name = "json_float_parse_benchmark"
 harness = false
 
 [[bench]]
