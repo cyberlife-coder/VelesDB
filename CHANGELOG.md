@@ -48,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `VELESDB_SERVER_HOST`, which the server never read; they now use
     `VELESDB_PORT` / `VELESDB_HOST`.
 
+- **`POST /collections` with `collection_type: "graph"` honours `dimension`
+  and `metric`.** The handler created every graph collection without
+  embeddings and with cosine, whatever the body said; `dimension` now gives the
+  nodes embeddings of that dimension (core's
+  `create_graph_collection_with_embeddings`), searched with `metric`. Without
+  `dimension` a graph still has no embeddings. `POST .../graph/search` with a
+  query of the wrong dimension now answers `400`, as documented, instead of
+  `500`. The `CreateCollectionRequest` field docs (and so the OpenAPI
+  descriptions) name the graph case.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

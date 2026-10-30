@@ -13,7 +13,7 @@ use axum::{
 use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::observer::QueryOperationKind;
 
-use crate::handlers::helpers::run_blocking_typed;
+use crate::handlers::helpers::{http_status_for_error, run_blocking_typed};
 use crate::types::ErrorResponse;
 use crate::AppState;
 
@@ -366,7 +366,9 @@ pub async fn graph_search(
             .await?
             .map_err(|e| {
                 (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    // A query of the wrong dimension is the caller's error
+                    // (400, as documented), not the server's.
+                    http_status_for_error(&e),
                     Json(ErrorResponse {
                         error: format!("Graph search failed: {e}"),
                         code: None,

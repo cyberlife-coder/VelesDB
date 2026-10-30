@@ -341,7 +341,15 @@ fn dispatch_create(
         }
         "graph" | "knowledge_graph" | "kg" => {
             let schema = parse_graph_schema(req)?;
-            Ok(state.db.create_graph_collection(&req.name, schema))
+            // `dimension` gives the nodes embeddings, indexed and searched
+            // with `metric`; without it the graph has none, and `metric`
+            // has nothing to apply to.
+            Ok(match req.dimension {
+                Some(dimension) => state.db.create_graph_collection_with_embeddings(
+                    &req.name, schema, dimension, metric,
+                ),
+                None => state.db.create_graph_collection(&req.name, schema),
+            })
         }
         "vector" | "" => create_vector_collection(state, req, metric, storage_mode),
         _ => Err(error_response(

@@ -4036,7 +4036,7 @@
           },
           "collection_type": {
             "type": "string",
-            "description": "Collection type: \"vector\" (default) or \"`metadata_only`\".",
+            "description": "Collection type: \"vector\" (default), \"`metadata_only`\" or \"graph\".",
             "example": "vector"
           },
           "deferred_indexing": {
@@ -4047,7 +4047,7 @@
               "integer",
               "null"
             ],
-            "description": "Vector dimension (required for vector collections, ignored for `metadata_only`).",
+            "description": "Vector dimension. Required for vector collections, optional for graph collections (where it gives the nodes embeddings of this dimension), ignored for `metadata_only`.",
             "example": 768,
             "minimum": 0
           },
@@ -4092,7 +4092,7 @@
           },
           "metric": {
             "type": "string",
-            "description": "Distance metric (cosine, euclidean, dot, hamming, jaccard).",
+            "description": "Distance metric (cosine, euclidean, dot, hamming, jaccard) of a vector collection, or of a graph collection's node embeddings when `dimension` is set.",
             "example": "cosine"
           },
           "name": {

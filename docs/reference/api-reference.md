@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-10-29 (VelesDB v8.0.0). The machine-readable source of
+> **Last updated**: 2026-10-30 (VelesDB v8.0.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -91,14 +91,20 @@ Create a new collection.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | name | string | Yes | Unique collection name |
-| dimension | integer | Yes (vector/graph) | Vector dimension (e.g., 768). Omit for `metadata_only` |
-| metric | string | No | Distance metric (see table below) |
+| dimension | integer | Yes (vector) | Vector dimension (e.g., 768). For `graph`, optional: gives the nodes embeddings of this dimension (searchable through `POST /collections/{name}/graph/search` and VelesQL `NEAR`); omit it for a graph without embeddings. Omit for `metadata_only` |
+| metric | string | No | Distance metric (see table below) — of the vectors, or of a graph's node embeddings when `dimension` is set |
 | storage_mode | string | No | `full` (default), `sq8`, or `binary` quantization |
 | collection_type | string | No | `vector` (default), `metadata_only`, or `graph` (see [CollectionType](#collectiontype-descriptor)) |
 | hnsw_m | integer | No | Tuned HNSW: bi-directional links per node |
 | hnsw_ef_construction | integer | No | Tuned HNSW: candidate list size during build |
 | hnsw_alpha | float | No | VAMANA neighbor-diversification factor (≥ 1.0) |
 | hnsw_max_elements | integer | No | Initial HNSW capacity (pre-size for bulk import) |
+
+`storage_mode`, the `hnsw_*` fields and the advanced overrides apply to
+`vector` collections. A `graph` collection with `dimension` takes its node
+index parameters from the `[hnsw]` config section and the dimension-based
+defaults; besides `name`, `collection_type` and `graph_schema`, `metric` is
+the only field it reads.
 
 **Distance Metrics:**
 
