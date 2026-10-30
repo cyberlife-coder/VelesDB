@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`velesdb_core::MAX_JSON_NESTING` (127) and `MAX_VALUE_DEPTH` (124)**, also
+  under `validation`: the nesting `serde_json` reads back, and the deepest
+  edge properties core accepts (see the `VELES-017` change under Changed).
+
 - **Agent-memory semantic search at an explicit quality in Python, Tauri and
   mobile.** The bindings now reach core 7.1.0's
   `SemanticMemory::query_with_quality`: Python's
@@ -145,6 +149,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database; `/metrics` calls it before every export.
 
 ### Changed
+
+- **BREAKING (behavior) — edges whose properties nest deeper than 124 levels
+  are refused.** `add_edge` and `add_edges_batch` return `VELES-017`
+  (`SchemaValidation`), before any lock or write, for an edge whose
+  properties nest more than `validation::MAX_VALUE_DEPTH` (124) levels of
+  arrays and objects, the properties map counting as the first. Core writes
+  edges into JSON documents, which `serde_json` reads back up to
+  `validation::MAX_JSON_NESTING` (127) levels; the deepest, the agent-memory
+  snapshot, holds an edge three levels down. A deeper edge was written, then
+  skipped with a warning on edge-WAL replay, or failed the agent-memory
+  restore. The edge snapshot refuses to write an edge it could not read
+  back (past `MAX_JSON_NESTING`, should one reach an `EdgeStore` directly),
+  rather than write a file it cannot read; one a 7.x edge WAL replays at 125
+  or 126 levels still snapshots.
+- **BREAKING — `EdgeStore` no longer implements `Serialize`/`Deserialize`.**
+  Its derived serde form was the `edge_store.bin` layout, a private
+  persistence format; the snapshot now has its own private form. Persist a
+  store with `to_bytes`/`from_bytes` or `save_to_file`/`load_from_file`.
 
 - **BREAKING (behavior) — LangChain relevance scores are higher-is-closer under
   every metric.** `similarity_search_with_relevance_scores` returned the raw
@@ -379,6 +401,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MultiQuerySearchRequest` examples 0.5 and 0.2.
 
 ### Fixed
+
+- **Graph edges with properties survive a flush and a reopen.** `flush()`
+  writes every edge to the `edge_store.bin` snapshot, encoded with postcard,
+  and then truncates the edge WAL. An edge's properties are
+  `serde_json::Value`s, which postcard can write but cannot read back, so a
+  snapshot holding any edge with properties could not be loaded: the
+  collection reopened with an empty edge store (a warning in the log), and
+  the next flush with a non-empty edge WAL overwrote the snapshot, making the
+  loss permanent. The snapshot now writes each edge's properties as one JSON
+  string; `GraphEdge`'s own serde form, which the API and the edge WAL carry,
+  is unchanged. A snapshot of edges without properties keeps the same bytes
+  in both directions. Float properties read back through `serde_json`'s
+  default float parser, as they already did from the edge WAL, which can
+  return a double one ULP off. An `edge_store.bin` that cannot be decoded is no longer
+  left in place to be overwritten: the open logs the decode error, moves the
+  file to `edge_store.bin.unreadable-<unix milliseconds>` next to it (never
+  replacing an earlier one), and opens the collection with the edges the WAL
+  still holds. A snapshot that cannot be read for another reason
+  (permissions, I/O), or cannot be moved aside (a read-only directory), fails
+  the collection's open with `VELES-011`; `Database::open` then logs a
+  warning and leaves that collection out, as it does for any collection that
+  fails to open, where 7.1.0 opened it without its edges.
+
+  **Upgrading from 7.1.0 or earlier:** 7.1.0 opened such a collection
+  without its edges and kept the snapshot until a flush found the edge WAL
+  non-empty and overwrote it; edges lost that way cannot be brought back. A
+  snapshot not yet overwritten is moved aside by the first 8.0.0 open, bytes
+  intact, for a manual recovery: postcard does not record the type of each
+  property value, so decoding them needs to know which types they had.
+  **Do not downgrade** a collection that has edges with properties to 7.x:
+  7.x cannot decode the 8.0 snapshot either, opens the collection without
+  its edges, and its next flush with a non-empty edge WAL overwrites them.
 
 - **`GraphCollection::traverse_bfs_parallel` counts only results against
   `limit`.** The traverser emitted each start node at depth 0, which took a

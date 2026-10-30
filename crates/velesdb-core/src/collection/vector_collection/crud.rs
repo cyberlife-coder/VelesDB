@@ -151,7 +151,9 @@ impl VectorCollection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the edge cannot be stored.
+    /// Returns an error if the edge cannot be stored, among them
+    /// `Error::SchemaValidation` when its properties nest deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
     pub fn add_edge(&self, edge: crate::collection::GraphEdge) -> Result<()> {
         self.inner.add_edge(edge)
     }
