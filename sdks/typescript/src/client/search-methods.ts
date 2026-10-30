@@ -103,7 +103,7 @@ export function hybridSearch(
 /**
  * Pure sparse search against a named sparse index (issue #380).
  *
- * Parity with `Collection::sparse_search_named()` in the Rust core.
+ * Parity with `VectorCollection::sparse_search()` in the Rust core.
  *
  * @see {@link SparseSearchNamedOptions} for the full pure-sparse vs hybrid comparison.
  * @see {@link VelesDB.search} for dense + sparse hybrid against a named index.

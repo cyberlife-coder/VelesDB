@@ -168,19 +168,6 @@ impl Parser {
         alias
     }
 
-    #[allow(dead_code)] // Reason: VelesQL GROUP BY / aggregation parser — wired from future ANALYZE/GROUP clause
-    pub(crate) fn parse_aggregation_list(
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Vec<AggregateFunction>, ParseError> {
-        let mut aggs = Vec::new();
-        for inner_pair in pair.into_inner() {
-            if inner_pair.as_rule() == Rule::aggregation_item {
-                aggs.push(Self::parse_aggregation_item(inner_pair)?);
-            }
-        }
-        Ok(aggs)
-    }
-
     pub(crate) fn parse_aggregation_item(
         pair: pest::iterators::Pair<Rule>,
     ) -> Result<AggregateFunction, ParseError> {
@@ -245,19 +232,6 @@ impl Parser {
             return AggregateArg::Score;
         }
         AggregateArg::Column(raw.to_string())
-    }
-
-    #[allow(dead_code)] // Reason: VelesQL column projection parser — wired from future SELECT clause handler
-    pub(crate) fn parse_column_list(
-        pair: pest::iterators::Pair<Rule>,
-    ) -> Result<Vec<Column>, ParseError> {
-        let mut columns = Vec::new();
-        for col_pair in pair.into_inner() {
-            if col_pair.as_rule() == Rule::column {
-                columns.push(Self::parse_column(col_pair)?);
-            }
-        }
-        Ok(columns)
     }
 
     pub(crate) fn parse_column(pair: pest::iterators::Pair<Rule>) -> Result<Column, ParseError> {

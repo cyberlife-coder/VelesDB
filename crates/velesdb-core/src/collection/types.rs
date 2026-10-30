@@ -4,8 +4,7 @@
 //! the sibling `collection_config` module.
 
 use crate::collection::graph::property_index::{
-    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex, IndexAdvisor,
-    QueryPatternTracker,
+    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex,
 };
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
@@ -329,16 +328,6 @@ pub(crate) struct GraphStore {
     /// Lock order position: **7** (same tier as `property_index` / `range_index`).
     pub(crate) composite_index_manager: Arc<RwLock<CompositeIndexManager>>,
 
-    /// Query pattern tracker for auto-index suggestion (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) query_pattern_tracker: Arc<RwLock<QueryPatternTracker>>,
-
-    /// Index advisor that suggests indexes based on tracked patterns (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) index_advisor: Arc<RwLock<IndexAdvisor>>,
-
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
     /// Uses sharded internal locking (256 shards) — no outer `RwLock` needed.
@@ -650,7 +639,7 @@ impl Collection {
     /// the whole batch, then `max_payload_size` per point.
     ///
     /// Shared by [`Self::upsert`](crate::collection::Collection) and
-    /// `upsert_bulk_inner` so both ingest paths apply identical limits with
+    /// `upsert_bulk` so both ingest paths apply identical limits with
     /// no duplicated logic. Runs before any storage lock or WAL write, so a
     /// violation rejects the batch without leaving partial state.
     ///

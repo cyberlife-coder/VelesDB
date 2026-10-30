@@ -143,3 +143,32 @@ fn test_count_similarity_conditions() {
     );
     assert_eq!(Collection::count_similarity_conditions(&double), 2);
 }
+
+#[test]
+fn test_validate_two_sparse_searches_fail() {
+    // The pipeline runs one sparse branch: a second SPARSE_NEAR is refused
+    // rather than silently dropped, under AND as under OR.
+    for cond in [
+        Condition::And(
+            Box::new(make_sparse_condition()),
+            Box::new(make_sparse_condition()),
+        ),
+        Condition::Or(
+            Box::new(make_sparse_condition()),
+            Box::new(make_sparse_condition()),
+        ),
+    ] {
+        let err = Collection::validate_similarity_query_structure(&cond).unwrap_err();
+        assert!(err.to_string().contains("2 SPARSE_NEAR"), "{err}");
+    }
+}
+
+#[test]
+fn test_validate_one_sparse_search_with_a_dense_one_ok() {
+    let dense = Condition::VectorSearch(crate::velesql::VectorSearch {
+        vector: VectorExpr::Literal(vec![0.1, 0.2]),
+    });
+    let cond = Condition::And(Box::new(dense), Box::new(make_sparse_condition()));
+
+    assert!(Collection::validate_similarity_query_structure(&cond).is_ok());
+}

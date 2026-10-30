@@ -14,13 +14,13 @@
 //!
 //! # Example
 //!
-//! Note: `GraphNode`/`Element` are exported value types for programmatic
+//! Note: `GraphNode` is an exported value type for programmatic
 //! construction; the query runtime itself persists node data as JSON payloads
 //! (`GraphCollection::upsert_node_payload` / `INSERT NODE`) and MATCH
 //! evaluates against those payloads, not against `GraphNode` instances.
 //!
 //! ```rust,ignore
-//! use velesdb_core::collection::graph::{GraphSchema, NodeType, EdgeType, ValueType, GraphNode, Element};
+//! use velesdb_core::collection::graph::{GraphSchema, NodeType, EdgeType, ValueType, GraphNode};
 //! use std::collections::HashMap;
 //!
 //! // Define a schema with Person and Company nodes
@@ -94,8 +94,6 @@ mod schema_tests;
 pub use clustered_index::ClusteredIndex;
 pub use csr_snapshot::{AdjacencySource, CsrSnapshot, EdgePredicate, LabelFilter, NoFilter};
 pub use edge::{EdgeStore, GraphEdge};
-#[allow(unused_imports)] // Re-exported for test access via super::*
-pub(crate) use node::Element;
 // Re-exported for use by ConcurrentEdgeStore (Task 5) and other internal consumers.
 #[allow(unused_imports)]
 pub(crate) use csr_snapshot::SnapshotBuilder;

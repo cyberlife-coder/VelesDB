@@ -1,6 +1,7 @@
 //! Integration tests for hybrid dense+sparse search execution.
 
 use crate::collection::types::Collection;
+use crate::fusion::FusionStrategy;
 use crate::index::sparse::SparseVector;
 use crate::point::Point;
 use std::collections::{BTreeMap, HashMap};
@@ -97,7 +98,14 @@ fn test_hybrid_dense_sparse_rrf() {
     };
 
     let results = col
-        .execute_hybrid_search(&dense_query, &svs, &HashMap::new(), None, 10)
+        .execute_hybrid_search_with_strategy(
+            &dense_query,
+            &svs,
+            &HashMap::new(),
+            None,
+            10,
+            &FusionStrategy::rrf_default(),
+        )
         .expect("hybrid search failed");
 
     assert!(!results.is_empty(), "Hybrid search should return results");
@@ -170,7 +178,14 @@ fn test_hybrid_empty_sparse_branch() {
     };
 
     let results = col
-        .execute_hybrid_search(&dense_query, &svs, &HashMap::new(), None, 5)
+        .execute_hybrid_search_with_strategy(
+            &dense_query,
+            &svs,
+            &HashMap::new(),
+            None,
+            5,
+            &FusionStrategy::rrf_default(),
+        )
         .expect("hybrid search with empty sparse should succeed");
 
     // Should gracefully fall back to dense-only results.
@@ -197,7 +212,14 @@ fn test_hybrid_dense_dimension_mismatch_fails_the_query() {
     };
 
     let err = col
-        .execute_hybrid_search(&[0.9, 0.5], &svs, &HashMap::new(), None, 5)
+        .execute_hybrid_search_with_strategy(
+            &[0.9, 0.5],
+            &svs,
+            &HashMap::new(),
+            None,
+            5,
+            &FusionStrategy::rrf_default(),
+        )
         .expect_err("a 2-dim dense vector on a 4-dim collection must fail");
 
     assert!(
@@ -223,7 +245,14 @@ fn test_hybrid_unknown_sparse_index_fails_like_sparse_only() {
     };
 
     let hybrid = col
-        .execute_hybrid_search(&[0.9, 0.5, 0.3, 0.1], &svs, &HashMap::new(), None, 5)
+        .execute_hybrid_search_with_strategy(
+            &[0.9, 0.5, 0.3, 0.1],
+            &svs,
+            &HashMap::new(),
+            None,
+            5,
+            &FusionStrategy::rrf_default(),
+        )
         .expect_err("an unknown sparse index must fail the hybrid query");
     let sparse_only = col
         .execute_sparse_search(&svs, &HashMap::new(), None, 5)

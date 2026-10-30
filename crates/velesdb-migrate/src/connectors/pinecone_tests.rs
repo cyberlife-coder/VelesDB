@@ -1,11 +1,9 @@
 use super::*;
 
 #[test]
-#[allow(deprecated)]
 fn test_pinecone_connector_new() {
     let config = PineconeConfig {
         api_key: "test-key".to_string(),
-        environment: "us-east-1".to_string(),
         index: "test-index".to_string(),
         namespace: None,
         base_url: None,

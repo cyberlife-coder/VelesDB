@@ -355,7 +355,7 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     Writing them down surfaced behaviour that did less than its name, since fixed in core (unreleased) and documented as fixed:
     - **Guard-rails reach every limit.** `Database::update_guardrails` (and `PUT /guardrails`, now `update_guardrails_with`) reconfigures each collection's `RateLimiter` and `CircuitBreaker` in place, and every collection created or opened afterwards starts from the updated limits; `Database::guardrail_limits` is the single source `GET /guardrails` reads. The server's own `AppState.query_limits` copy is gone. Python, Mobile and Tauri call the same `update_guardrails`, so they get the same reach with no binding change.
     - **Advanced config takes effect or says it will not yet.** `apply_advanced_config` installs a deferred indexer or an async index builder at once into a collection that runs none (which covers `POST /collections`); a change to a live one is persisted for the next open and named by the new `VectorCollection::pending_reopen` (`PendingReopen`). Python `Collection.pending_reopen()` and Mobile `pending_reopen()` relay it as field names. REST has no endpoint that changes these settings after creation, so it needs none.
-    - **Every `/metrics` family is fed.** Core feeds `velesdb_limits_exceeded_total` (`QueryContext` checks), `velesdb_rate_limit_requests_total` (`RateLimiter::check`), `velesdb_cache_collision_fallback_total` (query-cache bucket collisions), `velesdb_match_guardrail_hits_total` and `velesdb_match_similarity_queries_total`, and `velesdb_match_latency_seconds` has `_sum` / `_count`; `Database::refresh_storage_gauges` sets `velesdb_documents_total` and `velesdb_index_size_bytes` at each scrape; the server counts `velesdb_active_connections` on both serving paths and `velesdb_queries_by_type{type="graph"}` on its traversal and `/match` handlers. The never-fed `velesdb_traversal_*` families are removed in favour of the per-collection `velesdb_graph_traversal*` core already feeds.
+    - **Every `/metrics` family is fed.** Core feeds `velesdb_limits_exceeded_total` (`QueryContext` checks), `velesdb_rate_limit_requests_total` (`RateLimiter::check`), `velesdb_cache_collision_fallback_total` (query-cache bucket collisions), `velesdb_match_guardrail_hits_total` and `velesdb_match_similarity_queries_total`, and `velesdb_match_latency_seconds` has `_sum` / `_count`; `Database::refresh_storage_gauges` sets `velesdb_documents_total` and `velesdb_index_size_bytes` at each scrape; the server counts `velesdb_active_connections` on both serving paths and `velesdb_queries_by_type{type="graph"}` on its traversal and `/match` handlers. The never-fed `velesdb_traversal_*` families are removed in favour of the per-collection `velesdb_graph_traversal*` core already feeds, and in 8.0.0 so is `velesdb_core::TraversalMetrics`, the never-fed type whose `export_prometheus` still wrote them.
     - **`list_indexes` reports real figures.** `memory_bytes` is each index's heap estimate, a secondary index is labelled `btree` (it was `hash`), range indexes report their cardinality, and `indexes_memory_usage` includes secondary indexes.
 12. ✅ **Done (2026-10-29). Bindings carry core's error taxonomy and result
     kind instead of re-deriving them.** `tauri-plugin-velesdb` reports
@@ -394,9 +394,8 @@ collection creation; only Haystack is limited by its DocumentStore protocol.
     the new `GraphCollection::try_remove_edge`; `clear` removes edges before
     nodes, as core's `TRUNCATE` does. Still forked: `velesdb-wasm` keeps its
     own `GraphStore` (`crates/velesdb-wasm/src/graph.rs`) because core's
-    graph module is gated behind `persistence`, which wasm does not build; and `velesdb-python`'s
-    in-memory `GraphStore.traverse_dfs` (`crates/velesdb-python/src/graph_store.rs`,
-    `dfs_collect`) is its own DFS returning edges, capped on visited nodes and
-    filtered by relationship type, while its BFS already delegates to core.
-    Core exposes DFS only on a collection, so closing either needs a free
-    `dfs_traverse(&EdgeStore, …)` in core first.
+    graph module is gated behind `persistence`, which wasm does not build.
+    `velesdb-python`'s in-memory `GraphStore` is no longer forked: its BFS and,
+    since #2549, its DFS run core's over a standalone `EdgeStore`
+    (`bfs_stream` and the free `collection::graph::dfs_traverse`,
+    `crates/velesdb-python/src/graph_store.rs`).

@@ -1,10 +1,8 @@
 //! Graph node and element types for knowledge graph storage.
 //!
-//! This module provides the core types for representing nodes in a knowledge graph:
-//! - `GraphNode`: A typed entity with properties and optional vector embedding
-//! - `Element`: An enum that unifies Points (vector data) and Nodes (graph entities)
+//! This module provides `GraphNode`, a typed entity with properties and an
+//! optional vector embedding.
 
-use crate::Point;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -103,81 +101,5 @@ impl GraphNode {
     /// Sets a property value.
     pub fn set_property(&mut self, name: &str, value: Value) {
         self.properties.insert(name.to_string(), value);
-    }
-}
-
-/// A unified element that can be either a Point or a Node.
-///
-/// This enum allows storing both vector data (Points) and graph entities (Nodes)
-/// in the same collection, enabling hybrid graph+vector storage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-#[allow(dead_code)] // Scaffolded for hybrid graph+vector storage
-pub(crate) enum Element {
-    /// A vector point with optional metadata.
-    Point(Point),
-    /// A graph node with label, properties, and optional vector.
-    Node(GraphNode),
-}
-
-#[allow(dead_code)] // Scaffolded for hybrid graph+vector storage
-impl Element {
-    /// Returns the element ID.
-    #[must_use]
-    pub fn id(&self) -> u64 {
-        match self {
-            Self::Point(p) => p.id,
-            Self::Node(n) => n.id(),
-        }
-    }
-
-    /// Returns true if this is a Point.
-    #[must_use]
-    pub fn is_point(&self) -> bool {
-        matches!(self, Self::Point(_))
-    }
-
-    /// Returns true if this is a Node.
-    #[must_use]
-    pub fn is_node(&self) -> bool {
-        matches!(self, Self::Node(_))
-    }
-
-    /// Returns the inner Point if this is a Point.
-    #[must_use]
-    pub fn as_point(&self) -> Option<&Point> {
-        match self {
-            Self::Point(p) => Some(p),
-            Self::Node(_) => None,
-        }
-    }
-
-    /// Returns the inner Node if this is a Node.
-    #[must_use]
-    pub fn as_node(&self) -> Option<&GraphNode> {
-        match self {
-            Self::Point(_) => None,
-            Self::Node(n) => Some(n),
-        }
-    }
-
-    /// Returns true if this element has a vector embedding.
-    ///
-    /// Points always have vectors. Nodes may or may not have vectors.
-    #[must_use]
-    pub fn has_vector(&self) -> bool {
-        match self {
-            Self::Point(_) => true,
-            Self::Node(n) => n.vector().is_some(),
-        }
-    }
-
-    /// Returns the vector embedding if available.
-    #[must_use]
-    pub fn vector(&self) -> Option<&Vec<f32>> {
-        match self {
-            Self::Point(p) => Some(&p.vector),
-            Self::Node(n) => n.vector(),
-        }
     }
 }

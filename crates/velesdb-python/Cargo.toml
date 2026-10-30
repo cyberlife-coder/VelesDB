@@ -68,8 +68,5 @@ gpu = ["velesdb-core/gpu"]
 update-check = ["velesdb-core/update-check"]
 loom = ["velesdb-core/loom"]
 
-[build-dependencies]
-pyo3-build-config = "0.29"
-
 [lints]
 workspace = true

@@ -101,21 +101,6 @@ impl TraversalResult {
             depth,
         }
     }
-
-    /// Creates a traversal result from an internal `SmallVec` path.
-    ///
-    /// Converts the stack-allocated path to a heap-allocated `Vec` at the
-    /// public API boundary.
-    #[must_use]
-    #[allow(clippy::needless_pass_by_value)]
-    #[allow(dead_code)] // Reason: Constructor used by MATCH clause traversal (Wave 6 wiring)
-    pub(crate) fn from_smallvec(target_id: u64, path: TraversalPath, depth: u32) -> Self {
-        Self {
-            target_id,
-            path: path.to_vec(),
-            depth,
-        }
-    }
 }
 
 /// Configuration for graph traversal.

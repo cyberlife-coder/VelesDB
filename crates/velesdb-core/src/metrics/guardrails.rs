@@ -1,95 +1,11 @@
-//! Graph traversal metrics and guard-rails for rate limiting and resource protection.
+//! Guard-rail metrics for rate limiting and resource protection.
 //!
 //! Provides thread-safe metrics for:
-//! - Graph traversal statistics (nodes visited, depth, edges scanned)
 //! - Guard-rail limit tracking (timeout, depth, cardinality, memory)
 //! - Rate limiting decisions
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-
-/// Metrics specific to graph traversal operations.
-#[derive(Debug, Default)]
-pub struct TraversalMetrics {
-    /// Total nodes visited across all traversals
-    pub nodes_visited_total: AtomicU64,
-    /// Maximum depth reached in traversals
-    pub max_depth_reached: AtomicU64,
-    /// Total edges scanned
-    pub edges_scanned_total: AtomicU64,
-    /// Traversal count
-    pub traversal_count: AtomicU64,
-}
-
-impl TraversalMetrics {
-    /// Creates new traversal metrics.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Records a traversal operation.
-    pub fn record_traversal(&self, nodes_visited: u64, depth: u64, edges_scanned: u64) {
-        self.traversal_count.fetch_add(1, Ordering::Relaxed);
-        self.nodes_visited_total
-            .fetch_add(nodes_visited, Ordering::Relaxed);
-        self.edges_scanned_total
-            .fetch_add(edges_scanned, Ordering::Relaxed);
-
-        // Update max depth if this traversal went deeper
-        self.max_depth_reached.fetch_max(depth, Ordering::Relaxed);
-    }
-
-    /// Exports traversal metrics in Prometheus format.
-    #[must_use]
-    pub fn export_prometheus(&self) -> String {
-        use std::fmt::Write;
-        let mut output = String::new();
-
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_traversal_nodes_visited_total Total nodes visited in traversals"
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_traversal_nodes_visited_total counter"
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_traversal_nodes_visited_total {}",
-            self.nodes_visited_total.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(output);
-
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_traversal_max_depth Maximum traversal depth reached"
-        );
-        let _ = writeln!(output, "# TYPE velesdb_traversal_max_depth gauge");
-        let _ = writeln!(
-            output,
-            "velesdb_traversal_max_depth {}",
-            self.max_depth_reached.load(Ordering::Relaxed)
-        );
-        let _ = writeln!(output);
-
-        let _ = writeln!(
-            output,
-            "# HELP velesdb_traversal_edges_scanned_total Total edges scanned"
-        );
-        let _ = writeln!(
-            output,
-            "# TYPE velesdb_traversal_edges_scanned_total counter"
-        );
-        let _ = writeln!(
-            output,
-            "velesdb_traversal_edges_scanned_total {}",
-            self.edges_scanned_total.load(Ordering::Relaxed)
-        );
-
-        output
-    }
-}
 
 /// Types of resource limits that can be exceeded.
 ///

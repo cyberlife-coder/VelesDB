@@ -151,6 +151,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior) — a query with two `SPARSE_NEAR` clauses is
+  rejected.** A query runs one sparse search, and a second `SPARSE_NEAR`
+  (under `AND` or `OR`) was dropped without a word, the query answering for
+  the first sparse vector alone; with `USING FUSION` it even passed fusion
+  validation as a second branch. It now fails with a query error
+  (`VELES-010`) naming the count; the guard that existed for it was never
+  called. Run one query per sparse vector and fuse the results.
+
 - **BREAKING (behavior) — edges whose properties nest deeper than 124 levels
   are refused.** `add_edge` and `add_edges_batch` return `VELES-017`
   (`SchemaValidation`), before any lock or write, for an edge whose
@@ -416,6 +424,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenAPI spec) list the strategy aliases and core's weighted defaults. The
   `FusionRequest` field docs had kept the pre-#1545 0.5 / 0.3 / 0.2, and the
   `MultiQuerySearchRequest` examples 0.5 and 0.2.
+
+### Removed
+
+- **BREAKING (Rust API) — `velesdb-core` items deprecated one major or more
+  ago.** Each replacement already exists and does what the removed item did:
+  - `GraphCollection::store_node_payload` (deprecated in 1.6.0): call
+    `GraphCollection::upsert_node_payload`, same arguments.
+  - `OperationalMetrics::shared` (1.13.2): call `OperationalMetrics::new_arc`;
+    both returned a fresh `Arc`, never a shared one.
+  - `VelesConfig::effective_ef_search` (5.2.0): the engine resolves `[search]`
+    through `SearchConfig::resolved_quality` (#2087, `persistence` feature),
+    which returns the `SearchQuality` to read rather than a `usize`; the
+    removed helper returned `usize::MAX` for `perfect` (#2238). Without the
+    `persistence` feature, the ef_search it computed is
+    `search.ef_search.unwrap_or_else(|| search.default_mode.ef_search())`.
+  - `velesql::match_planner::CollectionStats` (5.2.0): the type is
+    `velesql::match_planner::MatchGraphStats`, same fields.
+  - The update-check entry points deprecated in 7.0.0: `check_for_updates`
+    and `spawn_update_check` become `check_for_updates_with` and
+    `spawn_update_check_with`, which take an
+    `UpdateCheckContext::new(entry, edition)` (add `.with_data_dir(dir)` to
+    keep a data directory) and report the calling binary instead of
+    `"library"`. `compute_instance_hash` has no replacement: the update check
+    derives its install hash itself, and the helper only ever read a stored
+    id, returning a fresh random hash when there was none.
+
+  `Database::notify_upsert` and `Database::notify_query` (deprecated in
+  3.9.0) stay in 8.0: the server's REST bulk upsert, NDJSON stream, search
+  pipeline, batch search and aggregation routes do not run through the core
+  layer that fires `on_upsert` / `on_query`, so these calls are their only
+  observer telemetry.
+- **BREAKING (Rust API) — `velesdb_core::TraversalMetrics`** (also
+  `velesdb_core::metrics::TraversalMetrics`). Nothing in the engine fed it,
+  and its `export_prometheus` still wrote the process-wide
+  `velesdb_traversal_*` families the server stopped writing in #2548. Graph
+  traversal counts are per collection and fed by core:
+  `GraphCollection::metrics()`, and `Database::graph_metrics_prometheus()`
+  for the `velesdb_graph_traversal*` families.
+- **BREAKING (velesdb-migrate) — `PineconeConfig::environment`** (deprecated
+  in 1.12.0). Pinecone serverless discovers the index host through
+  `GET /indexes/{name}`, so the field was never read. A YAML config that still
+  sets `environment:` keeps loading, the key ignored like any unknown key;
+  Rust code that builds a `PineconeConfig` drops the field. The shipped
+  template and example no longer write it.
+- **Dead internal code, with no public API change.** In `velesdb-core`: the
+  graph index advisor (`IndexAdvisor`, `QueryPatternTracker`) that nothing
+  read, so a `MATCH` no longer takes a write lock to record its pattern; a
+  second BFS / DFS implementation only tests called (the tests now run the
+  `traverse_*_config` path every binding uses); the never-called
+  deferred-sync bulk upsert and the `fsync` flag it alone set to `false`; the
+  `Collection` sparse-search wrappers, `estimate_column_selectivity`, the trigram and generic GPU
+  backend selectors, two never-incremented HNSW safety counters, and other
+  unreachable helpers. In `velesdb-server`, an unused query-type detector and
+  the `reqwest` dev-dependency; in `velesdb-cli`, `LicenseInfo::has_feature`;
+  in `velesdb-wasm`, a test-only accessor; in `velesdb-python`, the
+  `pyo3-build-config` build-dependency with no build script to use it.
 
 ### Fixed
 

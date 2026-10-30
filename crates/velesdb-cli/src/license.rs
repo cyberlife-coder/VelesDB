@@ -114,12 +114,6 @@ impl LicenseInfo {
         now > self.expires_at
     }
 
-    /// Checks if a feature is enabled
-    #[allow(dead_code)] // Reason: public API for license validation (used in tests, consumed by velesdb-premium)
-    pub fn has_feature(&self, feature: PremiumFeature) -> bool {
-        self.features.contains(&feature)
-    }
-
     /// Format expiration date as human-readable string
     pub fn expires_at_formatted(&self) -> String {
         use chrono::{DateTime, Utc};

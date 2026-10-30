@@ -1,8 +1,6 @@
 //! Collection lifecycle methods (create, open, flush).
 
-use crate::collection::graph::property_index::{
-    CompositeIndexManager, IndexAdvisor, QueryPatternTracker,
-};
+use crate::collection::graph::property_index::CompositeIndexManager;
 use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig};
 use crate::error::Result;
@@ -176,8 +174,6 @@ impl Collection {
             graph_range_indexes: Arc::new(RwLock::new(HashMap::new())),
             edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
             composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
-            query_pattern_tracker: Arc::new(RwLock::new(QueryPatternTracker::new())),
-            index_advisor: Arc::new(RwLock::new(IndexAdvisor::new())),
             edge_store: Arc::new(edge_store),
             edge_wal_lock: Arc::new(Mutex::new(())),
         })

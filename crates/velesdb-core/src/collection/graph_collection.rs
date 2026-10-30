@@ -528,16 +528,6 @@ impl GraphCollection {
         }
     }
 
-    /// Inserts or updates node payload (properties).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if storage fails.
-    #[deprecated(since = "1.6.0", note = "Use upsert_node_payload() instead")]
-    pub fn store_node_payload(&self, node_id: u64, payload: &serde_json::Value) -> Result<()> {
-        self.upsert_node_payload(node_id, payload)
-    }
-
     /// Retrieves node payload.
     ///
     /// # Errors

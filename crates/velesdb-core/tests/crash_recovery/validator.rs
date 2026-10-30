@@ -53,12 +53,6 @@ impl IntegrityReport {
         self.is_valid = false;
     }
 
-    /// Adds a warning to the report.
-    #[allow(dead_code)]
-    fn add_warning(&mut self, warning: String) {
-        self.warnings.push(warning);
-    }
-
     /// Prints a summary of the report.
     pub fn print_summary(&self) {
         eprintln!("=== INTEGRITY REPORT ===");

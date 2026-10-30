@@ -796,6 +796,10 @@ WHERE vector NEAR $dense AND vector SPARSE_NEAR $sparse
 LIMIT 10
 ```
 
+A query has at most one `SPARSE_NEAR`: it runs a single sparse search, so
+a second clause (under `AND` or `OR`) is rejected with a query error rather
+than ignored. Run one query per sparse vector and fuse the results.
+
 Sparse vectors use `{index: weight}` format where `index` is a non-negative
 integer (dimension) and `weight` is a float value. Scoring uses inner product
 with MaxScore DAAT for efficient top-K retrieval.

@@ -140,19 +140,15 @@ pub struct QdrantConfig {
 }
 
 /// Pinecone configuration.
-#[allow(deprecated)]
+///
+/// Pinecone serverless (2024+) discovers the index host through
+/// `GET /indexes/{name}`, so there is no `environment` field: a config
+/// written for an earlier release that still sets one loads unchanged, the
+/// key ignored like any other unknown key.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PineconeConfig {
     /// Pinecone API key.
     pub api_key: String,
-    /// Deprecated: Pinecone serverless (2024+) discovers the host dynamically
-    /// via `GET /indexes/{name}`. Kept for backward compatibility with existing YAML configs.
-    #[serde(default)]
-    #[deprecated(
-        since = "1.12.0",
-        note = "Pinecone serverless ignores environments; host is discovered via the API"
-    )]
-    pub environment: String,
     /// Index name.
     pub index: String,
     /// Optional namespace.

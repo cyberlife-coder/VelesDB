@@ -28,7 +28,6 @@ pub const PROMOTION_THRESHOLD: usize = 1000;
 
 /// Adaptive posting list that chooses optimal representation based on cardinality.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Some methods used only in tests or for future API
 pub(crate) enum PostingList {
     /// Small posting list using FxHashSet (fast for < 1000 docs)
     Small(FxHashSet<u32>),
@@ -42,7 +41,6 @@ impl Default for PostingList {
     }
 }
 
-#[allow(dead_code)] // Some methods used only in tests or reserved for future API
 impl PostingList {
     /// Creates a new empty posting list (starts as Small).
     #[must_use]
@@ -51,6 +49,7 @@ impl PostingList {
     }
 
     /// Creates a posting list with expected capacity hint.
+    #[cfg(test)]
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         if capacity >= PROMOTION_THRESHOLD {
@@ -89,6 +88,7 @@ impl PostingList {
     }
 
     /// Checks if the posting list contains a document ID.
+    #[cfg(test)]
     #[must_use]
     pub fn contains(&self, doc_id: u32) -> bool {
         match self {
@@ -113,6 +113,7 @@ impl PostingList {
     }
 
     /// Returns true if this is the Large (Roaring) representation.
+    #[cfg(test)]
     #[must_use]
     pub fn is_large(&self) -> bool {
         matches!(self, PostingList::Large(_))
