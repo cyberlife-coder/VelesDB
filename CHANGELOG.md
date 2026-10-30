@@ -466,9 +466,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Memory:** every scalar property of every labelled node is now held in the
   range indexes, strings included, on every write path and from the open on.
   Measured on 100 000 labelled nodes, each with two numbers, a distinct 1 KB
-  string and a 20-element array (debug build): the open took 23.8 s and
-  170 MiB of RSS, against 20.9 s and 46 MiB without the range rebuild; the
-  indexes cost about the size of the indexed strings.
+  string and a 20-element array, in a **debug** build (the open times are
+  only comparable with each other, not with a release build): the open took
+  23.8 s and 170 MiB of RSS, against 20.9 s and 46 MiB without the range
+  rebuild. The indexed strings dominate that cost: the indexes hold a copy
+  of every string property of every labelled node, and the 124 MiB they
+  added here is close to the 100 MB of strings the nodes carry.
 
 - **A bulk upsert of a point without a payload keeps that point's payload
   indexed.** `upsert_bulk` and `upsert_bulk_from_raw` store nothing for a

@@ -6,7 +6,7 @@ use super::graph_property_index_wiring::NodePayloadChange;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
-use crate::storage::VectorStorage;
+use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
@@ -63,6 +63,30 @@ impl Collection {
         }
         let changes = Self::payload_changes(writes, old_payloads);
         self.apply_payload_index_changes(changes.iter().copied());
+    }
+
+    /// Brings the label and range indexes in line with what `storage` holds
+    /// for `ids` after a batch write that returned an error.
+    ///
+    /// A failed batch write is not all-or-nothing: `LogPayloadStorage` makes
+    /// each record readable as it writes it, so a failure mid-batch leaves the
+    /// records before it readable, and a failed sync or flush leaves all of
+    /// them. Each id is read back and indexed as what storage now holds, against
+    /// the payload it carried before the batch; an id the write never reached
+    /// reads back that same payload and its entries are put back unchanged.
+    /// Error paths only: the read-back costs one storage read per id.
+    pub(super) fn index_payloads_after_failed_write(
+        &self,
+        storage: &LogPayloadStorage,
+        ids: &[u64],
+        old_payloads: &[Option<Value>],
+    ) {
+        let held: Vec<Option<Value>> = ids
+            .iter()
+            .map(|&id| storage.retrieve(id).ok().flatten())
+            .collect();
+        let writes = ids.iter().copied().zip(held.iter().map(Option::as_ref));
+        self.index_payload_writes(writes, old_payloads);
     }
 
     /// Pairs each write of a batch with the payload it replaces: the previous

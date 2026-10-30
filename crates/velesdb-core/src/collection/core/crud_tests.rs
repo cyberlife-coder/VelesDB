@@ -1813,3 +1813,60 @@ fn a_repeated_id_in_one_batch_is_settled_by_its_last_payload() {
         "the last payload in the batch carries no text, so nothing must match"
     );
 }
+
+/// After a failed batch write, the label and range indexes describe what
+/// payload storage holds, not what the batch meant to write.
+///
+/// No fault hook reaches the payload WAL's record write or sync (the
+/// `atomic_write` `FaultGuard` covers snapshot replacement only), so the state
+/// a failed write leaves — the records before the error readable, the rest not
+/// — is built by writing one record straight to storage, and handed to the
+/// reconciliation both write paths run on their error branch.
+#[test]
+fn indexes_follow_what_a_failed_batch_left_readable() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let coll = Collection::create_graph_collection(
+        PathBuf::from(temp_dir.path()),
+        "nodes",
+        crate::collection::graph::GraphSchema::schemaless(),
+        None,
+        DistanceMetric::Cosine,
+    )
+    .expect("graph collection");
+    let aged = |age: i64| serde_json::json!({ "_labels": ["P"], "age": age });
+    coll.store_node_payload(1, &aged(30)).expect("seed node 1");
+    coll.store_node_payload(2, &aged(40)).expect("seed node 2");
+
+    // The batch would set node 1 to 5, node 2 to 50 and add node 3 at 60; it
+    // failed after writing node 1.
+    let ids = [1, 2, 3];
+    let mut storage = coll.storage.payload_storage.write();
+    let old = Collection::collect_old_payloads_by_id(ids.iter().copied(), &storage);
+    storage
+        .store_batch(&[(1, &aged(5))])
+        .expect("the record written before the failure");
+    coll.index_payloads_after_failed_write(&storage, &ids, &old);
+    drop(storage);
+
+    let older_than = |floor: i64| {
+        let mut found = coll
+            .graph_range_lookup_gt("P", "age", &serde_json::json!(floor))
+            .unwrap_or_default();
+        found.sort_unstable();
+        found
+    };
+    assert_eq!(
+        older_than(10),
+        vec![2],
+        "node 1 now holds 5, node 3 nothing"
+    );
+    assert_eq!(older_than(0), vec![1, 2]);
+    let labelled: Vec<u64> = coll
+        .graph
+        .label_index
+        .read()
+        .lookup("P")
+        .map(|bitmap| bitmap.iter().map(u64::from).collect())
+        .unwrap_or_default();
+    assert_eq!(labelled, vec![1, 2], "node 3 was never written");
+}

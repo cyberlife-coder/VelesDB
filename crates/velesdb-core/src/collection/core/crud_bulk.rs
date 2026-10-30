@@ -325,10 +325,17 @@ impl Collection {
         let mut storage = self.storage.payload_storage.write();
         let old_payloads =
             Self::collect_old_payloads_by_id(entries.iter().map(|&(id, _)| id), &storage);
-        if fsync {
-            storage.store_batch(entries)?;
+        let stored = if fsync {
+            storage.store_batch(entries)
         } else {
-            storage.store_batch_deferred(entries)?;
+            storage.store_batch_deferred(entries)
+        };
+        if let Err(error) = stored {
+            // A failed batch is not all-or-nothing: the records written before
+            // the error, or all of them when only the sync failed, are readable.
+            let ids: Vec<u64> = entries.iter().map(|&(id, _)| id).collect();
+            self.index_payloads_after_failed_write(&storage, &ids, &old_payloads);
+            return Err(error.into());
         }
         self.index_payload_writes(
             entries.iter().map(|&(id, payload)| (id, Some(payload))),

@@ -202,7 +202,9 @@ impl Collection {
     /// the index update, so a concurrent writer cannot store a payload for
     /// these ids in between: the indexes end up describing what storage holds.
     /// A payload-less point deletes the stored payload here, and the indexes
-    /// follow.
+    /// follow — on an error too: a failed write or flush can leave part or all
+    /// of the batch readable, and the indexes are then rebuilt for these ids
+    /// from what storage holds before the error is returned.
     ///
     /// Issue #425: Accepts a pre-computed `dedup_map` to avoid rebuilding
     /// the last-writer-wins map redundantly.
@@ -216,8 +218,13 @@ impl Collection {
     ) -> Result<Vec<Option<serde_json::Value>>> {
         let mut payload_storage = self.storage.payload_storage.write();
         let old_payloads = Self::collect_old_payloads(points, &payload_storage);
-        Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)?;
-        payload_storage.flush()?;
+        let written = Self::write_deduped_payloads(points, &mut payload_storage, dedup_map)
+            .and_then(|()| payload_storage.flush().map_err(Into::into));
+        if let Err(error) = written {
+            let ids: Vec<u64> = points.iter().map(|p| p.id).collect();
+            self.index_payloads_after_failed_write(&payload_storage, &ids, &old_payloads);
+            return Err(error);
+        }
         self.index_payload_writes(
             points.iter().map(|p| (p.id, p.payload.as_ref())),
             &old_payloads,

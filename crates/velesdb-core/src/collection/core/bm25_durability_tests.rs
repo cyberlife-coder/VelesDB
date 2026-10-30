@@ -168,9 +168,10 @@ fn with_a_snapshot_a_lost_wal_entry_is_not_rebuilt_from_payloads() {
 /// SSD. `count_wal_io` filters on the BM25 context, so the graph edge WAL —
 /// which shares the same framing helpers — cannot inflate the numbers.
 ///
-/// Before the fix this fails with N opens / N flushes / N syncs, because
-/// `bulk_store_payloads_inner` calls `update_text_index` per point and each
-/// call opens the WAL, writes one frame and `sync_all()`s it.
+/// Before the fix this failed with N opens / N flushes / N syncs, because the
+/// bulk path called `update_text_index` per point and each call opened the
+/// WAL, wrote one frame and `sync_all()`ed it. The batch now goes through
+/// `update_text_index_for_entries` (`bulk_import.rs`), one WAL append.
 #[test]
 fn bulk_text_documents_use_one_wal_sync() {
     const N: u64 = 8;
@@ -471,9 +472,10 @@ fn a_truncated_final_frame_preserves_prior_complete_frames() {
 ///   -- --ignored --nocapture --test-threads=1
 /// ```
 ///
-/// The same body is run before and after the fix (by temporarily restoring the
-/// per-document call in `bulk_store_payloads_inner`), so the two columns are
-/// produced by identical measurement code on the same machine.
+/// The same body is run before and after the fix (by temporarily restoring a
+/// per-document call in place of the bulk path's single
+/// `update_text_index_for_entries` call), so the two columns are produced by
+/// identical measurement code on the same machine.
 #[test]
 #[ignore = "writes tens of thousands of documents; run deliberately, on a machine at rest"]
 fn bm25_batch_throughput() {
