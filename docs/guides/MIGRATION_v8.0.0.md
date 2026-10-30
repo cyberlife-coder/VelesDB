@@ -298,8 +298,9 @@ Rejections carry core's codes and a new `recoverable` field:
   float reads back as written after a reopen. A value an earlier version
   already read one ULP off and wrote back keeps that value.
   - Cargo unifies the feature across a build: every `serde_json` float parse
-    in a binary that links core pays it, your own included. On a
-    768-dimension body it costs about 20 µs per vector.
+    in a binary that links core pays it, your own included. The
+    CHANGELOG entry "Stored floats read back bit for bit" states the
+    measured cost and the benchmark that reproduces it.
   - An `f32` is parsed directly, so a vector component can differ from 7.1.0
     by one `f32` ULP, toward the exact value.
 - **Caller-chosen sizes no longer abort the process.** A huge scroll
