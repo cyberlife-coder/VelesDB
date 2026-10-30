@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > a core graph collection. `velesdb-wasm` storage modes return core's results
 > and keep f32 vectors in every mode. Graph edges with properties now survive a
 > flush and a reopen, and a `MATCH` range predicate returns every matching node.
+> `enable_streaming` returns `Result` and refuses a config that aborted the
+> process; caller-chosen sizes no longer abort it either. Stored floats read
+> back bit for bit (`serde_json`'s `float_roundtrip`, at a parse cost stated
+> below), and the Python binding raises on a value nested past 127 levels.
 > **Do not downgrade** to 7.x a graph collection whose edges carry properties:
 > 7.x cannot read the 8.0 edge snapshot.
 
