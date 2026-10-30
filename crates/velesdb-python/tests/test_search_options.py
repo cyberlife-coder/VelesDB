@@ -3,7 +3,7 @@
 Validates:
   - SearchOptions construction (defaults, fields)
   - search_request() produces same results as search()
-  - DeprecationWarning emitted by legacy search()
+  - search() emits no DeprecationWarning
   - __repr__ works
 
 Date: 2026-05-09
@@ -74,26 +74,12 @@ def test_search_options_repr():
     assert "my_idx" in r
 
 
-def test_search_options_top_k_alias_warns_and_sets_k():
-    with pytest.warns(DeprecationWarning, match="top_k.*deprecated.*k"):
-        opts = SearchOptions(top_k=7)
-
-    assert opts.k == 7
-
-    with pytest.warns(DeprecationWarning, match="top_k.*deprecated.*k"):
-        assert opts.top_k == 7
-    with pytest.warns(DeprecationWarning, match="top_k.*deprecated.*k"):
-        opts.top_k = 8
-    assert opts.k == 8
-    with pytest.warns(DeprecationWarning, match="top_k.*deprecated.*k"):
-        returned = opts.with_top_k(9)
-    assert returned is opts
-    assert opts.k == 9
-
-
-def test_search_options_rejects_k_and_top_k_together():
-    with pytest.raises(TypeError, match="k.*top_k"):
-        SearchOptions(k=3, top_k=4)
+def test_search_options_has_no_top_k_alias():
+    """``top_k`` was a deprecated alias of ``k``, removed in 8.0.0."""
+    with pytest.raises(TypeError):
+        SearchOptions(top_k=7)
+    assert not hasattr(SearchOptions(), "with_top_k")
+    assert SearchOptions().k == 10
 
 
 # ---------------------------------------------------------------------------
@@ -104,15 +90,13 @@ def test_search_options_rejects_k_and_top_k_together():
 def test_search_request_matches_search(collection):
     query = [0.5, 0.5, 0.5, 0.1]
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        legacy = collection.search(vector=query, top_k=3)
+    shorthand = collection.search(vector=query, top_k=3)
 
     opts = SearchOptions(vector=query, k=3)
     modern = collection.search_request(opts)
 
-    assert len(legacy) == len(modern)
-    for l, m in zip(legacy, modern):
+    assert len(shorthand) == len(modern)
+    for l, m in zip(shorthand, modern):
         assert l["id"] == m["id"]
         assert abs(l["score"] - m["score"]) < 1e-5
 
@@ -138,17 +122,13 @@ def test_search_request_k_respected(collection):
 
 
 # ---------------------------------------------------------------------------
-# C. DeprecationWarning from legacy search()
+# C. search() is a supported shorthand: it warns about nothing
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_search_emits_deprecation_warning(collection):
+def test_search_shorthand_emits_no_deprecation_warning(collection):
     query = [0.5, 0.5, 0.5, 0.1]
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        collection.search(vector=query, top_k=2)
-
-    deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert deprecations, "Expected at least one DeprecationWarning from search()"
-    msg = str(deprecations[0].message)
-    assert "search_request" in msg or "deprecated" in msg.lower()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        results = collection.search(vector=query, top_k=2)
+    assert len(results) == 2

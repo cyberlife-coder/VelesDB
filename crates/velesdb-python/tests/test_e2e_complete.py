@@ -333,9 +333,10 @@ class TestGraphE2E:
             vec = np.random.randn(32).astype(np.float32).tolist()
             col.upsert(i + 1, vec)
 
-        graph = col.get_graph_store()
-        if graph is None:
-            pytest.skip("GraphStore not available in this build")
+        # A standalone graph, as Collection.get_graph_store() returned until 8.0.0.
+        from velesdb import GraphStore
+
+        graph = GraphStore()
 
         graph.add_edge(1, source=1, target=2, label="related")
         graph.add_edge(2, source=2, target=3, label="related")
@@ -354,9 +355,10 @@ class TestGraphE2E:
             vec = np.random.randn(32).astype(np.float32).tolist()
             col.upsert(i + 1, vec)
 
-        graph = col.get_graph_store()
-        if graph is None:
-            pytest.skip("GraphStore not available in this build")
+        # A standalone graph, as Collection.get_graph_store() returned until 8.0.0.
+        from velesdb import GraphStore
+
+        graph = GraphStore()
 
         graph.add_edge(1, source=1, target=2, label="child")
         graph.add_edge(2, source=2, target=3, label="child")

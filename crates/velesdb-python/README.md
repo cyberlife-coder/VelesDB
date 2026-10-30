@@ -188,8 +188,8 @@ so your IDE and mypy/pyright are the reference. Task-oriented guides:
 - **One process per database directory.** A second process opening the same path fails with `DatabaseLockedError` (`[VELES-031]`).
 - **Concurrent WAL writing is not exposed** — Enterprise feature.
 - **No GPU in the published wheels.** The `gpu` Cargo feature exists but is not enabled by `[tool.maturin]`; it requires building from source.
-- **`Collection.search(...)` is deprecated** since v1.15 (emits `DeprecationWarning`); use `search_request(SearchOptions(...))`.
-- **`Collection.get_graph_store()` returns a standalone in-memory graph** that is not connected to the collection; use `Database.create_graph_collection()` for persistence.
+- **`Collection.search(vector, top_k=...)`** is the keyword shorthand over `search_request(SearchOptions(...))`, which adds fusion, `include_vectors` and the read-gate options.
+- **Graph persistence** goes through `Database.create_graph_collection()`; `Collection.get_graph_store()` (a standalone in-memory graph) was removed in 8.0.0.
 
 ## Compatibility
 

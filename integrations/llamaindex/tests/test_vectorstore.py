@@ -1002,7 +1002,7 @@ class TestSearchQualityLlamaIndex:
                 return []
 
             def search_request(self, opts):
-                return self.search(opts.vector, top_k=opts.top_k)
+                return self.search(opts.vector, top_k=opts.k)
 
             def info(self):
                 return {"dimension": 4}
