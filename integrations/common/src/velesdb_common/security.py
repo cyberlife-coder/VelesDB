@@ -56,7 +56,7 @@ except (ImportError, AttributeError):
     ALLOWED_METRICS = _FALLBACK_METRICS
     ALLOWED_STORAGE_MODES = _FALLBACK_STORAGE_MODES
     ALLOWED_CONDITION_TYPES = _FALLBACK_CONDITION_TYPES
-# velesdb-core's search quality parser, through the binding (velesdb >= 7.2.0).
+# velesdb-core's search quality parser, through the binding (velesdb >= 8.0.0).
 # There is no literal fallback: this package keeps no copy of the grammar.
 try:
     from velesdb import validate_search_quality as _core_validate_search_quality
@@ -468,7 +468,7 @@ def validate_search_quality(quality: str) -> str:
     ``ef_search`` range (16-4096) and ``MIN <= MAX``. A mode refused here is one
     every search would refuse, with the same message.
 
-    With a ``velesdb`` older than that function (< 7.2.0) only the type is
+    With a ``velesdb`` older than that function (< 8.0.0) only the type is
     checked here; the binding still refuses an invalid mode, at search time.
 
     Args:

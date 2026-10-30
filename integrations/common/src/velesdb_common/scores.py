@@ -13,7 +13,7 @@ well as the metric: core's ``FusionStrategy::fused_direction``, read through
 normalised (relative score) fusions are higher-is-better under every metric;
 average, maximum and weighted keep a distance metric's units.
 
-A wheel older than the binding exports (velesdb < 7.2.0) falls back to the
+A wheel older than the binding exports (velesdb < 8.0.0) falls back to the
 literal sets below so this package still imports and ranks correctly; the
 drift guards in ``tests/test_scores.py`` assert they equal the binding
 whenever the binding provides the functions.

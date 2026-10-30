@@ -7,7 +7,7 @@ of maintaining identical copies (US-018 — no duplication < 2%).
 The name grammar itself (names, aliases, case, defaults) is velesdb-core's
 ``FusionStrategy::from_name``, read through the binding's
 ``velesdb.FusionStrategy.from_name``. A wheel older than that export
-(velesdb < 7.2.0) falls back to the literal dispatch below.
+(velesdb < 8.0.0) falls back to the literal dispatch below.
 """
 
 from __future__ import annotations
