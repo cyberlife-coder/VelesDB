@@ -254,10 +254,13 @@ Rejections carry core's codes and a new `recoverable` field:
 - **Trained PQ collections differ from core:** once a PQ collection has
   trained, core's default `search()` returns ADC-approximated scores. The
   browser returns exact ones.
-- **`VectorStore.search_with_filter` refuses a filter core cannot parse**,
-  with core's message (`Invalid filter: missing field \`condition\``, for one).
-  A filter without a `condition` key, such as a flat `{ category: 'tech' }`,
-  used to match every point; it is now an error, as on REST.
+- **`VectorStore.search_with_filter` parses and evaluates the filter with
+  core.** Every core condition kind now selects what REST selects; `in`,
+  `contains`, `is_null`, `like`, the `array_contains*` and geo conditions
+  used to match nothing. A filter core cannot parse throws core's message
+  (`Invalid filter: missing field \`condition\``, for one): a flat
+  `{ category: 'tech' }` used to match every point, and `null` used to search
+  unfiltered. Call `search` for an unfiltered search.
 
 ## 8. Observability
 
@@ -351,7 +354,8 @@ the npm package ships.
   SDK sent `schema_mode`, which the server never read, so every graph
   collection was schemaless. It now sends core's `graph_schema`, with the
   node and edge types declared in the new `nodeTypes` / `edgeTypes` options
-  (core's `NodeType` / `EdgeType`). A strict graph accepts only those types;
+  (core's `NodeType` / `EdgeType`). A strict graph checks node `_labels` and
+  edge label/endpoint types against them;
   declare them, or drop `schemaMode: 'strict'` to keep the old schemaless
   behaviour. Types on a schemaless graph throw `ValidationError`.
 - **Node.js 22 or later** (`engines.node`). CI builds and tests the SDK on 22;

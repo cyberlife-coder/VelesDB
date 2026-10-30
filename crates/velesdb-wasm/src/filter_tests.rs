@@ -1,218 +1,93 @@
 use super::*;
+use serde::Deserialize;
 use serde_json::json;
+use std::path::PathBuf;
 
-#[test]
-fn test_filter_eq() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": {
-            "type": "eq",
-            "field": "category",
-            "value": "tech"
-        }
-    });
-    assert!(matches_filter(&payload, &filter));
+/// `conformance/filter_wire_cases.json`, the fixture velesdb-core's
+/// `tests/filter_wire_conformance.rs` runs through `Filter::matches`: every
+/// core condition kind, with the payloads it must and must not select.
+#[derive(Deserialize)]
+struct Fixture {
+    valid: Vec<ValidCase>,
+    invalid: Vec<InvalidCase>,
+}
+
+#[derive(Deserialize)]
+struct ValidCase {
+    id: String,
+    filter: Value,
+    matches: Vec<Value>,
+    rejects: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct InvalidCase {
+    id: String,
+    filter: Value,
+}
+
+fn fixture() -> Fixture {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/filter_wire_cases.json");
+    let content = std::fs::read_to_string(path).expect("read filter wire fixture");
+    serde_json::from_str(&content).expect("parse filter wire fixture")
 }
 
 #[test]
-fn test_filter_neq() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": {
-            "type": "neq",
-            "field": "category",
-            "value": "sports"
+fn every_core_condition_kind_selects_what_core_selects() {
+    let fixture = fixture();
+    // The fixture names one case per kind; prove each is here.
+    for kind in velesdb_core::CONDITION_TYPE_NAMES {
+        assert!(
+            fixture.valid.iter().any(|c| c
+                .filter
+                .to_string()
+                .contains(&format!("\"type\":\"{kind}\""))),
+            "fixture has no `{kind}` case"
+        );
+    }
+    for case in fixture.valid {
+        let filter = parse_filter(case.filter)
+            .unwrap_or_else(|e| panic!("case {} must parse: {e}", case.id));
+        for payload in &case.matches {
+            assert!(
+                filter.matches(payload),
+                "case {} must match {payload}",
+                case.id
+            );
         }
-    });
-    assert!(matches_filter(&payload, &filter));
+        for payload in &case.rejects {
+            assert!(
+                !filter.matches(payload),
+                "case {} must not match {payload}",
+                case.id
+            );
+        }
+    }
 }
 
 #[test]
-fn test_filter_gt() {
-    let payload = json!({"score": 85.0});
-    let filter = json!({
-        "condition": {
-            "type": "gt",
-            "field": "score",
-            "value": 80.0
-        }
-    });
-    assert!(matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_filter_and() {
-    let payload = json!({"category": "tech", "score": 90.0});
-    let filter = json!({
-        "condition": {
-            "type": "and",
-            "conditions": [
-                {"type": "eq", "field": "category", "value": "tech"},
-                {"type": "gt", "field": "score", "value": 80.0}
-            ]
-        }
-    });
-    assert!(matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_filter_or() {
-    let payload = json!({"category": "sports"});
-    let filter = json!({
-        "condition": {
-            "type": "or",
-            "conditions": [
-                {"type": "eq", "field": "category", "value": "tech"},
-                {"type": "eq", "field": "category", "value": "sports"}
-            ]
-        }
-    });
-    assert!(matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_filter_not() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": {
-            "type": "not",
-            "condition": {
-                "type": "eq",
-                "field": "category",
-                "value": "sports"
-            }
-        }
-    });
-    assert!(matches_filter(&payload, &filter));
+fn a_filter_core_refuses_is_refused_with_cores_message() {
+    for case in fixture().invalid {
+        let err = parse_filter(case.filter.clone()).expect_err(&case.id);
+        let core = velesdb_core::Filter::from_json_value(case.filter).expect_err(&case.id);
+        assert_eq!(err, core, "case {} must carry core's message", case.id);
+    }
+    assert!(parse_filter(json!({}))
+        .unwrap_err()
+        .contains("missing field `condition`"));
+    assert!(
+        parse_filter(Value::Null).is_err(),
+        "a null filter is refused"
+    );
 }
 
 #[test]
 fn test_nested_field() {
-    let payload = json!({"user": {"profile": {"name": "John"}}});
-    let value = get_nested_field(&payload, "user.profile.name");
-    assert_eq!(value, Some(&json!("John")));
-}
-
-#[test]
-fn test_filter_without_condition_matches_nothing() {
-    // A flat field map is not a filter. It used to read as "no filter" and
-    // match every payload, where velesdb-server refuses the same JSON.
-    let payload = json!({"category": "tech"});
-    assert!(!matches_filter(&payload, &json!({})));
-    assert!(!matches_filter(&payload, &json!({"category": "tech"})));
-}
-
-#[test]
-fn test_validate_filter_refuses_what_core_refuses_with_its_message() {
-    for filter in [
-        json!({}),
-        json!({"category": "tech"}),
-        json!({"condition": "eq"}),
-    ] {
-        let err = validate_filter(&filter).expect_err("core refuses this filter");
-        let core = velesdb_core::Filter::from_json_value(filter.clone())
-            .expect_err("core refuses this filter");
-        assert_eq!(err, core, "same message as core for {filter}");
-    }
-    assert!(validate_filter(&json!({}))
-        .unwrap_err()
-        .contains("missing field `condition`"));
-}
-
-#[test]
-fn test_validate_filter_accepts_a_core_filter() {
-    let filter = json!({"condition": {"type": "eq", "field": "category", "value": "tech"}});
-    assert!(validate_filter(&filter).is_ok());
-}
-
-#[test]
-fn test_unknown_condition_type_fails_closed() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": {
-            "type": "eqals",
-            "field": "category",
-            "value": "tech"
-        }
-    });
-    assert!(!matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_missing_condition_type_fails_closed() {
-    // A condition OBJECT with no "type" is an uninterpretable filter, not an
-    // absent one — it funnels into the same fail-closed arm as a typo'd type.
-    // (An absent `condition` key fails closed too: see
-    // test_filter_without_condition_matches_nothing.)
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": {
-            "field": "category",
-            "value": "tech"
-        }
-    });
-    assert!(!matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_non_string_condition_type_fails_closed() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": {
-            "type": 7,
-            "field": "category",
-            "value": "tech"
-        }
-    });
-    assert!(!matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_or_with_non_array_conditions_fails_closed() {
-    // A malformed `or` — `conditions` is an object, not an array — must not
-    // pass every point. This is the same leak class the unknown-`type` arm
-    // closes, reachable from a JS typo (object instead of list).
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": { "type": "or", "conditions": { "field": "category" } }
-    });
-    assert!(!matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_and_with_missing_conditions_fails_closed() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": { "type": "and" }
-    });
-    assert!(!matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_not_with_missing_inner_condition_fails_closed() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": { "type": "not" }
-    });
-    assert!(!matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_empty_and_is_vacuously_true() {
-    // A *present* empty array keeps its vacuous meaning: `all` of nothing is
-    // true. Only the malformed (absent / non-array) shape fails closed.
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": { "type": "and", "conditions": [] }
-    });
-    assert!(matches_filter(&payload, &filter));
-}
-
-#[test]
-fn test_empty_or_is_false() {
-    let payload = json!({"category": "tech"});
-    let filter = json!({
-        "condition": { "type": "or", "conditions": [] }
-    });
-    assert!(!matches_filter(&payload, &filter));
+    let payload = json!({"user": {"name": "John"}});
+    assert_eq!(
+        get_nested_field(&payload, "user.name"),
+        Some(&json!("John"))
+    );
+    assert_eq!(get_nested_field(&payload, "user.age"), None);
 }

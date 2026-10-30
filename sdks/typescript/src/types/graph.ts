@@ -196,10 +196,13 @@ export interface GraphCollectionConfig {
   metric?: DistanceMetric;
   /**
    * Schema mode (default: 'schemaless'). Sent with `nodeTypes` and
-   * `edgeTypes` as core's `graph_schema`. A `'strict'` graph accepts only
-   * the declared node types, and only declared edges between the declared
-   * endpoint types (`velesdb_core::GraphSchema::validate_node_type` /
-   * `validate_edge_type`); with none declared it accepts none.
+   * `edgeTypes` as core's `graph_schema`. In a `'strict'` graph core checks
+   * every label in a node payload's `_labels` against `nodeTypes` (a node
+   * with no `_labels` is not checked), and refuses an edge unless both
+   * endpoints exist and carry a label, and its label and endpoint types
+   * (each endpoint's first `_labels` entry) match a declared `edgeTypes`
+   * entry whose endpoint types are declared (`velesdb_core::GraphSchema::
+   * validate_node_type` / `validate_edge_type`).
    */
   schemaMode?: GraphSchemaMode;
   /** Node types a `'strict'` graph accepts. Refused on a schemaless graph, which ignores them. */

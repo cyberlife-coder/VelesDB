@@ -92,8 +92,9 @@ function searchWithFilter(
   k: number,
   filter: FilterInput
 ): SearchResult[] {
-  // velesdb-wasm reads a filter without a `condition` key as "no filter";
-  // normalizeFilter refuses that shape here, as the server does over REST.
+  // normalizeFilter refuses a filter without a `condition` key before the
+  // binding sees it, with the SDK's ValidationError; velesdb-wasm would
+  // refuse it too, with core's parse error, as the server does over REST.
   const results: WasmFilteredResult[] = collection!.store.search_with_filter(
     queryVector, k, normalizeFilter(filter)
   );

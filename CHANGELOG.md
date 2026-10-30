@@ -40,18 +40,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `graph_schema` for its config. The WASM backend still refuses graph
   collections with `NOT_SUPPORTED`. Migration: declare the types, or drop
   `schemaMode: 'strict'` to keep the old schemaless behaviour.
-- **BREAKING (behavior) — velesdb-wasm refuses a metadata filter core cannot
-  parse.** `VectorStore.search_with_filter` validates the filter with
-  `velesdb_core::Filter::from_json_value` (new `filter::validate_filter`) and
-  returns core's message (`Invalid filter: missing field \`condition\``),
-  and `matches_filter` matches nothing for a filter without `condition`. A
-  flat `{ "category": "tech" }` used to read as "no filter" and return
-  every point.
+- **BREAKING (behavior) — velesdb-wasm filters with core.**
+  `VectorStore.search_with_filter` parses the filter as
+  `velesdb_core::Filter` (`filter::parse_filter`) and evaluates it with
+  `Filter::matches`; the crate's own evaluator, which knew only `eq`, `neq`,
+  the four comparisons, `and`, `or` and `not`, is deleted. Every other core
+  condition kind (`in`, `contains`, `is_null`, `is_not_null`, `like`,
+  `ilike`, the three `array_contains*`, `geo_distance`, `geo_bbox`) used to
+  match nothing in the browser while REST returned hits; they now select what
+  core selects, checked against the shared
+  `conformance/filter_wire_cases.json`, which now holds one case per kind and
+  is run by both velesdb-core and velesdb-wasm. A filter core cannot parse
+  throws core's message (`Invalid filter: missing field \`condition\``, for
+  one): a flat `{ "category": "tech" }` used to read as "no filter" and
+  return every point, and a raw `search_with_filter(query, k, null)` now
+  throws instead of searching unfiltered — call `search` for an unfiltered
+  search.
 - **BREAKING — the TypeScript SDK requires Node.js 22 or later**
   (`engines.node`, was `>=18.0.0`). CI builds and tests the SDK on Node 22
   only, its test toolchain needs 22.12+, and Node 18 and 20 are end-of-life.
-  The SDK README, `docs/guides/INSTALL_OPTIONS.md` and the velesdb-wasm
-  README now state the same floor (the wasm README said 20+, the SDK 18).
+  The SDK README, `docs/guides/INSTALL_OPTIONS.md`, `CONTRIBUTING.md` and
+  `examples/node-express-rag` (engines, Dockerfile) now state it. The
+  velesdb-wasm README states the floor of its own binary instead, Node 18+
+  (WebAssembly SIMD, bulk memory, non-trapping float-to-int and reference
+  types), where it claimed 20+.
 
 ### Removed
 

@@ -151,12 +151,12 @@ export function isTypedFilter(input: FilterInput): input is Filter {
 /**
  * Checks a filter input against core's wire shape and returns it unchanged.
  *
- * `velesdb_core::filter::Filter` is `{ condition: Condition }`. The server
- * refuses anything else with a `400`, and velesdb-wasm reads a filter without
- * a `condition` key as "no filter" and returns unfiltered neighbours — so a
- * flat map such as `{ category: 'tech' }` failed loudly on one backend and
- * silently on the other. Every backend calls this before a filter leaves the
- * SDK, which makes both refuse it the same way.
+ * `velesdb_core::filter::Filter` is `{ condition: Condition }`. velesdb-server
+ * refuses anything else with a `400`, and velesdb-wasm with core's parse
+ * error (before 8.0.0 it read a filter without `condition` as "no filter"
+ * and returned unfiltered neighbours). Every backend calls this before a
+ * filter leaves the SDK, so a flat map such as `{ category: 'tech' }` is
+ * refused the same way, with `ValidationError`, on both.
  *
  * Only the root is checked (a `condition` that is a non-null object, see
  * {@link isTypedFilter}); the condition itself is validated by core.

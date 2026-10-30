@@ -169,10 +169,15 @@ store.search_with_filter(query, 5, {
 });
 ```
 
-The filter is parsed by velesdb-core first, as on REST: one core cannot parse
-throws with core's message. That includes a filter with no `condition` key,
-such as a flat `{ category: 'tech' }` (`Invalid filter: missing field
-\`condition\``), which used to match every point.
+The filter is velesdb-core's `Filter`, parsed and evaluated by core, so it
+selects what REST selects for the same JSON, with every condition kind:
+`eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `is_null`,
+`is_not_null`, `and`, `or`, `not`, `like`, `ilike`, `array_contains`,
+`array_contains_any`, `array_contains_all`, `geo_distance`, `geo_bbox`. A
+filter core cannot parse throws with core's message; that includes `null` and
+a filter with no `condition` key, such as a flat `{ category: 'tech' }`
+(`Invalid filter: missing field \`condition\``), which used to match every
+point.
 
 ### Storage modes and memory
 

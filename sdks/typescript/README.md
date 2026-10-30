@@ -10,7 +10,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 - **Agent memory works over REST.** `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`, `recallRecent` and `recallOlderThan` sent a flat `{ _memory_type: ... }` filter that velesdb-server refuses with a `400`; they now send core's `{ condition: ... }` shape, and `recallRecent`/`recallOlderThan` let the server apply the timestamp window. `recallRecent(since)` is now exclusive (`timestamp > since`), as core's `episodic.recent()` is.
 - **A filter must be core-shaped on both backends.** A flat field map such as `{ category: 'tech' }` is refused with `VALIDATION_ERROR` before it leaves the SDK. REST used to answer it with a `400`; WASM read it as "no filter" and returned unfiltered results. Build filters with `f.*` (see [Filters](#filters)).
-- **No option the server drops.** Removed: `SearchOptions.includeVectors` and `SearchResult.vector` (no search returns vectors; read one with `get()`), `query()`'s `options` argument and `QueryOptions` (`/query` takes no per-query timeout or stream; the server's timeout is its guard-rails `timeoutMs`), the `includeVectors` and `queryOptions` capabilities, `CollectionConfig.description` (core has no collection description), `HnswParams.storageMode` (use `CollectionConfig.storageMode`), and the traversal `cursor` / `nextCursor` (core has no traversal cursor). `createGraphCollection`'s `schemaMode` now reaches the server, as core's `graph_schema`.
+- **No option the server drops.** Removed: `SearchOptions.includeVectors` and `SearchResult.vector` (no search returns vectors; read one with `get()`), `query()`'s `options` argument and `QueryOptions` (`/query` takes no per-query timeout or stream; the server's timeout is its guard-rails `timeoutMs`), the `includeVectors` and `queryOptions` capabilities, `CollectionConfig.description` (core has no collection description), `HnswParams.storageMode` (use `CollectionConfig.storageMode`), and the traversal `cursor` / `nextCursor` (core has no traversal cursor). `createGraphCollection`'s `schemaMode` now reaches the server, as core's `graph_schema`, with new `nodeTypes`/`edgeTypes`; its `dimension` and `metric` take effect with velesdb-server 8.0.0, which ships with this SDK.
 - **The WASM backend creates `pq` and `rabitq` collections**, returning core's results for every storage mode.
 - **Node.js 22 or later** (`engines.node`): the version CI builds and tests on. Node 18 and 20 are end-of-life.
 
@@ -292,8 +292,11 @@ await db.createGraphCollection('social', {
 ```
 
 `schemaMode`, `nodeTypes` and `edgeTypes` are sent as core's `graph_schema`
-(`GraphSchema`). A `'strict'` graph accepts only the node types it declares,
-and only declared edges between the declared endpoint types:
+(`GraphSchema`). In a `'strict'` graph core checks every label in a node
+payload's `_labels` against the declared node types (a node without `_labels`
+is not checked), and accepts an edge only when both endpoints exist and carry
+a label and the edge's label and endpoint types (each endpoint's first
+`_labels` entry) match a declared edge type:
 
 ```typescript
 await db.createGraphCollection('org', {
@@ -309,9 +312,10 @@ await db.createGraphCollection('org', {
 Property types are core's `ValueType`: `'string'`, `'integer'`, `'float'`,
 `'boolean'`, `'vector'`. Declaring types on a schemaless graph is refused with
 `VALIDATION_ERROR`, since core would ignore them. The WASM backend has no graph
-collections and refuses `createGraphCollection` with `NOT_SUPPORTED`. Over REST, velesdb-server builds a graph collection from its name and
-schema alone: it does not read `dimension` or `metric` for
-`collection_type: 'graph'`.
+collections and refuses `createGraphCollection` with `NOT_SUPPORTED`. Over
+REST, `dimension` and `metric` give the graph's nodes embeddings; they take
+effect with velesdb-server 8.0.0, which ships with this SDK (earlier servers
+ignore them for `collection_type: 'graph'`).
 
 #### `db.createMetadataCollection(name)`
 
