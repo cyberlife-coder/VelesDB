@@ -303,9 +303,10 @@ docs = retriever.invoke("What is VelesDB?")
 The result holds the `seed_k` vector hits first, best score first, then the
 documents the graph reaches from them, seed by seed in traversal order, until
 `expand_k` documents in all. A document already returned, or one the vector
-store cannot return, is skipped and takes no slot. Neighbours carry
-`graph_depth=1` and no `relevance_score`: they were reached through the
-graph, not scored. `low_latency=True` returns the seeds only.
+store cannot return, is skipped and takes no slot. Seeds carry
+`graph_depth=0`; a neighbour carries its hops from the nearest seed as
+`graph_depth`, and no `relevance_score`: it was reached through the graph,
+not scored. `low_latency=True` returns the seeds only.
 
 ## Features
 

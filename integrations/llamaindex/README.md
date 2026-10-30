@@ -361,9 +361,10 @@ nodes = retriever.retrieve("What is VelesDB?")
 The result holds the `seed_k` vector hits first, best score first, then the
 nodes the graph reaches from them, seed by seed in traversal order, until
 `expand_k` nodes in all. A node already returned, or one the vector store
-cannot return, is skipped and takes no slot. Neighbours carry
-`graph_depth=1` and `score=0.5`, a placeholder: they were reached through the
-graph, not scored.
+cannot return, is skipped and takes no slot. Seeds carry `graph_depth=0`;
+a neighbour carries its hops from the nearest seed as `graph_depth`, and
+`score=None`: it was reached through the graph, not scored, so a score
+threshold downstream should let `None` through or drop it deliberately.
 
 `GraphQARetriever` re-ranks results by graph depth (seeds first) for Q&A:
 

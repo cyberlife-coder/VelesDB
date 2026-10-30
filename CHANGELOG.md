@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwrite the stored node. *Migration*: none. No stored data depends on the
   old native ids: in 8.0.0 the native mode never persisted anything, because
   the loader fell back to an in-memory graph store (see Fixed).
+- **BREAKING (behavior) — LlamaIndex `GraphRetriever` neighbours carry
+  `score=None`.** A node reached through the graph had `score=0.5`, a value no
+  search produced, which a downstream score threshold or re-ranker read as a
+  similarity. `NodeWithScore.score` is optional, and `None` now says the node
+  was not scored, as LangChain's neighbours carry no `relevance_score`.
+  `GraphQARetriever` sorts unscored nodes after the scored ones of the same
+  depth. *Migration*: a postprocessor that compares scores must handle `None`
+  (keep or drop graph-reached nodes on purpose).
 
 ### Fixed
 
@@ -53,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both: seeds by score, then neighbours seed by seed in traversal order, where
   the set they were kept in made it arbitrary. A neighbour that is a seed or
   that the vector store cannot return no longer takes a slot.
+- **LangChain and LlamaIndex `GraphRetriever` report a neighbour's real
+  `graph_depth`.** Every neighbour was marked `1`, also one reached at depth 2,
+  so `GraphQARetriever`'s depth re-ranking could not tell them apart. It is now
+  the hops from the nearest seed, as the traversal reports it, in native and
+  REST mode alike. REST mode also turns `target_id`, which the server
+  serialises as a string, into an integer: LlamaIndex passed the string to the
+  collection, which raised `TypeError` out of `retrieve()`. The new `velesdb_common.graph.parse_graph_traverse_results`
+  returns `(target_id, depth)` pairs, and `parse_graph_traverse_response`
+  now returns integer ids.
 
 ## [8.0.0] - 2026-10-30
 

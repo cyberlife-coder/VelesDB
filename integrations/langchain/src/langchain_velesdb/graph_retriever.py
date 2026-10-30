@@ -28,7 +28,7 @@ Example:
     >>> docs = retriever.get_relevant_documents("What is machine learning?")
 """
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 import hashlib
 import logging
 
@@ -36,7 +36,7 @@ from langchain_velesdb._common import (
     build_graph_rest_payload,
     is_timeout_exception,
     open_native_graph,
-    parse_graph_traverse_response,
+    parse_graph_traverse_results,
 )
 
 # Lazy VelesDBError resolution. `velesdb` is a runtime dependency for
@@ -85,9 +85,11 @@ class GraphRetriever(BaseRetriever):
     Results: the ``seed_k`` vector hits first, best score first, then the
     documents the graph reaches from them — seed by seed, each in traversal
     order — skipping any already returned or that the vector store cannot
-    return, until ``expand_k`` documents in all. Neighbours carry
-    ``graph_depth=1`` and no ``relevance_score``: they were reached through the graph, not
-    scored. With ``low_latency=True`` only the seeds are returned.
+    return, until ``expand_k`` documents in all. Seeds carry
+    ``graph_depth=0``; a neighbour carries ``graph_depth`` = its hops from the
+    nearest seed, as the traversal reports it, and no ``relevance_score``: it
+    was reached through the graph, not scored. With ``low_latency=True`` only
+    the seeds are returned.
 
     Supports two modes:
 
@@ -324,12 +326,13 @@ class GraphRetriever(BaseRetriever):
     ) -> bool:
         """Traverse graph from one seed node; return updated graph_available flag.
 
-        Reached ids are appended to ``neighbour_ids`` in traversal order; an id
-        already there keeps its first position.
+        Reached ids are added to ``neighbour_ids`` (id -> depth) in traversal
+        order. An id already there keeps its first position and the smaller
+        depth, so a neighbour's depth counts hops from the nearest seed.
         """
         try:
-            for neighbor_id in self._traverse_graph(doc_id):
-                neighbour_ids.setdefault(neighbor_id, None)
+            for neighbor_id, depth in self._traverse_graph(doc_id):
+                neighbour_ids[neighbor_id] = min(depth, neighbour_ids.get(neighbor_id, depth))
         except (ValueError, RuntimeError, OSError, TimeoutError, ConnectionError, _VelesDBError) as exc:
             if self._is_timeout(exc):
                 logger.warning(
@@ -376,7 +379,7 @@ class GraphRetriever(BaseRetriever):
         cannot return; neither takes a slot. Neighbours carry no
         ``relevance_score``: they were reached through the graph, not scored.
         """
-        for neighbor_id in neighbour_ids:
+        for neighbor_id, depth in neighbour_ids.items():
             if len(result_docs) >= self.expand_k:
                 return
             if neighbor_id in seed_docs:
@@ -384,33 +387,34 @@ class GraphRetriever(BaseRetriever):
             try:
                 neighbor_doc = self._fetch_document(neighbor_id)
                 if neighbor_doc:
-                    neighbor_doc.metadata["graph_depth"] = 1
+                    neighbor_doc.metadata["graph_depth"] = depth
                     neighbor_doc.metadata["retrieval_mode"] = "graph_expanded"
                     result_docs.append(neighbor_doc)
             except (ValueError, RuntimeError, OSError, KeyError, ConnectionError, _VelesDBError) as exc:
                 logger.debug("Failed to fetch neighbour document %s: %s", neighbor_id, exc)
 
-    def _traverse_graph(self, source_id: int) -> List[int]:
+    def _traverse_graph(self, source_id: int) -> List[Tuple[int, int]]:
         """Traverse graph from source node, dispatching to native or REST.
 
         Args:
             source_id: Starting node ID.
 
         Returns:
-            List of neighbour node IDs.
+            ``(node_id, depth)`` pairs in traversal order, ``depth`` being
+            the number of hops from ``source_id``.
         """
         if self.mode == "native":
             return self._traverse_graph_native(source_id)
         return self._traverse_graph_rest(source_id)
 
-    def _traverse_graph_native(self, source_id: int) -> List[int]:
+    def _traverse_graph_native(self, source_id: int) -> List[Tuple[int, int]]:
         """Traverse graph using the native Python bindings.
 
         Args:
             source_id: Starting node ID.
 
         Returns:
-            List of neighbour node IDs.
+            ``(node_id, depth)`` pairs in traversal order.
         """
         results = self._graph_collection.traverse_bfs(
             source_id,
@@ -418,16 +422,16 @@ class GraphRetriever(BaseRetriever):
             limit=self.expand_k * 2,
             rel_types=self.rel_types or [],
         )
-        return [r["target_id"] for r in results]
+        return [(r["target_id"], r["depth"]) for r in results]
 
-    def _traverse_graph_rest(self, source_id: int) -> List[int]:
+    def _traverse_graph_rest(self, source_id: int) -> List[Tuple[int, int]]:
         """Traverse graph via the VelesDB REST API.
 
         Args:
             source_id: Starting node ID.
 
         Returns:
-            List of neighbour node IDs.
+            ``(node_id, depth)`` pairs in traversal order.
 
         Raises:
             requests.exceptions.Timeout: If the request exceeds ``timeout_ms``.
@@ -441,7 +445,7 @@ class GraphRetriever(BaseRetriever):
         )
         timeout_sec = self.timeout_ms / 1000.0
         response = requests.post(url, json=payload, timeout=timeout_sec)
-        return parse_graph_traverse_response(response)
+        return parse_graph_traverse_results(response)
 
     def _fetch_document(self, doc_id: int) -> Optional[Document]:
         """Fetch a document by ID from the vector store.

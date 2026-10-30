@@ -751,12 +751,36 @@ class TestGraphRetrieverSeedAndExpand:
         assert [r.node.node_id for r in results] == ["near", "mid", "far"]
         assert results[0].score > results[1].score
         assert [r.node.metadata["graph_depth"] for r in results] == [0, 0, 1]
+        assert results[2].score is None  # reached through the graph, not scored
 
     def test_given_room_when_retrieved_then_deeper_neighbour_follows_nearer_one(
         self, native_store
     ):
         nodes = _ranked_nodes(near_next="far", far_next="low")
         retriever = _graph_retriever(native_store, nodes, seed_k=1, expand_k=5, max_depth=2)
+
+        results = retriever.retrieve("query")
+
+        assert [r.node.node_id for r in results] == ["near", "far", "low"]
+        assert [r.node.metadata["graph_depth"] for r in results] == [0, 1, 2]
+        assert [r.score is None for r in results] == [False, True, True]
+
+    def test_given_unscored_neighbours_when_qa_retrieved_then_sorted_by_depth(
+        self, native_store
+    ):
+        """GraphQARetriever sorts on (depth, score); a ``None`` score must not break it."""
+        from llama_index.core import VectorStoreIndex
+        from llama_index.core.embeddings import MockEmbedding
+        from llamaindex_velesdb import GraphQARetriever
+
+        nodes = _ranked_nodes(near_next="far", far_next="low")
+        _graph_retriever(native_store, nodes)  # stores the nodes and their edges
+        index = VectorStoreIndex.from_vector_store(
+            native_store, embed_model=MockEmbedding(embed_dim=4)
+        )
+        retriever = GraphQARetriever(
+            index=index, mode="native", graph_collection_name="kg", seed_k=1, expand_k=5
+        )
 
         results = retriever.retrieve("query")
 
@@ -772,3 +796,45 @@ class TestGraphRetrieverSeedAndExpand:
         results = retriever.retrieve("query")
 
         assert [r.node.node_id for r in results] == ["near", "mid"]
+
+
+class TestGraphRetrieverRestDepth:
+    """REST mode reads each neighbour's depth from the server's response."""
+
+    def test_given_server_response_when_retrieved_then_real_depth_and_no_score(
+        self, monkeypatch
+    ):
+        import requests
+        from llama_index.core.schema import NodeWithScore, TextNode
+        from llamaindex_velesdb import GraphRetriever
+
+        body = {  # the server's TraverseResponse: ids serialised as strings
+            "results": [
+                {"target_id": "42", "depth": 1, "path": ["7"]},
+                {"target_id": "43", "depth": 2, "path": ["7", "8"]},
+            ],
+            "has_more": False,
+            "stats": {"visited": 3, "depth_reached": 2},
+        }
+        response = MagicMock(status_code=200)
+        response.json.return_value = body
+        monkeypatch.setattr(requests, "post", MagicMock(return_value=response))
+
+        index = MagicMock()
+        index.as_retriever.return_value.retrieve.return_value = [
+            NodeWithScore(node=TextNode(text="seed", id_="seed"), score=0.9)
+        ]
+
+        def get_nodes_by_int_ids(ids):
+            if not all(isinstance(i, int) for i in ids):  # as the binding refuses them
+                raise TypeError("'str' object cannot be interpreted as an integer")
+            return [TextNode(text=f"node {ids[0]}", id_=str(ids[0]))]
+
+        index._vector_store.get_nodes_by_int_ids.side_effect = get_nodes_by_int_ids
+        retriever = GraphRetriever(index=index, mode="rest", seed_k=1, expand_k=5)
+
+        results = retriever.retrieve("query")
+
+        assert [r.node.get_content() for r in results] == ["seed", "node 42", "node 43"]
+        assert [r.node.metadata["graph_depth"] for r in results] == [0, 1, 2]
+        assert [r.score for r in results] == [0.9, None, None]

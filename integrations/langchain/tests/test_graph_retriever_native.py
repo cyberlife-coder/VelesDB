@@ -419,6 +419,7 @@ class TestSeedAndExpand:
         docs = retriever.invoke("query")
 
         assert [d.page_content for d in docs] == ["near", "far", "low"]
+        assert [d.metadata["graph_depth"] for d in docs] == [0, 1, 2]
 
     def test_given_seed_k_above_expand_k_when_invoked_then_capped_at_expand_k(
         self, db_dir: str
@@ -428,3 +429,41 @@ class TestSeedAndExpand:
         docs = retriever.invoke("query")
 
         assert [d.page_content for d in docs] == ["near", "mid"]
+
+
+class TestRestDepth:
+    """REST mode reads each neighbour's depth from the server's response."""
+
+    def test_given_server_response_when_invoked_then_real_depth_and_int_ids(
+        self, monkeypatch
+    ) -> None:
+        from unittest.mock import MagicMock
+
+        import requests
+        from langchain_core.documents import Document
+
+        body = {  # the server's TraverseResponse: ids serialised as strings
+            "results": [
+                {"target_id": "42", "depth": 1, "path": ["7"]},
+                {"target_id": "43", "depth": 2, "path": ["7", "8"]},
+            ],
+            "has_more": False,
+            "stats": {"visited": 3, "depth_reached": 2},
+        }
+        response = MagicMock(status_code=200)
+        response.json.return_value = body
+        monkeypatch.setattr(requests, "post", MagicMock(return_value=response))
+
+        store = MagicMock()
+        store.similarity_search_with_relevance_scores.return_value = [
+            (Document(page_content="seed", metadata={"_int_id": 1}), 0.9)
+        ]
+        store.get_by_ids.side_effect = lambda ids: (
+            [Document(page_content=f"doc {ids[0]}")] if isinstance(ids[0], int) else []
+        )
+        retriever = GraphRetriever(vector_store=store, mode="rest", seed_k=1, expand_k=5)
+
+        docs = retriever.invoke("query")
+
+        assert [d.page_content for d in docs] == ["seed", "doc 42", "doc 43"]
+        assert [d.metadata["graph_depth"] for d in docs] == [0, 1, 2]

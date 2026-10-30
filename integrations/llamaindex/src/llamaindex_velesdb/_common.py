@@ -14,11 +14,13 @@ from velesdb_common.graph import (  # noqa: F401
     is_timeout_exception,
     open_native_graph,
     parse_graph_traverse_response,
+    parse_graph_traverse_results,
 )
 
 __all__ = [
     "make_initial_id_counter", "build_graph_rest_payload",
     "is_timeout_exception", "open_native_graph", "parse_graph_traverse_response",
+    "parse_graph_traverse_results",
     "open_database",
 ]
 
