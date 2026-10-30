@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
+  node relationships as edges.** The option was documented but never read, and
+  the call always returned `"edges": 0`. Each `SOURCE`, `PREVIOUS`, `NEXT`,
+  `PARENT` and `CHILD` relationship whose target is loaded by the same call
+  becomes an edge labelled with the kind's name, with a deterministic id, so a
+  reload writes nothing new and returns the same counts. A relationship whose
+  target is not in the call is skipped, never written as a dangling edge, and
+  counted in the new `skipped_relations` key of the result.
+
+### Fixed
+
+- **LlamaIndex `GraphLoader` writes to its native graph collection again.** It
+  opened a second `velesdb.Database` on the vector store's path, which core
+  refuses once the store holds it open (`VELES-031`), and silently fell back
+  to an in-memory graph store. It now reuses the store's own handle, as
+  `GraphRetriever` does. In native mode `add_node` now upserts the node into
+  the graph collection, with `_labels` for `MATCH`, instead of the vector
+  store's collection: core refuses an edge whose endpoints are not nodes of
+  the same collection, so `add_edge` between loader nodes failed there.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

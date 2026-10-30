@@ -284,8 +284,11 @@ Three graph helpers ship with the package: `GraphLoader` (build a knowledge
 graph over stored nodes), `GraphRetriever` (vector seed + graph expansion)
 and `GraphQARetriever` (adds depth-based re-ranking). Native mode talks to
 the VelesDB graph layer directly — no server required. Create the graph
-collection once with the core API, then link the **VelesDB point IDs** of
-stored nodes (the hash of each LlamaIndex node id, via
+collection once with the core API; the loader then writes nodes and edges
+into it. Core refuses an edge whose source or target is not a node of that
+graph collection, so add both endpoints first. For `GraphRetriever` to
+expand from a stored LlamaIndex node, its graph node id must be that node's
+**VelesDB point ID** (the hash of its LlamaIndex node id, via
 `velesdb_common.ids.stable_hash_id`):
 
 ```python
@@ -295,9 +298,33 @@ vector_store = VelesDBVectorStore(path="./velesdb_data", collection_name="docs")
 vector_store._get_db().create_graph_collection("kg")  # once
 
 loader = GraphLoader(vector_store, graph_collection_name="kg")
+loader.add_node(node_id=source_id, label="DOCUMENT")
+loader.add_node(node_id=target_id, label="DOCUMENT")
 loader.add_edge(edge_id=1, source=source_id, target=target_id, label="RELATES_TO")
 edges = loader.get_edges(label="RELATES_TO")
 ```
+
+`load_from_nodes` loads LlamaIndex nodes as graph nodes in one call, each with
+id `stable_hash_id(f"{node_label}:{node.node_id}")`. With
+`extract_relations=True` it also writes each node's `relationships` as edges,
+labelled with the relationship kind: `SOURCE`, `PREVIOUS`, `NEXT`, `PARENT`,
+`CHILD` (one edge per child):
+
+```python
+counts = loader.load_from_nodes(nodes, extract_relations=True)
+# e.g. {"nodes": 4, "edges": 6, "skipped_relations": 1}
+```
+
+- Only targets loaded by the same call are linked. A relationship whose target
+  is not among `nodes` (typically `SOURCE`, when the source document is not
+  loaded) is counted in `skipped_relations` and not written: no dangling edge.
+  Load linked nodes together.
+- Edge ids are deterministic, so loading the same nodes again writes nothing
+  new and returns the same counts. `edges` counts the distinct relationship
+  edges the graph holds for the call, written now or by an earlier load; an
+  edge that fails to write is logged and not counted.
+- With `extract_relations=False` (the default) no edge is written and both
+  `edges` and `skipped_relations` are 0.
 
 `GraphRetriever` finds seed nodes by vector search, then expands the context
 through the graph:

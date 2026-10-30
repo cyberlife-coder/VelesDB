@@ -19,7 +19,7 @@ Example:
     >>> edges = loader.get_edges(label="KNOWS")
 """
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 import logging
 
 from velesdb_common.ids import stable_hash_id
@@ -41,12 +41,41 @@ def _generate_id(name: str, entity_type: str) -> int:
     return stable_hash_id(f"{entity_type}:{name}")
 
 
-def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]:
-    """Open a native graph collection from the vector store's database path.
+def _store_db_path(vector_store: Any) -> Optional[str]:
+    """The database path a vector store exposes, or ``None``."""
+    for attr in ("_db_path", "_path", "path", "_data_path"):
+        candidate = getattr(vector_store, attr, None)
+        if candidate is not None:
+            return str(candidate)
+    return None
 
-    Reuses the vector store's ``_config`` (``velesdb.VelesConfigOptions``)
-    when present, so the graph database is opened with the same engine
-    configuration as the vector store.
+
+def _store_database(vector_store: Any) -> Optional[Any]:
+    """The ``velesdb.Database`` holding the vector store's data.
+
+    Reuses the store's own handle (``_get_db()``) when it exposes one: core
+    refuses a second ``Database`` on a path this process already holds open
+    (VELES-031), so opening one here would always fail once the store has
+    touched its database. ``GraphRetriever`` resolves its graph the same way.
+    Otherwise the database is opened on the store's path with the store's
+    ``_config`` (``velesdb.VelesConfigOptions``) when present.
+    """
+    get_db = getattr(vector_store, "_get_db", None)
+    if callable(get_db):
+        return get_db()
+
+    db_path = _store_db_path(vector_store)
+    if db_path is None:
+        logger.debug(
+            "Cannot open native graph collection: vector store has no "
+            "_get_db() and no _db_path / _path / path attribute."
+        )
+        return None
+    return _open_database(db_path, getattr(vector_store, "_config", None))
+
+
+def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]:
+    """Open a native graph collection in the vector store's database.
 
     Args:
         vector_store: VelesDBVectorStore instance.
@@ -55,31 +84,16 @@ def _open_native_graph(vector_store: Any, collection_name: str) -> Optional[Any]
     Returns:
         PyGraphCollection instance, or None if unavailable.
     """
-    db_path: Optional[str] = None
-    for attr in ("_db_path", "_path", "path", "_data_path"):
-        candidate = getattr(vector_store, attr, None)
-        if candidate is not None:
-            db_path = str(candidate)
-            break
-
-    if db_path is None:
-        logger.debug(
-            "Cannot open native graph collection: vector store has no "
-            "_db_path / _path / path attribute."
-        )
-        return None
-
-    config = getattr(vector_store, "_config", None)
-
     try:
-        db = _open_database(db_path, config)
+        db = _store_database(vector_store)
+        if db is None:
+            return None
         graph = db.get_graph_collection(collection_name)
         if graph is None:
             logger.debug(
-                "Graph collection '%s' not found at '%s'; "
-                "it will be created on first write.",
+                "Graph collection '%s' not found; edges go to the in-memory "
+                "graph store instead.",
                 collection_name,
-                db_path,
             )
         return graph
     except ImportError:
@@ -128,20 +142,69 @@ def _extract_graph_metadata(node: Any) -> Dict[str, Any]:
     return metadata
 
 
+def _related_node_ids(related: Any) -> List[str]:
+    """Node ids a relationship points at: one ``RelatedNodeInfo``, or a list (``CHILD``)."""
+    items = related if isinstance(related, list) else [related]
+    return [item.node_id for item in items]
+
+
+def _relation_edge(label: str, source_id: int, target_id: int) -> Dict[str, Any]:
+    """The edge for one relationship between two loaded graph nodes.
+
+    Its id derives from the label and both endpoints, the way the LangChain
+    loader derives a relation's, so reloading the same relationship always
+    names the same edge.
+    """
+    return {
+        "id": _generate_id(f"{source_id}->{target_id}", label),
+        "source": source_id,
+        "target": target_id,
+        "label": label,
+        "properties": {},
+    }
+
+
+def _relation_edges(
+    node: Any, source_id: int, graph_ids: Dict[str, int]
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Edges for ``node.relationships`` whose target is in ``graph_ids``.
+
+    Returns the edges and the number of relationships skipped because their
+    target is not in ``graph_ids`` (an edge to it would dangle).
+    """
+    edges: List[Dict[str, Any]] = []
+    skipped = 0
+    for kind, related in node.relationships.items():
+        for target in _related_node_ids(related):
+            target_id = graph_ids.get(target)
+            if target_id is None:
+                skipped += 1
+                logger.debug(
+                    "Skipping %s relationship %s -> %s: target not loaded in this call.",
+                    kind.name, node.node_id, target,
+                )
+                continue
+            edges.append(_relation_edge(kind.name, source_id, target_id))
+    return edges, skipped
+
+
 class GraphLoader:
     """Load entities and relations into VelesDB's Knowledge Graph.
 
     Provides methods to add nodes and edges to a VelesDB collection's
     graph layer, enabling Knowledge Graph construction from LlamaIndex data.
 
-    When ``graph_collection_name`` is provided, edges are written directly to
-    the persistent ``PyGraphCollection`` via the native Python bindings (no REST
-    server needed). Otherwise, the loader falls back to an in-memory graph store.
+    When ``graph_collection_name`` names an existing graph collection in the
+    vector store's database, nodes and edges are written directly to that
+    persistent ``PyGraphCollection`` via the native Python bindings (no REST
+    server needed). Otherwise, nodes go to the vector store's collection and
+    edges to an in-memory graph store.
 
     Args:
         vector_store: VelesDBVectorStore instance.
-        graph_collection_name: Name of the native graph collection to write edges
-            to. If ``None``, an in-memory graph store is used (legacy behaviour).
+        graph_collection_name: Name of the native graph collection to write
+            nodes and edges to. If ``None`` (or the collection does not exist),
+            an in-memory graph store is used (legacy behaviour).
 
     Example:
         >>> loader = GraphLoader(vector_store, graph_collection_name="kg")
@@ -184,11 +247,16 @@ class GraphLoader:
     ) -> None:
         """Add a node to the graph.
 
+        With a native graph collection the node is upserted into it, next to
+        the edges; otherwise it is stored in the vector store's collection.
+
         Args:
             node_id: Unique node ID.
             label: Node label (type, e.g., "PERSON", "DOCUMENT").
             metadata: Optional node properties.
-            vector: Optional embedding vector for the node.
+            vector: Optional embedding vector for the node. A native graph
+                collection created without embeddings stores the node
+                without it.
 
         Example:
             >>> loader.add_node(
@@ -197,9 +265,12 @@ class GraphLoader:
             ...     metadata={"name": "John", "age": 30}
             ... )
         """
-        collection = self._get_collection(dimension=len(vector) if vector else None)
-
         payload = {"label": label, **(metadata or {})}
+        if self._native_graph is not None:
+            self._add_native_node(node_id, payload, vector)
+            return
+
+        collection = self._get_collection(dimension=len(vector) if vector else None)
 
         if vector is not None:
             collection.upsert([{
@@ -212,6 +283,22 @@ class GraphLoader:
                 "id": node_id,
                 "payload": payload,
             }])
+
+    def _add_native_node(
+        self, node_id: int, payload: Dict[str, Any], vector: Optional[List[float]]
+    ) -> None:
+        """Upsert a node into the native graph collection.
+
+        Core refuses an edge whose source or target has no node in the same
+        collection (``NodeNotFound``, issue #1470), so nodes go where their
+        edges go: one graph collection, as the LangChain loader writes it.
+        ``_labels`` is what ``MATCH (n:LABEL)`` matches on.
+        """
+        if not self._native_graph.has_embeddings:
+            vector = None
+        self._native_graph.upsert_node(
+            node_id, {"_labels": [payload["label"]], **payload}, vector
+        )
 
     def add_edge(
         self,
@@ -306,34 +393,101 @@ class GraphLoader:
         node_label: str = "DOCUMENT",
         extract_relations: bool = False,
     ) -> Dict[str, int]:
-        """Load LlamaIndex nodes as graph nodes.
+        """Load LlamaIndex nodes as graph nodes, and optionally their relationships.
+
+        Each node becomes a graph node whose id is derived from ``node_label``
+        and its LlamaIndex ``node_id``.
+
+        With ``extract_relations=True``, every entry of a loaded node's
+        ``relationships`` (``SOURCE``, ``PREVIOUS``, ``NEXT``, ``PARENT``,
+        ``CHILD``) becomes an edge from that node to its target, labelled with
+        the relationship kind's name (``"NEXT"``, ...). Only targets loaded by
+        the same call are linked: a relationship whose target is not among
+        ``nodes`` (or failed to load) is skipped, counted in
+        ``skipped_relations``, and never written as a dangling edge. To link
+        across batches, load the linked nodes together. Edge ids are
+        deterministic, and an edge already in the graph is left as it is, so
+        loading the same nodes again writes nothing new and returns the same
+        counts. An edge that fails to write is logged and not counted.
 
         Args:
             nodes: List of LlamaIndex BaseNode objects.
             node_label: Label to assign to all nodes. Defaults to "DOCUMENT".
-            extract_relations: Whether to extract relations (requires NLP).
+            extract_relations: Write the nodes' relationships as edges.
+                Defaults to ``False`` (nodes only).
 
         Returns:
-            Dictionary with counts: {"nodes": n, "edges": m}.
+            Dictionary with counts: ``{"nodes": n, "edges": m,
+            "skipped_relations": k}`` — ``edges`` is the number of distinct
+            relationship edges the graph holds for this call (written now or
+            by an earlier load); both are 0 when ``extract_relations`` is
+            ``False``.
 
         Example:
             >>> from llama_index.core.schema import TextNode
             >>> nodes = [TextNode(text="Hello", id_="1")]
-            >>> counts = loader.load_from_nodes(nodes)
+            >>> counts = loader.load_from_nodes(nodes, extract_relations=True)
         """
-        nodes_added = 0
+        loaded = self._load_graph_nodes(nodes, node_label)
+        counts = {"nodes": len(loaded), "edges": 0, "skipped_relations": 0}
+        if extract_relations:
+            counts["edges"], counts["skipped_relations"] = self._load_relations(loaded)
+        return counts
 
+    def _load_graph_nodes(
+        self, nodes: List[Any], node_label: str
+    ) -> List[Tuple[Any, int]]:
+        """Add each node to the graph; return ``(node, graph id)`` for those added."""
+        loaded: List[Tuple[Any, int]] = []
         for node in nodes:
             node_id = _generate_id(node.node_id, node_label)
             metadata = _extract_graph_metadata(node)
 
             try:
                 self.add_node(node_id=node_id, label=node_label, metadata=metadata)
-                nodes_added += 1
+                loaded.append((node, node_id))
             except Exception as e:
                 logger.warning(f"Failed to add node {node.node_id}: {e}")
+        return loaded
 
-        return {"nodes": nodes_added, "edges": 0}
+    def _load_relations(self, loaded: List[Tuple[Any, int]]) -> Tuple[int, int]:
+        """Write the relationships among ``loaded`` nodes as edges.
+
+        Returns (distinct edges the graph holds, relationships skipped).
+        """
+        graph_ids = {node.node_id: graph_id for node, graph_id in loaded}
+        mirrored = {edge["id"] for edge in self._edges}
+        held: Set[int] = set()
+        skipped = 0
+        for node, graph_id in loaded:
+            edges, node_skipped = _relation_edges(node, graph_id, graph_ids)
+            skipped += node_skipped
+            held.update(e["id"] for e in edges if self._ensure_edge(e, mirrored))
+        if skipped:
+            logger.info(
+                "Skipped %d relationship(s) whose target was not loaded in this call.",
+                skipped,
+            )
+        return len(held), skipped
+
+    def _ensure_edge(self, edge: Dict[str, Any], mirrored: Set[int]) -> bool:
+        """Write ``edge`` unless the graph already holds its id.
+
+        ``mirrored`` is the set of edge ids in the in-memory list ``get_edges``
+        reads without a native graph; it keeps that list free of duplicates.
+        Returns True when the graph holds the edge, False if writing it failed.
+        """
+        store = self._native_graph if self._native_graph is not None else self._graph_store
+        try:
+            if store is not None and not store.has_edge(edge["id"]):
+                store.add_edge(edge)
+        except Exception as exc:
+            logger.warning("Failed to write %s edge %s: %s", edge["label"], edge["id"], exc)
+            return False
+        if edge["id"] not in mirrored:
+            self._edges.append(edge)
+            mirrored.add(edge["id"])
+        return True
 
     def _get_collection(self, dimension: Optional[int] = None):
         """Get or lazily initialize the underlying collection."""

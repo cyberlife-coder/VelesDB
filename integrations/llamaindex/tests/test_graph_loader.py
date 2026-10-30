@@ -406,3 +406,217 @@ class TestGraphRetriever:
 
         mock_vector_store.get_nodes_by_int_ids.assert_called_once_with([42])
         assert node == expected
+
+
+# ---------------------------------------------------------------------------
+# load_from_nodes(extract_relations=True), against the real velesdb binding.
+# ---------------------------------------------------------------------------
+
+_ALL_KINDS = {"SOURCE", "PREVIOUS", "NEXT", "PARENT", "CHILD"}
+
+
+def _graph_id(node_id: str, node_label: str = "DOCUMENT") -> int:
+    """The graph node id load_from_nodes derives for a LlamaIndex node id."""
+    from velesdb_common.ids import stable_hash_id
+
+    return stable_hash_id(f"{node_label}:{node_id}")
+
+
+def _linked_nodes():
+    """A document, a parent and two chunks linked by every relationship kind.
+
+    Six relationships: a -SOURCE-> doc, a -NEXT-> b, a -PARENT-> p,
+    b -PREVIOUS-> a, p -CHILD-> a, p -CHILD-> b.
+    """
+    from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
+
+    doc = TextNode(text="whole document", id_="doc")
+    parent = TextNode(text="section", id_="p")
+    a = TextNode(text="chunk a", id_="a")
+    b = TextNode(text="chunk b", id_="b")
+    a.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(node_id="doc")
+    a.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(node_id="b")
+    a.relationships[NodeRelationship.PARENT] = RelatedNodeInfo(node_id="p")
+    b.relationships[NodeRelationship.PREVIOUS] = RelatedNodeInfo(node_id="a")
+    parent.relationships[NodeRelationship.CHILD] = [
+        RelatedNodeInfo(node_id="a"),
+        RelatedNodeInfo(node_id="b"),
+    ]
+    return [doc, parent, a, b]
+
+
+def _edge_triples(edges):
+    return {(e["label"], e["source"], e["target"]) for e in edges}
+
+
+@pytest.fixture
+def native_store(tmp_path):
+    """A real vector store whose database holds a graph collection ``kg``."""
+    pytest.importorskip("velesdb")
+    from llamaindex_velesdb import VelesDBVectorStore
+
+    store = VelesDBVectorStore(path=str(tmp_path), collection_name="docs")
+    store._get_db().create_graph_collection("kg")
+    return store
+
+
+class TestLoadFromNodesExtractRelations:
+    """``extract_relations=True`` turns ``BaseNode.relationships`` into edges."""
+
+    def test_given_store_db_open_when_loader_built_then_native_graph_is_shared(
+        self, native_store
+    ):
+        """A second Database on the store's path is refused (VELES-031), so the
+        loader must reuse the store's own handle to reach the graph collection."""
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+
+        assert loader._native_graph is not None
+
+    def test_given_native_graph_when_node_added_then_stored_beside_its_edges(
+        self, native_store
+    ):
+        """Core refuses an edge whose endpoints have no node in the same
+        collection (#1470), so a native-mode node lands in the graph collection."""
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        loader.add_node(node_id=1, label="PERSON", metadata={"name": "Ada"})
+        loader.add_node(node_id=2, label="PERSON", metadata={"name": "Alan"})
+        loader.add_edge(edge_id=10, source=1, target=2, label="KNOWS")
+
+        payload = loader._native_graph.get_node_payload(1)
+        assert payload == {"_labels": ["PERSON"], "label": "PERSON", "name": "Ada"}
+        assert _edge_triples(loader.get_edges()) == {("KNOWS", 1, 2)}
+
+    def test_given_every_relationship_kind_when_extracted_then_one_edge_each(
+        self, native_store
+    ):
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        counts = loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+
+        assert counts == {"nodes": 4, "edges": 6, "skipped_relations": 0}
+        edges = loader.get_edges()
+        assert {e["label"] for e in edges} == _ALL_KINDS
+        assert _edge_triples(edges) == {
+            ("SOURCE", _graph_id("a"), _graph_id("doc")),
+            ("NEXT", _graph_id("a"), _graph_id("b")),
+            ("PARENT", _graph_id("a"), _graph_id("p")),
+            ("PREVIOUS", _graph_id("b"), _graph_id("a")),
+            ("CHILD", _graph_id("p"), _graph_id("a")),
+            ("CHILD", _graph_id("p"), _graph_id("b")),
+        }
+
+    def test_given_custom_node_label_when_extracted_then_edges_join_labelled_ids(
+        self, native_store
+    ):
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        loader.load_from_nodes(_linked_nodes(), node_label="CHUNK", extract_relations=True)
+
+        next_edges = loader.get_edges(label="NEXT")
+        assert _edge_triples(next_edges) == {
+            ("NEXT", _graph_id("a", "CHUNK"), _graph_id("b", "CHUNK")),
+        }
+
+    def test_given_loaded_relations_when_reloaded_then_graph_unchanged(
+        self, native_store
+    ):
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        first = loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+        edges_before = loader.get_edges()
+
+        second = loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+
+        assert len(edges_before) == first["edges"] == 6
+        assert second == first
+        assert sorted(e["id"] for e in loader.get_edges()) == sorted(
+            e["id"] for e in edges_before
+        )
+
+    def test_given_persisted_relations_when_reloaded_after_reopen_then_same_edge_ids(
+        self, tmp_path
+    ):
+        pytest.importorskip("velesdb")
+        import gc
+
+        from llamaindex_velesdb import GraphLoader, VelesDBVectorStore
+
+        store = VelesDBVectorStore(path=str(tmp_path), collection_name="docs")
+        store._get_db().create_graph_collection("kg")
+        GraphLoader(store, graph_collection_name="kg").load_from_nodes(
+            _linked_nodes(), extract_relations=True
+        )
+        del store
+        gc.collect()  # release the database lock before reopening
+
+        reopened = VelesDBVectorStore(path=str(tmp_path), collection_name="docs")
+        loader = GraphLoader(reopened, graph_collection_name="kg")
+        ids_before = sorted(e["id"] for e in loader.get_edges())
+        counts = loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+
+        assert len(ids_before) == 6
+        assert counts == {"nodes": 4, "edges": 6, "skipped_relations": 0}
+        assert sorted(e["id"] for e in loader.get_edges()) == ids_before
+
+    def test_given_targets_not_in_the_call_when_extracted_then_skipped_and_reported(
+        self, native_store
+    ):
+        from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
+        from llamaindex_velesdb import GraphLoader
+
+        a = TextNode(text="chunk a", id_="a")
+        a.relationships[NodeRelationship.NEXT] = RelatedNodeInfo(node_id="missing")
+        a.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(node_id="unloaded-doc")
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        counts = loader.load_from_nodes([a], extract_relations=True)
+
+        assert counts == {"nodes": 1, "edges": 0, "skipped_relations": 2}
+        assert loader.get_edges() == []
+
+    def test_given_extract_relations_false_when_loaded_then_no_edges_written(
+        self, native_store
+    ):
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store, graph_collection_name="kg")
+        counts = loader.load_from_nodes(_linked_nodes())
+
+        assert counts == {"nodes": 4, "edges": 0, "skipped_relations": 0}
+        assert loader.get_edges() == []
+
+    def test_given_no_graph_collection_when_reloaded_then_in_memory_edges_not_duplicated(
+        self, native_store
+    ):
+        from llamaindex_velesdb import GraphLoader
+
+        loader = GraphLoader(native_store)  # in-memory GraphStore fallback
+        loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+        counts = loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+
+        assert counts["edges"] == 6
+        assert len(loader.get_edges()) == 6
+        assert loader._graph_store.edge_count() == 6
+
+    def test_given_edge_write_fails_when_extracted_then_edge_not_counted(self):
+        """A failed write is logged and left out of the count, never raised."""
+        from llamaindex_velesdb import GraphLoader
+
+        mock_store = MagicMock()
+        loader = GraphLoader(mock_store)
+        native = MagicMock()
+        native.has_edge.return_value = False
+        native.add_edge.side_effect = RuntimeError("disk full")
+        loader._native_graph = native
+
+        counts = loader.load_from_nodes(_linked_nodes(), extract_relations=True)
+
+        assert counts == {"nodes": 4, "edges": 0, "skipped_relations": 0}
+        assert loader._edges == []
