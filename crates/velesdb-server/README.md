@@ -116,7 +116,7 @@ The short version:
 | Config file | `VELESDB_CONFIG` or `--config` | `./velesdb.toml` if present |
 | Worker threads | `[server] workers` | one per CPU |
 | Largest request body | `[server] max_body_size` (bytes) | 100 MiB on point upload, 2 MiB elsewhere |
-| CORS | `[server] cors_enabled`, `cors_origins` (or the `[cors]` table) | on, any origin |
+| CORS | `[server] cors_origins` (or `[cors] allowed_origins`); `cors_enabled` switches it off | no CORS header: same origin only |
 | Logs | `[logging] level` / `format` / `file`; `VELESDB_LOGGING_LEVEL`; `RUST_LOG` overrides both levels | `info,tower_http=debug`, text, stdout |
 
 Configuration priority, highest first: **CLI flags > environment variables >
@@ -157,7 +157,7 @@ unversioned `/…` form is kept for backward compatibility — its responses car
 - **One process per data directory.** The engine takes an exclusive OS-level lock on `<data_dir>/velesdb.lock`. There is no built-in clustering, replication, or sharding: scale vertically, or shard at the application level. See [CONCURRENCY_LOCKING.md](../../docs/guides/CONCURRENCY_LOCKING.md).
 - **Authentication is a flat list of API keys.** No users, no roles, no per-collection scoping. Keys are read at startup, so rotation requires a restart (both old and new key can be active during the transition).
 - **Rate limiting is per process and in memory.** Replicas do not share a budget; put a shared limiter in front if you need a global one.
-- **CORS is permissive by default** (`cors_origins = ["*"]`); the server warns about it at startup. List exact origins in `[server] cors_origins` before exposing a browser-facing deployment, or set `cors_enabled = false` when no browser talks to it directly ([why](../../docs/guides/SERVER_SECURITY.md#6-cors)).
+- **CORS is off by default**: no CORS header is sent, so a browser front end on another origin needs its exact origin in `[server] cors_origins`; `["*"]` restores allow-all, with a startup warning ([why](../../docs/guides/SERVER_SECURITY.md#6-cors)).
 - **Swagger UI is opt-in at build time** (`--features swagger-ui`); the released default build does not serve `/swagger-ui` or `/api-docs/openapi.json`. Building with that feature needs network access: `utoipa-swagger-ui`'s build script downloads the Swagger UI distribution, so it fails in air-gapped builds. Offline, skip the feature and point any OpenAPI viewer at [docs/openapi.json](../../docs/openapi.json) instead.
 - **The `/v1` prefix is added by the binary.** Embedding `velesdb_server::routes::api_routes()` in your own Axum application gives you the unversioned routes; nest them yourself if you want the versioned form.
 - Engine-level limits (query length caps, GROUP BY ceilings, scan caps) are listed in [docs/reference/KNOWN_LIMITATIONS.md](../../docs/reference/KNOWN_LIMITATIONS.md).

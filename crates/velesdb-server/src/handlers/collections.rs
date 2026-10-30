@@ -345,9 +345,9 @@ fn dispatch_create(
             // with `metric`; without it the graph has none, and `metric`
             // has nothing to apply to.
             Ok(match req.dimension {
-                Some(dimension) => state.db.create_graph_collection_with_embeddings(
-                    &req.name, schema, dimension, metric,
-                ),
+                Some(dimension) => state
+                    .db
+                    .create_graph_collection_with_embeddings(&req.name, schema, dimension, metric),
                 None => state.db.create_graph_collection(&req.name, schema),
             })
         }

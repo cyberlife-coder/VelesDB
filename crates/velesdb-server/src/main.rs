@@ -134,10 +134,16 @@ fn log_cors_config(cors: &CorsConfig) {
              so browsers refuse cross-origin reads; CORS origin, method and header \
              settings are not applied"
         );
+    } else if cors.allowed_origins.is_empty() {
+        tracing::info!(
+            "CORS: no origin configured, so no CORS header is sent and only \
+             same-origin pages can read responses. List a browser front end's \
+             origin in [server] cors_origins."
+        );
     } else if cors.is_permissive() {
         tracing::warn!(
-            "CORS is permissive (all origins allowed). Set [server] cors_origins \
-             (or [cors] allowed_origins) in velesdb.toml for production."
+            "CORS is permissive (cors_origins = [\"*\"]: any web page can read \
+             responses). List exact origins in [server] cors_origins for production."
         );
     } else {
         tracing::info!(

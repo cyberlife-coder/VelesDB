@@ -20,18 +20,20 @@ pub(crate) struct CorsSection {
 
 /// CORS configuration for the server.
 ///
-/// When `allowed_origins` is `["*"]`, the server uses a fully permissive
-/// CORS policy (equivalent to `CorsLayer::permissive()`). Otherwise, only the
-/// listed origins are allowed, each compared byte for byte with the
-/// request's `Origin` header. `enabled = false` installs no CORS layer at
-/// all, so browsers refuse cross-origin reads.
+/// With no origin listed — the default — or `enabled = false`, the server
+/// installs no CORS layer: no CORS header is sent, and browsers let only
+/// same-origin pages read its responses. `["*"]`, written explicitly, is the
+/// fully permissive policy (`CorsLayer::permissive()`). Any other list allows
+/// exactly those origins, each compared byte for byte with the request's
+/// `Origin` header.
 ///
-/// Defaults to enabled and permissive (`["*"]`) for backward compatibility.
+/// The default was `["*"]` up to 7.1.0; a database reachable from every web
+/// page its user visits is not a default (see `docs/guides/SERVER_SECURITY.md`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CorsConfig {
     /// Whether the server answers CORS at all (`[server] cors_enabled`).
     pub enabled: bool,
-    /// Allowed origins. Use `["*"]` for permissive mode.
+    /// Allowed origins; empty (the default) allows none, `["*"]` allows all.
     pub allowed_origins: Vec<String>,
     /// Allowed HTTP methods (e.g. `["GET", "POST"]`).
     pub allowed_methods: Vec<String>,
@@ -51,7 +53,7 @@ impl Default for CorsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            allowed_origins: vec!["*".to_string()],
+            allowed_origins: Vec::new(),
             allowed_methods: vec![
                 "GET".to_string(),
                 "POST".to_string(),
@@ -68,6 +70,12 @@ impl Default for CorsConfig {
 }
 
 impl CorsConfig {
+    /// Returns `true` when the server answers CORS at all: enabled, with at
+    /// least one origin listed.
+    pub fn is_active(&self) -> bool {
+        self.enabled && !self.allowed_origins.is_empty()
+    }
+
     /// Returns `true` when CORS is in fully permissive mode (any origin).
     pub fn is_permissive(&self) -> bool {
         self.allowed_origins.iter().any(|o| o == "*")
@@ -152,13 +160,13 @@ pub(crate) fn resolve_cors(
 }
 
 /// Wraps `router` in the CORS layer `cors` describes, or returns it
-/// untouched when `cors.enabled` is `false` — no CORS header is then sent,
-/// and browsers refuse every cross-origin read.
+/// untouched when [`CorsConfig::is_active`] is `false` — no CORS header is
+/// then sent, and browsers refuse every cross-origin read.
 pub fn apply_cors<S>(router: axum::Router<S>, cors: &CorsConfig) -> axum::Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    if cors.enabled {
+    if cors.is_active() {
         router.layer(build_cors_layer(cors))
     } else {
         router

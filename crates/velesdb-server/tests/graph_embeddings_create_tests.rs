@@ -40,7 +40,10 @@ async fn call(app: &Router, method: &str, uri: &str, body: &Value) -> (StatusCod
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("test: body");
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 async fn create(app: &Router, body: &Value) {
@@ -99,10 +102,18 @@ async fn test_graph_created_with_dimension_and_metric_searches_with_them() {
         .iter()
         .filter_map(|r| r["id"].as_str())
         .collect();
-    assert_eq!(ids, ["2", "1"], "euclidean ranks the near node first: {found}");
+    assert_eq!(
+        ids,
+        ["2", "1"],
+        "euclidean ranks the near node first: {found}"
+    );
 
     let (status, body) = search_ids(&app, &[1.0, 0.0, 0.0]).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "a 3-d query on a 4-d graph: {body}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a 3-d query on a 4-d graph: {body}"
+    );
 }
 
 /// Positive control for the metric: the same nodes under cosine rank the

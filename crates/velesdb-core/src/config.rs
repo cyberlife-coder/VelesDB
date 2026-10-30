@@ -554,11 +554,15 @@ impl VelesConfig {
     /// As with [`Self::load_from_path`], `VELESDB_*` environment variables
     /// are layered on top of the (filtered) file and can still override an
     /// engine value — e.g. `VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a
-    /// `[limits] max_collections` from the file. Env vars for non-engine
-    /// sections (`VELESDB_SERVER_*`, `VELESDB_LOGGING_*`, ...) are
-    /// harmless here: they don't match any field once those sections are
-    /// filtered out of the base document, so they're ignored the same way
-    /// an unrecognised key always is.
+    /// `[limits] max_collections` from the file. The environment is filtered
+    /// the same way the file is, by [`Self::is_engine_path`]: a variable for
+    /// a non-engine section (`VELESDB_SERVER_*`, `VELESDB_LOGGING_*`) is not
+    /// read here at all. It used to be — `server` and `logging` are fields of
+    /// this struct, so such a variable reached them and was validated against
+    /// rules for values this loader never applies: `VELESDB_SERVER_PORT=80`
+    /// stopped `velesdb-server` (which binds `VELESDB_PORT`) with
+    /// `server.port must be >= 1024`. Those sections belong to the hosting
+    /// shell, which reads and validates them once, itself.
     ///
     /// # Errors
     ///
@@ -571,9 +575,22 @@ impl VelesConfig {
         let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(&filtered))
-            .merge(Self::env_provider());
+            .merge(Self::env_provider().filter(|path| Self::is_engine_path(path.as_str())));
 
         Self::finish(&figment)
+    }
+
+    /// Whether a mapped config path (`section.field`, as
+    /// [`Self::env_key_to_config_path`] produces it) belongs to an engine
+    /// section, or to a section a release removed — kept, as in
+    /// [`Self::filter_to_engine_sections`], so its removal warning still
+    /// fires. Everything else, including a name that maps to no section at
+    /// all, is the hosting shell's.
+    pub(crate) fn is_engine_path(path: &str) -> bool {
+        path.split_once('.').is_some_and(|(section, _)| {
+            Self::ENGINE_SECTIONS.contains(&section)
+                || crate::config_removed::removed_sections().any(|removed| removed == section)
+        })
     }
 
     /// Extracts a [`Self`] from an assembled [`Figment`] and validates it.

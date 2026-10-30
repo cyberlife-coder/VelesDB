@@ -282,16 +282,18 @@ workers = 0
 # Default: 104857600 (100 MiB)
 max_body_size = 104857600
 
-# Répondre au CORS. false = aucun en-tête CORS : les navigateurs refusent
-# toute lecture cross-origin.
+# Interrupteur général du CORS. false = aucun en-tête CORS, quelles que
+# soient les origines listées.
 # Default: true
 cors_enabled = true
 
 # Origines CORS autorisées, comparées exactement à l'en-tête Origin
-# ("scheme://host[:port]", sans chemin ni "/" final). ["*"] = toutes.
+# ("scheme://host[:port]", sans chemin ni "/" final). ["*"] = toutes, à
+# écrire explicitement. Vide (défaut) = aucun en-tête CORS : seules les pages
+# servies par le serveur lui-même (même origine) peuvent lire ses réponses.
 # Même liste que [cors] allowed_origins : n'en définir qu'une des deux.
-# Default: ["*"]
-cors_origins = ["*"]
+# Default: []
+cors_origins = ["https://app.example.com"]
 
 # -----------------------------------------------------------------------------
 # AUTHENTICATION (velesdb-server uniquement)
@@ -451,13 +453,12 @@ They have no effect on an embedded engine:
 
 `[server] workers`, `max_body_size`, `cors_enabled`, `cors_origins` and
 `[logging] format` / `file` have no variable: set them in the file.
-`VELESDB_SERVER_*` names (`VELESDB_SERVER_PORT`, ...) are **not** read by the
-server; they address `VelesConfig`'s own `server` fields, which nothing
-applies.
-
-`VELESDB_LOGGING_LEVEL` is also seen by the engine loader whenever a config
-file is loaded, and validated by it with the same rule: one of the five level
-names, in lower case.
+`VELESDB_SERVER_*` names (`VELESDB_SERVER_PORT`, ...) are **not** read by
+`velesdb-server`, and the engine loader both binaries use
+(`VelesConfig::load_from_path_engine_only`) ignores every variable outside the
+engine sections, so they do nothing — and, unlike up to 7.1.0, they can no
+longer fail the engine's validation either. Each `[server]`/`[logging]`
+setting is read and validated once, by the server.
 
 ### Name Mapping
 
@@ -650,8 +651,8 @@ unaffected.
 | `workers` | int | — | — | `0` | Tokio worker threads; `0` = one per CPU. Range `0`–`4096` |
 | `max_body_size` | int | — | — | `104857600` | Largest request body, in bytes (see below). Range `1`–`1073741824` |
 | `rate_limit` | int | `VELESDB_RATE_LIMIT` | `--rate-limit` | `100` | Max req/s per IP (0=disabled) |
-| `cors_enabled` | bool | — | — | `true` | Answer CORS at all; `false` sends no CORS header |
-| `cors_origins` | array | — | — | `["*"]` | Allowed origins, matched exactly; `["*"]` = any (same list as `[cors] allowed_origins`) |
+| `cors_enabled` | bool | — | — | `true` | Master switch; `false` sends no CORS header whatever the origins |
+| `cors_origins` | array | — | — | `[]` | Allowed origins, matched exactly; `["*"]` = any; empty = no CORS header (same list as `[cors] allowed_origins`) |
 
 **`workers`** sizes the Tokio runtime the server runs on. With `0` (or the key
 absent) Tokio picks one worker per CPU, which is what the server always did;
@@ -668,16 +669,19 @@ lower it, not raise it. `POST /collections/{name}/points/stream` reads its
 NDJSON body line by line without buffering it, and no body limit applies to
 it.
 
-**`cors_enabled` / `cors_origins`.** By default the server answers CORS for
-every origin (`*`), as it always has, and warns about it at startup. A list
-restricts it to exactly those origins: each entry is `scheme://host[:port]`,
+**`cors_enabled` / `cors_origins`.** By default no origin is listed and the
+server sends no CORS header, so only pages it serves itself (same origin) can
+read its responses — up to 7.1.0 it allowed every origin. A list allows
+exactly those origins, and `["*"]`, written explicitly, allows every origin
+(with a startup warning): each entry is `scheme://host[:port]`,
 compared byte for byte with the browser's `Origin` header, so
 `https://app.example.com` does not admit `https://app.example.com.evil.net`
 or `http://app.example.com`. An entry with a path or a trailing `/` (which no
 browser ever sends), `"*"` mixed into a list, or both `cors_origins` and
 `[cors] allowed_origins` set, are refused at startup. `cors_enabled = false`
-installs no CORS layer: no `Access-Control-*` header is sent and browsers
-refuse every cross-origin read; non-browser clients are unaffected. The
+installs no CORS layer whatever the list says: no `Access-Control-*` header is
+sent and browsers refuse every cross-origin read. Non-browser clients are
+unaffected either way. The
 methods, headers, credentials and preflight cache are set in the `[cors]`
 table, described in [SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md#4-cors); the
 security trade-off is in [SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors).

@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (behaviour): `velesdb-server` sends no CORS header unless origins
+  are configured.** 7.1.0 answered every origin with
+  `Access-Control-Allow-Origin: *` by default, so any web page open in a
+  browser that could reach the server — every site a local-first user visits,
+  for a server on `127.0.0.1` — could read and, without API keys, write
+  through it. The default is now same-origin only. A browser front end on
+  another origin needs its exact origin in `[server] cors_origins` (or
+  `[cors] allowed_origins`); `cors_origins = ["*"]`, written explicitly,
+  restores allow-all, with the startup warning it always had. Non-browser
+  clients are unaffected. Migration: `docs/guides/MIGRATION_v8.0.0.md`,
+  section 2.
+
 ### Fixed
 
 - **`velesdb-server` applies the `[server]` and `[logging]` settings
-  `docs/guides/CONFIGURATION.md` documents.** `workers`, `max_body_size`,
-  `cors_enabled`, `cors_origins` and the whole `[logging]` table were
-  documented and dropped without a word: no field read them, and the body
+  `docs/guides/CONFIGURATION.md` documents.** In 7.1.0 `workers`,
+  `max_body_size`, `cors_enabled`, `cors_origins` and the whole `[logging]`
+  table were documented and dropped without a word: no field read them, and the body
   limit, the worker count and the log filter were hard-wired. Each now does
   what the guide says, and the guide says what each does:
   - `[server] workers` sizes the Tokio runtime, which `main` now builds after
@@ -23,10 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `.../points/raw`, capped at 2 MiB on every other route as before. A larger
     body gets `413`. `velesdb_server::routes::api_routes_with_body_limit` is
     the router with that limit; `api_routes()` keeps the defaults.
-  - `[server] cors_enabled` (default `true`, so the permissive default stays)
-    removes the CORS layer when `false`; `[server] cors_origins` is the same
-    exact-match list as `[cors] allowed_origins`, and setting both is refused.
-    The guide used to give `cors_enabled` a default of `false`.
+  - `[server] cors_enabled` (default `true`) is a master switch that removes
+    the CORS layer when `false`; `[server] cors_origins` is the same
+    exact-match list as `[cors] allowed_origins`, and setting both is refused
+    (its default changed too, see Changed above).
   - `[logging] level`, `format` (`text` or `json`, one object per line) and
     `file` (appended to; empty = stdout) configure the subscriber, as does
     `VELESDB_LOGGING_LEVEL`. Precedence: `RUST_LOG` > `VELESDB_LOGGING_LEVEL` >
@@ -47,13 +61,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The guide's environment examples used `VELESDB_SERVER_PORT` /
     `VELESDB_SERVER_HOST`, which the server never read; they now use
     `VELESDB_PORT` / `VELESDB_HOST`.
-  - The Docker image and `docker-compose.yml` no longer set `RUST_LOG=info`,
+  - `VelesConfig::load_from_path_engine_only` reads only the environment
+    variables of engine sections. In 7.1.0 a `VELESDB_SERVER_*` or
+    `VELESDB_LOGGING_*` variable reached `VelesConfig`'s own `server` /
+    `logging` fields and was validated there, so `VELESDB_SERVER_PORT=80`
+    stopped `velesdb-server` (whose port is `VELESDB_PORT`) with
+    `server.port must be >= 1024` whenever a config file was loaded. Those
+    variables now have one owner, the hosting shell.
+  - The Docker image and `docker-compose.yml` no longer set `RUST_LOG=info`
+    (7.1.0 did),
     which outranked `[logging] level` and `VELESDB_LOGGING_LEVEL` in every
     container. Unset, the image logs at the server default: `info`, plus
     `tower_http`'s per-request debug lines.
 
 - **`POST /collections` with `collection_type: "graph"` honours `dimension`
-  and `metric`.** The handler created every graph collection without
+  and `metric`.** In 7.1.0 the handler created every graph collection without
   embeddings and with cosine, whatever the body said; `dimension` now gives the
   nodes embeddings of that dimension (core's
   `create_graph_collection_with_embeddings`), searched with `metric`. Without

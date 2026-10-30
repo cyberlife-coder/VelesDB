@@ -135,8 +135,10 @@ Equivalent settings: `VELESDB_RATE_LIMIT`, or `[server] rate_limit` in
 
 ## 4. CORS
 
-CORS defaults to **permissive** (`allowed_origins = ["*"]`), which is why the
-server logs a warning at startup. Restrict it in `velesdb.toml`:
+CORS is **off by default**: with no origin configured the server sends no CORS
+header, so only pages served from its own origin can read its responses (7.1.0
+allowed every origin). A browser front end on another origin needs its origin
+listed in `velesdb.toml`:
 
 ```toml
 [cors]
@@ -148,8 +150,10 @@ max_age_secs = 3600
 ```
 
 Keys are read from the `[cors]` table by
-`crates/velesdb-server/src/config.rs`. `allowed_origins = ["*"]` selects the
-fully permissive policy; any other list restricts to those origins exactly,
+`crates/velesdb-server/src/cors.rs`. `allowed_origins = ["*"]`, written
+explicitly, selects the fully permissive policy (with a startup warning); an
+empty list, the default, installs no CORS layer; any other list allows those
+origins exactly,
 each one `scheme://host[:port]` compared byte for byte with the browser's
 `Origin` header. An origin with a path or a trailing `/`, `"*"` inside a list,
 or a method or header name that does not parse stops the server at startup.
@@ -158,10 +162,10 @@ or a method or header name that does not parse stops the server at startup.
 
 | Key | Default | Effect |
 |-----|---------|--------|
-| `cors_origins` | `["*"]` | The same list as `[cors] allowed_origins`; setting both is refused at startup |
-| `cors_enabled` | `true` | `false` installs no CORS layer: no CORS header is sent, browsers refuse cross-origin reads |
+| `cors_origins` | `[]` | The same list as `[cors] allowed_origins`; setting both is refused at startup |
+| `cors_enabled` | `true` | Master switch: `false` installs no CORS layer whatever the list says |
 
-What the permissive default exposes, and when to turn CORS off, is in
+Why the default is closed, and what allow-all exposes, is in
 [SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors).
 
 ---

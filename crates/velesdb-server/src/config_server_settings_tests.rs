@@ -25,7 +25,10 @@ fn test_defaults_keep_the_behaviour_of_an_unconfigured_server() {
     let cfg = from_file("");
     assert_eq!(cfg.workers, 0, "0 = one worker per CPU, as #[tokio::main]");
     assert_eq!(cfg.max_body_size, 100 * 1024 * 1024);
-    assert!(cfg.cors.enabled && cfg.cors.is_permissive());
+    assert!(
+        cfg.cors.enabled && !cfg.cors.is_active(),
+        "same-origin only"
+    );
     assert_eq!(cfg.logging.level, None);
     assert_eq!(cfg.logging.format, LogFormat::Text);
     assert_eq!(cfg.logging.file, None);

@@ -130,3 +130,51 @@ fn test_a_name_merely_starting_with_a_section_is_not_split() {
     assert_eq!(path_of("SEARCHING_FOR"), "searching_for");
     assert_eq!(path_of("SERVERLESS_MODE"), "serverless_mode");
 }
+
+// -------------------------------------------------------------------------
+// The engine-only loader's environment filter
+// -------------------------------------------------------------------------
+
+/// `load_from_path_engine_only` reads only the variables this accepts. A
+/// hosting shell's `[server]`/`[logging]` variables must not reach this
+/// struct's same-named fields, where they were validated against rules for
+/// values the engine never applies (`VELESDB_SERVER_PORT=80` refused the
+/// server's startup with `server.port must be >= 1024`).
+#[test]
+fn test_engine_only_env_filter_keeps_engine_sections_and_drops_the_shells() {
+    for engine in [
+        "LIMITS_MAX_COLLECTIONS",
+        "HNSW_EF_CONSTRUCTION",
+        "SEARCH_DEFAULT_MODE",
+    ] {
+        assert!(
+            VelesConfig::is_engine_path(&path_of(engine)),
+            "{engine} must reach the engine"
+        );
+    }
+    for shell in [
+        "SERVER_PORT",
+        "SERVER_WORKERS",
+        "LOGGING_LEVEL",
+        "HOST",
+        "CONFIG",
+    ] {
+        assert!(
+            !VelesConfig::is_engine_path(&path_of(shell)),
+            "{shell} belongs to the hosting shell"
+        );
+    }
+}
+
+/// A removed section stays visible to the loader, so its warning fires.
+#[test]
+fn test_engine_only_env_filter_keeps_removed_sections() {
+    assert!(
+        crate::config_removed::removed_sections().next().is_some(),
+        "no removed section to check against"
+    );
+    for removed in crate::config_removed::removed_sections() {
+        let name = format!("{}_SOME_FIELD", removed.to_ascii_uppercase());
+        assert!(VelesConfig::is_engine_path(&path_of(&name)), "{name}");
+    }
+}

@@ -231,11 +231,29 @@ fn test_cors_enabled_false_sends_no_cors_headers_at_all() {
     assert_eq!(allow_origin(&response), None, "{response}");
 }
 
-/// Today's default, kept: with nothing configured, any origin is allowed.
+/// The default is same-origin only: with no origin configured the server
+/// sends no CORS header, so no other web page can read its responses.
 #[test]
-fn test_without_cors_settings_the_policy_stays_permissive() {
+fn test_without_cors_settings_no_cors_header_is_sent() {
     let home = TempDir::new().expect("tempdir");
     let server = start(&home, "[server]\n", &[]);
+
+    let response = send(
+        &server,
+        "GET",
+        "/health",
+        &["origin: https://app.example.com"],
+        b"",
+    );
+    assert_eq!(status_of(&response), "200", "{response}");
+    assert_eq!(allow_origin(&response), None, "{response}");
+}
+
+/// Allow-all is still available, but only when written down.
+#[test]
+fn test_an_explicit_wildcard_allows_every_origin() {
+    let home = TempDir::new().expect("tempdir");
+    let server = start(&home, "[server]\ncors_origins = [\"*\"]\n", &[]);
 
     let response = send(
         &server,
@@ -298,4 +316,28 @@ fn test_velesdb_logging_level_overrides_the_file_level() {
         !contents.contains("\u{1b}["),
         "no ANSI colours in a file:\n{contents}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// VELESDB_SERVER_* / VELESDB_LOGGING_* belong to the server, not the engine
+// ---------------------------------------------------------------------------
+
+/// `VELESDB_SERVER_PORT` is not a server variable (the port is
+/// `VELESDB_PORT`), and the engine loader must not read it either: with a
+/// config file present it used to reach core's own `server.port` and stop
+/// the server with `server.port must be >= 1024`.
+#[test]
+fn test_a_shell_owned_variable_does_not_reach_the_engine_loader() {
+    let home = TempDir::new().expect("tempdir");
+    let server = start(
+        &home,
+        "[search]\ndefault_mode = \"fast\"\n",
+        &[
+            ("VELESDB_SERVER_PORT", "80"),
+            ("VELESDB_SERVER_WORKERS", "999999"),
+        ],
+    );
+
+    let response = send(&server, "GET", "/health", &[], b"");
+    assert_eq!(status_of(&response), "200", "{response}");
 }

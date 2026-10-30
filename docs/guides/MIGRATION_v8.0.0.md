@@ -99,6 +99,22 @@ applying them: `rate_limit_qps`, `circuit_failure_threshold` and
 `circuit_recovery_seconds`. A limit you configured can start rejecting
 requests.
 
+### `velesdb-server` (REST)
+
+- **CORS is off unless configured.** 7.1.0 answered CORS for every origin by
+  default; 8.0.0 sends no CORS header until origins are listed, so a browser
+  page served from another origin can no longer read the server's responses.
+  **Fix:** list the front end's exact origins in `[server] cors_origins` (or
+  `[cors] allowed_origins`), or write `cors_origins = ["*"]` to restore
+  allow-all. Clients outside a browser are unaffected
+  ([SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors)).
+- **Configuration the server used to drop now stops it at startup:** a CORS
+  origin that cannot match a browser's `Origin` (a path, a trailing `/`, no
+  scheme), `"*"` inside an origin list, an unparseable CORS method or header,
+  both `[server] cors_origins` and `[cors] allowed_origins`, and a `[logging]`
+  `level` / `format` or `VELESDB_LOGGING_LEVEL` outside the documented values.
+  **Fix:** correct the value the error names.
+
 ## 3. Rust API
 
 ### Removed

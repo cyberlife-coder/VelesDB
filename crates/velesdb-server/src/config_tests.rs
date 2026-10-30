@@ -119,7 +119,7 @@ fn test_defaults() {
     assert!(!cfg.auth_enabled());
     assert!(!cfg.tls_enabled());
     assert!(cfg.rate_limit_enabled());
-    assert!(cfg.cors.is_permissive());
+    assert!(!cfg.cors.is_active(), "no CORS unless configured");
 }
 
 #[test]
@@ -395,10 +395,11 @@ fn test_rate_limit_cli_disables() {
 // ====================================================================
 
 #[test]
-fn test_cors_default_is_permissive() {
+fn test_cors_default_allows_no_origin() {
     let cors = CorsConfig::default();
-    assert!(cors.is_permissive());
-    assert_eq!(cors.allowed_origins, vec!["*"]);
+    assert!(!cors.is_active());
+    assert!(!cors.is_permissive());
+    assert!(cors.allowed_origins.is_empty());
     assert_eq!(cors.allowed_headers, vec!["*"]);
     assert!(!cors.allow_credentials);
     assert_eq!(cors.max_age_secs, 3600);
@@ -465,7 +466,7 @@ allowed_origins = ["https://myapp.com"]
 }
 
 #[test]
-fn test_cors_absent_from_toml_uses_permissive_default() {
+fn test_cors_absent_from_toml_stays_inactive() {
     let toml_content = r#"
 [server]
 port = 9090
@@ -474,7 +475,7 @@ port = 9090
     let cli = CliOverrides::default();
     let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
-    assert!(cfg.cors.is_permissive());
+    assert!(!cfg.cors.is_active());
     assert_eq!(cfg.cors, CorsConfig::default());
 }
 
@@ -487,12 +488,24 @@ fn test_cors_empty_section_uses_defaults() {
     let cli = CliOverrides::default();
     let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
-    assert!(cfg.cors.is_permissive());
+    assert_eq!(cfg.cors, CorsConfig::default());
+}
+
+#[test]
+fn test_cors_explicit_wildcard_is_permissive_and_active() {
+    let file_cfg: FileConfig =
+        toml::from_str("[server]\ncors_origins = [\"*\"]\n").expect("test: valid TOML");
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, CliOverrides::default())
+        .expect("test: merge");
+    assert!(cfg.cors.is_active() && cfg.cors.is_permissive());
 }
 
 #[test]
 fn test_build_cors_layer_permissive() {
-    let cors = CorsConfig::default();
+    let cors = CorsConfig {
+        allowed_origins: vec!["*".to_string()],
+        ..CorsConfig::default()
+    };
     // Should not panic — produces a valid CorsLayer
     let _layer = build_cors_layer(&cors);
 }
@@ -542,7 +555,11 @@ fn test_build_cors_layer_invalid_origin_skipped() {
 #[test]
 fn test_server_config_default_includes_cors() {
     let cfg = ServerConfig::default();
-    assert!(cfg.cors.is_permissive());
+    assert!(
+        cfg.cors.enabled,
+        "the switch is on; the empty list keeps it inactive"
+    );
+    assert!(!cfg.cors.is_active());
 }
 
 // ====================================================================

@@ -390,21 +390,26 @@ server's responses through a visitor's browser. It does not restrict `curl`,
 the SDKs, or any other non-browser client, and it is not access control: API
 keys are.
 
-### The default, and what it allows
+### The default: same origin only
 
-By default the server answers CORS for every origin (`Access-Control-Allow-Origin: *`)
-and logs a warning at startup saying so. That is convenient for a browser
-front end in development, and it has a consequence worth stating plainly:
+By default no origin is configured and the server sends **no** CORS header, so
+a browser lets only pages served from the server's own origin read its
+responses. Up to 7.1.0 the default was the opposite, `Access-Control-Allow-Origin: *`,
+and that default is why this one changed:
 
-- **Without API keys**, any web page open in a browser on a machine that can
-  reach the server can read *and* write through it — including a server bound
-  to `127.0.0.1`, because the browser making the request runs on that machine.
-- **With API keys**, a foreign page gets nowhere unless it knows a key: the
-  permissive policy never allows credentials (cookies), and the server's only
-  credential is the `Authorization: Bearer` header the page would have to set
-  itself.
+- **Allow-all without API keys** lets any web page open in a browser on a
+  machine that can reach the server read *and* write through it — including a
+  server bound to `127.0.0.1`, because the browser making the request runs on
+  that machine. For a local-first database, every site the user visits.
+- **Allow-all with API keys** is safer: a foreign page gets nowhere unless it
+  knows a key, since the permissive policy never allows credentials (cookies)
+  and the server's only credential is the `Authorization: Bearer` header the
+  page would have to set itself.
 
-### Restricting it
+Allow-all is still available, written explicitly (`cors_origins = ["*"]`); the
+server logs a warning at startup when it is on.
+
+### Allowing a browser front end
 
 ```toml
 # velesdb.toml
@@ -422,15 +427,9 @@ the same list under its older name — set one of the two; the `[cors]` table
 also holds methods, headers, credentials and the preflight cache
 ([SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md#4-cors)).
 
-If no browser ever talks to the server directly, turn CORS off:
-
-```toml
-[server]
-cors_enabled = false
-```
-
-No CORS header is then sent, and browsers refuse every cross-origin read. A
-page can still *send* a "simple" cross-origin request without reading the
+`cors_enabled = false` is a master switch: no CORS header is sent whatever the
+list says. With no CORS header, the default, a page from another origin can
+still *send* a "simple" cross-origin request without reading the
 answer; the endpoints that take JSON refuse those, since they require
 `Content-Type: application/json`, which a simple request cannot set — but treat
 that as a side effect, not a control. Exposed beyond `127.0.0.1`, set
