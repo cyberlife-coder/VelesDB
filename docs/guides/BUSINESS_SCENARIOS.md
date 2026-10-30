@@ -9,7 +9,7 @@
 **Problem:** "Show me products similar to this photo, from trusted suppliers, under $500"
 
 ```sql
--- PSEUDOCODE: conceptual query, not executable VelesQL
+-- Illustrative schema: labels, edge types and properties are examples
 -- Traditional approach: Pinecone (image search) + Neo4j (supplier trust) + PostgreSQL (price)
 -- VelesDB: ONE query
 
@@ -18,6 +18,7 @@ WHERE
   similarity(product.image_embedding, $uploaded_photo) > 0.7  -- Vector: visual similarity
   AND supplier.trust_score > 4.5                               -- Graph: relationship data
   AND product.price < 500                                         -- Column: real-time price
+RETURN product.name, supplier.name, similarity() AS score
 ORDER BY similarity() DESC
 LIMIT 12
 ```
@@ -39,7 +40,7 @@ LIMIT 12
 **Problem:** "Flag transactions that look suspicious based on pattern + network + history"
 
 ```sql
--- PSEUDOCODE: conceptual query, not executable VelesQL
+-- Illustrative schema: labels, edge types and properties are examples
 -- Detect fraud: semantic pattern + transaction network + account history
 MATCH (tx:Transaction)-[:FROM]->(account:Account)-[:LINKED_TO*1..3]->(related:Account)
 WHERE
@@ -66,7 +67,7 @@ RETURN tx.id, account.id, similarity() as fraud_score
 **Problem:** "Find similar patient cases with treatment outcomes, for HIPAA-regulated data"
 
 ```sql
--- PSEUDOCODE: conceptual query, not executable VelesQL
+-- Illustrative schema: labels, edge types and properties are examples
 -- Medical RAG: symptoms + patient network + treatment history
 MATCH (patient:Patient)-[:HAS_CONDITION]->(condition:Condition)
       -[:TREATED_WITH]->(treatment:Treatment)
@@ -74,7 +75,8 @@ WHERE
   similarity(condition.symptoms_embedding, $current_symptoms) > 0.75  -- Vector: symptom matching
   AND condition.icd10_code IN ('J18.9', 'J12.89')                     -- Column: specific diagnoses
   AND treatment.success_rate > 0.8                                    -- Column: outcome data
-RETURN treatment.name, AVG(success_rate) as effectiveness
+RETURN treatment.name, treatment.success_rate AS effectiveness, similarity() AS case_match
+ORDER BY treatment.success_rate DESC
 ```
 
 **Business Impact:**
@@ -94,14 +96,15 @@ RETURN treatment.name, AVG(success_rate) as effectiveness
 **Problem:** "My AI agent needs conversation history + knowledge base + user preferences"
 
 ```sql
--- PSEUDOCODE: conceptual query, not executable VelesQL
+-- Illustrative schema: labels, edge types and properties are examples
 -- Agent memory: semantic recall + conversation graph + user context
 MATCH (user:User)-[:HAD_CONVERSATION]->(conv:Conversation)
       -[:CONTAINS]->(message:Message)
 WHERE
   similarity(message.embedding, $current_query) > 0.7     -- Vector: relevant past messages
   AND conv.timestamp > NOW() - INTERVAL '7 days'          -- Column: recent conversations
-  AND message.topic = user.preferred_topic                          -- Column: user prefs
+  AND message.topic = $preferred_topic                    -- Column: user prefs
+RETURN message.text, conv.timestamp, similarity() AS relevance
 ORDER BY conv.timestamp DESC, similarity() DESC
 LIMIT 10
 ```
@@ -122,13 +125,14 @@ LIMIT 10
 **Goal:** Demonstrate the power of cross-model queries - finding semantically similar documents through graph relationships with structured data filtering
 
 ```sql
--- PSEUDOCODE: conceptual query, not executable VelesQL
+-- Illustrative schema: labels, edge types and properties are examples
 -- The VelesDB Advantage: One query across all three stores
 MATCH (doc:Document)-[:AUTHORED_BY]->(author:Author)
 WHERE
   similarity(doc.embedding, $research_question) > 0.8   -- Vector: semantic search
   AND doc.category = 'peer-reviewed'                     -- Column: structured filter
   AND author.citation_count > 50                          -- Column: structured filter
+RETURN doc.title, author.name, similarity() AS similarity
 ORDER BY similarity() DESC
 LIMIT 5
 ```
@@ -416,7 +420,7 @@ LIMIT 8
 **Goal:** Find similar malware patterns observed in the last 7 days
 
 ```sql
--- PSEUDOCODE: conceptual query, not executable VelesQL
+-- Illustrative schema: labels, edge types and properties are examples
 SELECT malware_hash, threat_level, first_seen
 FROM threat_intel
 WHERE

@@ -286,7 +286,7 @@ SELECT DISTINCT status, priority FROM tasks LIMIT 20;
 SELECT category, COUNT(*) as cnt
 FROM documents
 GROUP BY category
-HAVING cnt > 5
+HAVING COUNT(*) > 5
 ORDER BY cnt DESC
 LIMIT 10;
 
@@ -373,20 +373,27 @@ WHERE similarity(o.embedding, $q) > 0.7
 LIMIT 20;
 ```
 
-> **Note:** `LEFT JOIN` and `RIGHT JOIN` are parsed but raise runtime errors.
-> `INNER JOIN` is fully supported.
+> **Note:** `INNER`, `LEFT`, `RIGHT` and `FULL` joins all execute on the
+> column store. `INNER` and `LEFT` join on the right side's primary key or on a
+> payload field with a secondary index; `RIGHT` and `FULL` join on the primary
+> key only (see the JOIN section of [VELESQL_SPEC.md](../VELESQL_SPEC.md)).
 
-## Subqueries (parsed, not yet executable)
+## Subqueries
 
-> **Note:** subqueries are recognized by the VelesQL parser but raise runtime
-> errors during execution. This syntax is reserved for future support.
+A scalar subquery (one row, one column) is executed and substituted as a literal
+before the outer query runs:
 
 ```sql
--- IN subquery (parsed, execution not yet supported)
-SELECT * FROM docs WHERE id IN (SELECT doc_id FROM comments) LIMIT 10;
-
--- Scalar subquery comparison (parsed, execution not yet supported)
+-- Scalar subquery comparison
 SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products) LIMIT 20;
+```
+
+Set-membership subqueries (`IN (SELECT ...)`, `EXISTS`) are **not supported** —
+the grammar rejects them — and a correlated subquery (one referencing the outer
+query's table) is rejected at validation with `V010`:
+
+```velesql-error
+SELECT * FROM docs WHERE id IN (SELECT doc_id FROM comments) LIMIT 10;
 ```
 
 ## EXPLAIN
@@ -460,4 +467,4 @@ SELECT "select", "from", "order" FROM docs LIMIT 10;
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
