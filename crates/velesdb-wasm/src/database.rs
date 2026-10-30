@@ -371,7 +371,7 @@ impl WasmDatabase {
     /// Lists all collection names as a JavaScript `Array<string>`.
     pub fn list_collections(&self) -> JsValue {
         let names = self.inner.collection_names();
-        serde_wasm_bindgen::to_value(&names).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&names).unwrap_or(JsValue::NULL)
     }
 
     /// Returns a mutable handle to an existing collection.

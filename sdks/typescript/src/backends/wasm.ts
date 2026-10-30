@@ -14,6 +14,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
   CreateIndexOptions,
   IndexInfo,
@@ -436,7 +437,7 @@ export class WasmBackend implements IVelesDBBackend {
     return wasmSearchBatch(buildWasmContext(this.wasmModule!, this.collections), c, s);
   }
 
-  async textSearch(c: string, q: string, o?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+  async textSearch(c: string, q: string, o?: { k?: number; filter?: FilterInput }): Promise<TextSearchResult[]> {
     this.ensureInitialized();
     return wasmTextSearch(buildWasmContext(this.wasmModule!, this.collections), c, q, o);
   }

@@ -44,7 +44,7 @@ consequence of two different boundaries:
 | Direction | Representation | Why |
 |---|---|---|
 | Ids **passed in** (`insert`, `get`, `remove`, `GraphNode`, …) | `BigInt` (`1n`) | `wasm-bindgen` maps a Rust `u64` parameter to a JS `BigInt`. |
-| Ids **returned by search** (`search`, `batch_search`, …) | plain `number` | Those results go through `serde-wasm-bindgen`, whose default serializer emits `u64` as a JS number (`serialize_large_number_types_as_bigints` defaults to `false`, see `serde-wasm-bindgen` 0.6 `src/ser.rs`). |
+| Ids **returned by search** (`search`, `batch_search`, …) | plain `number` | Those results go through `serde-wasm-bindgen`'s `Serializer::json_compatible()`, which emits `u64` as a JS number (it leaves `serialize_large_number_types_as_bigints` at `false`, see `serde-wasm-bindgen` 0.6 `src/ser.rs`). |
 | Ids returned by a **direct getter** (`ParsedQuery.limit`, `GraphStore.get_neighbors`, `GraphNode.id`) | `BigInt` / `BigUint64Array` | Direct `wasm-bindgen` return, no serde in between. |
 | Memory-wedge ids (`MemoryService`) | decimal **string** | Chosen so ids survive `JSON.stringify` without precision loss. |
 
@@ -58,6 +58,13 @@ store.search(new Float32Array([1, 0, 0]), 2);    // => [[1, 1], [3, 0.9938837289
 
 Ids above `Number.MAX_SAFE_INTEGER` (2^53 − 1) cannot be represented and make
 serialization fail with an explicit error — keep ids under that bound.
+
+Every record returned as data (search results, `get`, `query`,
+`GraphNode.to_json`, …) is a **plain object**, the shape `JSON.parse` would
+give: payloads and properties read by property access and survive
+`JSON.stringify`, and an absent value (a point stored without a payload) is
+`null`. Before velesdb-wasm 8.0.0 the records carrying a payload or property
+map were ES2015 `Map`s, on which `record.id` is `undefined` (#2332).
 
 ## VectorStore
 
@@ -130,7 +137,7 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `search(query, k)` | `[[id, score], …]` | Brute-force k-NN over every vector. |
 | `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity, and is checked as the server checks it: each ef in 16–4096, or it throws (#2275). |
 | `search_with_filter(query, k, filter)` | `[{id, score, payload}, …]` | Metadata-filtered search. |
-| `text_search(query, k, field?)` | `[{id, score, payload}, …]` | Full-text over payload fields. |
+| `text_search(query, k, field?)` | `[{id, score: null, payload}, …]` | Case-insensitive substring match over payload fields, in insertion order. It selects without ranking, so `score` is always `null`. |
 | `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion. |
 | `multi_query_search(vectors, numVectors, k, strategy, rrfK?, weights?)` | `[[id, score], …]` | Multi-query fusion (MQG). |
 | `batch_search(vectors, numVectors, k)` | `[[[id, score], …], …]` | One result list per query vector. |

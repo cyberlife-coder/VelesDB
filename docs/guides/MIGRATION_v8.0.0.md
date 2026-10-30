@@ -244,7 +244,20 @@ Rejections carry core's codes and a new `recoverable` field:
 - **`updateGuardrails` throws `VelesError`** for limits core refuses.
 - **`SearchQuality.Adaptive` with `min_ef > max_ef`** is refused.
 
-## 7. `velesdb-wasm` storage modes
+## 7. `velesdb-wasm`
+
+### Values returned to JavaScript
+
+- **Records are plain objects**, no longer ES2015 `Map`s: read `hit.id` and
+  `hit.payload.title`, not `hit.get('id')` (#2332).
+- **An absent value is `null`, where 7.1.0 gave `undefined`:** a missing
+  `payload`, `query()`'s `graphScore` and `columnData`, `GraphNode.to_json()`'s
+  `vector`, an alias missing from `ParsedQuery.matchReturnItems`. Test with `== null`, which
+  matches both.
+- **`text_search` records carry `score: null`.** The match is an unranked
+  substring match; sort or threshold on something else.
+
+### Storage modes
 
 - **Every mode keeps f32 vectors** and returns core's top-k and scores for that
   mode.
@@ -254,13 +267,17 @@ Rejections carry core's codes and a new `recoverable` field:
 - **Trained PQ collections differ from core:** once a PQ collection has
   trained, core's default `search()` returns ADC-approximated scores. The
   browser returns exact ones.
+
+### Metadata filters
+
 - **`VectorStore.search_with_filter` parses and evaluates the filter with
-  core.** Every core condition kind now selects what REST selects; `in`,
-  `contains`, `is_null`, `like`, the `array_contains*` and geo conditions
-  used to match nothing. A filter core cannot parse throws core's message
-  (`Invalid filter: missing field \`condition\``, for one): a flat
-  `{ category: 'tech' }` used to match every point, and `null` used to search
-  unfiltered. Call `search` for an unfiltered search.
+  core**, so every core condition kind selects what REST selects. In 7.1.0,
+  `in`, `contains`, `is_null`, `like`, the `array_contains*` and the geo
+  conditions matched nothing.
+- **A filter core cannot parse throws core's message**
+  (`Invalid filter: missing field \`condition\``, for one). In 7.1.0 a flat
+  `{ category: 'tech' }` matched every point and `null` searched unfiltered;
+  call `search` for an unfiltered search.
 
 ## 8. Observability
 

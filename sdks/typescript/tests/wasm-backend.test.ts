@@ -26,7 +26,8 @@ class MockVectorStore {
     vector: [1, 0, 0, 0],
     payload: { title: 'Stored' },
   }));
-  text_search = vi.fn(() => [{ id: BigInt(1), score: 0.88, payload: { title: 'Text' } }]);
+  // velesdb-wasm 8.0.0's text_search ranks nothing: `score` is null.
+  text_search = vi.fn(() => [{ id: 1, score: null, payload: { title: 'Text' } }]);
   hybrid_search = vi.fn(() => [{ id: BigInt(1), score: 0.91, payload: { title: 'Hybrid' } }]);
   query = vi.fn(() => [
     { id: 1, a: 1 },
@@ -397,8 +398,7 @@ describe('WasmBackend', () => {
 
     it('supports text search', async () => {
       const results = await backend.textSearch('vectors', 'query', { k: 2 });
-      expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.88);
+      expect(results).toEqual([{ id: '1', score: null, payload: { title: 'Text' } }]);
     });
 
     it('supports hybrid search', async () => {

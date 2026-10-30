@@ -57,6 +57,8 @@ On Node.js the WASM backend's `init()` reads `velesdb_wasm_bg.wasm` from disk wi
 
 The WASM backend runs entirely in-process -- no server required. Ideal for browser apps, prototyping, and edge deployments.
 
+> **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` 8.0.0 or later, the version this SDK release pins. velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0).
+
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
 
@@ -413,7 +415,7 @@ Vector similarity search.
 | `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
 | `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
 
-> **WASM backend:** `filter` applies to dense search only (with velesdb-wasm 6.0.0, filtered results are affected by #2332). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so is `sparseIndexName`; neither is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`).
+> **WASM backend:** `filter` applies to dense search only (filtered results need velesdb-wasm 8.0.0, see [Binding version](#wasm-backend-browser--nodejs)). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so is `sparseIndexName`; neither is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`).
 
 ```typescript
 const results = await db.search('docs', queryVector, {
@@ -507,7 +509,7 @@ Full-text search using BM25 scoring.
 const results = await db.textSearch('docs', 'machine learning', { k: 10 });
 ```
 
-> **WASM backend:** the WASM build has no BM25 index. A `filter` is refused with `NOT_SUPPORTED` rather than return rows the filter excludes (`db.capabilities().filteredSearch` does not list `'textSearch'`). With velesdb-wasm 6.0.0, `textSearch` results are affected by #2332.
+> **WASM backend:** the WASM build has no BM25 index. A `filter` is refused with `NOT_SUPPORTED` rather than return rows the filter excludes (`db.capabilities().filteredSearch` does not list `'textSearch'`). It matches substrings case-insensitively and ranks nothing, so each result's `score` is `null` (`TextSearchResult.score` is `number | null`) and rows come in insertion order. Needs velesdb-wasm 8.0.0 (#2332).
 
 #### `db.hybridSearch(collection, vector, textQuery, options?)`
 
@@ -522,7 +524,7 @@ const results = await db.hybridSearch(
 );
 ```
 
-> **WASM backend:** a `filter` is refused with `NOT_SUPPORTED`, and a `vectorWeight` that is not a finite number with `BAD_REQUEST`, as REST refuses it. With velesdb-wasm 6.0.0, `hybridSearch` results are affected by #2332.
+> **WASM backend:** a `filter` is refused with `NOT_SUPPORTED`, and a `vectorWeight` that is not a finite number with `BAD_REQUEST`, as REST refuses it. Needs velesdb-wasm 8.0.0 (#2332).
 
 #### `db.multiQuerySearch(collection, vectors, options?)`
 
@@ -1175,6 +1177,7 @@ import {
   type SearchOptions,
   type SearchQuality,
   type SearchResult,
+  type TextSearchResult,
   type SparseVector,
   type MultiQuerySearchOptions,
   type GraphEdge,

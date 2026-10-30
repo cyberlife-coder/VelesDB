@@ -10,6 +10,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  TextSearchResult,
   IVelesDBBackend,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
@@ -251,7 +252,7 @@ export class VelesDB {
     return searchMethods.searchBatch(this.backend, collection, searches);
   }
 
-  async textSearch(collection: string, query: string, options?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+  async textSearch(collection: string, query: string, options?: { k?: number; filter?: FilterInput }): Promise<TextSearchResult[]> {
     this.ensureInitialized();
     return searchMethods.textSearch(this.backend, collection, query, options);
   }

@@ -104,3 +104,14 @@ export interface SearchResult {
   /** Document payload (if requested) */
   payload?: Record<string, unknown>;
 }
+
+/**
+ * Full-text search result (`textSearch`). `score` is the BM25 score on the
+ * REST backend and `null` on the WASM backend, whose text search selects by
+ * case-insensitive substring and ranks nothing (velesdb-wasm 8.0.0): there
+ * is no relevance to threshold or sort on, and none is invented.
+ */
+export interface TextSearchResult extends Omit<SearchResult, 'score'> {
+  /** BM25 score (REST), or `null` when the backend does not rank (WASM). */
+  score: number | null;
+}
