@@ -163,7 +163,7 @@ pip install -r requirements.txt
 python fusion_strategies.py
 ```
 
-> **Note**: The `graphrag_langchain.py` and `graphrag_llamaindex.py` examples require an OpenAI API key and a running VelesDB server. All other examples are fully self-contained.
+> **Note**: The `graphrag_langchain.py` and `graphrag_llamaindex.py` examples need the LangChain or LlamaIndex integration installed. They use OpenAI when `OPENAI_API_KEY` is set and run offline otherwise (or with `--offline`), with no server.
 
 ### Agent Memory (`agent_memory/`) -- Intermediate
 

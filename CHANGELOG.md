@@ -87,6 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new `velesdb_common.graph.parse_graph_traverse_results` returns
   `(target_id, depth)` pairs, and `parse_graph_traverse_response` now returns
   integer ids.
+- **The GraphRAG examples run.** `examples/python/graphrag_langchain.py` and
+  `graphrag_llamaindex.py` imported a store class that does not exist and
+  called REST routes the server does not have. They now use the integrations
+  natively (`VelesDBVectorStore`, `GraphLoader`, `GraphRetriever`), with no
+  server, and run offline with the frameworks' fake embeddings and LLM when no
+  OpenAI key is set or with `--offline`; each integration's test suite runs
+  its example that way.
 
 ## [8.0.0] - 2026-10-30
 
