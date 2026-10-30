@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
-use velesdb_core::{DistanceMetric, StorageMode};
+use velesdb_core::{DistanceMetric, StorageMode, MAX_JSON_NESTING};
 
 /// Extract an optional typed value for `key` from `dict`, returning `None` when
 /// the key is absent or holds Python `None` — so `{}`, a missing key, and an
@@ -112,10 +112,26 @@ pub fn parse_storage_mode(mode: &str) -> PyResult<StorageMode> {
 /// Returns `Err` for unsupported Python types (datetime, UUID, bytes, custom objects)
 /// instead of silently dropping them.
 ///
+/// Lists and dicts nest at most [`MAX_JSON_NESTING`] deep, the depth
+/// `serde_json` reads back, the outermost container counting as the first
+/// level. The conversion recurses once per level, so without the bound a deeply
+/// nested or self-containing list (`a = []; a.append(a)`) overflowed the
+/// native stack and aborted the interpreter instead of raising.
+///
 /// # Errors
 ///
-/// Returns `PyValueError` if the Python object type is not JSON-serializable.
+/// Returns `PyValueError` if the Python object type is not JSON-serializable,
+/// or if it nests lists and dicts deeper than [`MAX_JSON_NESTING`].
 pub fn python_to_json(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<serde_json::Value> {
+    python_to_json_within(py, obj, 0)
+}
+
+/// [`python_to_json`] for a value `enclosing` lists and dicts deep.
+pub(crate) fn python_to_json_within(
+    py: Python<'_>,
+    obj: &Py<PyAny>,
+    enclosing: usize,
+) -> PyResult<serde_json::Value> {
     if let Ok(s) = obj.extract::<String>(py) {
         return Ok(serde_json::Value::String(s));
     }
@@ -158,16 +174,18 @@ pub fn python_to_json(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<serde_json::V
         return Ok(serde_json::Value::Null);
     }
     if let Ok(list) = obj.extract::<Vec<Py<PyAny>>>(py) {
+        let depth = container_depth(enclosing)?;
         let arr: Vec<serde_json::Value> = list
             .iter()
-            .map(|item| python_to_json(py, item))
+            .map(|item| python_to_json_within(py, item, depth))
             .collect::<PyResult<_>>()?;
         return Ok(serde_json::Value::Array(arr));
     }
     if let Ok(dict) = obj.extract::<HashMap<String, Py<PyAny>>>(py) {
+        let depth = container_depth(enclosing)?;
         let map: serde_json::Map<String, serde_json::Value> = dict
             .into_iter()
-            .map(|(k, v)| python_to_json(py, &v).map(|jv| (k, jv)))
+            .map(|(k, v)| python_to_json_within(py, &v, depth).map(|jv| (k, jv)))
             .collect::<PyResult<_>>()?;
         return Ok(serde_json::Value::Object(map));
     }
@@ -180,6 +198,19 @@ pub fn python_to_json(py: Python<'_>, obj: &Py<PyAny>) -> PyResult<serde_json::V
     Err(PyValueError::new_err(format!(
         "Unsupported payload type '{type_name}'. Supported: str, int, float, bool, None, list, dict"
     )))
+}
+
+/// The depth of a list or dict inside `enclosing` containers, refused past
+/// [`MAX_JSON_NESTING`].
+fn container_depth(enclosing: usize) -> PyResult<usize> {
+    let depth = enclosing + 1;
+    if depth > MAX_JSON_NESTING {
+        return Err(PyValueError::new_err(format!(
+            "Value nests lists and dicts deeper than {MAX_JSON_NESTING} levels, \
+             the most JSON can read back"
+        )));
+    }
+    Ok(depth)
 }
 
 /// Helper to convert a value to `Py<PyAny>` using the `IntoPyObject` trait.
