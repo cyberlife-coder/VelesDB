@@ -181,7 +181,7 @@ results = collection.multi_query_search_ids(
 results = collection.search_request(velesdb.SearchOptions(
     vector=query_vector,
     sparse_vector={0: 1.0, 42: 2.0},
-    top_k=10,
+    k=10,
 ))
 
 # Text search (BM25)

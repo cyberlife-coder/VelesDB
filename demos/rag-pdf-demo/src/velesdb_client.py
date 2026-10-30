@@ -139,7 +139,7 @@ class VelesDBClient:
                 f"Collection '{collection}' not found"
             )
         results = col.search_request(
-            velesdb.SearchOptions(vector=query_vector, top_k=top_k, filter=filter_)
+            velesdb.SearchOptions(vector=query_vector, k=top_k, filter=filter_)
         )
         return {"results": results}
 
