@@ -2,7 +2,7 @@
 
 VelesDB is a **local-first** embedded database. The `velesdb-server` binary exposes VelesDB over HTTP on your local network or as a backend for your application. All security features are **opt-in** — by default the server runs without authentication or TLS, which is ideal for local development.
 
-This guide covers the server's operational features: authentication, TLS, graceful shutdown, and health monitoring.
+This guide covers the server's operational features: authentication, TLS, graceful shutdown, health monitoring, and CORS.
 
 > **See also:** [CONFIGURATION.md](CONFIGURATION.md) for the full configuration reference (all options, env vars, CLI flags, TOML keys).
 
@@ -15,6 +15,7 @@ This guide covers the server's operational features: authentication, TLS, gracef
 3. [TLS Setup](#3-tls-setup)
 4. [Graceful Shutdown](#4-graceful-shutdown)
 5. [Health Endpoints](#5-health-endpoints)
+6. [CORS](#6-cors)
 
 ---
 
@@ -382,4 +383,59 @@ echo "VelesDB is ready!"
 
 ---
 
-Last updated: 2026-08-08 · Applies to: velesdb-core 8.0.0
+## 6. CORS
+
+CORS decides whether a **web page served from another origin** may read the
+server's responses through a visitor's browser. It does not restrict `curl`,
+the SDKs, or any other non-browser client, and it is not access control: API
+keys are.
+
+### The default, and what it allows
+
+By default the server answers CORS for every origin (`Access-Control-Allow-Origin: *`)
+and logs a warning at startup saying so. That is convenient for a browser
+front end in development, and it has a consequence worth stating plainly:
+
+- **Without API keys**, any web page open in a browser on a machine that can
+  reach the server can read *and* write through it — including a server bound
+  to `127.0.0.1`, because the browser making the request runs on that machine.
+- **With API keys**, a foreign page gets nowhere unless it knows a key: the
+  permissive policy never allows credentials (cookies), and the server's only
+  credential is the `Authorization: Bearer` header the page would have to set
+  itself.
+
+### Restricting it
+
+```toml
+# velesdb.toml
+[server]
+# Exact origins: scheme://host[:port], no path, no trailing slash.
+cors_origins = ["https://app.example.com", "http://localhost:3000"]
+```
+
+Each origin is compared byte for byte with the browser's `Origin` header:
+`https://app.example.com` admits neither `https://app.example.com.evil.net`
+nor `http://app.example.com`. An entry that can never match (a path, a
+trailing `/`, no scheme) or `"*"` mixed into a list is refused at startup
+rather than quietly allowing nothing or everything. `[cors] allowed_origins` is
+the same list under its older name — set one of the two; the `[cors]` table
+also holds methods, headers, credentials and the preflight cache
+([SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md#4-cors)).
+
+If no browser ever talks to the server directly, turn CORS off:
+
+```toml
+[server]
+cors_enabled = false
+```
+
+No CORS header is then sent, and browsers refuse every cross-origin read. A
+page can still *send* a "simple" cross-origin request without reading the
+answer; the endpoints that take JSON refuse those, since they require
+`Content-Type: application/json`, which a simple request cannot set — but treat
+that as a side effect, not a control. Exposed beyond `127.0.0.1`, set
+`VELESDB_API_KEYS` whatever the CORS setting.
+
+---
+
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0

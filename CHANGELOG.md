@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`velesdb-server` applies the `[server]` and `[logging]` settings
+  `docs/guides/CONFIGURATION.md` documents.** `workers`, `max_body_size`,
+  `cors_enabled`, `cors_origins` and the whole `[logging]` table were
+  documented and dropped without a word: no field read them, and the body
+  limit, the worker count and the log filter were hard-wired. Each now does
+  what the guide says, and the guide says what each does:
+  - `[server] workers` sizes the Tokio runtime, which `main` now builds after
+    reading the configuration instead of through `#[tokio::main]`. `0`, the
+    default, keeps one worker per CPU; above 4096 is refused.
+  - `[server] max_body_size` (bytes, default 100 MiB, range 1 B–1 GiB) is the
+    largest body any route accepts: in full on `POST .../points` and
+    `.../points/raw`, capped at 2 MiB on every other route as before. A larger
+    body gets `413`. `velesdb_server::routes::api_routes_with_body_limit` is
+    the router with that limit; `api_routes()` keeps the defaults.
+  - `[server] cors_enabled` (default `true`, so the permissive default stays)
+    removes the CORS layer when `false`; `[server] cors_origins` is the same
+    exact-match list as `[cors] allowed_origins`, and setting both is refused.
+    The guide used to give `cors_enabled` a default of `false`.
+  - `[logging] level`, `format` (`text` or `json`, one object per line) and
+    `file` (appended to; empty = stdout) configure the subscriber, as does
+    `VELESDB_LOGGING_LEVEL`. Precedence: `RUST_LOG` > `VELESDB_LOGGING_LEVEL` >
+    `[logging] level` > `info,tower_http=debug`, the filter an unconfigured
+    server has always used; an empty variable counts as unset, and a
+    `RUST_LOG` that overrides a configured level is named in a startup
+    warning. `json` enables `tracing-subscriber`'s `json` feature, which adds
+    one crate, `tracing-serde`.
+  - A key in `[server]`, `[auth]`, `[tls]`, `[cors]` or `[logging]` that the
+    server does not read is named in a startup warning instead of being
+    ignored.
+  - **Refused at startup where it used to be dropped:** a CORS origin that can
+    never equal a browser's `Origin` header (a path, a trailing `/`, no
+    scheme), `"*"` mixed into an origin list (which silently allowed every
+    origin), and a CORS method or header name that does not parse. A file with
+    one of these stopped matching what it said long ago; it now stops the
+    server with the offending value named.
+  - The guide's environment examples used `VELESDB_SERVER_PORT` /
+    `VELESDB_SERVER_HOST`, which the server never read; they now use
+    `VELESDB_PORT` / `VELESDB_HOST`.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

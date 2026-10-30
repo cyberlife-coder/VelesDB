@@ -1,7 +1,7 @@
 # VelesDB Server — Deployment
 
 How to run `velesdb-server` outside a developer laptop: containers,
-orchestrators, probes, rate limiting, and CORS.
+orchestrators, probes, rate limiting, CORS, and runtime sizing.
 
 > **See also:** [SERVER_SECURITY.md](SERVER_SECURITY.md) for API keys, TLS and
 > graceful shutdown; [CONFIGURATION.md](CONFIGURATION.md) for the exhaustive
@@ -30,6 +30,11 @@ The image sets these defaults (see the `Dockerfile`):
 | `VELESDB_HOST` | `0.0.0.0` |
 | `VELESDB_PORT` | `8080` |
 | `RUST_LOG` | `info` |
+
+`RUST_LOG` outranks the `[logging] level` of a mounted `velesdb.toml` and
+`VELESDB_LOGGING_LEVEL`; pass `-e RUST_LOG=` (empty counts as unset) to hand
+the level back to them. Log format and destination are `[logging] format` /
+`file` — see [CONFIGURATION.md](CONFIGURATION.md#section-logging).
 
 It runs as the non-root `velesdb` user, exposes port 8080, and declares a
 `HEALTHCHECK` that curls `/health` every 30 s.
@@ -143,7 +148,20 @@ max_age_secs = 3600
 
 Keys are read from the `[cors]` table by
 `crates/velesdb-server/src/config.rs`. `allowed_origins = ["*"]` selects the
-fully permissive policy; any other list restricts to those origins exactly.
+fully permissive policy; any other list restricts to those origins exactly,
+each one `scheme://host[:port]` compared byte for byte with the browser's
+`Origin` header. An origin with a path or a trailing `/`, `"*"` inside a list,
+or a method or header name that does not parse stops the server at startup.
+
+`[server]` carries two shorter keys for the same policy:
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `cors_origins` | `["*"]` | The same list as `[cors] allowed_origins`; setting both is refused at startup |
+| `cors_enabled` | `true` | `false` installs no CORS layer: no CORS header is sent, browsers refuse cross-origin reads |
+
+What the permissive default exposes, and when to turn CORS off, is in
+[SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors).
 
 ---
 
@@ -170,6 +188,34 @@ enabled = false
 
 ---
 
+## 6. Runtime sizing, request size, logs
+
+```toml
+[server]
+workers = 8                 # Tokio worker threads; 0 (default) = one per CPU
+max_body_size = 268435456   # 256 MiB point-upload bodies (default 100 MiB)
+
+[logging]
+level = "info"              # VELESDB_LOGGING_LEVEL and RUST_LOG override it
+format = "json"             # one JSON object per line
+file = "/var/log/velesdb/velesdb.log"   # appended to; directory must exist
+```
+
+- `workers` fixes the number of threads serving requests. Unset or `0`, Tokio
+  starts one per CPU the process may use (`std::thread::available_parallelism`,
+  or `TOKIO_WORKER_THREADS` when that is set). The startup log prints the count
+  actually running.
+- `max_body_size` bounds the memory one upload request can take — the body is
+  buffered whole before it is parsed. Routes other than point upload stay at
+  2 MiB (lower `max_body_size` lowers them too); the NDJSON stream route is
+  not buffered and has no body limit. An oversized request gets `413`.
+- A key the server does not read in `[server]`, `[auth]`, `[tls]`, `[cors]` or
+  `[logging]` is named in a startup warning instead of being ignored silently.
+
+Every key, its range and its precedence: [CONFIGURATION.md](CONFIGURATION.md#section-server).
+
+---
+
 ## See also
 
 - [velesdb-server README](../../crates/velesdb-server/README.md)
@@ -178,4 +224,4 @@ enabled = false
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0

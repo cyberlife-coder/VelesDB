@@ -12,7 +12,6 @@ use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 use tower::ServiceExt;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(feature = "swagger-ui")]
 use utoipa_swagger_ui::SwaggerUi;
@@ -24,10 +23,9 @@ use velesdb_server::ApiDoc;
 use velesdb_server::{
     auth::{auth_middleware, AuthState},
     config::{
-        build_cors_layer, load_core_config, parse_api_keys_env, CliOverrides, CorsConfig,
-        ServerConfig,
+        apply_cors, load_core_config, parse_api_keys_env, CliOverrides, CorsConfig, ServerConfig,
     },
-    routes::api_routes,
+    routes::api_routes_with_body_limit,
     AppState, OnboardingMetrics,
 };
 
@@ -37,7 +35,7 @@ use velesdb_server::{
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Path to velesdb.toml configuration file. Configures both the
-    /// server transport ([server]/[auth]/[tls]/[cors]) and the core engine
+    /// server ([server]/[auth]/[tls]/[cors]/[logging]) and the core engine
     /// ([search]/[hnsw]/[storage]/[limits]/[quantization]) —
     /// only these engine sections are read into the core config, so a
     /// same-named [server]/[logging] table stays exclusively the
@@ -72,17 +70,30 @@ struct Args {
     rate_limit: Option<u32>,
 }
 
-fn configure_tracing() {
-    let _ = tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,tower_http=debug".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .try_init();
+/// What the configuration asked for that will not happen, said once the
+/// subscriber exists to say it.
+fn log_config_warnings(cfg: &ServerConfig, rust_log_overrides_level: bool) {
+    if !cfg.ignored_entries.is_empty() {
+        tracing::warn!(
+            ignored = cfg.ignored_entries.join(", "),
+            "these config entries are not read by velesdb-server and have no effect; \
+             check them against docs/guides/CONFIGURATION.md"
+        );
+    }
+    if rust_log_overrides_level {
+        tracing::warn!(
+            "RUST_LOG is set and takes precedence over VELESDB_LOGGING_LEVEL and \
+             [logging] level; unset it (or set it empty) to use them"
+        );
+    }
 }
 
 fn log_startup(cfg: &ServerConfig) {
     tracing::info!("Starting VelesDB server...");
+    tracing::info!(
+        "Tokio runtime started with {} worker thread(s)",
+        tokio::runtime::Handle::current().metrics().num_workers()
+    );
     tracing::info!("Data directory: {}", cfg.data_dir);
     tracing::info!("Bind address: {}:{}", cfg.host, cfg.port);
     if cfg.auth_enabled() {
@@ -117,10 +128,16 @@ fn log_startup(cfg: &ServerConfig) {
 }
 
 fn log_cors_config(cors: &CorsConfig) {
-    if cors.is_permissive() {
+    if !cors.enabled {
+        tracing::info!(
+            "CORS disabled ([server] cors_enabled = false): no CORS headers are sent, \
+             so browsers refuse cross-origin reads; CORS origin, method and header \
+             settings are not applied"
+        );
+    } else if cors.is_permissive() {
         tracing::warn!(
-            "CORS is permissive (all origins allowed). \
-             Set [cors] allowed_origins in velesdb.toml for production."
+            "CORS is permissive (all origins allowed). Set [server] cors_origins \
+             (or [cors] allowed_origins) in velesdb.toml for production."
         );
     } else {
         tracing::info!(
@@ -171,10 +188,9 @@ async fn deprecation_header(
 fn build_router(
     state: Arc<AppState>,
     auth_state: AuthState,
-    rate_limit: u32,
-    cors: &CorsConfig,
+    cfg: &ServerConfig,
 ) -> anyhow::Result<Router> {
-    let routes = api_routes();
+    let routes = api_routes_with_body_limit(cfg.max_body_size);
 
     // Canonical versioned API under /v1/
     let versioned = Router::new().nest("/v1", routes.clone());
@@ -191,18 +207,14 @@ fn build_router(
         api_router.merge(Router::<()>::new().merge(swagger_ui))
     };
 
-    let cors_layer = build_cors_layer(cors);
+    let router = api_router.layer(axum::middleware::from_fn_with_state(
+        auth_state,
+        auth_middleware,
+    ));
+    let router = apply_cors(router, &cfg.cors).layer(TraceLayer::new_for_http());
 
-    let router = api_router
-        .layer(axum::middleware::from_fn_with_state(
-            auth_state,
-            auth_middleware,
-        ))
-        .layer(cors_layer)
-        .layer(TraceLayer::new_for_http());
-
-    if rate_limit > 0 {
-        let config = velesdb_server::rate_limit::build_rate_limit_config(rate_limit)?;
+    if cfg.rate_limit > 0 {
+        let config = velesdb_server::rate_limit::build_rate_limit_config(cfg.rate_limit)?;
         Ok(router.layer(velesdb_server::rate_limit::GovernorLayer::new(config)))
     } else {
         Ok(router)
@@ -446,19 +458,26 @@ fn build_cli_overrides(args: Args) -> CliOverrides {
         tls_cert: args.tls_cert,
         tls_key: args.tls_key,
         rate_limit: args.rate_limit,
+        log_level: velesdb_server::logging::level_from_env(),
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    configure_tracing();
-
+/// Reads and validates the configuration, installs logging as it says, then
+/// starts the runtime it sizes. Both need the configuration first, which is
+/// why this is not `#[tokio::main]`: that runtime and its worker count would
+/// exist before the file was read.
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let config_path = args.config.clone();
-    let cli = build_cli_overrides(args);
-    let cfg = ServerConfig::load(cli)?;
+    let cfg = ServerConfig::load(build_cli_overrides(args))?;
     cfg.validate()?;
+    let rust_log_overrides_level = velesdb_server::logging::init(&cfg.logging)?;
+    log_config_warnings(&cfg, rust_log_overrides_level);
 
+    velesdb_server::runtime::build(cfg.workers)?.block_on(run(cfg, config_path))
+}
+
+async fn run(cfg: ServerConfig, config_path: Option<PathBuf>) -> anyhow::Result<()> {
     // Fail-fast: an explicit `--config`/`VELESDB_CONFIG` path that is
     // missing or fails validation aborts startup here with the typed core
     // `ConfigError` — never a silent fallback to engine defaults.
@@ -478,7 +497,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = init_app_state(&cfg.data_dir, core_config)?;
     let auth_state = AuthState::new(cfg.api_keys.clone());
-    let app = build_router(state.clone(), auth_state, cfg.rate_limit, &cfg.cors)?;
+    let app = build_router(state.clone(), auth_state, &cfg)?;
 
     if let (Some(cert), Some(key)) = (&cfg.tls.cert, &cfg.tls.key) {
         serve_tls(

@@ -2,9 +2,19 @@
 //!
 //! Loads configuration from multiple sources with priority:
 //! CLI flags > environment variables > velesdb.toml > defaults.
+//!
+//! The file sections this module owns are `[server]`, `[auth]`, `[tls]`,
+//! `[cors]` and `[logging]`. A key in one of them that no field below names
+//! is not dropped in silence: [`ServerConfig::ignored_entries`] lists it and
+//! the binary warns about it at startup.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+pub use crate::cors::{apply_cors, build_cors_layer, CorsConfig};
+use crate::cors::{resolve_cors, CorsSection};
+use crate::logging::{LoggingConfig, LoggingSection};
 
 // ============================================================================
 // Core engine configuration (issue #1549)
@@ -81,13 +91,21 @@ pub fn load_core_config(
 // TOML file configuration (all fields optional)
 // ============================================================================
 
-/// Root structure for `velesdb.toml`.
+/// The keys of a server-owned section that none of its fields name. Captured
+/// with `#[serde(flatten)]`, so the set of known keys is the struct itself —
+/// there is no second list to keep in step with it.
+pub(crate) type UnknownKeys = BTreeMap<String, toml::Value>;
+
+/// Root structure for `velesdb.toml`. Top-level tables not named here belong
+/// to the engine (`[search]`, `[hnsw]`, ...) or to other readers
+/// (`[update_check]`) and are not this module's to report.
 #[derive(Debug, Deserialize, Default)]
 struct FileConfig {
     server: Option<ServerSection>,
     auth: Option<AuthSection>,
     tls: Option<TlsSection>,
     cors: Option<CorsSection>,
+    logging: Option<LoggingSection>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -97,26 +115,46 @@ struct ServerSection {
     data_dir: Option<String>,
     shutdown_timeout_secs: Option<u64>,
     rate_limit: Option<u32>,
+    workers: Option<usize>,
+    max_body_size: Option<usize>,
+    cors_enabled: Option<bool>,
+    cors_origins: Option<Vec<String>>,
+    #[serde(flatten)]
+    unknown: UnknownKeys,
 }
 
 #[derive(Debug, Deserialize, Default)]
 struct AuthSection {
     api_keys: Option<Vec<String>>,
+    #[serde(flatten)]
+    unknown: UnknownKeys,
 }
 
 #[derive(Debug, Deserialize, Default)]
 struct TlsSection {
     cert: Option<String>,
     key: Option<String>,
+    #[serde(flatten)]
+    unknown: UnknownKeys,
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct CorsSection {
-    allowed_origins: Option<Vec<String>>,
-    allowed_methods: Option<Vec<String>>,
-    allowed_headers: Option<Vec<String>>,
-    allow_credentials: Option<bool>,
-    max_age_secs: Option<u64>,
+impl FileConfig {
+    /// Every key of a server-owned section that no field reads, as
+    /// `section.key`, sorted within each section.
+    fn unknown_entries(&self) -> Vec<String> {
+        let sections: [(&str, Option<&UnknownKeys>); 5] = [
+            ("server", self.server.as_ref().map(|s| &s.unknown)),
+            ("auth", self.auth.as_ref().map(|s| &s.unknown)),
+            ("tls", self.tls.as_ref().map(|s| &s.unknown)),
+            ("cors", self.cors.as_ref().map(|s| &s.unknown)),
+            ("logging", self.logging.as_ref().map(|s| &s.unknown)),
+        ];
+        sections
+            .into_iter()
+            .filter_map(|(name, keys)| Some((name, keys?)))
+            .flat_map(|(name, keys)| keys.keys().map(move |key| format!("{name}.{key}")))
+            .collect()
+    }
 }
 
 // ============================================================================
@@ -140,6 +178,24 @@ impl TlsConfig {
     pub fn is_enabled(&self) -> bool {
         self.cert.is_some() && self.key.is_some()
     }
+
+    /// Both paths or neither, and each one that is set must exist.
+    fn validate(&self) -> anyhow::Result<()> {
+        match (&self.cert, &self.key) {
+            (Some(_), None) => anyhow::bail!("tls_cert is set but tls_key is missing"),
+            (None, Some(_)) => anyhow::bail!("tls_key is set but tls_cert is missing"),
+            (Some(cert), Some(key)) => {
+                if !Path::new(cert).exists() {
+                    anyhow::bail!("TLS cert file not found: {cert}");
+                }
+                if !Path::new(key).exists() {
+                    anyhow::bail!("TLS key file not found: {key}");
+                }
+                Ok(())
+            }
+            (None, None) => Ok(()),
+        }
+    }
 }
 
 /// Final resolved server configuration.
@@ -156,61 +212,25 @@ pub struct ServerConfig {
     pub rate_limit: u32,
     /// CORS configuration for cross-origin requests.
     pub cors: CorsConfig,
-}
-
-/// CORS configuration for the server.
-///
-/// When `allowed_origins` contains `"*"`, the server uses a fully permissive
-/// CORS policy (equivalent to `CorsLayer::permissive()`). Otherwise, only the
-/// listed origins are allowed.
-///
-/// Defaults to permissive (`["*"]`) for backward compatibility.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CorsConfig {
-    /// Allowed origins. Use `["*"]` for permissive mode.
-    pub allowed_origins: Vec<String>,
-    /// Allowed HTTP methods (e.g. `["GET", "POST"]`).
-    pub allowed_methods: Vec<String>,
-    /// Allowed request headers (e.g. `["Content-Type", "Authorization"]`).
-    /// Use `["*"]` to allow any header.
-    pub allowed_headers: Vec<String>,
-    /// Whether to allow credentials (cookies, authorization headers).
-    pub allow_credentials: bool,
-    /// How long (in seconds) browsers may cache preflight responses.
-    pub max_age_secs: u64,
+    /// Tokio runtime worker threads (`[server] workers`). `0`, the default,
+    /// lets Tokio start one per CPU, as `#[tokio::main]` always did.
+    pub workers: usize,
+    /// The largest request body the server accepts, in bytes
+    /// (`[server] max_body_size`). The point-upload routes accept up to this;
+    /// every other route is capped at the smaller of this and
+    /// [`crate::routes::JSON_BODY_LIMIT`]. See
+    /// [`crate::routes::api_routes_with_body_limit`].
+    pub max_body_size: usize,
+    /// The `[logging]` section, with `VELESDB_LOGGING_LEVEL` applied.
+    pub logging: LoggingConfig,
+    /// Keys of the server-owned sections that nothing reads, as
+    /// `section.key` — a typo, or a setting this build does not have. The
+    /// binary warns about them at startup instead of dropping them silently.
+    pub ignored_entries: Vec<String>,
 }
 
 /// Default burst budget for rate limiting (requests per second per IP).
 const DEFAULT_RATE_LIMIT: u32 = 100;
-
-/// Default preflight cache duration in seconds (1 hour).
-const DEFAULT_CORS_MAX_AGE_SECS: u64 = 3600;
-
-impl Default for CorsConfig {
-    fn default() -> Self {
-        Self {
-            allowed_origins: vec!["*".to_string()],
-            allowed_methods: vec![
-                "GET".to_string(),
-                "POST".to_string(),
-                "PUT".to_string(),
-                "DELETE".to_string(),
-                "PATCH".to_string(),
-                "OPTIONS".to_string(),
-            ],
-            allowed_headers: vec!["*".to_string()],
-            allow_credentials: false,
-            max_age_secs: DEFAULT_CORS_MAX_AGE_SECS,
-        }
-    }
-}
-
-impl CorsConfig {
-    /// Returns `true` when CORS is in fully permissive mode (any origin).
-    pub fn is_permissive(&self) -> bool {
-        self.allowed_origins.iter().any(|o| o == "*")
-    }
-}
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -223,9 +243,22 @@ impl Default for ServerConfig {
             shutdown_timeout_secs: 30,
             rate_limit: DEFAULT_RATE_LIMIT,
             cors: CorsConfig::default(),
+            workers: 0,
+            max_body_size: crate::routes::DEFAULT_MAX_BODY_SIZE,
+            logging: LoggingConfig::default(),
+            ignored_entries: Vec::new(),
         }
     }
 }
+
+/// Ceiling for `[server] workers`, the same one `velesdb_core`'s own
+/// `server.workers` validation applies: high enough for any real machine,
+/// low enough that a typo cannot ask for millions of threads.
+pub const WORKERS_CAP: usize = 4_096;
+
+/// Ceiling for `[server] max_body_size`: 1 GiB. A point-upload body is
+/// buffered whole before it is parsed, so this bounds one request's memory.
+pub const MAX_BODY_SIZE_CAP: usize = 1024 * 1024 * 1024;
 
 // ============================================================================
 // Loading logic
@@ -237,18 +270,59 @@ impl ServerConfig {
     /// `cli` contains values from clap (which merges CLI flags + env vars).
     /// `cli_sources` indicates which fields were explicitly set via CLI/env
     /// (as opposed to falling back to clap defaults).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read or parsed, when a
+    /// `[logging]` value (or `VELESDB_LOGGING_LEVEL`) is not one the server
+    /// knows, or when both `[server] cors_origins` and
+    /// `[cors] allowed_origins` are set.
     pub fn load(cli: CliOverrides) -> anyhow::Result<Self> {
         let defaults = Self::default();
         let file_cfg = load_toml_file(&cli.config_path)?;
-        Ok(Self::merge(defaults, file_cfg, cli))
+        Self::merge(defaults, file_cfg, cli)
     }
 
-    fn merge(defaults: Self, file: FileConfig, cli: CliOverrides) -> Self {
-        let server = file.server.unwrap_or_default();
-        let auth = file.auth.unwrap_or_default();
-        let tls = file.tls.unwrap_or_default();
-        let cors_section = file.cors.unwrap_or_default();
+    fn merge(defaults: Self, file: FileConfig, cli: CliOverrides) -> anyhow::Result<Self> {
+        let ignored_entries = file.unknown_entries();
+        let logging =
+            LoggingConfig::resolve(&file.logging.unwrap_or_default(), cli.log_level.as_deref())?;
+        let mut server = file.server.unwrap_or_default();
+        let cors = resolve_cors(
+            &defaults.cors,
+            file.cors.unwrap_or_default(),
+            server.cors_enabled,
+            server.cors_origins.take(),
+        )?;
+        let workers = server.workers.unwrap_or(defaults.workers);
+        let max_body_size = server.max_body_size.unwrap_or(defaults.max_body_size);
+        let transport = Self::merge_transport(
+            defaults,
+            server,
+            file.auth.unwrap_or_default(),
+            file.tls.unwrap_or_default(),
+            cli,
+        );
+        Ok(Self {
+            cors,
+            workers,
+            max_body_size,
+            logging,
+            ignored_entries,
+            ..transport
+        })
+    }
 
+    /// The settings that have a CLI flag or an environment variable, layered
+    /// CLI/env > TOML > default. The rest of the returned value is
+    /// `defaults`'.
+    fn merge_transport(
+        defaults: Self,
+        server: ServerSection,
+        auth: AuthSection,
+        tls: TlsSection,
+        cli: CliOverrides,
+    ) -> Self {
         // Layer: TOML over defaults
         let host = server.host.unwrap_or(defaults.host);
         let port = server.port.unwrap_or(defaults.port);
@@ -262,28 +336,20 @@ impl ServerConfig {
             cert: tls.cert.or(defaults.tls.cert),
             key: tls.key.or(defaults.tls.key),
         };
-        let cors = resolve_cors(defaults.cors, cors_section);
 
         // Layer: CLI/env over TOML (only override when explicitly set)
-        let host = cli.host.unwrap_or(host);
-        let port = cli.port.unwrap_or(port);
-        let data_dir = cli.data_dir.unwrap_or(data_dir);
-        let api_keys = cli.api_keys.unwrap_or(api_keys);
-        let tls = TlsConfig {
-            cert: cli.tls_cert.or(tls.cert),
-            key: cli.tls_key.or(tls.key),
-        };
-        let rate_limit = cli.rate_limit.unwrap_or(rate_limit);
-
         Self {
-            host,
-            port,
-            data_dir,
-            api_keys,
-            tls,
+            host: cli.host.unwrap_or(host),
+            port: cli.port.unwrap_or(port),
+            data_dir: cli.data_dir.unwrap_or(data_dir),
+            api_keys: cli.api_keys.unwrap_or(api_keys),
+            tls: TlsConfig {
+                cert: cli.tls_cert.or(tls.cert),
+                key: cli.tls_key.or(tls.key),
+            },
             shutdown_timeout_secs,
-            rate_limit,
-            cors,
+            rate_limit: cli.rate_limit.unwrap_or(rate_limit),
+            ..defaults
         }
     }
 
@@ -295,27 +361,20 @@ impl ServerConfig {
         if self.data_dir.is_empty() {
             anyhow::bail!("data_dir must not be empty");
         }
-
-        // TLS: both cert and key must be provided together
-        match (&self.tls.cert, &self.tls.key) {
-            (Some(_), None) => {
-                anyhow::bail!("tls_cert is set but tls_key is missing");
-            }
-            (None, Some(_)) => {
-                anyhow::bail!("tls_key is set but tls_cert is missing");
-            }
-            (Some(cert), Some(key)) => {
-                if !Path::new(cert).exists() {
-                    anyhow::bail!("TLS cert file not found: {cert}");
-                }
-                if !Path::new(key).exists() {
-                    anyhow::bail!("TLS key file not found: {key}");
-                }
-            }
-            (None, None) => {}
+        if self.workers > WORKERS_CAP {
+            anyhow::bail!(
+                "server.workers: value {} is out of range: 0 (one per CPU) or 1..={WORKERS_CAP}",
+                self.workers
+            );
         }
-
-        Ok(())
+        if self.max_body_size == 0 || self.max_body_size > MAX_BODY_SIZE_CAP {
+            anyhow::bail!(
+                "server.max_body_size: value {} is out of range [1, {MAX_BODY_SIZE_CAP}] (bytes)",
+                self.max_body_size
+            );
+        }
+        self.tls.validate()?;
+        self.cors.validate()
     }
 
     /// Returns `true` when API key authentication is enabled.
@@ -379,6 +438,8 @@ pub struct CliOverrides {
     pub tls_cert: Option<String>,
     pub tls_key: Option<String>,
     pub rate_limit: Option<u32>,
+    /// `VELESDB_LOGGING_LEVEL` (see [`crate::logging::level_from_env`]).
+    pub log_level: Option<String>,
 }
 
 // ============================================================================
@@ -409,96 +470,6 @@ fn load_toml_file(path: &Option<PathBuf>) -> anyhow::Result<FileConfig> {
         .map_err(|e| anyhow::anyhow!("failed to parse config file {}: {e}", candidate.display()))?;
 
     Ok(cfg)
-}
-
-// ============================================================================
-// CORS resolution & layer builder
-// ============================================================================
-
-/// Merges a `CorsSection` (from TOML) over `CorsConfig` defaults.
-fn resolve_cors(defaults: CorsConfig, section: CorsSection) -> CorsConfig {
-    CorsConfig {
-        allowed_origins: section.allowed_origins.unwrap_or(defaults.allowed_origins),
-        allowed_methods: section.allowed_methods.unwrap_or(defaults.allowed_methods),
-        allowed_headers: section.allowed_headers.unwrap_or(defaults.allowed_headers),
-        allow_credentials: section
-            .allow_credentials
-            .unwrap_or(defaults.allow_credentials),
-        max_age_secs: section.max_age_secs.unwrap_or(defaults.max_age_secs),
-    }
-}
-
-/// Builds a [`tower_http::cors::CorsLayer`] from the resolved CORS config.
-///
-/// When `allowed_origins` contains `"*"`, returns `CorsLayer::permissive()`
-/// for full backward compatibility. Otherwise, constructs a restrictive
-/// layer with the specified origins, methods, and headers.
-pub fn build_cors_layer(cors: &CorsConfig) -> tower_http::cors::CorsLayer {
-    use tower_http::cors::{AllowOrigin, CorsLayer};
-
-    if cors.is_permissive() {
-        return CorsLayer::permissive();
-    }
-
-    let origins: Vec<axum::http::HeaderValue> = cors
-        .allowed_origins
-        .iter()
-        .filter_map(|o| o.parse().ok())
-        .collect();
-    let methods: Vec<axum::http::Method> = cors
-        .allowed_methods
-        .iter()
-        .filter_map(|m| m.parse().ok())
-        .collect();
-
-    let layer = CorsLayer::new()
-        .allow_origin(AllowOrigin::list(origins))
-        .allow_methods(methods)
-        .max_age(std::time::Duration::from_secs(cors.max_age_secs));
-
-    let layer = apply_cors_headers_policy(layer, cors);
-
-    if cors.allow_credentials {
-        layer.allow_credentials(true)
-    } else {
-        layer
-    }
-}
-
-/// Applies the headers policy to a `CorsLayer`, honouring the CORS spec rule that
-/// `allow_credentials=true` is incompatible with wildcard headers (browsers reject
-/// the preflight). Logs a warning and falls back to default headers in that case.
-fn apply_cors_headers_policy(
-    layer: tower_http::cors::CorsLayer,
-    cors: &CorsConfig,
-) -> tower_http::cors::CorsLayer {
-    use tower_http::cors::Any;
-
-    let has_wildcard = cors.allowed_headers.iter().any(|h| h == "*");
-    if has_wildcard && !cors.allow_credentials {
-        return layer.allow_headers(Any);
-    }
-    if has_wildcard && cors.allow_credentials {
-        tracing::warn!(
-            "CORS: allow_credentials=true is incompatible with wildcard \
-             headers per CORS spec. Falling back to default headers \
-             (Content-Type, Authorization)."
-        );
-    }
-    let headers: Vec<axum::http::HeaderName> = cors
-        .allowed_headers
-        .iter()
-        .filter(|h| h.as_str() != "*")
-        .filter_map(|h| h.parse().ok())
-        .collect();
-    if headers.is_empty() && cors.allow_credentials {
-        layer.allow_headers([
-            axum::http::header::CONTENT_TYPE,
-            axum::http::header::AUTHORIZATION,
-        ])
-    } else {
-        layer.allow_headers(headers)
-    }
 }
 
 // ============================================================================
@@ -550,3 +521,7 @@ pub fn update_check_plan(
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_server_settings_tests.rs"]
+mod server_settings_tests;
