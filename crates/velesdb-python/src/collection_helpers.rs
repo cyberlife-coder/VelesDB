@@ -11,7 +11,7 @@ use crate::exceptions::{
     CollectionExistsError, CollectionNotFoundError, DatabaseLockedError, DimensionMismatchError,
     EdgeExistsError,
 };
-use crate::utils::{extract_vector, json_to_python, python_to_json};
+use crate::utils::{extract_vector, json_to_python, python_to_json_within};
 use velesdb_core::sparse_index::SparseVector;
 use velesdb_core::{Filter, Point, SearchResult};
 
@@ -385,7 +385,8 @@ pub fn dict_to_json_map(
 ) -> PyResult<serde_json::Value> {
     let json_map: serde_json::Map<String, serde_json::Value> = dict
         .iter()
-        .map(|(k, v)| python_to_json(py, v).map(|jv| (k.clone(), jv)))
+        // The dict is the payload's first level, as core counts it.
+        .map(|(k, v)| python_to_json_within(py, v, 1).map(|jv| (k.clone(), jv)))
         .collect::<PyResult<_>>()?;
     Ok(serde_json::Value::Object(json_map))
 }
