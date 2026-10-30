@@ -18,6 +18,7 @@ import type {
 import type {
   SearchOptions,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
 } from './search';
@@ -148,12 +149,12 @@ export interface IVelesDBBackend {
     }>
   ): Promise<SearchResult[][]>;
 
-  /** Full-text search using BM25 */
+  /** Full-text search: BM25 on REST, unranked substring match on WASM */
   textSearch(
     collection: string,
     query: string,
     options?: { k?: number; filter?: FilterInput }
-  ): Promise<SearchResult[]>;
+  ): Promise<TextSearchResult[]>;
 
   /** Hybrid search combining vector and text */
   hybridSearch(

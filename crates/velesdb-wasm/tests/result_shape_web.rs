@@ -46,21 +46,26 @@ fn store_with_payloads() -> VectorStore {
     store
 }
 
-/// Asserts a `{id, score, payload}` record for id 1 with the payload above.
-fn assert_scored_record(record: &JsValue, what: &str) {
+/// Asserts a plain-object record for id 1 carrying the payload above.
+fn assert_record(record: &JsValue, what: &str) {
     assert_plain_object(record, what);
     assert_eq!(prop(record, "id").as_f64(), Some(1.0), "{what}.id");
-    let score = prop(record, "score").as_f64();
-    assert!(
-        score.is_some_and(|s| s > 0.0),
-        "{what}.score must be a positive number, got {score:?}"
-    );
     let payload = prop(record, "payload");
     assert_plain_object(&payload, &format!("{what}.payload"));
     assert_eq!(
         prop(&payload, "title").as_string().as_deref(),
         Some("hello rust"),
         "{what}.payload.title"
+    );
+}
+
+/// [`assert_record`], plus a positive numeric `score`.
+fn assert_scored_record(record: &JsValue, what: &str) {
+    assert_record(record, what);
+    let score = prop(record, "score").as_f64();
+    assert!(
+        score.is_some_and(|s| s > 0.0),
+        "{what}.score must be a positive number, got {score:?}"
     );
 }
 
@@ -83,16 +88,31 @@ fn search_with_filter_records_are_plain_objects() {
     assert_scored_record(&first(&results), "search_with_filter record");
 }
 
-/// `text_search` is a substring match with no relevance gradient: every match
-/// scores `1.0`, the text score `hybrid_search` gives a match, so the record
-/// has the documented `{id, score, payload}` shape.
+/// `text_search` selects by case-insensitive substring and ranks nothing, so
+/// its records carry `score: null` — never a number a caller could threshold
+/// or sort on — and come back in insertion order.
 #[wasm_bindgen_test]
-fn text_search_records_are_plain_objects_with_a_score() {
-    let store = store_with_payloads();
-    let results = store.text_search("hello", 2, None).unwrap();
+fn text_search_records_are_plain_objects_without_a_score() {
+    let mut store = store_with_payloads();
+    let payload = js_sys::Object::new();
+    js_sys::Reflect::set(&payload, &"title".into(), &"HELLO again".into()).unwrap();
+    store
+        .insert_with_payload(3, &[1.0, 1.0], payload.into())
+        .unwrap();
+
+    let results = store.text_search("hello", 5, None).unwrap();
+
     let record = first(&results);
-    assert_scored_record(&record, "text_search record");
-    assert_eq!(prop(&record, "score").as_f64(), Some(1.0));
+    assert_record(&record, "text_search record");
+    assert!(
+        prop(&record, "score").is_null(),
+        "text_search score is null"
+    );
+    let ids: Vec<f64> = js_sys::Array::from(&results)
+        .iter()
+        .map(|r| prop(&r, "id").as_f64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![1.0, 3.0], "every match, in insertion order");
 }
 
 /// An absent payload arrives as `null`, as `JSON.stringify` would keep it.

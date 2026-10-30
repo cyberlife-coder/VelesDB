@@ -250,7 +250,7 @@ impl VectorStore {
     /// Text search on payload fields (substring matching).
     ///
     /// Returns `[{id, score, payload}, ...]` in insertion order, truncated to
-    /// `k`; every match scores `1.0` (a substring match has no ranking).
+    /// `k`, with `score: null`: a substring match selects, it does not rank.
     #[wasm_bindgen]
     pub fn text_search(
         &self,

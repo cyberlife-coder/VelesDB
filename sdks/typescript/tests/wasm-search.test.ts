@@ -428,26 +428,23 @@ describe('wasmTextSearch', () => {
     );
   });
 
-  it('maps tuple results and object results via mapWasmResult', async () => {
-    const payloads = new Map<string, Record<string, unknown>>([
-      ['1', { from: 'map' }],
-    ]);
+  it('passes the binding records on with their null score, never a number', async () => {
+    // velesdb-wasm 8.0.0's text_search is an unranked substring match: its
+    // records are {id, score: null, payload}, in insertion order.
     const store = buildStore({
       text_search: vi.fn(() => [
-        [1n, 0.9], // tuple shape
-        { id: 2n, score: 0.5, payload: { inline: true } }, // object shape
+        { id: 2, score: null, payload: { inline: true } },
+        { id: 1, score: null, payload: { title: 'b' } },
       ]),
     });
-    const ctx = buildCtx('docs', store, { payloads });
+    const ctx = buildCtx('docs', store);
 
     const result = await wasmTextSearch(ctx, 'docs', 'hello', { k: 5 });
 
-    expect(result[0]).toEqual({ id: '1', score: 0.9, payload: { from: 'map' } });
-    expect(result[1]).toEqual({
-      id: '2',
-      score: 0.5,
-      payload: { inline: true },
-    });
+    expect(result).toEqual([
+      { id: '2', score: null, payload: { inline: true } },
+      { id: '1', score: null, payload: { title: 'b' } },
+    ]);
   });
 });
 

@@ -118,10 +118,10 @@ pub fn search(
 
 /// Text search in payloads.
 ///
-/// A substring match has no relevance gradient, so every match scores `1.0`
-/// — the text score [`hybrid_search_impl`] gives the same match — and the
-/// records carry the `{id, score, payload}` shape every other filtered or
-/// hybrid search returns.
+/// A case-insensitive substring match: it selects records, it does not rank
+/// them. Matches come back in insertion order with `score: null` — the
+/// `{id, score, payload}` shape of the other record-returning searches, with
+/// no number a caller could mistake for relevance and threshold or sort on.
 pub fn text_search_impl(
     query: &str,
     ids: &[u64],
@@ -144,7 +144,7 @@ pub fn text_search_impl(
                 if matches {
                     Some(serde_json::json!({
                         "id": id,
-                        "score": 1.0,
+                        "score": serde_json::Value::Null,
                         "payload": p
                     }))
                 } else {

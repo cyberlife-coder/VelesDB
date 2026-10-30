@@ -464,7 +464,7 @@ Full-text search using BM25 scoring.
 const results = await db.textSearch('docs', 'machine learning', { k: 10 });
 ```
 
-> **WASM backend:** the WASM build has no BM25 index. A `filter` is refused with `NOT_SUPPORTED` rather than return rows the filter excludes (`db.capabilities().filteredSearch` does not list `'textSearch'`). Every match scores `1`: the WASM build matches substrings and has no ranking. Needs velesdb-wasm 8.0.0 (#2332).
+> **WASM backend:** the WASM build has no BM25 index. A `filter` is refused with `NOT_SUPPORTED` rather than return rows the filter excludes (`db.capabilities().filteredSearch` does not list `'textSearch'`). It matches substrings case-insensitively and ranks nothing, so each result's `score` is `null` (`TextSearchResult.score` is `number | null`) and rows come in insertion order. Needs velesdb-wasm 8.0.0 (#2332).
 
 #### `db.hybridSearch(collection, vector, textQuery, options?)`
 
@@ -1124,6 +1124,7 @@ import {
   type SearchOptions,
   type SearchQuality,
   type SearchResult,
+  type TextSearchResult,
   type SparseVector,
   type MultiQuerySearchOptions,
   type GraphEdge,

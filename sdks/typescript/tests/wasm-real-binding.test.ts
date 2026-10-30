@@ -77,10 +77,14 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     expect(results[0].payload).toEqual(NOTES);
   });
 
-  it('textSearch returns ids, a score per match and payloads', async () => {
-    const results = await db.textSearch('docs', 'rust', { k: 3 });
+  it('textSearch returns ids and payloads, and no score: it ranks nothing', async () => {
+    const results = await db.textSearch('docs', 'E', { k: 3 });
 
-    expect(results).toEqual([{ id: '1', score: 1, payload: RUST }]);
+    // Case-insensitive substring match, in insertion order, unscored.
+    expect(results).toEqual([
+      { id: '1', score: null, payload: RUST },
+      { id: '2', score: null, payload: NOTES },
+    ]);
   });
 
   it('hybridSearch returns ids, fused scores and payloads', async () => {

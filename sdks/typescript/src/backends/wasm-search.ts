@@ -8,6 +8,7 @@
 import type {
   SearchOptions,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
   QueryOptions,
   QueryApiResponse,
@@ -34,7 +35,7 @@ import type {
   WasmSparseResult,
   WasmFilteredResult,
   WasmHybridResult,
-  WasmSearchResultItem,
+  WasmTextResult,
 } from './wasm-types';
 
 // ---------------------------------------------------------------------------
@@ -380,18 +381,13 @@ export async function wasmSearchBatch(
 // Text / Hybrid search
 // ---------------------------------------------------------------------------
 
-/** Map a WASM search result (tuple or object) to a SearchResult. */
+/** Map a WASM `[id, score]` tuple to a SearchResult with its stored payload. */
 function mapWasmResult(
   ctx: WasmContext,
   collection: ReturnType<WasmContext['getCollection']>,
-  r: WasmSearchResultItem
+  [id, score]: WasmDenseResult
 ): SearchResult {
-  if (Array.isArray(r)) {
-    const key = ctx.canonicalPayloadKeyFromResultId(r[0]);
-    return { id: String(r[0]), score: r[1], payload: collection!.payloads.get(key) };
-  }
-  const key = ctx.canonicalPayloadKeyFromResultId(r.id);
-  return { id: String(r.id), score: r.score, payload: r.payload ?? collection!.payloads.get(key) };
+  return { id: String(id), score, payload: collection!.payloads.get(ctx.canonicalPayloadKeyFromResultId(id)) };
 }
 
 export async function wasmTextSearch(
@@ -399,7 +395,7 @@ export async function wasmTextSearch(
   collectionName: string,
   query: string,
   options?: { k?: number; filter?: FilterInput }
-): Promise<SearchResult[]> {
+): Promise<TextSearchResult[]> {
   const collection = ctx.getCollection(collectionName);
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
@@ -411,8 +407,10 @@ export async function wasmTextSearch(
   }
   // The binding's third argument names one payload field to match. It is
   // not a filter, which is why a filter is refused above.
-  const raw: WasmSearchResultItem[] = collection.store.text_search(query, k, null);
-  return raw.map(r => mapWasmResult(ctx, collection, r));
+  // A substring match ranks nothing: the binding's `score` is null, and it
+  // is passed on as null rather than replaced by a number (#2332).
+  const raw: WasmTextResult[] = collection.store.text_search(query, k, null);
+  return raw.map(r => ({ id: String(r.id), score: r.score, payload: r.payload }));
 }
 
 export async function wasmHybridSearch(
@@ -615,7 +613,7 @@ export async function wasmMultiQuerySearch(
     flat.set(src, idx * dimension);
   });
 
-  const raw: WasmSearchResultItem[] = collection.store.multi_query_search(
+  const raw: WasmDenseResult[] = collection.store.multi_query_search(
     flat,
     numVectors,
     k,

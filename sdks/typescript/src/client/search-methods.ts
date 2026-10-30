@@ -14,6 +14,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
   PqTrainOptions,
@@ -76,13 +77,13 @@ export function searchBatch(
   return backend.searchBatch(collection, searches);
 }
 
-/** Perform full-text search using BM25. */
+/** Full-text search: BM25 on REST, an unranked substring match on WASM. */
 export function textSearch(
   backend: IVelesDBBackend,
   collection: string,
   query: string,
   options?: { k?: number; filter?: FilterInput }
-): Promise<SearchResult[]> {
+): Promise<TextSearchResult[]> {
   requireNonEmptyString(query, 'Query');
   return backend.textSearch(collection, query, options);
 }

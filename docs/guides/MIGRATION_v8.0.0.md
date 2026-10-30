@@ -244,7 +244,20 @@ Rejections carry core's codes and a new `recoverable` field:
 - **`updateGuardrails` throws `VelesError`** for limits core refuses.
 - **`SearchQuality.Adaptive` with `min_ef > max_ef`** is refused.
 
-## 7. `velesdb-wasm` storage modes
+## 7. `velesdb-wasm`
+
+### Values returned to JavaScript
+
+- **Records are plain objects**, no longer ES2015 `Map`s: read `hit.id` and
+  `hit.payload.title`, not `hit.get('id')` (#2332).
+- **An absent value is `null`, where 7.1.0 gave `undefined`:** a missing
+  `payload`, `query()`'s `graphScore` and `columnData`, `GraphNode.to_json()`'s
+  `vector`, an alias missing from `ParsedQuery.matchReturnItems`. Test with `== null`, which
+  matches both.
+- **`text_search` records carry `score: null`.** The match is an unranked
+  substring match; sort or threshold on something else.
+
+### Storage modes
 
 - **Every mode keeps f32 vectors** and returns core's top-k and scores for that
   mode.

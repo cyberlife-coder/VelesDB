@@ -137,7 +137,7 @@ Inserting an id that already exists replaces the previous entry — `insert` and
 | `search(query, k)` | `[[id, score], …]` | Brute-force k-NN over every vector. |
 | `search_with_quality(query, k, quality)` | `[[id, score], …]` | Accepts the Python/Server quality strings (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min>:<max>`). **All modes return identical results in WASM** — there is no HNSW graph; the parameter exists for API parity, and is checked as the server checks it: each ef in 16–4096, or it throws (#2275). |
 | `search_with_filter(query, k, filter)` | `[{id, score, payload}, …]` | Metadata-filtered search. |
-| `text_search(query, k, field?)` | `[{id, score, payload}, …]` | Case-insensitive substring match over payload fields, in insertion order; every match scores `1.0`. |
+| `text_search(query, k, field?)` | `[{id, score: null, payload}, …]` | Case-insensitive substring match over payload fields, in insertion order. It selects without ranking, so `score` is always `null`. |
 | `hybrid_search(vector, textQuery, k, vectorWeight?)` | `[{id, score, payload}, …]` | Dense + text fusion. |
 | `multi_query_search(vectors, numVectors, k, strategy, rrfK?, weights?)` | `[[id, score], …]` | Multi-query fusion (MQG). |
 | `batch_search(vectors, numVectors, k)` | `[[[id, score], …], …]` | One result list per query vector. |
