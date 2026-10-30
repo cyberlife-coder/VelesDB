@@ -513,6 +513,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stored floats read back bit for bit.** Payloads, edge-WAL records and
+  edge-snapshot properties are JSON, and `serde_json`'s default parser returns
+  some doubles one ULP off (`127.75015752618465` reads back as
+  `127.75015752618464`): a float written to a payload or an edge property
+  could come back different after a reopen, and an exact-equality filter on
+  it stop matching. `velesdb-core` now enables `serde_json`'s
+  `float_roundtrip` feature, which parses every float exactly. The feature
+  is process-wide, so every JSON float parse in a binary that links core pays
+  it, REST request bodies included: measured on a 768-dimension query body
+  (15.5 KB, release build), parsing went from 38-40 µs to 56-63 µs into a
+  typed `Vec<f32>` (about +20 µs per vector) and from 44-47 µs to 57-61 µs
+  into a `serde_json::Value`.
 - **Graph edges with properties survive a flush and a reopen.** `flush()`
   writes every edge to the `edge_store.bin` snapshot, encoded with postcard,
   and then truncates the edge WAL. An edge's properties are
@@ -523,9 +535,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loss permanent. The snapshot now writes each edge's properties as one JSON
   string; `GraphEdge`'s own serde form, which the API and the edge WAL carry,
   is unchanged. A snapshot of edges without properties keeps the same bytes
-  in both directions. Float properties read back through `serde_json`'s
-  default float parser, as they already did from the edge WAL, which can
-  return a double one ULP off. An `edge_store.bin` that cannot be decoded is no longer
+  in both directions. Float properties read back exactly (see the next
+  entry). An `edge_store.bin` that cannot be decoded is no longer
   left in place to be overwritten: the open logs the decode error, moves the
   file to `edge_store.bin.unreadable-<unix milliseconds>` next to it (never
   replacing an earlier one), and opens the collection with the edges the WAL

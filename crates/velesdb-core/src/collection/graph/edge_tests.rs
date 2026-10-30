@@ -1252,3 +1252,27 @@ fn test_the_snapshot_writes_a_replayed_edge_it_can_read_back() {
 
     assert_eq!(restored.get_edge(7), Some(&edge));
 }
+
+/// An edge's float property reads back bit for bit from the WAL record and
+/// the snapshot.
+#[test]
+fn test_edge_float_properties_round_trip_exactly() {
+    // One of the doubles the default serde_json parser returns one ULP off.
+    let value = 127.750_157_526_184_65_f64;
+    let edge = GraphEdge::new(7, 1, 2, "W")
+        .unwrap()
+        .with_properties(HashMap::from([("w".to_string(), json!(value))]));
+    let mut store = EdgeStore::new();
+    store.add_edge(edge.clone()).unwrap();
+
+    let from_wal: GraphEdge = serde_json::from_slice(&serde_json::to_vec(&edge).unwrap()).unwrap();
+    let from_snapshot = EdgeStore::from_bytes(&store.to_bytes().unwrap()).unwrap();
+
+    for read_back in [&from_wal, from_snapshot.get_edge(7).unwrap()] {
+        let stored = read_back
+            .property("w")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap();
+        assert_eq!(stored.to_bits(), value.to_bits());
+    }
+}
