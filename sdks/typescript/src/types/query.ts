@@ -126,13 +126,6 @@ export interface CollectionConfigResponse {
 // VelesQL Multi-Model Query Types (EPIC-031 US-011)
 // ============================================================================
 
-/** VelesQL query options */
-export interface QueryOptions {
-  /** Timeout in milliseconds (default: 30000) */
-  timeoutMs?: number;
-  /** Enable streaming response */
-  stream?: boolean;
-}
 
 /**
  * Query result row from VelesQL query.

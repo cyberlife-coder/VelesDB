@@ -14,6 +14,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
   CreateIndexOptions,
   IndexInfo,
@@ -24,7 +25,6 @@ import type {
   TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -437,7 +437,7 @@ export class WasmBackend implements IVelesDBBackend {
     return wasmSearchBatch(buildWasmContext(this.wasmModule!, this.collections), c, s);
   }
 
-  async textSearch(c: string, q: string, o?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+  async textSearch(c: string, q: string, o?: { k?: number; filter?: FilterInput }): Promise<TextSearchResult[]> {
     this.ensureInitialized();
     return wasmTextSearch(buildWasmContext(this.wasmModule!, this.collections), c, q, o);
   }
@@ -447,9 +447,9 @@ export class WasmBackend implements IVelesDBBackend {
     return wasmHybridSearch(buildWasmContext(this.wasmModule!, this.collections), c, v, t, o);
   }
 
-  async query(c: string, q: string, p?: Record<string, unknown>, o?: QueryOptions): Promise<QueryApiResponse> {
+  async query(c: string, q: string, p?: Record<string, unknown>): Promise<QueryApiResponse> {
     this.ensureInitialized();
-    return wasmQuery(buildWasmContext(this.wasmModule!, this.collections), c, q, p, o);
+    return wasmQuery(buildWasmContext(this.wasmModule!, this.collections), c, q, p);
   }
 
   async multiQuerySearch(c: string, v: Array<number[] | Float32Array>, o?: MultiQuerySearchOptions): Promise<SearchResult[]> {

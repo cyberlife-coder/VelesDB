@@ -1,0 +1,55 @@
+{
+  "description": "The `graph_schema` value the TypeScript SDK's createGraphCollection sends in POST /collections for a given GraphCollectionConfig (`sdk_config`). velesdb-server deserializes it as velesdb_core::GraphSchema (crates/velesdb-server/src/handlers/collections.rs, parse_graph_schema). crates/velesdb-core/tests/graph_schema_wire_conformance.rs proves each case parses, yields the stated mode and accepts/refuses the stated node types and edges; sdks/typescript/tests/graph-backend.test.ts proves the SDK sends exactly `graph_schema` for `sdk_config`.",
+  "cases": [
+    {
+      "id": "default_schemaless",
+      "sdk_config": {},
+      "graph_schema": { "schemaless": true, "node_types": [], "edge_types": [] },
+      "is_schemaless": true,
+      "accepts_node_types": ["Anything"],
+      "refuses_node_types": [],
+      "accepts_edges": [["ANY", "A", "B"]],
+      "refuses_edges": []
+    },
+    {
+      "id": "strict_without_types",
+      "sdk_config": { "schemaMode": "strict" },
+      "graph_schema": { "schemaless": false, "node_types": [], "edge_types": [] },
+      "is_schemaless": false,
+      "accepts_node_types": [],
+      "refuses_node_types": ["Person"],
+      "accepts_edges": [],
+      "refuses_edges": [["KNOWS", "Person", "Person"]]
+    },
+    {
+      "id": "strict_with_types",
+      "sdk_config": {
+        "schemaMode": "strict",
+        "nodeTypes": [
+          { "name": "Person", "properties": { "name": "string", "age": "integer" } },
+          { "name": "Company" }
+        ],
+        "edgeTypes": [
+          { "name": "WORKS_AT", "fromType": "Person", "toType": "Company", "properties": { "since": "integer" } },
+          { "name": "KNOWS", "fromType": "Person", "toType": "Person" }
+        ]
+      },
+      "graph_schema": {
+        "schemaless": false,
+        "node_types": [
+          { "name": "Person", "properties": { "name": "string", "age": "integer" } },
+          { "name": "Company", "properties": {} }
+        ],
+        "edge_types": [
+          { "name": "WORKS_AT", "from_type": "Person", "to_type": "Company", "properties": { "since": "integer" } },
+          { "name": "KNOWS", "from_type": "Person", "to_type": "Person", "properties": {} }
+        ]
+      },
+      "is_schemaless": false,
+      "accepts_node_types": ["Person", "Company"],
+      "refuses_node_types": ["Robot"],
+      "accepts_edges": [["WORKS_AT", "Person", "Company"], ["KNOWS", "Person", "Person"]],
+      "refuses_edges": [["WORKS_AT", "Company", "Person"], ["MANAGES", "Person", "Person"]]
+    }
+  ]
+}

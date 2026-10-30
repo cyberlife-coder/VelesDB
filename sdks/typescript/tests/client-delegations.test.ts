@@ -406,7 +406,6 @@ describe('VelesDB — index management delegations', () => {
     expect(backend.query).toHaveBeenCalledWith(
       'docs',
       'ALTER COLLECTION docs SET(auto_reindex=true)',
-      undefined,
       undefined
     );
 
@@ -414,7 +413,6 @@ describe('VelesDB — index management delegations', () => {
     expect(backend.query).toHaveBeenCalledWith(
       'docs',
       'ALTER COLLECTION docs SET(auto_reindex=false)',
-      undefined,
       undefined
     );
   });
@@ -424,7 +422,6 @@ describe('VelesDB — index management delegations', () => {
     expect(backend.query).toHaveBeenCalledWith(
       'docs',
       'ALTER COLLECTION docs SET(auto_reindex=true)',
-      undefined,
       undefined
     );
     await expect(db.alterCollection('docs', {})).rejects.toThrow(ValidationError);

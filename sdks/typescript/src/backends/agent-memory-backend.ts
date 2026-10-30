@@ -15,6 +15,8 @@ import type {
   ProceduralPattern,
   EpisodicRecord,
 } from '../types';
+import type { Filter } from '../filter';
+import { f } from '../filter';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
 import { parseRestPointId } from './crud-backend';
@@ -26,8 +28,36 @@ export interface AgentMemoryTransport extends BaseTransport {
     collection: string,
     embedding: number[],
     k: number,
-    filter: Record<string, string>
+    filter: Filter
   ): Promise<SearchResult[]>;
+}
+
+// ---------------------------------------------------------------------------
+// Wire filters — every agent-memory query selects through these, so each one
+// is a core `Filter` (`{ condition: ... }`) and nothing else. Their exact JSON
+// is pinned by `conformance/filter_wire_cases.json`, which velesdb-core's
+// `tests/filter_wire_conformance.rs` parses with `velesdb_core::Filter`.
+// ---------------------------------------------------------------------------
+
+/** The value written to `_memory_type` by each store operation. */
+type MemoryType = 'semantic' | 'episodic' | 'procedural';
+
+/** Points written as `memoryType` (`_memory_type == memoryType`). */
+function memoryTypeFilter(memoryType: MemoryType): Filter {
+  return f.eq('_memory_type', memoryType);
+}
+
+/**
+ * Episodic events inside an optional timestamp window. Both bounds are
+ * exclusive, as in core: `TemporalIndex::recent` skips `ts <= since` and
+ * `TemporalIndex::older_than` skips `ts >= before`.
+ */
+function episodicWindowFilter(window: { since?: number; before?: number }): Filter {
+  const bounds: Filter[] = [];
+  if (window.since !== undefined) bounds.push(f.gt('timestamp', window.since));
+  if (window.before !== undefined) bounds.push(f.lt('timestamp', window.before));
+  const episodic = memoryTypeFilter('episodic');
+  return bounds.length === 0 ? episodic : f.and([episodic, ...bounds]);
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +157,7 @@ export async function searchSemanticMemory(
   embedding: number[],
   k = 5
 ): Promise<SearchResult[]> {
-  return transport.searchVectors(collection, embedding, k, { _memory_type: 'semantic' });
+  return transport.searchVectors(collection, embedding, k, memoryTypeFilter('semantic'));
 }
 
 export async function recordEpisodicEvent(
@@ -171,7 +201,7 @@ export async function recallEpisodicEvents(
   embedding: number[],
   k = 5
 ): Promise<SearchResult[]> {
-  return transport.searchVectors(collection, embedding, k, { _memory_type: 'episodic' });
+  return transport.searchVectors(collection, embedding, k, memoryTypeFilter('episodic'));
 }
 
 export async function storeProceduralPattern(
@@ -211,7 +241,7 @@ export async function matchProceduralPatterns(
   embedding: number[],
   k = 5
 ): Promise<SearchResult[]> {
-  return transport.searchVectors(collection, embedding, k, { _memory_type: 'procedural' });
+  return transport.searchVectors(collection, embedding, k, memoryTypeFilter('procedural'));
 }
 
 // ---------------------------------------------------------------------------
@@ -232,17 +262,21 @@ function toEpisodicRecord(point: {
   return { id: String(point.id), timestamp: payload.timestamp, payload };
 }
 
-/** Scroll every episodic event in the collection into memory. */
+/**
+ * Scroll every episodic event the server selects with `filter` into memory,
+ * sorted most-recent-first. The timestamp window is applied by core, not here.
+ */
 async function scrollEpisodicRecords(
   transport: AgentMemoryTransport,
-  collection: string
+  collection: string,
+  filter: Filter
 ): Promise<EpisodicRecord[]> {
   const records: EpisodicRecord[] = [];
   let cursor: string | number | null = null;
   do {
     const page = await scroll(transport, collection, {
       cursor: cursor ?? undefined,
-      filter: { _memory_type: 'episodic' },
+      filter,
     });
     for (const point of page.points) {
       const record = toEpisodicRecord(point);
@@ -250,22 +284,20 @@ async function scrollEpisodicRecords(
     }
     cursor = page.nextCursor;
   } while (cursor !== null && cursor !== undefined);
-  return records;
+  return records.sort((a, b) => b.timestamp - a.timestamp);
 }
 
 /**
  * Recall episodic events most-recent-first, optionally bounded below by
- * `since` (inclusive). Mirrors `EpisodicMemory::recent(since_timestamp)`.
+ * `since` (exclusive: strictly newer). Mirrors
+ * `EpisodicMemory::recent(since_timestamp)`.
  */
 export async function recallRecentEvents(
   transport: AgentMemoryTransport,
   collection: string,
   since?: number
 ): Promise<EpisodicRecord[]> {
-  const records = await scrollEpisodicRecords(transport, collection);
-  return records
-    .filter((r) => since === undefined || r.timestamp >= since)
-    .sort((a, b) => b.timestamp - a.timestamp);
+  return scrollEpisodicRecords(transport, collection, episodicWindowFilter({ since }));
 }
 
 /**
@@ -277,8 +309,5 @@ export async function recallOlderThanEvents(
   collection: string,
   before: number
 ): Promise<EpisodicRecord[]> {
-  const records = await scrollEpisodicRecords(transport, collection);
-  return records
-    .filter((r) => r.timestamp < before)
-    .sort((a, b) => b.timestamp - a.timestamp);
+  return scrollEpisodicRecords(transport, collection, episodicWindowFilter({ before }));
 }

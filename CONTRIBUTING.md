@@ -209,6 +209,8 @@ merge moved the repo ahead of your installed skills.
   0.11.4`, which declares `rust-version = 1.90.0` — on 1.89 the workspace only
   builds when that dependency is already cached.
 - Docker (optional, for integration tests)
+- Node.js 22.12+ to work on the TypeScript SDK (`sdks/typescript`): its test
+  toolchain (vitest 5, eslint 10) requires it, and CI runs the SDK on Node 22.
 
 ### Building from Source
 

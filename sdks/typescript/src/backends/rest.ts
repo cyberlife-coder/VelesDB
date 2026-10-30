@@ -25,7 +25,6 @@ import type {
   TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -208,7 +207,7 @@ export class RestBackend implements IVelesDBBackend {
   async sparseSearchNamed(c: string, q: import('../types').SparseVector, idx: string, o?: import('../types').SparseSearchNamedOptions): Promise<SearchResult[]> { this.ensureInitialized(); return _sparseSearchNamed(buildSearchTransport(this.httpConfig), c, q, idx, o); }
 
   // Query
-  async query(c: string, q: string, p?: Record<string, unknown>, o?: QueryOptions): Promise<QueryApiResponse> { this.ensureInitialized(); return _query(buildQueryTransport(this.httpConfig), c, q, p, o); }
+  async query(c: string, q: string, p?: Record<string, unknown>): Promise<QueryApiResponse> { this.ensureInitialized(); return _query(buildQueryTransport(this.httpConfig), c, q, p); }
   async queryExplain(q: string, p?: Record<string, unknown>, o?: { analyze?: boolean }): Promise<ExplainResponse> { this.ensureInitialized(); return _queryExplain(buildQueryTransport(this.httpConfig), q, p, o); }
   async collectionSanity(c: string): Promise<CollectionSanityResponse> { this.ensureInitialized(); return _collectionSanity(buildQueryTransport(this.httpConfig), c); }
 

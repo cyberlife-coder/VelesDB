@@ -348,7 +348,6 @@ describe('RestBackend', () => {
             vector: [1.0, 0.0],
             top_k: 5,
             filter: undefined,
-            include_vectors: false,
           }),
         })
       );
@@ -656,34 +655,6 @@ describe('RestBackend', () => {
             query: 'MATCH (d:Doc) RETURN d LIMIT 1',
             params: {},
             collection: 'docs',
-            timeout_ms: undefined,
-            stream: false,
-          }),
-        })
-      );
-    });
-
-    it('should pass query options timeout/stream to /query', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({
-          results: [],
-          timing_ms: 0.2,
-          rows_returned: 0,
-        }),
-      });
-
-      await backend.query('docs', 'SELECT * FROM docs LIMIT 1', {}, { timeoutMs: 1500, stream: true });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://localhost:8080/query',
-        expect.objectContaining({
-          body: JSON.stringify({
-            query: 'SELECT * FROM docs LIMIT 1',
-            params: {},
-            collection: 'docs',
-            timeout_ms: 1500,
-            stream: true,
           }),
         })
       );

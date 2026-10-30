@@ -149,7 +149,6 @@ export async function createCollection(
     metric: config.metric ?? 'cosine',
     storage_mode: config.storageMode ?? 'full',
     collection_type: config.collectionType ?? 'vector',
-    description: config.description,
     hnsw_m: config.hnsw?.m,
     hnsw_ef_construction: config.hnsw?.efConstruction,
     hnsw_alpha: config.hnsw?.alpha,
