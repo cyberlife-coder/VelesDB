@@ -399,6 +399,16 @@ default, `--purge`/`--stub` to fix); see
 [#1469](https://github.com/cyberlife-coder/VelesDB/issues/1469) and
 `guides/GRAPH_PATTERNS.md`.
 
+**Payload-derived indexes.** `label_index` and `graph_range_indexes` (both
+position 7, with no order between them: a path holds one, releases it, then
+takes the other) are derived from the stored payloads. Every write and delete
+path updates them while still holding the `payload_storage` (3) write guard
+it read the old payloads and wrote the new ones under — `upsert`,
+`upsert_metadata`, both bulk paths, the node-payload write and `delete` — so
+two writers to the same id cannot interleave and leave the indexes describing
+a payload storage no longer holds. BM25, the secondary indexes and the
+histograms are still updated after that guard is released.
+
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 
 ### Lock Layout
@@ -776,8 +786,9 @@ ensure no data is lost.
 │  4. load_bm25_index()                                                  │
 │     └─ bm25.snapshot + bm25.wal replay; payload rebuild if no snapshot │
 │                                                                        │
-│  5. Property index, label index (rebuilt from payloads), range index,  │
-│     edge_store.bin, named sparse indexes                               │
+│  5. Property index, label index + graph range indexes (both rebuilt    │
+│     from the payloads in one scan), range index, edge_store.bin,       │
+│     named sparse indexes                                               │
 │     └─ each sparse snapshot, then its WAL replayed over it             │
 │                                                                        │
 │  6. reconcile_point_count()                                            │

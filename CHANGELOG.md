@@ -545,6 +545,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   7.x cannot decode the 8.0 snapshot either, opens the collection without
   its edges, and its next flush with a non-empty edge WAL overwrites them.
 
+- **A MATCH range predicate no longer hides nodes the graph range index
+  missed.** `MATCH (n:P) WHERE n.age > 10` takes its candidates from the
+  in-memory `P.age` range index whenever that index exists, but only the
+  node-payload write (`upsert_node_payload` / `upsert_node_payloads`) fed it,
+  and every open started it empty. A node written through
+  `upsert_node(id, payload, Some(vector))`, `upsert`, `upsert_metadata`,
+  `upsert_bulk` or `upsert_bulk_from_raw`, or any node written before a
+  reopen, was then left out of the result, with no error, as soon as one
+  node-payload write had created the index — after a reopen, the query
+  returned only the nodes written since. Deletes also left their entries
+  behind. The range indexes are now derived from the payloads exactly like the
+  label index: every write and delete path that maintains the label index
+  maintains them too, through one shared remove-then-index step, and the open
+  rebuilds both from the stored payloads, WAL replay included, in the same
+  scan.
+
+  The index lookup is also kept a superset of what WHERE accepts, which it
+  was not in four cases, each of which hid matching nodes: `n.w = 0.5` matched
+  exactly where WHERE accepts any value within 0.001 (the lookup is now that
+  tolerance, doubled, around the literal); `n.age > 9007199254740992` missed
+  `2^53 + 1`, which the index orders as the `f64` `2^53` (a strict bound on an
+  integer is now looked up inclusive); `n.w >= 0.0` missed `-0.0` (the index
+  now orders `-0.0` and `0.0` equal, as WHERE does); and a top-level key
+  containing a dot, `"a.b"`, was indexed under the key WHERE uses for the
+  nested path `a` → `b` (such keys are no longer indexed: WHERE cannot reach
+  them). Only scalar properties are indexed — null, booleans, numbers,
+  strings — since an array or an object never satisfies an index-eligible
+  comparison.
+
+  **Memory:** every scalar property of every labelled node is now held in the
+  range indexes, strings included, on every write path and from the open on.
+  Measured on 100 000 labelled nodes, each with two numbers, a distinct 1 KB
+  string and a 20-element array, in a **debug** build (the open times are
+  only comparable with each other, not with a release build): the open took
+  23.8 s and 170 MiB of RSS, against 20.9 s and 46 MiB without the range
+  rebuild. The indexed strings dominate that cost: the indexes hold a copy
+  of every string property of every labelled node, and the 124 MiB they
+  added here is close to the 100 MB of strings the nodes carry.
+
+- **A bulk upsert of a point without a payload keeps that point's payload
+  indexed.** `upsert_bulk` and `upsert_bulk_from_raw` store nothing for a
+  point whose payload is `None`, so the point keeps its stored payload, but
+  the index maintenance treated it as a delete: re-embedding a node with
+  `upsert_bulk([Point::new(1, vector, None)])` removed it from the label and
+  range indexes (`MATCH (n:P)` no longer returned it), from BM25 (its text no
+  longer matched), from the persisted histograms and from the columnar payload
+  mirror. Both bulk paths now derive every payload index from the points that
+  carry a payload, with a repeated id resolved to its previous payload in the
+  batch, and invalidate the mirror when a point keeps its payload. `upsert`
+  keeps its documented behaviour: a point without a payload deletes it.
+  `upsert_bulk` also never maintained the secondary indexes, so an equality
+  lookup missed every point it wrote; it now does, as `upsert_bulk_from_raw`
+  did. The label and range indexes are now updated under the same payload
+  write lock as the write itself on `upsert` and both bulk paths, so a
+  concurrent write to the same ids can no longer leave them describing a
+  payload storage no longer holds.
+
+- **A payload write that fails part-way leaves the indexes describing what
+  was stored.** A batch write to payload storage is not all-or-nothing: the
+  records written before the error, or all of them when only the sync fails,
+  are readable. `upsert`, both bulk paths and `upsert_node_payloads` now read
+  those ids back on the error and index what storage holds; the node-payload
+  write used to remove the old label, range and composite entries before the
+  write and index nothing on an error, so a node it had rewritten sat in
+  storage under no label at all. A bulk upsert whose vector write fails now
+  also updates BM25, the secondary indexes and the histograms for the
+  payloads it stored before returning the error, where it used to return
+  first and leave those payloads out of them.
+
 - **`GraphCollection::traverse_bfs_parallel` counts only results against
   `limit`.** The traverser emitted each start node at depth 0, which took a
   slot of `limit` before the `min_depth` filter dropped it, so

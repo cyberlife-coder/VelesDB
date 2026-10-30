@@ -6,10 +6,10 @@
 
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::storage::VectorStorage;
 use crate::validation::validate_dimension_match;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 impl Collection {
     /// Bulk insert from contiguous flat slices (zero-copy from numpy / FFI).
@@ -35,10 +35,9 @@ impl Collection {
         dimension: usize,
         payloads: Option<&[Option<serde_json::Value>]>,
     ) -> Result<usize> {
-        // LOCK ORDER: config(1, read) → payload_storage(3, read) →
-        //   store_vectors_and_payload_entries (vector_storage(2) ‖ payload_storage(3)) →
-        //   secondary_indexes(6, read) → label_index(7, write) → HNSW index (internal) →
-        //   config(1, write).
+        // LOCK ORDER: config(1, read) → store_vectors_and_payloads (see its
+        //   doc: the storage locks, then the indexes derived from payloads) →
+        //   HNSW index (internal) → vector_storage(2, read) → config(1, write).
         let n = ids.len();
         if n == 0 {
             return Ok(0);
@@ -56,27 +55,9 @@ impl Collection {
             .map(|(i, &id)| (id, &vectors[i * dimension..(i + 1) * dimension]))
             .collect();
 
-        // Collect pre-batch payloads BEFORE overwriting -- for histogram decrements.
-        // Bug #46: deduplicate by ID -- only the first occurrence retrieves the
-        // pre-batch value; duplicates get None so the old value is decremented
-        // exactly once.
-        let old_payloads: Vec<Option<serde_json::Value>> = if payloads.is_some() {
-            let storage = self.storage.payload_storage.read();
-            let mut seen = HashSet::new();
-            ids.iter()
-                .map(|&id| {
-                    if seen.insert(id) {
-                        storage.retrieve(id).ok().flatten()
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Payload entries for batch WAL write (only ids that have payloads).
+        // Payload entries for batch WAL write (only ids that have payloads). A
+        // `None` entry stores nothing, so the id keeps its payload and every
+        // index derived from it: the payload indexes below see only `entries`.
         let payload_entries: Vec<(u64, &serde_json::Value)> = payloads
             .into_iter()
             .flat_map(|ps| {
@@ -86,11 +67,7 @@ impl Collection {
             })
             .collect();
 
-        self.store_vectors_and_payload_entries(&vector_refs, &payload_entries)?;
-
-        self.update_text_index_from_raw(ids, payloads, &old_payloads)?;
-        self.update_label_index_from_raw(ids, payloads, &old_payloads);
-        self.update_secondary_indexes_from_raw(ids, payloads, &old_payloads);
+        self.store_vectors_and_payloads(&vector_refs, &payload_entries)?;
 
         let inserted = self.bulk_index_or_defer(&vector_refs);
         // Two statements so the guards never overlap: the one-liner form
@@ -99,45 +76,41 @@ impl Collection {
         let point_count = self.storage.vector_storage.read().len();
         self.storage.config.write().point_count = point_count;
 
-        self.maintain_histograms_for_raw(ids, payloads, &old_payloads);
-
         self.invalidate_caches_and_bump_generation();
 
         Ok(inserted)
     }
 
-    /// Incremental histogram maintenance for a raw-slices bulk upsert.
+    /// Incremental histogram maintenance for a bulk upsert's payload entries.
     ///
     /// Decrements old values and increments new values in a single atomic
     /// read/modify/write cycle (Bug #49). Bug #47: only the last occurrence
     /// per ID is counted for new payloads to match last-writer-wins storage
-    /// semantics.
+    /// semantics. Shared by `upsert_bulk` and `upsert_bulk_from_raw`, whose
+    /// entries leave out the points without a payload: those keep theirs.
+    /// Bug #46: `old_payloads` holds the pre-batch payload of each id's first
+    /// entry only, so an old value is decremented exactly once.
     ///
-    /// Extracted from `upsert_bulk_from_raw` to keep its CC under the
-    /// Codacy limit after adding the BM25 WAL propagation (#389).
-    fn maintain_histograms_for_raw(
+    /// A batch without payloads changes no histogram, and returns before
+    /// reading the statistics file.
+    pub(super) fn apply_histogram_replace_for_entries(
         &self,
-        ids: &[u64],
-        payloads: Option<&[Option<serde_json::Value>]>,
+        entries: &[(u64, &serde_json::Value)],
         old_payloads: &[Option<serde_json::Value>],
     ) {
-        let Some(ps) = payloads else { return };
-        let mut dedup_map: HashMap<u64, usize> = HashMap::with_capacity(ids.len());
-        for (i, &id) in ids.iter().enumerate() {
-            dedup_map.insert(id, i);
+        if entries.is_empty() {
+            return;
         }
-        let owned: Vec<Option<serde_json::Value>> = ps
+        let mut last: HashMap<u64, usize> = HashMap::with_capacity(entries.len());
+        for (i, &(id, _)) in entries.iter().enumerate() {
+            last.insert(id, i);
+        }
+        let new_payloads: Vec<Option<serde_json::Value>> = entries
             .iter()
             .enumerate()
-            .map(|(i, opt)| {
-                if dedup_map.get(&ids[i]) == Some(&i) {
-                    opt.clone()
-                } else {
-                    None
-                }
-            })
+            .map(|(i, &(id, payload))| (last.get(&id) == Some(&i)).then(|| payload.clone()))
             .collect();
-        self.update_histograms_replace(old_payloads, &owned);
+        self.update_histograms_replace(old_payloads, &new_payloads);
     }
 
     /// Enforces the runtime ingest limits (parity item E) for the raw bulk
@@ -200,190 +173,52 @@ impl Collection {
         Ok(())
     }
 
-    /// Stores pre-built payload entries via batch WAL write + flush.
+    /// Batch-updates secondary indexes from bulk payload entries.
     ///
-    /// Extracted from `bulk_store_payloads` to accept `(u64, &Value)` pairs
-    /// directly, avoiding the need to reconstruct `Point` structs.
-    fn bulk_store_payload_entries(&self, entries: &[(u64, &serde_json::Value)]) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-        self.storage.payload_storage.write().store_batch(entries)?;
-        Ok(())
-    }
-
-    /// Writes vectors and raw payload entries to storage (parallel when available).
-    fn store_vectors_and_payload_entries(
-        &self,
-        vector_refs: &[(u64, &[f32])],
-        payload_entries: &[(u64, &serde_json::Value)],
-    ) -> Result<()> {
-        // LOCK ORDER: vector_storage(2, write, parallel) ‖ payload_storage(3, write, parallel).
-        //   Each rayon closure acquires only one lock — no ordering dependency between them.
-        #[cfg(feature = "persistence")]
-        {
-            let (vec_result, pay_result) = rayon::join(
-                || self.bulk_store_vectors(vector_refs),
-                || self.bulk_store_payload_entries(payload_entries),
-            );
-            vec_result?;
-            pay_result?;
-        }
-
-        #[cfg(not(feature = "persistence"))]
-        {
-            self.bulk_store_vectors(vector_refs)?;
-            self.bulk_store_payload_entries(payload_entries)?;
-        }
-
-        Ok(())
-    }
-
-    /// Batch-updates secondary indexes from raw payload slices.
-    ///
-    /// For each point with a payload, **removes the prior indexed value and
-    /// inserts the new one** (via [`update_secondary_indexes_on_upsert`]) so an
-    /// overwrite of an already-indexed point does not leave a stale entry in the
-    /// old key's bucket. Without the removal the same id would sit in both its
-    /// old and new key buckets, inflating `Σ buckets` above `point_count` so the
+    /// For each entry, **removes the prior indexed value and inserts the new
+    /// one** (via [`update_secondary_indexes_on_upsert`]) so an overwrite of an
+    /// already-indexed point does not leave a stale entry in the old key's
+    /// bucket. Without the removal the same id would sit in both its old and
+    /// new key buckets, inflating `Σ buckets` above `point_count` so the
     /// ordered-index coverage check declines the fast path — and a restart that
     /// rebuilds from the final stored payload (backfill) would then diverge from
-    /// the live tree (EPIC-081 phase 3d restore equivalence). `old_payloads[i]`
-    /// is the pre-batch payload for `ids[i]` (already collected by the caller),
-    /// deduplicated so a duplicate id within the same batch carries `None`.
+    /// the live tree (EPIC-081 phase 3d restore equivalence). A repeated id
+    /// replaces its previous entry's value, not the pre-batch one, through
+    /// [`Self::payload_changes`].
     ///
     /// Skips entirely when no secondary indexes exist (fast path for bulk
     /// loading before `create_index`).
     ///
     /// [`update_secondary_indexes_on_upsert`]: Self::update_secondary_indexes_on_upsert
-    fn update_secondary_indexes_from_raw(
+    pub(super) fn update_secondary_indexes_for_entries(
         &self,
-        ids: &[u64],
-        payloads: Option<&[Option<serde_json::Value>]>,
+        entries: &[(u64, &serde_json::Value)],
         old_payloads: &[Option<serde_json::Value>],
     ) {
-        let Some(ps) = payloads else { return };
         if self.query.secondary_indexes.read().is_empty() {
             return;
         }
-        for (i, opt) in ps.iter().enumerate() {
-            if opt.is_none() {
-                continue;
-            }
-            let old = old_payloads.get(i).and_then(Option::as_ref);
-            self.update_secondary_indexes_on_upsert(ids[i], old, opt.as_ref());
+        let writes = entries.iter().map(|&(id, payload)| (id, Some(payload)));
+        for (id, old, new) in Self::payload_changes(writes, old_payloads) {
+            self.update_secondary_indexes_on_upsert(id, old, new);
         }
     }
 
-    /// Updates BM25 text index from raw payload slices (WAL-then-apply).
+    /// Updates the BM25 text index from bulk payload entries (WAL-then-apply),
+    /// through the same classification as every other write path
+    /// (`classify_text_mutations` in `crud_indexing.rs`, whose doc holds the
+    /// truth table). A bulk point without a payload is not an entry, keeps its
+    /// payload, and keeps its document.
     ///
-    /// Mirrors the contract of `classify_text_mutations` in
-    /// `crud_indexing.rs`, whose doc holds the truth table: a point is
-    /// searchable exactly when its current payload yields indexable text, so
-    /// the mutation follows from comparing the old payload with the new. A
-    /// payload that still exists but no longer yields text is a **removal**,
-    /// not a no-op — that case is why this takes `old_payloads`, which is
-    /// already collected upstream for the histogram decrements and already
-    /// handed to the secondary and label indexes.
-    ///
-    /// Issue #389: each mutation is appended to the BM25 WAL BEFORE it
-    /// is applied in-memory so that a crash between the two replays
-    /// the mutation on next open. WAL append errors propagate and the
-    /// in-memory mutation is skipped, so in-memory and WAL state never
-    /// diverge.
-    fn update_text_index_from_raw(
+    /// Issue #389: the mutations are appended to the BM25 WAL before they are
+    /// applied in memory, so a crash between the two replays them on the next
+    /// open; a WAL error propagates with the in-memory index untouched.
+    pub(super) fn update_text_index_for_entries(
         &self,
-        ids: &[u64],
-        payloads: Option<&[Option<serde_json::Value>]>,
+        entries: &[(u64, &serde_json::Value)],
         old_payloads: &[Option<serde_json::Value>],
     ) -> Result<()> {
-        let Some(ps) = payloads else { return Ok(()) };
-        let mut seen: HashMap<u64, Option<&serde_json::Value>> = HashMap::with_capacity(ids.len());
-        let mut adds: Vec<(u64, String)> = Vec::new();
-        let mut removes: Vec<u64> = Vec::new();
-        for (i, &id) in ids.iter().enumerate() {
-            let new_payload = ps.get(i).and_then(Option::as_ref);
-            let pre_batch_old = old_payloads.get(i).and_then(Option::as_ref);
-            let effective_old = match seen.get(&id) {
-                Some(&previous) => previous,
-                None => pre_batch_old,
-            };
-            match Self::indexable_text(new_payload) {
-                Some(text) => adds.push((id, text)),
-                None if Self::indexable_text(effective_old).is_some() => removes.push(id),
-                None => {}
-            }
-            seen.insert(id, new_payload);
-        }
-        if adds.is_empty() && removes.is_empty() {
-            return Ok(());
-        }
-        // One WAL barrier for the whole batch (WAL-before-apply preserved:
-        // the in-memory index is only touched after the batch is durable).
-        self.append_text_batch_to_wal(&adds, &removes)?;
-        for (id, text) in &adds {
-            self.storage.text_index.add_document(*id, text);
-        }
-        for id in &removes {
-            self.storage.text_index.remove_document(*id);
-        }
-        Ok(())
-    }
-
-    /// Batch-updates the label index from raw payload slices.
-    ///
-    /// Mirrors `update_text_index_from_raw` but for the label index.
-    ///
-    /// This indexed the incoming payloads only, so a raw bulk *upsert* that
-    /// changed a point's `_labels` left it listed under the old ones too.
-    /// `old_payloads` is already collected a few lines up for the histogram
-    /// decrements, and already handed to `update_secondary_indexes_from_raw`
-    /// right below — the label index was the one index left out.
-    ///
-    /// Removal precedes indexing so a label carried on both sides of the
-    /// update survives, and the within-batch duplicate rule matches the
-    /// `Point` path: a repeated id removes the previous occurrence's labels,
-    /// not the pre-batch ones (which `old_payloads` already reports as `None`
-    /// for duplicates).
-    ///
-    /// LOCK ORDER: label_index(7) -- after payload_storage(3).
-    // The label_index guard spans the whole un-index/re-index batch on purpose,
-    // the same design as store_node_payloads: releasing it mid-batch would let
-    // a reader see labels from a half-applied bulk import.
-    #[expect(clippy::significant_drop_tightening)]
-    fn update_label_index_from_raw(
-        &self,
-        ids: &[u64],
-        payloads: Option<&[Option<serde_json::Value>]>,
-        old_payloads: &[Option<serde_json::Value>],
-    ) {
-        let Some(ps) = payloads else { return };
-        let carries_labels = |opt: &Option<serde_json::Value>| {
-            opt.as_ref().is_some_and(|v| v.get("_labels").is_some())
-        };
-        // An update that *drops* every label has no labels on the incoming
-        // side and still has stale entries to remove, so the old payloads
-        // decide this too.
-        if !ps.iter().any(carries_labels) && !old_payloads.iter().any(carries_labels) {
-            return;
-        }
-        let mut seen: std::collections::HashMap<u64, Option<&serde_json::Value>> =
-            std::collections::HashMap::with_capacity(ids.len());
-        let mut label_idx = self.graph.label_index.write();
-        for (i, &id) in ids.iter().enumerate() {
-            let pre_batch_old = old_payloads.get(i).and_then(Option::as_ref);
-            let effective_old = match seen.get(&id) {
-                Some(&previous) => previous,
-                None => pre_batch_old,
-            };
-            if let Some(old) = effective_old {
-                label_idx.remove_from_payload(id, old);
-            }
-            let new_payload = ps.get(i).and_then(Option::as_ref);
-            if let Some(payload) = new_payload {
-                label_idx.index_from_payload(id, payload);
-            }
-            seen.insert(id, new_payload);
-        }
+        let writes = entries.iter().map(|&(id, payload)| (id, Some(payload)));
+        self.apply_text_changes(&Self::payload_changes(writes, old_payloads))
     }
 }

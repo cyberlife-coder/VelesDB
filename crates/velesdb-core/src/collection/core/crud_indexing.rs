@@ -2,45 +2,15 @@
 //!
 //! Extracted from `crud.rs` to reduce NLOC.
 
+use super::graph_property_index_wiring::NodePayloadChange;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
-use crate::storage::VectorStorage;
+use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
 impl Collection {
-    /// Checks whether label index updates are needed for this batch.
-    pub(super) fn needs_label_updates(
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
-    ) -> bool {
-        Self::any_point_has_labels(points)
-            || old_payloads
-                .iter()
-                .any(|opt| opt.as_ref().is_some_and(|v| v.get("_labels").is_some()))
-    }
-
-    /// Pre-allocates the label update buffer when needed.
-    pub(super) fn alloc_label_buffer(
-        needed: bool,
-        capacity: usize,
-    ) -> Vec<(u64, Option<serde_json::Value>, Option<serde_json::Value>)> {
-        if needed {
-            Vec::with_capacity(capacity)
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Returns `true` if any point carries `_labels` in its payload.
-    pub(super) fn any_point_has_labels(points: &[Point]) -> bool {
-        points.iter().any(|p| {
-            p.payload
-                .as_ref()
-                .is_some_and(|v| v.get("_labels").is_some())
-        })
-    }
-
     /// Resolves the effective "old payload" for a point, accounting for
     /// within-batch duplicate IDs.
     pub(super) fn resolve_effective_old<'a>(
@@ -66,23 +36,114 @@ impl Collection {
         }
     }
 
-    /// Applies buffered label index updates in a single write lock scope.
-    pub(super) fn apply_label_updates(
-        label_index: &parking_lot::RwLock<crate::collection::graph::LabelIndex>,
-        label_updates: &[(u64, Option<serde_json::Value>, Option<serde_json::Value>)],
-    ) {
-        if label_updates.is_empty() {
+    /// Applies a batch of payload writes to the label and range indexes.
+    ///
+    /// `writes` is each write's `(id, payload stored)` in batch order, `None`
+    /// for a write that deleted the payload; `old_payloads` is positional, the
+    /// pre-batch payload of each id's first occurrence and `None` for a
+    /// repeat (what `collect_old_payloads` returns). A repeated id resolves to
+    /// its previous occurrence, so the batch indexes what storage ends with.
+    ///
+    /// Callers hold `payload_storage` (3) across the write and this call, so
+    /// no other writer can store a newer payload for these ids in between and
+    /// leave the indexes describing one storage no longer has.
+    pub(super) fn index_payload_writes<'a, I>(&self, writes: I, old_payloads: &'a [Option<Value>])
+    where
+        I: Iterator<Item = (u64, Option<&'a Value>)> + Clone,
+    {
+        let labelled =
+            |payload: Option<&Value>| payload.is_some_and(|v| v.get("_labels").is_some());
+        // An update that drops every label still has entries to remove, so the
+        // old payloads decide this too. Unlabelled batches (every plain vector
+        // upsert) allocate nothing and take no index lock.
+        if !writes.clone().any(|(_, new)| labelled(new))
+            && !old_payloads.iter().any(|old| labelled(old.as_ref()))
+        {
             return;
         }
-        let mut label_idx = label_index.write();
-        for (id, old, new) in label_updates {
-            if let Some(old_val) = old {
-                label_idx.remove_from_payload(*id, old_val);
-            }
-            if let Some(new_val) = new {
-                label_idx.index_from_payload(*id, new_val);
+        let changes = Self::payload_changes(writes, old_payloads);
+        self.apply_payload_index_changes(changes.iter().copied());
+    }
+
+    /// Brings the label and range indexes in line with what `storage` holds
+    /// for `ids` after a batch write that returned an error.
+    ///
+    /// A failed batch write is not all-or-nothing: `LogPayloadStorage` makes
+    /// each record readable as it writes it, so a failure mid-batch leaves the
+    /// records before it readable, and a failed sync or flush leaves all of
+    /// them. Each id is read back and indexed as what storage now holds, against
+    /// the payload it carried before the batch; an id the write never reached
+    /// reads back that same payload and its entries are put back unchanged.
+    /// Error paths only: the read-back costs one storage read per id.
+    pub(super) fn index_payloads_after_failed_write(
+        &self,
+        storage: &LogPayloadStorage,
+        ids: &[u64],
+        old_payloads: &[Option<Value>],
+    ) {
+        let held = Self::read_back_payloads(storage, ids);
+        let writes = ids.iter().copied().zip(held.iter().map(Option::as_ref));
+        self.index_payload_writes(writes, old_payloads);
+    }
+
+    /// What `storage` holds for each of `ids`, in order: `None` where it holds
+    /// no payload or the read fails.
+    pub(super) fn read_back_payloads(
+        storage: &LogPayloadStorage,
+        ids: &[u64],
+    ) -> Vec<Option<Value>> {
+        ids.iter()
+            .map(|&id| storage.retrieve(id).ok().flatten())
+            .collect()
+    }
+
+    /// Pairs each write of a batch with the payload it replaces: the previous
+    /// occurrence of a repeated id within the batch, else its pre-batch
+    /// payload. See [`Self::index_payload_writes`] for the two inputs.
+    pub(super) fn payload_changes<'a>(
+        writes: impl Iterator<Item = (u64, Option<&'a Value>)>,
+        old_payloads: &'a [Option<Value>],
+    ) -> Vec<NodePayloadChange<'a>> {
+        let mut seen: HashMap<u64, Option<&Value>> = HashMap::new();
+        writes
+            .enumerate()
+            .map(|(i, (id, new))| {
+                let pre_batch_old = old_payloads.get(i).and_then(Option::as_ref);
+                let old = Self::resolve_effective_old(&seen, id, pre_batch_old);
+                seen.insert(id, new);
+                (id, old, new)
+            })
+            .collect()
+    }
+
+    /// Applies node payload changes to the two indexes derived from node
+    /// payloads: the label index, then the graph range indexes, each in a
+    /// single write lock scope. Each change removes the old payload's entries
+    /// before indexing the new one's.
+    ///
+    /// LOCK ORDER: label_index(7), released, then graph_range_indexes(7) —
+    /// the two share a rank with no order between them, so never both held.
+    pub(super) fn apply_payload_index_changes<'a, I>(&self, changes: I)
+    where
+        I: IntoIterator<Item = NodePayloadChange<'a>>,
+        I::IntoIter: Clone,
+    {
+        let changes = changes.into_iter();
+        if changes.clone().next().is_none() {
+            return;
+        }
+        {
+            let mut label_idx = self.graph.label_index.write();
+            for (id, old, new) in changes.clone() {
+                if let Some(old_val) = old {
+                    label_idx.remove_from_payload(id, old_val);
+                }
+                if let Some(new_val) = new {
+                    label_idx.index_from_payload(id, new_val);
+                }
             }
         }
+        self.apply_range_index_changes(changes);
     }
 
     /// Collects sparse vectors from a point into the batch buffer.
@@ -132,7 +193,23 @@ impl Collection {
         points: &[Point],
         old_payloads: &[Option<serde_json::Value>],
     ) -> Result<()> {
-        let (adds, removes) = Self::classify_text_mutations(points, old_payloads);
+        debug_assert_eq!(
+            points.len(),
+            old_payloads.len(),
+            "old_payloads is positional: a short slice would silently drop removals"
+        );
+        let writes = points.iter().map(|p| (p.id, p.payload.as_ref()));
+        self.apply_text_changes(&Self::payload_changes(writes, old_payloads))
+    }
+
+    /// Applies a batch's payload changes to BM25 under one WAL barrier; see
+    /// [`Self::bulk_update_text_index`] and [`Self::classify_text_mutations`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates any WAL open / write / flush / fsync failure.
+    pub(super) fn apply_text_changes(&self, changes: &[NodePayloadChange<'_>]) -> Result<()> {
+        let (adds, removes) = Self::classify_text_mutations(changes);
         if adds.is_empty() && removes.is_empty() {
             return Ok(());
         }
@@ -176,32 +253,21 @@ impl Collection {
     /// that were never indexed. Deciding on the old payload keeps that path
     /// writing nothing, which is also what it did before.
     ///
-    /// `resolve_effective_old` is what makes a repeated id inside one batch
-    /// resolve to the batch's own earlier occurrence: `old_payloads` reports
-    /// `None` for a duplicate, so the pre-batch value alone would miss that
-    /// the batch had already indexed it.
+    /// The changes come from [`Self::payload_changes`], which resolves a
+    /// repeated id inside one batch to the batch's own earlier occurrence:
+    /// `old_payloads` reports `None` for a duplicate, so the pre-batch value
+    /// alone would miss that the batch had already indexed it.
     fn classify_text_mutations(
-        points: &[Point],
-        old_payloads: &[Option<serde_json::Value>],
+        changes: &[NodePayloadChange<'_>],
     ) -> (Vec<(u64, String)>, Vec<u64>) {
-        debug_assert_eq!(
-            points.len(),
-            old_payloads.len(),
-            "old_payloads is positional: a short slice would silently drop removals"
-        );
-        let mut seen: HashMap<u64, Option<&serde_json::Value>> =
-            HashMap::with_capacity(points.len());
         let mut adds: Vec<(u64, String)> = Vec::new();
         let mut removes: Vec<u64> = Vec::new();
-        for (index, point) in points.iter().enumerate() {
-            let pre_batch_old = old_payloads.get(index).and_then(Option::as_ref);
-            let effective_old = Self::resolve_effective_old(&seen, point.id, pre_batch_old);
-            match Self::indexable_text(point.payload.as_ref()) {
-                Some(text) => adds.push((point.id, text)),
-                None if Self::indexable_text(effective_old).is_some() => removes.push(point.id),
+        for &(id, old, new) in changes {
+            match Self::indexable_text(new) {
+                Some(text) => adds.push((id, text)),
+                None if Self::indexable_text(old).is_some() => removes.push(id),
                 None => {}
             }
-            seen.insert(point.id, point.payload.as_ref());
         }
         (adds, removes)
     }
