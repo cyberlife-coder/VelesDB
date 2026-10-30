@@ -340,14 +340,14 @@ fit naturally:
 ### 4. Batch Writes Instead of Lowering Durability
 
 A collection's storage is opened with `DurabilityMode::Fsync`: no collection
-or `VelesConfig` setting lowers it. A single-point `upsert` syncs its WAL
-records before it returns. The bulk paths, `upsert_bulk` and
-`upsert_bulk_from_raw`, write the whole batch to the WAL without an fsync and
-leave the durability barrier to `flush()`: batch the ingest, then flush once.
+or `VelesConfig` setting lowers it. Every write call syncs its WAL before it
+returns, once per storage per call, so the cost is per call, not per point:
+`upsert_bulk` and `upsert_bulk_from_raw` write a whole batch for the price of
+one sync.
 
 ```rust
-collection.upsert_bulk(&points)?; // WAL written, not yet fsynced
-collection.flush()?;              // durability barrier for the whole ingest
+// One WAL sync per storage for the whole batch, instead of one per point
+collection.upsert_bulk(&points)?;
 ```
 
 The lower-level `velesdb_core::storage::MmapStorage::new_with_durability`

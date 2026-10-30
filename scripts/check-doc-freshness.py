@@ -212,7 +212,7 @@ VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
         "prose-core-version",
         "velesdb-core",
         re.compile(
-            r"\b(?:VelesDB|velesdb-(?:core|server|cli|wasm|python|migrate|mobile|sdk))"
+            r"\b(?:VelesDB|velesdb-(?:core|server|cli|wasm|python|migrate|mobile|sdk)|tauri-plugin-velesdb)"
             # A closing backtick and a table cell border may sit between the
             # name and its version: `velesdb-core` | 5.0.0 survived 8.0.0 in
             # the server README because the version was one cell over.

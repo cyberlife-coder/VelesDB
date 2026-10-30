@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Python quickstart and examples run on 8.0.0.** The root README's
   "three commands that work" ran `examples/python/hello_velesdb.py`, which
   passed `SearchOptions(top_k=...)`: 8.0.0 removed that alias, so the script
-  stopped with `TypeError`, as did 29 other samples in `examples/`,
-  `tutorials/`, `demos/rag-pdf-demo` and the Python API reference. They pass
-  `k=`. The VelesQL tutorial ran the direct search methods on a graph
+  stopped with `TypeError`, as did the other `SearchOptions(top_k=)` calls in
+  `examples/`, `tutorials/`, `demos/rag-pdf-demo` and the Python API reference
+  (29 call sites in 12 files). They pass `k=`. The VelesQL tutorial ran the direct search methods on a graph
   collection, which 8.0.0 refuses, and now runs them on a vector collection.
   CI used to compile the examples only; it now runs every example that needs
   no network, server or API key against the wheel it builds
@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The concurrency guide configured a collection with
     `CollectionConfig::new(..).with_durability(..)`, which does not exist: a
     collection always opens its storage with `DurabilityMode::Fsync`. The
-    guide now batches with `upsert_bulk` and calls `flush()`.
+    guide now batches with `upsert_bulk`, which syncs once per call.
   - The API correspondence table kept `SearchOptions.top_k` as an accepted
     alias, and the WASM bundle guide still recommended `sq8` for a 4x memory
     saving that 8.0.0 removed.

@@ -47,15 +47,18 @@ def run_example(python: str, example: str) -> "tuple[int, str]":
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(STUB_ENCODER), env.get("PYTHONPATH")]))
     with tempfile.TemporaryDirectory() as workdir:
-        done = subprocess.run(
-            [python, str(REPO_ROOT / example)],
-            cwd=workdir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
-        )
+        try:
+            done = subprocess.run(
+                [python, str(REPO_ROOT / example)],
+                cwd=workdir,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return 124, f"timed out after {TIMEOUT_SECONDS} s"
     return done.returncode, (done.stdout + done.stderr)[-2000:]
 
 

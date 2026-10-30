@@ -25,10 +25,9 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.0,<2.0.0",
-    # 5.0.0 is the first wheel with MemoryService.feedback,
-    # save_working_context/load_working_context and the automatic
-    # `_veles_date` stamp, which the tools call; see README.md's
-    # "Compatibility" section.
+    # 5.0.0 is the first wheel whose load_working_context returns the
+    # {found, working, other_sessions} envelope the toolkit relays; see
+    # README.md's "Compatibility" section.
     "velesdb>=5.0.0",
 ]
 
