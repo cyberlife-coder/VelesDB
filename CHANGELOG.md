@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`velesdb_core::MAX_JSON_NESTING` (127) and `MAX_VALUE_DEPTH` (124)**, also
   under `validation`: the nesting `serde_json` reads back, and the deepest
-  edge properties core accepts (see the `VELES-017` change under Changed).
+  edge properties and point payloads core accepts (see the two `VELES-017`
+  changes under Changed).
 
 - **Agent-memory semantic search at an explicit quality in Python, Tauri and
   mobile.** The bindings now reach core 7.1.0's
@@ -167,6 +168,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its derived serde form was the `edge_store.bin` layout, a private
   persistence format; the snapshot now has its own private form. Persist a
   store with `to_bytes`/`from_bytes` or `save_to_file`/`load_from_file`.
+
+- **BREAKING (behavior) — point payloads nested deeper than 124 levels are
+  refused.** Every payload ingest path (`upsert`, `upsert_bulk`,
+  `upsert_bulk_from_raw`, `upsert_metadata`, graph node payload writes)
+  returns `VELES-017` (`SchemaValidation`) naming the point, before anything
+  is written, for a payload nesting more than `validation::MAX_VALUE_DEPTH`
+  (124) arrays and objects. `serde_json` reads back 127 nested levels: a
+  payload deeper than that, reachable from the Rust API and the Python
+  binding (the REST API's JSON parser already stopped earlier), was written
+  to the payload log, and then every read of that point failed; one at 125
+  to 127 levels read back, but made the agent-memory snapshot holding it,
+  three levels deeper, fail to restore. The bound is the one edge properties
+  have, so every stored value fits every document core writes it into.
+  *Upgrading:* a payload a 7.x store holds at 125 to 127 levels stays
+  readable, but writing it back unchanged (a VelesQL `UPDATE`, any
+  read-modify-write) is now refused; flatten it first.
 
 - **BREAKING (behavior) — LangChain relevance scores are higher-is-closer under
   every metric.** `similarity_search_with_relevance_scores` returned the raw
