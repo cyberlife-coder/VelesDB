@@ -1232,7 +1232,7 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 ---
 
-*Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0 (this stamp tracks
+*Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0 (this stamp tracks
 the document revision; this revision describes the in-place
 `ContiguousVectors::reorder` and `retrieve_ref`, and drops the removed
 `reduce_4acc_*` helpers. The underlying unsafe audit was last run in full on

@@ -13,7 +13,9 @@ use serde::{de::DeserializeOwned, Serialize};
 /// persisted to files.
 ///
 /// Eliminates identical `to_bytes`/`from_bytes`/`save_to_file`/`load_from_file`
-/// implementations across `EdgeStore`, `PropertyIndex`, and `RangeIndex`.
+/// implementations across `PropertyIndex` and `RangeIndex`. `EdgeStore` has
+/// its own snapshot form (`edge::snapshot_wire`), since its edges' JSON
+/// properties cannot go through postcard as they are.
 pub(crate) trait PostcardPersistence: Serialize + DeserializeOwned + Sized {
     /// Serializes this value to bytes using `postcard`.
     ///

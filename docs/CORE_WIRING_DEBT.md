@@ -447,7 +447,7 @@ avoid implying a guarantee that does not exist. Community-scope.
 
 ---
 
-*Last updated: 2026-10-29 · Applies to: velesdb-core 7.1.0 (this stamp tracks
+*Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0 (this stamp tracks
 the document revision; this revision names `upsert_bulk` for the bulk
 ingest limit check, its private `upsert_bulk_inner` being folded into it. The rest of the inventory was last re-verified against the code on
 2026-06-14, as stated at the top of this page)*

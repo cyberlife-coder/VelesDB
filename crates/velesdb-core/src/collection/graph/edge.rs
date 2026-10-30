@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[path = "edge_snapshot_wire.rs"]
+pub(super) mod snapshot_wire;
+
 /// A directed edge (relationship) in the knowledge graph.
 ///
 /// Edges connect nodes and can have a label (type) and properties.
@@ -109,6 +112,37 @@ impl GraphEdge {
     pub fn property(&self, name: &str) -> Option<&Value> {
         self.properties.get(name)
     }
+
+    /// Checks that this edge's properties can be persisted and read back.
+    ///
+    /// Core writes an edge into JSON documents (the edge WAL, the edge
+    /// snapshot's property strings, the agent-memory snapshot), and
+    /// `serde_json` reads back a bounded nesting: properties deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH) would be
+    /// written, then fail to decode.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::SchemaValidation` when the properties nest deeper
+    /// than [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH).
+    pub(crate) fn ensure_persistable(&self) -> Result<()> {
+        if self.properties_nest_deeper_than(crate::validation::MAX_VALUE_DEPTH) {
+            return Err(Error::SchemaValidation(format!(
+                "edge {} has properties nested more than {} levels deep (counting \
+                 the properties map), which cannot be persisted",
+                self.id,
+                crate::validation::MAX_VALUE_DEPTH
+            )));
+        }
+        Ok(())
+    }
+
+    /// Whether the properties nest deeper than `limit` levels of arrays
+    /// and objects, the map itself being the first level.
+    pub(super) fn properties_nest_deeper_than(&self, limit: usize) -> bool {
+        // The values sit one level deep, inside the properties map.
+        crate::validation::nests_deeper_than(self.properties.values(), 1, limit)
+    }
 }
 
 /// Storage for graph edges with bidirectional indexing.
@@ -126,9 +160,17 @@ impl GraphEdge {
 /// After loading from disk or after explicit `build_read_snapshot()`, the
 /// `csr_snapshot` field provides zero-copy `&[u64]` access to neighbor
 /// target IDs and edge IDs. Writes invalidate the snapshot automatically.
-#[derive(Debug, Default, Serialize, Deserialize)]
+///
+/// # Persistence
+///
+/// `EdgeStore` has no serde representation of its own: the `edge_store.bin`
+/// snapshot form is private to `edge::snapshot_wire` and reached through
+/// [`to_bytes`](Self::to_bytes) / [`save_to_file`](Self::save_to_file) and
+/// their readers. Only `edges`, `outgoing` and `incoming` are persisted; the
+/// label table, the label indexes and the CSR snapshot are rebuilt on load.
+#[derive(Debug, Default)]
 pub struct EdgeStore {
-    /// All edges indexed by ID
+    /// All edges indexed by ID.
     pub(super) edges: HashMap<u64, GraphEdge>,
     /// Outgoing edges: source_id -> Vec<edge_id>
     pub(super) outgoing: HashMap<u64, Vec<u64>>,
@@ -136,34 +178,29 @@ pub struct EdgeStore {
     pub(super) incoming: HashMap<u64, Vec<u64>>,
     /// Secondary index: interned label -> Vec<edge_id> for fast label queries.
     ///
-    /// `serde(skip)`: keyed by [`LabelId`], which is only meaningful against
-    /// this store's `label_table` — both are rebuilt in `load_from_file`
+    /// Not persisted: keyed by [`LabelId`], which is only meaningful against
+    /// this store's `label_table` — both are rebuilt in `from_bytes`
     /// (#2089). Old snapshots that still serialize the String-keyed maps
     /// load fine: postcard's `from_bytes` ignores trailing bytes.
-    #[serde(skip)]
     pub(super) by_label: HashMap<LabelId, Vec<u64>>,
     /// Composite index: (source_id, label) -> Vec<edge_id> for fast filtered
-    /// traversal. `serde(skip)`: same rebuild contract as `by_label`.
-    #[serde(skip)]
+    /// traversal. Not persisted: same rebuild contract as `by_label`.
     pub(super) outgoing_by_label: HashMap<(u64, LabelId), Vec<u64>>,
     /// Composite index: (target_id, label) -> Vec<edge_id> — the incoming
     /// mirror of `outgoing_by_label`, so `<-[:TYPE]-` patterns stop paying
     /// O(in-degree) full-edge clones on super-nodes.
     ///
-    /// `serde(skip)`: the snapshot format is postcard (not self-describing),
+    /// Not persisted: the snapshot format is postcard (not self-describing),
     /// so a new serialized field would break every existing edge_store.bin.
-    /// The index is fully derivable and rebuilt in `load_from_file`.
-    #[serde(skip)]
+    /// The index is fully derivable and rebuilt in `from_bytes`.
     pub(super) incoming_by_label: HashMap<(u64, LabelId), Vec<u64>>,
     /// Interning table mapping label strings to the [`LabelId`]s that key the
     /// three label indices above. Populated by `insert_edge`, rebuilt with
-    /// the indices in `load_from_file` (#2089 — wires the table the doc
+    /// the indices in `from_bytes` (#2089 — wires the table the doc
     /// comment always promised; labels are no longer stored per edge entry).
-    #[serde(skip)]
     pub(super) label_table: LabelTable,
     /// Zero-copy CSR snapshot for BFS traversal (G1).
     /// Built on-demand via `build_read_snapshot()`, invalidated by writes.
-    #[serde(skip)]
     pub(super) csr_snapshot: Option<CsrSnapshot>,
 }
 

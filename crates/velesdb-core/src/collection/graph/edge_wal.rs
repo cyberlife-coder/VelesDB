@@ -100,8 +100,9 @@ pub(crate) fn wal_append_add_batch(wal_path: &Path, edges: &[GraphEdge]) -> Resu
 /// The body uses JSON (`serde_json`) rather than postcard: `GraphEdge`
 /// properties are `serde_json::Value`, whose `Deserialize` relies on
 /// `deserialize_any`, which postcard (a non-self-describing format) does
-/// not support — postcard round-trips silently drop / corrupt property
-/// values. JSON is self-describing and round-trips `Value` losslessly.
+/// not support, so a postcard body with properties could not be decoded.
+/// JSON is self-describing, so `Value` decodes from it, within the depth
+/// `GraphEdge::ensure_persistable` enforces before the append.
 fn write_add_entry(w: &mut BufWriter<std::fs::File>, edge: &GraphEdge) -> Result<()> {
     let edge_bytes = serde_json::to_vec(edge)
         .map_err(|e| Error::Index(format!("Edge WAL: serialize edge: {e}")))?;

@@ -31,6 +31,10 @@ impl Collection {
     /// `Error::SchemaValidation` is still returned for actual schema-shape
     /// violations (undeclared node type, undeclared edge type, endpoint
     /// type mismatch) once both endpoints are confirmed to exist.
+    /// `Error::SchemaValidation` is also returned, before any lock or write,
+    /// when the properties nest deeper than
+    /// [`MAX_VALUE_DEPTH`](crate::validation::MAX_VALUE_DEPTH)
+    /// levels, which could not be read back from disk.
     ///
     /// # Example
     ///
@@ -41,6 +45,8 @@ impl Collection {
     /// collection.add_edge(edge)?;
     /// ```
     pub fn add_edge(&self, edge: GraphEdge) -> Result<()> {
+        edge.ensure_persistable()?;
+
         // Position 1, hoisted before the payload guard below (position 3) so
         // the acquisition order is never 3 → 1 (see LOCK ORDERING in
         // collection/types.rs).
@@ -108,11 +114,14 @@ impl Collection {
     /// Returns an error if WAL logging fails (fail-closed: the in-memory
     /// store is not mutated when the WAL append fails). Returns
     /// `Error::NodeNotFound` if any edge's `source` or `target` has no
-    /// stored node payload (see [`Self::add_edge`]).
+    /// stored node payload, and `Error::SchemaValidation` if any edge's
+    /// properties nest too deep (see [`Self::add_edge`]); either fails the
+    /// whole batch before anything is written.
     pub fn add_edges_batch(&self, edges: Vec<GraphEdge>) -> Result<usize> {
         if edges.is_empty() {
             return Ok(0);
         }
+        edges.iter().try_for_each(GraphEdge::ensure_persistable)?;
 
         // Position 1, hoisted before the payload guard (see add_edge).
         let schema = self.non_schemaless_graph_schema();

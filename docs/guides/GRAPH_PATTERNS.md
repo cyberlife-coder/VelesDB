@@ -1,6 +1,6 @@
 # Graph Patterns Guide
 
-*Version 7.1.0 -- May 2026*
+*Version 8.0.0 -- May 2026*
 
 Practical guide for using VelesQL `MATCH` graph patterns in VelesDB.
 
