@@ -176,3 +176,41 @@ fn test_training_failed_is_recoverable() {
     // Training failure is recoverable (user can add more data or change params)
     assert!(Error::TrainingFailed("not enough vectors".into()).is_recoverable());
 }
+
+// -------------------------------------------------------------------------
+// Caller-error classification (what the circuit breaker may count)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_caller_errors_are_classified_as_the_callers() {
+    let caller = [
+        Error::CollectionNotFound("x".into()),
+        Error::CollectionExists("x".into()),
+        Error::DimensionMismatch {
+            expected: 4,
+            actual: 2,
+        },
+        Error::Query("[V015] unsupported MATCH ORDER BY".into()),
+        Error::GraphNotSupported("MATCH ORDER BY expression 'd'".into()),
+        Error::Config("bad option".into()),
+        Error::NodeNotFound(7),
+    ];
+    for err in &caller {
+        assert!(err.is_caller_error(), "{err} must be the caller's error");
+    }
+}
+
+#[test]
+fn test_engine_failures_and_guard_rail_stops_are_not_caller_errors() {
+    let engine = [
+        Error::Io(std::io::Error::other("disk gone")),
+        Error::Storage("short write".into()),
+        Error::IndexCorrupted("checksum mismatch".into()),
+        Error::Internal("unexpected state".into()),
+        Error::AllocationFailed("oom".into()),
+        Error::GuardRail("Query timed out".into()),
+    ];
+    for err in &engine {
+        assert!(!err.is_caller_error(), "{err} must count as the engine's");
+    }
+}

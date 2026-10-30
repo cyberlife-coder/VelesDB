@@ -88,25 +88,6 @@ fn search_request_pre_check(
     Ok((collection, quality_mode))
 }
 
-/// Executes the full search pipeline and records circuit-breaker on failure.
-///
-/// Shared by `/search` and `/search/ids` (both accept `SearchRequest`).
-/// `quality_mode` is the request's `mode`, which the handler parsed with
-/// [`parse_mode_or_400`] before this point, so that a bad one is refused as
-/// the client's error and never counted as the collection's failure (#2267).
-#[allow(clippy::result_large_err)]
-fn execute_with_cb(
-    state: &AppState,
-    name: &str,
-    collection: &VectorCollection,
-    req: &mut SearchRequest,
-    quality_mode: Option<velesdb_core::SearchQuality>,
-) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
-    execute_search_request(state, name, collection, req, quality_mode).inspect_err(|_| {
-        collection.guard_rails().circuit_breaker.record_failure();
-    })
-}
-
 /// Search for similar vectors.
 ///
 /// Auto-detects search mode:
@@ -158,7 +139,7 @@ pub async fn search(
 
     let execution = run_search_with_optional_timeout(timeout_ms, move || {
         let mut owned_req = req;
-        execute_search_with_cb_owned(
+        execute_search_request(
             &state_for_work,
             &name_for_work,
             &collection_for_work,
@@ -170,6 +151,8 @@ pub async fn search(
 
     let search_result = match execution {
         Ok(Ok(inner)) => inner,
+        // A `400` refusing the request itself: the client's error, so it
+        // records no circuit-breaker failure.
         Ok(Err(resp)) => {
             state.operational_metrics.inc_errors();
             return resp;
@@ -187,27 +170,17 @@ pub async fn search(
     finish_search_with_cb(&state, &name, start, &collection, search_result)
 }
 
-/// Owned-request wrapper around [`execute_with_cb`] used by the
-/// `run_search_with_optional_timeout` spawn_blocking closure. Having a
-/// dedicated function keeps the move-semantics inside the closure
-/// explicit and avoids lifetime juggling in the handler body.
-#[allow(clippy::result_large_err)]
-fn execute_search_with_cb_owned(
-    state: &AppState,
-    name: &str,
-    collection: &VectorCollection,
-    req: &mut SearchRequest,
-    quality_mode: Option<velesdb_core::SearchQuality>,
-) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
-    execute_with_cb(state, name, collection, req, quality_mode)
-}
-
 /// Owned-request variant for `/search/ids`: takes the `search_ids` fast path
 /// (no payload hydration) for plain dense requests, otherwise falls back to
-/// the generic pipeline. Records a circuit-breaker failure on a hard error so
-/// both paths stay consistent with [`execute_with_cb`].
+/// the generic pipeline.
+///
+/// Neither path touches the circuit breaker. Their `Err` is a `400` refusing
+/// the request itself (a wrong dimension, a bad filter, sparse input or
+/// fusion), the client's error and never the collection's; the core outcome
+/// in `Ok` is recorded by [`finish_search_ids_with_cb`], which counts only an
+/// engine failure (`CircuitBreaker::record_error`).
 #[allow(clippy::result_large_err)]
-fn execute_search_ids_with_cb_owned(
+fn execute_search_ids_owned(
     state: &AppState,
     name: &str,
     collection: &VectorCollection,
@@ -215,10 +188,9 @@ fn execute_search_ids_with_cb_owned(
     quality_mode: Option<velesdb_core::SearchQuality>,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
     if ids_fast_path_eligible(req) {
-        return execute_dense_search_ids(state, name, collection, req)
-            .inspect_err(|_| collection.guard_rails().circuit_breaker.record_failure());
+        return execute_dense_search_ids(state, name, collection, req);
     }
-    execute_with_cb(state, name, collection, req, quality_mode)
+    execute_search_request(state, name, collection, req, quality_mode)
 }
 
 /// Search using BM25 full-text search.
@@ -438,7 +410,7 @@ pub async fn search_ids(
 
     let execution = run_search_with_optional_timeout(timeout_ms, move || {
         let mut owned_req = req;
-        execute_search_ids_with_cb_owned(
+        execute_search_ids_owned(
             &state_for_work,
             &name_for_work,
             &collection_for_work,

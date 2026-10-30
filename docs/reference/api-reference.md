@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-10-29 (VelesDB v8.0.0). The machine-readable source of
+> **Last updated**: 2026-10-30 (VelesDB v8.0.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -1315,7 +1315,8 @@ The values above are the defaults a server starts with
 (`velesdb_core::QueryLimits::default()`): depth 10, 100 000 intermediate
 results, 100 MiB per query, 30 s, a rate limit of 100 000 queries per second
 per client, and a circuit breaker that opens after 5 consecutive failures for
-30 s. A
+30 s. Only engine failures count (storage, I/O, internal errors, guard-rail
+stops, request timeouts); a `4xx` — the client's own error — never does. A
 `timeout_ms` of `0` disables the timeout.
 
 ### PUT /guardrails

@@ -1,8 +1,9 @@
 //! Query validation for VelesQL (EPIC-044 US-007).
 //!
 //! Type definitions (`ValidationError`, `ValidationErrorKind`, `ValidationConfig`,
-//! `ComplexityStats`) live in `validation_types.rs` and the V011 MATCH anchor
-//! rule in `validation_anchor.rs`, to keep each file under the 500 NLOC limit.
+//! `ComplexityStats`) live in `validation_types.rs`, the V011 MATCH anchor
+//! rule in `validation_anchor.rs` and the V015 MATCH `ORDER BY` rule in
+//! `validation_match_order.rs`, to keep each file under the 500 NLOC limit.
 
 use super::ast::{ArithmeticExpr, Condition, DmlStatement, OrderByExpr, Query, SelectColumns};
 use super::error::{ParseError, ParseErrorKind};
@@ -19,6 +20,7 @@ pub use super::validation_types::{
 /// - LET binding legality (DDL/DML/admin cannot use LET)
 /// - Similarity context (similarity() requires a score-producing WHERE clause)
 /// - Qualified wildcard alias resolution
+/// - MATCH `ORDER BY` forms the MATCH executor can sort by (V015)
 /// - Compound query validation across UNION/INTERSECT/EXCEPT operands
 /// - Complexity budget enforcement (AST depth, LIKE/ILIKE terms, graph hops)
 pub struct QueryValidator;
@@ -45,6 +47,11 @@ impl QueryValidator {
         // Subqueries parse but are not executable; reject them in any WHERE
         // clause (SELECT, compound operands, or DML) before further validation.
         reject_subqueries(query)?;
+
+        // V015 rule lives in `validation_match_order.rs`.
+        if let Some(ref match_clause) = query.match_clause {
+            super::validation_match_order::validate_match_order_by(match_clause)?;
+        }
 
         // Non-SELECT statements: only check LET bindings.
         if !requires_select_validation(query) {

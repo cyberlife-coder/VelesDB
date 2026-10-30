@@ -279,19 +279,19 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut sorted = match_results;
         self.apply_match_order_by(&mut sorted, match_clause, params)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut results = self
             .match_results_to_search_results(sorted)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         // Final cardinality check for MATCH path (EPIC-048 US-003).
         ctx.check_cardinality(results.len())
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         if let Some(limit) = match_return_limit(match_clause) {
             results.truncate(limit);
         }
@@ -322,18 +322,18 @@ impl Collection {
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut sorted = match_results;
         self.apply_match_order_by(&mut sorted, match_clause, params)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         // Final cardinality check for MATCH path (EPIC-048 US-003), matching
         // `finalize_match_results` so the ordered surface rejects oversized
         // result sets identically to the SQL path.
         ctx.check_cardinality(sorted.len())
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         if let Some(limit) = match_return_limit(match_clause) {
             sorted.truncate(limit);
         }

@@ -310,7 +310,32 @@ impl CircuitBreaker {
         }
     }
 
-    /// Records a failed request.
+    /// Records a request that failed with `error`, counting it only when the
+    /// error says the engine is unhealthy.
+    ///
+    /// The breaker exists to shed load from a collection that keeps failing,
+    /// so a caller's mistake ([`Error::is_caller_error`]: an unsupported
+    /// query, a missing parameter, a wrong dimension, …) is not counted —
+    /// otherwise a client repeating one typo would open the breaker and
+    /// refuse every caller for the recovery window. It is not a success
+    /// either, so the failure count is left where it is. Every execution path
+    /// that records a failure carrying an [`Error`] goes through here; only a
+    /// failure with no `Error` to classify (the server's request timeout)
+    /// calls [`record_failure`](Self::record_failure) directly.
+    ///
+    /// [`Error`]: crate::error::Error
+    /// [`Error::is_caller_error`]: crate::error::Error::is_caller_error
+    pub fn record_error(&self, error: &crate::error::Error) {
+        if !error.is_caller_error() {
+            self.record_failure();
+        }
+    }
+
+    /// Records a failed request unconditionally.
+    ///
+    /// Prefer [`record_error`](Self::record_error) wherever the failure is an
+    /// [`Error`](crate::error::Error): this method cannot tell a caller's
+    /// mistake from an unhealthy engine.
     pub fn record_failure(&self) {
         // Acquire the state write-lock BEFORE incrementing the counter to close the TOCTOU
         // window. Without this, a thread could compute count >= threshold, be preempted, and

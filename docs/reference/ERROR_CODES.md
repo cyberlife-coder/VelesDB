@@ -146,7 +146,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `Query(String)`
 - **Message**: `Query error: {details}`
-- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, `HAVING` without `GROUP BY`, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`), a `WITH (mode = ...)` that is not a string, names no search mode, or gives a `custom:`/`adaptive:` ef outside `[16, 4096]` carries `V013` (`InvalidSearchMode`), and a `WITH (ef_search = ...)` that is not an integer or falls outside `[16, 4096]` carries `V014` (`InvalidEfSearch`).
+- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, `HAVING` without `GROUP BY`, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`), a `WITH (mode = ...)` that is not a string, names no search mode, or gives a `custom:`/`adaptive:` ef outside `[16, 4096]` carries `V013` (`InvalidSearchMode`), a `WITH (ef_search = ...)` that is not an integer or falls outside `[16, 4096]` carries `V014` (`InvalidEfSearch`), and a MATCH `ORDER BY` the MATCH executor cannot sort by — an aggregate, a bare pattern alias, a `RETURN` alias or an unqualified property — carries `V015` (`UnsupportedMatchOrderBy`).
 - **Resolution**: Check the VelesQL syntax. Refer to `docs/VELESQL_SPEC.md` for the grammar specification. The error message includes the position of the parsing failure.
 - **Recoverable**: Yes
 
@@ -282,7 +282,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `GuardRail(String)`
 - **Message**: `Guard-rail violation: {details}`
-- **Cause**: A query or operation exceeded a configured limit. Guard-rails include: query timeout, traversal depth limit, result cardinality cap, memory budget, rate limit, and circuit breaker thresholds.
+- **Cause**: A query or operation exceeded a configured limit. Guard-rails include: query timeout, traversal depth limit, result cardinality cap, memory budget, rate limit, and circuit breaker thresholds. The circuit breaker counts only failures that say the engine is unhealthy — the errors for which `Error::is_caller_error()` is `false` (storage, I/O, corruption, internal errors, and guard-rail stops) — so a client repeating its own mistake (a `VELES-010` query error, a `VELES-004` dimension mismatch, …) never opens it.
 - **Resolution**: Reduce the scope of the query (e.g., lower LIMIT, add filters). If the limit is too restrictive for your workload, adjust the guard-rail configuration.
 - **Recoverable**: Yes
 

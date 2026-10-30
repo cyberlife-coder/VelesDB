@@ -610,15 +610,16 @@ pub(crate) fn finish_search_ids(
     )
 }
 
-/// Record circuit-breaker outcome (success/failure) based on a search result.
+/// Record circuit-breaker outcome based on a search result: a success, or a
+/// failure counted only when the error says the engine is unhealthy
+/// (`CircuitBreaker::record_error`) — a caller's error never opens the breaker.
 pub(crate) fn record_circuit_breaker<T>(
     collection: &VectorCollection,
     result: &velesdb_core::Result<T>,
 ) {
-    if result.is_ok() {
-        collection.guard_rails().circuit_breaker.record_success();
-    } else {
-        collection.guard_rails().circuit_breaker.record_failure();
+    match result {
+        Ok(_) => collection.guard_rails().circuit_breaker.record_success(),
+        Err(e) => collection.guard_rails().circuit_breaker.record_error(e),
     }
 }
 

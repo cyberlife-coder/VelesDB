@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-09-23 · Applies to: velesdb-core 8.0.0
+**Version**: 3.10.0 | Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
 
 ---
 
@@ -1797,6 +1797,10 @@ RETURN <projection>
 [ORDER BY <expression>]
 [LIMIT <n>]
 ```
+
+An `ORDER BY` the MATCH executor cannot sort by — an aggregate, or a bare name
+(a pattern alias, a `RETURN` alias, an unqualified property) — is refused at
+validation with `V015`, before any traversal.
 
 ### Pattern Syntax
 

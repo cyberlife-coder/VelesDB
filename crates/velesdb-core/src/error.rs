@@ -281,6 +281,66 @@ impl Error {
                 | Self::IncompatibleSchemaVersion { .. }
         )
     }
+
+    /// Returns true if the caller caused this error, not the engine.
+    ///
+    /// A caller error — a malformed or unsupported query, a missing bind
+    /// parameter, a vector of the wrong dimension, a name that does not
+    /// exist or already does — is answered the same way however healthy the
+    /// collection is, so it says nothing about that health: retrying it
+    /// unchanged fails again. Every other error comes from the engine or its
+    /// environment (storage, I/O, corruption, an internal fault) or is a
+    /// guard-rail stop (timeout, cardinality, memory or depth ceiling): load
+    /// the engine could not carry, which is what the circuit breaker sheds.
+    ///
+    /// This is the one classification of that question. The circuit breaker
+    /// counts only errors for which it is `false`
+    /// (`CircuitBreaker::record_error`), and the server answers a caller error
+    /// with a `4xx` status, every other error with a `5xx`.
+    ///
+    /// The match is exhaustive on purpose: a new variant does not compile
+    /// until someone decides which side it is on.
+    #[must_use]
+    pub const fn is_caller_error(&self) -> bool {
+        match self {
+            Self::CollectionExists(_)
+            | Self::CollectionNotFound(_)
+            | Self::PointNotFound(_)
+            | Self::DimensionMismatch { .. }
+            | Self::InvalidVector(_)
+            | Self::Config(_)
+            | Self::Query(_)
+            | Self::VectorNotAllowed(_)
+            | Self::SearchNotSupported(_)
+            | Self::VectorRequired(_)
+            | Self::SchemaValidation(_)
+            | Self::GraphNotSupported(_)
+            | Self::EdgeExists(_)
+            | Self::EdgeNotFound(_)
+            | Self::InvalidEdgeLabel(_)
+            | Self::NodeNotFound(_)
+            | Self::Overflow(_)
+            | Self::InvalidQuantizerConfig(_)
+            | Self::InvalidDimension { .. }
+            | Self::InvalidCollectionName { .. } => true,
+            Self::Storage(_)
+            | Self::Index(_)
+            | Self::IndexCorrupted(_)
+            | Self::Io(_)
+            | Self::Serialization(_)
+            | Self::Internal(_)
+            | Self::ColumnStoreError(_)
+            | Self::GpuError(_)
+            | Self::EpochMismatch(_)
+            | Self::GuardRail(_)
+            | Self::TrainingFailed(_)
+            | Self::SparseIndexError(_)
+            | Self::DatabaseLocked(_)
+            | Self::AllocationFailed(_)
+            | Self::SnapshotBuildFailed(_)
+            | Self::IncompatibleSchemaVersion { .. } => false,
+        }
+    }
 }
 
 /// Conversion from `VelesQL` `ParseError`.

@@ -297,7 +297,7 @@ impl Collection {
             cbo_strategy,
             cbo_over_fetch,
         )
-        .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
+        .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Applies the exact WHERE post-filter when graph predicates are present,
@@ -319,7 +319,7 @@ impl Collection {
             &stmt.from_alias,
             graph_cache,
         )
-        .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
+        .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Attempts the GraphFirst anchored fetch for the main SELECT path.

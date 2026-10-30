@@ -75,6 +75,12 @@ mod metadata_only_tests;
 mod guardrails_integration_tests;
 
 #[cfg(all(test, feature = "persistence"))]
+mod circuit_breaker_classification_tests;
+
+#[cfg(all(test, feature = "persistence"))]
+mod match_order_by_validation_parity_tests;
+
+#[cfg(all(test, feature = "persistence"))]
 mod metrics_wiring_tests;
 
 #[cfg(all(test, feature = "persistence"))]

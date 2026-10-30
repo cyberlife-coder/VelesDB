@@ -374,10 +374,10 @@ impl Collection {
     ) -> Result<()> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         ctx.check_cardinality(result_count)
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         Ok(())
     }
 

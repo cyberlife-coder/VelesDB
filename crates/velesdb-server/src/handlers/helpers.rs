@@ -82,7 +82,11 @@ pub(crate) fn core_error_response(
 /// Derive the canonical HTTP status code from a [`velesdb_core::Error`].
 ///
 /// Centralizes the error→status mapping so that every handler returns
-/// consistent HTTP codes for the same error variant.
+/// consistent HTTP codes for the same error variant. Which errors are the
+/// client's is not decided here but by core's
+/// [`velesdb_core::Error::is_caller_error`], the same classification the
+/// circuit breaker counts by, so a `4xx` answer and "does not open the
+/// breaker" cannot drift apart.
 pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
     use velesdb_core::Error;
     match e {
@@ -95,21 +99,8 @@ pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
         // 409 Conflict
         Error::CollectionExists(_) | Error::EdgeExists(_) => StatusCode::CONFLICT,
 
-        // 400 Bad Request — client input errors
-        Error::DimensionMismatch { .. }
-        | Error::InvalidVector(_)
-        | Error::InvalidCollectionName { .. }
-        | Error::InvalidDimension { .. }
-        | Error::Config(_)
-        | Error::Query(_)
-        | Error::InvalidEdgeLabel(_)
-        | Error::InvalidQuantizerConfig(_)
-        | Error::SchemaValidation(_)
-        | Error::VectorNotAllowed(_)
-        | Error::VectorRequired(_)
-        | Error::SearchNotSupported(_)
-        | Error::GraphNotSupported(_)
-        | Error::Overflow(_) => StatusCode::BAD_REQUEST,
+        // 400 Bad Request — every other client input error
+        e if e.is_caller_error() => StatusCode::BAD_REQUEST,
 
         // 503 Service Unavailable
         Error::DatabaseLocked(_) | Error::GuardRail(_) => StatusCode::SERVICE_UNAVAILABLE,

@@ -63,3 +63,45 @@ async fn test_apply_pre_check_rate_limit_carries_veles_027() {
     let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
     assert_eq!(json["code"], "VELES-027");
 }
+
+/// The status a core error gets follows core's caller/engine classification,
+/// the one the circuit breaker counts by: every caller error is a `4xx`, every
+/// other error a `5xx`, and the variants' statuses are those 8.0.0 shipped.
+#[test]
+fn test_http_status_follows_the_caller_error_classification() {
+    use velesdb_core::Error;
+    let cases = [
+        (Error::CollectionNotFound("c".into()), StatusCode::NOT_FOUND),
+        (Error::EdgeExists(1), StatusCode::CONFLICT),
+        (Error::Query("[V015]".into()), StatusCode::BAD_REQUEST),
+        (
+            Error::GraphNotSupported("ORDER BY d".into()),
+            StatusCode::BAD_REQUEST,
+        ),
+        (Error::Overflow("u64".into()), StatusCode::BAD_REQUEST),
+        (
+            Error::GuardRail("timed out".into()),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            Error::DatabaseLocked("pid".into()),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            Error::Storage("short write".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            Error::ColumnStoreError("pk".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            Error::Internal("bug".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ];
+    for (err, status) in &cases {
+        assert_eq!(http_status_for_error(err), *status, "{err}");
+        assert_eq!(status.is_client_error(), err.is_caller_error(), "{err}");
+    }
+}

@@ -284,8 +284,8 @@ grammar and parser; queries that violate them are rejected at parse time.
   a valid `alias.property` path, `similarity(field, $vec)`, and arithmetic over a
   **bare** property identifier (e.g. `ORDER BY year - 2000 DESC`). Arithmetic over
   a dotted path (e.g. `ORDER BY d.year - 2000`) is a parse error. Aggregates (no
-  `GROUP BY`) and bare aliases are rejected with error `VELES-018` rather than
-  silently ignored.
+  `GROUP BY`) and bare names (a pattern alias, a `RETURN` alias, an unqualified
+  property) are refused at validation with `V015` rather than silently ignored.
 - **`LIMIT`**.
 - **Cross-collection payload enrichment** via `alias@collection` (see above).
 

@@ -1,6 +1,7 @@
 //! Tests for `RateLimiter` and `CircuitBreaker` resilience primitives.
 
 use super::resilience::{CircuitBreaker, CircuitState, RateLimiter};
+use crate::error::Error;
 use crate::guardrails::limits::GuardRailViolation;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,4 +321,39 @@ fn circuit_reconfigure_recovery_applies_to_an_open_breaker() {
         "a shortened recovery lets the probe through"
     );
     assert_eq!(cb.state(), CircuitState::HalfOpen);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CircuitBreaker::record_error: only engine failures count
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn circuit_record_error_ignores_caller_errors() {
+    let cb = CircuitBreaker::new(2, 60);
+    for _ in 0..10 {
+        cb.record_error(&Error::GraphNotSupported("ORDER BY d".into()));
+        cb.record_error(&Error::Query("[V015] ORDER BY COUNT(*)".into()));
+    }
+    assert_eq!(cb.state(), CircuitState::Closed);
+    assert!(cb.check().is_ok());
+}
+
+#[test]
+fn circuit_record_error_counts_engine_failures() {
+    let cb = CircuitBreaker::new(2, 60);
+    cb.record_error(&Error::Io(std::io::Error::other("disk gone")));
+    assert_eq!(cb.state(), CircuitState::Closed);
+    cb.record_error(&Error::GuardRail("Query timed out".into()));
+    assert_eq!(cb.state(), CircuitState::Open);
+}
+
+#[test]
+fn circuit_record_error_does_not_reset_engine_failures_between_caller_errors() {
+    // A caller error is no evidence of health: it neither counts nor clears
+    // the engine failures already counted.
+    let cb = CircuitBreaker::new(2, 60);
+    cb.record_error(&Error::Storage("short write".into()));
+    cb.record_error(&Error::Query("typo".into()));
+    cb.record_error(&Error::Storage("short write".into()));
+    assert_eq!(cb.state(), CircuitState::Open);
 }

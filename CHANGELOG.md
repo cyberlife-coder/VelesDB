@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A client's error no longer opens a collection's circuit breaker.** Every
+  failed query counted toward the breaker, so five in a row of one client's
+  mistake — a MATCH `ORDER BY` the executor cannot run, a query vector of the
+  wrong dimension, a bad REST search body — opened it, and every query on the
+  collection then failed with `VELES-027` for the 30 s recovery window. The
+  breaker now counts only failures that say the engine is unhealthy:
+  `Error::is_caller_error` is the single classification (exhaustive over the
+  variants), every core execution path records through the new
+  `CircuitBreaker::record_error`, the REST search handlers record the core
+  outcome through it and no longer record a `400` that refuses the request
+  body, and the server's `4xx`/`5xx` choice reads the same classification.
+  Storage, I/O, corruption and internal errors still count, as do guard-rail
+  stops (timeout, cardinality, memory, depth) and the REST request timeout.
+- **An unsupported MATCH `ORDER BY` is refused at validation.**
+  `ORDER BY COUNT(*)`, `ORDER BY MAX(year)`, a bare pattern alias
+  (`ORDER BY d`), a `RETURN` alias (`RETURN d.year AS y ORDER BY y`) and an
+  unqualified property (`ORDER BY year`) passed `QueryValidator::validate` and
+  failed only after traversal, with `VELES-018`. `QueryValidator` now refuses
+  them with `V015` (`UnsupportedMatchOrderBy`; `VELES-010` from the Rust API,
+  `422` from REST `/query`), naming the forms MATCH can order by: `similarity()`,
+  `similarity(field, $v)`, `depth`, `alias.property` and arithmetic over a
+  property (`year - 2000`). A test runs every form through the validator and
+  the executor and fails if their verdicts differ.
+
 ## [8.0.0] - 2026-10-30
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

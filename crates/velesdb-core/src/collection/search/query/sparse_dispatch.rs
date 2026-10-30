@@ -71,7 +71,7 @@ impl Collection {
             limit,
             Some(anchor_ids),
         )
-        .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
+        .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Computes the GraphFirst anchor set for a sparse-only fetch.
@@ -120,7 +120,7 @@ impl Collection {
                 execution_limit,
                 &fusion_strategy,
             )
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
         } else {
             self.execute_sparse_search(
                 svs,
@@ -128,7 +128,7 @@ impl Collection {
                 extracted.filter_condition.as_ref(),
                 execution_limit,
             )
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
         }
     }
 
@@ -151,7 +151,7 @@ impl Collection {
                     &stmt.from_alias,
                     cache,
                 )
-                .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure()),
+                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e)),
             None => Ok(results),
         }
     }

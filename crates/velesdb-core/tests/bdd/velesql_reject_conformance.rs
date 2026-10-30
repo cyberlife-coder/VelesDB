@@ -250,15 +250,15 @@ fn scenario_select_edges_nested_and_rejected() {
 }
 
 // =========================================================================
-// 8. Bare-MATCH RETURN ORDER BY of an unsupported expression -> VELES-018
+// 8. Bare-MATCH RETURN ORDER BY of an unsupported expression -> V015
 //
 // `order_match_results` (collection/search/query/match_exec/order_by.rs)
 // supports ORDER BY similarity(), similarity(field, $v), depth, a valid
 // `alias.property` path, and arithmetic over a bare property identifier;
-// aggregates (no GROUP BY) and bare aliases are rejected (VELES-018).
-// Any other expression that the parser accepts (e.g. a bare alias `d`) used
-// to be silently dropped (tracing::warn + no reorder), returning rows in
-// traversal order. It must now error so callers never get mis-ordered rows.
+// aggregates (no GROUP BY) and bare names (a pattern alias, a RETURN alias,
+// an unqualified property) are refused at validation with V015
+// (velesql/validation_match_order.rs), before any traversal, and never count
+// toward the collection's circuit breaker.
 // =========================================================================
 
 /// Creates a 2-dim vector collection `kgdocs` with three `Doc`-labeled nodes,
@@ -289,56 +289,62 @@ fn setup_doc_nodes(db: &Database) {
     .expect("test: upsert kgdocs");
 }
 
-#[test]
-fn scenario_match_unsupported_order_by_expression_rejected() {
-    let (_dir, db) = create_test_db();
-    setup_doc_nodes(&db);
-
-    // A bare alias `d` parses as an ORDER BY expression but is neither
-    // similarity(), depth, nor a valid `alias.property` path, so it cannot be
-    // applied. It must be rejected (VELES-018) rather than silently ignored.
+/// Runs `sql` against `kgdocs` and returns the error it must fail with.
+fn match_on_kgdocs_err(db: &Database, sql: &str) -> velesdb_core::Error {
     let mut params = std::collections::HashMap::new();
     params.insert("_collection".to_string(), json!("kgdocs"));
-    let err = execute_sql_with_params(
-        &db,
-        "MATCH (d:Doc) RETURN d.name ORDER BY d LIMIT 3",
-        &params,
-    )
-    .expect_err("test: unsupported MATCH ORDER BY expression must be rejected");
-    assert!(
-        err.to_string().contains("VELES-018"),
-        "expected VELES-018 graph-not-supported code, got: {err}"
-    );
-    assert!(
-        err.to_string().contains("ORDER BY"),
-        "expected ORDER BY context in the message, got: {err}"
-    );
+    execute_sql_with_params(db, sql, &params).expect_err(sql)
 }
 
 #[test]
-fn scenario_match_order_by_aggregate_rejected() {
+fn scenario_match_unsupported_order_by_forms_refused_at_validation() {
     let (_dir, db) = create_test_db();
     setup_doc_nodes(&db);
 
-    // An aggregate in a bare-MATCH ORDER BY has no GROUP BY semantics, so it is
-    // rejected (VELES-018) rather than silently ignored — unlike arithmetic and
-    // similarity(field, $v), which now sort.
+    for sql in [
+        // A bare pattern alias names a node, not a sortable value.
+        "MATCH (d:Doc) RETURN d.name ORDER BY d LIMIT 3",
+        // An aggregate has no GROUP BY to rank in a bare MATCH.
+        "MATCH (d:Doc) RETURN d.name ORDER BY COUNT(*) DESC LIMIT 3",
+        "MATCH (d:Doc) RETURN d.name ORDER BY MAX(year) LIMIT 3",
+        // A RETURN alias and an unqualified property are not property paths.
+        "MATCH (d:Doc) RETURN d.name AS n ORDER BY n LIMIT 3",
+        "MATCH (d:Doc) RETURN d.name ORDER BY name LIMIT 3",
+    ] {
+        let err = match_on_kgdocs_err(&db, sql);
+        assert_eq!(err.code(), "VELES-010", "{sql}: {err}");
+        assert!(err.to_string().contains("[V015]"), "{sql}: {err}");
+        assert!(err.to_string().contains("ORDER BY"), "{sql}: {err}");
+    }
+}
+
+#[test]
+fn scenario_match_order_by_typos_leave_the_collection_serving() {
+    // A client repeating an unsupported ORDER BY well past the breaker's
+    // threshold (5 by default) must not take the collection down.
+    let (_dir, db) = create_test_db();
+    setup_doc_nodes(&db);
+
+    for _ in 0..10 {
+        match_on_kgdocs_err(&db, "MATCH (d:Doc) RETURN d.name ORDER BY d LIMIT 3");
+    }
+
+    let docs = db
+        .get_vector_collection("kgdocs")
+        .expect("test: get kgdocs");
+    assert!(
+        docs.guard_rails().circuit_breaker.check().is_ok(),
+        "the breaker must stay closed"
+    );
     let mut params = std::collections::HashMap::new();
     params.insert("_collection".to_string(), json!("kgdocs"));
-    let err = execute_sql_with_params(
+    let rows = execute_sql_with_params(
         &db,
-        "MATCH (d:Doc) RETURN d.name ORDER BY COUNT(*) DESC LIMIT 3",
+        "MATCH (d:Doc) RETURN d.name ORDER BY d.name LIMIT 3",
         &params,
     )
-    .expect_err("test: MATCH ORDER BY aggregate must be rejected");
-    assert!(
-        err.to_string().contains("VELES-018"),
-        "expected VELES-018 graph-not-supported code, got: {err}"
-    );
-    assert!(
-        err.to_string().contains("ORDER BY"),
-        "expected ORDER BY context in the message, got: {err}"
-    );
+    .expect("test: a supported ORDER BY must still run");
+    assert_eq!(rows.len(), 3);
 }
 
 // NEAR_FUSED via SQL now EXECUTES real multi-vector fusion (it is no longer

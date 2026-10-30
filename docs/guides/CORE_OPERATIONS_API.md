@@ -190,7 +190,11 @@ assert_eq!(docs.guard_rails().limits().max_depth, 5);
 
 `QueryLimits::default()` is depth 10, 100 000 intermediate results, 100 MiB,
 30 s, a rate limit of 100 000 queries per second per client, and a breaker
-opening after 5 consecutive failures for 30 s. `Database::update_guardrails`
+opening after 5 consecutive failures for 30 s. Only engine failures count:
+query execution records a failed query with `CircuitBreaker::record_error`,
+which skips every error `Error::is_caller_error()` classifies as the caller's
+(a bad query, a missing parameter, a wrong dimension), so a client repeating
+its own mistake never opens the breaker for everyone. `Database::update_guardrails`
 replaces all seven fields, and every one of them reaches every collection:
 
 - `max_depth`, `max_cardinality`, `memory_limit_bytes` and `timeout_ms` apply
@@ -575,4 +579,4 @@ None of these truncates to `k`: they score exactly the slices they are given.
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
