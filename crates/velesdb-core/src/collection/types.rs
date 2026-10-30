@@ -193,6 +193,8 @@ impl Default for RuntimeLimits {
 //   5. pq_quantizer → pq_training_buffer
 //   6. secondary_indexes
 //   7. property_index / range_index         (any order among themselves)
+//   7. label_index / graph_range_indexes    (never both held; see
+//                                            docs/CONCURRENCY_MODEL.md)
 //   8. (reserved — edge_store now uses internal sharded locking)
 //   9. sparse_indexes
 //  10. delta_buffer
