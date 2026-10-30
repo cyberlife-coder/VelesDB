@@ -987,7 +987,7 @@ class TestServerUrlRemoved:
 
 
 # search_quality is refused by velesdb-core's parser, which the binding exposes
-# from velesdb 7.2.0 on; an older wheel refuses a bad mode only at search time.
+# from velesdb 8.0.0 on; an older wheel refuses a bad mode only at search time.
 requires_core_quality_parser = pytest.mark.skipif(
     not hasattr(importlib.import_module("velesdb"), "validate_search_quality"),
     reason="installed velesdb predates velesdb.validate_search_quality",

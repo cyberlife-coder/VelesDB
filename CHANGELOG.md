@@ -121,7 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scores `multi_query_search` returns with that strategy; `velesdb_common.scores`
   gains `fused_higher_is_better(strategy, fusion, metric)`, which calls it and
   falls back to a literal set pinned to it by a drift test for a wheel older
-  than 7.2.0, and `to_similarity(score, higher_is_better)`.
+  than 8.0.0, and `to_similarity(score, higher_is_better)`.
 - **`parse_search_mode` and `SearchQuality` no longer need `persistence`.**
   `SearchQuality` moved from `index::hnsw::params` to its own ungated module.
   It is re-exported at `velesdb_core::SearchQuality` and at its old path.
@@ -398,11 +398,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FNV-1a copy and its search-quality grammar (preset set, `custom:`/`adaptive:`
   regexes, a mirrored 16–4096 ef range) are gone. `stable_hash_id(value,
   algorithm="fnv1a")` is `velesdb.hash_id` and raises `ImportError` naming
-  velesdb 7.2.0 with an older wheel; its SHA-256 default is unchanged, needs no
+  velesdb 8.0.0 with an older wheel; its SHA-256 default is unchanged, needs no
   binding, and still differs from core's FNV-1a by design (KNOWN_LIMITATIONS
   #12). `validate_search_quality` accepts exactly what core accepts (now
   `custom:+256` too) and its `SecurityError` carries core's message; with a
-  wheel older than 7.2.0 it checks only the type and leaves the mode to the
+  wheel older than 8.0.0 it checks only the type and leaves the mode to the
   binding, which refuses an invalid one at search time. The connectors' declared
   `velesdb` floors stay where they are, since every new call is
   feature-detected.
@@ -436,7 +436,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **MIT integrations** (`velesdb_common.fusion.build_fusion_strategy`, used
     by LangChain and LlamaIndex): the name goes to the binding's
     `FusionStrategy.from_name`, so they accept core's aliases and casing and
-    report core's errors. A wheel older than the export (velesdb < 7.2.0)
+    report core's errors. A wheel older than the export (velesdb < 8.0.0)
     keeps the previous literal dispatch, as the other `velesdb_common` helpers
     do.
 - **`velesdb-wasm` validates search modes with core's `parse_search_mode`.**
