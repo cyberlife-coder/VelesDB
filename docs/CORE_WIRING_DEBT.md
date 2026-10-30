@@ -450,7 +450,7 @@ avoid implying a guarantee that does not exist. Community-scope.
 
 ---
 
-*Last updated: 2026-10-25 · Applies to: velesdb-core 7.1.0 (this stamp tracks
+*Last updated: 2026-10-25 · Applies to: velesdb-core 8.0.0 (this stamp tracks
 the document revision; this revision closes entry 1, removed from the schema
 for 7.0.0. The rest of the inventory was last re-verified against the code on
 2026-06-14, as stated at the top of this page)*

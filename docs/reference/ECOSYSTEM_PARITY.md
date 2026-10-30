@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-10-29 (v7.1.0 + unreleased fusion/search-mode grammar and fused score direction; velesdb-memory 0.16.0)
+Last updated: 2026-10-29 (v8.0.0 + unreleased fusion/search-mode grammar and fused score direction; velesdb-memory 0.16.0)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -90,7 +90,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
   | Durable TTL set/refresh | ✅ `PATCH .../points/{id}/ttl` | ✅ `client.setTtlDurable()` | ❌ (throws `NOT_SUPPORTED`) | ✅ `set_semantic/episodic/procedural_ttl_durable`, `store_with_ttl`, `record_with_ttl`, `learn_with_ttl` |
   | Temporal recall facades | n/a (use `/query`) | ✅ `recallRecent` / `recallOlderThan` | ❌ (throws `NOT_SUPPORTED`) | ✅ `episodic.recent` / `episodic.older_than` |
 - **Agent Memory (WASM / Mobile)**: WASM now ships the high-level `MemoryService` wedge (remember — incl. per-fact `ttlSeconds` — /recall/recallWhere/recallFused/relate/unrelate/forget/entity/why/rememberExtracted; in-memory only, no persistence under WASM, #1310) alongside the primitive `SemanticMemory`. `rememberExtracted` on WASM (and on the TS SDK wrapping it) runs the deterministic, network-free `outline` extractor ONLY — a generative backend (`"ollama"`) is refused by name rather than silently substituted, because it would put a network call in the bundle (`crates/velesdb-wasm/src/memory_service.rs`, `sdks/typescript/src/memory.ts` `rememberExtracted`). `feedback` remains deliberately absent on WASM (it sits behind the `persistence` feature; a durable learned confidence is meaningless for a store that disappears on page reload). Mobile remains ⚠️ semantic-only (`VelesSemanticMemory`). Episodic/procedural memory, the standalone TTL setters (`setTtlDurable`-style), and snapshots are not exposed on these bindings.
-- **Agent Memory — search quality per call (velesdb-core 7.1.0)**: `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and `query_excluding_with_quality` run one semantic search at an explicit `SearchQuality`; `query`, `query_filtered` and `query_excluding` keep the collection's runtime quality. Usage: [AGENT_MEMORY.md](../guides/AGENT_MEMORY.md#semantic-search-at-an-explicit-quality). Where the choice reaches a caller:
+- **Agent Memory — search quality per call (velesdb-core 8.0.0)**: `SemanticMemory::query_with_quality`, `query_filtered_with_quality` and `query_excluding_with_quality` run one semantic search at an explicit `SearchQuality`; `query`, `query_filtered` and `query_excluding` keep the collection's runtime quality. Usage: [AGENT_MEMORY.md](../guides/AGENT_MEMORY.md#semantic-search-at-an-explicit-quality). Where the choice reaches a caller:
 
   | Surface | Per-call quality | Per-store quality |
   |---|---|---|
