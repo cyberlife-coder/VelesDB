@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-10-30
+
+> **MAJOR release.** The breaking changes and how to move past each one are in
+> [`docs/guides/MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md).
+> API deprecated one major or more ago is removed: in Rust, `store_node_payload`,
+> `OperationalMetrics::shared`, `effective_ef_search`, `CollectionStats`, the
+> 7.0 update-check entry points, `TraversalMetrics` and velesdb-migrate's
+> `PineconeConfig::environment`, and `EdgeStore` loses its serde impls; in
+> Python, the native `Collection.search`, the `top_k` alias and
+> `get_graph_store`. Point payloads and edge properties nested deeper than 124
+> levels are refused (`VELES-017`) where they used to be written and then fail
+> to read back or to restore; a second `SPARSE_NEAR` is refused where it was
+> dropped, and a failing branch fails a hybrid dense + sparse search. The WASM
+> VelesQL executor validates with core's `QueryValidator`. The Tauri plugin and
+> the mobile bindings carry core's `VELES-###` codes, and `MobileGraphStore` is
+> a core graph collection. `velesdb-wasm` storage modes return core's results
+> and keep f32 vectors in every mode. Graph edges with properties now survive a
+> flush and a reopen, and a `MATCH` range predicate returns every matching node.
+> `enable_streaming` returns `Result` and refuses a config that aborted the
+> process; caller-chosen sizes no longer abort it either. Stored floats read
+> back bit for bit (`serde_json`'s `float_roundtrip`, at a parse cost stated
+> below), and the Python binding raises on a value nested past 127 levels.
+> **Do not downgrade** to 7.x a graph collection whose edges carry properties:
+> 7.x cannot read the 8.0 edge snapshot.
+
 ### Added
 
 - **`velesdb_core::MAX_JSON_NESTING` (127) and `MAX_VALUE_DEPTH` (124)**, also
@@ -881,10 +906,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second; the defaults are 100 MiB and 100 000. `PUT /guardrails` now says what
   it reaches: every limit, on every collection, including those opened after
   the update (see Fixed).
-
-  it reaches: the depth, cardinality, memory and timeout limits of the
-  collections open at the time, not the rate limiter, the circuit breaker, or a
-  collection opened afterwards.
 - **No guide shows `NEAR_FUSED ... USING FUSION 'weighted'` as working.** The
   validator has rejected `weighted` and `rsf` on `NEAR_FUSED` with `V012` since
   3.3.0, as the spec says, but the CLI cookbook, the business scenarios and the
@@ -11493,7 +11514,10 @@ still genuinely pending is:
 > product), not part of the open-source Community roadmap — see the
 > "Scope & boundaries" section of the README.
 
-[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/cyberlife-coder/VelesDB/compare/v8.0.0...HEAD
+[8.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v7.1.0...v8.0.0
+[7.1.0]: https://github.com/cyberlife-coder/VelesDB/compare/v7.0.0...v7.1.0
+[7.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v6.0.0...v7.0.0
 [6.0.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.2.0...v6.0.0
 [5.2.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.1.0...v5.2.0
 [5.1.0]: https://github.com/cyberlife-coder/VelesDB/compare/v5.0.0...v5.1.0

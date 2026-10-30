@@ -41,6 +41,10 @@ Detailed guides for using VelesDB features. **[Full guides index →](./guides/R
 | [Use Cases](./guides/USE_CASES.md) | Common use cases and recommended configurations |
 | [Migration v3.3.0](./guides/MIGRATION_v3.3.0.md) | Error codes, REST statuses and query results that changed in 3.3.0. |
 | [Migration v4.0.0](./guides/MIGRATION_v4.0.0.md) | The 4.0.0 breaking changes — start with the WASM `weighted` reordering, which is silent. |
+| [Migration v5.0.0](./guides/MIGRATION_v5.0.0.md) | The `load_working_context` envelope, on every surface that relays it. |
+| [Migration v6.0.0](./guides/MIGRATION_v6.0.0.md) | Three compile-time Rust API changes in `velesdb-core`. |
+| [Migration v7.0.0](./guides/MIGRATION_v7.0.0.md) | The 7.0.0 breaking changes: search modes and `ef_search` that now fail. |
+| [Migration v8.0.0](./guides/MIGRATION_v8.0.0.md) | The 8.0.0 breaking changes — read the edge-snapshot section before upgrading a graph you may roll back. |
 | [Troubleshooting](./NEW_USER_TROUBLESHOOTING.md) | Solutions for common issues new users encounter |
 
 ### API reference, per binding
