@@ -54,6 +54,7 @@ VelesDB uniquely combines **vector similarity search** with **knowledge graph tr
 -- Find similar documents AND their referenced materials
 MATCH (d:Document)-[:REFERENCES]->(ref:Document)
 WHERE similarity(d.embedding, $query) > 0.75
+RETURN d, ref
 LIMIT 20
 ```
 
@@ -71,6 +72,7 @@ results = docs.query(
     """
     MATCH (d:Document)-[:REFERENCES]->(ref:Document)
     WHERE similarity(d.embedding, $q) > 0.75
+    RETURN d, ref
     LIMIT 20
     """,
     params={"q": query_embedding}
@@ -118,6 +120,7 @@ for r in results:
 -- Find experts connected to topics mentioned in similar documents
 MATCH (d:Document)-[:MENTIONS]->(t:Topic)<-[:IS_EXPERT_IN]-(p:Person)
 WHERE similarity(d.embedding, $query) > 0.7
+RETURN p.name, t.name
 LIMIT 10
 ```
 
@@ -127,6 +130,7 @@ LIMIT 10
 MATCH (d:Document)-[:MENTIONS]->(t:Topic)<-[:IS_EXPERT_IN]-(p:Person)-[:WORKS_AT]->(o:Organization)
 WHERE similarity(d.embedding, $query) > 0.7 
   AND o.name = 'MIT'
+RETURN p.name, o.name
 LIMIT 5
 ```
 
@@ -141,6 +145,7 @@ let collection = db.get_vector_collection("research").unwrap();
 let query = Parser::parse(r#"
     MATCH (d:Document)-[:MENTIONS]->(t:Topic)<-[:IS_EXPERT_IN]-(p:Person)
     WHERE similarity(d.embedding, $q) > 0.7
+    RETURN p, t
     LIMIT 10
 "#)?;
 
@@ -184,6 +189,7 @@ for expert in experts {
 -- Discover concepts within 3 hops of semantically similar starting points
 MATCH (start:Concept)-[*1..3]->(discovered:Concept)
 WHERE similarity(start.embedding, $query) > 0.8
+RETURN start.name, discovered.name
 LIMIT 50
 ```
 
@@ -193,6 +199,7 @@ LIMIT 50
 MATCH (start:Concept)-[:RELATED_TO|PART_OF*1..3]->(discovered:Concept)
 WHERE similarity(start.embedding, $query) > 0.8
   AND discovered.category = 'technology'
+RETURN discovered.name
 LIMIT 30
 ```
 
@@ -206,6 +213,7 @@ const db = new VelesDB({ backend: 'rest', url: 'http://localhost:8080' });
 const response = await db.query('knowledge_graph', `
     MATCH (start:Concept)-[*1..3]->(discovered:Concept)
     WHERE similarity(start.embedding, $q) > 0.8
+    RETURN discovered
     LIMIT 50
 `, { q: queryVector });
 
@@ -372,6 +380,7 @@ for (const article of results.results) {
 MATCH (u:User)-[:LIKED]->(liked:Item)
 WHERE u.id = $user_id
   AND similarity(liked.embedding, $candidate) > 0.7
+RETURN liked
 LIMIT 20
 ```
 
@@ -382,6 +391,7 @@ LIMIT 20
 MATCH (u:User)-[:LIKED]->(i:Item)<-[:LIKED]-(similar_user:User)-[:LIKED]->(recommendation:Item)
 WHERE u.id = $user_id
   AND similarity(recommendation.embedding, $user_preference_vector) > 0.6
+RETURN recommendation, similarity() AS score
 LIMIT 10
 ```
 
@@ -393,6 +403,7 @@ items = db.get_collection("items")
 user_likes = items.match_query("""
     MATCH (u:User)-[:LIKED]->(i:Item)
     WHERE u.id = $user_id
+    RETURN i
     LIMIT 100
 """, params={"user_id": user_id})
 
@@ -404,12 +415,13 @@ recommendations = items.query("""
     SELECT id, name, category
     FROM items
     WHERE vector NEAR $pref
-      AND id NOT IN $already_liked
-    LIMIT 20
-""", params={
-    "pref": preference_vector,
-    "already_liked": [m['node_id'] for m in user_likes]
-})
+    LIMIT 40
+""", params={"pref": preference_vector})
+
+# NOT IN takes a literal list, not a bound parameter: drop the already-liked
+# items client-side.
+already_liked = {m['node_id'] for m in user_likes}
+recommendations = [r for r in recommendations if r['node_id'] not in already_liked][:20]
 ```
 
 ### Performance
@@ -435,14 +447,11 @@ recommendations = items.query("""
 
 ### VelesQL Query
 
-```sql
--- Find potential duplicates (very high similarity)
-SELECT a.id as id_a, b.id as id_b, a.name, b.name
-FROM companies a, companies b
-WHERE similarity(a.embedding, b.embedding) > 0.95
-  AND a.id < b.id  -- Avoid self-matches and duplicates
-LIMIT 100
-```
+VelesQL has no all-pairs self-join: a comma join (`FROM companies a, companies b`)
+is not in the grammar, and `similarity()` compares a field against a query vector
+(a `$parameter` or a literal), never against another stored field. Deduplicate
+one entity at a time instead — run the check below with each candidate's
+embedding bound to `$new_entity_embedding`.
 
 ### Single Entity Deduplication Check
 
@@ -505,14 +514,18 @@ else:
 
 ### VelesQL Query
 
+VelesQL has no date-truncation function (`DATE()` is not in the grammar), so
+store the bucket you group on as its own payload field at ingest — here
+`published_day`, e.g. `'2024-03-15'`:
+
 ```sql
 -- Daily article count for a topic over time
-SELECT DATE(published_at) as day, COUNT(*) as article_count, AVG(sentiment_score) as avg_sentiment
+SELECT published_day, COUNT(*) AS article_count, AVG(sentiment_score) AS avg_sentiment
 FROM articles
 WHERE similarity(embedding, $topic_vector) > 0.7
   AND published_at >= '2024-01-01'
-GROUP BY DATE(published_at)
-ORDER BY day ASC
+GROUP BY published_day
+ORDER BY published_day ASC
 ```
 
 ### Category Breakdown
@@ -537,19 +550,19 @@ topic_vector = embed("artificial intelligence breakthroughs")
 
 articles = db.get_collection("articles")
 trends = articles.query("""
-    SELECT DATE(published_at) as day, 
-           COUNT(*) as count,
-           AVG(sentiment_score) as sentiment
+    SELECT published_day,
+           COUNT(*) AS count,
+           AVG(sentiment_score) AS sentiment
     FROM articles
     WHERE similarity(embedding, $topic) > 0.7
       AND published_at >= '2024-01-01'
-    GROUP BY DATE(published_at)
-    ORDER BY day ASC
+    GROUP BY published_day
+    ORDER BY published_day ASC
 """, params={"topic": topic_vector})
 
 # Convert to DataFrame and plot
 df = pd.DataFrame(trends)
-df['day'] = pd.to_datetime(df['day'])
+df['day'] = pd.to_datetime(df['published_day'])
 
 fig, ax1 = plt.subplots()
 ax1.bar(df['day'], df['count'], alpha=0.7, label='Article Count')
@@ -588,6 +601,7 @@ plt.show()
 -- Find all components affected by a change (up to 5 hops)
 MATCH (source:Component)-[:DEPENDS_ON*1..5]->(affected:Component)
 WHERE source.id = $component_id
+RETURN affected
 LIMIT 100
 ```
 
@@ -598,6 +612,7 @@ LIMIT 100
 MATCH (source:Component)-[:DEPENDS_ON*1..3]->(affected:Component)
 WHERE source.id = $component_id
   AND similarity(affected.embedding, $critical_pattern) > 0.6
+RETURN affected.name, affected.criticality
 ORDER BY affected.criticality DESC
 LIMIT 50
 ```
@@ -612,6 +627,7 @@ def analyze_impact(component_id: str, max_depth: int = 5) -> dict:
     affected = components.match_query(f"""
         MATCH (source:Component)-[:DEPENDS_ON*1..{max_depth}]->(affected:Component)
         WHERE source.id = $cid
+        RETURN affected
         LIMIT 500
     """, params={"cid": component_id})
     
@@ -681,6 +697,7 @@ LIMIT 10
 MATCH (c:Conversation)-[:HAS_MESSAGE]->(m:Message)
 WHERE c.user_id = $user_id
   AND similarity(m.embedding, $query) > 0.7
+RETURN m.content, m.timestamp
 ORDER BY m.timestamp DESC
 LIMIT 20
 ```
@@ -691,6 +708,7 @@ LIMIT 20
 -- Messages mentioning entities similar to current topic
 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
 WHERE similarity(e.embedding, $topic_vector) > 0.8
+RETURN m.content, e.name
 ORDER BY m.timestamp DESC
 LIMIT 15
 ```

@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-09-23 · Applies to: velesdb-core 8.0.0
+**Version**: 3.10.0 | Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
 
 ---
 
@@ -111,7 +111,7 @@ The SELECT statement is the primary way to query data from collections.
 
 ### Full Syntax
 
-```sql
+```text
 [LET <name> = <expr> ...]
 SELECT [DISTINCT] <columns> [, <window_fn>() OVER (...) [AS <alias>] ...]
 FROM <collection> [[AS] <alias>]
@@ -139,8 +139,8 @@ SELECT * FROM documents
 ### Select Specific Columns
 
 ```sql
-SELECT id, score FROM documents
-SELECT id, payload.title, payload.category FROM documents
+SELECT id, score FROM documents;
+SELECT id, payload.title, payload.category FROM documents;
 ```
 
 ### Nested Payload Fields
@@ -148,8 +148,8 @@ SELECT id, payload.title, payload.category FROM documents
 Access nested JSON fields using dot notation at any depth:
 
 ```sql
-SELECT payload.metadata.author FROM articles
-SELECT payload.stats.views, payload.stats.likes FROM posts
+SELECT payload.metadata.author FROM articles;
+SELECT payload.stats.views, payload.stats.likes FROM posts;
 ```
 
 ### Column Aliases
@@ -157,8 +157,8 @@ SELECT payload.stats.views, payload.stats.likes FROM posts
 Rename output columns with `AS`:
 
 ```sql
-SELECT id, payload.title AS title FROM docs
-SELECT id AS doc_id, category AS cat FROM products
+SELECT id, payload.title AS title FROM docs;
+SELECT id AS doc_id, category AS cat FROM products;
 ```
 
 ### DISTINCT Modifier
@@ -199,9 +199,9 @@ SELECT ctx.* FROM docs AS ctx WHERE vector NEAR $v LIMIT 10
 ### Aggregate Functions in SELECT
 
 ```sql
-SELECT COUNT(*) FROM docs
-SELECT category, COUNT(*), AVG(price), MAX(rating) FROM products GROUP BY category
-SELECT SUM(quantity) AS total FROM orders
+SELECT COUNT(*) FROM docs;
+SELECT category, COUNT(*), AVG(price), MAX(rating) FROM products GROUP BY category;
+SELECT SUM(quantity) AS total FROM orders;
 ```
 
 | Function | Description | Argument |
@@ -221,10 +221,10 @@ SELECT SUM(quantity) AS total FROM orders
 Use the zero-argument `similarity()` to project the pre-computed search score:
 
 ```sql
-SELECT similarity() FROM docs WHERE vector NEAR $v LIMIT 10
-SELECT similarity() AS score FROM docs WHERE vector NEAR $v LIMIT 10
+SELECT similarity() FROM docs WHERE vector NEAR $v LIMIT 10;
+SELECT similarity() AS score FROM docs WHERE vector NEAR $v LIMIT 10;
 SELECT id, payload.title, similarity() AS relevance
-FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5
+FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5;
 ```
 
 ---
@@ -237,6 +237,8 @@ and `FROM documents AS d` are strictly equivalent. A bare alias may not be a
 reserved clause keyword (`WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`,
 `WITH`, `USING`, `UNION`, `INTERSECT`, `EXCEPT`, `INNER`, `LEFT`, `RIGHT`,
 `FULL`, `OUTER`, `JOIN`, `ON`, `AS`); quote it (`` `limit` ``) to use one anyway.
+`FROM` names exactly one collection: a comma-separated list (`FROM a, b`, an
+implicit cross join) is a parse error — combine collections with `JOIN ... ON`.
 
 ```sql
 -- Simple
@@ -260,7 +262,7 @@ Combine data from multiple collections.
 
 ### Syntax
 
-```sql
+```text
 SELECT <columns>
 FROM <table1> [[AS] <alias1>]
 [INNER | LEFT | RIGHT | FULL] JOIN <table2> [[AS] <alias2>]
@@ -388,9 +390,9 @@ with `AND`, `OR`, and `NOT`.
 | `<=` | Less or equal | `rating <= 5` |
 
 ```sql
-SELECT * FROM products WHERE price > 100 AND category = 'electronics'
-SELECT * FROM users WHERE age >= 18 AND age <= 65
-SELECT * FROM docs WHERE status <> 'deleted'
+SELECT * FROM products WHERE price > 100 AND category = 'electronics';
+SELECT * FROM users WHERE age >= 18 AND age <= 65;
+SELECT * FROM docs WHERE status <> 'deleted';
 ```
 
 ### Logical Operators (AND, OR, NOT)
@@ -473,8 +475,8 @@ SELECT * FROM docs WHERE category IN ('tech', 'science', 'ai')
 SELECT * FROM docs WHERE id IN (1, 2, 3, 4, 5)
 
 -- NOT IN
-SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted')
-SELECT * FROM docs WHERE id NOT IN (1, 2, 3)
+SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted');
+SELECT * FROM docs WHERE id NOT IN (1, 2, 3);
 ```
 
 **Index acceleration**: When a secondary index exists on the filtered column,
@@ -490,9 +492,9 @@ transparently. Results are identical in both paths.
 Test if a value falls within a range (inclusive):
 
 ```sql
-SELECT * FROM docs WHERE price BETWEEN 10 AND 100
-SELECT * FROM docs WHERE date BETWEEN '2024-01-01' AND '2024-12-31'
-SELECT * FROM products WHERE rating BETWEEN 3.5 AND 5.0
+SELECT * FROM docs WHERE price BETWEEN 10 AND 100;
+SELECT * FROM docs WHERE date BETWEEN '2024-01-01' AND '2024-12-31';
+SELECT * FROM products WHERE rating BETWEEN 3.5 AND 5.0;
 ```
 
 ### LIKE (Pattern Matching)
@@ -552,9 +554,9 @@ Characters without a defined case mapping (e.g., CJK ideographs) are compared as
 Test for null values:
 
 ```sql
-SELECT * FROM docs WHERE category IS NULL
-SELECT * FROM docs WHERE category IS NOT NULL
-SELECT * FROM users WHERE email IS NOT NULL AND verified = true
+SELECT * FROM docs WHERE category IS NULL;
+SELECT * FROM docs WHERE category IS NOT NULL;
+SELECT * FROM users WHERE email IS NOT NULL AND verified = true;
 ```
 
 ### CONTAINS (Array Filter, v3.7+)
@@ -660,7 +662,7 @@ string payload field. Unlike `MATCH` (which boosts via RRF), `CONTAINS_TEXT`
 is a **strict filter**: any result whose target field does not contain the
 specified substring is excluded from the result set.
 
-```sql
+```text
 column CONTAINS_TEXT 'substring'
 ```
 
@@ -859,7 +861,7 @@ results by similarity score rather than just finding nearest neighbors.
 
 #### Syntax
 
-```sql
+```text
 similarity(field, vector_expr) <operator> threshold
 ```
 
@@ -908,15 +910,17 @@ SELECT * FROM docs WHERE similarity(vector, $v) > 0.8
 ### Temporal Functions (v2.1+)
 
 VelesQL supports temporal expressions for date/time filtering using `NOW()`
-and `INTERVAL`.
+and `INTERVAL`. These are the only temporal functions: there is no date
+extraction or truncation (`DATE()`, `EXTRACT()`, `DATE_TRUNC()` are parse
+errors), so group by a day or month field stored in the payload instead.
 
 #### NOW() Function
 
 Returns the current Unix timestamp (seconds since epoch):
 
 ```sql
-SELECT * FROM events WHERE timestamp > NOW()
-SELECT * FROM items WHERE created_at > NOW()
+SELECT * FROM events WHERE timestamp > NOW();
+SELECT * FROM items WHERE created_at > NOW();
 ```
 
 #### INTERVAL Expression
@@ -1009,6 +1013,10 @@ the CLI REPL (both route through `Database::execute_query`).
   the subquery's own collection, **not** a correlation, so it executes normally.
 - Nesting up to 8 levels deep (a deeper nest errors with `VELES-010`).
 
+**Not supported:** set-membership subqueries — `id IN (SELECT doc_id FROM t)`
+and `EXISTS (...)` — are not in the grammar and fail to parse. A subquery inside
+an `IN (...)` list is a scalar like any other: `id IN ((SELECT MAX(id) FROM t))`.
+
 **Not yet supported (rejected at validation with `V010`):**
 
 - **Correlated subqueries** — a subquery whose inner `WHERE` references one of the
@@ -1070,7 +1078,9 @@ LIMIT 10
 SELECT * FROM docs AS d
 WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)
 LIMIT 10
+```
 
+```velesql-error
 -- Rejected with V011 (G1): the FROM alias 'd' is in a non-anchor position;
 -- anchor the pattern on it instead, e.g. MATCH (d)-[:REL]->(w)
 SELECT * FROM docs AS d
@@ -1231,7 +1241,7 @@ three ranking functions over a `PARTITION BY` / `ORDER BY` window.
 
 ### Syntax
 
-```sql
+```text
 <function>() OVER ([PARTITION BY <expr> [, <expr> ...]] [ORDER BY <expr> [ASC|DESC] [, <expr> ...]])
 ```
 
@@ -1340,8 +1350,8 @@ Sort results by one or more expressions, each with an optional direction.
 ### Basic Sorting
 
 ```sql
-SELECT * FROM docs ORDER BY created_at DESC
-SELECT * FROM docs ORDER BY category ASC, price DESC
+SELECT * FROM docs ORDER BY created_at DESC;
+SELECT * FROM docs ORDER BY category ASC, price DESC;
 ```
 
 ### Order by Similarity
@@ -1485,7 +1495,7 @@ LET clauses appear **before** the SELECT statement.
 
 ### Syntax
 
-```sql
+```text
 LET <name> = <arithmetic_expression>
 ```
 
@@ -1542,6 +1552,10 @@ LET boost = 1.5
 LET weighted = 0.7 * vector_score + 0.3 * bm25_score
 LET final_score = weighted * boost
 LET sim = similarity()
+SELECT * FROM documents
+WHERE vector NEAR $query AND content MATCH 'machine learning'
+ORDER BY final_score DESC
+LIMIT 10
 ```
 
 Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`,
@@ -1790,7 +1804,7 @@ Execute graph pattern matching queries with optional vector similarity filtering
 
 ### Syntax
 
-```sql
+```text
 MATCH <pattern>
 [WHERE <conditions>]
 RETURN <projection>
@@ -1804,7 +1818,7 @@ RETURN <projection>
 
 A node is enclosed in parentheses with optional alias, labels, and properties:
 
-```sql
+```text
 (alias)                          -- Any node
 (alias:Label)                    -- Node with label
 (alias:Label1:Label2)            -- Node with multiple labels
@@ -1838,7 +1852,7 @@ When using `@collection`:
 
 Relationships connect nodes with direction and optional type/range:
 
-```sql
+```text
 -[r:TYPE]->                      -- Outgoing, named
 <-[r:TYPE]-                      -- Incoming, named
 -[r:TYPE]-                       -- Undirected, named
@@ -1886,7 +1900,7 @@ traversed relationships, not a single edge:
 
 Project fields from matched nodes and relationships:
 
-```sql
+```text
 RETURN a.name, b.title             -- Property access
 RETURN a.name AS author            -- With alias
 RETURN *                           -- All bound variables
@@ -2429,8 +2443,8 @@ are cached in memory and persisted to disk (`collection.stats.json`).
 
 ```sql
 -- Compute statistics for query optimizer
-ANALYZE docs
-ANALYZE COLLECTION docs   -- optional COLLECTION keyword
+ANALYZE docs;
+ANALYZE COLLECTION docs;   -- optional COLLECTION keyword
 ```
 
 Returns a JSON payload with collection statistics including `total_points`,
@@ -2464,8 +2478,8 @@ all data unconditionally.
 
 ```sql
 -- Delete all rows
-TRUNCATE docs
-TRUNCATE COLLECTION docs   -- optional COLLECTION keyword
+TRUNCATE docs;
+TRUNCATE COLLECTION docs;   -- optional COLLECTION keyword
 ```
 
 Returns a payload with `{"deleted_count": N}`. Truncating an empty collection
@@ -2662,8 +2676,8 @@ WITH PROPERTIES accepts key-value pairs (strings, integers, or floats).
 Remove an edge by its ID from a graph collection.
 
 ```sql
-DELETE EDGE 123 FROM knowledge
-DELETE EDGE 10 FROM kg
+DELETE EDGE 123 FROM knowledge;
+DELETE EDGE 10 FROM kg;
 ```
 
 ### SELECT EDGES (v3.5+)
@@ -2718,7 +2732,7 @@ Explicitly train a Product Quantizer on a collection's vector data.
 
 ### Syntax
 
-```sql
+```text
 TRAIN QUANTIZER ON <collection> WITH (<parameters>)
 ```
 
@@ -2857,7 +2871,7 @@ path.
 
 Single-quoted. To include a single quote, double it (`''`):
 
-```sql
+```text
 'hello world'
 'O''Brien'                -- produces: O'Brien
 'It''s a ''test'''        -- produces: It's a 'test'
@@ -2866,7 +2880,7 @@ Single-quoted. To include a single quote, double it (`''`):
 
 Unicode characters are fully supported:
 
-```sql
+```text
 '日本語テキスト'
 '🚀 Launch'
 ```
@@ -2875,7 +2889,7 @@ Unicode characters are fully supported:
 
 ### Numbers
 
-```sql
+```text
 42            -- integer
 3.14          -- float
 -100          -- negative integer
@@ -2884,7 +2898,7 @@ Unicode characters are fully supported:
 
 ### Booleans
 
-```sql
+```text
 TRUE
 FALSE
 ```
@@ -2893,27 +2907,27 @@ Case-insensitive: `true`, `True`, `TRUE` are all equivalent.
 
 ### Vectors
 
-```sql
+```text
 [0.1, 0.2, 0.3, 0.4]           -- literal vector (dense)
 $query_vector                    -- parameter reference
 ```
 
 ### Sparse Vectors
 
-```sql
+```text
 {0: 0.9, 14: 0.7, 256: 0.5}   -- literal sparse vector
 $sparse_query                    -- parameter reference
 ```
 
 ### NULL
 
-```sql
+```text
 NULL
 ```
 
 ### Temporal Values
 
-```sql
+```text
 NOW()                            -- current Unix timestamp
 INTERVAL '7 days'               -- time duration
 NOW() - INTERVAL '24 hours'     -- temporal arithmetic
@@ -3396,8 +3410,8 @@ INSERT INTO documents (id, title, category) VALUES (1, 'Getting Started', 'tutor
 UPDATE documents SET status = 'published', updated = TRUE WHERE id = 1
 
 -- Delete with mandatory WHERE
-DELETE FROM documents WHERE id IN (10, 11, 12)
-DELETE FROM logs WHERE level = 'debug' AND timestamp < 1000
+DELETE FROM documents WHERE id IN (10, 11, 12);
+DELETE FROM logs WHERE level = 'debug' AND timestamp < 1000;
 ```
 
 ### Join Queries
@@ -3510,8 +3524,8 @@ INSERT NODE INTO knowledge (id = 42, payload = '{"name": "Alice", "_labels": ["P
 SHOW COLLECTIONS
 
 -- Get collection metadata (dimension, metric, point count, type)
-DESCRIBE COLLECTION documents
-DESCRIBE documents
+DESCRIBE COLLECTION documents;
+DESCRIBE documents;
 
 -- View query execution plan without running
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10

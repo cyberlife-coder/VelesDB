@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-10-29 (VelesDB v8.0.0)
+> Last updated: 2026-10-30 (VelesDB v8.0.0)
 
 ## Fully Supported (Parsed AND Executed)
 
@@ -78,6 +78,10 @@ parse errors.
 | Subqueries in `FROM` clause | Only collection names allowed in `FROM` |
 | `CASE WHEN ... THEN ... END` | Not in grammar |
 | `EXISTS` / `IN (subquery)` | Not in grammar |
+| Comma join (`FROM a, b`) | `FROM` takes one collection; use `JOIN ... ON` |
+| Date functions (`DATE()`, `EXTRACT()`, `DATE_TRUNC()`) | Only `NOW()` and `INTERVAL` exist; group on a stored day/month field |
+| `HAVING` on a SELECT alias (`HAVING cnt > 5`) | `HAVING` compares an aggregate function: `HAVING COUNT(*) > 5` |
+| Column-to-column comparison (`a.x = b.y`, `similarity(a.v, b.v)`) | A comparison's right side is a literal, `$parameter`, `NOW()`/`INTERVAL` or scalar subquery; `similarity()` takes a `$parameter` or literal vector |
 | `CREATE TABLE` / DDL (SQL-standard) | VelesQL uses `CREATE COLLECTION` instead (v3.3); SQL `CREATE TABLE` is not supported |
 | Stored procedures / functions | Not applicable |
 
