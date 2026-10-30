@@ -412,7 +412,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loss permanent. The snapshot now writes each edge's properties as one JSON
   string; `GraphEdge`'s own serde form, which the API and the edge WAL carry,
   is unchanged. A snapshot of edges without properties keeps the same bytes
-  in both directions. An `edge_store.bin` that cannot be decoded is no longer
+  in both directions. Float properties read back through `serde_json`'s
+  default float parser, as they already did from the edge WAL, which can
+  return a double one ULP off. An `edge_store.bin` that cannot be decoded is no longer
   left in place to be overwritten: the open logs the decode error, moves the
   file to `edge_store.bin.unreadable-<unix milliseconds>` next to it (never
   replacing an earlier one), and opens the collection with the edges the WAL
