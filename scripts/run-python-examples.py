@@ -10,7 +10,7 @@ directory, and fails on the first non-zero exit.
 Examples that embed text get the deterministic stand-in encoder in
 `scripts/fixtures/stub_sentence_transformers`, so no model is downloaded.
 
-Usage: python scripts/run-python-examples.py [--python PATH]
+Usage: python scripts/run-python-examples.py [--python PATH] [--root DIR]
 """
 
 from __future__ import annotations
@@ -43,13 +43,13 @@ EXAMPLES = (
 TIMEOUT_SECONDS = 300
 
 
-def run_example(python: str, example: str) -> "tuple[int, str]":
+def run_example(python: str, root: Path, example: str) -> "tuple[int, str]":
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(STUB_ENCODER), env.get("PYTHONPATH")]))
     with tempfile.TemporaryDirectory() as workdir:
         try:
             done = subprocess.run(
-                [python, str(REPO_ROOT / example)],
+                [python, str(root / example)],
                 cwd=workdir,
                 env=env,
                 capture_output=True,
@@ -65,11 +65,12 @@ def run_example(python: str, example: str) -> "tuple[int, str]":
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--python", default=sys.executable, help="interpreter with velesdb installed")
+    parser.add_argument("--root", type=Path, default=REPO_ROOT, help="repository holding the examples")
     args = parser.parse_args(argv)
 
     failures = 0
     for example in EXAMPLES:
-        code, tail = run_example(args.python, example)
+        code, tail = run_example(args.python, args.root, example)
         if code == 0:
             print(f"  OK    {example}")
             continue
