@@ -287,7 +287,7 @@ SELECT category, COUNT(*) as cnt
 FROM documents
 GROUP BY category
 HAVING COUNT(*) > 5
-ORDER BY COUNT(*) DESC
+ORDER BY cnt DESC
 LIMIT 10;
 
 -- Multiple aggregates
@@ -373,9 +373,10 @@ WHERE similarity(o.embedding, $q) > 0.7
 LIMIT 20;
 ```
 
-> **Note:** `INNER`, `LEFT`, `RIGHT` and `FULL` joins all execute; the outer
-> joins run on the column store and join on the primary key only (see the JOIN
-> section of [VELESQL_SPEC.md](../VELESQL_SPEC.md)).
+> **Note:** `INNER`, `LEFT`, `RIGHT` and `FULL` joins all execute on the
+> column store. `INNER` and `LEFT` join on the right side's primary key or on a
+> payload field with a secondary index; `RIGHT` and `FULL` join on the primary
+> key only (see the JOIN section of [VELESQL_SPEC.md](../VELESQL_SPEC.md)).
 
 ## Subqueries
 

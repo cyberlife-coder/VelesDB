@@ -274,7 +274,7 @@ FROM <table1> [[AS] <alias1>]
 | Type | Keyword | Description | Runtime |
 |------|---------|-------------|---------|
 | Inner | `JOIN` or `INNER JOIN` | Only matching rows from both sides | Fully executed |
-| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed (column-store, primary-key only — see `collection/search/query/join.rs:164-171`) |
+| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed (column-store; primary key or a secondary-indexed field — see the constraint below) |
 | Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed (`join.rs:155-162`) |
 | Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed (`join.rs:155-171`) |
 
@@ -1811,6 +1811,10 @@ RETURN <projection>
 [ORDER BY <expression>]
 [LIMIT <n>]
 ```
+
+`ORDER BY` takes `depth`, an `alias.property` path, `similarity(field, $vec)`,
+or arithmetic over a bare property identifier. An aggregate or a lone bare
+identifier is refused (see [Graph Patterns](guides/GRAPH_PATTERNS.md)).
 
 ### Pattern Syntax
 

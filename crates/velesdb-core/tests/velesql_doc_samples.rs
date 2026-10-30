@@ -95,7 +95,13 @@ fn doc_files() -> Vec<PathBuf> {
         );
     }
     for tree in DOC_TREES {
-        collect_markdown(&root.join(tree), &mut files);
+        let dir = root.join(tree);
+        // A renamed or moved tree must fail here, not drop out of the scan.
+        assert!(
+            dir.is_dir(),
+            "doc tree `{tree}` is missing; update DOC_TREES"
+        );
+        collect_markdown(&dir, &mut files);
     }
     files.sort();
     files
@@ -249,9 +255,38 @@ fn every_sql_fence_in_user_docs_is_accepted_by_the_engine() {
     // Positive control: the walk must actually reach the docs, or an empty
     // scan would pass vacuously.
     assert!(
-        accepted >= 300,
+        accepted >= 500 && rejected > 0,
         "expected the docs to carry hundreds of VelesQL samples, verified {accepted} \
          ({rejected} rejected-on-purpose)"
+    );
+}
+
+/// A VelesQL block under a near-miss tag (`SQL`, `velesql`, ...) would skip
+/// the check above without anyone noticing.
+#[test]
+fn no_velesql_block_hides_under_a_near_miss_fence_tag() {
+    let root = repo_root();
+    let mut misses = Vec::new();
+    for file in doc_files() {
+        let markdown = std::fs::read_to_string(&file).expect("read markdown file");
+        for (idx, line) in markdown.lines().enumerate() {
+            let Some(tag) = fence_tag(line) else { continue };
+            let near_miss = (tag.eq_ignore_ascii_case(CHECKED_FENCE) && tag != CHECKED_FENCE)
+                || tag.eq_ignore_ascii_case("velesql");
+            if near_miss {
+                let rel = file
+                    .strip_prefix(&root)
+                    .unwrap_or(&file)
+                    .display()
+                    .to_string();
+                misses.push(format!("{rel}:{}: fence `{tag}`", idx + 1));
+            }
+        }
+    }
+    assert!(
+        misses.is_empty(),
+        "fence these `{CHECKED_FENCE}` (or `{REJECTED_FENCE}`) so the engine checks them:\n{}",
+        misses.join("\n")
     );
 }
 

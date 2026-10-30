@@ -41,8 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unexecutable. The cheat-sheet test became `velesql_doc_samples`, which parses
   and validates every `sql` block of the user-facing markdown; the fence
   convention it enforces (`postgresql`, `text`, `velesql-error`) is in
-  `CONTRIBUTING.md`.
-
+  `CONTRIBUTING.md`. The MATCH `ORDER BY` forms the engine refuses (an
+  aggregate, a lone bare identifier) are now documented in the spec, the graph
+  patterns guide and the conformance matrix.
 - **Docs that named a missing API or a wrong version.**
   - The concurrency guide configured a collection with
     `CollectionConfig::new(..).with_durability(..)`, which does not exist: a

@@ -418,7 +418,7 @@ recommendations = items.query("""
     LIMIT 40
 """, params={"pref": preference_vector})
 
-# NOT IN takes a literal list, not a bound parameter: drop the already-liked
+# NOT IN takes a list of values, not an array parameter: drop the already-liked
 # items client-side.
 already_liked = {m['node_id'] for m in user_likes}
 recommendations = [r for r in recommendations if r['node_id'] not in already_liked][:20]
