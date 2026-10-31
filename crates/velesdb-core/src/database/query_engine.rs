@@ -13,10 +13,10 @@ use super::Database;
 /// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
 ///
 /// Mirrors [`AccessDecision`] but is returned to in-crate callers — the `VelesQL`
-/// [`read_gate`](Database::read_gate) and the raw `gated_search` path — so each
-/// enforces the same decision in the shape it needs: `read_gate` maps it onto a
-/// [`Cow<Query>`](std::borrow::Cow), the raw path onto a filtered collection
-/// search. Keeping one resolver means the observer-consult logic is defined
+/// [`authorize_statement`](Database::authorize_statement) and the raw
+/// `gated_search` path — so each enforces the same decision in the shape it
+/// needs: `authorize_statement` folds it into the statement it admits, the raw
+/// path into a filtered collection search. Keeping one resolver means the observer-consult logic is defined
 /// exactly once.
 pub(crate) enum RawGateOutcome {
     /// Execute the read unmodified.
