@@ -442,6 +442,8 @@ impl NativeHnswInner {
     /// is not yet implemented).
     #[must_use]
     pub fn search_auto(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        #[cfg(test)]
+        AUTO_WALKS.with(|walks| walks.set(walks.get() + 1));
         if let Some(results) = self.try_gpu_route(query, k, ef_search) {
             return results;
         }
@@ -913,3 +915,16 @@ const _: fn() = || {
 
 // ============================================================================
 // Tests moved to native_inner_tests.rs per project rules
+
+#[cfg(test)]
+thread_local! {
+    static AUTO_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The walks [`NativeHnswInner::search_auto`] has run on this thread: a
+/// test's count of the walks a search ran past its first, under the
+/// qualities whose first walk is [`NativeHnswInner::search_resumable`].
+#[cfg(test)]
+pub(crate) fn auto_walks() -> usize {
+    AUTO_WALKS.with(std::cell::Cell::get)
+}

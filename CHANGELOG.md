@@ -445,6 +445,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whatever an earlier one did, the first error being returned at the end,
   and the HNSW save waits only on a drain whose link failed.
 
+- **Adaptive and AutoTune searches walked the graph again for candidates
+  they did not need.** A PQ rescore or a forced rerank over-fetches
+  candidates and keeps `k`; under those qualities, nodes a delete left
+  behind among the fetched candidates made the walk run again although the
+  live ones were enough for `k`, as other qualities already knew.
+
 - **`upsert_bulk` with an async index builder returned before its points
   could be found.** Its V2 path places each vector in the graph's arena and
   leaves linking it to the builder until `merge_threshold` points wait or a

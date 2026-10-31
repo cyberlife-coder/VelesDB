@@ -4666,3 +4666,106 @@ fn one_refused_pair_does_not_keep_its_batch_out() {
     assert_eq!(settled, (0..10).collect::<Vec<u64>>());
     assert_eq!(index.len(), 10);
 }
+
+// =========================================================================
+// Adaptive and AutoTune walk again only for what the caller needs
+// =========================================================================
+
+/// 300 points, with the 5 nearest to the query removed: their nodes stay in
+/// the graph, unmapped, among the first 30 a walk returns.
+fn index_with_unmapped_nearest() -> (HnswIndex, Vec<f32>) {
+    let index = HnswIndex::new(16, DistanceMetric::Euclidean).expect("test: index");
+    let vector = |id: u64| -> Vec<f32> {
+        (0..16_u64)
+            .map(|d| ((id * 16 + d) as f32 * 0.618_034).sin())
+            .collect()
+    };
+    for id in 0..300 {
+        VectorIndex::insert(&index, id, &vector(id));
+    }
+    let query = vector(0);
+    let mut nearest: Vec<(u64, f32)> = (0..300)
+        .map(|id| {
+            let d: f32 = vector(id)
+                .iter()
+                .zip(&query)
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum();
+            (id, d)
+        })
+        .collect();
+    nearest.sort_by(|a, b| a.1.total_cmp(&b.1));
+    for &(id, _) in &nearest[..5] {
+        assert!(index.remove(id), "test: remove {id}");
+    }
+    (index, query)
+}
+
+/// The walks past the first a search under `quality` runs for `fetch`
+/// candidates of which it needs `needed`.
+fn rewalks(
+    index: &HnswIndex,
+    query: &[f32],
+    fetch: usize,
+    needed: usize,
+    quality: SearchQuality,
+) -> usize {
+    let before = super::auto_walks();
+    let results = index
+        .search_with_quality_needing(query, fetch, needed, quality)
+        .expect("test: search");
+    assert!(
+        results.len() >= needed,
+        "{quality:?}: {} results",
+        results.len()
+    );
+    super::auto_walks() - before
+}
+
+/// Under Adaptive and AutoTune, a search over-fetching candidates (to rerank
+/// or rescore them) walks again only when the nodes a delete left behind
+/// leave fewer than it keeps — as every other quality does. Both ignored
+/// `needed` and walked again for the whole fetch.
+#[test]
+fn adaptive_and_autotune_walk_again_only_for_what_the_search_needs() {
+    let (index, query) = index_with_unmapped_nearest();
+    for quality in [
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 128,
+        },
+        SearchQuality::AutoTune,
+    ] {
+        assert!(
+            rewalks(&index, &query, 30, 30, quality) > 0,
+            "{quality:?}: premise, removed nodes are among the first 30"
+        );
+        assert_eq!(
+            rewalks(&index, &query, 30, 10, quality),
+            0,
+            "{quality:?}: 25 live candidates are enough for a search keeping 10"
+        );
+    }
+}
+
+/// The forced rerank (`search_with_rerank_quality`) fetches `rerank_k`
+/// candidates and keeps `k`: under Adaptive and AutoTune it walks no more
+/// than the 25 live ones of its first 30 need.
+#[test]
+fn a_forced_rerank_under_adaptive_quality_walks_once() {
+    let (index, query) = index_with_unmapped_nearest();
+    for quality in [
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 128,
+        },
+        SearchQuality::AutoTune,
+    ] {
+        let before = super::auto_walks();
+        let results = index
+            .search_with_rerank_quality(&query, 10, 30, quality)
+            .expect("test: rerank");
+        assert_eq!(results.len(), 10);
+        assert_eq!(super::auto_walks() - before, 0, "{quality:?}");
+    }
+}

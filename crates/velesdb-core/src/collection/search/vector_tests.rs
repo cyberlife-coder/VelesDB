@@ -412,3 +412,58 @@ fn test_filtered_perfect_search_over_cap_is_rejected() {
         "expected GuardRail, got {err:?}"
     );
 }
+
+/// A PQ collection rescoring over-fetched candidates under Adaptive or
+/// AutoTune quality walks again only when the nodes a delete left behind
+/// leave fewer candidates than it keeps (`k`), not fewer than it fetched.
+#[test]
+fn a_pq_rescore_under_adaptive_quality_walks_once_past_deleted_nodes() {
+    let temp_dir = tempfile::tempdir().expect("test: temp dir");
+    let collection = Collection::create_with_options(
+        PathBuf::from(temp_dir.path()),
+        16,
+        DistanceMetric::Euclidean,
+        StorageMode::ProductQuantization,
+    )
+    .expect("test: collection");
+    let vector = |id: u64| -> Vec<f32> {
+        (0..16_u64)
+            .map(|d| {
+                let x = f32::from(u16::try_from(id * 16 + d).expect("test: fits"));
+                (x * 0.618_034).sin()
+            })
+            .collect()
+    };
+    collection
+        .upsert((0..300).map(|id| Point::without_payload(id, vector(id))))
+        .expect("test: upsert");
+    let query = vector(0);
+    let distance = |id: u64| -> f32 {
+        vector(id)
+            .iter()
+            .zip(&query)
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum()
+    };
+    let mut nearest: Vec<u64> = (0..300).collect();
+    nearest.sort_by(|a, b| distance(*a).total_cmp(&distance(*b)));
+    collection.delete(&nearest[..5]).expect("test: delete");
+
+    for quality in [
+        crate::SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 128,
+        },
+        crate::SearchQuality::AutoTune,
+    ] {
+        collection.set_runtime_search_quality(quality);
+        let before = crate::index::hnsw::auto_walks();
+        let results = collection.search(&query, 10).expect("test: search");
+        assert_eq!(results.len(), 10, "{quality:?}");
+        assert_eq!(
+            crate::index::hnsw::auto_walks() - before,
+            0,
+            "{quality:?}: the live candidates of the first walk are enough for 10"
+        );
+    }
+}

@@ -415,7 +415,7 @@ impl HnswIndex {
         self.validate_dimension(query)?;
 
         // Delegate to specialised paths that don't need the full match cascade.
-        if let Some(result) = self.try_search_special_quality(query, fetch, &quality)? {
+        if let Some(result) = self.try_search_special_quality(query, fetch, needed, &quality)? {
             return Ok(result);
         }
 
@@ -432,11 +432,14 @@ impl HnswIndex {
 
     /// Handles Perfect, small-collection brute-force, Adaptive, and AutoTune
     /// quality modes. Returns `Ok(Some(results))` when handled, `Ok(None)` to
-    /// fall through to the standard HNSW path.
+    /// fall through to the standard HNSW path. `k` results are fetched, of
+    /// which the caller cannot do without `needed` (see
+    /// [`Self::search_with_quality_needing`]).
     fn try_search_special_quality(
         &self,
         query: &[f32],
         k: usize,
+        needed: usize,
         quality: &SearchQuality,
     ) -> crate::error::Result<Option<Vec<ScoredResult>>> {
         if matches!(quality, SearchQuality::Perfect) {
@@ -451,6 +454,7 @@ impl HnswIndex {
             return Ok(Some(self.search_adaptive(
                 query,
                 k,
+                needed,
                 (*min_ef).max(k),
                 *max_ef,
             )));
@@ -459,7 +463,7 @@ impl HnswIndex {
         if matches!(quality, SearchQuality::AutoTune) {
             let (min_ef, max_ef) =
                 crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k);
-            return Ok(Some(self.search_adaptive(query, k, min_ef, max_ef)));
+            return Ok(Some(self.search_adaptive(query, k, needed, min_ef, max_ef)));
         }
 
         Ok(None)
@@ -485,6 +489,7 @@ impl HnswIndex {
         &self,
         query: &[f32],
         k: usize,
+        needed: usize,
         min_ef: usize,
         max_ef: usize,
     ) -> Vec<ScoredResult> {
@@ -495,7 +500,8 @@ impl HnswIndex {
         // `RwLock`, which can deadlock behind a queued writer.
         let inner = self.inner.read();
         let (neighbours, resume) = inner.search_resumable(query, k, min_ef);
-        let (results, rewalked) = self.live_or_rewalk(&inner, query, k, min_ef, &neighbours);
+        let (results, rewalked) =
+            self.live_or_rewalk(&inner, query, (k, needed), min_ef, &neighbours);
         // A re-walk restarted the traversal: there is no state to resume.
         let resume = if rewalked { None } else { resume };
         if results.len() < 2 {
@@ -528,33 +534,33 @@ impl HnswIndex {
         // corpus.
         let escalated = match resume {
             Some(r) => inner.resume_search(r, query, k, escalated_ef),
-            None => return self.search_live(&inner, query, k, k, escalated_ef),
+            None => return self.search_live(&inner, query, k, needed, escalated_ef),
         };
-        self.live_or_rewalk(&inner, query, k, escalated_ef, &escalated)
+        self.live_or_rewalk(&inner, query, (k, needed), escalated_ef, &escalated)
             .0
     }
 
-    /// `walked` (a walk at `k` and `ef` already run) mapped to its first `k`
-    /// results, or — when nodes no id maps cut it short — walked past them
-    /// from there without running it again
+    /// `walked` (a walk at `fetch` and `ef` already run) mapped to its first
+    /// `fetch` results, or — when nodes no id maps leave fewer than `needed`
+    /// of them — walked past them from there without running it again
     /// ([`upsert::search_past_unmapped_from`](crate::index::hnsw::upsert::search_past_unmapped_from)),
     /// flagged `true`.
     fn live_or_rewalk(
         &self,
         inner: &crate::index::hnsw::native_inner::NativeHnswInner,
         query: &[f32],
-        k: usize,
+        (fetch, needed): (usize, usize),
         ef: usize,
         walked: &[(usize, f32)],
     ) -> (Vec<ScoredResult>, bool) {
-        let mapped = self.map_graph_results(inner, walked, k);
-        if mapped.len() >= k || walked.len() <= mapped.len() {
+        let mapped = self.map_graph_results(inner, walked, fetch);
+        if mapped.len() >= needed.min(fetch) || walked.len() <= mapped.len() {
             return (mapped, false);
         }
         let results = crate::index::hnsw::upsert::search_past_unmapped_from(
             walked,
-            k,
-            k,
+            fetch,
+            needed,
             ef,
             |k, ef| inner.search_auto(query, k, ef),
             |nodes, k| self.map_graph_results(inner, nodes, k),
