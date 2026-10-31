@@ -1,9 +1,8 @@
 //! What a vector search merges besides the index's results: points written
 //! but not indexed yet. The async index builder holds the points
 //! `upsert_bulk`'s V2 path wrote that the graph has not linked; the deferred
-//! indexer buffers writes it has not inserted; the delta buffer holds the
-//! writes a rebuild has not seen. Together they are the collection's
-//! *unindexed* points.
+//! indexer buffers writes it has not inserted. Together they are the
+//! collection's *unindexed* points.
 //!
 //! A graph walk cannot reach those points, or reaches a copy older than the
 //! one written since, so every search handles them itself, in one place
@@ -11,7 +10,7 @@
 //! the search:
 //!
 //! - **The unindexed ids are read before the index search**
-//!   ([`Collection::snapshot_pending`]). Each of the three sources drops a
+//!   ([`Collection::snapshot_pending`]). Each of the two sources drops a
 //!   point only after indexing it, so a snapshot taken before the walk holds
 //!   every point the walk could miss: the point was either indexed before the
 //!   walk started, and the walk can reach it, or still held when the snapshot
@@ -111,8 +110,8 @@ impl<'a> PendingRestriction<'a> {
     }
 }
 
-/// The unindexed ids — the async builder's, the deferred indexer's and the
-/// delta buffer's, each once, sorted — read before an index search.
+/// The unindexed ids — the async builder's and the deferred indexer's, each
+/// once, sorted — read before an index search.
 pub(crate) struct PendingSnapshot(Vec<u64>);
 
 impl PendingSnapshot {
@@ -136,7 +135,6 @@ impl Collection {
         if let Some(deferred) = self.streaming.deferred_indexer.load().as_ref() {
             ids.extend(deferred.ids());
         }
-        ids.extend(self.streaming.delta_buffer.ids());
         ids.sort_unstable();
         ids.dedup();
         PendingSnapshot(ids)

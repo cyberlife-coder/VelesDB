@@ -212,7 +212,7 @@ impl HnswIndex {
     /// pairs only when the insert failed (logged).
     ///
     /// A merge into the index (the async builder's flush, the deferred
-    /// indexer's and the delta buffer's drains) reads each id's vector from
+    /// indexer's merge) reads each id's vector from
     /// storage, and the graph may already hold it: an upsert that went
     /// straight to the graph after the id was queued. Inserting it again
     /// would only leave the node it has behind, unmapped, for every search

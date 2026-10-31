@@ -6,8 +6,8 @@
 //! ways, each handled by a dedicated pass in [`run_crash_recovery`]:
 //!
 //! 1. **Gap**: vectors in storage but not in HNSW (crash between the storage
-//!    write and the HNSW batch insert — deferred indexer gap, delta buffer
-//!    gap, or normal insert gap).
+//!    write and the HNSW batch insert — deferred indexer gap or normal
+//!    insert gap).
 //! 2. **Orphans**: ids in HNSW but not in storage (delete reached the vector
 //!    WAL but not the next index save).
 //! 3. **Stale**: WAL-touched ids present on both sides whose indexed vector

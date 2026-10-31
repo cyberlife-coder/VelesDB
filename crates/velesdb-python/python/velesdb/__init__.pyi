@@ -746,10 +746,6 @@ class Collection:
         """
         ...
 
-    def is_delta_active(self) -> bool:
-        """Check if the streaming delta buffer is active (HNSW rebuild in progress)."""
-        ...
-
     def search_batch_parallel(
         self,
         vectors: List[Union[List[float], "np.ndarray"]],

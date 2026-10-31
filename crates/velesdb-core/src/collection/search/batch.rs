@@ -251,7 +251,7 @@ impl Collection {
     }
 
     /// Runs the batch index search and merges, per query, the points not yet
-    /// in the index (async builder, deferred indexer, delta buffer) as
+    /// in the index (async builder, deferred indexer) as
     /// [`merge_pending`](Self::merge_pending) does, each query keeping
     /// `overfetch_k` best `(id, score)` pairs.
     ///

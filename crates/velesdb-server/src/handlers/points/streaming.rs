@@ -64,9 +64,8 @@ fn parse_ndjson_line(
     }
 }
 
-/// Flushes a batch and -- if the collection's delta buffer is active -- also
-/// pushes the entries into the buffer for immediate searchability.
-async fn flush_point_batch_with_delta(
+/// Flushes a batch through `upsert_bulk` on the blocking thread pool.
+async fn flush_point_batch(
     collection: &VectorCollection,
     batch: &mut Vec<Point>,
     stats: &mut StreamUpsertStats,
@@ -78,26 +77,10 @@ async fn flush_point_batch_with_delta(
     let points = std::mem::take(batch);
     let batch_size = points.len();
 
-    // Snapshot (id, vector) pairs for delta before moving `points` into spawn_blocking.
-    // Only allocate when delta is active to keep the hot path allocation-free.
-    #[cfg(feature = "persistence")]
-    let delta_entries: Vec<(u64, Vec<f32>)> = if collection.is_delta_active() {
-        points.iter().map(|p| (p.id, p.vector.clone())).collect()
-    } else {
-        Vec::new()
-    };
-
     let coll = collection.clone();
     match tokio::task::spawn_blocking(move || coll.upsert_bulk(&points)).await {
         Ok(Ok(inserted)) => {
             stats.inserted += inserted;
-
-            // C-3: push into the delta buffer after a successful upsert so that
-            // search can find these points before HNSW is rebuilt.
-            #[cfg(feature = "persistence")]
-            if !delta_entries.is_empty() {
-                collection.push_to_delta_if_active(&delta_entries);
-            }
         }
         Ok(Err(error)) => {
             stats.failed_upserts += batch_size;
@@ -194,7 +177,7 @@ async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> Str
                 buffer.extend_from_slice(&chunk);
                 process_buffer_lines(&mut buffer, &mut batch, &mut stats);
                 if should_flush(&batch, last_flush) {
-                    flush_point_batch_with_delta(collection, &mut batch, &mut stats).await;
+                    flush_point_batch(collection, &mut batch, &mut stats).await;
                     last_flush = Instant::now();
                 }
             }
@@ -212,7 +195,7 @@ async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> Str
         parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
     }
 
-    flush_point_batch_with_delta(collection, &mut batch, &mut stats).await;
+    flush_point_batch(collection, &mut batch, &mut stats).await;
     stats
 }
 

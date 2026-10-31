@@ -24,7 +24,7 @@
 //!
 //! # Lock ordering
 //!
-//! Position 11 (after `delta_buffer` at 10). Neither queue's lock (`buffer`,
+//! Position 11 (after `sparse_indexes` at 9). Neither queue's lock (`buffer`,
 //! `placed`) may be held while acquiring any lock at position ≤ 10.
 
 use crate::index::hnsw::HnswIndex;
@@ -77,7 +77,7 @@ impl Default for AsyncIndexBuilderConfig {
 /// read by every search through `Self::pending_ids` until a flush has
 /// indexed it.
 ///
-/// Lock order position: 11 (after `delta_buffer` at 10).
+/// Lock order position: 11 (after `sparse_indexes` at 9).
 pub struct AsyncIndexBuilder {
     /// Ids pending insertion, from [`Self::enqueue`]: a flush inserts what
     /// storage holds for each then, which places and links it.

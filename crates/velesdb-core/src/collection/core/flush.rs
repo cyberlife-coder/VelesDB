@@ -35,11 +35,8 @@ impl Collection {
         // even with a stale index file.
         self.storage.vector_storage.write().flush()?;
         self.storage.payload_storage.write().flush()?;
-        // Drain delta buffer into HNSW before persisting the index.
-        // Lock order: delta_buffer(10) is acquired after vector_storage(2)
-        // and payload_storage(3) — both already released above.
-        self.drain_delta_into_index();
-        // Drain deferred indexer into HNSW (position 11, after delta at 10).
+        // Drain deferred indexer into HNSW (position 11). vector_storage(2)
+        // and payload_storage(3) are both released above.
         self.drain_deferred_into_index();
         // Drain async index builder buffer (V2 bulk insert path) into HNSW.
         // Without this, sub-threshold batches from upsert_bulk would stay out
@@ -79,7 +76,6 @@ impl Collection {
         self.save_config()?;
         self.storage.vector_storage.write().flush()?;
         self.storage.payload_storage.write().flush()?;
-        self.drain_delta_into_index();
         self.drain_deferred_into_index();
         self.drain_async_index_builder()?;
         // Always save HNSW on full flush and reset the counter.
@@ -208,21 +204,6 @@ impl Collection {
         }
         Ok(())
     }
-
-    /// Indexes what the delta buffer holds (if a rebuild left it active)
-    /// and only then empties it: sealed first, so it takes no new write and
-    /// searches still read it while its points are inserted (see
-    /// `collection/search/pending.rs`).
-    #[cfg(feature = "persistence")]
-    fn drain_delta_into_index(&self) {
-        let ids = self.streaming.delta_buffer.seal();
-        self.index_current(&ids);
-        let _ = self.streaming.delta_buffer.deactivate_and_drain();
-    }
-
-    /// No-op stub when persistence is disabled.
-    #[cfg(not(feature = "persistence"))]
-    fn drain_delta_into_index(&self) {}
 
     /// Indexes what the deferred indexer holds (if configured).
     #[cfg(feature = "persistence")]

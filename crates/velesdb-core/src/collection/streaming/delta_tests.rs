@@ -37,27 +37,6 @@ fn delta_ids_empty_when_inactive() {
     assert!(buf.ids().is_empty());
 }
 
-/// A sealed buffer takes no new write and is still read by searches, until
-/// the drain empties it.
-#[test]
-fn delta_seal_stops_writes_and_keeps_points_readable() {
-    let buf = DeltaBuffer::new();
-    buf.activate();
-    buf.push(1, vec![1.0]);
-    assert_eq!(buf.seal(), vec![1]);
-    buf.push(2, vec![2.0]);
-    assert_eq!(buf.ids(), vec![1], "sealed: still read, no new write");
-    let _ = buf.deactivate_and_drain();
-    assert!(buf.ids().is_empty());
-}
-
-#[test]
-fn delta_seal_of_an_inactive_buffer_holds_nothing() {
-    let buf = DeltaBuffer::new();
-    assert!(buf.seal().is_empty());
-    assert!(!buf.is_searchable());
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // State transitions: activate / deactivate_and_drain
 // ─────────────────────────────────────────────────────────────────────────────

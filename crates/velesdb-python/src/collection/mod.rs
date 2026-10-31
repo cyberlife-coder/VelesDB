@@ -660,14 +660,6 @@ impl Collection {
         Ok(crate::utils::json_to_python(py, &json))
     }
 
-    /// Check if the streaming delta buffer is active (HNSW rebuild in progress).
-    ///
-    /// Returns:
-    ///     bool: True if delta buffer is active
-    fn is_delta_active(&self) -> bool {
-        self.inner.is_delta_active()
-    }
-
     /// Membership test: ``id in collection``.
     ///
     /// Args:

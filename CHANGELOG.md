@@ -71,11 +71,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and merges.** `DeltaBuffer::search`, `DeferredIndexer::{search,
   merge_with_hnsw, swap_and_drain, drain_all}` and
   `collection::streaming::{merge_with_delta, merge_with_delta_scored}` had
-  no caller outside tests: a search merges what both buffers hold through
-  the collection (see Fixed), and a flush indexes it. They scored the copy
-  each buffer took, where a search now scores what storage holds.
+  no caller outside tests: a search merges what the deferred indexer holds
+  through the collection (see Fixed), and a flush indexes it. They scored
+  the copy each buffer took, where a search now scores what storage holds.
   *Migration*: search the collection; `VectorCollection::flush` indexes
   what the deferred indexer holds.
+- **BREAKING — the collection-level delta buffer, which nothing activated.**
+  Every collection carried a `DeltaBuffer` meant to hold writes while an
+  HNSW rebuild ran, but no rebuild path ever activated it: writes checked
+  it, deletes purged it, every flush drained it and every search read it,
+  always empty. It is removed with what only fed or reported it:
+  `VectorCollection::push_to_delta_if_active` and
+  `VectorCollection::is_delta_active` (always `false`), Python's
+  `Collection.is_delta_active()`, and the stream ingester's and the NDJSON
+  stream route's copies into it. `DeltaBuffer` stays, as the deferred
+  indexer's write buffer.
+  *Migration*: drop the calls; `is_delta_active()` returned `false` on every
+  collection.
 - **The edge property index (`EdgePropertyIndex`).** Every edge write fed it
   (and cloned the edge's properties to do so), every open rebuilt it from the
   edge snapshot and again from the edge WAL replay, and nothing ever read it
@@ -113,9 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `search_with_10k_pending_768d`, on a shared 4-vCPU cloud sandbox, not the
   reference machine): see `docs/BENCHMARKS.md`. It lasts only until a flush
   or the threshold links them.
-- **A restricted search could return the deferred indexer's and the delta
-  buffer's points outside its restriction, or lose its matches to them.**
-  Both merged their unrestricted top `k` into every search: a filter applied
+- **A restricted search could return the deferred indexer's points outside
+  its restriction, or lose its matches to them.** It merged its
+  unrestricted top `k` into every search: a filter applied
   after the merge could find its places taken by buffered points it rejects
   and return fewer matches or none, and a graph-anchored `NEAR` over more
   than 10 000 anchors could return buffered points outside the anchor set.
@@ -125,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A search could score a point on a vector it no longer has.** An
   unindexed point was scored on the copy its source took: the async index
-  builder's arena slot, the deferred indexer's or the delta buffer's buffer.
+  builder's arena slot, the deferred indexer's buffer.
   A point bulk-loaded and then overwritten before a flush was scored on its
   first vector, and the index's result for a point overwritten since it was
   indexed could outrank the newer one, since the newer one won only within
@@ -147,8 +159,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer holds. It also leaves out an id the graph already holds as storage
   does — a point upserted straight into the graph after `upsert_bulk`
   queued it — which 7.1.0 inserted a second time, leaving its first node in
-  the graph, unmapped, until `vacuum`. The deferred indexer's and the delta
-  buffer's merges skip such an id the same way.
+  the graph, unmapped, until `vacuum`. The deferred indexer's merge skips
+  such an id the same way.
 - **A search could return fewer than `k` results, or none, near a point
   deleted or overwritten since the last `vacuum`.** A delete or an upsert
   leaves the point's old node in the graph, mapped to no id. The graph walk
@@ -162,12 +174,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twice the `ef` (at most 10 000). A search near no such node runs one
   walk, exactly as before. A neighbourhood so dense with deleted points
   that this still falls short needs `vacuum`.
-- **A search racing a deferred-indexer or delta-buffer merge could miss its
-  points.** Both merges emptied their buffer before inserting what it held.
-  Both now insert first and drop only what they inserted, as the async index
-  builder does: the deferred indexer keeps an entry written again during
-  the merge for the next one, and the delta buffer is sealed (no new writes,
-  still searched) until its points are inserted.
+- **A search racing a deferred-indexer merge could miss its points.** The
+  merge emptied its buffer before inserting what it held. It now inserts
+  first and drops only what it inserted, as the async index builder does,
+  and keeps an entry written again during the merge for the next one.
 - **Filtered hybrid and batch searches copied the vector of every
   candidate.** `hybrid_search_with_filter`, a filtered VelesQL `NEAR` +
   `MATCH` under a score-level `USING FUSION` (`maximum`, `average`, `rsf`)

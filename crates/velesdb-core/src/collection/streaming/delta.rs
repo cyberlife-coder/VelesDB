@@ -1,11 +1,11 @@
-//! Delta buffer for accumulating vectors during HNSW rebuilds.
+//! The write buffer behind the deferred indexer.
 //!
-//! The [`DeltaBuffer`] holds recently inserted vectors that have not yet been
-//! indexed into the HNSW graph (e.g., because a rebuild is in progress).
-//! Every search reads its ids (`DeltaBuffer::ids`) before the index search
-//! and scores those points on what storage holds for them
-//! (`collection/search/pending.rs`), so they are found before they are
-//! indexed.
+//! A [`DeltaBuffer`] holds vectors written but not yet inserted into the HNSW
+//! graph, one entry per id (a second write of an id replaces the first). The
+//! deferred indexer (`deferred.rs`) owns one: every search reads its ids
+//! before the index search and scores those points on what storage holds for
+//! them (`collection/search/pending.rs`), so they are found before a merge
+//! indexes them, and a merge retires an entry only once it has indexed it.
 //!
 //! # State machine
 //!
@@ -16,26 +16,19 @@
 //! ```
 //!
 //! - `push` / `extend`: only write when `ACTIVE`.
-//! - `ids`: read when `ACTIVE` or `DRAINING` (so concurrent searches during
-//!   drain still see the buffered points).
+//! - `ids`: read when `ACTIVE` or `DRAINING`.
 //!
-//! A drain into the index seals the buffer first (`DeltaBuffer::seal`:
-//! `DRAINING`, no new writes, still read by searches), indexes what it
-//! holds, and only then empties it ([`DeltaBuffer::deactivate_and_drain`]),
-//! so a search racing the drain finds each point in the index or here.
-//!
-//! [`DeltaBuffer::activate`] is an unconditional store kept for the idempotent
-//! callers in the rebuild path. [`DeltaBuffer::try_activate`] is the hardened
-//! variant: it uses `compare_exchange(INACTIVE, ACTIVE)` and returns
-//! [`ActivateError::AlreadyActive`] on re-entrance, so a double-activation bug
-//! (two rebuilds racing on the same buffer) surfaces instead of being silently
-//! swallowed (STREAM-9).
+//! [`DeltaBuffer::activate`] is an unconditional store.
+//! [`DeltaBuffer::try_activate`] is the hardened variant: it uses
+//! `compare_exchange(INACTIVE, ACTIVE)` and returns
+//! [`ActivateError::AlreadyActive`] on re-entrance, which the deferred
+//! indexer's write path treats as the expected, idempotent case.
 //!
 //! # Lock ordering
 //!
-//! `DeltaBuffer` is at position **10** in the collection lock order
-//! (after `sparse_indexes` at 9). Code must never hold a delta buffer lock
-//! while acquiring a lower-numbered lock.
+//! A `DeltaBuffer`'s lock ranks with its owner's: the deferred indexer's, at
+//! position **11**. Code must never hold it while acquiring a lower-numbered
+//! lock.
 
 use parking_lot::RwLock;
 use std::collections::HashSet;
@@ -266,23 +259,6 @@ impl DeltaBuffer {
     #[must_use]
     pub(crate) fn entries(&self) -> Vec<(u64, Vec<f32>)> {
         self.points.read().clone()
-    }
-
-    /// Stops accepting writes (`DRAINING`) while staying readable by search,
-    /// and returns the ids it holds: what a drain must index before
-    /// [`Self::deactivate_and_drain`] empties it. A no-op on an inactive
-    /// buffer, which returns nothing.
-    pub(crate) fn seal(&self) -> Vec<u64> {
-        let points = self.points.write();
-        if self
-            .state
-            .compare_exchange(ACTIVE, DRAINING, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-            && self.state.load(Ordering::Acquire) != DRAINING
-        {
-            return Vec::new();
-        }
-        points.iter().map(|&(id, _)| id).collect()
     }
 
     /// Removes the entries `indexed` names with the same vector: what a merge

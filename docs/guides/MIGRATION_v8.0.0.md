@@ -116,9 +116,10 @@ requests.
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
 | `velesql::match_clause` (`parse_match_clause`, `parse_node_pattern`, `parse_relationship_pattern`) | `velesql::Parser::parse` on the whole `MATCH` statement, then `Query::match_clause` |
 | `AsyncIndexBuilder::{search_buffer, drain_buffer, buffer_len, is_building, trigger_build_async}` | search the collection; `VectorCollection::flush` indexes what the builder holds |
-| `DeltaBuffer::search`, `DeferredIndexer::search` | search the collection: it merges what both hold |
+| `DeltaBuffer::search`, `DeferredIndexer::search` | search the collection: it merges what the deferred indexer holds |
 | `DeferredIndexer::{merge_with_hnsw, swap_and_drain, drain_all}` | `VectorCollection::flush` indexes what the deferred indexer holds |
 | `collection::streaming::{merge_with_delta, merge_with_delta_scored}` | search the collection |
+| `VectorCollection::{push_to_delta_if_active, is_delta_active}` | none: no rebuild ever activated the buffer they fed and reported on |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a
   `usize`. The removed helper returned `usize::MAX` for `perfect`. Without the
@@ -173,6 +174,9 @@ under `validation`.
   search returns dicts (`result["id"]`, `result["score"]`,
   `result["payload"]`). Drop the import; to annotate, the stub's
   `SearchResultDict` is importable under `typing.TYPE_CHECKING`.
+- **`Collection.is_delta_active()` is removed.** It returned `False` on
+  every collection: the buffer it reported on was never activated. Drop the
+  call.
 - **`GraphStore.traverse_dfs` runs core's DFS.**
   - It returns one result per node reached, in depth-first order.
   - An empty `relationship_types` list now follows every edge; it followed none

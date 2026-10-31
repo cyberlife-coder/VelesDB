@@ -127,8 +127,6 @@ impl Collection {
                 #[cfg(feature = "persistence")]
                 stream_ingester: Arc::new(RwLock::new(None)),
                 #[cfg(feature = "persistence")]
-                delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-                #[cfg(feature = "persistence")]
                 deferred_indexer: Arc::new(arc_swap::ArcSwapOption::new(deferred_indexer)),
                 async_index_builder: Arc::new(arc_swap::ArcSwapOption::new(async_index_builder)),
                 auto_reindex: Arc::new(RwLock::new(None)),

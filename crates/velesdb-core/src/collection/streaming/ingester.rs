@@ -348,32 +348,16 @@ async fn handle_received_point(
 /// Flushes the accumulated batch via the collection's existing upsert pipeline.
 ///
 /// Runs the blocking upsert on Tokio's blocking thread pool to avoid stalling
-/// the async runtime. If the delta buffer is active (HNSW rebuild in progress),
-/// also pushes the batch vectors into the delta buffer for immediate searchability.
+/// the async runtime.
 async fn flush_batch(collection: &Collection, batch: &mut Vec<Point>) {
     let points: Vec<Point> = std::mem::take(batch);
-
-    // Snapshot vectors for delta buffer before moving points into upsert.
-    // Only allocate if delta is active (common case: delta is inactive).
-    let delta_entries: Vec<(u64, Vec<f32>)> = if collection.streaming.delta_buffer.is_active() {
-        points.iter().map(|p| (p.id, p.vector.clone())).collect()
-    } else {
-        Vec::new()
-    };
 
     let coll = collection.clone();
     // spawn_blocking wraps the synchronous upsert call (which acquires
     // multiple RwLocks and does mmap I/O) to prevent blocking the async runtime.
     let result = tokio::task::spawn_blocking(move || coll.upsert(points)).await;
     match result {
-        Ok(Ok(())) => {
-            // After successful upsert, push to delta buffer if active.
-            // The upsert wrote to storage+WAL; delta is an additional runtime
-            // copy so search can find these vectors before HNSW is rebuilt.
-            if !delta_entries.is_empty() {
-                collection.streaming.delta_buffer.extend(delta_entries);
-            }
-        }
+        Ok(Ok(())) => {}
         Ok(Err(e)) => {
             tracing::error!("Streaming drain flush failed: {e}");
         }

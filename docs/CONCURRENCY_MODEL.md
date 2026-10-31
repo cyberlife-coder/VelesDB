@@ -948,15 +948,14 @@ also truncates the WAL) re-saves the HNSW index after compaction.
 
 ### Gap Sources
 
-Three distinct write paths can leave vectors in storage but absent from HNSW:
+Two distinct write paths can leave vectors in storage but absent from HNSW:
 
 | Gap Source | Mechanism | Typical Window |
 |-----------|-----------|---------------|
 | **Normal insert gap** | `batch_store_all` writes vectors before `bulk_index_or_defer` inserts into HNSW. Crash between Phase 1 and Phase 3 of the 3-phase upsert pipeline. | Duration of Phase 2 (secondary indexes, quantization, text indexing) |
 | **Deferred indexer gap** | `DeferredIndexer` buffers vectors in memory (up to `merge_threshold`, default 1 024) before batch-merging into HNSW. Crash before merge loses the buffer. | Up to `merge_threshold` vectors (memory-only, not WAL-protected) |
-| **Delta buffer gap** | `DeltaBuffer` accumulates vectors during background HNSW rebuild. Crash before `deactivate_and_drain` loses the buffer. | Duration of the rebuild operation |
 
-All three gaps are recovered by the same `recover_hnsw_gap` mechanism
+Both gaps are recovered by the same `recover_hnsw_gap` mechanism
 because the recovery compares the final storage state against the HNSW
 mappings, regardless of how the gap originated.
 

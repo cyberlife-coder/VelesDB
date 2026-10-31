@@ -10,7 +10,6 @@ use crate::collection::graph::{
 use crate::collection::order_by_advisor::OrderByIndexAdvisor;
 use crate::collection::stats::CollectionStats;
 #[cfg(feature = "persistence")]
-use crate::collection::streaming::delta::DeltaBuffer;
 use crate::collection::streaming::AsyncIndexBuilder;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::{BackpressureError, DeferredIndexer, StreamIngester};
@@ -195,7 +194,7 @@ impl Default for RuntimeLimits {
 //                                            docs/CONCURRENCY_MODEL.md)
 //   8. (reserved — edge_store now uses internal sharded locking)
 //   9. sparse_indexes
-//  10. delta_buffer
+//  10. (reserved — the collection-level delta buffer is removed)
 //  11. deferred_indexer / async_index_builder (internal locks)
 //  12. stats_io_mutex                         (disk I/O only, no other lock held)
 //
@@ -431,7 +430,7 @@ pub(crate) struct GenerationCounters {
     pub(crate) inserts_since_last_hnsw_save: Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// Streaming ingestion, delta buffering and deferred/async/auto indexing.
+/// Streaming ingestion and deferred/async/auto indexing.
 ///
 /// Concern cluster **streaming** of `Collection` (R1.1, EPIC #1384). Three of
 /// the five fields are `#[cfg(feature = "persistence")]`; the cfg attributes
@@ -452,12 +451,6 @@ pub(crate) struct StreamingState {
     #[cfg(feature = "persistence")]
     pub(super) stream_ingester: Arc<RwLock<Option<StreamIngester>>>,
 
-    /// Delta buffer for vectors pending HNSW index insertion (STREAM-02).
-    ///
-    /// Lock order position: **10** (after `sparse_indexes` at 9).
-    #[cfg(feature = "persistence")]
-    pub(crate) delta_buffer: Arc<DeltaBuffer>,
-
     /// Deferred indexer for high-throughput sequential inserts (US-366).
     ///
     /// `None` when deferred indexing is not configured. When `Some`, inserts
@@ -469,7 +462,7 @@ pub(crate) struct StreamingState {
     /// never replaces a live one — see [`PendingReopen`]. Read lock-free with
     /// `load()` on the write and search paths.
     ///
-    /// Lock order position: **11** (after `delta_buffer` at 10).
+    /// Lock order position: **11** (after `sparse_indexes` at 9).
     ///
     /// [`PendingReopen`]: crate::collection::streaming::PendingReopen
     #[cfg(feature = "persistence")]
@@ -587,7 +580,7 @@ pub(crate) struct Collection {
     /// Monotonic generation counters for plan-cache invalidation.
     pub(crate) generations: GenerationCounters,
 
-    /// Streaming ingestion, delta buffering and deferred/async/auto indexing.
+    /// Streaming ingestion and deferred/async/auto indexing.
     pub(crate) streaming: StreamingState,
 
     /// Query-execution guard-rails and runtime ingest/search limits.
@@ -827,21 +820,6 @@ impl Collection {
         let ingester = StreamIngester::new(self.clone(), config);
         *self.streaming.stream_ingester.write() = Some(ingester);
         Ok(())
-    }
-
-    /// Pushes entries into the delta buffer if it is currently active.
-    ///
-    /// This is a convenience method for callers (e.g., the REST upsert handlers)
-    /// that do not have direct access to the delta buffer internals.
-    ///
-    /// No-op when the delta buffer is inactive.
-    #[cfg(feature = "persistence")]
-    pub fn push_to_delta_if_active(&self, entries: &[(u64, Vec<f32>)]) {
-        if self.streaming.delta_buffer.is_active() {
-            self.streaming
-                .delta_buffer
-                .extend(entries.iter().map(|(id, v)| (*id, v.clone())));
-        }
     }
 
     /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)

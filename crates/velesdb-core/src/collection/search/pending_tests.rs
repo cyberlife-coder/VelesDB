@@ -1,5 +1,5 @@
-//! The delta buffer and the deferred indexer hold points the HNSW graph does
-//! not answer for, as the async index builder does, and every search merges
+//! The deferred indexer holds points the HNSW graph does not answer for, as
+//! the async index builder does, and every search merges
 //! them through the same entry point (`super::pending`). A restricted search
 //! must restrict them too: points outside its filter must neither appear nor
 //! take the place of a match.
@@ -93,27 +93,6 @@ fn with_deferred_points(dir: &tempfile::TempDir) -> Collection {
     coll
 }
 
-/// The pending points are stored and, as during a rebuild, held by the
-/// delta buffer rather than the index. The deferred indexer is how they get
-/// stored without an index insert; its buffer is then retired, unmerged.
-fn with_delta_points(dir: &tempfile::TempDir) -> Collection {
-    let coll = with_deferred_points(dir);
-    let indexer = coll.deferred_indexer().expect("premise: installed");
-    let held = indexer.begin_merge().expect("premise: nothing merging");
-    let retired: Vec<(u64, &[f32])> = held.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-    indexer.end_merge(&retired);
-    assert!(indexer.ids().is_empty(), "premise: retired, unmerged");
-    assert_eq!(
-        held.len(),
-        usize::try_from(BATCH).expect("test: fits"),
-        "premise"
-    );
-    coll.streaming.delta_buffer.activate();
-    coll.push_to_delta_if_active(&held);
-    assert!(coll.streaming.delta_buffer.is_searchable(), "premise");
-    coll
-}
-
 fn cats(results: &[SearchResult]) -> Vec<String> {
     results
         .iter()
@@ -167,38 +146,21 @@ fn a_restricted_search_restricts_the_deferred_indexers_points() {
     assert_restrictions_hold(&with_deferred_points(&dir), "deferred indexer");
 }
 
-#[test]
-fn a_restricted_search_restricts_the_delta_buffers_points() {
-    let dir = tempfile::tempdir().expect("test: temp dir");
-    assert_restrictions_hold(&with_delta_points(&dir), "delta buffer");
-}
-
 /// The graph-anchored bitmap search admits none of them outside its anchors.
 #[test]
-fn an_anchored_search_admits_no_delta_or_deferred_point_outside_its_anchors() {
+fn an_anchored_search_admits_no_deferred_point_outside_its_anchors() {
     let anchors: std::collections::HashSet<u64> = (0..BATCH).collect();
-    for (source, build) in [
-        (
-            "deferred indexer",
-            with_deferred_points as fn(&tempfile::TempDir) -> Collection,
-        ),
-        ("delta buffer", with_delta_points),
-    ] {
-        let dir = tempfile::tempdir().expect("test: temp dir");
-        let coll = build(&dir);
-        let hits = coll
-            .search_anchors_bitmap(&query(), &anchors, None, K, DistanceMetric::Euclidean)
-            .expect("test: anchored");
-        let outside: Vec<u64> = hits
-            .iter()
-            .map(|h| h.point.id)
-            .filter(|id| !anchors.contains(id))
-            .collect();
-        assert!(
-            outside.is_empty(),
-            "{source}: non-anchors returned {outside:?}"
-        );
-    }
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = with_deferred_points(&dir);
+    let hits = coll
+        .search_anchors_bitmap(&query(), &anchors, None, K, DistanceMetric::Euclidean)
+        .expect("test: anchored");
+    let outside: Vec<u64> = hits
+        .iter()
+        .map(|h| h.point.id)
+        .filter(|id| !anchors.contains(id))
+        .collect();
+    assert!(outside.is_empty(), "non-anchors returned {outside:?}");
 }
 
 /// A collection whose `upsert_bulk` takes the async builder's V2 path and
