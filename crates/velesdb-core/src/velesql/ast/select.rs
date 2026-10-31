@@ -224,6 +224,28 @@ pub struct SelectOrderBy {
 }
 
 impl SelectOrderBy {
+    /// Applies this item's direction to `ascending`, the comparison of two
+    /// rows' values in ascending order. `similarity()` reads as similarity
+    /// whatever the metric: under a distance metric (`higher_is_better`
+    /// false) a smaller score is more similar, so `similarity() DESC` puts
+    /// the nearest row first. Every other expression sorts its raw value.
+    #[must_use]
+    pub fn directed(
+        &self,
+        ascending: std::cmp::Ordering,
+        higher_is_better: bool,
+    ) -> std::cmp::Ordering {
+        let is_similarity = matches!(
+            self.expr,
+            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
+        );
+        if self.descending == (is_similarity && !higher_is_better) {
+            ascending
+        } else {
+            ascending.reverse()
+        }
+    }
+
     /// Returns a `(column_name, direction)` pair for display.
     #[must_use]
     pub fn to_display_pair(&self) -> (String, String) {

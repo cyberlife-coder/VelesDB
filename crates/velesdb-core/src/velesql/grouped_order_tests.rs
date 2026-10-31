@@ -1,5 +1,6 @@
-//! Tests for [`super::grouped_order`]: which column of a grouped row an
-//! ORDER BY item sorts on, and the `V016` refusal of one that names none.
+//! Tests for [`super::grouped_order`]: distinct output names (`V017`), which
+//! column of a grouped row an ORDER BY item sorts on, and the `V016` refusal
+//! of one that names none.
 
 use super::ast::{OrderByExpr, SelectColumns, SelectStatement};
 use super::validation::{QueryValidator, ValidationError, ValidationErrorKind};
@@ -96,6 +97,16 @@ fn test_validator_refuses_duplicate_names_without_group_by_and_in_a_vector_group
     assert_v017("SELECT COUNT(*), COUNT(*) FROM docs");
     assert_v017(
         "SELECT category, MAX(score) AS category FROM docs WHERE vector NEAR $v GROUP BY category",
+    );
+}
+
+#[test]
+fn test_validator_refuses_an_aggregate_named_id_or_score_in_a_grouped_query() {
+    // Grouped results carry their own id and score: an aggregate output under
+    // either name would shadow it when sorting.
+    assert_v017("SELECT category, COUNT(*) AS score FROM docs GROUP BY category");
+    assert_v017(
+        "SELECT category, MAX(year) AS id FROM docs WHERE vector NEAR $v GROUP BY category",
     );
 }
 

@@ -422,7 +422,9 @@ scalar-expression ones below, which use the same single-collection dataset):
   `ORDER BY AVG(col)` when the SELECT stores that aggregate under an `AS`
   alias, G008 a `HAVING` on an aggregate the SELECT does not list, G009
   an ORDER BY name resolving to a SELECT alias before a payload field, and
-  G010 the default names of unaliased aggregates, the same in both engines.
+  G010 the default names of unaliased aggregates, the same in both engines;
+  G011 `COUNT(column)` over a string column, G012 a selected column outside
+  `GROUP BY` (not output), G013 `GROUP BY id` (the point id).
 - `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
@@ -446,14 +448,18 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R004 and R010–R012: queries both engines must refuse,
+- `rejected_cases` R001–R004 and R010–R013: queries both engines must refuse,
   each with the `expected_code` both must report — `NEAR_FUSED` with
   `weighted`/`rsf` and `USING FUSION` over a single `NEAR` (V012), a
   `GROUP BY` ordered by an aggregate the SELECT does not list (V016), and
-  output columns sharing a name (R011–R012, V017).
-- `vector_group_cases` V001–V003: a vector `GROUP BY` (`NEAR` + `GROUP BY`)
+  output columns sharing a name, an aggregate named `score` included
+  (R011–R013, V017).
+- `vector_group_cases` V001–V008: a vector `GROUP BY` (`NEAR` + `GROUP BY`)
   ordered by `similarity()` (each group's best score) and by a SELECT
-  aggregate, compared on the order of the groups.
+  aggregate, every aggregate per group with each group's id and score
+  (V004), `HAVING` (V005), the default order (V006), and a Euclidean
+  collection (`docs_l2`, V007–V008) whose nearest group comes first and whose
+  rows without the `GROUP BY` field form the `NULL` group.
 - `dml_cases` W001–W008: `UPDATE` / `DELETE` statements run on a fresh copy of
   the dataset, then a SELECT (or a `NEAR`) is asserted.
 - `projection_cases` P001–P005: `SELECT DISTINCT` with `ORDER BY`, `LIMIT`, a

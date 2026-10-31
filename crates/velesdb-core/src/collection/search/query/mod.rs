@@ -332,7 +332,7 @@ impl Collection {
         // before ORDER BY / LIMIT / OFFSET are applied, which then sort the
         // groups on the payload fields their aggregates landed in.
         let stmt = if args.is_vgb {
-            results = self.apply_vector_group_by(stmt, &results);
+            results = self.apply_vector_group_by(stmt, &results, params)?;
             stmt.order_by_aggregates_as_fields()
                 .map_err(|e| crate::error::Error::Query(e.to_string()))?
         } else {
@@ -381,7 +381,7 @@ impl Collection {
 
     // NOTE: try_dispatch_match, compute_fetch_limit, try_early_return_or_guard_let,
     // validate_let_binding_support, prepare_query_context, finalize_query_results,
-    // extract_query_components, apply_vector_group_by, extract_aggregations,
+    // extract_query_components, apply_vector_group_by,
     // check_guardrails_and_record, explain_analyze_query
     // → moved to query_pipeline.rs (NLOC/file reduction)
 

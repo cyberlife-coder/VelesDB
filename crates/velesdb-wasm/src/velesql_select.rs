@@ -63,7 +63,12 @@ pub(crate) fn execute(
         execute_plain(db, &query.select, params)?
     };
 
-    finalize(&query.select, rows, params)
+    let higher_is_better = db
+        .get_shared_store(&query.select.from)?
+        .borrow()
+        .metric
+        .higher_is_better();
+    finalize(&query.select, rows, params, higher_is_better)
 }
 
 // --- Plain scan ----------------------------------------------------------
@@ -410,31 +415,39 @@ fn fusion_branch_from_residual(
 
 /// Applies DISTINCT / GROUP BY / HAVING / ORDER BY / LIMIT / OFFSET once the
 /// raw row set has been materialised by either the plain or vector path.
+/// `higher_is_better` is the collection metric's direction.
 fn finalize(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
     params: &Params,
+    higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
     if velesql_aggregate::needs_aggregation_pipeline(stmt) {
-        return finalize_aggregated(stmt, rows, params);
+        return finalize_aggregated(stmt, rows, params, higher_is_better);
     }
-    finalize_plain(stmt, rows)
+    finalize_plain(stmt, rows, higher_is_better)
 }
 
 fn finalize_aggregated(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
     params: &Params,
+    higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
     let scanned: Vec<_> = rows
         .iter()
         .map(|(id, score, p)| (*id, *score, p.as_ref()))
         .collect();
-    let out = velesql_aggregate::apply(stmt, &scanned, params)?;
-    // Aggregation output is not row-capped by core: a LIMIT-less GROUP BY
-    // returns every group. Pass `u64::MAX` so the default-10 SELECT cap
-    // never silently truncates group rows.
-    Ok(apply_limit_offset(stmt, out, u64::MAX))
+    let out = velesql_aggregate::apply(stmt, &scanned, params, higher_is_better)?;
+    // A vector GROUP BY is a search, which core caps at the SELECT default
+    // LIMIT. SQL aggregation output is not row-capped by core: a LIMIT-less
+    // GROUP BY returns every group.
+    let default_limit = if stmt.is_vector_group_by() {
+        velesdb_core::velesql::DEFAULT_SELECT_LIMIT
+    } else {
+        u64::MAX
+    };
+    Ok(apply_limit_offset(stmt, out, default_limit))
 }
 
 /// Finalizes a non-aggregated SELECT: DISTINCT, window functions, ORDER BY,
@@ -451,13 +464,14 @@ fn finalize_aggregated(
 fn finalize_plain(
     stmt: &SelectStatement,
     rows: Vec<OwnedScanRow>,
+    higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
     let mut results = velesql_project::to_search_results(rows);
     if stmt.distinct == DistinctMode::All {
         results = apply_distinct(results, &stmt.columns);
     }
     velesql_project::inject_window_functions(stmt, &mut results)?;
-    velesql_orderby::sort_rows(stmt, &mut results)?;
+    velesql_orderby::sort_rows(stmt, &mut results, higher_is_better)?;
     let projected = velesql_project::project(stmt, &results)?;
     Ok(apply_limit_offset(
         stmt,

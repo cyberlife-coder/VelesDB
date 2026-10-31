@@ -332,38 +332,22 @@ impl Collection {
         })
     }
 
-    /// Applies vector-search GROUP BY post-processing on search results.
-    ///
-    /// Extracts aggregation functions from the SELECT columns and delegates
-    /// to [`vector_group_by::group_search_results`].
-    #[allow(clippy::unused_self)] // Instance method for consistency with other query pipeline stages.
+    /// Applies vector-search GROUP BY post-processing on search results,
+    /// HAVING bound with `params`, through
+    /// [`vector_group_by::group_search_results`].
     pub(super) fn apply_vector_group_by(
         &self,
         stmt: &crate::velesql::SelectStatement,
         results: &[SearchResult],
-    ) -> Vec<SearchResult> {
-        let Some(group_by) = stmt.group_by.as_ref() else {
-            return results.to_vec();
-        };
-        let aggregations = Self::extract_aggregations(&stmt.columns);
-        let limit_hint = stmt.limit.map(|l| usize::try_from(l).unwrap_or(MAX_LIMIT));
-        let config = vector_group_by::VectorGroupByConfig {
-            group_by_columns: &group_by.columns,
-            aggregations: &aggregations,
-            limit_hint,
-        };
-        vector_group_by::group_search_results(results, &config)
-    }
-
-    /// Extracts aggregate functions from `SelectColumns`.
-    fn extract_aggregations(
-        columns: &crate::velesql::SelectColumns,
-    ) -> Vec<crate::velesql::AggregateFunction> {
-        match columns {
-            crate::velesql::SelectColumns::Aggregations(aggs) => aggs.clone(),
-            crate::velesql::SelectColumns::Mixed { aggregations, .. } => aggregations.clone(),
-            _ => Vec::new(),
-        }
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<SearchResult>> {
+        let having = stmt
+            .having
+            .as_ref()
+            .map(|h| Self::resolve_having_params(h, params))
+            .transpose()?;
+        let higher_is_better = self.storage.config.read().metric.higher_is_better();
+        vector_group_by::group_search_results(stmt, results, having.as_ref(), higher_is_better)
     }
 
     /// Checks timeout and cardinality guard-rails, recording failure on violation.

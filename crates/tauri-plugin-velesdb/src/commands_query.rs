@@ -8,34 +8,6 @@ use crate::helpers::require_collection;
 use crate::state::VelesDbState;
 use crate::types::{HybridResult, QueryRequest, QueryResponse};
 use tauri::{command, AppHandle, Runtime, State};
-use velesdb_core::velesql::SelectColumns;
-
-/// Detects aggregation queries (COUNT, SUM, AVG, etc. in SELECT).
-///
-/// Returns `false` for vector-search GROUP BY queries (NEAR + GROUP BY),
-/// which are handled as post-processing in `execute_query`.
-fn is_aggregation_query(parsed: &velesdb_core::velesql::Query) -> bool {
-    let has_aggs = match &parsed.select.columns {
-        SelectColumns::Aggregations(_) => true,
-        SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
-        _ => false,
-    };
-    let is_agg = has_aggs || parsed.select.group_by.is_some();
-
-    // Vector-search GROUP BY is handled inside execute_query, not execute_aggregate.
-    if is_agg {
-        let has_vector_near = parsed
-            .select
-            .where_clause
-            .as_ref()
-            .is_some_and(velesdb_core::velesql::Condition::has_vector_search);
-        if has_vector_near && parsed.select.group_by.is_some() {
-            return false;
-        }
-    }
-
-    is_agg
-}
 
 /// Executes a `VelesQL` query (EPIC-031 US-012).
 ///
@@ -70,7 +42,9 @@ async fn dispatch_tauri_query(
     parsed: velesdb_core::velesql::Query,
     request: QueryRequest,
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
-    if is_aggregation_query(&parsed) && !parsed.select.from.is_empty() {
+    // `SelectStatement::is_aggregation_query` is the routing test every
+    // surface shares: a vector GROUP BY runs inside `execute_query`.
+    if parsed.select.is_aggregation_query() && !parsed.select.from.is_empty() {
         return execute_tauri_aggregation(state, parsed, request).await;
     }
 

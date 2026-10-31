@@ -12,27 +12,6 @@ use crate::point::SearchResult;
 use crate::velesql::{ArithmeticExpr, ArithmeticOp};
 use std::cmp::Ordering;
 
-/// Looks up a (possibly dotted) field path inside a JSON payload.
-///
-/// A bare name (`"source"`) is a top-level lookup; a dotted path
-/// (`"meta.source"`) walks nested objects segment by segment. Returns `None`
-/// when any segment is missing or a non-object is traversed. Shared by ORDER BY
-/// field comparison and score-variable payload resolution so both honor the same
-/// nested-path semantics as projection/filter/aggregation.
-fn get_nested_payload<'a>(
-    payload: &'a serde_json::Value,
-    path: &str,
-) -> Option<&'a serde_json::Value> {
-    let mut current = payload;
-    for segment in path.split('.') {
-        match current {
-            serde_json::Value::Object(map) => current = map.get(segment)?,
-            _ => return None,
-        }
-    }
-    Some(current)
-}
-
 /// Compare two JSON values for sorting with total ordering.
 ///
 /// Ordering priority (ascending): Null < Bool < Number < String < Array < Object
@@ -144,7 +123,7 @@ impl Collection {
                                 r.point
                                     .payload
                                     .as_ref()
-                                    .and_then(|p| get_nested_payload(p, field_name))
+                                    .and_then(|p| crate::velesql::row_field(p, field_name))
                             })
                             .collect(),
                     )
@@ -292,12 +271,7 @@ impl Collection {
                 }
             };
 
-            let is_similarity = matches!(
-                &ob.expr,
-                OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
-            );
-            let directed_cmp =
-                Self::apply_sort_direction(cmp, ob.descending, is_similarity, higher_is_better);
+            let directed_cmp = ob.directed(cmp, higher_is_better);
             if directed_cmp != Ordering::Equal {
                 return directed_cmp;
             }
@@ -316,12 +290,12 @@ impl Collection {
             .point
             .payload
             .as_ref()
-            .and_then(|p| get_nested_payload(p, field_name));
+            .and_then(|p| crate::velesql::row_field(p, field_name));
         let val_j = results[j]
             .point
             .payload
             .as_ref()
-            .and_then(|p| get_nested_payload(p, field_name));
+            .and_then(|p| crate::velesql::row_field(p, field_name));
         compare_json_values(val_i, val_j)
     }
 
@@ -415,26 +389,6 @@ impl Collection {
             per_result_let.get(j).map(Vec::as_slice),
         );
         (ctx_i, ctx_j)
-    }
-
-    /// Applies ASC/DESC direction, accounting for distance metric inversion.
-    fn apply_sort_direction(
-        cmp: Ordering,
-        descending: bool,
-        is_similarity: bool,
-        higher_is_better: bool,
-    ) -> Ordering {
-        if descending {
-            if is_similarity && !higher_is_better {
-                cmp
-            } else {
-                cmp.reverse()
-            }
-        } else if is_similarity && !higher_is_better {
-            cmp.reverse()
-        } else {
-            cmp
-        }
     }
 }
 
@@ -624,7 +578,7 @@ impl<'a> ScoreContext<'a> {
     /// Resolves a variable name from the payload.
     fn resolve_payload_variable(&self, name: &str) -> f32 {
         self.payload
-            .and_then(|p| get_nested_payload(p, name))
+            .and_then(|p| crate::velesql::row_field(p, name))
             .and_then(serde_json::Value::as_f64)
             .map_or(0.0, |v| {
                 #[allow(clippy::cast_possible_truncation)]

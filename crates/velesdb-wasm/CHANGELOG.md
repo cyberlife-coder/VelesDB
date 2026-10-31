@@ -22,6 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior) — an unaliased aggregate is named as in core.**
+  `COUNT(*)` comes back as `count` (was `count(*)`), `SUM(price)` as
+  `sum_price` (was `sum(price)`), and every other aggregate as
+  `<function>_<column>` (`max_score` for `MAX(score)`). Alias an aggregate
+  (`COUNT(*) AS n`) to name it the same in every version.
+- **BREAKING (behavior) — GROUP BY and aggregates group as core does**,
+  through core's `velesql::Grouper`: a selected column outside `GROUP BY` is
+  no longer added to each group row; `MIN`/`MAX` read numeric values and
+  return `null` for a group of strings, and `SUM` over no numeric value is
+  `null` (was `0`); `score` as an aggregate argument
+  outside a vector `GROUP BY` reads a payload field named `score`. A vector
+  `GROUP BY` (`NEAR` + `GROUP BY`) returns each group with its best row's id
+  and the group score (was `0` and `0.0`), best score first without ORDER BY,
+  and 10 groups without LIMIT (was every group).
+- **BREAKING (behavior) — a `GROUP BY` ORDER BY that names no column of the
+  grouped rows fails with `V016`**, where it was ignored (or, for a selected
+  column outside `GROUP BY`, sorted by each group's first value). **An
+  aggregate query whose output columns share a name fails with `V017`**,
+  where one column overwrote the other: a `GROUP BY` or selected column and
+  an aggregate's name, two aggregates, or an aggregate named `id` or `score`
+  in a `GROUP BY` query.
+- **`ORDER BY similarity()` follows the metric's direction**: under a
+  distance metric `DESC` puts the nearest row first, as in core.
 - **BREAKING (behavior) — VelesQL queries go through `velesdb-core`'s
   `QueryValidator`.** A query core refuses is refused here too. `USING FUSION`
   over a single `NEAR` now fails with V012 for every strategy (`rrf`, `maximum`

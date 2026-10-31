@@ -104,6 +104,15 @@ struct VectorGroupCase {
     query: String,
     group_column: String,
     expect_order: Vec<Value>,
+    /// Each group's row (its payload), in order, when the case pins it.
+    #[serde(default)]
+    expect_rows: Option<Vec<Value>>,
+    /// Each group's id (its best row's), in order.
+    #[serde(default)]
+    expect_ids: Option<Vec<u64>>,
+    /// Each group's score, in order, compared within [`SCORE_TOLERANCE`].
+    #[serde(default)]
+    expect_scores: Option<Vec<f32>>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -285,28 +294,44 @@ fn test_velesql_executor_conformance_rejected_cases() {
 #[test]
 fn test_velesql_executor_conformance_vector_group_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     for case in &fixture.vector_group_cases {
         let query = Parser::parse(&case.query)
             .unwrap_or_else(|e| panic!("case {} failed to parse: {e}", case.id));
         let results = db
             .execute_query(&query, &fixture.query_params)
             .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
-        let order: Vec<Value> = results
+        let rows: Vec<Value> = results
             .iter()
-            .map(|r| {
-                r.point
-                    .payload
-                    .as_ref()
-                    .and_then(|p| p.get(&case.group_column))
-                    .cloned()
-                    .unwrap_or(Value::Null)
-            })
+            .map(|r| r.point.payload.clone().unwrap_or(Value::Null))
             .collect();
-        assert_eq!(
-            order, case.expect_order,
-            "vector GROUP BY conformance mismatch for case {}: query={:?}",
-            case.id, case.query
+        let order: Vec<Value> = rows
+            .iter()
+            .map(|row| row.get(&case.group_column).cloned().unwrap_or(Value::Null))
+            .collect();
+        let context = format!("case {}: query={:?}", case.id, case.query);
+        assert_eq!(order, case.expect_order, "vector GROUP BY order, {context}");
+        if let Some(expected) = &case.expect_rows {
+            assert_eq!(&rows, expected, "vector GROUP BY rows, {context}");
+        }
+        if let Some(expected) = &case.expect_ids {
+            let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+            assert_eq!(&ids, expected, "vector GROUP BY ids, {context}");
+        }
+        if let Some(expected) = &case.expect_scores {
+            let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+            assert_scores_close(&scores, expected, &context);
+        }
+    }
+}
+
+/// Asserts `got` matches `expected` element-wise within [`SCORE_TOLERANCE`].
+fn assert_scores_close(got: &[f32], expected: &[f32], context: &str) {
+    assert_eq!(got.len(), expected.len(), "score count, {context}");
+    for (g, e) in got.iter().zip(expected) {
+        assert!(
+            (g - e).abs() <= SCORE_TOLERANCE,
+            "scores {got:?}, expected {expected:?}, {context}"
         );
     }
 }

@@ -18,9 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it sorted on a selected column outside `GROUP BY` (`SELECT category, title,
   COUNT(*) ... GROUP BY category ORDER BY title`) by each group's first
   `title`, a column core's rows never carried. 8.0.0 refuses all of these at
-  validation, in both engines; a vector `GROUP BY` (`NEAR` in WHERE) is
-  refused only an ORDER BY aggregate it does not select, and still orders by
-  `similarity()`, arithmetic and its payload fields. Migration: order by a
+  validation, in both engines. A vector `GROUP BY` (`NEAR` in WHERE) is
+  refused only for an ORDER BY aggregate it does not select; it still orders
+  by `similarity()`, arithmetic and its payload fields. Migration: order by a
   `GROUP BY` column or a SELECT aggregate — add the column to `GROUP BY` or
   the aggregate to the SELECT list (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 2).
@@ -30,17 +30,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   COUNT(*) FROM docs GROUP BY category, count` returned the count under
   `count` and lost the `count` group column, and `COUNT(*) AS n, SUM(year)
   AS n` returned one of the two. 8.0.0 refuses it at validation in every
-  engine, naming the column. Migration: alias the aggregate whose name
-  repeats another column.
+  engine, naming the column. A selected column counts even outside `GROUP
+  BY` (`SELECT title, COUNT(*) AS title ... GROUP BY category`), and in a
+  `GROUP BY` query an aggregate may not be named `id` or `score`, which
+  would shadow the group's own id and score under `ORDER BY`. Migration:
+  alias the aggregate whose name repeats another column.
 - **BREAKING (behavior) — `velesdb-wasm` names an unaliased aggregate as
   core does.** 7.1.0 WASM returned `COUNT(*)` as `count(*)` and `SUM(price)`
   as `sum(price)`; 8.0.0 returns `count` and `sum_price`, the names core and
   every other binding return (`<function>_<column>`, `<function>_score`),
   through one derivation, `AggregateFunction::result_key`. A core vector
-  `GROUP BY` uses it too, so an unaliased `COUNT(*)` there is `count`, not
-  `Count_*`, and `MIN(score)` is `min_score`, not `agg_score`. Migration:
+  `GROUP BY` (server, Python, Node, every binding) uses it too: an unaliased
+  `COUNT(*)` there is `count`, not `Count_*`, and `COUNT(score)`,
+  `SUM(score)`, `MIN(score)` and `FIRST(score)` are `count_score`,
+  `sum_score`, `min_score` and `first_score`, not `agg_score`. The old keys
+  held `null` (7.1.0 computed none of those aggregates there). Migration:
   read the new key, or alias the aggregate (`COUNT(*) AS n`), the key in
   every version (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), sections 7 and
+  9).
+- **BREAKING (behavior) — `velesdb-wasm` groups as core does.** Its GROUP BY
+  and aggregates now run through core's engine-shared grouping
+  (`velesql::Grouper`), so three 7.1.0 WASM behaviours change: a selected
+  column outside `GROUP BY` is no longer added to each group row (core never
+  output it); `MIN` and `MAX` read numeric values, as `SUM` and `AVG` do,
+  and return `null` for a group of strings, as `SUM` now does over no
+  numeric value (it returned `0`); and `score` as an aggregate
+  argument outside a vector `GROUP BY` is the payload field of that name, as
+  in core, not the row's search score. Migration: add the column to
+  `GROUP BY`, and keep `MIN`/`MAX` for numeric columns (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 7).
 
 ### Fixed
@@ -102,6 +120,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `HAVING COUNT(*) > 3` beside `SUM(amount)`) dropped every group in core
     7.1.0, which only accumulated the SELECT's aggregates. Core now computes
     the HAVING aggregates too, as WASM already did.
+- **A vector `GROUP BY` (`NEAR` + `GROUP BY`) returns true groups, the same
+  in every engine.** Core and WASM now group through one implementation
+  (`velesql::Grouper`). In 7.1.0:
+  - core computed only `MAX(score)`, `AVG(score)` and `FIRST(col)` there:
+    `COUNT`, `SUM`, `MIN`, `MAX(col)` and `AVG(col)` came back `null`, so
+    `ORDER BY COUNT(*)` sorted on nothing;
+  - core ignored `HAVING` there;
+  - core returned groups in hash order when the query had no ORDER BY, so
+    the default `LIMIT 10` kept arbitrary groups; groups now come best score
+    first, ties by id, in both engines, and WASM, which returned every group,
+    applies the same default `LIMIT 10`;
+  - core dropped rows without the `GROUP BY` field; they now form the `NULL`
+    group, as in SQL `GROUP BY`;
+  - under a distance metric (Euclidean, Hamming…) core took the farthest
+    row as a group's best one and score; it takes the nearest;
+  - WASM returned each group with id `0` and score `0.0`; it returns the
+    best row's id and the group score, as core does.
+- **WASM `ORDER BY similarity()` follows the metric's direction.** Under a
+  distance metric `similarity() DESC` sorted the farthest rows first in
+  WASM; it puts the nearest first, as core does (`SelectOrderBy::directed`,
+  shared).
+- **`COUNT(column)` counts non-null values of any type in core.** 7.1.0
+  counted numeric values only: `COUNT(category)` over a string column
+  returned `0`.
+- **A `GROUP BY` column reads as in WHERE in core.** `GROUP BY id` grouped
+  by a payload field named `id`, so every row fell in one `NULL` group; it
+  groups by the point id, as WASM did. `FIRST(col)` in a SQL `GROUP BY`
+  returned `null` in core; it returns the group's first row's value.
 - **`@wiscale/tauri-plugin-velesdb` ships a README.** Its package listed
   `README.md` in `files`, but none existed, so the npm page was empty.
 - The committed Playwright report of the e-commerce example is removed.

@@ -1,6 +1,6 @@
 {
-  "version": "2.1.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with.",
+  "version": "2.2.0",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -157,6 +157,17 @@
   ],
   "extra_collections": [
     {
+      "collection": "docs_l2",
+      "dimension": 2,
+      "metric": "euclidean",
+      "points": [
+        { "id": 21, "vector": [1.0, 0.0], "payload": { "grp": "x" } },
+        { "id": 22, "vector": [3.0, 0.0], "payload": { "grp": "y" } },
+        { "id": 23, "vector": [2.0, 0.0], "payload": { "grp": "x" } },
+        { "id": 24, "vector": [0.5, 0.0], "payload": { "label": "no group" } }
+      ]
+    },
+    {
       "collection": "customers",
       "dimension": 2,
       "metric": "cosine",
@@ -304,7 +315,7 @@
         { "category": "tech", "year": 3 },
         { "category": "other", "year": 2 }
       ],
-      "note": "an ORDER BY name resolves to an explicit SELECT alias first, then a GROUP BY column, then the executor's own default aggregate name: `year` here is the count, not the payload field"
+      "note": "ORDER BY `year` names the count, the aggregate aliased `year`; the payload field `year` is not a column of the grouped rows"
     },
     {
       "id": "G010",
@@ -314,6 +325,33 @@
         { "category": "other", "count": 2, "sum_year": 4040.0, "avg_year": 2020.0 }
       ],
       "note": "unaliased aggregates carry the same default names in both engines (AggregateFunction::result_key), and ORDER BY can name them. WASM used to output count(*), sum(year) and avg(year) (formerly documented_divergences D001)"
+    },
+    {
+      "id": "G011",
+      "query": "SELECT category, COUNT(category) AS n FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "n": 2 },
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "COUNT(column) counts the non-null values of any type; core counted numeric values only and returned 0 for a string column"
+    },
+    {
+      "id": "G012",
+      "query": "SELECT category, year, COUNT(*) AS n FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "n": 2 },
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "a grouped row carries its GROUP BY columns and aggregates only; WASM used to add a selected column outside GROUP BY from the group's first row"
+    },
+    {
+      "id": "G013",
+      "query": "SELECT id, COUNT(*) AS n FROM docs GROUP BY id ORDER BY id DESC LIMIT 2",
+      "expect_groups": [
+        { "id": 5, "n": 1 },
+        { "id": 4, "n": 1 }
+      ],
+      "note": "a GROUP BY column resolves as in WHERE: `id` is the point id (core read a payload field `id` and put every row in one NULL group)"
     }
   ],
   "setops_cases": [
@@ -360,7 +398,8 @@
   ],
   "query_params": {
     "a": [0.1, 0.2, 0.3, 0.4],
-    "b": [0.2, 0.4, 0.0, 0.1]
+    "b": [0.2, 0.4, 0.0, 0.1],
+    "e": [0.0, 0.0]
   },
   "near_cases": [
     {
@@ -534,6 +573,12 @@
       "expected_code": "V017",
       "query": "SELECT category, COUNT(*) AS n, SUM(year) AS n FROM docs GROUP BY category",
       "note": "two aggregates aliased alike share an output field; one used to overwrite the other"
+    },
+    {
+      "id": "R013",
+      "expected_code": "V017",
+      "query": "SELECT category, COUNT(*) AS score FROM docs GROUP BY category",
+      "note": "an aggregate named `score` (or `id`) would shadow the group's own score (id) when sorting"
     }
   ],
   "dml_cases": [
@@ -649,6 +694,50 @@
       "group_column": "category",
       "expect_order": ["other", "tech"],
       "note": "an ORDER BY aggregate of a vector GROUP BY sorts on the SELECT item it repeats"
+    },
+    {
+      "id": "V004",
+      "query": "SELECT category, COUNT(*) AS n, SUM(year) AS total, AVG(year) AS mean, MIN(year) AS lo, MAX(year) AS hi, FIRST(year) AS top FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY COUNT(*) ASC",
+      "group_column": "category",
+      "expect_order": ["other", "tech"],
+      "expect_rows": [
+        { "category": "other", "n": 2, "total": 4040.0, "mean": 2020.0, "lo": 2019.0, "hi": 2021.0, "top": 2021 },
+        { "category": "tech", "n": 3, "total": 6065.0, "mean": 2021.6666666666667, "lo": 2020.0, "hi": 2023.0, "top": 2023 }
+      ],
+      "expect_ids": [3, 4],
+      "expect_scores": [0.547723, 0.730297],
+      "note": "every aggregate is computed per group (core returned null for all but MAX/AVG(score) and FIRST), FIRST reads the best row, and each group is its best row's id with the group score"
+    },
+    {
+      "id": "V005",
+      "query": "SELECT category, COUNT(*) AS n FROM docs WHERE vector NEAR $a GROUP BY category HAVING COUNT(*) > 2",
+      "group_column": "category",
+      "expect_order": ["tech"],
+      "note": "HAVING filters vector GROUP BY groups (core ignored it)"
+    },
+    {
+      "id": "V006",
+      "query": "SELECT year, COUNT(*) AS n FROM docs WHERE vector NEAR $a GROUP BY year",
+      "group_column": "year",
+      "expect_order": [2023, 2021, 2019, 2022, 2020],
+      "expect_ids": [4, 3, 5, 2, 1],
+      "note": "without ORDER BY, groups come best score first, ties by best-row id (core returned hash order)"
+    },
+    {
+      "id": "V007",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 WHERE vector NEAR $e GROUP BY grp ORDER BY similarity() DESC",
+      "group_column": "grp",
+      "expect_order": [null, "x", "y"],
+      "expect_ids": [24, 21, 22],
+      "note": "Euclidean: similarity() DESC puts the nearest group first (WASM sorted raw distances). A row without the group column forms the NULL group, as in SQL GROUP BY (core dropped it)"
+    },
+    {
+      "id": "V008",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 WHERE vector NEAR $e GROUP BY grp",
+      "group_column": "grp",
+      "expect_order": [null, "x", "y"],
+      "expect_ids": [24, 21, 22],
+      "note": "Euclidean default order: nearest group first, each group's best row being its nearest"
     }
   ],
   "documented_divergences": [

@@ -66,6 +66,7 @@ mod groupby_tests;
 mod grouped_order;
 #[cfg(test)]
 mod grouped_order_tests;
+pub(crate) mod grouping;
 #[cfg(test)]
 mod having_tests;
 #[cfg(test)]
@@ -291,6 +292,7 @@ pub use explain::{
     EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
 pub use grouped_order::vector_group_score_is_average;
+pub use grouping::{row_field, GroupInput, GroupOutput, Grouper};
 pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{

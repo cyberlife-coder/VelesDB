@@ -529,10 +529,10 @@ impl QueryValidator {
         Ok(())
     }
 
-    /// Returns `true` if the argument references the score pseudo-column.
+    /// Returns `true` if the argument references the score pseudo-column,
+    /// which the parser reads `score` as in any letter case.
     fn is_score_column(arg: &super::ast::AggregateArg) -> bool {
         matches!(arg, super::ast::AggregateArg::Score)
-            || matches!(arg, super::ast::AggregateArg::Column(col) if col.eq_ignore_ascii_case("score"))
     }
 
     /// Collects aggregate functions from `SelectColumns`.

@@ -27,75 +27,7 @@ use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::{AggregateFunction, Aggregator, Query, SelectColumns};
 use rayon::prelude::*;
-use rustc_hash::FxHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-
-/// Group key for GROUP BY operations with pre-computed hash.
-/// Avoids JSON serialization overhead by using direct value hashing.
-#[derive(Clone)]
-pub(crate) struct GroupKey {
-    /// Original values for result construction
-    pub(crate) values: Vec<serde_json::Value>,
-    /// Pre-computed hash for fast HashMap lookup
-    hash: u64,
-}
-
-impl GroupKey {
-    pub(crate) fn new(values: Vec<serde_json::Value>) -> Self {
-        let hash = Self::compute_hash(&values);
-        Self { values, hash }
-    }
-
-    fn compute_hash(values: &[serde_json::Value]) -> u64 {
-        let mut hasher = FxHasher::default();
-        for v in values {
-            Self::hash_value(v, &mut hasher);
-        }
-        hasher.finish()
-    }
-
-    fn hash_value(value: &serde_json::Value, hasher: &mut FxHasher) {
-        match value {
-            serde_json::Value::Null => 0u8.hash(hasher),
-            serde_json::Value::Bool(b) => {
-                1u8.hash(hasher);
-                b.hash(hasher);
-            }
-            serde_json::Value::Number(n) => {
-                2u8.hash(hasher);
-                // Use bits for consistent hashing of floats
-                if let Some(f) = n.as_f64() {
-                    f.to_bits().hash(hasher);
-                }
-            }
-            serde_json::Value::String(s) => {
-                3u8.hash(hasher);
-                s.hash(hasher);
-            }
-            _ => {
-                // Arrays and objects: fallback to string representation
-                4u8.hash(hasher);
-                value.to_string().hash(hasher);
-            }
-        }
-    }
-}
-
-impl Hash for GroupKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.hash.hash(state);
-    }
-}
-
-impl PartialEq for GroupKey {
-    fn eq(&self, other: &Self) -> bool {
-        // Fast path: different hash means definitely different
-        self.hash == other.hash && self.values == other.values
-    }
-}
-
-impl Eq for GroupKey {}
 
 /// Context for runtime WHERE evaluation during aggregation.
 pub(super) struct RuntimeWhereCtx<'a> {
@@ -182,7 +114,7 @@ impl Collection {
             }
         };
 
-        if let Some(ref group_by) = stmt.group_by {
+        if stmt.group_by.is_some() {
             // HAVING thresholds are not part of the WHERE condition tree, so
             // they need their own resolution pass (same loud-failure guard).
             let having = stmt
@@ -190,13 +122,7 @@ impl Collection {
                 .as_ref()
                 .map(|h| Self::resolve_having_params(h, params))
                 .transpose()?;
-            return self.execute_grouped_aggregate(
-                query,
-                aggregations,
-                &group_by.columns,
-                having.as_ref(),
-                params,
-            );
+            return self.execute_grouped_aggregate(query, having.as_ref(), params);
         }
 
         if stmt.having.is_some() {
@@ -454,34 +380,20 @@ impl Collection {
         let mut result = serde_json::Map::new();
 
         for agg in aggregations {
-            let value = Self::aggregation_result_value(agg, agg_result);
-            result.insert(agg.result_key(), value);
+            result.insert(agg.result_key(), agg_result.value_of(agg));
         }
 
         serde_json::Value::Object(result)
     }
 
-    // NOTE: aggregation_result_value is in grouped.rs and shared by both
-    // grouped and ungrouped aggregation paths; the result key is
-    // `AggregateFunction::result_key`.
+    // NOTE: an aggregate's output value is `AggregateResult::value_of` and its
+    // key `AggregateFunction::result_key`, shared by every engine.
 
     /// Get a nested value from JSON payload using dot notation.
     pub(crate) fn get_nested_value<'a>(
         payload: &'a serde_json::Value,
         path: &str,
     ) -> Option<&'a serde_json::Value> {
-        let parts: Vec<&str> = path.split('.').collect();
-        let mut current = payload;
-
-        for part in parts {
-            match current {
-                serde_json::Value::Object(map) => {
-                    current = map.get(part)?;
-                }
-                _ => return None,
-            }
-        }
-
-        Some(current)
+        crate::velesql::grouping::payload_path(payload, path)
     }
 }

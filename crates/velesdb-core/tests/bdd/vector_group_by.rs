@@ -446,26 +446,30 @@ fn test_given_max_score_without_near_when_execute_then_error() {
 }
 
 // =========================================================================
-// Scenario 10: Negative — GROUP BY on nonexistent field → empty
+// Scenario 10: Edge — GROUP BY on a field no chunk has → one NULL group
 // =========================================================================
 
 #[test]
-fn test_given_nonexistent_group_field_when_group_by_then_empty() {
+fn test_given_nonexistent_group_field_when_group_by_then_one_null_group() {
     let (_dir, db) = create_test_db();
     setup_chunked_collection(&db);
 
     let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
     let results = execute_sql_with_params(
         &db,
-        "SELECT nonexistent_field, MAX(score) AS relevance FROM chunks WHERE vector NEAR $v GROUP BY nonexistent_field LIMIT 10",
+        "SELECT nonexistent_field, COUNT(*) AS n FROM chunks WHERE vector NEAR $v GROUP BY nonexistent_field LIMIT 10",
         &params,
     )
     .expect("test: nonexistent group field");
 
-    assert!(
-        results.is_empty(),
-        "GROUP BY on nonexistent field → empty result set"
+    // As in SQL GROUP BY, rows without the column form the NULL group.
+    assert_eq!(results.len(), 1, "every chunk falls in the NULL group");
+    let payload = results[0].point.payload.as_ref().expect("test: group row");
+    assert_eq!(
+        payload.get("nonexistent_field"),
+        Some(&serde_json::Value::Null)
     );
+    assert_eq!(payload.get("n"), Some(&serde_json::json!(9)));
 }
 
 // =========================================================================

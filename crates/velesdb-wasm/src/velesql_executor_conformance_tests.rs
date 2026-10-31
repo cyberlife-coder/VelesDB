@@ -113,6 +113,15 @@ struct VectorGroupCase {
     query: String,
     group_column: String,
     expect_order: Vec<Value>,
+    /// Each group's row, in order, when the case pins it.
+    #[serde(default)]
+    expect_rows: Option<Vec<Value>>,
+    /// Each group's id (its best row's), in order.
+    #[serde(default)]
+    expect_ids: Option<Vec<u64>>,
+    /// Each group's score, in order, compared within 1e-5.
+    #[serde(default)]
+    expect_scores: Option<Vec<f32>>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -479,24 +488,41 @@ fn test_wasm_velesql_executor_rejected_cases() {
 fn test_wasm_velesql_executor_vector_group_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     let params = params_json(&fixture);
     for case in &fixture.vector_group_cases {
         let result = execute(&mut db, &case.query, Some(&params))
             .unwrap_or_else(|e| panic!("vector group case {} failed to execute: {e}", case.id));
-        let order: Vec<Value> = result
+        let rows: Vec<Value> = result
             .rows_ref()
             .iter()
-            .map(|row| {
-                let row: Value =
-                    serde_json::from_str(&row.data_json()).expect("test: parse row JSON");
-                row.get(&case.group_column).cloned().unwrap_or(Value::Null)
-            })
+            .map(|row| serde_json::from_str(&row.data_json()).expect("test: parse row JSON"))
             .collect();
-        assert_eq!(
-            order, case.expect_order,
-            "WASM vector GROUP BY conformance mismatch for case {}: query={:?}",
-            case.id, case.query
-        );
+        let order: Vec<Value> = rows
+            .iter()
+            .map(|row: &Value| row.get(&case.group_column).cloned().unwrap_or(Value::Null))
+            .collect();
+        let context = format!("WASM case {}: query={:?}", case.id, case.query);
+        assert_eq!(order, case.expect_order, "vector GROUP BY order, {context}");
+        if let Some(expected) = &case.expect_rows {
+            assert_eq!(&rows, expected, "vector GROUP BY rows, {context}");
+        }
+        if let Some(expected) = &case.expect_ids {
+            let ids: Vec<u64> = result.rows_ref().iter().map(|r| r.id()).collect();
+            assert_eq!(&ids, expected, "vector GROUP BY ids, {context}");
+        }
+        if let Some(expected) = &case.expect_scores {
+            let scores: Vec<f32> = result.rows_ref().iter().map(|r| r.score()).collect();
+            assert_eq!(scores.len(), expected.len(), "score count, {context}");
+            for (got, want) in scores.iter().zip(expected) {
+                assert!(
+                    (got - want).abs() <= 1e-5,
+                    "scores {scores:?}, expected {expected:?}, {context}"
+                );
+            }
+        }
     }
 }
 

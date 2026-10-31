@@ -288,6 +288,19 @@ Rejections carry core's codes and a new `recoverable` field:
   A dotted column keeps its dots (`SUM(a.b)` → `sum_a.b`). **Fix:** read the
   new key, or alias the aggregate (`COUNT(*) AS n`): an alias is the key in
   every version and engine.
+- **BREAKING (behavior) — GROUP BY and aggregates run through core's
+  grouping**, so they return what core returns:
+  - a selected column outside `GROUP BY` is no longer added to each group
+    row: add it to `GROUP BY`;
+  - `MIN` and `MAX` read numeric values and return `null` for a group of
+    strings, like `SUM` and `AVG`; `SUM` over no numeric value is `null`, not
+    `0`;
+  - `score` as an aggregate argument is the search score only in a vector
+    `GROUP BY` (`NEAR` + `GROUP BY`); elsewhere it reads a payload field
+    named `score`;
+  - a vector `GROUP BY` without `LIMIT` returns 10 groups, the SELECT
+    default, where it returned every group; each group row carries its best
+    row's id and the group score instead of `0` and `0.0`.
 
 ## 8. Observability
 
@@ -302,6 +315,27 @@ Rejections carry core's codes and a new `recoverable` field:
   `label == "secondary"` or `"btree"`.
 
 ## 9. Results that change (not breaking)
+
+- **Vector `GROUP BY` (`NEAR` + `GROUP BY`) computes every aggregate, on the
+  server, in Python, Node and every binding.** 7.1.0 core computed only
+  `MAX(score)`, `AVG(score)` and `FIRST(col)` there; every other aggregate
+  came back `null`, under a key of its own that changes now:
+
+  | Aggregate | 7.1.0 key (value `null`) | 8.0.0 key |
+  |---|---|---|
+  | `COUNT(*)` | `Count_*` | `count` |
+  | `COUNT(score)` | `agg_score` | `count_score` |
+  | `SUM(score)` | `agg_score` | `sum_score` |
+  | `MIN(score)` | `agg_score` | `min_score` |
+  | `FIRST(score)` | `agg_score` | `first_score` |
+
+  `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` keep their
+  `<function>_<column>` key and now carry a value. The groups change too:
+  `HAVING` applies; without ORDER BY they come best score first, ties by id,
+  instead of in hash order; a chunk without the `GROUP BY` field joins the
+  `NULL` group instead of being dropped; and under a distance metric a
+  group's best chunk and score are its nearest, not its farthest. Alias an
+  aggregate (`COUNT(*) AS n`) to fix its key across versions.
 
 - **`MATCH` range predicates return every matching node.** The
   `label.property` range index used to miss two kinds of nodes:

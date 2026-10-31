@@ -309,15 +309,38 @@ fn test_distinct_with_param_unbound_errors() {
 }
 
 #[test]
-fn test_sum_of_non_numeric_is_zero() {
+fn test_sum_of_non_numeric_is_null() {
     let mut db = db_with_seed();
-    // category is a string — summing it yields 0 (no numeric values).
+    // category is a string: no numeric value to sum, so SUM is null, as in
+    // core and SQL.
     let r = execute(&mut db, "SELECT SUM(category) AS s FROM products", None)
         .expect("test: sum strings");
-    // serde_json may encode f64 as "0.0" or "-0.0"; accept any zero encoding.
     let body = r.rows_json();
-    assert!(
-        body.contains("\"s\":0") || body.contains("\"s\":-0.0") || body.contains("\"s\":0.0"),
-        "got: {body}"
+    assert!(body.contains("\"s\":null"), "got: {body}");
+}
+
+// =========================================================================
+// Vector GROUP BY — the SELECT default LIMIT, as in core
+// =========================================================================
+
+#[test]
+fn test_vector_group_by_without_limit_returns_the_default_ten_groups() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("chunks", 2, "cosine")
+        .expect("test: create");
+    for id in 1..=12_u64 {
+        let sql = format!("INSERT INTO chunks (id, vector, doc) VALUES ({id}, $v, 'd{id}')");
+        execute(&mut db, &sql, Some(r#"{"v": [1.0, 0.5]}"#)).expect("test: insert");
+    }
+    let r = execute(
+        &mut db,
+        "SELECT doc, COUNT(*) AS n FROM chunks WHERE vector NEAR $q GROUP BY doc",
+        Some(r#"{"q": [1.0, 0.0]}"#),
+    )
+    .expect("test: vector group by");
+    assert_eq!(
+        r.row_count(),
+        10,
+        "a vector GROUP BY is a search: LIMIT defaults to 10"
     );
 }

@@ -207,14 +207,26 @@ SELECT SUM(quantity) AS total FROM orders
 | Function | Description | Argument |
 |----------|-------------|----------|
 | `COUNT(*)` | Count all rows | Wildcard |
-| `COUNT(col)` | Count non-null values in column | Column name |
+| `COUNT(col)` | Count non-null values in column, of any type | Column name |
 | `SUM(col)` | Sum of numeric values | Column name |
 | `AVG(col)` | Average of numeric values | Column name |
-| `MIN(col)` | Minimum value | Column name |
-| `MAX(col)` | Maximum value | Column name |
+| `MIN(col)` | Minimum numeric value (`null` when the group has none) | Column name |
+| `MAX(col)` | Maximum numeric value (`null` when the group has none) | Column name |
 | `MAX(score)` | Max similarity score across group (v3.7+) | `score` pseudo-column |
 | `AVG(score)` | Mean similarity score across group (v3.7+) | `score` pseudo-column |
-| `FIRST(col)` | Value from highest-scoring row in group (v3.7+) | Column name |
+| `FIRST(col)` | Value from the group's best row (v3.7+) | Column name |
+
+Every engine groups the same way:
+
+- A `GROUP BY` column reads as in WHERE: `id` is the point id, any other name
+  a payload path (`meta.lang`). A row without it belongs to the `NULL` group.
+- A grouped row carries its `GROUP BY` columns and its aggregates, nothing
+  else: a selected column outside `GROUP BY` is not output.
+- `FIRST(col)` reads the group's best row: the most similar one in a vector
+  search (the highest score, the lowest distance), the first on a tie.
+  Outside a vector search every row ties, so it is the group's first row.
+- `score` as an aggregate argument is the search score in a vector
+  `GROUP BY`, and a payload field named `score` everywhere else.
 
 ### Similarity Score in SELECT
 
@@ -1183,7 +1195,14 @@ LIMIT 10
 | `FIRST(col)` | Value of `col` from the highest-scoring chunk | `GROUP BY` |
 
 Behavior:
-- Chunks missing the GROUP BY field are silently skipped
+- Every aggregate (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `FIRST`) is computed
+  per group, and `HAVING` filters the groups
+- Each group is returned as a search result: its best (most similar) chunk's
+  id, the group score — that chunk's score, or the mean when the SELECT asks
+  for `AVG(score)` and not `MAX(score)` — and the group row as payload
+- Without ORDER BY, groups come best score first, ties by id; without LIMIT,
+  the SELECT default of 10 applies, as for any search
+- Chunks missing the GROUP BY field form the `NULL` group
 - `FIRST(col)` returns `null` if the best chunk lacks the specified column
 - Multiple `FIRST` projections all come from the same highest-scoring chunk
 - `FIRST(*)` is not supported (parse error)
@@ -1390,10 +1409,14 @@ LIMIT 10
 An aggregate's output field is its alias, else a default name: `count` for
 `COUNT(*)`, `<function>_<column>` otherwise (`sum_price`, `avg_score`), in
 every engine. The output columns of an aggregate query — its `GROUP BY`
-columns and its aggregates — must carry distinct names: a query in which two
-would share one (`GROUP BY category, count` beside `COUNT(*)`, or
-`COUNT(*) AS n, SUM(year) AS n`) fails validation with `V017` rather than
-returning one of them. Alias an aggregate to rename it.
+columns, its selected columns and its aggregates — must carry distinct names:
+a query in which two would share one (`GROUP BY category, count` beside
+`COUNT(*)`, `COUNT(*) AS n, SUM(year) AS n`, or `SELECT title, ...,
+COUNT(*) AS title` — a selected column counts even outside `GROUP BY`, where
+no grouped row carries it) fails validation with `V017` rather than
+returning one of them. In a `GROUP BY` query an aggregate may not be named
+`id` or `score` either: each group carries its own, which `ORDER BY id` /
+`ORDER BY score` reads. Alias an aggregate to rename it.
 
 An ORDER BY item of a `GROUP BY` query names a column of the grouped rows: a
 SELECT aggregate repeated as an expression (`COUNT(*)` above, which sorts on

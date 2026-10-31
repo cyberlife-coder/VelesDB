@@ -64,22 +64,15 @@ fn test_aggregator_multiple_columns() {
 }
 
 #[test]
-fn test_result_to_json() {
+fn test_count_column_counts_non_null_values_of_any_type() {
     let mut agg = Aggregator::new();
-    agg.process_count();
-    agg.process_value("price", &serde_json::json!(50));
+    agg.process_value("status", &serde_json::json!("open"));
+    agg.process_value("status", &serde_json::json!(null));
+    agg.process_value("status", &serde_json::json!(3));
 
     let result = agg.finalize();
-    let json = result.to_json();
-
-    assert_eq!(
-        json.get("count").and_then(serde_json::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        json.get("sum_price").and_then(serde_json::Value::as_f64),
-        Some(50.0)
-    );
+    assert_eq!(result.counts.get("status"), Some(&2));
+    assert_eq!(result.sums.get("status"), Some(&3.0), "sums stay numeric");
 }
 
 #[test]

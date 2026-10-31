@@ -141,19 +141,9 @@ pub fn vector_group_score_is_average(aggregations: &[AggregateFunction]) -> bool
     let over_score = |function_type: AggregateType| {
         aggregations
             .iter()
-            .any(|agg| agg.function_type == function_type && is_score_argument(&agg.argument))
+            .any(|agg| agg.function_type == function_type && agg.argument == AggregateArg::Score)
     };
     over_score(AggregateType::Avg) && !over_score(AggregateType::Max)
-}
-
-/// The `score` pseudo-column, spelled as the keyword or as a column name in
-/// any letter case.
-fn is_score_argument(argument: &AggregateArg) -> bool {
-    match argument {
-        AggregateArg::Score => true,
-        AggregateArg::Column(column) => column.eq_ignore_ascii_case("score"),
-        AggregateArg::Wildcard => false,
-    }
 }
 
 /// Validates the output columns of an aggregate query: distinct names
@@ -172,8 +162,11 @@ pub(super) fn validate_grouped_rows(stmt: &SelectStatement) -> Result<(), Valida
 }
 
 /// Refuses (`V017`) an aggregate whose output field repeats another output
-/// column's name: a GROUP BY column, a selected column (WASM outputs a
-/// selected column outside GROUP BY too), or another aggregate.
+/// column's name: a GROUP BY column, a selected column, or another aggregate.
+/// A selected column outside GROUP BY counts although no grouped row carries
+/// it, so a name means one thing in the SELECT list. In a GROUP BY query an
+/// aggregate may not be named `id` or `score` either: each group carries its
+/// own, which ORDER BY `id` / `score` reads.
 fn validate_output_names(stmt: &SelectStatement) -> Result<(), ValidationError> {
     let aggregate_fields: Vec<String> = aggregations(stmt)
         .iter()
@@ -185,18 +178,27 @@ fn validate_output_names(stmt: &SelectStatement) -> Result<(), ValidationError> 
         }
         _ => &[],
     };
+    let reserved: &[&str] = if stmt.group_by.is_some() {
+        &["id", "score"]
+    } else {
+        &[]
+    };
     let mut names: HashSet<&str> = group_columns(stmt)
         .map(String::as_str)
         .chain(selected_columns.iter().map(|column| column.name.as_str()))
         .collect();
-    match aggregate_fields.iter().find(|field| !names.insert(field)) {
+    let clash = aggregate_fields
+        .iter()
+        .find(|field| reserved.contains(&field.as_str()) || !names.insert(field));
+    match clash {
         Some(field) => Err(ValidationError::new(
             ValidationErrorKind::DuplicateOutputColumn,
             None,
             field.clone(),
             format!(
-                "two output columns are named '{field}', so one would overwrite the other: \
-                 give the aggregate a distinct alias (AS ...)"
+                "an aggregate is output as '{field}', which another column of the result \
+                 already is (each group carries its own id and score): give it a distinct \
+                 alias (AS ...)"
             ),
         )),
         None => Ok(()),

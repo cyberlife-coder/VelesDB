@@ -35,7 +35,14 @@ const MAX_ARITHMETIC_DEPTH: u8 = 64;
 /// Returns `Err` for ORDER BY shapes WASM cannot evaluate (named-vector
 /// `similarity(field, $v)` or aggregate expressions outside aggregation), so
 /// the executor fails loud instead of returning scan order (#8a).
-pub(crate) fn sort_rows(stmt: &SelectStatement, rows: &mut [SearchResult]) -> Result<(), String> {
+/// `higher_is_better` is the collection metric's direction: `similarity()`
+/// sorts most similar first under `DESC` whatever the metric, as in core
+/// (`SelectOrderBy::directed`).
+pub(crate) fn sort_rows(
+    stmt: &SelectStatement,
+    rows: &mut [SearchResult],
+    higher_is_better: bool,
+) -> Result<(), String> {
     let Some(specs) = stmt.order_by.as_ref() else {
         return Ok(());
     };
@@ -43,7 +50,7 @@ pub(crate) fn sort_rows(stmt: &SelectStatement, rows: &mut [SearchResult]) -> Re
         return Ok(());
     }
     validate_order_by(specs)?;
-    rows.sort_by(|a, b| compare_rows(a, b, specs));
+    rows.sort_by(|a, b| compare_rows(a, b, specs, higher_is_better));
     Ok(())
 }
 
@@ -75,9 +82,14 @@ fn validate_order_by(specs: &[SelectOrderBy]) -> Result<(), String> {
 }
 
 /// Strict total order used by `sort_by` over a multi-key ORDER BY.
-fn compare_rows(a: &SearchResult, b: &SearchResult, specs: &[SelectOrderBy]) -> Ordering {
+fn compare_rows(
+    a: &SearchResult,
+    b: &SearchResult,
+    specs: &[SelectOrderBy],
+    higher_is_better: bool,
+) -> Ordering {
     for spec in specs {
-        let ord = compare_with_spec(a, b, spec);
+        let ord = spec.directed(compare_with_spec(a, b, spec), higher_is_better);
         if ord != Ordering::Equal {
             return ord;
         }
@@ -86,8 +98,9 @@ fn compare_rows(a: &SearchResult, b: &SearchResult, specs: &[SelectOrderBy]) -> 
     a.point.id.cmp(&b.point.id)
 }
 
+/// Compares two rows on one ORDER BY item, ascending.
 fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -> Ordering {
-    let ord = match &spec.expr {
+    match &spec.expr {
         OrderByExpr::Field(name) => compare_field(a, b, name),
         OrderByExpr::SimilarityBare => compare_scores(a, b),
         OrderByExpr::Arithmetic(expr) => {
@@ -98,11 +111,6 @@ fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -
         // Similarity / Aggregate were rejected by `validate_order_by`; treat
         // as equal defensively (the non_exhaustive enum may add variants).
         _ => Ordering::Equal,
-    };
-    if spec.descending {
-        ord.reverse()
-    } else {
-        ord
     }
 }
 
@@ -135,13 +143,14 @@ fn compare_f32(a: f32, b: f32) -> Ordering {
     }
 }
 
-/// Pulls a column from the payload (supports dot-nested paths).
+/// Pulls a column from the payload: the key itself first (a group row stores
+/// `first_meta.title` flat), then the dot-nested path — core's `row_field`.
 fn extract_payload_field(result: &SearchResult, column: &str) -> Option<serde_json::Value> {
     result
         .point
         .payload
         .as_ref()
-        .and_then(|p| crate::filter::get_nested_field(p, column).cloned())
+        .and_then(|p| velesdb_core::velesql::row_field(p, column).cloned())
 }
 
 /// Evaluates an arithmetic ORDER BY expression for a single row, mirroring

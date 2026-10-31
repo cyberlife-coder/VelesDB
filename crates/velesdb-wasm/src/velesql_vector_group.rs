@@ -1,21 +1,21 @@
 //! ORDER BY for a vector GROUP BY (`NEAR` + GROUP BY) in the WASM executor.
 //!
-//! Core returns a vector GROUP BY as search results, one per group: scored by
-//! its best row (or by the average, see
-//! [`vector_group_score_is_average`]), identified by that best row, carrying
-//! the group row as payload, and sorted by the plain search ORDER BY once each
-//! ORDER BY aggregate has become the field the group stores it in. This module
-//! builds the same results from the WASM group rows and sorts them with the
-//! WASM search ORDER BY (`velesql_orderby::sort_rows`), so `similarity()`,
-//! arithmetic, fields and aggregates order the groups as they do in core.
+//! Core's engine-shared `Grouper` already made each group what core's vector
+//! GROUP BY returns: its best row's id, the group score, and the group row,
+//! best group first. Core then sorts those search results with its search
+//! ORDER BY once each ORDER BY aggregate has become the field the group
+//! stores it in; this module does the same with the WASM search ORDER BY
+//! (`velesql_orderby::sort_rows`), so `similarity()`, arithmetic, fields and
+//! aggregates order the groups as they do in core, and each row keeps the
+//! group's id and score.
 
 use velesdb_core::point::{Point, SearchResult};
-use velesdb_core::velesql::{vector_group_score_is_average, AggregateFunction, SelectStatement};
+use velesdb_core::velesql::{GroupOutput, SelectStatement};
 
-use crate::velesql_aggregate::ScannedRow;
+use crate::velesql_result::QueryResultRow;
 
-/// Orders finished vector GROUP BY rows, each beside the scanned rows of its
-/// group, by the statement's ORDER BY.
+/// Orders finished vector GROUP BY groups by the statement's ORDER BY, under
+/// the collection metric's direction (`higher_is_better`).
 ///
 /// # Errors
 ///
@@ -24,45 +24,31 @@ use crate::velesql_aggregate::ScannedRow;
 /// evaluate.
 pub(crate) fn order_groups(
     stmt: &SelectStatement,
-    aggregates: &[AggregateFunction],
-    groups: Vec<(serde_json::Value, Vec<ScannedRow<'_>>)>,
-) -> Result<Vec<serde_json::Value>, String> {
-    let average = vector_group_score_is_average(aggregates);
+    groups: Vec<GroupOutput>,
+    higher_is_better: bool,
+) -> Result<Vec<QueryResultRow>, String> {
     let stmt = stmt
         .order_by_aggregates_as_fields()
         .map_err(|e| e.to_string())?;
     let mut results: Vec<SearchResult> = groups
         .into_iter()
-        .map(|(row, rows)| {
-            let (id, score) = group_score(&rows, average);
-            SearchResult::new(Point::new(id, Vec::new(), Some(row)), score)
+        .map(|group| {
+            SearchResult::new(
+                Point::new(group.id, Vec::new(), Some(group.row)),
+                group.score,
+            )
         })
         .collect();
-    crate::velesql_orderby::sort_rows(&stmt, &mut results)?;
-    Ok(results
-        .into_iter()
-        .map(|result| result.point.payload.unwrap_or(serde_json::Value::Null))
-        .collect())
-}
-
-/// The id of a group's best row (the first, on a tie) and the group's score:
-/// that row's, or the mean over the group when `average`. A group holds at
-/// least the row that created it.
-fn group_score(rows: &[ScannedRow<'_>], average: bool) -> (u64, f32) {
-    let mut best = (0, f32::NEG_INFINITY);
-    let mut sum = 0.0_f32;
-    for &(id, score, _) in rows {
-        sum += score;
-        if score > best.1 {
-            best = (id, score);
-        }
-    }
-    if average {
-        // Reason: a group's row count is bounded by the scanned result set.
-        #[allow(clippy::cast_precision_loss)]
-        let count = rows.len() as f32;
-        (best.0, sum / count)
-    } else {
-        best
-    }
+    crate::velesql_orderby::sort_rows(&stmt, &mut results, higher_is_better)?;
+    results
+        .iter()
+        .map(|result| {
+            let row = result
+                .point
+                .payload
+                .as_ref()
+                .unwrap_or(&serde_json::Value::Null);
+            QueryResultRow::from_projected(result.point.id, result.score, row)
+        })
+        .collect()
 }
