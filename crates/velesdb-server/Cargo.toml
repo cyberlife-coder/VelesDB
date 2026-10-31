@@ -30,7 +30,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+# `json`: `[logging] format = "json"`. Adds one crate, `tracing-serde`; the
+# rest of what it needs (`serde`, `serde_json`) is already linked.
+tracing-subscriber = { workspace = true, features = ["json"] }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }

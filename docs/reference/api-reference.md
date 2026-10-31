@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-10-29 (VelesDB v8.0.0). The machine-readable source of
+> **Last updated**: 2026-10-30 (VelesDB v8.0.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -45,6 +45,24 @@ Per-IP rate limiting is enabled by default (100 requests/second per IP). When a 
 | `retry-after` | integer | Seconds to wait before retrying (only on 429 responses) |
 
 **Configuration**: See [CONFIGURATION.md](../guides/CONFIGURATION.md#rate-limiting) for CLI, environment variable, and TOML options.
+
+### Browser origins and hosts (CORS, the origin guard, the Host check)
+
+Every request whose `Host` is not `localhost`, a `127.0.0.0/8` address,
+`[::1]`, the bind host (unless `0.0.0.0`/`::`) or an entry of
+`[server] allowed_hosts` is refused with `421 Misdirected Request`, whatever
+its method; `/health` and `/ready` are exempt, and `X-Forwarded-Host` is never
+read. The `421` carries no CORS header.
+
+On every route, a request whose method is not `GET`, `HEAD` or `OPTIONS` and
+that carries an `Origin` header is refused with `403` unless that origin is
+the server's own (its host and port equal the request's `Host`, the scheme's
+default port — 80 for `http`, 443 for `https` — filled in where either side
+leaves it out) or allowed by
+`[server] cors_origins` (`["*"]`: any). Requests without `Origin` — curl, the
+SDKs, other servers — are not affected. No CORS header is sent unless
+`cors_origins` is configured. This `403` is not repeated in each operation of
+`openapi.yaml`, nor is the `421`. See [SERVER_SECURITY.md](../guides/SERVER_SECURITY.md#6-cors-origins-and-hosts).
 
 ---
 
@@ -91,14 +109,20 @@ Create a new collection.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | name | string | Yes | Unique collection name |
-| dimension | integer | Yes (vector/graph) | Vector dimension (e.g., 768). Omit for `metadata_only` |
-| metric | string | No | Distance metric (see table below) |
+| dimension | integer | Yes (vector) | Vector dimension (e.g., 768). For `graph`, optional: gives the nodes embeddings of this dimension (searchable through `POST /collections/{name}/graph/search` and VelesQL `NEAR`); omit it for a graph without embeddings. Omit for `metadata_only` |
+| metric | string | No | Distance metric (see table below) — of the vectors, or of a graph's node embeddings when `dimension` is set |
 | storage_mode | string | No | `full` (default), `sq8`, or `binary` quantization |
 | collection_type | string | No | `vector` (default), `metadata_only`, or `graph` (see [CollectionType](#collectiontype-descriptor)) |
 | hnsw_m | integer | No | Tuned HNSW: bi-directional links per node |
 | hnsw_ef_construction | integer | No | Tuned HNSW: candidate list size during build |
 | hnsw_alpha | float | No | VAMANA neighbor-diversification factor (≥ 1.0) |
 | hnsw_max_elements | integer | No | Initial HNSW capacity (pre-size for bulk import) |
+
+`storage_mode`, the `hnsw_*` fields and the advanced overrides apply to
+`vector` collections. A `graph` collection with `dimension` takes its node
+index parameters from the `[hnsw]` config section and the dimension-based
+defaults; besides `name`, `collection_type` and `graph_schema`, `metric` is
+the only field it reads.
 
 **Distance Metrics:**
 
@@ -361,8 +385,8 @@ queryable via VelesQL over its payload, but is not added to any HNSW index.
 
 ### POST /collections/:name/points/raw
 
-Bulk-upsert points via a compact binary wire format (`application/octet-stream`)
-for zero-copy, high-throughput ingestion. This avoids the per-point JSON
+Bulk-upsert points via a compact binary wire format (`application/octet-stream`;
+any other `Content-Type` is refused with `415`) for zero-copy, high-throughput ingestion. This avoids the per-point JSON
 overhead of `POST /collections/:name/points`. **Payloads are not carried on this
 path** — use the JSON endpoint when you need them.
 
@@ -463,6 +487,7 @@ cursor) are serialized as strings (see the Point ID encoding note in
 ### POST /collections/:name/points/stream
 
 Stream-upsert points as NDJSON (`application/x-ndjson`, one JSON point per line).
+Any other `Content-Type` is refused with `415`.
 Points are accumulated into micro-batches and flushed via bulk upsert. The
 response includes a `network_errors` count: a non-zero value means the HTTP body
 stream was truncated and fewer points than sent may have been received.
@@ -718,7 +743,11 @@ containing the structured VELES-XXX error code (when applicable):
 The `code` field is omitted when no structured error code applies (e.g., generic
 validation errors). See [ERROR_CODES.md](ERROR_CODES.md) for the full list of codes.
 
-For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized:
+For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized. A statement that fails during execution answers `422` when the failure is the client's, and the engine's own status otherwise (`500` for a storage, I/O or internal fault, `503` for a timeout under the server's limit, the memory budget, an open circuit breaker or a locked database). A `WITH (timeout_ms = N)` tighter than the server's limit that runs out is the client's own budget: `422` with `VELESQL_EXECUTION_ERROR` (code `VELES-027` in the message), not `408`.
+
+The search endpoints (`/search`, `/search/ids`, `/search/text`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids`) answer a failed search, and a read the access gate denied, with the error's canonical status: `4xx` for the client's errors, `5xx` for the engine's. A search's `timeout_ms` can shorten the server's `timeout_ms`, never lengthen it, and `0` keeps the server's limit (the same resolution as VelesQL `WITH (timeout_ms = N)`); one strictly tighter than the server's limit that runs out answers `408`, the server's limit running out answers `503`.
+
+The graph endpoints answer a core error, and a read the access gate denied, the same way: the error's canonical status and its `VELES-NNN` code. A scope narrowing that batch search, multi-query search or a graph read cannot apply answers `400` `VELES-009`.
 
 ```json
 {
@@ -738,8 +767,11 @@ For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), 
 | 201 | Created |
 | 400 | Bad Request (invalid input) |
 | 404 | Not Found |
+| 408 | Request Timeout (the request's own `timeout_ms` ran out) |
+| 422 | Unprocessable Entity (a VelesQL statement the client got wrong) |
 | 429 | Too Many Requests (rate limit exceeded or streaming backpressure) |
 | 500 | Internal Server Error |
+| 503 | Service Unavailable (circuit breaker open, a timeout under the server's limit, the memory budget) |
 
 ---
 
@@ -918,7 +950,7 @@ The query language itself is documented once, not per surface. For the full
 syntax — DDL, DML, `vector NEAR`, sparse and hybrid search, `MATCH`
 traversals, `WHERE` operators, scalar subqueries, pagination — see the
 [VelesQL cheat sheet](./VELESQL_CHEATSHEET.md) (every example there is
-parse-checked in CI) and, normatively, [`VELESQL_SPEC.md`](../VELESQL_SPEC.md).
+parsed and validated in CI) and, normatively, [`VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
 ### VelesQL v2.0 Features
 
@@ -1315,8 +1347,11 @@ The values above are the defaults a server starts with
 (`velesdb_core::QueryLimits::default()`): depth 10, 100 000 intermediate
 results, 100 MiB per query, 30 s, a rate limit of 100 000 queries per second
 per client, and a circuit breaker that opens after 5 consecutive failures for
-30 s. A
-`timeout_ms` of `0` disables the timeout.
+30 s. Only engine failures count — storage, I/O and internal errors, a
+timeout under this `timeout_ms`, the memory budget; an error answered with a
+`4xx` (the client's own, its request's own `timeout_ms` included) never
+does, nor does a read the access gate denied. A `timeout_ms` of `0` disables
+the timeout.
 
 ### PUT /guardrails
 

@@ -2,6 +2,7 @@
 
 pub(crate) mod batch;
 pub(crate) mod multi;
+mod outcome;
 mod pipeline;
 mod workers;
 
@@ -24,10 +25,13 @@ use crate::types::{
 use crate::AppState;
 
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
+use outcome::{
+    finish_search_ids_with_cb, finish_search_with_cb, read_refused, request_timeout_ms,
+    search_timeout_response,
+};
 use pipeline::{
-    execute_dense_search_ids, execute_search_request, finish_search_ids_with_cb,
-    finish_search_with_cb, finish_search_with_status, ids_fast_path_eligible, parse_mode_or_400,
-    parse_optional_filter, timeout_response, validate_ef_search_or_400, validate_query_dimension,
+    execute_dense_search_ids, execute_search_request, ids_fast_path_eligible, parse_mode_or_400,
+    parse_optional_filter, validate_ef_search_or_400, validate_query_dimension,
 };
 use workers::{run_blocking_search, run_search_with_optional_timeout};
 
@@ -88,25 +92,6 @@ fn search_request_pre_check(
     Ok((collection, quality_mode))
 }
 
-/// Executes the full search pipeline and records circuit-breaker on failure.
-///
-/// Shared by `/search` and `/search/ids` (both accept `SearchRequest`).
-/// `quality_mode` is the request's `mode`, which the handler parsed with
-/// [`parse_mode_or_400`] before this point, so that a bad one is refused as
-/// the client's error and never counted as the collection's failure (#2267).
-#[allow(clippy::result_large_err)]
-fn execute_with_cb(
-    state: &AppState,
-    name: &str,
-    collection: &VectorCollection,
-    req: &mut SearchRequest,
-    quality_mode: Option<velesdb_core::SearchQuality>,
-) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
-    execute_search_request(state, name, collection, req, quality_mode).inspect_err(|_| {
-        collection.guard_rails().circuit_breaker.record_failure();
-    })
-}
-
 /// Search for similar vectors.
 ///
 /// Auto-detects search mode:
@@ -123,6 +108,10 @@ fn execute_with_cb(
     request_body = SearchRequest,
     responses(
         (status = 200, description = "Search results", body = SearchResponse),
+        (status = 408, description = "The request's own timeout_ms ran out", body = crate::types::ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
         (
@@ -147,18 +136,19 @@ pub async fn search(
         Err(resp) => return resp,
     };
 
-    // F-03: honour the per-request `timeout_ms` budget. The synchronous
+    // F-03: honour the per-request `timeout_ms` budget, clamped to the
+    // server's limit (`request_timeout_ms`). The synchronous
     // search runs on a blocking worker so the async runtime stays
     // responsive and the timer can actually fire. See
     // `run_search_with_optional_timeout` for the cancellation contract.
-    let timeout_ms = req.timeout_ms;
+    let timeout_ms = request_timeout_ms(&collection, req.timeout_ms);
     let state_for_work = Arc::clone(&state);
     let name_for_work = name.clone();
     let collection_for_work = collection.clone();
 
     let execution = run_search_with_optional_timeout(timeout_ms, move || {
         let mut owned_req = req;
-        execute_search_with_cb_owned(
+        execute_search_request(
             &state_for_work,
             &name_for_work,
             &collection_for_work,
@@ -170,44 +160,33 @@ pub async fn search(
 
     let search_result = match execution {
         Ok(Ok(inner)) => inner,
+        // The request refused before any search ran (a bad body, a read the
+        // gate denied): not the collection's failure, so nothing is recorded.
         Ok(Err(resp)) => {
             state.operational_metrics.inc_errors();
             return resp;
         }
         Err(workers::TimeoutElapsed) => {
             state.operational_metrics.inc_errors();
-            // Timeout elapsed: record the circuit-breaker failure and
-            // return a 408 with the budget echoed back to the caller.
-            collection.guard_rails().circuit_breaker.record_failure();
-            let ms = timeout_ms.unwrap_or_default();
-            return timeout_response(&name, ms);
+            return search_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
         }
     };
 
     finish_search_with_cb(&state, &name, start, &collection, search_result)
 }
 
-/// Owned-request wrapper around [`execute_with_cb`] used by the
-/// `run_search_with_optional_timeout` spawn_blocking closure. Having a
-/// dedicated function keeps the move-semantics inside the closure
-/// explicit and avoids lifetime juggling in the handler body.
-#[allow(clippy::result_large_err)]
-fn execute_search_with_cb_owned(
-    state: &AppState,
-    name: &str,
-    collection: &VectorCollection,
-    req: &mut SearchRequest,
-    quality_mode: Option<velesdb_core::SearchQuality>,
-) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
-    execute_with_cb(state, name, collection, req, quality_mode)
-}
-
 /// Owned-request variant for `/search/ids`: takes the `search_ids` fast path
 /// (no payload hydration) for plain dense requests, otherwise falls back to
-/// the generic pipeline. Records a circuit-breaker failure on a hard error so
-/// both paths stay consistent with [`execute_with_cb`].
+/// the generic pipeline.
+///
+/// Neither path touches the circuit breaker. Their `Err` refuses the request
+/// before any search runs — a bad body (a wrong dimension, a bad filter,
+/// sparse input or fusion) or a read the gate denied ([`read_refused`]) —
+/// and is never the collection's failure; the core outcome in `Ok` is
+/// recorded by [`finish_search_ids_with_cb`], which counts only an engine
+/// failure (`CircuitBreaker::record_error`).
 #[allow(clippy::result_large_err)]
-fn execute_search_ids_with_cb_owned(
+fn execute_search_ids_owned(
     state: &AppState,
     name: &str,
     collection: &VectorCollection,
@@ -215,10 +194,9 @@ fn execute_search_ids_with_cb_owned(
     quality_mode: Option<velesdb_core::SearchQuality>,
 ) -> Result<velesdb_core::Result<Vec<velesdb_core::SearchResult>>, axum::response::Response> {
     if ids_fast_path_eligible(req) {
-        return execute_dense_search_ids(state, name, collection, req)
-            .inspect_err(|_| collection.guard_rails().circuit_breaker.record_failure());
+        return execute_dense_search_ids(state, name, collection, req);
     }
-    execute_with_cb(state, name, collection, req, quality_mode)
+    execute_search_request(state, name, collection, req, quality_mode)
 }
 
 /// Search using BM25 full-text search.
@@ -232,6 +210,10 @@ fn execute_search_ids_with_cb_owned(
     request_body = TextSearchRequest,
     responses(
         (status = 200, description = "Text search results", body = SearchResponse),
+        (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     )
@@ -278,9 +260,10 @@ pub async fn text_search(
             k: top_k,
             filter: filter.as_ref(),
         };
-        Ok(state_for_work
+        state_for_work
             .db
-            .gated_search(&name_for_work, None, None, read))
+            .gated_search_outcome(&name_for_work, None, None, read)
+            .map_err(|refusal| read_refused(&refusal))
     })
     .await;
 
@@ -292,14 +275,7 @@ pub async fn text_search(
         }
     };
 
-    finish_search_with_status(
-        &state,
-        &name,
-        start,
-        &collection,
-        StatusCode::INTERNAL_SERVER_ERROR,
-        search_result,
-    )
+    finish_search_with_cb(&state, &name, start, &collection, search_result)
 }
 
 /// Hybrid search combining vector similarity and BM25 text search.
@@ -313,6 +289,9 @@ pub async fn text_search(
     request_body = HybridSearchRequest,
     responses(
         (status = 200, description = "Hybrid search results", body = SearchResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
@@ -370,9 +349,10 @@ pub async fn hybrid_search(
             alpha: Some(vector_weight),
             filter: filter.as_ref(),
         };
-        Ok(state_for_work
+        state_for_work
             .db
-            .gated_search(&name_for_work, None, None, read))
+            .gated_search_outcome(&name_for_work, None, None, read)
+            .map_err(|refusal| read_refused(&refusal))
     })
     .await;
 
@@ -403,6 +383,10 @@ pub async fn hybrid_search(
     request_body = SearchRequest,
     responses(
         (status = 200, description = "IDs-only search results", body = SearchIdsResponse),
+        (status = 408, description = "The request's own timeout_ms ran out", body = crate::types::ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = crate::types::ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = crate::types::ErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::ErrorResponse),
         (status = 400, description = "Invalid request", body = crate::types::ErrorResponse),
         (
@@ -427,18 +411,19 @@ pub async fn search_ids(
         Err(resp) => return resp,
     };
 
-    // F-03: honour the per-request `timeout_ms` budget and run the
+    // F-03: honour the per-request `timeout_ms` budget (clamped to the
+    // server's limit by `request_timeout_ms`) and run the
     // CPU-bound search on a blocking worker so the async runtime stays
     // responsive. Mirrors the pattern used by `search` so both endpoints
     // share the same timeout semantics for the same `SearchRequest` type.
-    let timeout_ms = req.timeout_ms;
+    let timeout_ms = request_timeout_ms(&collection, req.timeout_ms);
     let state_for_work = Arc::clone(&state);
     let name_for_work = name.clone();
     let collection_for_work = collection.clone();
 
     let execution = run_search_with_optional_timeout(timeout_ms, move || {
         let mut owned_req = req;
-        execute_search_ids_with_cb_owned(
+        execute_search_ids_owned(
             &state_for_work,
             &name_for_work,
             &collection_for_work,
@@ -456,9 +441,7 @@ pub async fn search_ids(
         }
         Err(workers::TimeoutElapsed) => {
             state.operational_metrics.inc_errors();
-            collection.guard_rails().circuit_breaker.record_failure();
-            let ms = timeout_ms.unwrap_or_default();
-            return timeout_response(&name, ms);
+            return search_timeout_response(&collection, &name, timeout_ms.unwrap_or_default());
         }
     };
 

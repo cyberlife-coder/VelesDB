@@ -93,7 +93,7 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
-    /// The validation code (`V0xx`) the refusal must carry.
+    /// The validation code (`V0xx`) the refusal must carry, as `[V0xx]`.
     expected_code: String,
 }
 
@@ -283,7 +283,7 @@ fn test_velesql_executor_conformance_rejected_cases() {
             case.id, case.query
         ));
         assert!(
-            err.contains(&case.expected_code),
+            err.contains(&format!("[{}]", case.expected_code)),
             "rejected case {} refused without {}: {err}",
             case.id,
             case.expected_code

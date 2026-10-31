@@ -27,6 +27,9 @@ fn exceeded(limit: LimitType, violation: GuardRailViolation) -> GuardRailViolati
 pub struct QueryContext {
     /// Query limits configuration.
     pub limits: QueryLimits,
+    /// Whose budget `limits.timeout_ms` is; set by
+    /// [`set_client_timeout_ms`](Self::set_client_timeout_ms).
+    timeout_budget: crate::error::TimeoutBudget,
     /// Query start time.
     start_time: Instant,
     /// Current traversal depth.
@@ -46,6 +49,10 @@ pub struct QueryContext {
     /// the CBO `Parallel` strategy, which runs on a rayon worker thread
     /// (a thread-local channel would silently lose that leg's record).
     executed_filter_strategy: Arc<ExecutedStrategyCell>,
+    /// Milliseconds added to the measured time (test-only fault hook; see
+    /// [`QueryClockSkewGuard`]).
+    #[cfg(any(test, feature = "test-fault-injection"))]
+    clock_skew_ms: u64,
 }
 
 /// Shared cell the executor records the ran filter strategy into.
@@ -87,12 +94,45 @@ impl ExecutedStrategyCell {
     }
 }
 
+/// Test-only fault hook: while bound, every [`QueryContext`] that the
+/// [`GuardRails`](super::GuardRails) it was activated on creates measures its
+/// elapsed time `skew_ms` later than the wall clock, so a test can make a
+/// query run past a time budget deterministically instead of racing one.
+///
+/// The skew belongs to that one `GuardRails` — one collection — so tests
+/// running in parallel on other collections never see it. Dropping the guard
+/// resets it, panics included. Bind it to a named variable
+/// (`let _skew = ...`): `let _ = ...` drops it at once.
+#[cfg(any(test, feature = "test-fault-injection"))]
+#[derive(Debug)]
+pub struct QueryClockSkewGuard(Arc<AtomicU64>);
+
+#[cfg(any(test, feature = "test-fault-injection"))]
+impl QueryClockSkewGuard {
+    /// Starts skewing the clock of every query context `guard_rails`
+    /// creates by `skew_ms`.
+    #[must_use = "the guard must be bound to a variable or the skew resets immediately"]
+    pub fn activate(guard_rails: &super::GuardRails, skew_ms: u64) -> Self {
+        let skew = guard_rails.clock_skew();
+        skew.store(skew_ms, Ordering::SeqCst);
+        Self(skew)
+    }
+}
+
+#[cfg(any(test, feature = "test-fault-injection"))]
+impl Drop for QueryClockSkewGuard {
+    fn drop(&mut self) {
+        self.0.store(0, Ordering::SeqCst);
+    }
+}
+
 impl QueryContext {
     /// Creates a new query context with the given limits.
     #[must_use]
     pub fn new(limits: QueryLimits) -> Self {
         Self {
             limits,
+            timeout_budget: crate::error::TimeoutBudget::Configured,
             start_time: Instant::now(),
             current_depth: AtomicU64::new(0),
             current_cardinality: AtomicUsize::new(0),
@@ -100,7 +140,18 @@ impl QueryContext {
             traversal_nodes_visited: AtomicU64::new(0),
             traversal_edges_traversed: AtomicU64::new(0),
             executed_filter_strategy: Arc::new(ExecutedStrategyCell::default()),
+            #[cfg(any(test, feature = "test-fault-injection"))]
+            clock_skew_ms: 0,
         }
+    }
+
+    /// Measures this context's time `skew_ms` later than the wall clock
+    /// (test-only fault hook; see [`QueryClockSkewGuard`]).
+    #[cfg(any(test, feature = "test-fault-injection"))]
+    #[must_use]
+    pub(crate) fn with_clock_skew_ms(mut self, skew_ms: u64) -> Self {
+        self.clock_skew_ms = skew_ms;
+        self
     }
 
     /// Returns the shared cell the executor records the ran filter strategy
@@ -118,6 +169,28 @@ impl QueryContext {
         self.executed_filter_strategy.get()
     }
 
+    /// Applies the time budget the request asked for (`VelesQL`
+    /// `WITH (timeout_ms = N)`), as
+    /// [`QueryLimits::client_timeout_ms`] resolves it against the server's
+    /// limit: never longer than that limit, and `0` keeps it.
+    ///
+    /// A timeout under the result is classified by
+    /// [`QueryLimits::timeout_budget`]: the client's only when its budget is
+    /// strictly tighter than the server's limit.
+    pub fn set_client_timeout_ms(&mut self, requested_ms: u64) {
+        let effective_ms = self.limits.client_timeout_ms(requested_ms);
+        self.timeout_budget = self.limits.timeout_budget(effective_ms);
+        self.limits.timeout_ms = effective_ms;
+    }
+
+    /// Milliseconds since the query started, as the timeout check sees them.
+    fn elapsed_ms(&self) -> u64 {
+        let measured = self.start_time.elapsed().as_millis() as u64;
+        #[cfg(any(test, feature = "test-fault-injection"))]
+        let measured = measured.saturating_add(self.clock_skew_ms);
+        measured
+    }
+
     /// Checks if the query has timed out (US-001).
     ///
     /// # Errors
@@ -129,13 +202,14 @@ impl QueryContext {
         if self.limits.timeout_ms == 0 {
             return Ok(());
         }
-        let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
+        let elapsed_ms = self.elapsed_ms();
         if elapsed_ms >= self.limits.timeout_ms {
             return Err(exceeded(
                 LimitType::Timeout,
                 GuardRailViolation::Timeout {
                     max_ms: self.limits.timeout_ms,
                     elapsed_ms,
+                    budget: self.timeout_budget,
                 },
             ));
         }

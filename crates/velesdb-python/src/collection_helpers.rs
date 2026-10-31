@@ -119,7 +119,7 @@ pub fn core_err(e: velesdb_core::Error) -> PyErr {
         | E::ColumnStoreError(_)
         | E::GpuError(_)
         | E::EpochMismatch(_)
-        | E::GuardRail(_)
+        | E::GuardRail { .. }
         | E::TrainingFailed(_)
         | E::SparseIndexError(_)
         | E::SnapshotBuildFailed(_)

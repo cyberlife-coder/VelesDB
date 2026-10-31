@@ -31,9 +31,8 @@ from llamaindex_velesdb.security import (
     validate_named_sparse_vector,
 )
 from velesdb_common.collection_admin import CollectionAdminMixin
-from velesdb_common.ids import stable_hash_id as _stable_hash_id
 from velesdb_common.scores import metric_higher_is_better, to_similarity
-from llamaindex_velesdb._common import open_database as _open_database
+from llamaindex_velesdb._common import open_database as _open_database, point_id
 from llamaindex_velesdb.filter_ops import metadata_filters_to_core_filter
 from llamaindex_velesdb.node_builder import (
     validate_all_embeddings as _validate_all_embeddings,
@@ -390,7 +389,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
             return
 
         self._delete_nodes_of_ref_doc(collection, ref_doc_id)
-        collection.delete([_stable_hash_id(ref_doc_id)])
+        collection.delete([point_id(ref_doc_id)])
 
     def _open_existing_collection(self) -> Optional[velesdb.Collection]:
         """Bind to the named collection if it already exists on disk."""
@@ -523,23 +522,23 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     def get_nodes(self, node_ids: List[str], **kwargs: Any) -> List[TextNode]:
         """Retrieve nodes by their LlamaIndex string IDs.
 
-        The string IDs are hashed through ``_stable_hash_id`` before the
-        VelesDB lookup, matching the insertion path in ``node_builder``.
+        The string IDs go through ``point_id`` before the VelesDB lookup,
+        as on the insertion path in ``node_builder``.
         For callers that already hold the hashed integer IDs (e.g. graph
         traversals), use :meth:`get_nodes_by_int_ids` to avoid an extra
         round of hashing.
         """
         if not node_ids:
             return []
-        return self.get_nodes_by_int_ids([_stable_hash_id(nid) for nid in node_ids])
+        return self.get_nodes_by_int_ids([point_id(nid) for nid in node_ids])
 
     def get_nodes_by_int_ids(self, int_ids: List[int]) -> List[TextNode]:
         """Retrieve nodes by their VelesDB **internal integer point IDs**.
 
         Use this when callers already hold the int IDs that VelesDB
-        stores (e.g. hash-based IDs produced by ``stable_hash_id`` during
-        insertion, or IDs returned from a graph traversal). Passing those
-        ints back through :meth:`get_nodes` would call ``_stable_hash_id``
+        stores (e.g. IDs produced by ``point_id`` during insertion, or IDs
+        returned from a graph traversal). Passing those ints back through
+        :meth:`get_nodes` would call ``point_id``
         on the string form of an already-hashed int and silently return
         nothing.
         """

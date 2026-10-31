@@ -4,7 +4,7 @@ This document lists every VelesQL feature with its parser and executor status.
 A feature can be **Parsed** (the grammar + AST accept it) without being
 **Executed** (the query engine acts on it at runtime).
 
-> Last updated: 2026-10-29 (VelesDB v8.0.0)
+> Last updated: 2026-10-30 (VelesDB v8.0.0)
 
 ## Fully Supported (Parsed AND Executed)
 
@@ -26,9 +26,9 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `LEFT JOIN` | `ast/join.rs:JoinType::Left` | `search/query/join.rs:192-226` | EPIC-031 US-004 |
 | `RIGHT JOIN` | `ast/join.rs:JoinType::Right` | `search/query/join.rs` | EPIC-031 US-004 |
 | `FULL JOIN` | `ast/join.rs:JoinType::Full` | `search/query/join.rs` | EPIC-031 US-004 |
-| `GROUP BY` | `ast/aggregation.rs:GroupByClause` | `velesql/aggregator.rs` | |
-| `HAVING` | `ast/aggregation.rs:HavingClause` | `velesql/aggregator.rs` | |
-| Aggregate functions | `ast/aggregation.rs` | `velesql/aggregator.rs` | COUNT, SUM, AVG, MIN, MAX |
+| `GROUP BY` | `ast/aggregation.rs:GroupByClause` | `velesql/grouping.rs:Grouper` | One grouping for core SQL `GROUP BY`, vector `GROUP BY` and the WASM executor; ORDER BY over grouped rows resolves through `velesql/grouped_order.rs` |
+| `HAVING` | `ast/aggregation.rs:HavingClause` | `velesql/grouping.rs:HavingClause::accepts` | Any aggregate, listed in SELECT or not |
+| Aggregate functions | `ast/aggregation.rs` | `velesql/aggregator.rs` | COUNT, SUM, AVG, MIN, MAX, FIRST; output key `AggregateFunction::result_key` in every engine |
 | `USING FUSION(strategy=...)` | `ast/fusion.rs:FusionClause` | `search/query/sparse_dispatch.rs:resolve_fusion_strategy` + `hybrid_sparse.rs` | Honored: RRF, RSF, average, maximum, weighted (RSF/weighted use `dense_weight`/`sparse_weight`) |
 | `WHERE vector NEAR_FUSED [...]` | `grammar.pest:vector_fused_search` | `search/query/fused_dispatch.rs` | Executable multi-vector fusion via `multi_query_search`; honors `rrf`/`average`/`maximum` (others fall back to RRF). Must be the only vector predicate, `AND`-able with a metadata filter only |
 | `ALTER COLLECTION ... SET (auto_reindex=...)` | `ast/ddl.rs` | `database/ddl_executor.rs:execute_alter_collection` | Applies and persists the auto-reindex policy (restored on next open) |
@@ -63,8 +63,10 @@ incorrect or empty results at execution time.
 | Feature | Parser source | Status | Notes |
 |---------|--------------|--------|-------|
 | Correlated subqueries | `grammar.pest:subquery_expr`, `ast/values.rs:Subquery` | Parsed, then rejected at validation with V010 (SubqueryNotExecutable). Non-correlated scalar subqueries (e.g. `WHERE price > (SELECT AVG(price) FROM products)`) **are** executed: they are evaluated and substituted as literals before validation runs (`velesql/validation.rs:reject_subqueries`) | EPIC-039 |
-| MATCH `ORDER BY` aggregate (no `GROUP BY`) or bare alias | `match_exec/order_by.rs` | Parsed, then rejected at execution with VELES-018 (GraphNotSupported). Supported MATCH `ORDER BY`: `similarity()`, `similarity(field, $v)`, `depth`, `alias.property`, arithmetic over a bare property identifier (e.g. `year - 2000`) | EPIC-045 |
-| MATCH `ORDER BY` in the WASM/browser executor | `velesdb-wasm/src/velesql_match_orderby.rs` | Reduced subset of the row above: only `depth` and `alias.property` are honored. `similarity()`, `similarity(field, $v)`, arithmetic, and aggregate forms are rejected with an error because the browser MATCH path materializes no vector scores | Core supports the full set; this is a documented WASM-only divergence |
+| MATCH `ORDER BY` aggregate (no `GROUP BY`) or bare name (pattern alias, `RETURN` alias, unqualified property) | `velesql/validation_match_order.rs` | Parsed, then refused at validation with V015 (UnsupportedMatchOrderBy), before any traversal. Supported MATCH `ORDER BY`: `similarity()`, `similarity(field, $v)`, `depth`, `alias.property`, arithmetic over a bare property identifier (e.g. `year - 2000`) | EPIC-045 |
+| `GROUP BY` ORDER BY that names no column of the grouped rows (an aggregate missing from SELECT, a column outside `GROUP BY`, `similarity()` or arithmetic outside a vector `GROUP BY`) | `velesql/grouped_order.rs` | Parsed, then refused at validation with V016 (OrderByNotInResult); `rejected_cases` R010 | |
+| Aggregate query whose output columns share a name (a `GROUP BY` or selected column and an aggregate's name, two aggregates, an aggregate named `id`/`score` in a `GROUP BY` query) | `velesql/grouped_order.rs` | Parsed, then refused at validation with V017 (DuplicateOutputColumn); `rejected_cases` R011–R013 | |
+| MATCH `ORDER BY` in the WASM/browser executor | `velesdb-wasm/src/velesql_match_orderby.rs` | Reduced subset of the row above: only `depth` and `alias.property` are honored. Aggregates and bare names are refused at validation with V015, as in core (WASM runs core's `QueryValidator`; `rejected_cases` R005–R009). `similarity()`, `similarity(field, $v)` and arithmetic pass validation and are rejected by the WASM executor, because the browser MATCH path materializes no vector scores | Core supports the full set; the three score forms are a documented WASM-only divergence |
 
 ## Not Parsed (Not in Grammar)
 
@@ -78,6 +80,10 @@ parse errors.
 | Subqueries in `FROM` clause | Only collection names allowed in `FROM` |
 | `CASE WHEN ... THEN ... END` | Not in grammar |
 | `EXISTS` / `IN (subquery)` | Not in grammar |
+| Comma join (`FROM a, b`) | `FROM` takes one collection; use `JOIN ... ON` |
+| Date functions (`DATE()`, `EXTRACT()`, `DATE_TRUNC()`) | Only `NOW()` and `INTERVAL` exist; group on a stored day/month field |
+| `HAVING` on a SELECT alias (`HAVING cnt > 5`) | `HAVING` compares an aggregate function: `HAVING COUNT(*) > 5` |
+| Column-to-column comparison in `WHERE`/`HAVING` (`a.x = b.y`, `similarity(a.v, b.v)`; a `JOIN ... ON a.x = b.y` condition is parsed) | A comparison's right side is a literal, `$parameter`, `NOW()`/`INTERVAL` or scalar subquery; `similarity()` takes a `$parameter` or literal vector |
 | `CREATE TABLE` / DDL (SQL-standard) | VelesQL uses `CREATE COLLECTION` instead (v3.3); SQL `CREATE TABLE` is not supported |
 | Stored procedures / functions | Not applicable |
 

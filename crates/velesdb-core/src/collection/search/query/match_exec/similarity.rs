@@ -308,6 +308,7 @@ impl Collection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
+        super::super::match_dispatch::validate_match_clause(match_clause)?;
         // Raw traversal results (no ORDER BY/LIMIT yet): the similarity score is
         // computed below, then the shared finalize step applies ORDER BY + LIMIT.
         let results = self.execute_match_with_context(match_clause, params, None)?;

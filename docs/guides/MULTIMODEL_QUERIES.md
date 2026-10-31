@@ -13,7 +13,7 @@ collection = db.get_collection("documents")
 
 # Multi-model query: vector similarity + graph context
 results = collection.query(
-    "MATCH (d:Doc) WHERE vector NEAR $q LIMIT 20",
+    "MATCH (d:Doc) WHERE vector NEAR $q RETURN d LIMIT 20",
     params={"q": query_embedding}
 )
 
@@ -29,7 +29,7 @@ const db = new VelesDB({ url: 'http://localhost:8080', backend: 'rest' });
 await db.init();
 
 const response = await db.query('documents', 
-    'MATCH (d:Doc) WHERE vector NEAR $q LIMIT 20',
+    'MATCH (d:Doc) WHERE vector NEAR $q RETURN d LIMIT 20',
     { q: queryVector }
 );
 
@@ -45,7 +45,7 @@ use velesdb_core::{Database, velesql::Parser};
 let db = Database::open("./data")?;
 let collection = db.get_vector_collection("documents").unwrap();
 
-let query = Parser::parse("MATCH (d:Doc) WHERE vector NEAR $q LIMIT 20")?;
+let query = Parser::parse("MATCH (d:Doc) WHERE vector NEAR $q RETURN d LIMIT 20")?;
 let params = [("q".to_string(), serde_json::json!(query_vector))].into();
 
 let results = collection.execute_query(&query, &params)?;
@@ -59,7 +59,7 @@ for r in results {
 import { invoke } from '@tauri-apps/api/tauri';
 
 const results = await invoke('plugin:velesdb|query', {
-    query: 'MATCH (d:Doc) WHERE vector NEAR $q LIMIT 20',
+    query: 'MATCH (d:Doc) WHERE vector NEAR $q RETURN d LIMIT 20',
     params: { q: queryVector }
 });
 ```
@@ -93,6 +93,7 @@ SELECT * FROM collection WHERE similarity(vector, $query) > 0.8 LIMIT 10
 -- Find connected nodes
 MATCH (doc:Document)-[:REFERENCES]->(ref:Document)
 WHERE vector NEAR $query
+RETURN doc, ref
 LIMIT 20
 ```
 

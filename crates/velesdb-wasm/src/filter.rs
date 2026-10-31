@@ -1,126 +1,25 @@
-//! Filter evaluation for `VelesDB` WASM.
+//! Metadata filtering for `VelesDB` WASM.
 //!
-//! Provides JSON-based metadata filtering for vector search results.
-//! Supports conditions: eq, neq, gt, gte, lt, lte, and, or, not.
+//! A filter is `velesdb_core::filter::Filter` — parsed and evaluated by core,
+//! so `search_with_filter` selects exactly what velesdb-server selects for
+//! the same JSON, every condition kind included (`eq` … `geo_bbox`). The
+//! shared fixture `conformance/filter_wire_cases.json` holds one case per
+//! kind; core and this crate both run it.
 
 use serde_json::Value;
 
-/// Evaluates if a payload matches a filter condition.
+/// Parses `filter` as core's `Filter`, or returns core's own error message.
 ///
-/// # Filter Format
+/// `{}` and a flat field map such as `{"category": "tech"}` are refused
+/// ("Invalid filter: missing field \`condition\`"), as velesdb-server
+/// refuses them with `400`; so is `null`.
 ///
-/// ```json
-/// {
-///   "condition": {
-///     "type": "eq",
-///     "field": "category",
-///     "value": "tech"
-///   }
-/// }
-/// ```
+/// # Errors
 ///
-/// # Supported Condition Types
-///
-/// - `eq`: Equals
-/// - `neq`: Not equals
-/// - `gt`, `gte`: Greater than (or equal)
-/// - `lt`, `lte`: Less than (or equal)
-/// - `and`: All conditions must match
-/// - `or`: Any condition must match
-/// - `not`: Negates inner condition
-pub fn matches_filter(payload: &Value, filter: &Value) -> bool {
-    let condition = match filter.get("condition") {
-        Some(c) => c,
-        None => return true,
-    };
-
-    evaluate_condition(payload, condition)
-}
-
-/// Evaluates a single condition against a payload.
-///
-/// Fails closed on any condition it cannot interpret: an unrecognized
-/// `"type"`, a missing `"type"`, or a non-string one all match nothing.
-/// The permissive case is reserved for [`matches_filter`]'s *absent*
-/// `condition` key — "no filter" and "a filter this evaluator cannot
-/// interpret" are different claims, and only the second is an error.
-pub fn evaluate_condition(payload: &Value, condition: &Value) -> bool {
-    // A missing or non-string "type" funnels into the fail-closed arm below.
-    let cond_type = condition.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-    match cond_type {
-        "eq" => {
-            let (pv, v) = match extract_field_pair(payload, condition) {
-                Some(pair) => pair,
-                None => return false,
-            };
-            pv == v
-        }
-        "neq" => match extract_field_pair(payload, condition) {
-            Some((pv, v)) => pv != v,
-            None => {
-                // No condition value → neq always true (backward compat).
-                // Condition value present but field missing → also true.
-                condition.get("value").is_none()
-                    || condition
-                        .get("field")
-                        .and_then(|f| f.as_str())
-                        .is_some_and(|field| get_nested_field(payload, field).is_none())
-            }
-        },
-        "gt" => compare_numeric(payload, condition, |pv, v| pv > v),
-        "gte" => compare_numeric(payload, condition, |pv, v| pv >= v),
-        "lt" => compare_numeric(payload, condition, |pv, v| pv < v),
-        "lte" => compare_numeric(payload, condition, |pv, v| pv <= v),
-        // Composites fail closed on a malformed shape, for the same reason the
-        // unknown-`type` arm below does: a missing or non-array `conditions`
-        // (an object, number, string) — or a `not` with no `condition` — is a
-        // filter typo, and must not match every point. `is_some_and` yields
-        // `false` for that shape; a *present* empty array keeps its vacuous
-        // result (`all` -> true, `any` -> false), which is correct.
-        "and" => condition
-            .get("conditions")
-            .and_then(|c| c.as_array())
-            .is_some_and(|conds| conds.iter().all(|c| evaluate_condition(payload, c))),
-        "or" => condition
-            .get("conditions")
-            .and_then(|c| c.as_array())
-            .is_some_and(|conds| conds.iter().any(|c| evaluate_condition(payload, c))),
-        "not" => condition
-            .get("condition")
-            .is_some_and(|c| !evaluate_condition(payload, c)),
-        // Fail closed: an unrecognized/misspelled "type" must not silently
-        // match everything, or a filter typo would leak unfiltered results.
-        _ => false,
-    }
-}
-
-/// Extracts the (payload_value, condition_value) pair from a condition with "field" and "value" keys.
-fn extract_field_pair<'a>(
-    payload: &'a Value,
-    condition: &'a Value,
-) -> Option<(&'a Value, &'a Value)> {
-    let field = condition
-        .get("field")
-        .and_then(|f| f.as_str())
-        .unwrap_or("");
-    let cond_value = condition.get("value")?;
-    let payload_value = get_nested_field(payload, field)?;
-    Some((payload_value, cond_value))
-}
-
-/// Evaluates a numeric comparison condition using the given comparator.
-fn compare_numeric(payload: &Value, condition: &Value, cmp: fn(f64, f64) -> bool) -> bool {
-    let field = condition
-        .get("field")
-        .and_then(|f| f.as_str())
-        .unwrap_or("");
-    let cond_val = condition.get("value").and_then(|v| v.as_f64());
-    let payload_val = get_nested_field(payload, field).and_then(|v| v.as_f64());
-    match (payload_val, cond_val) {
-        (Some(pv), Some(v)) => cmp(pv, v),
-        _ => false,
-    }
+/// Returns core's `Invalid filter: …` message when `filter` does not
+/// deserialize as a core `Filter`.
+pub fn parse_filter(filter: Value) -> Result<velesdb_core::Filter, String> {
+    velesdb_core::Filter::from_json_value(filter)
 }
 
 /// Gets a nested field from a JSON payload using dot notation.

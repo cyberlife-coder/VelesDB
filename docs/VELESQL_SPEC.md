@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-09-23 · Applies to: velesdb-core 8.0.0
+**Version**: 3.10.0 | Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
 
 ---
 
@@ -111,7 +111,7 @@ The SELECT statement is the primary way to query data from collections.
 
 ### Full Syntax
 
-```sql
+```text
 [LET <name> = <expr> ...]
 SELECT [DISTINCT] <columns> [, <window_fn>() OVER (...) [AS <alias>] ...]
 FROM <collection> [[AS] <alias>]
@@ -139,8 +139,8 @@ SELECT * FROM documents
 ### Select Specific Columns
 
 ```sql
-SELECT id, score FROM documents
-SELECT id, payload.title, payload.category FROM documents
+SELECT id, score FROM documents;
+SELECT id, payload.title, payload.category FROM documents;
 ```
 
 ### Nested Payload Fields
@@ -148,8 +148,8 @@ SELECT id, payload.title, payload.category FROM documents
 Access nested JSON fields using dot notation at any depth:
 
 ```sql
-SELECT payload.metadata.author FROM articles
-SELECT payload.stats.views, payload.stats.likes FROM posts
+SELECT payload.metadata.author FROM articles;
+SELECT payload.stats.views, payload.stats.likes FROM posts;
 ```
 
 ### Column Aliases
@@ -157,8 +157,8 @@ SELECT payload.stats.views, payload.stats.likes FROM posts
 Rename output columns with `AS`:
 
 ```sql
-SELECT id, payload.title AS title FROM docs
-SELECT id AS doc_id, category AS cat FROM products
+SELECT id, payload.title AS title FROM docs;
+SELECT id AS doc_id, category AS cat FROM products;
 ```
 
 ### DISTINCT Modifier
@@ -199,9 +199,9 @@ SELECT ctx.* FROM docs AS ctx WHERE vector NEAR $v LIMIT 10
 ### Aggregate Functions in SELECT
 
 ```sql
-SELECT COUNT(*) FROM docs
-SELECT category, COUNT(*), AVG(price), MAX(rating) FROM products GROUP BY category
-SELECT SUM(quantity) AS total FROM orders
+SELECT COUNT(*) FROM docs;
+SELECT category, COUNT(*), AVG(price), MAX(rating) FROM products GROUP BY category;
+SELECT SUM(quantity) AS total FROM orders;
 ```
 
 | Function | Description | Argument |
@@ -233,10 +233,10 @@ Every engine groups the same way:
 Use the zero-argument `similarity()` to project the pre-computed search score:
 
 ```sql
-SELECT similarity() FROM docs WHERE vector NEAR $v LIMIT 10
-SELECT similarity() AS score FROM docs WHERE vector NEAR $v LIMIT 10
+SELECT similarity() FROM docs WHERE vector NEAR $v LIMIT 10;
+SELECT similarity() AS score FROM docs WHERE vector NEAR $v LIMIT 10;
 SELECT id, payload.title, similarity() AS relevance
-FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5
+FROM docs WHERE vector NEAR $v ORDER BY similarity() DESC LIMIT 5;
 ```
 
 ---
@@ -249,6 +249,8 @@ and `FROM documents AS d` are strictly equivalent. A bare alias may not be a
 reserved clause keyword (`WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`,
 `WITH`, `USING`, `UNION`, `INTERSECT`, `EXCEPT`, `INNER`, `LEFT`, `RIGHT`,
 `FULL`, `OUTER`, `JOIN`, `ON`, `AS`); quote it (`` `limit` ``) to use one anyway.
+`FROM` names exactly one collection: a comma-separated list (`FROM a, b`, an
+implicit cross join) is a parse error — combine collections with `JOIN ... ON`.
 
 ```sql
 -- Simple
@@ -272,7 +274,7 @@ Combine data from multiple collections.
 
 ### Syntax
 
-```sql
+```text
 SELECT <columns>
 FROM <table1> [[AS] <alias1>]
 [INNER | LEFT | RIGHT | FULL] JOIN <table2> [[AS] <alias2>]
@@ -284,7 +286,7 @@ FROM <table1> [[AS] <alias1>]
 | Type | Keyword | Description | Runtime |
 |------|---------|-------------|---------|
 | Inner | `JOIN` or `INNER JOIN` | Only matching rows from both sides | Fully executed |
-| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed (column-store, primary-key only — see `collection/search/query/join.rs:164-171`) |
+| Left | `LEFT JOIN` or `LEFT OUTER JOIN` | All left rows; unmatched right side gets `NULL`s for joined columns | Fully executed (column-store; primary key or a secondary-indexed field — see the constraint below) |
 | Right | `RIGHT JOIN` or `RIGHT OUTER JOIN` | All right rows; unmatched left side gets `NULL`s | Fully executed (`join.rs:155-162`) |
 | Full | `FULL JOIN` or `FULL OUTER JOIN` | All rows from both sides with `NULL`s on the unmatched side | Fully executed (`join.rs:155-171`) |
 
@@ -400,9 +402,9 @@ with `AND`, `OR`, and `NOT`.
 | `<=` | Less or equal | `rating <= 5` |
 
 ```sql
-SELECT * FROM products WHERE price > 100 AND category = 'electronics'
-SELECT * FROM users WHERE age >= 18 AND age <= 65
-SELECT * FROM docs WHERE status <> 'deleted'
+SELECT * FROM products WHERE price > 100 AND category = 'electronics';
+SELECT * FROM users WHERE age >= 18 AND age <= 65;
+SELECT * FROM docs WHERE status <> 'deleted';
 ```
 
 ### Logical Operators (AND, OR, NOT)
@@ -485,8 +487,8 @@ SELECT * FROM docs WHERE category IN ('tech', 'science', 'ai')
 SELECT * FROM docs WHERE id IN (1, 2, 3, 4, 5)
 
 -- NOT IN
-SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted')
-SELECT * FROM docs WHERE id NOT IN (1, 2, 3)
+SELECT * FROM docs WHERE category NOT IN ('draft', 'deleted');
+SELECT * FROM docs WHERE id NOT IN (1, 2, 3);
 ```
 
 **Index acceleration**: When a secondary index exists on the filtered column,
@@ -502,9 +504,9 @@ transparently. Results are identical in both paths.
 Test if a value falls within a range (inclusive):
 
 ```sql
-SELECT * FROM docs WHERE price BETWEEN 10 AND 100
-SELECT * FROM docs WHERE date BETWEEN '2024-01-01' AND '2024-12-31'
-SELECT * FROM products WHERE rating BETWEEN 3.5 AND 5.0
+SELECT * FROM docs WHERE price BETWEEN 10 AND 100;
+SELECT * FROM docs WHERE date BETWEEN '2024-01-01' AND '2024-12-31';
+SELECT * FROM products WHERE rating BETWEEN 3.5 AND 5.0;
 ```
 
 ### LIKE (Pattern Matching)
@@ -564,9 +566,9 @@ Characters without a defined case mapping (e.g., CJK ideographs) are compared as
 Test for null values:
 
 ```sql
-SELECT * FROM docs WHERE category IS NULL
-SELECT * FROM docs WHERE category IS NOT NULL
-SELECT * FROM users WHERE email IS NOT NULL AND verified = true
+SELECT * FROM docs WHERE category IS NULL;
+SELECT * FROM docs WHERE category IS NOT NULL;
+SELECT * FROM users WHERE email IS NOT NULL AND verified = true;
 ```
 
 ### CONTAINS (Array Filter, v3.7+)
@@ -672,7 +674,7 @@ string payload field. Unlike `MATCH` (which boosts via RRF), `CONTAINS_TEXT`
 is a **strict filter**: any result whose target field does not contain the
 specified substring is excluded from the result set.
 
-```sql
+```text
 column CONTAINS_TEXT 'substring'
 ```
 
@@ -871,7 +873,7 @@ results by similarity score rather than just finding nearest neighbors.
 
 #### Syntax
 
-```sql
+```text
 similarity(field, vector_expr) <operator> threshold
 ```
 
@@ -920,15 +922,17 @@ SELECT * FROM docs WHERE similarity(vector, $v) > 0.8
 ### Temporal Functions (v2.1+)
 
 VelesQL supports temporal expressions for date/time filtering using `NOW()`
-and `INTERVAL`.
+and `INTERVAL`. These are the only temporal functions: there is no date
+extraction or truncation (`DATE()`, `EXTRACT()`, `DATE_TRUNC()` are parse
+errors), so group by a day or month field stored in the payload instead.
 
 #### NOW() Function
 
 Returns the current Unix timestamp (seconds since epoch):
 
 ```sql
-SELECT * FROM events WHERE timestamp > NOW()
-SELECT * FROM items WHERE created_at > NOW()
+SELECT * FROM events WHERE timestamp > NOW();
+SELECT * FROM items WHERE created_at > NOW();
 ```
 
 #### INTERVAL Expression
@@ -1021,6 +1025,10 @@ the CLI REPL (both route through `Database::execute_query`).
   the subquery's own collection, **not** a correlation, so it executes normally.
 - Nesting up to 8 levels deep (a deeper nest errors with `VELES-010`).
 
+**Not supported:** set-membership subqueries — `id IN (SELECT doc_id FROM t)`
+and `EXISTS (...)` — are not in the grammar and fail to parse. A subquery inside
+an `IN (...)` list is a scalar like any other: `id IN ((SELECT MAX(id) FROM t))`.
+
 **Not yet supported (rejected at validation with `V010`):**
 
 - **Correlated subqueries** — a subquery whose inner `WHERE` references one of the
@@ -1082,7 +1090,9 @@ LIMIT 10
 SELECT * FROM docs AS d
 WHERE category = 'tech' AND MATCH (ctx)-[:REL]->(x)
 LIMIT 10
+```
 
+```velesql-error
 -- Rejected with V011 (G1): the FROM alias 'd' is in a non-anchor position;
 -- anchor the pattern on it instead, e.g. MATCH (d)-[:REL]->(w)
 SELECT * FROM docs AS d
@@ -1250,7 +1260,7 @@ three ranking functions over a `PARTITION BY` / `ORDER BY` window.
 
 ### Syntax
 
-```sql
+```text
 <function>() OVER ([PARTITION BY <expr> [, <expr> ...]] [ORDER BY <expr> [ASC|DESC] [, <expr> ...]])
 ```
 
@@ -1359,8 +1369,8 @@ Sort results by one or more expressions, each with an optional direction.
 ### Basic Sorting
 
 ```sql
-SELECT * FROM docs ORDER BY created_at DESC
-SELECT * FROM docs ORDER BY category ASC, price DESC
+SELECT * FROM docs ORDER BY created_at DESC;
+SELECT * FROM docs ORDER BY category ASC, price DESC;
 ```
 
 ### Value order and NULLs
@@ -1543,7 +1553,7 @@ LET clauses appear **before** the SELECT statement.
 
 ### Syntax
 
-```sql
+```text
 LET <name> = <arithmetic_expression>
 ```
 
@@ -1600,6 +1610,10 @@ LET boost = 1.5
 LET weighted = 0.7 * vector_score + 0.3 * bm25_score
 LET final_score = weighted * boost
 LET sim = similarity()
+SELECT * FROM documents
+WHERE vector NEAR $query AND content MATCH 'machine learning'
+ORDER BY final_score DESC
+LIMIT 10
 ```
 
 Available variables: `vector_score`, `bm25_score`, `graph_score`, `sparse_score`,
@@ -1661,7 +1675,7 @@ WITH (mode = 'accurate', ef_search = 512, timeout_ms = 5000)
 | `mode` | string | `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>` | Search quality preset: `fast`/`balanced`/`accurate` map to ef_search 96/160/512, `perfect` is an exhaustive scan capped by `limits.max_perfect_mode_vectors`, `autotune` derives an ef range from the collection's size, `custom:<ef>` sets the ef, `adaptive:<min_ef>:<max_ef>` runs the two-phase adaptive search, with `min_ef` at most `max_ef`. `custom`'s `ef` and `adaptive`'s `min_ef`/`max_ef` are each bounded to the same 16--4096 range as the dedicated `ef_search` option: an integer outside it fails the query with `V013`, naming the value (#2275). Names match in any letter case. Every value given for the mode is checked, even one another `mode` or `quality` entry shadows: any other value, or one that is not a string, fails the query with `V013`, naming the accepted forms, whatever the query's shape, in every build with `persistence` (the server, the CLI, Python, Tauri); the WASM executor reads no `WITH` option (#2267) |
 | `quality` | string | same as `mode` | Alias for `mode` (v3.5+). If both are set, `mode` takes precedence, and a repeated key's first value applies; every value given is checked as `mode`'s are. |
 | `ef_search` | integer | 16--4096 | HNSW ef_search parameter (overrides `mode`). Enforced, for every value a repeated key gives: a value that is not an integer, or one outside this range — a negative literal included, which the grammar accepts and a plain cast would wrap to near `usize::MAX` — fails the query with `V014`, in every build with `persistence`; the WASM executor reads no `WITH` option (#2274) |
-| `timeout_ms` | integer | >= 100 | Per-query timeout in milliseconds |
+| `timeout_ms` | integer | `0` or any positive integer (no minimum is enforced) | Per-query timeout in milliseconds. It can shorten the server's limit (`QueryLimits::timeout_ms`), never lengthen it; `0` keeps the server's limit. The REST search's `timeout_ms` resolves the same way. A timeout under a budget tighter than the limit is the client's: it never counts toward the circuit breaker, and `/query` answers it `422` |
 | `rerank` | boolean | `true`/`false` | Two-stage SIMD reranking (retrieves 4x candidates, re-ranks with exact distance) |
 | `quantization` | string | `f32`, `int8`, `dual`, `auto` | Quantization mode for search |
 | `oversampling` | float | >= 1.0 | Oversampling ratio for dual-precision mode |
@@ -1848,7 +1862,7 @@ Execute graph pattern matching queries with optional vector similarity filtering
 
 ### Syntax
 
-```sql
+```text
 MATCH <pattern>
 [WHERE <conditions>]
 RETURN <projection>
@@ -1856,13 +1870,19 @@ RETURN <projection>
 [LIMIT <n>]
 ```
 
+`ORDER BY` takes `depth`, an `alias.property` path, `similarity(field, $vec)`,
+or arithmetic over a bare property identifier. An aggregate or a bare name
+(a pattern alias, a `RETURN` alias, an unqualified property) is refused at
+validation with `V015`, before any traversal (see
+[Graph Patterns](guides/GRAPH_PATTERNS.md)).
+
 ### Pattern Syntax
 
 #### Node Patterns
 
 A node is enclosed in parentheses with optional alias, labels, and properties:
 
-```sql
+```text
 (alias)                          -- Any node
 (alias:Label)                    -- Node with label
 (alias:Label1:Label2)            -- Node with multiple labels
@@ -1896,7 +1916,7 @@ When using `@collection`:
 
 Relationships connect nodes with direction and optional type/range:
 
-```sql
+```text
 -[r:TYPE]->                      -- Outgoing, named
 <-[r:TYPE]-                      -- Incoming, named
 -[r:TYPE]-                       -- Undirected, named
@@ -1944,7 +1964,7 @@ traversed relationships, not a single edge:
 
 Project fields from matched nodes and relationships:
 
-```sql
+```text
 RETURN a.name, b.title             -- Property access
 RETURN a.name AS author            -- With alias
 RETURN *                           -- All bound variables
@@ -2487,8 +2507,8 @@ are cached in memory and persisted to disk (`collection.stats.json`).
 
 ```sql
 -- Compute statistics for query optimizer
-ANALYZE docs
-ANALYZE COLLECTION docs   -- optional COLLECTION keyword
+ANALYZE docs;
+ANALYZE COLLECTION docs;   -- optional COLLECTION keyword
 ```
 
 Returns a JSON payload with collection statistics including `total_points`,
@@ -2522,8 +2542,8 @@ all data unconditionally.
 
 ```sql
 -- Delete all rows
-TRUNCATE docs
-TRUNCATE COLLECTION docs   -- optional COLLECTION keyword
+TRUNCATE docs;
+TRUNCATE COLLECTION docs;   -- optional COLLECTION keyword
 ```
 
 Returns a payload with `{"deleted_count": N}`. Truncating an empty collection
@@ -2720,8 +2740,8 @@ WITH PROPERTIES accepts key-value pairs (strings, integers, or floats).
 Remove an edge by its ID from a graph collection.
 
 ```sql
-DELETE EDGE 123 FROM knowledge
-DELETE EDGE 10 FROM kg
+DELETE EDGE 123 FROM knowledge;
+DELETE EDGE 10 FROM kg;
 ```
 
 ### SELECT EDGES (v3.5+)
@@ -2776,7 +2796,7 @@ Explicitly train a Product Quantizer on a collection's vector data.
 
 ### Syntax
 
-```sql
+```text
 TRAIN QUANTIZER ON <collection> WITH (<parameters>)
 ```
 
@@ -2915,7 +2935,7 @@ path.
 
 Single-quoted. To include a single quote, double it (`''`):
 
-```sql
+```text
 'hello world'
 'O''Brien'                -- produces: O'Brien
 'It''s a ''test'''        -- produces: It's a 'test'
@@ -2924,7 +2944,7 @@ Single-quoted. To include a single quote, double it (`''`):
 
 Unicode characters are fully supported:
 
-```sql
+```text
 '日本語テキスト'
 '🚀 Launch'
 ```
@@ -2933,7 +2953,7 @@ Unicode characters are fully supported:
 
 ### Numbers
 
-```sql
+```text
 42            -- integer
 3.14          -- float
 -100          -- negative integer
@@ -2942,7 +2962,7 @@ Unicode characters are fully supported:
 
 ### Booleans
 
-```sql
+```text
 TRUE
 FALSE
 ```
@@ -2951,27 +2971,27 @@ Case-insensitive: `true`, `True`, `TRUE` are all equivalent.
 
 ### Vectors
 
-```sql
+```text
 [0.1, 0.2, 0.3, 0.4]           -- literal vector (dense)
 $query_vector                    -- parameter reference
 ```
 
 ### Sparse Vectors
 
-```sql
+```text
 {0: 0.9, 14: 0.7, 256: 0.5}   -- literal sparse vector
 $sparse_query                    -- parameter reference
 ```
 
 ### NULL
 
-```sql
+```text
 NULL
 ```
 
 ### Temporal Values
 
-```sql
+```text
 NOW()                            -- current Unix timestamp
 INTERVAL '7 days'               -- time duration
 NOW() - INTERVAL '24 hours'     -- temporal arithmetic
@@ -3454,8 +3474,8 @@ INSERT INTO documents (id, title, category) VALUES (1, 'Getting Started', 'tutor
 UPDATE documents SET status = 'published', updated = TRUE WHERE id = 1
 
 -- Delete with mandatory WHERE
-DELETE FROM documents WHERE id IN (10, 11, 12)
-DELETE FROM logs WHERE level = 'debug' AND timestamp < 1000
+DELETE FROM documents WHERE id IN (10, 11, 12);
+DELETE FROM logs WHERE level = 'debug' AND timestamp < 1000;
 ```
 
 ### Join Queries
@@ -3568,8 +3588,8 @@ INSERT NODE INTO knowledge (id = 42, payload = '{"name": "Alice", "_labels": ["P
 SHOW COLLECTIONS
 
 -- Get collection metadata (dimension, metric, point count, type)
-DESCRIBE COLLECTION documents
-DESCRIBE documents
+DESCRIBE COLLECTION documents;
+DESCRIBE documents;
 
 -- View query execution plan without running
 EXPLAIN SELECT * FROM docs WHERE vector NEAR $v AND category = 'tech' LIMIT 10

@@ -394,11 +394,11 @@ describe('transport adapter factories', () => {
     const searchFn = vi.fn().mockResolvedValueOnce([{ id: 1, score: 0.5 }]);
     const transport = buildAgentMemoryTransport(config, searchFn);
 
-    const out = await transport.searchVectors('c', [0.1], 5, { k: '1' });
+    const out = await transport.searchVectors('c', [0.1], 5, { condition: { type: 'eq', field: 'k', value: '1' } });
 
     expect(searchFn).toHaveBeenCalledWith('c', [0.1], {
       k: 5,
-      filter: { k: '1' },
+      filter: { condition: { type: 'eq', field: 'k', value: '1' } },
     });
     expect(out).toEqual([{ id: 1, score: 0.5 }]);
   });

@@ -44,10 +44,13 @@ impl Database {
             + self.metadata_colls.read().len();
         let cap = self.config.limits.max_collections;
         if total_collections >= cap {
-            return Err(Error::GuardRail(format!(
-                "max_collections limit reached ({total_collections} / {cap}); \
+            return Err(Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                message: format!(
+                    "max_collections limit reached ({total_collections} / {cap}); \
                  raise `limits.max_collections` in VelesConfig to create more"
-            )));
+                ),
+            });
         }
 
         Ok(())
@@ -116,10 +119,13 @@ impl Database {
         }
         let cap = self.config.limits.max_dimensions;
         if dimension > cap {
-            return Err(Error::GuardRail(format!(
-                "vector dimension {dimension} exceeds configured max_dimensions cap of {cap}; \
+            return Err(Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                message: format!(
+                    "vector dimension {dimension} exceeds configured max_dimensions cap of {cap}; \
                  raise `limits.max_dimensions` in VelesConfig to allow larger vectors"
-            )));
+                ),
+            });
         }
         Ok(())
     }

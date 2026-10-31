@@ -2,7 +2,7 @@
  * Optional embedding helpers for the VelesDB TypeScript SDK.
  *
  * A thin {@link Embedder} interface plus an adapter for OpenAI-compatible
- * endpoints. The adapter uses the global `fetch` API (Node ≥ 18, browsers,
+ * endpoints. The adapter uses the global `fetch` API (Node.js 22+, browsers,
  * Deno) and has no additional runtime dependencies.
  *
  * @example

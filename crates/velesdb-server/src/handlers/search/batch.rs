@@ -14,12 +14,13 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::pipeline::{
-    actionable_search_error, build_search_response, record_circuit_breaker,
-    validate_query_dimension,
+use super::outcome::{
+    build_search_response, read_refused, record_circuit_breaker, search_error_response,
 };
+use super::pipeline::validate_query_dimension;
 use crate::handlers::helpers::{
-    apply_pre_check, extract_client_id, get_vector_collection_or_404, notify_query_timing,
+    apply_pre_check, authorize_unscoped_read, extract_client_id, get_vector_collection_or_404,
+    notify_query_timing, worker_failure,
 };
 
 /// Batch search for multiple vectors.
@@ -33,6 +34,9 @@ use crate::handlers::helpers::{
     request_body = BatchSearchRequest,
     responses(
         (status = 200, description = "Batch search results", body = BatchSearchResponse),
+        (status = 429, description = "The client's rate limit", body = ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (
@@ -83,24 +87,14 @@ pub async fn batch_search(
     // Gate the read (CORE-2) before dispatching the off-thread batch. A denied
     // decision — or a scope narrowing, which batch has no per-query channel to
     // apply — refuses the batch (fail closed).
-    match state.db.authorize_read(
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
         &name,
         velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
+        "batch search",
     ) {
-        Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
-            state.operational_metrics.inc_errors();
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Read denied by governance policy".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
-        }
+        state.operational_metrics.inc_errors();
+        return read_refused(&refusal);
     }
 
     // F-01 sweep: batch search is CPU-bound (one HNSW pass per query) and must
@@ -120,17 +114,8 @@ pub async fn batch_search(
     .await
     {
         Ok(inner) => inner,
-        Err(_) => {
-            state.operational_metrics.inc_errors();
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Batch search worker failed".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
-        }
+        // A panicked worker is the engine's fault: recorded below like any.
+        Err(join_err) => Err(worker_failure("batch search", &join_err)),
     };
     record_circuit_breaker(&collection, &batch_result);
 
@@ -138,7 +123,7 @@ pub async fn batch_search(
         Ok(batch_results) => build_batch_responses(&state, batch_results, &req),
         Err(e) => {
             state.operational_metrics.inc_errors();
-            return (StatusCode::BAD_REQUEST, Json(actionable_search_error(&e))).into_response();
+            return search_error_response(&e);
         }
     };
 

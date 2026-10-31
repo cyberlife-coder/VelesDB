@@ -7,7 +7,298 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Database::gated_search_outcome`: `gated_search` with the read gate's
+  refusal kept apart from the search's own outcome.
+- `QueryLimits::client_timeout_ms` (the budget a request's own
+  `timeout_ms` resolves to) and `QueryLimits::timeout_budget` (whose budget
+  ran out — the one classification `VelesQL` and the REST search share).
+
+- **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
+  node relationships as edges.** The option was documented but never read, and
+  the call always returned `"edges": 0`. Each `SOURCE`, `PREVIOUS`, `NEXT`,
+  `PARENT` and `CHILD` relationship whose target is in the graph — loaded by
+  the same call or, with a native graph collection, by an earlier one —
+  becomes an edge labelled with the kind's name, with a deterministic id, so a
+  reload writes nothing new and returns the same counts. Any other
+  relationship is skipped, never written as a dangling edge, and counted in
+  the new `skipped_relations` key of the result.
+
 ### Changed
+
+- **BREAKING (behaviour): `velesdb-server` sends no CORS header unless origins
+  are configured.** 7.1.0 answered every origin with
+  `Access-Control-Allow-Origin: *` by default, so any web page open in a
+  browser that could reach the server — every site a local-first user visits,
+  for a server on `127.0.0.1` — could read and, without API keys, write
+  through it. The default is now same-origin only. A browser front end on
+  another origin needs its exact origin in `[server] cors_origins` (or
+  `[cors] allowed_origins`); `cors_origins = ["*"]`, written explicitly,
+  restores allow-all, with the startup warning it always had. Non-browser
+  clients are unaffected. What the closed default protects is spelt out in
+  `docs/guides/SERVER_SECURITY.md` §6: no cross-origin read, and no
+  cross-origin request with a body — which needed the next entry to be true.
+  Migration: `docs/guides/MIGRATION_v8.0.0.md`, section 2.
+
+- **BREAKING (behaviour): `POST /collections/{name}/points/stream` and
+  `.../points/raw` refuse a `Content-Type` other than the one they document**
+  (`application/x-ndjson`, `application/octet-stream`) with `415`. In 7.1.0
+  they read any body, so a page on another site could write points with a
+  `text/plain` request a browser sends without a CORS preflight, whatever the
+  CORS policy. One shared extractor (`handlers::content_type`) guards both;
+  every other route that takes a body is a JSON route, which axum already
+  restricts to `application/json`. The TypeScript SDK sends both types.
+
+- **BREAKING (behaviour): a request that changes state from a browser origin
+  the CORS policy does not allow is refused with `403`.** CORS only hides
+  answers; in 7.1.0 a page on any site could still fire the body-less
+  `POST`s (flush, analyze, index rebuild, vacuum, compact, locality reorder)
+  without a preflight. An origin guard now covers every route at once: a
+  method other than `GET`/`HEAD`/`OPTIONS` with an `Origin` header passes only
+  if that origin is the server's own (`Origin`'s authority equals `Host`) or
+  allowed by `cors_origins` (`["*"]`: any). Requests without `Origin` — curl,
+  the SDKs, backends — are not affected.
+
+- **`VelesConfig::load_from_path_engine_only` reads only the environment
+  variables of engine sections** (and of removed sections, so their warning
+  still fires). In 7.1.0 a `VELESDB_SERVER_*` or `VELESDB_LOGGING_*` variable
+  reached `VelesConfig`'s own `server` / `logging` fields and was validated
+  there, so an unrelated variable could fail every caller of this loader —
+  `velesdb-server` and the `velesdb` CLI, and any Rust caller that loads a
+  shared config file this way: `VELESDB_SERVER_PORT=80` stopped
+  `velesdb-server` (whose port is `VELESDB_PORT`) with `server.port must be
+  >= 1024`. A caller that relied on such a variable reaching those fields
+  through this loader no longer gets it; `load_from_path` is unchanged. The
+  new `VelesConfig::load_engine_only_from_env` is the same layer with no
+  file, and both binaries use it when they have no config file: in 7.1.0
+  `velesdb-server` and the `velesdb` CLI then opened on bare defaults and
+  ignored `VELESDB_LIMITS_MAX_COLLECTIONS` and every other engine variable.
+  `velesdb_core::config::WORKERS_CAP` and `LOG_LEVELS` are now public, so a
+  hosting shell validates `[server] workers` and log levels by the engine's
+  own rules instead of a copy, and so is `VelesConfig::is_engine_table`, which
+  tells such a shell which top-level tables of a shared file the engine reads.
+
+- **BREAKING (behaviour): `velesdb-server` answers only the `Host` names it
+  is configured for, with `421 Misdirected Request` otherwise.** A
+  DNS-rebinding page (a name that resolves to `127.0.0.1` after the page
+  loads) is same-origin for the browser, so neither CORS nor the origin guard
+  stopped it reading and writing a loopback server — 7.1.0's default
+  deployment. Answered with no configuration: `localhost`, `127.0.0.0/8`,
+  `[::1]` and the bind host unless it is `0.0.0.0`/`::`; new
+  `[server] allowed_hosts` (`--allowed-hosts`, `VELESDB_ALLOWED_HOSTS`) adds
+  names, `["*"]` turns the check off. All methods are checked; `/health` and
+  `/ready` are exempt for orchestrator probes; `X-Forwarded-Host` is never
+  read. The origin guard's same-origin comparison now normalises default
+  ports and is trusted only after the `Host` check. One function,
+  `config::apply_browser_policy`, installs the `Host` check, the origin guard
+  and the CORS layer — the only public way to install the origin guard, whose
+  same-origin rule relies on the `Host` check. An `allowed_hosts` entry must
+  be a bare name or address (a port, scheme, path, `*.` pattern or trailing
+  dot is refused at startup) and IP entries are compared as addresses;
+  `--allowed-hosts` / `VELESDB_ALLOWED_HOSTS` trim items, drop empty ones and
+  treat an empty value as unset; a malformed or unreadable `Host` is refused;
+  `allowed_hosts = ["*"]` is warned about at startup. The `421` body names the refused host and the three
+  ways to allow it, and a server bound to `0.0.0.0`/`::` with no
+  `allowed_hosts` says at startup that it answers only loopback names. A
+  container reached by its service name needs that name listed:
+  `examples/node-express-rag/docker-compose.yml` now sets
+  `VELESDB_ALLOWED_HOSTS: velesdb`, and the root `docker-compose.yml`, the
+  `Dockerfile` and the deployment guides show how.
+
+- **BREAKING (Rust API) — `Error::GuardRail` says which limit was crossed.**
+  The variant is `GuardRail { kind: GuardRailKind, message: String }`, where it
+  was `GuardRail(String)`; `GuardRailKind` (`Timeout(TimeoutBudget)`, `Depth`,
+  `Cardinality`, `Memory`, `Capacity`, `RateLimit`, `CircuitOpen`) and
+  `TimeoutBudget` (`Client`, `Configured`) are exported at the crate root,
+  `GuardRailViolation::Timeout` carries a `budget`, `GuardRailViolation::kind`
+  maps a violation to its kind, and `QueryContext::set_client_timeout_ms`
+  applies a request's own budget. The code stays `VELES-027` and the message
+  is unchanged. Match `Error::GuardRail { .. }`, or on `kind`, where you
+  matched `Error::GuardRail(_)`.
+- **REST statuses follow core's caller/engine classification.** Every REST
+  error built from a core error now takes its status from the one mapping
+  (`http_status_for_error`, which reads `Error::is_caller_error`): `4xx` for
+  the client's errors, `5xx` for the engine's, with its `VELES-NNN` code. A
+  request the server refuses while reading it, before core is called (a
+  missing parameter, a malformed filter, …), stays `400` with no code;
+  `/query`, `/aggregate` and `/query/explain` keep `422` for a client's
+  failure. Changes from 7.1.0:
+  - routes answering with the canonical mapping (`/collections/{name}/match`,
+    collection, point and graph routes): a depth, cardinality or capacity
+    ceiling (`max_collections`, `max_dimensions`,
+    `max_vectors_per_collection`, `max_payload_size`,
+    `max_perfect_mode_vectors`) `503` → `400`; the rate limit on `/match`
+    `503` → `429`. An open breaker, the memory budget, a timeout under the
+    server's limit and a locked database stay `503`;
+  - `/search`, `/search/ids`, `/search/hybrid`, `/search/batch`,
+    `/search/multi` and `/search/multi/ids` answered every failure during
+    the search `400`; `/search/text` answered it `500`. Each now answers the
+    error's canonical status (an engine fault `500`, a guard rail the engine
+    could not carry `503`, a collection deleted while the search ran `404`,
+    the client's errors `400`). A missing collection or an open breaker
+    found before the search starts was already `404` / `503`;
+  - a read the access gate denied answered `400` (`/search`, `/search/ids`,
+    `/search/hybrid`), `500` (`/search/text`) or `403` with no code
+    (`/search/batch`, `/search/multi`, `/search/multi/ids` and every graph
+    read, `/graph/search` included); it now answers the denial error's
+    canonical status and code on all of them. A scope narrowing an endpoint
+    cannot apply (batch, multi-query, graph reads) is `400` `VELES-009`
+    (was `403`);
+  - `/graph/search` and `GET`/`PUT /graph/nodes/{id}/payload` answered every
+    core error `500` with no code (a query vector of the wrong dimension
+    included, now `400` `VELES-004`); an invalid edge on `/graph/edges`,
+    `/graph/edges/batch` and `/relations` gains its code; a core error
+    setting a point's TTL is no longer always `500`;
+  - a blocking worker that panicked answered `500` with no code, or
+    `VELES-INTERNAL-WORKER-FAILURE` outside the `VELES-NNN` namespace on
+    search; it is now `500` `VELES-013`, and on a search it is counted by the
+    circuit breaker as the engine failure it is;
+  - a REST search's `timeout_ms` at or above the server's `timeout_ms`
+    limit answers `503` (was `408`): the search ran as long as the server's
+    own limit. A budget strictly tighter stays `408`;
+  - `/query`, `/aggregate` and `/query/explain` answered every execution
+    failure `422`: a storage, I/O or internal fault is now `500`; a timeout
+    under the server's limit, the memory budget, an open breaker and a
+    locked database are `503`. The client's own failures stay `422`, its
+    `WITH (timeout_ms)` running out included, keeping the `VELESQL_*` code.
+- **A request's own `timeout_ms` can shorten the server's time limit, never
+  lengthen it.** `VelesQL` `WITH (timeout_ms = N)` and a REST search's
+  `timeout_ms` resolve the same way, through `QueryLimits::client_timeout_ms`:
+  the budget is `min(N, QueryLimits::timeout_ms)` when the server sets a
+  limit, and `0` keeps that limit. 7.1.0 let `WITH (timeout_ms = N)` replace
+  the limit, longer or `0` (disabled) included, and let a REST search's
+  `timeout_ms` run past the limit, or time out at once (`408`) with `0`.
+  With no server limit, `N` applies as before.
+- **An unsupported MATCH `ORDER BY` is refused at validation, with `V015`
+  instead of `VELES-018`.** `ORDER BY COUNT(*)`, `ORDER BY MAX(year)`, a bare
+  pattern alias (`ORDER BY d`), a `RETURN` alias (`RETURN d.year AS y ORDER BY
+  y`) and an unqualified property (`ORDER BY year`) passed
+  `QueryValidator::validate` and failed after traversal with `VELES-018`
+  (`GraphNotSupported`; REST `/query` `422 VELESQL_EXECUTION_ERROR`,
+  `/collections/{name}/match` `400 VELES-018`). They are now refused before
+  traversal with `V015` (`UnsupportedMatchOrderBy`): `VELES-010` from the
+  Rust API and `/collections/{name}/match` (`400`), `422
+  VELESQL_VALIDATION_ERROR` from `/query`, and an error from the WASM
+  executor. `QueryValidator::validate_match_clause` holds the one rule set,
+  and `match_query_ordered`, `execute_match` and
+  `execute_match_with_similarity` run it on the clause they receive, so the
+  same MATCH gets the same answer on every surface. A test runs every form
+  through the validator and the executor and fails if their verdicts differ;
+  `rejected_cases` R005–R009 lock the refusal in both engines.
+
+- **BREAKING (behavior) — the TypeScript SDK refuses a filter that is not
+  core-shaped.** `normalizeFilter`, now called on every filter before it
+  leaves the SDK (REST search, batch, text, hybrid, multi-query, sparse,
+  ids and scroll; the WASM filtered search and its batch pre-loop), throws
+  `ValidationError` unless the filter is `{ condition: {...} }`, the shape of
+  `velesdb_core::filter::Filter`. A flat map such as `{ category: 'tech' }`
+  used to reach velesdb-server, which answered `400 missing field condition`,
+  or velesdb-wasm, whose `matches_filter` read a filter without `condition`
+  as "no filter" in 7.1.0 and returned unfiltered neighbours. `null` still means no
+  filter. Migration: build filters with `f.*`.
+- **BREAKING (behavior) — `recallRecent(collection, since)` is exclusive in
+  the TypeScript SDK**, returning events with `timestamp > since` as core's
+  `TemporalIndex::recent` does (it skips `ts <= since`); it was `>=`. The
+  shared fixture's `since` case now pins `gt`. `recallOlderThan` already
+  matched core's strict `older_than`. Migration: pass `since - 1` to keep an
+  event stamped exactly `since`.
+- **BREAKING (behavior) — `createGraphCollection({ schemaMode: 'strict' })`
+  creates a strict graph** (TypeScript SDK). The SDK sent `schema_mode`, a
+  field velesdb-server never read, so every graph collection came out
+  schemaless; it now sends core's `graph_schema`. The new `nodeTypes` and
+  `edgeTypes` options mirror core's `NodeType` and `EdgeType` (properties
+  typed by `ValueType`), so a strict graph can declare what it accepts;
+  declaring types on a schemaless graph, where core ignores them, throws
+  `ValidationError`. The wire shape is pinned by
+  `conformance/graph_schema_wire_cases.json`:
+  `crates/velesdb-core/tests/graph_schema_wire_conformance.rs` parses each case
+  as `GraphSchema`, round-trips it and checks the node types and edges it
+  accepts and refuses, and the SDK test checks it sends each case's
+  `graph_schema` for its config. The WASM backend still refuses graph
+  collections with `NOT_SUPPORTED`. Migration: declare the types, or drop
+  `schemaMode: 'strict'` to keep the old schemaless behaviour.
+- **BREAKING (behavior) — velesdb-wasm filters with core.**
+  `VectorStore.search_with_filter` parses the filter as
+  `velesdb_core::Filter` (`filter::parse_filter`) and evaluates it with
+  `Filter::matches`; the crate's own evaluator, which knew only `eq`, `neq`,
+  the four comparisons, `and`, `or` and `not`, is deleted. Every other core
+  condition kind (`in`, `contains`, `is_null`, `is_not_null`, `like`,
+  `ilike`, the three `array_contains*`, `geo_distance`, `geo_bbox`) matched
+  nothing in the browser in 7.1.0 while REST returned hits; they now select what
+  core selects, checked against the shared
+  `conformance/filter_wire_cases.json`, which now holds one case per kind and
+  is run by both velesdb-core and velesdb-wasm. A filter core cannot parse
+  throws core's message (`Invalid filter: missing field \`condition\``, for
+  one): a flat `{ "category": "tech" }` read as "no filter" in 7.1.0 and
+  returned every point, and a raw `search_with_filter(query, k, null)` now
+  throws instead of searching unfiltered — call `search` for an unfiltered
+  search.
+- **BREAKING — the TypeScript SDK requires Node.js 22 or later**
+  (`engines.node`, was `>=18.0.0`). CI builds and tests the SDK on Node 22
+  only, its test toolchain needs 22.12+, and Node 18 and 20 are end-of-life.
+  The SDK README, `docs/guides/INSTALL_OPTIONS.md`, `CONTRIBUTING.md` and
+  `examples/node-express-rag` (engines, Dockerfile) now state it. The
+  velesdb-wasm README states the floor of its own binary instead, Node 18+
+  (WebAssembly SIMD, bulk memory, non-trapping float-to-int and reference
+  types), where it claimed 20+.
+- **BREAKING (behavior) — `velesdb-wasm` returns `null` for an absent value,
+  where 7.1.0 returned `undefined`.** It follows from the fix below: the
+  binding now serializes as `JSON.parse` would, and `JSON.stringify` keeps a
+  `null` where it drops an `undefined`. Affected: a missing `payload` in
+  `hybrid_search` and `search_with_filter` records, `query()`'s `graphScore`
+  and `columnData`, `GraphNode.to_json()`'s `vector`, and a missing alias in
+  `ParsedQuery.matchReturnItems`. A check written `=== undefined` must become
+  `== null`. See the [migration guide](docs/guides/MIGRATION_v8.0.0.md#7-velesdb-wasm).
+- **BREAKING (TypeScript SDK types) — `textSearch` returns
+  `TextSearchResult[]`, whose `score` is `number | null`.** velesdb-wasm's
+  text search is an unranked, case-insensitive substring match, so its
+  records carry `score: null` (in 7.1.0 the SDK's `textSearch` threw on any
+  match instead, see Fixed). REST still
+  returns the BM25 score. A caller that sorts or thresholds on it must handle
+  `null`.
+
+- **BREAKING (behavior) — LlamaIndex `GraphLoader` with a graph collection
+  writes its nodes there, at VelesDB point ids.** In 7.1.0 `add_node` and
+  `load_from_nodes` wrote every node into the vector store's collection — a
+  metadata-only point, or a vector point when `add_node` got a vector — at the
+  given id, or at `stable_hash_id(f"{node_label}:{node.node_id}")` for
+  `load_from_nodes`, while its edges never persisted (see Fixed). In 8.0.0,
+  with a graph collection, a node is upserted into that graph collection only,
+  labelled through `_labels` (from `label`, which a `_labels` key in the
+  node's metadata no longer overrides); a vector is dropped when the graph
+  collection has no embeddings. `load_from_nodes` gives it the id
+  `VelesDBVectorStore` stores the node under, `stable_hash_id(node.node_id)`,
+  so `GraphRetriever` expands from a vector hit straight into the loaded
+  graph, as LangChain's retriever expands from the point id (`_int_id`).
+  Without a graph collection nothing changes. *Migration*: the points the
+  7.1.0 loader wrote into the vector store's collection are no longer read.
+  They are metadata-only, so search and `get` never return them, but they
+  stay stored and counted; delete them with the snippet in
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md) (section 4).
+- **BREAKING (behavior) — LangChain and LlamaIndex `GraphRetriever` search
+  `seed_k` seeds.** In 7.1.0 they searched `expand_k` (default 10); in 8.0.0
+  they search `seed_k` (default 3), as documented, and fill the rest of
+  `expand_k` with graph neighbours (see Fixed). A query whose seeds have no
+  neighbour now returns at most `seed_k` documents where it returned up to
+  `expand_k`. *Migration*: raise `seed_k` to get more vector hits.
+- **BREAKING (behavior) — LlamaIndex `GraphRetriever` neighbours carry
+  `score=None`.** In 7.1.0 a node reached through the graph had `score=0.5`,
+  a value no search produced, which a downstream score threshold or re-ranker
+  read as a similarity. `NodeWithScore.score` is optional, and `None` now says
+  the node was not scored, as LangChain's neighbours carry no
+  `relevance_score`. `GraphQARetriever` sorts unscored nodes after the scored
+  ones of the same depth. *Migration*: a postprocessor that compares scores
+  must handle `None` (keep or drop graph-reached nodes on purpose).
+- **BREAKING (behavior) — LlamaIndex `GraphRetriever` expands a seed from its
+  point id only.** In 7.1.0 it took the seed's id from an `id`, `doc_id` or
+  `node_id` key of its metadata when one held an integer, else `int()` of a
+  numeric node id, else the hash — while `VelesDBVectorStore` always stores a
+  node under the hash, so a node id like `"1"` (or such a metadata key)
+  expanded from a point that does not exist and found nothing. Store, loader
+  and retriever now share one derivation, `point_id(node_id)` =
+  `stable_hash_id(node_id)`. *Migration*: edges added by hand must use
+  `stable_hash_id(node.node_id)` as `source` / `target`.
 
 - **BREAKING (behavior) — a `GROUP BY` ORDER BY that names no column of the
   grouped rows is refused with `V016` (`OrderByNotInResult`).** In 7.1.0 core
@@ -60,7 +351,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in core, not the row's search score. Migration: add the column to
   `GROUP BY`, and keep `MIN`/`MAX` for numeric columns (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 7).
-
 - **BREAKING (behavior) — ORDER BY sorts `null` last under `ASC` and first
   under `DESC`, in every engine and ORDER BY path.** In 7.1.0 core sorted a
   `null` or missing key before every value under `ASC` (and after under
@@ -75,7 +365,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `null` keys coming first under `ASC` reads them last (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
 
+### Removed
+
+- **BREAKING — `CollectionConfig.description` (TypeScript SDK).** Core has no
+  collection description: `CreateCollectionRequest` has no such field, so the
+  REST server dropped it silently, and the WASM backend stored it where
+  nothing read it. It is gone from the type, the REST request and
+  `capabilities().collectionConfig`.
+- **BREAKING — `HnswParams.storageMode` (TypeScript SDK).** Nothing read it;
+  the REST request takes `CollectionConfig.storageMode` only, which is the
+  field to set.
+- **BREAKING — `SearchOptions.includeVectors` and `SearchResult.vector`
+  (TypeScript SDK).** No search returns vectors on either backend: core's
+  `SearchRequest` has no `include_vectors` and `SearchResultResponse` is id,
+  score and payload. REST sent the flag to be dropped (while
+  `REST_CAPABILITIES.includeVectors` claimed `true`); WASM refused it. Read a
+  vector with `get()`.
+- **BREAKING — `QueryOptions` and `query()`'s `options` argument (TypeScript
+  SDK).** Core's `QueryRequest` (`/query`, `/aggregate`) is `query`,
+  `params` and `collection`: REST sent `timeout_ms` and `stream` to be
+  dropped, WASM refused them. The server's query timeout is its guard-rails
+  `timeoutMs` (`updateGuardRails`).
+- **BREAKING — the `includeVectors` and `queryOptions` capabilities**, which
+  described the two removed options, leave `CapabilityMap`,
+  `CAPABILITY_LIST_UNIVERSES` and `QUERY_OPTION_NAMES` with them.
+- **BREAKING — `TraverseRequest.cursor` and `TraverseResponse.nextCursor`
+  (TypeScript SDK).** velesdb-server's `TraverseRequest` and
+  `TraverseResponse` have no cursor (the WASM backend has no traversal), so
+  the request field was dropped and the response field always `undefined`.
+  `hasMore` says the traversal stopped at `limit`.
+
 ### Fixed
+
+- **`velesdb-server` applies the `[server]` and `[logging]` settings
+  `docs/guides/CONFIGURATION.md` documents.** In 7.1.0 `workers`,
+  `max_body_size`, `cors_enabled`, `cors_origins` and the whole `[logging]`
+  table were documented and dropped without a word: no field read them, and the body
+  limit, the worker count and the log filter were hard-wired. Each now does
+  what the guide says, and the guide says what each does:
+  - `[server] workers` sizes the Tokio runtime, which `main` now builds after
+    reading the configuration instead of through `#[tokio::main]`. `0`, the
+    default, keeps one worker per CPU; above 4096 is refused.
+  - `[server] max_body_size` (bytes, default 100 MiB, range 1 B–1 GiB) is the
+    largest body any route accepts: in full on `POST .../points` and
+    `.../points/raw`, capped at 2 MiB on every other route as before. A larger
+    body gets `413`. `velesdb_server::routes::api_routes_with_body_limit` is
+    the router with that limit; `api_routes()` keeps the defaults.
+  - `[server] cors_enabled` (default `true`) is a master switch that removes
+    the CORS layer when `false`; `[server] cors_origins` is the same
+    exact-match list as `[cors] allowed_origins`, and setting both is refused
+    (its default changed too, see Changed above).
+  - `[logging] level`, `format` (`text` or `json`, one object per line) and
+    `file` (appended to; empty = stdout) configure the subscriber, as does
+    `VELESDB_LOGGING_LEVEL`. Precedence: `RUST_LOG` > `VELESDB_LOGGING_LEVEL` >
+    `[logging] level` > `info,tower_http=debug`, the filter an unconfigured
+    server has always used; an empty variable counts as unset, and a
+    `RUST_LOG` that overrides a configured level is named in a startup
+    warning. `json` enables `tracing-subscriber`'s `json` feature, which adds
+    one crate, `tracing-serde`.
+  - A key in `[server]`, `[auth]`, `[tls]`, `[cors]` or `[logging]` that the
+    server does not read is named in a startup warning instead of being
+    ignored.
+  - **Refused at startup where it used to be dropped:** a CORS origin that can
+    never equal a browser's `Origin` header (a path, a trailing `/`, no
+    scheme), `"*"` mixed into an origin list (which silently allowed every
+    origin), and a CORS method or header name that does not parse. A file with
+    one of these stopped matching what it said long ago; it now stops the
+    server with the offending value named.
+  - The guide's environment examples used `VELESDB_SERVER_PORT` /
+    `VELESDB_SERVER_HOST`, which the server never read; they now use
+    `VELESDB_PORT` / `VELESDB_HOST`.
+  - Engine variables (`VELESDB_LIMITS_MAX_COLLECTIONS`, ...) apply when
+    `velesdb-server` starts with no config file at all, as CONFIGURATION.md
+    says (see the `load_from_path_engine_only` entry above; the CLI is fixed
+    the same way).
+  - An unknown top-level table (`[sever]`) is named in the same startup
+    warning as an unread key ("not read by this velesdb-server build"). Tables
+    the engine reads, removed tables the engine already warns about, and
+    `[update_check]` in a build with that feature are not; `[premium]`, read
+    only by premium distributions, is.
+  - `cors_origins = ["*"]` next to a `[cors]` setting the permissive policy
+    ignores (`allow_credentials = true`, methods, headers, `max_age_secs`) is
+    refused at startup instead of being ignored.
+  - The Docker image and `docker-compose.yml` no longer set `RUST_LOG=info`
+    (7.1.0 did),
+    which outranked `[logging] level` and `VELESDB_LOGGING_LEVEL` in every
+    container. Unset, the image logs at the server default: `info`, plus
+    `tower_http`'s per-request debug lines.
+
+- **`POST /collections` with `collection_type: "graph"` honours `dimension`
+  and `metric`.** In 7.1.0 the handler created every graph collection without
+  embeddings and with cosine, whatever the body said; `dimension` now gives the
+  nodes embeddings of that dimension (core's
+  `create_graph_collection_with_embeddings`), searched with `metric`. Without
+  `dimension` a graph still has no embeddings. `POST .../graph/search` with a
+  query of the wrong dimension now answers `400`, as documented, instead of
+  `500`. The `CreateCollectionRequest` field docs (and so the OpenAPI
+  descriptions) name the graph case.
+
+- **A client's error no longer opens a collection's circuit breaker.** Every
+  failed query counted toward the breaker, so five in a row of one client's
+  mistake — a MATCH `ORDER BY` the executor cannot run, a query vector of the
+  wrong dimension, a bad REST search body, a `timeout_ms` of `0` or a
+  `WITH (timeout_ms = 1)`, a query too broad for `max_cardinality`, a read the
+  access gate denied — opened it, and every query on the collection then
+  failed with `VELES-027` for the 30 s recovery window. The breaker now counts
+  only failures that say the engine is unhealthy: storage, I/O, corruption and
+  internal errors, a timeout under the server's own limit, the memory budget.
+  `Error::is_caller_error` is the one classification (exhaustive over the
+  variants and over `GuardRailKind`); a request's own time budget is the
+  client's when it is tighter than the server's limit. Every recording site
+  calls `CircuitBreaker::record_error`, which also never counts the breaker's
+  own refusal: 19 in core (3 in `early_return`, 8 in `match_dispatch` — the
+  MATCH traversal failure, which was not recorded at all, among them — 2 in
+  `query_pipeline`, 2 in `select_dispatch`, 4 in `sparse_dispatch`) and 2 in
+  the server (the REST search outcome, and the REST search timeout, which
+  called `record_failure` unconditionally and is now classified by the same
+  `QueryLimits::timeout_budget` as `WITH (timeout_ms)`). The REST search handlers no longer
+  record a `400` refusing the request body, nor a read the access gate denied
+  (`AccessDecision::Deny`, whatever error carries it). The server's
+  `4xx`/`5xx` choice reads the same classification.
+
+- **The TypeScript SDK's agent memory works over REST.**
+  `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`,
+  `recallRecentEvents` and `recallOlderThanEvents` sent a flat
+  `{ _memory_type: '...' }` filter that velesdb-server refuses with a `400`,
+  so every recall failed while `REST_CAPABILITIES.agentMemory` advertised
+  them. They now send core filters built by one pair of helpers
+  (`memoryTypeFilter`, `episodicWindowFilter`), and the temporal recalls let
+  the server apply their `timestamp` window (`gt` since, `lt` before)
+  instead of scrolling every episodic point to filter it client-side. The
+  exact JSON is pinned by `conformance/filter_wire_cases.json`, shared by a
+  velesdb-core test that parses each case as `Filter` and checks which
+  payloads it selects (`tests/filter_wire_conformance.rs`) and an SDK test
+  that asserts the requests carry those bodies
+  (`sdks/typescript/tests/filter-wire-contract.test.ts`).
+- **`velesdb-wasm` returns plain objects, not ES2015 `Map`s, so the TypeScript
+  SDK's WASM backend can read its results (#2332).** Every value the binding
+  handed to JavaScript went through `serde-wasm-bindgen`'s default serializer,
+  which turns a map into a `Map`: a record from `hybrid_search`,
+  `text_search`, `search_with_filter` or `get`, the `bindings` of `query`, and
+  the `properties` of `GraphNode.to_json` / `GraphEdge.to_json`. On a `Map`,
+  `record.id` is `undefined` and `JSON.stringify` yields `{}`, so the SDK's
+  `textSearch`, `hybridSearch`, filtered `search` and `get` threw (`Cannot
+  read properties of undefined`) on every call that matched a row, with
+  velesdb-wasm 6.x through 7.1.0. The crate now has one serializer,
+  `Serializer::json_compatible()`, and a test fails on any call that bypasses
+  it. What changes for a direct caller of the binding: records are plain
+  objects, and an absent value is `null` (listed under Changed). Ids are
+  unchanged: still a JS `number`, still refused above
+  `Number.MAX_SAFE_INTEGER`. `text_search` records gain an explicit `score:
+  null`: the [WASM API guide](docs/guides/WASM_API.md) promised a score its
+  unranked substring match never computed, and the guide now says so. The
+  `velesdb-wasm` crate doc showed `search()` returning BigInt ids (`[[1n,
+  0.95]]`); they are JS numbers, and it now says so. Graphs saved to IndexedDB
+  by earlier versions still load: the deserializer reads both shapes. The SDK
+  gains a suite that runs its search family over a real velesdb-wasm build
+  instead of a fake store, run by the `wasm-check` CI job.
+
+- **LlamaIndex `GraphLoader` reaches its graph collection.** It opened a
+  second `velesdb.Database` on the vector store's path, which core refuses
+  once the store holds it open (`VELES-031`), and silently fell back to an
+  in-memory graph store, so in 7.1.0 no edge persisted. It now reuses the
+  store's own handle, as `GraphRetriever` does.
+- **LangChain and LlamaIndex `GraphRetriever` return graph neighbours.** In
+  7.1.0 every result slot went to a vector hit on a store holding at least
+  `expand_k` documents, so graph expansion never added one. The order is now
+  defined and the same in both: seeds by score, then neighbours seed by seed
+  in traversal order, where the set they were kept in made it arbitrary. A
+  neighbour that is a seed or that the vector store cannot return takes no
+  slot.
+- **LangChain and LlamaIndex `GraphRetriever` report a neighbour's real
+  `graph_depth`.** In 7.1.0 every neighbour was marked `1`, also one reached
+  at depth 2, so `GraphQARetriever`'s depth re-ranking could not tell them
+  apart. It is now the hops from the nearest seed, as the traversal reports
+  it, in native and REST mode alike. REST mode also turns `target_id`, which
+  the server serialises as a string, into an integer: LlamaIndex passed the
+  string to the collection, which raised `TypeError` out of `retrieve()`. The
+  new `velesdb_common.graph.parse_graph_traverse_results` returns
+  `(target_id, depth)` pairs, and `parse_graph_traverse_response` now returns
+  integer ids.
+- **The GraphRAG examples run.** `examples/python/graphrag_langchain.py` and
+  `graphrag_llamaindex.py` imported a store class that does not exist and
+  called REST routes the server does not have. They now use the integrations
+  natively (`VelesDBVectorStore`, `GraphLoader`, `GraphRetriever`), with no
+  server, and run offline with the frameworks' fake embeddings and LLM when no
+  OpenAI key is set or with `--offline`; each integration's test suite runs
+  its example that way.
 
 - **The Python quickstart and examples run on 8.0.0.** The root README's
   "three commands that work" ran `examples/python/hello_velesdb.py`, which
@@ -98,6 +574,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   architecture reference ran `USING FUSION` with no branch to fuse, and the
   CLI cookbook's weighted, maximum and default fusion samples with a single
   `NEAR`: each fails with `V012`. They fuse `NEAR` with a `MATCH`.
+- **Every `sql` block in the docs is VelesQL the engine accepts.** 60 statements
+  in the spec and the guides were refused: `MATCH` without `RETURN` (or with
+  `ORDER BY` before it), `HAVING` on a SELECT alias, `IN (SELECT ...)`, a comma
+  join, `DATE()`, a PostgreSQL `CREATE TABLE`, and grammar notation or
+  consecutive statements with no `;`. They are rewritten in supported syntax,
+  or the guide now says the feature does not exist (comma joins, `DATE()`,
+  set-membership subqueries — also listed in the spec and the conformance
+  matrix); the cookbook no longer calls scalar subqueries and outer joins
+  unexecutable. The cheat-sheet test became `velesql_doc_samples`, which parses
+  and validates every `sql` block of the user-facing markdown; the fence
+  convention it enforces (`postgresql`, `text`, `velesql-error`) is in
+  `CONTRIBUTING.md`. The MATCH `ORDER BY` forms the engine refuses (an
+  aggregate, a lone bare identifier) are now documented in the spec, the graph
+  patterns guide and the conformance matrix.
 - **Docs that named a missing API or a wrong version.**
   - The concurrency guide configured a collection with
     `CollectionConfig::new(..).with_durability(..)`, which does not exist: a
@@ -165,6 +655,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`@wiscale/tauri-plugin-velesdb` ships a README.** Its package listed
   `README.md` in `files`, but none existed, so the npm page was empty.
 - The committed Playwright report of the e-commerce example is removed.
+
+### Documentation
+
+- **TypeScript SDK README:** the stale "What's New in v3.12.0" section under
+  the v8.0.0 banner is replaced by what 8.0.0 changes; filters, the HNSW
+  options, the search and query options, graph schema mode, traversal and
+  the supported Node.js
+  versions describe what the SDK does. `docs/guides/AGENT_MEMORY.md` states
+  the filters agent memory sends, and `docs/guides/MIGRATION_v8.0.0.md` gains
+  a TypeScript SDK section.
 
 ## [8.0.0] - 2026-10-30
 

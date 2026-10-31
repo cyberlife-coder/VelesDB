@@ -1,0 +1,623 @@
+{
+  "description": "Metadata filter wire shapes shared by velesdb-core (tests/filter_wire_conformance.rs) and the TypeScript SDK (sdks/typescript/tests/filter-wire-contract.test.ts). Every `valid` case must deserialize as velesdb_core::Filter and match exactly the `matches` payloads; every `invalid` case must be refused by core and by the SDK's normalizeFilter. The `agent_memory_*` cases are the exact filters the SDK's agent-memory REST calls send; with the `condition_*` cases every core condition kind appears, and velesdb-wasm (src/filter_tests.rs) evaluates every valid case with the same expectations.",
+  "valid": [
+    {
+      "id": "agent_memory_semantic",
+      "filter": {
+        "condition": {
+          "type": "eq",
+          "field": "_memory_type",
+          "value": "semantic"
+        }
+      },
+      "matches": [
+        {
+          "_memory_type": "semantic",
+          "content": "x"
+        }
+      ],
+      "rejects": [
+        {
+          "_memory_type": "episodic",
+          "timestamp": 1
+        },
+        {}
+      ]
+    },
+    {
+      "id": "agent_memory_episodic",
+      "filter": {
+        "condition": {
+          "type": "eq",
+          "field": "_memory_type",
+          "value": "episodic"
+        }
+      },
+      "matches": [
+        {
+          "_memory_type": "episodic",
+          "timestamp": 1
+        }
+      ],
+      "rejects": [
+        {
+          "_memory_type": "semantic"
+        },
+        {}
+      ]
+    },
+    {
+      "id": "agent_memory_procedural",
+      "filter": {
+        "condition": {
+          "type": "eq",
+          "field": "_memory_type",
+          "value": "procedural"
+        }
+      },
+      "matches": [
+        {
+          "_memory_type": "procedural",
+          "name": "deploy"
+        }
+      ],
+      "rejects": [
+        {
+          "_memory_type": "semantic"
+        }
+      ]
+    },
+    {
+      "id": "agent_memory_episodic_since_200",
+      "filter": {
+        "condition": {
+          "type": "and",
+          "conditions": [
+            {
+              "type": "eq",
+              "field": "_memory_type",
+              "value": "episodic"
+            },
+            {
+              "type": "gt",
+              "field": "timestamp",
+              "value": 200
+            }
+          ]
+        }
+      },
+      "matches": [
+        {
+          "_memory_type": "episodic",
+          "timestamp": 201
+        },
+        {
+          "_memory_type": "episodic",
+          "timestamp": 300
+        }
+      ],
+      "rejects": [
+        {
+          "_memory_type": "episodic",
+          "timestamp": 200
+        },
+        {
+          "_memory_type": "episodic"
+        },
+        {
+          "_memory_type": "semantic",
+          "timestamp": 300
+        }
+      ]
+    },
+    {
+      "id": "agent_memory_episodic_before_200",
+      "filter": {
+        "condition": {
+          "type": "and",
+          "conditions": [
+            {
+              "type": "eq",
+              "field": "_memory_type",
+              "value": "episodic"
+            },
+            {
+              "type": "lt",
+              "field": "timestamp",
+              "value": 200
+            }
+          ]
+        }
+      },
+      "matches": [
+        {
+          "_memory_type": "episodic",
+          "timestamp": 199
+        }
+      ],
+      "rejects": [
+        {
+          "_memory_type": "episodic",
+          "timestamp": 200
+        },
+        {
+          "_memory_type": "episodic"
+        },
+        {
+          "_memory_type": "procedural",
+          "timestamp": 100
+        }
+      ]
+    },
+    {
+      "id": "condition_neq",
+      "filter": {
+        "condition": {
+          "type": "neq",
+          "field": "status",
+          "value": "archived"
+        }
+      },
+      "matches": [
+        {
+          "status": "active"
+        },
+        {}
+      ],
+      "rejects": [
+        {
+          "status": "archived"
+        }
+      ]
+    },
+    {
+      "id": "condition_gte",
+      "filter": {
+        "condition": {
+          "type": "gte",
+          "field": "price",
+          "value": 50
+        }
+      },
+      "matches": [
+        {
+          "price": 50
+        },
+        {
+          "price": 60.5
+        }
+      ],
+      "rejects": [
+        {
+          "price": 40
+        },
+        {
+          "price": "60"
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_lte",
+      "filter": {
+        "condition": {
+          "type": "lte",
+          "field": "price",
+          "value": 50
+        }
+      },
+      "matches": [
+        {
+          "price": 50
+        },
+        {
+          "price": -1
+        }
+      ],
+      "rejects": [
+        {
+          "price": 51
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_in",
+      "filter": {
+        "condition": {
+          "type": "in",
+          "field": "category",
+          "values": [
+            "tech",
+            "science"
+          ]
+        }
+      },
+      "matches": [
+        {
+          "category": "tech"
+        },
+        {
+          "category": "science"
+        }
+      ],
+      "rejects": [
+        {
+          "category": "art"
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_contains",
+      "filter": {
+        "condition": {
+          "type": "contains",
+          "field": "title",
+          "value": "vector"
+        }
+      },
+      "matches": [
+        {
+          "title": "a vector db"
+        }
+      ],
+      "rejects": [
+        {
+          "title": "graph"
+        },
+        {
+          "title": 5
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_is_null",
+      "filter": {
+        "condition": {
+          "type": "is_null",
+          "field": "deleted_at"
+        }
+      },
+      "matches": [
+        {
+          "deleted_at": null
+        },
+        {}
+      ],
+      "rejects": [
+        {
+          "deleted_at": "2026-01-01"
+        }
+      ]
+    },
+    {
+      "id": "condition_is_not_null",
+      "filter": {
+        "condition": {
+          "type": "is_not_null",
+          "field": "deleted_at"
+        }
+      },
+      "matches": [
+        {
+          "deleted_at": "2026-01-01"
+        }
+      ],
+      "rejects": [
+        {
+          "deleted_at": null
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_or",
+      "filter": {
+        "condition": {
+          "type": "or",
+          "conditions": [
+            {
+              "type": "eq",
+              "field": "a",
+              "value": 1
+            },
+            {
+              "type": "eq",
+              "field": "b",
+              "value": 2
+            }
+          ]
+        }
+      },
+      "matches": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "rejects": [
+        {
+          "a": 2
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_not",
+      "filter": {
+        "condition": {
+          "type": "not",
+          "condition": {
+            "type": "eq",
+            "field": "a",
+            "value": 1
+          }
+        }
+      },
+      "matches": [
+        {
+          "a": 2
+        },
+        {}
+      ],
+      "rejects": [
+        {
+          "a": 1
+        }
+      ]
+    },
+    {
+      "id": "condition_like",
+      "filter": {
+        "condition": {
+          "type": "like",
+          "field": "name",
+          "pattern": "al%"
+        }
+      },
+      "matches": [
+        {
+          "name": "alice"
+        },
+        {
+          "name": "al"
+        }
+      ],
+      "rejects": [
+        {
+          "name": "Alice"
+        },
+        {
+          "name": "bob"
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_ilike",
+      "filter": {
+        "condition": {
+          "type": "ilike",
+          "field": "name",
+          "pattern": "al%"
+        }
+      },
+      "matches": [
+        {
+          "name": "Alice"
+        },
+        {
+          "name": "alice"
+        }
+      ],
+      "rejects": [
+        {
+          "name": "bob"
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_array_contains",
+      "filter": {
+        "condition": {
+          "type": "array_contains",
+          "field": "tags",
+          "value": "rust"
+        }
+      },
+      "matches": [
+        {
+          "tags": [
+            "rust",
+            "go"
+          ]
+        }
+      ],
+      "rejects": [
+        {
+          "tags": [
+            "go"
+          ]
+        },
+        {
+          "tags": "rust"
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_array_contains_any",
+      "filter": {
+        "condition": {
+          "type": "array_contains_any",
+          "field": "tags",
+          "values": [
+            "rust",
+            "c"
+          ]
+        }
+      },
+      "matches": [
+        {
+          "tags": [
+            "c"
+          ]
+        },
+        {
+          "tags": [
+            "rust",
+            "go"
+          ]
+        }
+      ],
+      "rejects": [
+        {
+          "tags": [
+            "go"
+          ]
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_array_contains_all",
+      "filter": {
+        "condition": {
+          "type": "array_contains_all",
+          "field": "tags",
+          "values": [
+            "rust",
+            "go"
+          ]
+        }
+      },
+      "matches": [
+        {
+          "tags": [
+            "go",
+            "rust",
+            "c"
+          ]
+        }
+      ],
+      "rejects": [
+        {
+          "tags": [
+            "rust"
+          ]
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_geo_distance",
+      "filter": {
+        "condition": {
+          "type": "geo_distance",
+          "field": "location",
+          "lat": 48.8566,
+          "lng": 2.3522,
+          "operator": "Lt",
+          "threshold": 10000
+        }
+      },
+      "matches": [
+        {
+          "location": {
+            "lat": 48.86,
+            "lng": 2.35
+          }
+        }
+      ],
+      "rejects": [
+        {
+          "location": {
+            "lat": 51.5074,
+            "lng": -0.1278
+          }
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_geo_bbox",
+      "filter": {
+        "condition": {
+          "type": "geo_bbox",
+          "field": "location",
+          "lat_min": 48.0,
+          "lng_min": 2.0,
+          "lat_max": 49.0,
+          "lng_max": 3.0
+        }
+      },
+      "matches": [
+        {
+          "location": {
+            "lat": 48.8566,
+            "lng": 2.3522
+          }
+        }
+      ],
+      "rejects": [
+        {
+          "location": {
+            "lat": 51.5074,
+            "lng": -0.1278
+          }
+        },
+        {}
+      ]
+    },
+    {
+      "id": "condition_nested_field",
+      "filter": {
+        "condition": {
+          "type": "eq",
+          "field": "user.name",
+          "value": "John"
+        }
+      },
+      "matches": [
+        {
+          "user": {
+            "name": "John"
+          }
+        }
+      ],
+      "rejects": [
+        {
+          "user": {
+            "name": "Jane"
+          }
+        },
+        {
+          "user": "John"
+        }
+      ]
+    }
+  ],
+  "invalid": [
+    {
+      "id": "flat_equality_map",
+      "filter": {
+        "_memory_type": "semantic"
+      }
+    },
+    {
+      "id": "empty_object",
+      "filter": {}
+    },
+    {
+      "id": "condition_not_an_object",
+      "filter": {
+        "condition": "eq"
+      }
+    }
+  ]
+}

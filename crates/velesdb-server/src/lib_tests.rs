@@ -587,3 +587,117 @@ async fn test_openapi_routes_match_router() {
         failures.join("\n  ")
     );
 }
+
+/// Status of `POST uri` with a body of `size` bytes through `router`.
+async fn post_status(router: &axum::Router, uri: &str, size: usize) -> axum::http::StatusCode {
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        // The type each route documents: the raw route refuses any other
+        // with 415 before it reads a byte (`handlers::content_type`).
+        .header(
+            "content-type",
+            if uri.ends_with("/raw") {
+                "application/octet-stream"
+            } else {
+                "application/json"
+            },
+        )
+        .body(axum::body::Body::from(vec![b' '; size]))
+        .expect("test: build request");
+    tower::ServiceExt::oneshot(router.clone(), req)
+        .await
+        .expect("test: send request")
+        .status()
+}
+
+/// `[server] max_body_size` above 2 MiB raises the point-upload routes alone:
+/// the upload sub-router's own limit must win over the router-wide cap, and
+/// the cap must still hold everywhere else.
+#[tokio::test]
+async fn test_max_body_size_above_the_json_cap_raises_upload_routes_only() {
+    let (state, _dir) = create_conformance_state();
+    let max_body_size = 2 * crate::routes::JSON_BODY_LIMIT;
+    let router = crate::routes::api_routes_with_body_limit(max_body_size).with_state(state);
+    let between = crate::routes::JSON_BODY_LIMIT + 1024;
+    let too_large = axum::http::StatusCode::PAYLOAD_TOO_LARGE;
+
+    for upload in ["/collections/c/points", "/collections/c/points/raw"] {
+        assert_ne!(
+            post_status(&router, upload, between).await,
+            too_large,
+            "{upload}"
+        );
+        assert_eq!(
+            post_status(&router, upload, max_body_size + 1).await,
+            too_large,
+            "{upload}"
+        );
+    }
+    for other in ["/query", "/collections/c/search"] {
+        assert_eq!(
+            post_status(&router, other, between).await,
+            too_large,
+            "{other}"
+        );
+    }
+}
+
+/// Every operation that takes a body refuses the content types a browser can
+/// send without a CORS preflight. The JSON routes get that from axum's
+/// `Json` extractor, the stream and raw routes from
+/// `handlers::content_type`; a route that read its body raw with neither
+/// would let a page on any site send it data — this is what would catch
+/// one. Derived from the spec, so a new body-taking route is covered by
+/// declaring it.
+#[tokio::test]
+async fn test_every_body_route_refuses_preflight_free_content_types() {
+    let spec = openapi_json();
+    let operations: Vec<(String, String)> = spec["paths"]
+        .as_object()
+        .expect("paths")
+        .iter()
+        .flat_map(|(path, ops)| {
+            ops.as_object()
+                .expect("operations")
+                .iter()
+                .filter(|(_, op)| op.get("requestBody").is_some())
+                .map(move |(method, _)| (path.clone(), method.to_ascii_uppercase()))
+        })
+        .collect();
+    assert!(
+        operations.len() > 20,
+        "only {} operations take a body — the spec or this filter broke",
+        operations.len()
+    );
+
+    let (state, _dir) = create_conformance_state();
+    let router = crate::routes::api_routes().with_state(state);
+    let mut accepted = Vec::new();
+    for (template, method) in &operations {
+        for content_type in [
+            "text/plain",
+            "application/x-www-form-urlencoded",
+            "multipart/form-data; boundary=x",
+        ] {
+            let req = axum::http::Request::builder()
+                .method(method.as_str())
+                .uri(template_to_uri(template))
+                .header("content-type", content_type)
+                .body(axum::body::Body::from("x"))
+                .expect("test: build request");
+            let status = tower::ServiceExt::oneshot(router.clone(), req)
+                .await
+                .expect("test: send request")
+                .status();
+            if status != axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE {
+                accepted.push(format!("{method} {template} [{content_type}] -> {status}"));
+            }
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "body-taking routes that did not refuse a preflight-free content type:\n  {}",
+        accepted.join("\n  ")
+    );
+}

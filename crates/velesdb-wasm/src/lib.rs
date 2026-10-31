@@ -42,9 +42,10 @@
 //! const store = new VectorStore(768, "cosine");
 //! store.insert(1n, new Float32Array([0.1, 0.2, ...]));
 //!
-//! // search() returns Array<[bigint, number]>
+//! // Ids go in as BigInt and come back as plain numbers:
+//! // search() returns Array<[number, number]>
 //! const results = store.search(new Float32Array([0.1, ...]), 10);
-//! // results = [[1n, 0.95], [42n, 0.87], ...]
+//! // results = [[1, 0.95], [42, 0.87], ...]
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,7 @@ mod graph_persistence;
 mod graph_store;
 mod graph_worker_hints;
 mod idb_helpers;
+mod js_value;
 /// WASM binding for `velesdb-memory`'s agent-memory wedge — see
 /// [`memory_service::WasmMemoryService`], exported to JS as `MemoryService`.
 mod memory_service;

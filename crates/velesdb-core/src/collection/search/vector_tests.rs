@@ -402,7 +402,13 @@ fn test_filtered_perfect_search_over_cap_is_rejected() {
         .search_with_filter_and_opts(&[0.1, 0.2, 0.3, 0.4], 5, &filter, &opts)
         .expect_err("filtered Perfect search over cap must be rejected");
     assert!(
-        matches!(err, crate::error::Error::GuardRail(_)),
+        matches!(
+            err,
+            crate::error::Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                ..
+            }
+        ),
         "expected GuardRail, got {err:?}"
     );
 }

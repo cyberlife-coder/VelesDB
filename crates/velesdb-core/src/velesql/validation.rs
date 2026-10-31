@@ -1,8 +1,9 @@
 //! Query validation for VelesQL (EPIC-044 US-007).
 //!
 //! Type definitions (`ValidationError`, `ValidationErrorKind`, `ValidationConfig`,
-//! `ComplexityStats`) live in `validation_types.rs` and the V011 MATCH anchor
-//! rule in `validation_anchor.rs`, to keep each file under the 500 NLOC limit.
+//! `ComplexityStats`) live in `validation_types.rs`, the V011 MATCH anchor
+//! rule in `validation_anchor.rs` and the V015 MATCH `ORDER BY` rule in
+//! `validation_match_order.rs`, to keep each file under the 500 NLOC limit.
 
 use super::ast::{ArithmeticExpr, Condition, DmlStatement, OrderByExpr, Query, SelectColumns};
 use super::error::{ParseError, ParseErrorKind};
@@ -19,6 +20,7 @@ pub use super::validation_types::{
 /// - LET binding legality (DDL/DML/admin cannot use LET)
 /// - Similarity context (similarity() requires a score-producing WHERE clause)
 /// - Qualified wildcard alias resolution
+/// - MATCH `ORDER BY` forms the MATCH executor can sort by (V015)
 /// - Compound query validation across UNION/INTERSECT/EXCEPT operands
 /// - Complexity budget enforcement (AST depth, LIKE/ILIKE terms, graph hops)
 pub struct QueryValidator;
@@ -46,6 +48,10 @@ impl QueryValidator {
         // clause (SELECT, compound operands, or DML) before further validation.
         reject_subqueries(query)?;
 
+        if let Some(ref match_clause) = query.match_clause {
+            Self::validate_match_clause(match_clause)?;
+        }
+
         // Non-SELECT statements: only check LET bindings.
         if !requires_select_validation(query) {
             return reject_let_on_non_select(query);
@@ -60,6 +66,22 @@ impl QueryValidator {
         }
 
         Ok(())
+    }
+
+    /// Validates a bare MATCH clause: the rules [`validate`](Self::validate)
+    /// applies to the MATCH part of a statement, for the surfaces that take a
+    /// [`MatchClause`](super::MatchClause) rather than a whole query
+    /// (`Collection::match_query_ordered`, `execute_match`,
+    /// `execute_match_with_similarity`). One rule set, so the same MATCH gets
+    /// the same answer on every surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationErrorKind::UnsupportedMatchOrderBy`] (`V015`) for
+    /// an `ORDER BY` the MATCH executor cannot sort by (the rule lives in
+    /// `validation_match_order.rs`).
+    pub fn validate_match_clause(clause: &super::MatchClause) -> Result<(), ValidationError> {
+        super::validation_match_order::validate_match_order_by(clause)
     }
 
     /// Validates a single SELECT statement (main or compound operand).

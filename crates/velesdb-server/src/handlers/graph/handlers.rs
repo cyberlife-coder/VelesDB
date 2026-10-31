@@ -16,7 +16,10 @@ use axum::{
 use velesdb_core::collection::graph::{GraphEdge, TraversalConfig};
 use velesdb_core::observer::QueryOperationKind;
 
-use crate::handlers::helpers::{auto_core_error_response, run_blocking, run_blocking_typed};
+use crate::handlers::helpers::{
+    authorize_unscoped_read, auto_core_error_response, core_error_body, run_blocking,
+    run_blocking_typed,
+};
 use crate::types::ErrorResponse;
 use crate::AppState;
 
@@ -99,8 +102,9 @@ pub(super) fn get_graph_collection_or_404(
 /// Shared graph preamble for **read** operations: resolves the collection via
 /// [`graph_preamble`], then routes the read through the control-plane gate
 /// (CORE-2). Graph reads have no metadata-filter channel to narrow, so a
-/// denied or scope-narrowed decision refuses the request (fail closed)
-/// rather than running it unfiltered.
+/// scope-narrowed decision refuses the request (fail closed, `400`
+/// `VELES-009`) rather than running it unfiltered, and a denial answers the
+/// denial error's canonical status and code ([`authorize_unscoped_read`]).
 ///
 /// Mirrors the gate `MATCH` (`handlers::match_query`) and embedding
 /// [`super::handlers_extended::graph_search`] already apply — centralized
@@ -113,16 +117,9 @@ pub(super) fn graph_read_preamble(
     operation: QueryOperationKind,
 ) -> Result<velesdb_core::GraphCollection, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_preamble(state, name)?;
-    match state.db.authorize_read(name, operation, None, None) {
-        Ok(None) => Ok(coll),
-        Ok(Some(_)) | Err(_) => Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Read denied by governance policy".to_string(),
-                code: None,
-            }),
-        )),
-    }
+    authorize_unscoped_read(state, name, operation, "graph reads")
+        .map_err(|refusal| core_error_body(&refusal))?;
+    Ok(coll)
 }
 
 /// Get edges from a collection's graph filtered by label.
@@ -132,9 +129,9 @@ pub(super) fn graph_read_preamble(
     params(("name" = String, Path, description = "Collection name"), EdgeQueryParams),
     responses(
         (status = 200, description = "Edges retrieved successfully", body = EdgesResponse),
-        (status = 400, description = "Missing required 'label' query parameter", body = ErrorResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 400, description = "Missing required 'label' query parameter, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
     ),
     tag = "graph"
 )]
@@ -247,15 +244,7 @@ fn build_edge(request: AddEdgeRequest) -> Result<GraphEdge, (StatusCode, Json<Er
     };
 
     let edge = GraphEdge::new(request.id, request.source, request.target, &request.label)
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!("Invalid edge: {e}"),
-                    code: None,
-                }),
-            )
-        })?
+        .map_err(|e| core_error_body(&e))?
         .with_properties(properties);
     Ok(edge)
 }
@@ -310,9 +299,9 @@ pub async fn add_edges_batch(
     request_body = TraverseRequest,
     responses(
         (status = 200, description = "Traversal completed successfully", body = TraverseResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 400, description = "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     ),
     tag = "graph"
@@ -392,8 +381,9 @@ pub async fn traverse_graph(
     ),
     responses(
         (status = 200, description = "Degree retrieved successfully", body = DegreeResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 400, description = "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
     ),
     tag = "graph"
 )]

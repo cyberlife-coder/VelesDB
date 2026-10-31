@@ -449,12 +449,12 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R004 and R010–R013: queries both engines must refuse,
-  each with the `expected_code` both must report — `NEAR_FUSED` with
-  `weighted`/`rsf` and `USING FUSION` over a single `NEAR` (V012), a
-  `GROUP BY` ordered by an aggregate the SELECT does not list (V016), and
-  output columns sharing a name, an aggregate named `score` included
-  (R011–R013, V017).
+- `rejected_cases` R001–R013: queries both engines must refuse, each with the
+  `expected_code` both must report — `NEAR_FUSED` with `weighted`/`rsf` and
+  `USING FUSION` over a single `NEAR` (V012), a MATCH `ORDER BY` of an
+  aggregate or a bare name (R005–R009, V015), a `GROUP BY` ordered by an
+  aggregate the SELECT does not list (R010, V016), and output columns sharing
+  a name, an aggregate named `score` included (R011–R013, V017).
 - `null_order_cases` O001–O002: a plain SELECT whose ORDER BY key is missing
   on a row, which sorts last under `ASC` and first under `DESC`.
 - `vector_group_cases` V001–V010: a vector `GROUP BY` (`NEAR` + `GROUP BY`)

@@ -50,8 +50,6 @@ export interface HnswParams {
   efConstruction?: number;
   /** Maximum number of elements in the index */
   maxElements?: number;
-  /** Storage mode for vector quantization */
-  storageMode?: StorageMode;
   /** Alpha parameter for HNSW construction */
   alpha?: number;
 }
@@ -104,8 +102,6 @@ export interface CollectionConfig {
   storageMode?: StorageMode;
   /** Collection type: 'vector' (default) or 'metadata_only' */
   collectionType?: CollectionType;
-  /** Optional collection description */
-  description?: string;
   /** Optional HNSW parameters for index tuning */
   hnsw?: HnswParams;
   /**

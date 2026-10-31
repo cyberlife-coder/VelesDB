@@ -175,6 +175,7 @@ impl VectorStore {
         store_search::validate_dimension(query.len(), self.dimension)?;
         let filter_obj: serde_json::Value = serde_wasm_bindgen::from_value(filter)
             .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
+        let filter = filter::parse_filter(filter_obj).map_err(|e| JsValue::from_str(&e))?;
         store_search::search_with_filter_impl(
             query,
             &self.ids,
@@ -183,7 +184,7 @@ impl VectorStore {
             self.dimension,
             self.metric,
             k,
-            |payload: &serde_json::Value| filter::matches_filter(payload, &filter_obj),
+            |payload: &serde_json::Value| filter.matches(payload),
         )
     }
 
@@ -248,6 +249,9 @@ impl VectorStore {
     }
 
     /// Text search on payload fields (substring matching).
+    ///
+    /// Returns `[{id, score, payload}, ...]` in insertion order, truncated to
+    /// `k`, with `score: null`: a substring match selects, it does not rank.
     #[wasm_bindgen]
     pub fn text_search(
         &self,
@@ -308,7 +312,7 @@ impl VectorStore {
         let results = self
             .search_sparse_scored(query_indices, query_values, k)
             .map_err(|e| JsValue::from_str(&e))?;
-        serde_wasm_bindgen::to_value(&results)
+        crate::js_value::to_js_value(&results)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
     }
 
@@ -355,7 +359,7 @@ impl VectorStore {
             })
             .collect();
 
-        serde_wasm_bindgen::to_value(&hybrid_results)
+        crate::js_value::to_js_value(&hybrid_results)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
     }
 
@@ -404,7 +408,7 @@ impl VectorStore {
         k: usize,
     ) -> Result<JsValue, JsValue> {
         if num_vectors == 0 {
-            return serde_wasm_bindgen::to_value::<Vec<Vec<(u64, f32)>>>(&vec![])
+            return crate::js_value::to_js_value::<Vec<Vec<(u64, f32)>>>(&vec![])
                 .map_err(|e| JsValue::from_str(&e.to_string()));
         }
         store_search::validate_multi_vector_len(vectors.len(), num_vectors, self.dimension)

@@ -120,7 +120,7 @@ fn rank_by_score(rows: &mut [OwnedScanRow], higher_is_better: bool) {
 ///
 /// Two condition views are kept:
 ///
-/// - `normalized`: the full WHERE clause after [`push_not_inward`]. Still
+/// - `normalized`: the full WHERE clause after [`push_not_inward`](crate::velesql_logic::push_not_inward). Still
 ///   contains `Similarity(_)` leaves; evaluated row-wise via
 ///   [`velesql_similarity::evaluate_where_with_similarity`] so boolean
 ///   composition (AND / OR / NOT) around similarity stays correct —

@@ -399,7 +399,10 @@ fn test_core_err_mapping_covers_every_code() {
             CoreError::ColumnStoreError("x".into()),
             CoreError::GpuError("x".into()),
             CoreError::EpochMismatch("x".into()),
-            CoreError::GuardRail("x".into()),
+            CoreError::GuardRail {
+                kind: velesdb_core::GuardRailKind::Cardinality,
+                message: "x".into(),
+            },
             CoreError::InvalidQuantizerConfig("x".into()),
             CoreError::TrainingFailed("x".into()),
             CoreError::SparseIndexError("x".into()),
