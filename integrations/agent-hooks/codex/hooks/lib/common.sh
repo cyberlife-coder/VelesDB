@@ -633,4 +633,359 @@ promote_pending_recall() {
   rmdir "$dir" 2>/dev/null || true
 }
 
+# --- Verifiable evidence for feedback ------------------------------------------
+# The Stop checklist asks for feedback on the memories this session's recalls
+# actually returned, against outcomes the hooks observed, never against the
+# model's own impression of what helped. Three kinds of records feed it, each
+# kept per host session in the private state directory:
+#   - the ids a successful recall, recall_where, recall_fused or why returned,
+#     with the server's `stale` verdict for an anchored lesson;
+#   - check outcomes: a single test, build or lint command whose exit status
+#     the host reported (Claude Code: PostToolUse is exit 0, PostToolUseFailure
+#     carries "Exit code N");
+#   - reverts: a commit whose message says "This reverts commit <sha>",
+#     committed in an edited repository since the window opened.
+# None of them drives `feedback` by itself. A hook never opens the store, and
+# no observed outcome names the memory that caused it: a green test after a
+# recall does not prove the memory helped. The checklist presents them as
+# evidence and asks the model to cite one for every feedback it sends.
+
+# Records kept per evidence kind and host session; later ones are dropped.
+EVIDENCE_RECORD_CAP=64
+
+# The longest command text a check record keeps.
+EVIDENCE_COMMAND_MAX=300
+
+# jq: the decoded result object of an MCP call, from whichever of the three
+# shapes successful_tool_response reads.
+TOOL_RESULT_OBJECT='
+  def text_object: select(type == "object" and .type == "text") | .text | fromjson? | select(type == "object");
+  .tool_response
+  | if (type == "string") then (fromjson? // null)
+    elif (type == "array") then (first(.[] | text_object) // null)
+    elif (type == "object") then
+      (if ((.structuredContent? | type) == "object") then .structuredContent
+       else (first(.content[]? | text_object) // null) end)
+    else null end'
+
+# jq: one compact record per memory a recall returned, keyed by its decimal id.
+RECALLED_MEMORIES="$TOOL_RESULT_OBJECT"'
+  | select(type == "object")
+  | ([(.memories? | arrays), (.nodes? | arrays)] | add // [])[]
+  | select(type == "object" and (.id_str | type) == "string" and (.id_str | test("\\A[0-9]{1,20}\\z")))
+  | {id: .id_str, tool: $tool, stale: (((.freshness? | type) == "object") and .freshness.state == "stale")}'
+
+# evidence_dir DIR: DIR exists as a private directory of this user, not a link.
+evidence_dir() {
+  [ -L "$1" ] && return 1
+  if [ ! -e "$1" ]; then
+    mkdir -m 700 "$1" 2>/dev/null || [ -d "$1" ] || return 1
+  fi
+  [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]
+}
+
+# record_evidence DIR NAME RECORD: atomically write DIR/NAME.json, refusing a
+# link or a non-file there. A new record past EVIDENCE_RECORD_CAP is dropped.
+record_evidence() {
+  local path="$1/$2.json"
+  local count
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    count="$(find "$1" -maxdepth 1 -name '*.json' | wc -l | tr -d '[:space:]')"
+    [ "$count" -lt "$EVIDENCE_RECORD_CAP" ] || return 0
+  fi
+  write_private_marker "$path" "$3"
+}
+
+# record_recalled_memories DIR TOOL_NAME PAYLOAD: keep the id of every memory a
+# successful recall returned, one record per id, the latest stale verdict kept.
+record_recalled_memories() {
+  local dir="$1"
+  local records
+  local record
+  local id
+  records="$(printf '%s' "$3" | jq -c --arg tool "${2##*__}" "$RECALLED_MEMORIES" 2>/dev/null)" || return 1
+  [ -n "$records" ] || return 0
+  evidence_dir "$dir" || return 1
+  while IFS= read -r record; do
+    id="$(printf '%s' "$record" | jq -r '.id')" || return 1
+    record_evidence "$dir" "$id" "$record" || return 1
+  done <<<"$records"
+}
+
+# check_kind COMMAND: print test, build or lint when COMMAND is one check
+# whose exit status is its own; fail otherwise. A pipe, a chain, a subshell, an
+# expansion or a redirected input makes the status someone else's (or the
+# command something else), so it is never evidence. `2>&1` is the one
+# redirection removed first, since it changes no status.
+check_kind() {
+  local text="${1//2>&1/}"
+  local -a words=()
+  case "$text" in
+    '' | *[\|\;\&\`\$\(\)\<]* | *[[:cntrl:]]*) return 1 ;;
+  esac
+  read -r -a words <<<"$text"
+  while [ "${#words[@]}" -gt 0 ] && [[ "${words[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+    words=("${words[@]:1}")
+  done
+  if [ "${words[0]:-}" = flock ] && [ "${#words[@]}" -gt 2 ]; then
+    words=("${words[@]:2}")
+  fi
+  [ "${#words[@]}" -gt 0 ] || return 1
+  check_kind_of "${words[@]}"
+}
+
+# check_kind_of WORD...: the kind of check a command's words name.
+check_kind_of() {
+  case "$1 ${2:-}" in
+    'cargo test' | 'cargo nextest' | 'go test' | 'npm test' | 'pnpm test' | 'yarn test') echo test ;;
+    'cargo build' | 'cargo check' | 'go build') echo build ;;
+    'cargo clippy' | 'go vet') echo lint ;;
+    'cargo fmt')
+      case " $* " in
+        *' --check '*) echo lint ;;
+        *) return 1 ;;
+      esac
+      ;;
+    'npm run' | 'pnpm run' | 'yarn run') script_kind "${3:-}" ;;
+    'python -m' | 'python3 -m')
+      case "${3:-}" in
+        pytest | unittest) echo test ;;
+        *) return 1 ;;
+      esac
+      ;;
+    'pytest '*) echo test ;;
+    'ruff '* | 'eslint '* | 'shellcheck '* | 'mypy '* | 'flake8 '*) echo lint ;;
+    *) return 1 ;;
+  esac
+}
+
+# script_kind NAME: the kind of check a package script named NAME runs.
+script_kind() {
+  case "$1" in
+    test*) echo test ;;
+    build*) echo build ;;
+    lint*) echo lint ;;
+    *) return 1 ;;
+  esac
+}
+
+# failure_exit_code ERROR: print N when ERROR's first line is exactly
+# "Exit code N" with N non-zero, the line Claude Code documents for a shell
+# command that ran and exited. A timeout, an interrupt or a process that never
+# started has no such line and is not a check outcome.
+failure_exit_code() {
+  local first="${1%%$'\n'*}"
+  [[ "$first" =~ ^Exit\ code\ ([1-9][0-9]{0,2})$ ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+
+# record_check_outcome DIR COMMAND STATUS: STATUS (pass or fail) of a check.
+# Two records per command, each replaced whole, so no record is read before it
+# is written: KEY.last holds the latest status, KEY.failed exists once the
+# command has failed in this window.
+record_check_outcome() {
+  local dir="$1"
+  local kind
+  local key
+  local record
+  kind="$(check_kind "$2")" || return 0
+  [ "${#2}" -le "$EVIDENCE_COMMAND_MAX" ] || return 0
+  key="$(safe_marker_key "$2")"
+  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  record="$(jq -cn --arg kind "$kind" --arg command "$2" --arg status "$3" \
+    '{kind: $kind, command: $command, status: $status}')" || return 1
+  evidence_dir "$dir" || return 1
+  if [ "$3" = fail ]; then
+    record_evidence "$dir" "$key.failed" "$record" || return 1
+  fi
+  record_evidence "$dir" "$key.last" "$record"
+}
+
+# evidence_epoch VALUE: VALUE is a positive count of seconds, written without a
+# leading zero and at most 10 digits, so arithmetic reads only what it shows.
+evidence_epoch() {
+  [[ "$1" =~ ^[1-9][0-9]{0,9}$ ]]
+}
+
+# open_evidence_window MARKER: record now as the start of the window reverts
+# are read from, unless a valid start is already recorded.
+open_evidence_window() {
+  local since
+  if valid_private_marker "$1"; then
+    read_exact_line since cat "$1" || since=""
+    evidence_epoch "$since" && return 0
+  fi
+  write_private_marker "$1" "$(date +%s)"
+}
+
+# What collect_learning_evidence found: the record files it read, which the
+# checkpoint naming them consumes, and the three evidence arrays.
+EVIDENCE_FILES=()
+EVIDENCE_RECALLED='[]'
+EVIDENCE_CHECKS='[]'
+LEARNING_EVIDENCE=
+
+# collect_recalled DIR: set EVIDENCE_RECALLED to the recalled-memory records of
+# DIR as one JSON array; return 2 when DIR or one of its records is linked or
+# malformed. Never run in a subshell: it adds what it read to EVIDENCE_FILES.
+collect_recalled() {
+  local file
+  local -a files=()
+  [ -L "$1" ] && return 2
+  if [ -d "$1" ]; then
+    for file in "$1"/*.json; do
+      [ -e "$file" ] || [ -L "$file" ] || continue
+      [ -f "$file" ] && [ ! -L "$file" ] && [ -O "$file" ] || return 2
+      jq -s -e --arg name "${file##*/}" '
+        length == 1 and (.[0] | type == "object"
+          and ((keys | sort) == ["id", "stale", "tool"])
+          and (.id | type == "string" and test("\\A[0-9]{1,20}\\z"))
+          and (.stale | type == "boolean")
+          and (.tool | type == "string" and test("\\A[a-z_]{1,32}\\z"))
+          and (.id + ".json") == $name)
+      ' "$file" >/dev/null 2>&1 || return 2
+      files+=("$file")
+    done
+  elif [ -e "$1" ]; then
+    return 2
+  fi
+  # An empty array is never expanded: bash 3.2 reads "${files[@]}" of an
+  # empty array as an unbound variable under `set -u`.
+  EVIDENCE_RECALLED='[]'
+  if [ "${#files[@]}" -eq 0 ]; then
+    return 0
+  fi
+  EVIDENCE_FILES+=("${files[@]}")
+  EVIDENCE_RECALLED="$(jq -sc 'map({id, stale})' "${files[@]}")" || return 2
+}
+
+# valid_check_record FILE NAME_KEY: FILE holds one check record whose command
+# hashes to NAME_KEY, the key its file name carries.
+valid_check_record() {
+  local key
+  jq -s -e '
+    length == 1 and (.[0] | type == "object"
+      and ((keys | sort) == ["command", "kind", "status"])
+      and (.kind == "test" or .kind == "build" or .kind == "lint")
+      and (.status == "pass" or .status == "fail")
+      and (.command | type == "string" and length > 0 and (test("[[:cntrl:]]") | not)))
+  ' "$1" >/dev/null 2>&1 || return 1
+  read_exact key safe_marker_key "$(jq -j '.command' "$1")" || return 1
+  [ "$key" = "$2" ]
+}
+
+# collect_checks DIR: set EVIDENCE_CHECKS to the check verdicts of DIR as one
+# JSON array — a
+# command whose latest status is fail is "still failing", one that failed and
+# then passed is "failed, then passed", and one that only passed is no
+# evidence at all; return 2 when DIR or one of its records is linked or
+# malformed. Never run in a subshell, for the same reason as collect_recalled.
+collect_checks() {
+  local file
+  local name
+  local failed
+  local -a verdicts=()
+  EVIDENCE_CHECKS='[]'
+  [ -L "$1" ] && return 2
+  if [ ! -d "$1" ]; then
+    [ -e "$1" ] && return 2
+    return 0
+  fi
+  for file in "$1"/*.json; do
+    [ -e "$file" ] || [ -L "$file" ] || continue
+    [ -f "$file" ] && [ ! -L "$file" ] && [ -O "$file" ] || return 2
+    name="${file##*/}"
+    case "$name" in
+      *.failed.json) valid_check_record "$file" "${name%.failed.json}" || return 2 ;;
+      *.last.json) valid_check_record "$file" "${name%.last.json}" || return 2 ;;
+      *) return 2 ;;
+    esac
+    EVIDENCE_FILES+=("$file")
+    case "$name" in *.failed.json) continue ;; esac
+    failed=false
+    [ -f "${file%.last.json}.failed.json" ] && failed=true
+    verdicts+=("$(jq -c --argjson failed "$failed" '
+      if .status == "fail" then {kind, command, verdict: "still failing"}
+      elif $failed then {kind, command, verdict: "failed, then passed"}
+      else empty end' "$file")")
+  done
+  if [ "${#verdicts[@]}" -eq 0 ]; then
+    return 0
+  fi
+  EVIDENCE_CHECKS="$(printf '%s\n' "${verdicts[@]}" | jq -sc '.')" || return 2
+}
+
+# collect_reverts SINCE_MARKER ROOTS_JSON: print, as one JSON array, every
+# commit made since the window opened in one of ROOTS_JSON's repositories whose
+# message says it reverts another. Without git, a window or a repository, there
+# is nothing to report.
+collect_reverts() {
+  local since
+  local repo
+  local commit
+  local body
+  valid_private_marker "$1" || { printf '[]'; return 0; }
+  read_exact_line since cat "$1" || { printf '[]'; return 0; }
+  evidence_epoch "$since" || { printf '[]'; return 0; }
+  command -v git >/dev/null 2>&1 || { printf '[]'; return 0; }
+  while IFS= read -r -d '' repo; do # exact-read-ok: NUL-delimited, so no newline separates anything
+    while IFS= read -r commit; do
+      read_exact body git -C "$repo" show -s --format=%B "$commit" || continue
+      [[ "$body" =~ This\ reverts\ commit\ ([0-9a-f]{40}) ]] || continue
+      # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+      jq -cn --arg repo "$repo" --arg commit "$commit" --arg reverted "${BASH_REMATCH[1]}" \
+        '{repository: $repo, commit: $commit, reverted: $reverted}'
+    done < <(git -C "$repo" log --since="@$((since - 1))" -n 20 --format=%H \
+      --grep='^This reverts commit [0-9a-f]\{40\}' 2>/dev/null || true)
+  done < <(printf '%s' "$2" | jq -j '[.[].root] | unique[] | . + "\u0000"') | jq -sc '.' # exact-read-ok: NUL-delimited, so no newline separates anything
+}
+
+# collect_learning_evidence RECALLED_DIR CHECKS_DIR SINCE_MARKER ROOTS_JSON:
+# set LEARNING_EVIDENCE to {recalled, checks, reverts} for the checkpoint about
+# to be emitted, and EVIDENCE_FILES to the records it read. Returns 2 when a
+# record directory or a record in it is linked or malformed: such state is
+# reported, never consumed or followed. Never run in a subshell.
+collect_learning_evidence() {
+  local reverts
+  EVIDENCE_FILES=()
+  LEARNING_EVIDENCE=""
+  collect_recalled "$1" || return 2
+  collect_checks "$2" || return 2
+  reverts="$(collect_reverts "$3" "$4")" || reverts='[]'
+  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  LEARNING_EVIDENCE="$(jq -cn --argjson recalled "$EVIDENCE_RECALLED" \
+    --argjson checks "$EVIDENCE_CHECKS" --argjson reverts "$reverts" \
+    '{recalled: $recalled, checks: $checks, reverts: $reverts}')" || return 2
+}
+
+# evidence_present EVIDENCE: EVIDENCE holds at least one record.
+evidence_present() {
+  printf '%s' "$1" | jq -e '(.recalled + .checks + .reverts) | length > 0' >/dev/null 2>&1
+}
+
+# consume_learning_evidence SINCE_MARKER: remove the records the checkpoint
+# just named, and open the next revert window now. Called only once the
+# checkpoint is durable in its pending manifest.
+consume_learning_evidence() {
+  if [ "${#EVIDENCE_FILES[@]}" -gt 0 ]; then
+    rm -f "${EVIDENCE_FILES[@]}" || return 1
+  fi
+  write_private_marker "$1" "$(date +%s)"
+}
+
+# feedback_step EVIDENCE: step 4 of the checklist, naming the exact memories
+# the session's recalls returned and the outcomes observed since the last
+# checkpoint. Feedback must cite an outcome; nothing is scored on impression.
+feedback_step() {
+  printf '%s' "$1" | jq -r '
+    def memories: [.recalled[] | .id + (if .stale then " (stale: an anchored file changed; re-verify it, then forget and replace it if wrong or remember it again with its anchors if still right)" else "" end)];
+    def outcomes: [(.checks[] | "`\(.command)` (\(.kind)): \(.verdict)"), (.reverts[] | "commit \(.commit) in \(.repository) reverts \(.reverted)")];
+    (outcomes | if length == 0 then "none" else join("; ") end) as $seen
+    | if (.recalled | length) == 0 then
+        "4. Feedback: no recall result was observed since the last checkpoint, so no memory has earned feedback; send none. Verified outcomes observed: \($seen)."
+      else
+        "4. Feedback: the recalls since the last checkpoint returned exactly these memories: \(memories | join(", ")). Verified outcomes observed: \($seen). Call feedback(id_str, true|false) only for a listed memory whose effect one of these outcomes demonstrates, and name that outcome; leave every other listed memory without feedback. Never score a memory on your own impression that it helped or misled."
+      end'
+}
+
 # <<< END: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.

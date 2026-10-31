@@ -39,6 +39,13 @@ source_kind="$(printf '%s' "$payload" | jq -r '.source // empty')"
 read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 
 resolve_config "$cwd"
+# Open the window a later Stop reads reverts from (lib/common.sh); kept when
+# this is a resume or a post-compaction start of the same session.
+if [ -n "$session_id" ] \
+  && read_exact evidence_since sentinel_path "codex-evidence-since" "$session_id"; then
+  # shellcheck disable=SC2154 # read_exact sets evidence_since (printf -v)
+  open_evidence_window "$evidence_since" || true
+fi
 # A save reminder names only a session this conversation saved.
 save_session="$SESSION"
 if read_exact adopted adopted_session_for "$session_id" "$PROJECT" save; then
@@ -50,7 +57,7 @@ if adopt_working_session "$session_id" any; then
   session_note=", the session this conversation last saved (else the one it last loaded),"
 fi
 
-context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\")$session_note as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. load_working_context returns {found, working, other_sessions}: read 'working' for the state. If 'found' is false, nothing was saved under that EXACT project+session — but check 'other_sessions' before starting fresh: a similarly-named session listed there means the session id was a typo, not a new task. 'other_sessions' is filled in on a hit too, so if one of them looks more like the session you meant, you may have just resumed the wrong work. Reinforcement loop: whenever a memory surfaced by recall/recall_fused (or pulled into compile_context — its decision carries the memory_id) actually helps you, call feedback(id, true) with the id_str string; if it misled you, feedback(id, false). This is what makes ranking improve with use — skipping it keeps confidence flat."
+context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\")$session_note as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. load_working_context returns {found, working, other_sessions}: read 'working' for the state. If 'found' is false, nothing was saved under that EXACT project+session — but check 'other_sessions' before starting fresh: a similarly-named session listed there means the session id was a typo, not a new task. 'other_sessions' is filled in on a hit too, so if one of them looks more like the session you meant, you may have just resumed the wrong work. Reinforcement loop: send feedback(id_str, true|false) on a recalled memory only when an observed outcome shows its effect — a check that failed and passed once you applied it, a revert of the change it advised — and name that outcome; never score a memory on your own impression that it helped. The Stop checklist names the exact memories your recalls returned and the outcomes the hooks observed. A recall result marked stale means an anchored file changed: re-verify that memory before relying on it."
 
 if [ "$source_kind" = "compact" ]; then
   context="$context This session restarted after a COMPACTION, so detail from the previous transcript was just discarded lossily. Codex hooks cannot intercept compaction before it happens, so this is the first moment anything can be said about it: call save_working_context(project=\"$PROJECT\", session=\"$save_session\") now with whatever distilled state survived, and from here on save it again whenever the working state changes meaningfully rather than waiting for the end of the session."

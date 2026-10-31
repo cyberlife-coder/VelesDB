@@ -77,6 +77,7 @@ HOOKS: "tuple[tuple[str, str], ...]" = (
     ("PreCompact", "pre-compact.sh"),
     ("PreToolUse", "pre-tool-use.sh"),
     ("PostToolUse", "post-tool-use.sh"),
+    ("PostToolUseFailure", "post-tool-use-failure.sh"),
 )
 
 CODEX_HOOKS: "tuple[tuple[str, str], ...]" = (
@@ -139,6 +140,10 @@ def marker_for(client: str) -> str:
 def matcher_for(client: str, event: str) -> "str | None":
     if event == "PreToolUse":
         return "^(Edit|Write)$" if client == "claude" else "^(apply_patch|Edit|Write)$"
+    if client == "claude" and event == "PostToolUseFailure":
+        # Only a failed shell command is a check outcome; every other tool's
+        # failure costs the hook nothing.
+        return "^Bash$"
     if client == "codex" and event == "PostToolUse":
         return "^mcp__velesdb[-_]memory__(recall|recall_fused|recall_where|compile_context|entity|why|save_working_context|load_working_context)$"
     return None

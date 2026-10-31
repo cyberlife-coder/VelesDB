@@ -12,10 +12,11 @@ gives it the *tools*. It does not make the agent actually call
 `load_working_context` at the start of every session or
 `save_working_context` before every one ends — that only happens if the
 agent remembers to, which it won't reliably do on its own. This directory
-automates load/save, recall-before-edit, pre-compaction advice, and tool-result
-compression for [Claude Code](claude-code/) (five tested hooks); load/save and
-recall-before-edit for [Codex CLI](codex/) (four tested hooks; tool-result
-replacement remains unavailable); and a partial reminder for
+automates load/save, recall-before-edit, pre-compaction advice, tool-result
+compression and evidence for feedback for [Claude Code](claude-code/) (six
+tested hooks); load/save, recall-before-edit and part of that evidence for
+[Codex CLI](codex/) (four tested hooks; tool-result replacement and check
+outcomes remain unavailable); and a partial reminder for
 [Windsurf](windsurf/) (one tested hook, with a delivery caveat). The parity
 table below says exactly what exists where, and why each gap is a gap.
 
@@ -30,6 +31,9 @@ Claude Code equivalent · ❌ = not shipped, with the reason spelled out.
 | Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ✅ `codex/hooks/session-start.sh` on `SessionStart`, via `additionalContext` |
 | Save/checkpoint working context | ✅ first Stop plus every later covered edit batch when opted in; otherwise the first Stop keeps the legacy save reminder | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ same session-and-edit checkpoint as Claude; otherwise the first Stop keeps the legacy save reminder |
 | Require successful recall before the first repository edit | ✅ `pre-tool-use.sh` refuses `Edit`/`Write`; `post-tool-use.sh` marks only a successful VelesDB recall | ❌ not implemented | ✅ `codex/hooks/pre-tool-use.sh` refuses `apply_patch`; its PostToolUse partner applies the same success rule |
+| Name the exact memories recall returned in the Stop checklist | ✅ `post-tool-use.sh` records the ids of every successful `recall`, `recall_where`, `recall_fused` and `why`, with the server's `stale` verdict; `stop.sh` names them | ❌ not implemented | ✅ same, through `codex/hooks/post-tool-use.sh`, whose matcher already covers those tools |
+| Check outcomes as feedback evidence (test, build, lint) | ✅ `post-tool-use.sh` (exit 0) and `post-tool-use-failure.sh` (`Exit code N`) record a single check command; `stop.sh` lists one that failed then passed, or still fails | ❌ not implemented | ❌ **not shipped.** The PostToolUse matcher is limited to VelesDB tools, and the shape a Codex shell result reports its exit status in has not been measured here. Wiring it on an assumed field would record outcomes nobody verified |
+| Reverts as feedback evidence | ✅ `stop.sh` reads git, in each repository the checkpoint names, for commits since the window `session-start.sh` opened whose message reverts another | ❌ not implemented | ✅ same, read at `Stop`, so it needs no shell payload |
 | Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ⚠️ **no pre-compaction hook is possible.** `PreCompact`/`PostCompact` support neither `additionalContext` nor a documented `decision`/`reason`, so nothing a hook prints there reaches the model. `codex/hooks/session-start.sh` compensates *after the fact* on `source == "compact"` |
 | Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext`, or `decision: "block"` to substitute feedback for the result, but documents no equivalent of `updatedToolOutput` — it cannot hand back a *compiled* version of the real output |
 
@@ -111,7 +115,7 @@ exits with the host's blocking code before any covered edit; the other
 lifecycle reminders may still be treated as failed hooks by the host.
 
 **Global (recommended for continuous CLI usage — every project, one-time
-setup).** One command does both halves — the scripts and the five
+setup).** One command does both halves — the scripts and the six
 `settings.json` entries:
 
 ```bash
@@ -165,6 +169,9 @@ be relative to for a global install):
     ],
     "PostToolUse": [
       { "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/post-tool-use.sh'" }] }
+    ],
+    "PostToolUseFailure": [
+      { "matcher": "^Bash$", "hooks": [{ "type": "command", "command": "bash '/Users/you/.claude/hooks/velesdb-memory/post-tool-use-failure.sh'" }] }
     ]
   }
 }
@@ -311,7 +318,7 @@ store open, the same way `--version` does. `PostToolUse` below is the one hook
 that uses it. The three advisory hooks drive the model; `PreToolUse` can deny
 an edit but does not compile content.
 
-## The five Claude Code hooks
+## The six Claude Code hooks
 
 (Windsurf's one wired hook, `pre_user_prompt`, is documented in its own
 install section above — it folds the same load/save loop into one event.)
@@ -322,7 +329,8 @@ install section above — it folds the same load/save loop into one event.)
 | `Stop` | Fires whenever Claude is about to stop responding, not only at final session exit. In an opted-in repository it blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; each continuation passes. Without enforcement it retains the legacy first-Stop save reminder. Either names only a session this conversation saved, and otherwise the configured one: never one it only loaded. The checklist names each edited repository's own. | `{"decision":"block","reason":"..."}` plus repository-and-session first-Stop markers, a session-wide queue carrying every edited repository identity, and an atomic pending/delivered manifest that makes an interrupted checklist recoverable. |
 | `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first, naming only a session this conversation saved, and otherwise the configured one; later ones pass through. | Its own block-once-then-pass sentinel, separate from edit checkpoints. |
 | `PreToolUse` | In an opted-in project, refuses the first `Edit`/`Write` until the same host session has completed a successful VelesDB recall in that repository. | Exit 2 with an actionable reason; the refused target is queued so a successful recall remains bound to it even if the host `cwd` is elsewhere. |
-| `PostToolUse` | Marks a successful VelesDB recall for the edit guard, and records the session of a successful `save_working_context`, or of a `load_working_context` that found one, for the reminders above. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
+| `PostToolUse` | Marks a successful VelesDB recall for the edit guard and records the ids it returned, and records the session of a successful `save_working_context`, or of a `load_working_context` that found one, for the reminders above. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
+| `PostToolUseFailure` | In an opted-in repository, records a single test, build or lint command whose `Bash` call failed with a documented `Exit code N`; `PostToolUse` records the same command's later success. A pipe, a chain, a subshell or an expansion is never recorded: its exit status is not the check's own. | Private per-session records, two per command, each replaced atomically. |
 
 **Design note — the only hook that reduces the payload itself.** The three
 lifecycle continuations can only ask the model to call a tool; whether context
@@ -409,6 +417,40 @@ model, so that's what's implemented; blocking *every* `PreCompact` was
 rejected as unsafe (auto-compaction can retrigger repeatedly on a long
 session, and refusing it every time risks the transcript never
 compacting).
+
+## Evidence for feedback: what is observed, and what is never automatic
+
+`feedback` is a reward, so the `Stop` checklist hands the model evidence rather
+than asking for its impression. It names:
+
+- **the exact memories this session's recalls returned** — the `id_str` of every
+  memory in a successful `recall`, `recall_where` or `recall_fused` result and
+  every node of a `why` result, each marked when the server reported it
+  `stale` (an anchored file changed, see the velesdb-memory README);
+- **check outcomes** (Claude Code only) — a test, build or lint command that
+  failed and then passed, or still fails. A command that only passed is not
+  listed: a green run after a recall does not show that the memory helped;
+- **reverts** — a commit in an edited repository, since the last checkpoint,
+  whose message says `This reverts commit <sha>`.
+
+**No signal drives `feedback` by itself.** A hook never opens the store (see
+the constraint below), and no observed outcome names the memory that caused
+it. The checklist therefore asks for `feedback` only on a listed memory whose
+effect one of the listed outcomes demonstrates, citing it, and for no feedback
+on the others. The one automatic effect is server-side: a `stale` lesson is
+ranked lower by `recall`, without its learned confidence changing.
+
+**User corrections are not recorded.** Detecting one would mean classifying the
+text of a prompt, and a correction cannot be told apart reliably from a
+question, a quotation or a change of plan; a guessed reward is the
+self-assessment this design removes.
+
+The records live beside the edit records, under the same rules: one private
+directory per kind and host session, one atomically replaced file per memory or
+per check, at most 64 of each, and a link or a malformed record makes `Stop`
+block and report it instead of following or discarding it. The checkpoint that
+names them consumes them, through the same pending/delivered manifest as the
+edited repositories, so an interrupted `Stop` re-emits the same evidence.
 
 ## `.velesdb-hooks.json` config format
 
