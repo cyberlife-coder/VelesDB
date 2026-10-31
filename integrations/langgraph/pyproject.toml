@@ -25,17 +25,9 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.3.0,<2.0.0",
-    # The floor is deliberately kept at 3.12.0 pending the 5.0.0 release
-    # that carries the `load_working_context` envelope (CHANGELOG
-    # [Unreleased]): later velesdb releases exist on PyPI, but the version
-    # that makes raising the floor meaningful has not shipped yet, and floors
-    # move with the 5.0.0 release train. 3.12.0 ships
-    # forget/recall_where/recall_fused, but not yet
-    # MemoryService.feedback/save_working_context/load_working_context, nor
-    # the automatic `_veles_date` metadata stamp (velesdb-memory 0.11.0) —
-    # those tools return {"error": ...} or report the drift at call time, and
-    # recall_where/recall_fused's `metadata` stays empty for auto-dating,
-    # until the 5.0.0 release. See README.md's "Compatibility" section.
+    # 5.0.0 is the first wheel whose load_working_context returns the
+    # {found, working, other_sessions} envelope the toolkit relays; see
+    # README.md's "Compatibility" section.
     "velesdb>=5.0.0",
 ]
 

@@ -4,6 +4,8 @@ from velesdb_common.graph import (
     build_graph_rest_payload,
     is_timeout_exception,
     open_native_graph,
+    parse_graph_traverse_response,
+    parse_graph_traverse_results,
 )
 
 
@@ -75,3 +77,37 @@ def test_open_native_graph_no_config_call_unchanged(tmp_path, recording_db):
     graph = open_native_graph(str(tmp_path), "kg")
     assert graph is not None
     assert recording_db.calls == [((str(tmp_path),), {})]
+
+
+class _Response:
+    """A ``requests.Response`` stand-in carrying a JSON body."""
+
+    def __init__(self, status_code, body=None):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+# Shaped like the server's ``TraverseResponse``: ids serialised as strings.
+_TRAVERSE_BODY = {
+    "results": [
+        {"target_id": "42", "depth": 1, "path": ["7"]},
+        {"target_id": "43", "depth": 2, "path": ["7", "8"]},
+    ],
+    "has_more": False,
+    "stats": {"visited": 3, "depth_reached": 2},
+}
+
+
+def test_given_server_traverse_response_when_parsed_then_int_ids_with_depth():
+    assert parse_graph_traverse_results(_Response(200, _TRAVERSE_BODY)) == [(42, 1), (43, 2)]
+
+
+def test_given_server_traverse_response_when_parsed_for_ids_then_ints():
+    assert parse_graph_traverse_response(_Response(200, _TRAVERSE_BODY)) == [42, 43]
+
+
+def test_given_error_status_when_parsed_then_no_results():
+    assert parse_graph_traverse_results(_Response(404)) == []

@@ -20,7 +20,7 @@ export type BooleanCapability = {
 /** List capabilities that name the fields of an options object. */
 type FieldListCapability = Extract<
   ListCapability,
-  'multiQueryFusionParams' | 'collectionConfig' | 'queryOptions'
+  'multiQueryFusionParams' | 'collectionConfig'
 >;
 
 /** List capabilities that name the values one option may take. */

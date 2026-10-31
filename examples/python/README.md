@@ -26,7 +26,10 @@ This sibling example replaces hand-written vectors with ordinary sentences and t
 
 - Python 3.9+
 - The other scripts below import NumPy directly (already a transitive dependency of `velesdb`, but they use it explicitly).
-- For `graphrag_*.py`: an OpenAI API key and a running `velesdb-server`.
+- For `graphrag_*.py`: the LangChain or LlamaIndex integration (see
+  `requirements.txt`). They run natively, with no server. An OpenAI API key
+  selects OpenAI embeddings and LLM; without one, or with `--offline`, they use
+  the framework's own deterministic fake embeddings and LLM.
 
 ## Installation
 
@@ -52,7 +55,8 @@ pip install -r requirements.txt
 
 Most examples use synthetic data (random vectors via NumPy) and create temporary
 directories that are cleaned up automatically. `hello_velesdb_text.py` uses an
-opt-in local embedding model; only the GraphRAG examples require an API key.
+opt-in local embedding model; the GraphRAG examples use OpenAI when an API key
+is set and run offline otherwise.
 
 | File | Description |
 |---|---|
@@ -62,8 +66,8 @@ opt-in local embedding model; only the GraphRAG examples require an API key.
 | `graph_traversal.py` | Persistent GraphCollection: edges, BFS/DFS traversal, node payloads, degree analysis |
 | `hybrid_queries.py` | Dense vector search, VelesQL queries, batch search, EXPLAIN plans, CRUD operations |
 | `multimodel_notebook.py` | Notebook-style tutorial combining vector search, VelesQL, and MATCH queries |
-| `graphrag_langchain.py` | GraphRAG pattern with LangChain (requires OpenAI API key and VelesDB server) |
-| `graphrag_llamaindex.py` | GraphRAG pattern with LlamaIndex (requires OpenAI API key and VelesDB server) |
+| `graphrag_langchain.py` | GraphRAG with LangChain: `VelesDBVectorStore` + a graph collection + `GraphRetriever` (seed by vector search, expand through edges) |
+| `graphrag_llamaindex.py` | GraphRAG with LlamaIndex: `GraphLoader.load_from_nodes(extract_relations=True)` turns node relationships into edges, `GraphRetriever` expands through them |
 
 ## Running
 
@@ -79,9 +83,12 @@ python hybrid_queries.py
 # Notebook-style example (requires velesdb + numpy)
 python multimodel_notebook.py
 
-# GraphRAG examples (require OpenAI API key + running VelesDB server)
+# GraphRAG examples: native, no server. Offline (fake embeddings and LLM):
+python graphrag_langchain.py --offline
+python graphrag_llamaindex.py --offline
+
+# With OpenAI embeddings and LLM:
 export OPENAI_API_KEY=your-key
-velesdb-server --port 8080  # in another terminal
 python graphrag_langchain.py
 python graphrag_llamaindex.py
 ```
@@ -110,7 +117,7 @@ coll.upsert([
 ])
 
 # Dense vector search
-results = coll.search_request(velesdb.SearchOptions(vector=[0.1] * 384, top_k=10))
+results = coll.search_request(velesdb.SearchOptions(vector=[0.1] * 384, k=10))
 
 # VelesQL query
 results = coll.query(

@@ -6,7 +6,6 @@
  */
 
 import type {
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -108,8 +107,7 @@ export async function query(
   transport: QueryTransport,
   collection: string,
   queryString: string,
-  params?: Record<string, unknown>,
-  options?: QueryOptions
+  params?: Record<string, unknown>
 ): Promise<QueryApiResponse> {
   const endpoint = isLikelyDdlOrMutationQuery(queryString)
     ? '/query'
@@ -123,8 +121,6 @@ export async function query(
       query: queryString,
       params: params ?? {},
       collection,
-      timeout_ms: options?.timeoutMs,
-      stream: options?.stream ?? false,
     }
   );
 

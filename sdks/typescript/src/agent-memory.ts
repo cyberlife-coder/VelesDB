@@ -60,7 +60,7 @@ export class AgentMemoryClient {
 
   /**
    * Recall episodic events most-recent-first, optionally bounded below by
-   * `since` (inclusive unix-seconds). Mirrors core `episodic.recent(since)`.
+   * `since` (exclusive unix-seconds: strictly newer). Mirrors core `episodic.recent(since)`.
    */
   async recallRecent(collection: string, since?: number): Promise<EpisodicRecord[]> {
     return this.backend.recallRecentEvents(collection, since);

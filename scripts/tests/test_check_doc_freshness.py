@@ -287,6 +287,13 @@ class VersionGuardTests(FreshnessGuardTestCase):
         self.write("docs/ALPHA.md", ALPHA_CLEAN)
         self.assertGuardPasses("versions")
 
+    def test_a_sibling_crate_pinned_a_major_behind_fails(self) -> None:
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + '\n```toml\ntauri-plugin-velesdb = "3.2.0"\n```\n',
+        )
+        self.assertGuardFails("versions", "[cargo-pin-core]", "says 3.2.0")
+
     def test_stale_memory_tag_fails_then_passes(self) -> None:
         self.write("docs/ALPHA.md", ALPHA_CLEAN.replace(
             f"velesdb-memory-v{MEMORY_VERSION}", "velesdb-memory-v0.11.0"
@@ -347,6 +354,13 @@ class VersionGuardTests(FreshnessGuardTestCase):
 
     def test_unqualified_old_product_version_is_refused(self) -> None:
         self.write("docs/ALPHA.md", ALPHA_CLEAN + "\nThis guide targets VelesDB v3.12.0.\n")
+        self.assertGuardFails("versions", "[prose-core-version]", "says 3.12.0")
+
+    def test_an_old_version_one_table_cell_over_is_refused(self) -> None:
+        self.write(
+            "docs/ALPHA.md",
+            ALPHA_CLEAN + "\n| Component | Version |\n|---|---|\n| `velesdb-core` | 3.12.0 |\n",
+        )
         self.assertGuardFails("versions", "[prose-core-version]", "says 3.12.0")
 
     def test_measurement_word_alone_does_not_exempt_an_old_version(self) -> None:

@@ -176,10 +176,14 @@ VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
         "cargo-pin-core",
         "velesdb-core",
         re.compile(
-            r'velesdb-core\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?"[\^~=]?(\d+(?:\.\d+){0,2})"'
+            # Every crate that versions with the workspace: the Tauri tutorial
+            # pinned tauri-plugin-velesdb 4.3.0 beside velesdb-core 8.0.0, two
+            # majors apart, and its sample could not compile.
+            r'(?:velesdb-(?:core|server|cli|migrate|mobile)|tauri-plugin-velesdb)'
+            r'\s*=\s*(?:\{[^}\n]*?version\s*=\s*)?"[\^~=]?(\d+(?:\.\d+){0,2})"'
         ),
         exact=False,
-        description="Cargo dependency pin `velesdb-core = \"...\"` in a doc snippet",
+        description="Cargo dependency pin `velesdb-core = \"...\"` (or a sibling workspace crate) in a doc snippet",
     ),
     VersionClaim(
         "cargo-pin-memory",
@@ -208,8 +212,11 @@ VERSION_CLAIMS: "tuple[VersionClaim, ...]" = (
         "prose-core-version",
         "velesdb-core",
         re.compile(
-            r"\b(?:VelesDB|velesdb-(?:core|server|cli|wasm|python|migrate|mobile|sdk))"
-            r"\s*(?:@|v\s*)?(\d+\.\d+\.\d+)\b",
+            r"\b(?:VelesDB|velesdb-(?:core|server|cli|wasm|python|migrate|mobile|sdk)|tauri-plugin-velesdb)"
+            # A closing backtick and a table cell border may sit between the
+            # name and its version: `velesdb-core` | 5.0.0 survived 8.0.0 in
+            # the server README because the version was one cell over.
+            r"`?\s*(?:\|\s*)?(?:@|v\s*)?(\d+\.\d+\.\d+)\b",
             re.IGNORECASE,
         ),
         exact=True,

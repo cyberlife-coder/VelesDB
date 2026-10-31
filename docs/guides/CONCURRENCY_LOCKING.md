@@ -337,15 +337,22 @@ fit naturally:
 - **Ingest phase:** bulk load embeddings (write-heavy, but one-time)
 - **Query phase:** many concurrent similarity searches (read-heavy)
 
-### 4. Use Appropriate Durability
+### 4. Batch Writes Instead of Lowering Durability
 
-For embeddings that can be re-computed from source documents:
+A collection's storage is opened with `DurabilityMode::Fsync`: no collection
+or `VelesConfig` setting lowers it. Every write call syncs its WAL before it
+returns, once per storage per call, so the cost is per call, not per point:
+`upsert_bulk` and `upsert_bulk_from_raw` write a whole batch for the price of
+one sync.
 
 ```rust
-// Faster writes for re-derivable data
-let config = CollectionConfig::new(384, DistanceMetric::Cosine)
-    .with_durability(DurabilityMode::FlushOnly);
+// One WAL sync per storage for the whole batch, instead of one per point
+collection.upsert_bulk(&points)?;
 ```
+
+The lower-level `velesdb_core::storage::MmapStorage::new_with_durability`
+and `LogPayloadStorage::new_with_durability` take a `DurabilityMode` for code
+that builds directly on the storage layer.
 
 ### 5. Size Graph Shards Appropriately
 
