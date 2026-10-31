@@ -428,8 +428,9 @@ scalar-expression ones below, which use the same single-collection dataset):
   `NULL` group last under `ASC` and first under `DESC`, G016 `FIRST(col)` in
   a SQL `GROUP BY` (the row with the smallest point id), G017 an aggregate
   named `score` in a SQL `GROUP BY`, G018 groups an ORDER BY ties ordered by
-  `GROUP BY` key, G019 the default order (`GROUP BY` key ascending) and G020
-  HAVING's `AND` binding tighter than `OR`.
+  `GROUP BY` key, G019 the default order (`GROUP BY` key ascending), G020
+  HAVING's `AND` binding tighter than `OR` and G021 an aggregate whose WHERE
+  reads `id` as the point id.
 - `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
@@ -461,8 +462,10 @@ WASM**, plus more scalar cases the CLI runs too:
   a name, an aggregate named `score` in a vector `GROUP BY` included
   (R011–R013, V017), and a HAVING with a non-numeric threshold or without
   `GROUP BY` (R014–R015, V018).
-- `null_order_cases` O001–O002: a plain SELECT whose ORDER BY key is missing
-  on a row, which sorts last under `ASC` and first under `DESC`.
+- `null_order_cases` O001–O003: a plain SELECT whose ORDER BY key is missing
+  on a row, which sorts last under `ASC` and first under `DESC` (O001–O002),
+  and WHERE / ORDER BY `id` reading the point id over the `tickets`
+  collection, whose payloads carry an `id` of their own (O003).
 - `vector_group_cases` V001–V010: a vector `GROUP BY` (`NEAR` + `GROUP BY`)
   ordered by `similarity()` (each group's best score) and by a SELECT
   aggregate, every aggregate per group with each group's id and score

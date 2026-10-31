@@ -89,8 +89,9 @@ a v3 blob with `Unsupported version: 3`.
 | WASM: `GROUP BY` ordered by a selected column outside `GROUP BY` (`SELECT category, title, COUNT(*) ... GROUP BY category ORDER BY title`) | sorted on each group's first `title` | `V016` |
 | A grouped or aggregate query whose output columns share a name: a `GROUP BY` column and an aggregate's alias or default name (`GROUP BY category, count` beside `COUNT(*)`), or two aggregates (`COUNT(*) AS n, SUM(year) AS n`) | one column silently overwritten | `V017` |
 | A vector `GROUP BY` (`NEAR` + `GROUP BY`) naming an aggregate `id` or `score` (`COUNT(*) AS score`); a SQL `GROUP BY` keeps accepting it | the group's own score or id shadowed under `ORDER BY` | `V017` |
-| A HAVING threshold that is not a number (`HAVING COUNT(*) > 'many'`, `= NULL`) | no group matched | `V018` |
-| A HAVING parameter bound to a non-number | no group matched | `V018` when the query runs |
+| A HAVING threshold that is neither a number nor `NULL` (`HAVING COUNT(*) > 'many'`, `> TRUE`) | no group matched | `V018` |
+| A HAVING parameter, or scalar subquery, whose value is neither a number nor `null` | no group matched | `V018` when the query runs |
+| `execute_aggregate` (Rust `Collection` / `Database`) over a vector `GROUP BY` (`NEAR` + `GROUP BY`) | grouped every point, unscored and uncapped | `Error::Query`: run it with `execute_query` |
 | `HAVING` without `GROUP BY` | core: unnumbered error; WASM: filtered the one implicit group | `V018` |
 | WASM: a SQL `GROUP BY` past `WITH (max_groups = N)` groups (10,000 by default) | grouped without bound | `Too many groups (limit: N)`, as in core |
 
@@ -314,7 +315,10 @@ under `validation`. `GuardRailKind`, `TimeoutBudget`, `Error::is_caller_error`,
 `SelectOrderBy::directed`; `SelectStatement::grouped_sort_keys`,
 `order_by_aggregates_as_fields` and `is_vector_group_by`; and
 `ValidationErrorKind::{OrderByNotInResult, DuplicateOutputColumn,
-InvalidHaving}` (`V016`–`V018`).
+InvalidHaving}` (`V016`–`V018`). `Filter::matches_point` and
+`filter::Condition::matches_point` evaluate a filter against a point, its id
+included (a filter built from VelesQL reads `id` as the point id; `matches`
+knows no id).
 
 ## 4. Python and the integrations
 
@@ -548,17 +552,48 @@ Rejections carry core's codes and a new `recoverable` field:
   - `FIRST(col)` reads the group's row with the smallest point id (core
     returned `null`); in a vector `GROUP BY`, the most similar row, the
     smallest id among equally similar ones;
-  - numbers equal by value are one group (`1` and `1.0`, `0.0` and `-0.0`).
+  - numbers equal by exact value are one group (`1` and `1.0`, `0.0` and
+    `-0.0`, `2^53` as an integer and as a float);
+  - groups whose keys compare equal (two arrays) come by best row id, and
+    rows are aggregated in id order, so a float `SUM` is the same on every
+    run.
 
   Add an ORDER BY to pin another order.
 
-- **An aggregate reads its column as WHERE does, in core.** `id` is the point
-  id: `GROUP BY id` groups by it (7.1.0 put every row in one `NULL` group),
-  and `COUNT(id)` / `MAX(id)` read it without `GROUP BY` too. `COUNT(col)`
+- **BREAKING (behavior) — `id` is the point id in every VelesQL clause, in
+  core.** 7.1.0 core read a payload field named `id` in a SELECT's WHERE,
+  ORDER BY, GROUP BY and aggregates, and in a MATCH `WHERE n.id`; its
+  projection, `UPDATE` / `DELETE` and JOIN filters, and WASM, read the point
+  id. What changes, for a point whose payload carries its own `id`:
+
+  | Query | 7.1.0 core reads | 8.0.0 reads |
+  |---|---|---|
+  | `WHERE id = 3`, `WHERE id IN (...)`, `WHERE id < 100` | payload `id` | point id |
+  | `ORDER BY id` | payload `id` | point id |
+  | `GROUP BY id`, `COUNT(id)`, `MAX(id)` | payload `id` | point id |
+  | MATCH `WHERE n.id = 3` (`r.id` on an edge) | node (edge) property `id` | node (edge) id |
+
+  Without such a payload field, 7.1.0 `GROUP BY id` put every row in one
+  `NULL` group and `WHERE id < 100` matched nothing. VelesQL cannot reach a
+  payload field named `id` (`SELECT *` returns the point id under that
+  name): rename it (`doc_id`) to filter or sort on it, or use a JSON filter
+  (`{"type": "eq", "field": "id", ...}` on a REST search or scroll), which
+  still reads the payload field.
+
+- **ORDER BY compares an integer and a float exactly**, a total order: 7.1.0
+  compared them as `f64`, so `2^53 + 1` tied the float `2^53` and a sort
+  over both could come out inconsistent.
+
+- **Aggregates count and read columns as SQL does, in core.** `COUNT(col)`
   counts non-null values of any type (7.1.0 counted numbers only, so
   `COUNT(category)` was `0`). `HAVING COUNT(col)` over a column a group never
   holds compares `0`, and `HAVING AVG(score)` in a SQL `GROUP BY` averages
   the payload field `score`; 7.1.0 dropped those groups.
+
+- **A `NULL` HAVING threshold matches no group**, as SQL's UNKNOWN: `=
+  NULL`, a parameter bound to `null`, a scalar subquery returning no row.
+  It is no error (`V018` is for a threshold that is neither a number nor
+  `NULL`).
 
 - **`HAVING a OR b AND c` reads as `a OR (b AND c)`**, SQL's precedence, in
   every engine; 7.1.0 read it left to right. HAVING takes no parentheses:

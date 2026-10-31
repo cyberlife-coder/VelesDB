@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `order_by_aggregates_as_fields` and `is_vector_group_by`.
 - `ValidationErrorKind::OrderByNotInResult` (`V016`),
   `DuplicateOutputColumn` (`V017`) and `InvalidHaving` (`V018`).
+- `Filter::matches_point` and `filter::Condition::matches_point`: evaluate a
+  filter against a point, its id included, which a VelesQL `id` column
+  reads.
 
 - **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
   node relationships as edges.** The option was documented but never read, and
@@ -339,13 +342,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GROUP BY` `AVG(rating) AS score` keeps working. Migration: alias the
   aggregate whose name repeats another column.
 - **BREAKING (behavior) — a HAVING the query cannot evaluate is refused with
-  `V018` (`InvalidHaving`), in every engine.** A threshold that is not a
-  number (`HAVING COUNT(*) > 'many'`, `= NULL`, or a parameter bound to a
-  string) matched no group in 7.1.0, silently; it is refused at validation,
-  or, for a bound parameter, when the query runs. `HAVING` without `GROUP
-  BY` was refused by core with an unnumbered error and filtered the single
-  implicit group in WASM; both now refuse it with `V018`. Migration: compare
-  aggregates with numbers, and add `GROUP BY` (or move the test to WHERE).
+  `V018` (`InvalidHaving`), in every engine.** A threshold that is neither a
+  number nor `NULL` (`HAVING COUNT(*) > 'many'`, `> TRUE`, or a parameter
+  bound to a string) matched no group in 7.1.0, silently; it is refused at
+  validation, or, for a bound parameter or scalar subquery, when the query
+  runs, and the error shows the value as JSON (`"many"`). A `NULL`
+  threshold — `= NULL`, a parameter bound to `null`, a subquery returning no
+  row — is SQL's UNKNOWN: it matches no group and is no error. `HAVING`
+  without `GROUP BY` was refused by core with an unnumbered error and
+  filtered the single implicit group in WASM; both now refuse it with
+  `V018`. Migration: compare aggregates with numbers, and add `GROUP BY` (or
+  move the test to WHERE).
 - **BREAKING (behavior) — SQL `GROUP BY` results no longer depend on scan
   order.** In 7.1.0 core grouped in hash order and WASM in scan order, so the
   same query could return different rows:
@@ -358,16 +365,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     returned `null`, WASM the first row scanned); in a vector `GROUP BY` it
     reads the most similar row, the smallest id among equally similar ones
     (the first one scanned in 7.1.0);
-  - numbers equal by value are one group: `1` and `1.0`, `0.0` and `-0.0`
-    (separate groups in 7.1.0).
+  - numbers equal by exact value are one group: `1` and `1.0`, `0.0` and
+    `-0.0`, `2^53` as an integer and as a float (separate groups in 7.1.0);
+  - groups whose keys compare equal (two arrays) come by their best row's
+    id;
+  - rows are aggregated in point id order, so a float `SUM` or `AVG` adds
+    its values in the same order on every run (core followed storage
+    order).
   Migration: add an ORDER BY to pin another order (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
-- **BREAKING (behavior) — an aggregate reads its column as WHERE does, with
-  or without `GROUP BY`.**
-  - `id` is the point id: `GROUP BY id` grouped every row into one `NULL`
-    group in core 7.1.0 (it read a payload field named `id`), and `COUNT(id)`
-    and `MAX(id)` without `GROUP BY` read that payload field too. WASM
-    already read the point id.
+- **BREAKING (behavior) — `id` is the point id in every VelesQL clause, in
+  core as in WASM.** Core 7.1.0 read a payload field named `id` in a
+  SELECT's WHERE (plain or aggregate), ORDER BY, GROUP BY and aggregates,
+  and in a MATCH `WHERE n.id`, while its projection, its `UPDATE` / `DELETE`
+  WHERE and its JOIN filters, and every WASM clause, read the point id. For a payload
+  carrying its own `id`, `WHERE id = 3`, `ORDER BY id`, `GROUP BY id`,
+  `COUNT(id)` / `MAX(id)` and `WHERE n.id = 3` in a MATCH now read the
+  point (node, edge) id. Without such a payload field, `GROUP BY id` grouped
+  every row into one `NULL` group and `WHERE id < 100` matched nothing.
+  VelesQL cannot reach a payload field named `id`: `SELECT *` already
+  returned the point id under that name. Migration: rename the payload field
+  (`doc_id`) to filter or sort on it in VelesQL; a JSON filter (REST search
+  and scroll `filter`, `{"field": "id"}`) still reads the payload field (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9). In
+  Rust, a `filter::Condition` converted from a VelesQL condition reads `id`
+  only through `matches_point`; `matches` knows no point id.
+- **BREAKING (behavior) — `Collection::execute_aggregate` and
+  `Database::execute_aggregate` refuse a vector `GROUP BY`** (`NEAR` +
+  `GROUP BY`) with `Error::Query`. It grouped every point of the collection,
+  with no search score and no group budget; run it with `execute_query`,
+  which groups the search results.
+- **BREAKING (behavior) — ORDER BY compares an integer and a float
+  exactly.** 7.1.0 compared them as `f64`, so `2^53 + 1` equalled the float
+  `2^53`, which is less than `2^53 + 1` as an integer: the order was not
+  transitive and a sort over such values could come out inconsistent.
+  Numbers now compare by exact value (`-0.0` equal to `0`), a total order.
+- **BREAKING (behavior) — aggregates count and read columns as SQL does,
+  with or without `GROUP BY`.**
   - `COUNT(col)` counts non-null values of any type: core 7.1.0 counted
     numeric values only, so `COUNT(category)` over a string column returned
     `0`. `SUM`, `AVG`, `MIN` and `MAX` still read numeric values only.

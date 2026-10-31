@@ -218,10 +218,12 @@ SELECT SUM(quantity) AS total FROM orders;
 
 Every engine groups the same way:
 
-- A `GROUP BY` column, and an aggregate's column, reads as in WHERE: `id` is
-  the point id, any other name a payload path (`meta.lang`). A row without
-  it belongs to the `NULL` group. Numbers equal by value are one group:
-  `1` and `1.0`, `0.0` and `-0.0`.
+- A `GROUP BY` column, and an aggregate's column, reads as every clause
+  reads it: `id` is the point id, any other name a payload path
+  (`meta.lang`). A row without it belongs to the `NULL` group. Numbers equal
+  by exact value are one group: `1` and `1.0`, `0.0` and `-0.0`, `2^53` as
+  an integer and as a float. Unlike WHERE's `=`, no rounding tolerance
+  applies.
 - A grouped row carries its `GROUP BY` columns and its aggregates, nothing
   else: a selected column outside `GROUP BY` is not output.
 - `FIRST(col)` reads the group's best row. In a vector search that is the
@@ -233,7 +235,10 @@ Every engine groups the same way:
   `GROUP BY`, and a payload field named `score` everywhere else.
 - Without ORDER BY, the groups of a SQL `GROUP BY` come by `GROUP BY` key,
   ascending, `NULL` last. Groups an ORDER BY ties also fall back to that
-  order.
+  order, and groups whose keys compare equal (two arrays) come by their best
+  row's id.
+- Rows are aggregated in point id order, so a float `SUM` or `AVG` adds its
+  values in the same order on every run and in every engine.
 - A SQL `GROUP BY` holds at most `WITH (max_groups = N)` groups, 10,000 by
   default and 1,000,000 at most, in every engine; one more group fails the
   query (`Too many groups`). A vector `GROUP BY` groups its search results,
@@ -400,6 +405,17 @@ Both optimizations are transparent and produce identical results to the non-opti
 
 The WHERE clause filters rows using conditions. Multiple conditions are combined
 with `AND`, `OR`, and `NOT`.
+
+`id` is the point id in every clause of a SELECT — WHERE, the projection,
+ORDER BY, GROUP BY and aggregates — in core and WASM alike, and in a MATCH
+`WHERE` (`n.id` is the node id). A payload field named `id` is not reachable
+from VelesQL: `SELECT *` returns the point id under `id`, and `WHERE id = 3`
+compares the point id. A JSON filter (`{"type": "eq", "field": "id", ...}`
+on a REST search or scroll) still reads the payload field.
+
+Numbers compare by value. WHERE's `=` (and `IN`) treats two numbers less
+than `f64::EPSILON` (about 2.2e-16) apart as equal, while GROUP BY and ORDER
+BY compare exactly, an integer beyond 2^53 included.
 
 ### Comparison Operators
 
@@ -1218,8 +1234,9 @@ LIMIT 10
 Behavior:
 - Every aggregate (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `FIRST`) is computed
   per group, and `HAVING` filters the groups
-- Each group is returned as a search result: its best (most similar) chunk's
-  id — the smallest id among equally similar chunks — the group score — that chunk's score, or the mean when the SELECT asks
+- Each group is returned as a search result: its best (most similar)
+  chunk's id — the smallest id among equally similar chunks — the group
+  score — that chunk's score, or the mean when the SELECT asks
   for `AVG(score)` and not `MAX(score)` — and the group row as payload
 - Without ORDER BY, groups come best score first, ties by id; without LIMIT,
   the SELECT default of 10 applies, as for any search
@@ -1239,9 +1256,10 @@ against numbers, combined with `AND`/`OR`. As in SQL, `AND` binds tighter
 than `OR`: `HAVING COUNT(*) = 2 OR COUNT(*) > 0 AND SUM(x) > 5` keeps a group
 of two whatever its sum. HAVING requires `GROUP BY`, and each threshold must
 be a number (a literal, a parameter bound to one, or a scalar subquery
-returning one): validation refuses anything else with `V018`, and a
-parameter or subquery whose value is not a number fails the query with
-`V018` too. HAVING may test any aggregate, listed in SELECT or
+returning one) or `NULL`: validation refuses anything else with `V018`, and
+a parameter or subquery whose value is neither fails the query with `V018`
+too. A `NULL` threshold — `= NULL`, a parameter bound to `null`, a subquery
+returning no row — is SQL's UNKNOWN and matches no group. HAVING may test any aggregate, listed in SELECT or
 not; `COUNT(col)` over a column no row of the group holds is `0`.
 
 ```sql
