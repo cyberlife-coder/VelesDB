@@ -119,7 +119,7 @@ fn test_defaults() {
     assert!(!cfg.auth_enabled());
     assert!(!cfg.tls_enabled());
     assert!(cfg.rate_limit_enabled());
-    assert!(cfg.cors.is_permissive());
+    assert!(!cfg.cors.is_active(), "no CORS unless configured");
 }
 
 #[test]
@@ -140,7 +140,7 @@ key = "/etc/ssl/key.pem"
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg.host, "0.0.0.0");
     assert_eq!(cfg.port, 9090);
@@ -166,7 +166,7 @@ port = 9090
         host: Some("10.0.0.1".to_string()),
         ..Default::default()
     };
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     // CLI wins over TOML
     assert_eq!(cfg.host, "10.0.0.1");
@@ -183,7 +183,7 @@ port = 4000
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg.port, 4000);
     assert_eq!(cfg.host, "127.0.0.1"); // default
@@ -194,7 +194,7 @@ port = 4000
 fn test_empty_toml_uses_all_defaults() {
     let file_cfg: FileConfig = toml::from_str("").expect("test: empty TOML parses to default");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg, ServerConfig::default());
 }
@@ -326,7 +326,7 @@ data_dir = "/toml/data"
         // host not set in CLI → TOML should win
         ..Default::default()
     };
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg.port, 3000); // CLI wins
     assert_eq!(cfg.host, "0.0.0.0"); // TOML wins (no CLI override)
@@ -341,7 +341,7 @@ rate_limit = 50
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg.rate_limit, 50);
     assert!(cfg.rate_limit_enabled());
@@ -355,7 +355,7 @@ rate_limit = 0
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg.rate_limit, 0);
     assert!(!cfg.rate_limit_enabled());
@@ -372,7 +372,7 @@ rate_limit = 50
         rate_limit: Some(200),
         ..Default::default()
     };
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg.rate_limit, 200);
 }
@@ -384,7 +384,7 @@ fn test_rate_limit_cli_disables() {
         rate_limit: Some(0),
         ..Default::default()
     };
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert_eq!(cfg.rate_limit, 0);
     assert!(!cfg.rate_limit_enabled());
@@ -395,10 +395,11 @@ fn test_rate_limit_cli_disables() {
 // ====================================================================
 
 #[test]
-fn test_cors_default_is_permissive() {
+fn test_cors_default_allows_no_origin() {
     let cors = CorsConfig::default();
-    assert!(cors.is_permissive());
-    assert_eq!(cors.allowed_origins, vec!["*"]);
+    assert!(!cors.is_active());
+    assert!(!cors.is_permissive());
+    assert!(cors.allowed_origins.is_empty());
     assert_eq!(cors.allowed_headers, vec!["*"]);
     assert!(!cors.allow_credentials);
     assert_eq!(cors.max_age_secs, 3600);
@@ -429,7 +430,7 @@ max_age_secs = 7200
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert!(!cfg.cors.is_permissive());
     assert_eq!(
@@ -453,7 +454,7 @@ allowed_origins = ["https://myapp.com"]
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
     assert!(!cfg.cors.is_permissive());
     assert_eq!(cfg.cors.allowed_origins, vec!["https://myapp.com"]);
@@ -465,16 +466,16 @@ allowed_origins = ["https://myapp.com"]
 }
 
 #[test]
-fn test_cors_absent_from_toml_uses_permissive_default() {
+fn test_cors_absent_from_toml_stays_inactive() {
     let toml_content = r#"
 [server]
 port = 9090
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
-    assert!(cfg.cors.is_permissive());
+    assert!(!cfg.cors.is_active());
     assert_eq!(cfg.cors, CorsConfig::default());
 }
 
@@ -485,14 +486,26 @@ fn test_cors_empty_section_uses_defaults() {
 "#;
     let file_cfg: FileConfig = toml::from_str(toml_content).expect("test: valid FileConfig TOML");
     let cli = CliOverrides::default();
-    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli);
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, cli).expect("test: merge");
 
-    assert!(cfg.cors.is_permissive());
+    assert_eq!(cfg.cors, CorsConfig::default());
+}
+
+#[test]
+fn test_cors_explicit_wildcard_is_permissive_and_active() {
+    let file_cfg: FileConfig =
+        toml::from_str("[server]\ncors_origins = [\"*\"]\n").expect("test: valid TOML");
+    let cfg = ServerConfig::merge(ServerConfig::default(), file_cfg, CliOverrides::default())
+        .expect("test: merge");
+    assert!(cfg.cors.is_active() && cfg.cors.is_permissive());
 }
 
 #[test]
 fn test_build_cors_layer_permissive() {
-    let cors = CorsConfig::default();
+    let cors = CorsConfig {
+        allowed_origins: vec!["*".to_string()],
+        ..CorsConfig::default()
+    };
     // Should not panic — produces a valid CorsLayer
     let _layer = build_cors_layer(&cors);
 }
@@ -500,6 +513,7 @@ fn test_build_cors_layer_permissive() {
 #[test]
 fn test_build_cors_layer_specific_origins() {
     let cors = CorsConfig {
+        enabled: true,
         allowed_origins: vec![
             "https://app.example.com".to_string(),
             "http://localhost:3000".to_string(),
@@ -532,14 +546,20 @@ fn test_build_cors_layer_invalid_origin_skipped() {
         ],
         ..CorsConfig::default()
     };
-    // Invalid origins are silently filtered via filter_map
+    // The layer builder still filters what does not parse, but startup never
+    // gets that far: validation refuses the origin first.
     let _layer = build_cors_layer(&cors);
+    assert!(cors.validate().is_err());
 }
 
 #[test]
 fn test_server_config_default_includes_cors() {
     let cfg = ServerConfig::default();
-    assert!(cfg.cors.is_permissive());
+    assert!(
+        cfg.cors.enabled,
+        "the switch is on; the empty list keeps it inactive"
+    );
+    assert!(!cfg.cors.is_active());
 }
 
 // ====================================================================

@@ -79,7 +79,7 @@ impl GraphPersistence {
         let nodes = store.get_all_nodes_internal();
         for node in nodes {
             let key = format!("{graph_name}:{}", node.id());
-            let value = serde_wasm_bindgen::to_value(&node)?;
+            let value = crate::js_value::to_js_value(&node)?;
             let request = nodes_store.put_with_key(&value, &JsValue::from_str(&key))?;
             wait_for_request(&request).await?;
         }
@@ -88,7 +88,7 @@ impl GraphPersistence {
         let edges = store.get_all_edges_internal();
         for edge in edges {
             let key = format!("{graph_name}:{}", edge.id());
-            let value = serde_wasm_bindgen::to_value(&edge)?;
+            let value = crate::js_value::to_js_value(&edge)?;
             let request = edges_store.put_with_key(&value, &JsValue::from_str(&key))?;
             wait_for_request(&request).await?;
         }
@@ -103,7 +103,7 @@ impl GraphPersistence {
             updated_at: now,
             version: 1,
         };
-        let meta_value = serde_wasm_bindgen::to_value(&metadata)?;
+        let meta_value = crate::js_value::to_js_value(&metadata)?;
         let meta_request = meta_store.put_with_key(&meta_value, &JsValue::from_str(graph_name))?;
         wait_for_request(&meta_request).await?;
 

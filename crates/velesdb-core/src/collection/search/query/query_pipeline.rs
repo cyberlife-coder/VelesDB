@@ -175,14 +175,16 @@ impl Collection {
 
         let mut ctx = self.runtime.guard_rails.create_context();
 
-        // WITH (timeout_ms=N) overrides the collection-level timeout for this query.
-        if let Some(override_ms) = query
+        // WITH (timeout_ms=N) can only shorten the collection's limit for this
+        // query (`QueryLimits::client_timeout_ms`; 0 keeps the limit), and the
+        // context classifies whose budget a timeout under it ran out of.
+        if let Some(requested_ms) = query
             .select
             .with_clause
             .as_ref()
             .and_then(crate::velesql::WithClause::get_timeout_ms)
         {
-            ctx.limits.timeout_ms = override_ms;
+            ctx.set_client_timeout_ms(requested_ms);
         }
 
         crate::velesql::QueryValidator::validate(query)
@@ -374,10 +376,10 @@ impl Collection {
     ) -> Result<()> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         ctx.check_cardinality(result_count)
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         Ok(())
     }
 

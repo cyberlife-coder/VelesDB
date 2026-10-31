@@ -10,6 +10,7 @@ import type {
   SearchOptions,
   SearchQuality,
   SearchResult,
+  TextSearchResult,
   IVelesDBBackend,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
@@ -25,7 +26,6 @@ import type {
   TraverseParallelRequest,
   TraverseResponse,
   DegreeResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -252,7 +252,7 @@ export class VelesDB {
     return searchMethods.searchBatch(this.backend, collection, searches);
   }
 
-  async textSearch(collection: string, query: string, options?: { k?: number; filter?: FilterInput }): Promise<SearchResult[]> {
+  async textSearch(collection: string, query: string, options?: { k?: number; filter?: FilterInput }): Promise<TextSearchResult[]> {
     this.ensureInitialized();
     return searchMethods.textSearch(this.backend, collection, query, options);
   }
@@ -284,9 +284,9 @@ export class VelesDB {
     return searchMethods.sparseSearchNamed(this.backend, collection, query, indexName, options);
   }
 
-  async query(collection: string, queryString: string, params?: Record<string, unknown>, options?: QueryOptions): Promise<QueryApiResponse> {
+  async query(collection: string, queryString: string, params?: Record<string, unknown>): Promise<QueryApiResponse> {
     this.ensureInitialized();
-    return searchMethods.query(this.backend, collection, queryString, params, options);
+    return searchMethods.query(this.backend, collection, queryString, params);
   }
 
   async queryExplain(queryString: string, params?: Record<string, unknown>, options?: { analyze?: boolean }): Promise<ExplainResponse> {

@@ -8,7 +8,7 @@ Canonical contract for VelesQL server endpoints and payloads.
   returned as `meta.velesql_contract_version` in every response. The document
   revision tracks edits to this file; only the runtime constant appears on the
   wire.
-- Last updated: `2026-08-08`
+- Last updated: `2026-10-30`
 
 This document is the normative REST contract baseline for VelesQL.
 When behavior differs between docs and runtime, runtime must be fixed or this
@@ -208,14 +208,26 @@ Current codes:
 - `VELESQL_MUTATION_ERROR`
 - `VELESQL_EXPLAIN_ANALYZE_ERROR`
 
+A statement that fails during execution answers `422` when the failure is
+the client's (`Error::is_caller_error`: a query error, an unsupported shape,
+a guard-rail ceiling the query crossed, a `WITH (timeout_ms = N)` budget
+tighter than the server's limit running out, …) and the engine's own status
+otherwise — `500` for a storage, I/O or internal fault, `503` for a timeout
+under the server's limit, the memory budget, an open circuit breaker or a
+locked database — keeping the `VELESQL_*` code. `WITH (timeout_ms = N)` can
+shorten the server's limit, never lengthen it, and `0` keeps it.
+
 `/collections/{name}/match` no longer emits the bespoke `*_ERROR`
 strings (`COLLECTION_NOT_FOUND` / `PARSE_ERROR` / `EXECUTION_ERROR` / …).
 It now returns the canonical `{ "error", "code" }` body with a
 `VELES-XXX` code (e.g. `VELES-002` for a missing collection, `VELES-010`
 for a parse error or unbound parameter, `VELES-019` for a duplicate
 edge), and the HTTP status is derived from the error variant. Guard-rail
-rejections (rate limit `429`, circuit breaker `503`) and query timeouts
-(`408`) carry the `VELES-027` code.
+stops carry the `VELES-027` code, with the status of the limit crossed: the
+rate limit `429`; a depth, cardinality or capacity ceiling `400`; the circuit
+breaker, the memory budget and a timeout under the server's limit `503`. An
+`ORDER BY` MATCH cannot sort by is refused before traversal with `VELES-010`
+carrying `V015`, as `/query` refuses it with `VELESQL_VALIDATION_ERROR`.
 
 Syntax errors still use parser-specific payload (`QueryErrorResponse` with `type/message/position/query`).
 

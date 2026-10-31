@@ -216,7 +216,7 @@ client to be compatible with. Supported platforms:
 | macOS Intel (`x86_64-apple-darwin`) | Supported | Release binary |
 | Linux ARM64, other targets | Build from source | Not covered by the release matrix |
 | Rust toolchain | 1.90+ | Workspace MSRV |
-| VelesDB destination format | 4.3.0 | Written through `velesdb-core` 4.3.0 |
+| VelesDB destination format | 8.0.0 | Written through `velesdb-core` 8.0.0 |
 
 ## Troubleshooting
 

@@ -15,6 +15,7 @@ use crate::types::{EnableStreamingRequest, ErrorResponse, StreamInsertRequest};
 use crate::AppState;
 use velesdb_core::{BackpressureError, Point, VectorCollection};
 
+use crate::handlers::content_type::{Ndjson, RequireContentType};
 use crate::handlers::helpers::{
     auto_core_error_response, error_response, get_vector_collection_or_404,
 };
@@ -103,7 +104,8 @@ async fn flush_point_batch(
 
 /// Stream upsert points using NDJSON.
 ///
-/// Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,
+/// Accepts an `application/x-ndjson` body, and refuses any other
+/// `Content-Type` with `415`. Each line is one JSON-encoded point,
 /// whose `id` is an unsigned 64-bit integer: a line that is not blank and does
 /// not parse as one, a string `id` included, is counted in the response's
 /// `malformed` field.
@@ -122,12 +124,14 @@ async fn flush_point_batch(
     request_body(content = String, content_type = "application/x-ndjson", description = "NDJSON stream with one point per line"),
     responses(
         (status = 200, description = "Stream processed", body = Object),
-        (status = 404, description = "Collection not found", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 415, description = "Content-Type is not application/x-ndjson", body = ErrorResponse)
     )
 )]
 pub async fn stream_upsert_points(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    _content_type: RequireContentType<Ndjson>,
     body: Body,
 ) -> impl IntoResponse {
     let collection = match get_vector_collection_or_404(&state, &name) {

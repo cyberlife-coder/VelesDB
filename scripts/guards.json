@@ -1600,6 +1600,51 @@
         "issue": null,
         "summary": "Asserts that one test whose name starts with the given regex passed, not how many: a filter that narrows from the whole module to one test of it stays green. The job runs only on schedule or dispatch and is not in CI Success, so a red step is seen on the next weekly run, not on a pull request. scripts.tests.test_miri_step pins each verdict with a stub cargo (nothing passed, wrong module, ignored only, cargo failing) and that no `cargo miri test` in the workflow bypasses the script."
       }
+    },
+    {
+      "script": "scripts/run-python-examples.py",
+      "purpose": "Every offline Python example runs to exit 0 against the wheel CI builds (the README quickstart included).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "python-sdk-tests",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_run_python_examples",
+      "self_test_required": true,
+      "blind_spot": {
+        "issue": null,
+        "summary": "Runs the examples that need no network, server or API key: examples/python_example.py (a running server), the graphrag_* examples (OpenAI) and the CLIP tutorial (a model download) are out of its reach and stay compile-checked only. Text embeddings come from a deterministic stand-in encoder, so it proves the velesdb calls work, not the quality of any ranking."
+      },
+      "must_refuse": [
+        {
+          "vector": "the README quickstart failing at run time on an argument the wheel removed - the 8.0.0 `SearchOptions(top_k=)` break",
+          "files": {
+            "examples/python/hello_velesdb.py": "raise TypeError(\"SearchOptions.__new__() got an unexpected keyword argument 'top_k'\")\n",
+            "examples/python/hello_velesdb_text.py": "print('ok')\n",
+            "examples/python/hybrid_queries.py": "print('ok')\n",
+            "examples/python/multimodel_notebook.py": "print('ok')\n",
+            "examples/python/fusion_strategies.py": "print('ok')\n",
+            "examples/python/graph_traversal.py": "print('ok')\n",
+            "examples/tutorials/distance_metrics_demo.py": "print('ok')\n",
+            "examples/tutorials/multi_query_fusion_demo.py": "print('ok')\n",
+            "examples/tutorials/velesql_tutorial_complete.py": "print('ok')\n"
+          },
+          "accepts": {
+            "examples/python/hello_velesdb.py": "print('ok')\n",
+            "examples/python/hello_velesdb_text.py": "print('ok')\n",
+            "examples/python/hybrid_queries.py": "print('ok')\n",
+            "examples/python/multimodel_notebook.py": "print('ok')\n",
+            "examples/python/fusion_strategies.py": "print('ok')\n",
+            "examples/python/graph_traversal.py": "print('ok')\n",
+            "examples/tutorials/distance_metrics_demo.py": "print('ok')\n",
+            "examples/tutorials/multi_query_fusion_demo.py": "print('ok')\n",
+            "examples/tutorials/velesql_tutorial_complete.py": "print('ok')\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ]
     }
   ],
   "unwired": [

@@ -96,6 +96,43 @@ impl QueryLimits {
         self
     }
 
+    /// The time budget a query runs under when it asks for `requested_ms` of
+    /// its own (`VelesQL` `WITH (timeout_ms = N)`).
+    ///
+    /// With a server limit (`timeout_ms > 0`) it is the tighter of the two:
+    /// a request can shorten the limit, never lengthen it, and a `requested_ms`
+    /// of `0` — no budget of its own — leaves the limit in force. With no
+    /// server limit, the request's own budget applies, `0` leaving the query
+    /// without one.
+    #[must_use]
+    pub const fn client_timeout_ms(&self, requested_ms: u64) -> u64 {
+        match (self.timeout_ms, requested_ms) {
+            (0, requested) => requested,
+            (limit, 0) => limit,
+            (limit, requested) if requested < limit => requested,
+            (limit, _) => limit,
+        }
+    }
+
+    /// Whose budget a query that ran out of `budget_ms` ran out of — the one
+    /// classification of a timeout, shared by `VelesQL` and the REST search's
+    /// `timeout_ms`.
+    ///
+    /// [`TimeoutBudget::Client`](crate::error::TimeoutBudget::Client) when the
+    /// budget is strictly tighter than the server's limit, or the server sets
+    /// none: running out of it says the request asked for too little time.
+    /// [`TimeoutBudget::Configured`](crate::error::TimeoutBudget::Configured)
+    /// otherwise: the query ran at least as long as the server's own limit,
+    /// which is load on the engine.
+    #[must_use]
+    pub const fn timeout_budget(&self, budget_ms: u64) -> crate::error::TimeoutBudget {
+        if self.timeout_ms == 0 || budget_ms < self.timeout_ms {
+            crate::error::TimeoutBudget::Client
+        } else {
+            crate::error::TimeoutBudget::Configured
+        }
+    }
+
     /// Refuses the limits no running database should enforce as given.
     ///
     /// A `rate_limit_qps` of `0` would reject every query and a
@@ -155,6 +192,8 @@ pub enum GuardRailViolation {
         max_ms: u64,
         /// Actual elapsed time in milliseconds.
         elapsed_ms: u64,
+        /// Whose budget `max_ms` is: the client's own, or the server's limit.
+        budget: crate::error::TimeoutBudget,
     },
     /// Rate limit exceeded (US-005).
     RateLimitExceeded {
@@ -166,6 +205,23 @@ pub enum GuardRailViolation {
         /// Time until recovery in seconds.
         recovery_in_seconds: u64,
     },
+}
+
+impl GuardRailViolation {
+    /// The [`GuardRailKind`](crate::error::GuardRailKind) this violation is
+    /// surfaced as in [`Error::GuardRail`](crate::error::Error::GuardRail).
+    #[must_use]
+    pub const fn kind(&self) -> crate::error::GuardRailKind {
+        use crate::error::GuardRailKind as K;
+        match self {
+            Self::DepthExceeded { .. } => K::Depth,
+            Self::CardinalityExceeded { .. } => K::Cardinality,
+            Self::MemoryExceeded { .. } => K::Memory,
+            Self::Timeout { budget, .. } => K::Timeout(*budget),
+            Self::RateLimitExceeded { .. } => K::RateLimit,
+            Self::CircuitOpen { .. } => K::CircuitOpen,
+        }
+    }
 }
 
 impl std::fmt::Display for GuardRailViolation {
@@ -188,7 +244,9 @@ impl std::fmt::Display for GuardRailViolation {
                     used_bytes / (1024 * 1024)
                 )
             }
-            Self::Timeout { max_ms, elapsed_ms } => {
+            Self::Timeout {
+                max_ms, elapsed_ms, ..
+            } => {
                 write!(f, "Query timed out: max={max_ms}ms, elapsed={elapsed_ms}ms")
             }
             Self::RateLimitExceeded { limit_qps } => {

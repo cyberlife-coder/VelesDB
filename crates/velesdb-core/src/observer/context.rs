@@ -85,6 +85,12 @@ pub enum AccessDecision {
     Allow,
     /// Abort the query and return this error without producing results
     /// (Requirement 1.4).
+    ///
+    /// A denial is the policy's answer, not a failure of the collection, so
+    /// it never counts toward the collection's circuit breaker, whatever
+    /// error variant carries it: core records no denial, and
+    /// `Database::gated_search_outcome` returns it apart from the search's own
+    /// outcome so the server's search handlers record only the latter.
     Deny(crate::Error),
     /// Execute with the given scope AND-composed into the filter pipeline
     /// (Requirement 1.5).

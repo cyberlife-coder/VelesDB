@@ -26,7 +26,6 @@ const ALL_CAPABILITY_KEYS: readonly (keyof CapabilityMap)[] = [
   'multiQuerySearch',
   'sparseSearch',
   'namedSparseIndexes',
-  'includeVectors',
   'idOnlySearch',
   'scroll',
   'graphTraversal',
@@ -93,7 +92,6 @@ describe('REST_CAPABILITIES — full-feature contract', () => {
     expect(REST_CAPABILITIES.velesqlMatchOrderBy).toBe(true);
     expect(REST_CAPABILITIES.velesqlAlterCollection).toBe(true);
     expect(REST_CAPABILITIES.namedSparseIndexes).toBe(true);
-    expect(REST_CAPABILITIES.includeVectors).toBe(true);
     expect(REST_CAPABILITIES.idOnlySearch).toBe(true);
     // Every filter-taking entry point but /search/multi/ids, whose server
     // endpoint refuses a filter.
@@ -108,7 +106,7 @@ describe('REST_CAPABILITIES — full-feature contract', () => {
       'sparseSearchNamed',
       'scroll',
     ]);
-    for (const key of ['storageModes', 'collectionTypes', 'collectionConfig', 'queryOptions'] as const) {
+    for (const key of ['storageModes', 'collectionTypes', 'collectionConfig'] as const) {
       expect(REST_CAPABILITIES[key]).toEqual(CAPABILITY_LIST_UNIVERSES[key]);
     }
     expect([...REST_CAPABILITIES.multiQueryFusionParams]).toEqual([
@@ -150,9 +148,7 @@ describe('WASM_CAPABILITIES — focused subset', () => {
       'metric',
       'storageMode',
       'collectionType',
-      'description',
     ]);
-    expect([...WASM_CAPABILITIES.queryOptions]).toEqual([]);
     expect([...WASM_CAPABILITIES.multiQueryFusionParams]).toEqual([
       'k',
       'avgWeight',
@@ -160,7 +156,6 @@ describe('WASM_CAPABILITIES — focused subset', () => {
       'hitWeight',
     ]);
     expect(WASM_CAPABILITIES.namedSparseIndexes).toBe(false);
-    expect(WASM_CAPABILITIES.includeVectors).toBe(false);
     expect(WASM_CAPABILITIES.idOnlySearch).toBe(false);
   });
 

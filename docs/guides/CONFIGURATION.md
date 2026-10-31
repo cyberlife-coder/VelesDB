@@ -1,6 +1,6 @@
 # ⚙️ VelesDB Configuration
 
-*Version 8.0.0 — Last updated: 2026-09-07*
+*Version 8.0.0 — Last updated: 2026-10-30*
 
 Complete guide for configuring VelesDB via configuration file, environment variables, and runtime parameters.
 
@@ -86,8 +86,15 @@ the running engine. Reaching `VelesConfig` is not the same as changing
 behaviour: see the note above for which of them the engine actually acts
 on. Every other top-level table is silently dropped before
 `VelesConfig` ever sees it — most importantly `[server]`, `[auth]`,
-`[tls]`, `[cors]`, which stay exclusively `velesdb-server`'s own transport
-config. This matters because `VelesConfig` *also* has its own same-named
+`[tls]`, `[cors]` and `[logging]`, which stay exclusively `velesdb-server`'s
+own config. `velesdb-server` reads those five itself, and a key in one of
+them that it does not read is not dropped silently: the server names it in a
+startup warning (`these config entries are not read by this velesdb-server
+build and have no effect`), so a typo such as `[server] worker = 4` is visible. So is a
+top-level table nobody reads (`[sever]`, or `[premium]`, which this build does
+not read); the engine's tables, removed tables (which the engine names in its
+own warning) and — in a build with the default `update-check` feature —
+`[update_check]` are not reported. This matters because `VelesConfig` *also* has its own same-named
 `[server]`/`[logging]` fields (for standalone/embedded use), which don't
 mean the same thing: a perfectly legitimate `velesdb-server --config`
 value like `[server] port = 443` (its HTTP bind port, e.g. behind
@@ -98,7 +105,8 @@ file down to the engine sections before parsing it as `VelesConfig`, so
 this can't happen.
 
 `VELESDB_*` environment variables still layer on top of the (filtered)
-file, same as `VelesConfig::load`/`load_from_path` — e.g.
+file — and on the defaults when there is no file at all — same as
+`VelesConfig::load`/`load_from_path` — e.g.
 `VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a `[limits] max_collections`
 value from the file, and `velesdb-server`'s own `VELESDB_PORT`/
 `VELESDB_HOST`/... env vars (mapped to its transport `Args`, not to
@@ -266,23 +274,38 @@ shutdown_timeout_secs = 30
 # Default: 100
 rate_limit = 100
 
-# Nombre de workers (threads)
-# Range: 1 - 256
-# Default: nombre de CPUs
-workers = 0  # 0 = auto-detect
+# Noms d'hôte (en-tête Host) auxquels le serveur répond, en plus de localhost,
+# 127.0.0.0/8, [::1] et de `host` s'il n'est pas 0.0.0.0/::. Les autres
+# requêtes reçoivent 421 (protection contre le DNS rebinding).
+# ["*"] désactive la vérification. Env: VELESDB_ALLOWED_HOSTS (a,b,c).
+# Default: []
+# allowed_hosts = ["db.example.com"]
 
-# Taille maximale du body HTTP (octets)
-# Range: 1048576 - 1073741824 (1 GB max)
-# Default: 104857600 (100 MB)
+# Nombre de threads workers du runtime Tokio
+# Range: 0 - 4096 (0 = un par CPU, comme Tokio par défaut)
+# Default: 0
+workers = 0
+
+# Taille maximale d'un body de requête (octets) ; au-delà : 413
+# Les routes d'upload de points (POST .../points, .../points/raw) acceptent
+# jusqu'à cette valeur ; toutes les autres jusqu'à min(cette valeur, 2 MiB).
+# POST .../points/stream (NDJSON, lu au fil de l'eau) n'est pas plafonnée.
+# Range: 1 - 1073741824 (1 GiB)
+# Default: 104857600 (100 MiB)
 max_body_size = 104857600
 
-# Activer CORS
-# Default: false
-cors_enabled = false
+# Interrupteur général du CORS. false = aucun en-tête CORS, quelles que
+# soient les origines listées.
+# Default: true
+cors_enabled = true
 
-# Origines CORS autorisées (si cors_enabled = true)
-# Default: ["*"]
-cors_origins = ["*"]
+# Origines CORS autorisées, comparées exactement à l'en-tête Origin
+# ("scheme://host[:port]", sans chemin ni "/" final). ["*"] = toutes, à
+# écrire explicitement. Vide (défaut) = aucun en-tête CORS : seules les pages
+# fournies par le serveur lui-même (même origine) peuvent lire ses réponses.
+# Même liste que [cors] allowed_origins : n'en définir qu'une des deux.
+# Default: []
+cors_origins = ["https://app.example.com"]
 
 # -----------------------------------------------------------------------------
 # AUTHENTICATION (velesdb-server uniquement)
@@ -313,17 +336,19 @@ cors_origins = ["*"]
 # LOGGING CONFIGURATION
 # -----------------------------------------------------------------------------
 [logging]
-# Niveau de log
-# Valeurs: "error" | "warn" | "info" | "debug" | "trace"
-# Default: "info"
+# Niveau de log (velesdb-server)
+# Valeurs: "error" | "warn" | "info" | "debug" | "trace" (en minuscules)
+# Priorité: RUST_LOG > VELESDB_LOGGING_LEVEL > level > défaut
+# Default: absent = "info,tower_http=debug" (info + une ligne debug par requête)
 level = "info"
 
 # Format de log
-# Valeurs: "text" | "json"
+# Valeurs: "text" | "json" (un objet JSON par ligne)
 # Default: "text"
 format = "text"
 
-# Fichier de log (vide = stdout)
+# Fichier de log, ouvert en ajout (créé s'il manque ; son répertoire doit
+# exister). Vide = stdout.
 # Default: "" (stdout)
 file = ""
 
@@ -362,29 +387,15 @@ enabled = true
 
 # Timeout in milliseconds (default: 2000)
 # timeout_ms = 2000
-
-# -----------------------------------------------------------------------------
-# PREMIUM FEATURES (nécessite velesdb-premium)
-# -----------------------------------------------------------------------------
-[premium]
-# Clé de licence (ou utiliser VELESDB_LICENSE_KEY env var)
-# license_key = "VELES-XXXX-XXXX-XXXX-XXXX"
-
-# Activer le hot-reload de la configuration (Premium)
-# Default: false
-hot_reload = false
-
-# Profil de recherche prédéfini (Premium)
-# Valeurs: "default" | "low_latency" | "accurate" | "memory_optimized"
-# Default: "default"
-# profile = "default"
 ```
 
 ---
 
 ## Environment Variables
 
-All options can be set via environment variables with the `VELESDB_` prefix:
+Engine options can be set via environment variables with the `VELESDB_`
+prefix; `velesdb-server`'s own settings only through the variables listed under
+[Server variables](#server-variables-velesdb-server-only):
 
 **Two config systems share the `VELESDB_` prefix.** The engine
 (`VelesConfig`) and the `velesdb-server` transport layer each read their own
@@ -406,7 +417,6 @@ name kept as they are:
 | `VELESDB_LIMITS_MAX_COLLECTIONS` | `limits.max_collections` | `50` |
 | `VELESDB_LIMITS_MAX_DIMENSIONS` | `limits.max_dimensions` | `4096` |
 | `VELESDB_STORAGE_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
-| `VELESDB_LOGGING_LEVEL` | `logging.level` | `debug` |
 
 Setting one of these is exactly equivalent to setting its TOML key. Most are
 **reserved** and stay reserved when set this way: `VELESDB_SEARCH_MAX_RESULTS`
@@ -428,12 +438,25 @@ They have no effect on an embedded engine:
 | `VELESDB_PORT` | Bind port | `8080` |
 | `VELESDB_DATA_DIR` | Server data directory | `/var/lib/velesdb` |
 | `VELESDB_RATE_LIMIT` | Requests per window | `100` |
+| `VELESDB_ALLOWED_HOSTS` | Extra `Host` names to answer to (comma-separated) | `db.example.com,10.0.0.5` |
+| `VELESDB_LOGGING_LEVEL` | Log level; overrides `[logging] level`, and `RUST_LOG` overrides it | `debug` |
+| `RUST_LOG` | Full `tracing` filter (`info,velesdb_core=debug`); overrides both of the above | `info` |
 | `VELESDB_API_KEYS` | API keys | `key1,key2,key3` (comma-separated) |
 | `VELESDB_TLS_CERT` | TLS certificate path | `/etc/ssl/cert.pem` |
 | `VELESDB_TLS_KEY` | TLS key path | `/etc/ssl/key.pem` |
 | `VELESDB_LICENSE_KEY` | License key | `VELES-...` |
 | `VELESDB_NO_UPDATE_CHECK` | Disables the update check | `1` |
 | `VELESDB_CONFIG` | Config file path | `/etc/velesdb/velesdb.toml` |
+
+`[server] workers`, `max_body_size`, `cors_enabled`, `cors_origins` and
+`[logging] format` / `file` have no variable: set them in the file.
+`VELESDB_SERVER_*` names (`VELESDB_SERVER_PORT`, ...) are **not** read by
+`velesdb-server`, and the engine loaders both binaries use
+(`VelesConfig::load_from_path_engine_only` with a file,
+`VelesConfig::load_engine_only_from_env` without one) ignore every variable
+outside the engine sections, so they do nothing — and, unlike up to 7.1.0,
+they can no longer fail the engine's validation either. Each `[server]`/`[logging]`
+setting is read and validated once, by the server.
 
 ### Name Mapping
 
@@ -457,15 +480,15 @@ field at all.
 ```bash
 # Linux/macOS
 export VELESDB_SEARCH_DEFAULT_MODE=accurate
-export VELESDB_SERVER_PORT=9090
+export VELESDB_PORT=9090
 export VELESDB_LOGGING_LEVEL=debug
 
 # Windows PowerShell
 $env:VELESDB_SEARCH_DEFAULT_MODE = "accurate"
-$env:VELESDB_SERVER_PORT = "9090"
+$env:VELESDB_PORT = "9090"
 
 # Docker
-docker run -e VELESDB_SERVER_HOST=0.0.0.0 -e VELESDB_SERVER_PORT=8080 velesdb
+docker run -e VELESDB_HOST=0.0.0.0 -e VELESDB_PORT=8080 velesdb
 ```
 
 ---
@@ -481,7 +504,7 @@ Configuration follows this priority order (from lowest to highest):
    ↓
 3. VELESDB_* environment variables
    ↓
-4. CLI parameters (--host, --port, --data-dir, --tls-cert, --tls-key)
+4. CLI parameters (--host, --port, --data-dir, --tls-cert, --tls-key, --rate-limit, --allowed-hosts)
    ↓
 5. Runtime override (REPL \set, VelesQL WITH, API params)
 ```
@@ -489,6 +512,17 @@ Configuration follows this priority order (from lowest to highest):
 > `--config`/`VELESDB_CONFIG` isn't a level in this chain — it *selects*
 > which file fills level 2, for both `velesdb-server` and the `velesdb` CLI.
 > See [File Search Paths](#file-search-paths) above for its exact semantics.
+
+**The server's log level** follows the same order, with `RUST_LOG` on top:
+
+```
+RUST_LOG  >  VELESDB_LOGGING_LEVEL  >  [logging] level  >  "info,tower_http=debug"
+```
+
+`RUST_LOG` stays first because it was the only knob before `[logging]` was
+read and it takes full `tracing` directives; when it overrides a configured
+level, the server says so in a startup warning. A variable set to the empty
+string counts as unset (`RUST_LOG=` hands the level back to the file).
 
 ### Resolution Example
 
@@ -612,11 +646,61 @@ unaffected.
 | `port` | int | `VELESDB_PORT` | `--port` | `8080` | Port |
 | `data_dir` | string | `VELESDB_DATA_DIR` | `--data-dir` | `"./velesdb_data"` | Data directory |
 | `shutdown_timeout_secs` | int | — | — | `30` | Connection drain timeout (seconds) |
-| `workers` | int | — | — | `0` | Workers (0=auto) |
-| `max_body_size` | int | — | — | `104857600` | Max body (bytes) |
+| `workers` | int | — | — | `0` | Tokio worker threads; `0` = one per CPU. Range `0`–`4096` |
+| `max_body_size` | int | — | — | `104857600` | Largest request body, in bytes (see below). Range `1`–`1073741824` |
 | `rate_limit` | int | `VELESDB_RATE_LIMIT` | `--rate-limit` | `100` | Max req/s per IP (0=disabled) |
-| `cors_enabled` | bool | — | — | `false` | Enable CORS |
-| `cors_origins` | array | — | — | `["*"]` | CORS origins |
+| `allowed_hosts` | array | `VELESDB_ALLOWED_HOSTS` | `--allowed-hosts` | `[]` | `Host` names answered besides loopback and the bind host; `["*"]` = any (see below) |
+| `cors_enabled` | bool | — | — | `true` | Master switch; `false` sends no CORS header whatever the origins |
+| `cors_origins` | array | — | — | `[]` | Allowed origins, matched exactly; `["*"]` = any; empty = no CORS header (same list as `[cors] allowed_origins`) |
+
+**`allowed_hosts`.** Every request whose `Host` header names a host the server
+does not answer to is refused with `421 Misdirected Request`, whatever its
+method. Answered without configuration: `localhost`, any `127.0.0.0/8`
+address, `[::1]`, and the bind `host` unless it is a wildcard (`0.0.0.0`,
+`::`). `allowed_hosts` adds names or addresses — bare: a port, a scheme, a path, a
+`*.` pattern or a trailing dot is refused at startup; names match
+case-insensitively, IP addresses as addresses (`FE80:0:0::1` = `[fe80::1]`),
+and the request's port is ignored. `["*"]` alone turns the check off (with a
+startup warning). In `--allowed-hosts` and `VELESDB_ALLOWED_HOSTS`, items are
+comma-separated, trimmed, empty ones dropped, and an empty variable counts as
+unset. `/health` and
+`/ready` answer any `Host`, so orchestrator probes that address the server by
+IP keep working. `X-Forwarded-Host` is never read. A server bound to `0.0.0.0`
+and reached under any other name — a DNS name, a LAN address, a reverse proxy
+that rewrites `Host` — needs that name here. The reason is DNS rebinding; see
+[SERVER_SECURITY.md](SERVER_SECURITY.md#dns-rebinding-and-the-host-check).
+
+**`workers`** sizes the Tokio runtime the server runs on. With `0` (or the key
+absent) Tokio picks one worker per CPU, which is what the server always did;
+Tokio's own `TOKIO_WORKER_THREADS` variable is honoured in that case only.
+The startup log reports the count actually running
+(`Tokio runtime started with N worker thread(s)`).
+
+**`max_body_size`** is the largest request body the server accepts on any
+route, in bytes; a larger one gets `413 Payload Too Large`. The point-upload
+routes (`POST /collections/{name}/points` and `.../points/raw`) accept up to
+the full value; every other route accepts up to the smaller of this value and
+2 MiB (2 097 152 bytes), the limit they have always had — the setting can
+lower it, not raise it. `POST /collections/{name}/points/stream` reads its
+NDJSON body line by line without buffering it, and no body limit applies to
+it.
+
+**`cors_enabled` / `cors_origins`.** By default no origin is listed and the
+server sends no CORS header, so only pages it serves itself (same origin) can
+read its responses — up to 7.1.0 it allowed every origin. A list allows
+exactly those origins, and `["*"]`, written explicitly, allows every origin
+(with a startup warning): each entry is `scheme://host[:port]`,
+compared byte for byte with the browser's `Origin` header, so
+`https://app.example.com` does not admit `https://app.example.com.evil.net`
+or `http://app.example.com`. An entry with a path or a trailing `/` (which no
+browser ever sends), `"*"` mixed into a list, or both `cors_origins` and
+`[cors] allowed_origins` set, are refused at startup. `cors_enabled = false`
+installs no CORS layer whatever the list says: no `Access-Control-*` header is
+sent and browsers refuse every cross-origin read. Non-browser clients are
+unaffected either way. The
+methods, headers, credentials and preflight cache are set in the `[cors]`
+table, described in [SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md#4-cors); the
+security trade-off is in [SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors-origins-and-hosts).
 
 ### Section [auth]
 
@@ -640,11 +724,16 @@ unaffected.
 
 ### Section [logging]
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `level` | string | `"info"` | Log level |
-| `format` | string | `"text"` | Format: text or json |
-| `file` | string | `""` | File (empty=stdout) |
+Read by `velesdb-server`; the engine never sees this table.
+
+| Key | Type | Env var | Default | Description |
+|-----|------|---------|---------|-------------|
+| `level` | string | `VELESDB_LOGGING_LEVEL` | none: `info,tower_http=debug` | `error`, `warn`, `info`, `debug` or `trace` (lower case). `RUST_LOG` overrides both — see [Priority Order](#priority-order) |
+| `format` | string | — | `"text"` | `text` (human-readable lines) or `json` (one JSON object per line: `timestamp`, `level`, `fields`, `target`) |
+| `file` | string | — | `""` | Path the log is **appended** to, created if missing (its directory must exist); empty = stdout. Text written to a file carries no ANSI colours |
+
+Any other value of `level` or `format`, or a `file` that cannot be opened,
+stops the server at startup with an error naming the key.
 
 ### Section [quantization]
 
@@ -714,6 +803,11 @@ The environment variables win over the configuration file. A config file that ex
 
 ### Section [premium]
 
+Read only by premium distributions of VelesDB. The open-source
+`velesdb-server` does not read it: a `[premium]` table in its config file is
+ignored and named in the startup warning (`not read by this velesdb-server
+build`).
+
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `license_key` | string? | `null` | License key |
@@ -755,6 +849,7 @@ storage_mode = "mmap"  # reserved (#2087), not yet applied
 host = "0.0.0.0"
 port = 8080
 workers = 16
+allowed_hosts = ["velesdb.internal"]  # the names clients use (see below)
 
 [logging]
 level = "warn"
@@ -809,11 +904,18 @@ max_dimensions = 768
 host = "0.0.0.0"  # Écouter sur toutes les interfaces
 port = 8080
 data_dir = "/data"  # Volume monté
+# Noms sous lesquels les clients appellent le serveur (nom de service
+# compose/Kubernetes) ; sinon 421. /health et /ready répondent à tout Host.
+allowed_hosts = ["velesdb", "velesdb.default.svc.cluster.local"]
 
 [logging]
 level = "info"
 format = "json"  # Pour collecteurs de logs
 ```
+
+The repository's Docker image sets no `RUST_LOG`, so this `level` applies;
+a `RUST_LOG` passed to the container would override it (`format` and `file`
+are not affected by `RUST_LOG`).
 
 ---
 
@@ -837,7 +939,6 @@ Some configurations generate warnings without blocking startup:
 ```
 WARN: search.ef_search=2048 is very high, may cause slow queries
 WARN: limits.max_perfect_mode_vectors=5000000 allows slow bruteforce on large datasets
-WARN: premium.hot_reload=true but no valid license key found
 ```
 
 ### Validating a Config File

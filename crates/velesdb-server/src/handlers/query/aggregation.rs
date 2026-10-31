@@ -13,7 +13,9 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
+use super::velesql_helpers::{
+    parse_and_validate, velesql_collection_not_found, velesql_error, velesql_execution_error,
+};
 
 fn aggregation_result_count(result: &serde_json::Value) -> usize {
     match result {
@@ -44,12 +46,10 @@ pub(crate) fn execute_aggregation_query(
         Ok(r) => r,
         Err(e) => {
             state.operational_metrics.inc_errors();
-            return velesql_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
+            return velesql_execution_error(
+                &e,
                 "VELESQL_AGGREGATION_ERROR",
-                &e.to_string(),
                 "Verify GROUP BY/HAVING clauses and aggregate function arguments",
-                None,
             );
         }
     };
@@ -133,6 +133,8 @@ fn prepare_aggregation(
     request_body = QueryRequest,
     responses(
         (status = 200, description = "Aggregation results", body = AggregationResponse),
+        (status = 500, description = "An engine fault during execution (storage, I/O, internal)", body = crate::types::VelesqlErrorResponse),
+        (status = 503, description = "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement", body = crate::types::VelesqlErrorResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
         (status = 422, description = "Aggregation validation/execution error", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)

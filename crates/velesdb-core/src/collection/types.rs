@@ -675,11 +675,14 @@ impl Collection {
     ) -> crate::error::Result<()> {
         let projected = self.len().saturating_add(incoming);
         if projected > cap {
-            return Err(crate::error::Error::GuardRail(format!(
-                "upsert would raise collection size to {projected}, exceeding \
+            return Err(crate::error::Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                message: format!(
+                    "upsert would raise collection size to {projected}, exceeding \
                  max_vectors_per_collection cap of {cap}; raise \
                  `limits.max_vectors_per_collection` in VelesConfig"
-            )));
+                ),
+            });
         }
         Ok(())
     }
@@ -710,10 +713,13 @@ impl Collection {
             return Ok(());
         }
         if counter.exceeded() {
-            return Err(crate::error::Error::GuardRail(format!(
-                "point {id} payload exceeds max_payload_size cap of {cap} bytes; \
+            return Err(crate::error::Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                message: format!(
+                    "point {id} payload exceeds max_payload_size cap of {cap} bytes; \
                  raise `limits.max_payload_size` in VelesConfig"
-            )));
+                ),
+            });
         }
         Ok(())
     }

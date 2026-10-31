@@ -233,7 +233,6 @@ describe('RestBackend — graph facade delegation', () => {
   it('traverseGraph delegates', async () => {
     mockOk({
       results: [],
-      next_cursor: null,
       has_more: false,
       stats: { visited: 0, depth_reached: 0 },
     });
@@ -244,7 +243,6 @@ describe('RestBackend — graph facade delegation', () => {
   it('traverseParallel delegates', async () => {
     mockOk({
       results: [],
-      next_cursor: null,
       has_more: false,
       stats: { visited: 0, depth_reached: 0 },
     });

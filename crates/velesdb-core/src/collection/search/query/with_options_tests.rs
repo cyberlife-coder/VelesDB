@@ -350,17 +350,18 @@ fn test_with_timeout_ms_override_does_not_error_on_normal_query() {
 }
 
 #[test]
-fn test_with_timeout_ms_zero_means_disabled() {
+fn test_with_timeout_ms_zero_keeps_the_server_limit() {
     let (_dir, col) = setup_with_options_collection();
     let mut params = HashMap::new();
     params.insert("v".to_string(), serde_json::json!([0.5, 0.5, 0.5, 0.3]));
-    // timeout_ms=0 should disable timeout (never fire)
+    // timeout_ms=0 asks for no budget of its own: the server's limit (30 s by
+    // default) stays in force, so a normal query succeeds.
     let results = col
         .execute_query_str(
             "SELECT * FROM docs WHERE vector NEAR $v LIMIT 5 WITH (timeout_ms=0)",
             &params,
         )
-        .expect("query should succeed with timeout disabled");
+        .expect("query should succeed under the server's limit");
     assert_eq!(results.len(), 5);
 }
 

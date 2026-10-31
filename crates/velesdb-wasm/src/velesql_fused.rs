@@ -1,7 +1,7 @@
 //! `NEAR_FUSED` multi-vector fusion for the WASM VelesQL executor.
 //!
 //! Mirrors core's
-//! [`dispatch_fused_query`](velesdb_core::collection::Collection) semantics with
+//! `Collection::dispatch_fused_query` semantics with
 //! WASM's brute-force primitives: resolve the N query vectors from the
 //! `VectorFusedSearch`, run a per-vector brute-force similarity scan, fuse the N
 //! ranked lists via the [`FusionStrategy`] mapped from the fusion config

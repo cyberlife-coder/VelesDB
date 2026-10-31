@@ -3362,6 +3362,136 @@ async fn test_bad_ef_search_does_not_open_the_circuit_breaker_and_is_checked_in_
     assert!(error.contains("index 1"), "{error}");
 }
 
+/// A query vector of the wrong dimension is the client's error, refused
+/// before the search runs: however often it is sent, to `/search` or to
+/// `/search/ids`, it records no circuit-breaker failure, and the collection
+/// keeps answering well-formed searches.
+#[tokio::test]
+async fn test_dimension_mismatch_does_not_open_the_circuit_breaker() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "dim_breaker", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/dim_breaker/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let threshold = state
+        .db
+        .get_vector_collection("dim_breaker")
+        .expect("the collection exists")
+        .guard_rails()
+        .limits()
+        .circuit_failure_threshold;
+    let uris = [
+        "/collections/dim_breaker/search",
+        "/collections/dim_breaker/search/ids",
+    ];
+    let bad = json!({"vector": [1.0, 0.0], "top_k": 1});
+    let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1});
+    for uri in uris {
+        for _ in 0..threshold {
+            let response = app
+                .clone()
+                .oneshot(post(uri, &bad))
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        }
+    }
+    for uri in uris {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &good))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+}
+
+/// A search's `timeout_ms` of `0` asks for no budget of its own: the server's
+/// limit stays in force (`QueryLimits::client_timeout_ms`, the clamp
+/// `VelesQL` `WITH (timeout_ms)` uses), so the search runs and answers `200`
+/// on `/search` and `/search/ids` — where 7.1.0 timed it out at once with a
+/// `408`. Whose a timeout is, and that the client's never opens the breaker,
+/// is pinned by `timeout_response_tests` and `workers_tests`.
+#[tokio::test]
+async fn test_a_zero_timeout_keeps_the_server_limit() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let (app, state) = create_test_app_with_state(&temp_dir);
+    let post = |uri: &str, body: &Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("Failed to build request")
+    };
+    let collection = json!({"name": "timeout_breaker", "dimension": 4, "metric": "cosine"});
+    let response = app
+        .clone()
+        .oneshot(post("/collections", &collection))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let points = json!({"points": [{"id": 1, "vector": [1.0, 0.0, 0.0, 0.0]}]});
+    let response = app
+        .clone()
+        .oneshot(post("/collections/timeout_breaker/points", &points))
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let threshold = state
+        .db
+        .get_vector_collection("timeout_breaker")
+        .expect("the collection exists")
+        .guard_rails()
+        .limits()
+        .circuit_failure_threshold;
+    let uris = [
+        "/collections/timeout_breaker/search",
+        "/collections/timeout_breaker/search/ids",
+    ];
+    let zero_budget = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "timeout_ms": 0});
+    let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1});
+    for uri in uris {
+        for _ in 0..threshold {
+            let response = app
+                .clone()
+                .oneshot(post(uri, &zero_budget))
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        }
+    }
+    for uri in uris {
+        let response = app
+            .clone()
+            .oneshot(post(uri, &good))
+            .await
+            .expect("Request failed");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+}
+
 /// An `ef_search` that is not a non-negative integer fails the body's JSON
 /// parsing: axum answers a plain-text `422` on every path whose body carries
 /// one, and the OpenAPI document declares that answer, in that content type,
@@ -5085,14 +5215,10 @@ async fn test_search_with_generous_timeout_returns_200() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-/// Negative: a search with `timeout_ms: 0` yields an immediate timeout.
-/// The handler must return 408 Request Timeout with the canonical VELES-027
-/// error code, not 200 with the results. The `tokio::time::timeout`
-/// wrapper fires on the very next runtime tick after the worker is
-/// spawned, so this deterministic test will always see the elapsed
-/// path regardless of how fast the underlying HNSW search is.
+/// A search with `timeout_ms: 0` keeps the server's limit (30 s by
+/// default) instead of timing out at once: `200` with the results.
 #[tokio::test]
-async fn test_search_with_zero_timeout_returns_408() {
+async fn test_search_with_zero_timeout_keeps_the_server_limit() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     seed_timeout_collection(&app, "timeout_zero").await;
@@ -5118,28 +5244,16 @@ async fn test_search_with_zero_timeout_returns_408() {
 
     assert_eq!(
         response.status(),
-        StatusCode::REQUEST_TIMEOUT,
-        "F-03: timeout_ms=0 must return 408 Request Timeout"
+        StatusCode::OK,
+        "timeout_ms=0 keeps the server's limit, it does not time out"
     );
-
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("test: read body");
     let json: Value = serde_json::from_slice(&body).expect("test: parse json");
-    assert_eq!(
-        json["code"].as_str(),
-        Some("VELES-027"),
-        "timeout error code must be the canonical VELES-027, got: {}",
-        json["code"]
-    );
-    let error_msg = json["error"].as_str().expect("error field");
     assert!(
-        error_msg.contains("timeout_zero"),
-        "error must include collection name, got: {error_msg}"
-    );
-    assert!(
-        error_msg.contains("0ms"),
-        "error must echo the budget, got: {error_msg}"
+        !json["results"].as_array().expect("results").is_empty(),
+        "{json}"
     );
 }
 

@@ -206,7 +206,7 @@ helper. Community-scope cleanup, not a feature.
   - `max_payload_size` — a per-point serialized-size check (shared
     `enforce_payload_limits` helper) on the same cold ingest boundary for
     every payload path: Point upsert, raw bulk, and graph node writes
-    (`store_node_payload`). The size is measured with a bounded counting
+    (`upsert_node_payload`). The size is measured with a bounded counting
     writer that aborts past the cap, so it allocates no throwaway buffer and
     serializes at most `cap + 1` bytes — **not** in the innermost WAL
     `write_store_record` loop. The same helper first refuses a payload nested
