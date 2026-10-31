@@ -104,7 +104,7 @@ Store a fact in durable local memory.
 | `metadata` | object | no | Free-form structured metadata for later filtering. Capped at 64 KiB serialized (`MAX_METADATA_BYTES`). |
 | `ttl_seconds` | integer | no | Durable expiry that survives a restart. Omit for a permanent fact; falls back to the server's `VELESDB_MEMORY_DEFAULT_TTL`. |
 | `anchors` | array of strings | no | Repository-relative paths of the files the fact is about, at most 8. The server reads each one under `anchor_root` and records its SHA-256 (reserved, never in `metadata`), so `recall` can later flag the fact stale. Requires `anchor_root`. Remembering the fact again with `anchors` re-anchors it; without them it keeps its anchors. |
-| `anchor_root` | string | no | Absolute path of the checkout `anchors` are relative to. Must lie inside `VELESDB_MEMORY_INGEST_ROOTS`; without ingest roots, anchoring is refused. A path with a root, `.` or `..`, a symlink leaving the checkout, a missing or non-regular file, or a file over 1 MiB is refused with `invalid_params`, and nothing is stored. |
+| `anchor_root` | string | no | Absolute path of the checkout `anchors` are relative to; its canonical form is stored with the anchors. Must lie inside `VELESDB_MEMORY_INGEST_ROOTS`; without ingest roots, anchoring is refused. A path with a root, `.` or `..`, a symlink leaving the checkout, a missing or non-regular file, or a file over 1 MiB is refused with `invalid_params`, and nothing is stored. Sent without `anchors`, it is still validated and refused the same way. |
 
 Returns `{ id, id_str }`. The id is derived from the fact's content, so
 re-remembering identical text is idempotent — same id, updated in place.
@@ -175,7 +175,9 @@ With `anchor_root`, each fact remembered with `anchors` also carries
 changed or was deleted — listed in `changed` — and the fact's ranking key is
 halved) or `unverified` (a file could not be checked: outside the root, not a
 regular file, over 1 MiB, or past the request's budget of 256 files and
-16 MiB). Freshness is recomputed by each such recall and never stored; it does
+16 MiB — or the fact was anchored in another checkout than `anchor_root`, which
+says nothing about the code it was written against, so its rank is left
+alone). Freshness is recomputed by each such recall and never stored; it does
 not touch the learned confidence. `recall_where` and `recall_fused` do not
 judge anchors.
 

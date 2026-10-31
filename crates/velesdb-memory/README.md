@@ -292,20 +292,33 @@ record its SHA-256 in a reserved key that never appears in `metadata`. A later
 anchored fact a `freshness`: `fresh`, `stale` (a file changed or was deleted;
 the paths are in `changed`, and the fact's ranking key is halved) or
 `unverified` (a file could not be checked, which says nothing either way).
+The anchors record the canonical checkout they were read in, and only a
+`recall` with that same checkout judges them: one naming another checkout —
+another clone, another worktree, a moved directory — reports `unverified` and
+leaves the rank alone, so two repositories that both hold `src/lib.rs` never
+make each other's lessons stale. A moved checkout therefore reads as
+`unverified` until the lesson is anchored again from its new place.
 Staleness is recomputed on every such recall and never stored: it changes the
 order, not the learned confidence, and restoring the file makes the lesson
 fresh again. Remembering the fact again with `anchors` re-anchors it; without
-`anchors`, it keeps the ones it had.
+`anchors`, it keeps the ones it had. An `anchor_root` sent without `anchors`
+is still validated, and refused like one sent with them.
 
 The server computes every digest itself — the agent never supplies one — and
 reads only below an `anchor_root` that lies inside `VELESDB_MEMORY_INGEST_ROOTS`:
 paths are refused unless they are plain relative names (no root, `.` or `..`),
 a symlink resolving out of the checkout is refused rather than followed, only
-regular files of at most 1 MiB are read, and one request reads at most 256
-files and 16 MiB. Without ingest roots, anchoring is refused. Plain `recall`,
-`recall_where` and `recall_fused` do not read anchors. In Rust, the same is
-`MemoryService::remember_anchored` and `MemoryService::recall_anchored` with an
-`anchor::AnchorRoot`; the language bindings do not expose it yet.
+regular files of at most 1 MiB are read — type and size checked on the opened
+handle, which is opened without blocking, so a FIFO swapped in under an
+anchored path is refused instead of hanging the recall — and one request reads
+at most 256 files and 16 MiB. The files are read after the store's locks are
+released, so a slow file system delays that one recall, never another caller.
+Without ingest roots, anchoring is refused. Plain `recall`, `recall_where` and
+`recall_fused` do not read anchors. In Rust, the same is
+`MemoryService::remember_anchored` with an `anchor::AnchorSet` built by
+`anchor::AnchorRoot::anchors`, and `MemoryService::recall_anchored` (or
+`anchored_candidates` then `AnchoredCandidates::judge`, to read the files with
+no lock held); the language bindings do not expose it yet.
 
 By design the server exposes **memory semantics only** — never raw database
 capabilities (`query`, `create_collection`, `upsert`, `traverse`).

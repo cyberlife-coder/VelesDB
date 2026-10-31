@@ -170,7 +170,9 @@ leave the terminal fields empty; only `committed` carries final ids.
    `fresh`, `stale` (a file changed or was deleted, listed in `changed`; the
    fact is ranked lower) or `unverified`. Re-verify a stale fact; then forget
    and replace it, or remember it again with its anchors to re-anchor it.
-   Only `recall` judges anchors.
+   Only `recall` judges anchors, and only against the checkout they were read
+   in: a `recall` naming another checkout (another clone, a moved directory)
+   reports `unverified` and keeps the fact's rank.
 
 ## Resuming a session: list → load → work → save
 

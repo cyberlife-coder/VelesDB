@@ -22,9 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for feedback only on a listed memory whose effect an outcome demonstrates,
   citing it. The records follow the edit records' rules (private directory,
   atomic files, links and malformed records refused) and travel in the
-  pending/delivered manifest, so an interrupted `Stop` re-emits them. Codex
-  does not record check outcomes: how its shell results report an exit status
-  has not been measured. `scripts/sync-agent-hooks.py` installs the new hook.
+  pending/delivered manifest, so an interrupted `Stop` re-emits them; every
+  entry a recovered manifest carries is validated like its record. A `Bash`
+  call launched in the background, moved there past its timeout, or
+  interrupted is never a pass, exit 126/127 (and a `flock` wrapper's own
+  64–78) never a failure, and `--no-run`, `--list`, `--help` or
+  `--collect-only` runs are not checks. At most 64 records of each kind are
+  kept, the oldest evicted and the checklist saying how many were dropped; a
+  `stale` mark survives a later recall that did not judge anchors; recalls are
+  recorded only where the learning loop runs, and the evidence of a session
+  idle for more than seven days is removed at `SessionStart`. Git runs through
+  one helper that keeps the repository's own config (signature verification,
+  `core.fsmonitor`, a pager) from running a program. Codex does not record
+  check outcomes: how its shell results report an exit status has not been
+  measured. `scripts/sync-agent-hooks.py` installs the new hook.
 
 - `Database::gated_search_outcome`: `gated_search` with the read gate's
   refusal kept apart from the search's own outcome.

@@ -23,17 +23,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recomputed on every such recall and never stored, so it does not change the
   learned confidence and a restored file makes the lesson fresh again.
   Remembering a fact again with `anchors` re-anchors it; without them it keeps
-  its anchors. The server computes every digest itself and reads only below a
-  root inside the ingest allowlist: paths with a root, `.` or `..` are refused,
-  a symlink resolving out of the checkout is refused rather than followed, only
-  regular files up to 1 MiB are read, and a request reads at most 256 files and
-  16 MiB (`limits::MAX_ANCHOR_FILE_BYTES`, `MAX_ANCHOR_FILES_PER_RECALL`,
-  `MAX_ANCHOR_BYTES_PER_RECALL`). Without ingest roots, anchoring is refused
-  with `invalid_params`. `recall_where` and `recall_fused` do not judge anchors.
+  its anchors. The anchors record the canonical checkout they were read in, and
+  a `recall` naming another checkout (another clone, a moved directory) reports
+  `unverified` and leaves the rank alone: two repositories holding the same
+  relative path never make each other's lessons stale. An `anchor_root` sent
+  without `anchors` is still validated. The server computes every digest itself
+  and reads only below a root inside the ingest allowlist: paths with a root,
+  `.` or `..` are refused, a symlink resolving out of the checkout is refused
+  rather than followed, only regular files up to 1 MiB are read — type and
+  size checked on the handle, opened without blocking, so a FIFO swapped in is
+  refused instead of hanging the recall — and a request reads at most 256
+  files and 16 MiB (`limits::MAX_ANCHOR_FILE_BYTES`,
+  `MAX_ANCHOR_FILES_PER_RECALL`, `MAX_ANCHOR_BYTES_PER_RECALL`). The files are
+  read after the store's locks are released, so no file I/O holds up a
+  generation writer or the readers queued behind it. Without ingest roots,
+  anchoring is refused with `invalid_params`. `recall_where` and
+  `recall_fused` do not judge anchors.
 - **Rust API for anchors:** the `anchor` module (`RepoPath`, `ContentDigest`,
-  `FileAnchor`, `AnchorProbe`, `AnchorRoot`, `Freshness`, `assess_freshness`,
-  `AnchoredRecollection`, `AnchorError`), `MemoryService::remember_anchored`,
-  `MemoryService::recall_anchored`, and `MemoryError::Anchor`. The Node, Python
+  `FileAnchor`, `AnchorSet`, `AnchorProbe`, `AnchorRoot`, `Freshness`,
+  `assess_freshness`, `AnchoredRecollection`, `AnchoredCandidates`,
+  `AnchorError`), `MemoryService::remember_anchored`,
+  `MemoryService::anchored_candidates`, `MemoryService::recall_anchored`, and
+  `MemoryError::Anchor`. The Node, Python
   and WASM bindings do not expose anchors.
 
 - **`cli_flags::FlagError`**, the two refusals the hand-rolled subcommand parsers
