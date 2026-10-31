@@ -174,10 +174,10 @@ impl Collection {
         };
         // Not `search`, which pins `Balanced` and ignores `[search]` (#2430).
         let vec_res =
-            self.search_merging_pending(vector_query, candidate_k, metric, restriction, || {
+            self.search_merging_pending(vector_query, candidate_k, metric, restriction, |n| {
                 self.storage.index.search_with_quality(
                     vector_query,
-                    candidate_k,
+                    n,
                     self.runtime_search_quality(),
                 )
             })?;

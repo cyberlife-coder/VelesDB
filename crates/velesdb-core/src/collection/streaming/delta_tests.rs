@@ -1,11 +1,10 @@
-//! Extended tests for [`DeltaBuffer`] state machine, concurrent safety,
-//! and `merge_with_delta` deduplication.
+//! Extended tests for the [`DeltaBuffer`] state machine and concurrent
+//! safety. How searches score and merge its points is tested at the
+//! collection's entry points (`search/pending_tests.rs`).
 
 #![allow(clippy::cast_precision_loss)]
 
 use super::delta::DeltaBuffer;
-use super::delta_merge::merge_with_delta;
-use crate::distance::DistanceMetric;
 use std::sync::Arc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,22 +22,40 @@ fn delta_push_increments_len() {
 }
 
 #[test]
-fn delta_search_respects_k_limit() {
+fn delta_ids_names_each_point_once_sorted() {
     let buf = DeltaBuffer::new();
     buf.activate();
-    for i in 0..20 {
+    for i in [5, 1, 5, 3] {
         buf.push(i, vec![i as f32; 2]);
     }
-    let results = buf.search(&[0.0, 0.0], 5, DistanceMetric::Euclidean);
-    assert_eq!(results.len(), 5, "search must truncate to k");
+    assert_eq!(buf.ids(), vec![1, 3, 5]);
 }
 
 #[test]
-fn delta_search_empty_buffer_returns_empty() {
+fn delta_ids_empty_when_inactive() {
+    let buf = DeltaBuffer::new();
+    assert!(buf.ids().is_empty());
+}
+
+/// A sealed buffer takes no new write and is still read by searches, until
+/// the drain empties it.
+#[test]
+fn delta_seal_stops_writes_and_keeps_points_readable() {
     let buf = DeltaBuffer::new();
     buf.activate();
-    let results = buf.search(&[1.0], 10, DistanceMetric::Cosine);
-    assert!(results.is_empty(), "empty active buffer returns no results");
+    buf.push(1, vec![1.0]);
+    assert_eq!(buf.seal(), vec![1]);
+    buf.push(2, vec![2.0]);
+    assert_eq!(buf.ids(), vec![1], "sealed: still read, no new write");
+    let _ = buf.deactivate_and_drain();
+    assert!(buf.ids().is_empty());
+}
+
+#[test]
+fn delta_seal_of_an_inactive_buffer_holds_nothing() {
+    let buf = DeltaBuffer::new();
+    assert!(buf.seal().is_empty());
+    assert!(!buf.is_searchable());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,11 +117,11 @@ fn delta_reactivate_after_drain_accepts_new_entries() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Concurrent push + search safety
+// Concurrent push + read safety
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn delta_concurrent_push_and_search() {
+fn delta_concurrent_push_and_read() {
     let buf = Arc::new(DeltaBuffer::new());
     buf.activate();
 
@@ -125,7 +142,7 @@ fn delta_concurrent_push_and_search() {
             let b = Arc::clone(&buf);
             std::thread::spawn(move || {
                 for _ in 0..20 {
-                    let _ = b.search(&[1.0, 0.0, 0.0], 5, DistanceMetric::Cosine);
+                    let _ = b.ids();
                 }
             })
         })
@@ -139,49 +156,4 @@ fn delta_concurrent_push_and_search() {
     }
 
     assert_eq!(buf.len(), 200, "all 4x50 pushes should land");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// merge_with_delta
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn merge_delta_dedup_prefers_delta() {
-    let buf = DeltaBuffer::new();
-    buf.activate();
-    // Delta has id=1 with vector very close to query
-    buf.push(1, vec![1.0, 0.0]);
-
-    let hnsw = vec![(1, 0.5_f32), (2, 0.4)];
-    let merged = merge_with_delta(hnsw, &buf, &[1.0, 0.0], 10, DistanceMetric::Cosine);
-
-    let ids: Vec<u64> = merged.iter().map(|(id, _)| *id).collect();
-    // id=1 must appear exactly once (deduplicated)
-    assert_eq!(ids.iter().filter(|&&id| id == 1).count(), 1);
-
-    // ...and the surviving id=1 score must come from the delta brute-force
-    // (Cosine([1,0],[1,0]) ≈ 1.0), NOT the HNSW input score (0.5).
-    let id1_score = merged
-        .iter()
-        .find(|(id, _)| *id == 1)
-        .expect("id=1 must be present")
-        .1;
-    let expected_delta_score = DistanceMetric::Cosine.calculate(&[1.0, 0.0], &[1.0, 0.0]);
-    assert!(
-        (id1_score - expected_delta_score).abs() < 1e-5,
-        "delta score ({id1_score}) should win over HNSW score (0.5)"
-    );
-}
-
-#[test]
-fn merge_delta_truncates_to_k() {
-    let buf = DeltaBuffer::new();
-    buf.activate();
-    for i in 0..10 {
-        buf.push(100 + i, vec![i as f32; 2]);
-    }
-
-    let hnsw: Vec<(u64, f32)> = (0..10).map(|i| (i, 0.5)).collect();
-    let merged = merge_with_delta(hnsw, &buf, &[0.0, 0.0], 3, DistanceMetric::Euclidean);
-    assert_eq!(merged.len(), 3);
 }

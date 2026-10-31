@@ -5,6 +5,7 @@ use super::resolve;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::point::{Point, SearchResult};
+use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
 use rayon::prelude::*;
@@ -50,24 +51,13 @@ impl Collection {
 
         let candidates_k = k.saturating_mul(4).max(k + 10);
         let higher_is_better = metric.higher_is_better();
-        let pending = self.snapshot_pending();
-        let index_results = self.storage.index.search_batch_parallel(
-            queries,
-            candidates_k,
-            self.runtime_search_quality(),
-        )?;
-
+        let restrictions = filters
+            .iter()
+            .map(|filter| PendingRestriction::NONE.post_filtered_if(filter.is_some()));
         // Merged per query before the storage guards are taken: scoring the
         // pending points holds no lock a writer waits on.
-        let merged: Vec<_> = index_results
-            .into_iter()
-            .zip(queries.iter())
-            .zip(filters)
-            .map(|((qr, query), filter)| {
-                let restriction = PendingRestriction::NONE.post_filtered_if(filter.is_some());
-                self.merge_pending(qr, &pending, query, candidates_k, metric, restriction)
-            })
-            .collect();
+        let merged =
+            self.batch_search_merging_pending(queries, candidates_k, metric, restrictions)?;
 
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
@@ -95,7 +85,7 @@ impl Collection {
 
     /// Filters and resolves a single batch query's results.
     fn filter_and_resolve_batch(
-        results: &[crate::scored_result::ScoredResult],
+        results: &[ScoredResult],
         filter: Option<&crate::filter::Filter>,
         vector_storage: &dyn VectorStorage,
         payload_storage: &dyn PayloadStorage,
@@ -159,20 +149,8 @@ impl Collection {
         }
 
         // Perf: Use parallel HNSW search (P0 optimization)
-        let pending = self.snapshot_pending();
-        let index_results =
-            self.storage
-                .index
-                .search_batch_parallel(queries, k, self.runtime_search_quality())?;
-
-        // Pre-merge delta per query (requires &self)
-        let merged: Vec<_> = index_results
-            .into_iter()
-            .zip(queries.iter())
-            .map(|(qr, query)| {
-                self.merge_pending(qr, &pending, query, k, metric, PendingRestriction::NONE)
-            })
-            .collect();
+        let restrictions = std::iter::repeat(PendingRestriction::NONE);
+        let merged = self.batch_search_merging_pending(queries, k, metric, restrictions)?;
 
         // Parallel result resolution across queries (P0 QPS optimization)
         let vector_storage = self.storage.vector_storage.read();
@@ -228,7 +206,7 @@ impl Collection {
 
         let restriction = PendingRestriction::NONE.post_filtered_if(filter.is_some());
         let batch_results =
-            self.search_and_merge_delta(vectors, overfetch_k, metric, restriction)?;
+            self.search_batch_merging_pending(vectors, overfetch_k, metric, restriction)?;
         let filtered = self.apply_pre_fusion_filter(batch_results, filter);
 
         // Every branch carries this collection's metric scores, so score-level
@@ -279,43 +257,63 @@ impl Collection {
         }
     }
 
-    /// Runs batch index search and merges delta buffer per query.
+    /// Runs the batch index search and merges, per query, the points not yet
+    /// in the index (async builder, deferred indexer, delta buffer) as
+    /// [`merge_pending`](Self::merge_pending) does, each query keeping
+    /// `overfetch_k` best `(id, score)` pairs.
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::Error::DimensionMismatch`] if any query vector has a dimension
     /// different from the index dimension.
-    fn search_and_merge_delta(
+    fn search_batch_merging_pending(
         &self,
         vectors: &[&[f32]],
         overfetch_k: usize,
         metric: crate::DistanceMetric,
         restriction: PendingRestriction<'_>,
     ) -> Result<Vec<Vec<(u64, f32)>>> {
-        let pending = self.snapshot_pending();
-        let batch_results = self.storage.index.search_batch_parallel(
-            vectors,
-            overfetch_k,
-            self.runtime_search_quality(),
-        )?;
-
-        Ok(batch_results
+        let restrictions = std::iter::repeat(restriction);
+        let merged =
+            self.batch_search_merging_pending(vectors, overfetch_k, metric, restrictions)?;
+        Ok(merged
             .into_iter()
-            .zip(vectors)
-            .map(|(query_results, query)| {
-                self.merge_pending(
-                    query_results,
-                    &pending,
-                    query,
-                    overfetch_k,
-                    metric,
-                    restriction,
-                )
-                .into_iter()
-                .map(Into::into)
-                .collect()
-            })
+            .map(|results| results.into_iter().map(Into::into).collect())
             .collect())
+    }
+
+    /// The batch form of [`search_merging_pending`](Self::search_merging_pending):
+    /// one pending snapshot before the parallel index search, then, per query,
+    /// a refetch while unindexed ids crowd its `k` and the merge under that
+    /// query's restriction (one per query, in order).
+    ///
+    /// # Errors
+    ///
+    /// Returns what the index search returns.
+    fn batch_search_merging_pending<'r>(
+        &self,
+        queries: &[&[f32]],
+        k: usize,
+        metric: crate::DistanceMetric,
+        restrictions: impl Iterator<Item = PendingRestriction<'r>>,
+    ) -> Result<Vec<Vec<ScoredResult>>> {
+        let quality = self.runtime_search_quality();
+        let pending = self.snapshot_pending();
+        let index_results = self
+            .storage
+            .index
+            .search_batch_parallel(queries, k, quality)?;
+        index_results
+            .into_iter()
+            .zip(queries)
+            .zip(restrictions)
+            .map(|((first, query), restriction)| {
+                let results = Self::index_results_past_pending(&pending, k, first, |n| {
+                    self.storage.index.search_with_quality(query, n, quality)
+                })?;
+                Ok(self.merge_pending(results, &pending, query, k, metric, restriction))
+            })
+            .collect()
     }
 
     /// Applies metadata filter to batch results before fusion.
@@ -360,7 +358,7 @@ impl Collection {
     ///
     /// Reuses [`validate_multi_query_inputs`](Self::validate_multi_query_inputs),
     /// [`overfetch_factor`](Self::overfetch_factor), and
-    /// [`search_and_merge_delta`](Self::search_and_merge_delta) to eliminate
+    /// [`search_batch_merging_pending`](Self::search_batch_merging_pending) to eliminate
     /// duplication with `multi_query_search`.
     ///
     /// # Arguments
@@ -386,8 +384,12 @@ impl Collection {
         let metric = self.validate_multi_query_inputs(vectors)?;
         let overfetch_k = Self::overfetch_factor(top_k);
 
-        let batch_results =
-            self.search_and_merge_delta(vectors, overfetch_k, metric, PendingRestriction::NONE)?;
+        let batch_results = self.search_batch_merging_pending(
+            vectors,
+            overfetch_k,
+            metric,
+            PendingRestriction::NONE,
+        )?;
 
         // Same polarity contract as `multi_query_search` (#2102).
         let directions = vec![metric.score_direction(); batch_results.len()];

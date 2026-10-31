@@ -61,18 +61,18 @@ impl Collection {
         // error read as an empty answer is the one failure a caller cannot tell
         // from a correct result, and every caller here returns a `Result`.
         if !is_pq || oversampling == 0 {
-            return self.search_merging_pending(query, k, metric, restriction, || {
-                self.storage.index.search_with_quality(query, k, quality)
+            return self.search_merging_pending(query, k, metric, restriction, |n| {
+                self.storage.index.search_with_quality(query, n, quality)
             });
         }
 
-        let candidates_k = k.saturating_mul(oversampling).max(k + 32);
-        self.search_merging_pending(query, k, metric, restriction, || {
+        self.search_merging_pending(query, k, metric, restriction, |n| {
+            let candidates_k = n.saturating_mul(oversampling).max(n + 32);
             let index_results =
                 self.storage
                     .index
                     .search_with_quality(query, candidates_k, quality)?;
-            Ok(self.rescore_pq_candidates(query, k, metric, higher_is_better, index_results))
+            Ok(self.rescore_pq_candidates(query, n, metric, higher_is_better, index_results))
         })
     }
 
@@ -321,8 +321,8 @@ impl Collection {
         let quality = super::vector_filter::ef_to_quality(ef_search);
 
         let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
-                self.storage.index.search_with_quality(query, k, quality)
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+                self.storage.index.search_with_quality(query, n, quality)
             })?;
         Ok(self.finalize_search_results(&index_results))
     }
@@ -378,8 +378,8 @@ impl Collection {
         self.enforce_perfect_mode_limit(quality)?;
 
         let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
-                self.storage.index.search_with_quality(query, k, quality)
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+                self.storage.index.search_with_quality(query, n, quality)
             })?;
         Ok(self.finalize_search_results(&index_results))
     }
@@ -429,12 +429,12 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         let metric = self.validate_query_and_read_metric(query)?;
 
-        let rerank_k = k.saturating_mul(4).max(k + 32);
         let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+                let rerank_k = n.saturating_mul(4).max(n + 32);
                 self.storage
                     .index
-                    .search_with_rerank_quality(query, k, rerank_k, quality)
+                    .search_with_rerank_quality(query, n, rerank_k, quality)
             })?;
         Ok(self.finalize_search_results(&index_results))
     }
@@ -458,8 +458,11 @@ impl Collection {
         // candidate-pool sizing.
         let ef_search = quality.ef_search_for_scale(k, self.storage.index.len());
         let index_results =
-            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, || {
-                Ok(self.storage.index.search_hnsw_only(query, k, ef_search))
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+                Ok(self
+                    .storage
+                    .index
+                    .search_hnsw_only(query, n, ef_search.max(n)))
             })?;
         Ok(self.finalize_search_results(&index_results))
     }
@@ -571,11 +574,11 @@ impl Collection {
             }
             let ef_search = candidates_k.max(k * 10);
             let restriction = PendingRestriction::within(&bitmap).and_post_filtered();
-            return self.search_merging_pending(query, candidates_k, metric, restriction, || {
+            return self.search_merging_pending(query, candidates_k, metric, restriction, |n| {
                 Ok(self.storage.index.search_hnsw_only_filtered(
                     query,
-                    candidates_k,
-                    ef_search,
+                    n,
+                    ef_search.max(n),
                     &bitmap,
                 ))
             });

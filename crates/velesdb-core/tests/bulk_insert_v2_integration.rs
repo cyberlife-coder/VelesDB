@@ -52,12 +52,10 @@ fn async_builder_threshold_triggers_correctly() {
     let builder = AsyncIndexBuilder::new(config);
 
     // Enqueue 49 vectors — should not trigger.
-    let batch1: Vec<(u64, Vec<f32>)> = (0..49).map(|i| (i, make_vector(i, 4))).collect();
-    assert!(!builder.enqueue(batch1), "49 < 50, should not trigger");
+    assert!(!builder.enqueue(0..49), "49 < 50, should not trigger");
 
     // Enqueue 1 more — should trigger (total = 50).
-    let batch2: Vec<(u64, Vec<f32>)> = vec![(49, make_vector(49, 4))];
-    assert!(builder.enqueue(batch2), "50 >= 50, should trigger");
+    assert!(builder.enqueue([49]), "50 >= 50, should trigger");
 }
 
 // ── Collection upsert_bulk + flush consistency ──────────────────────────
@@ -593,7 +591,9 @@ fn a_filter_against_the_pending_points_still_returns_k_matches() {
         assert_k_linked(&label("multi_query_search"), &multi, k);
 
         let hybrid = coll
-            .hybrid_search_with_filter(&q, "zebra okapi", k, Some(0.5), &filter)
+            // Text only the pending points carry: the linked matches can come
+            // only from the vector branch, which the pending points crowded.
+            .hybrid_search_with_filter(&q, "okapi", k, Some(0.5), &filter)
             .expect("hybrid");
         assert_k_linked(&label("hybrid_search_with_filter"), &hybrid, k);
     }

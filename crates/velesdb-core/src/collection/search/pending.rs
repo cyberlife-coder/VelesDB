@@ -2,49 +2,55 @@
 //! but not indexed yet. The async index builder holds the points
 //! `upsert_bulk`'s V2 path wrote that the graph has not linked; the deferred
 //! indexer buffers writes it has not inserted; the delta buffer holds the
-//! writes a rebuild has not seen.
+//! writes a rebuild has not seen. Together they are the collection's
+//! *unindexed* points.
 //!
-//! A graph walk cannot reach those points, so every search scores them
-//! itself and merges them with the index's results, all three in one place
-//! ([`Collection::merge_pending`]). Two rules make that merge correct
-//! whatever the search:
+//! A graph walk cannot reach those points, or reaches a copy older than the
+//! one written since, so every search handles them itself, in one place
+//! ([`Collection::merge_pending`]). Three rules make that correct whatever
+//! the search:
 //!
-//! - **The async builder's pending ids are read before the index search.**
-//!   A flush links a point and only then drops it from the builder's queue,
-//!   so a snapshot taken before the walk holds every point the walk could
-//!   miss: the point was either linked before the walk started, and the walk
-//!   can reach it, or still queued when the snapshot was taken. Read after
-//!   the walk, the queue could already have lost a point the walk had
-//!   already missed. [`PendingSnapshot`] comes only from
-//!   [`Collection::snapshot_pending`], and
-//!   [`Collection::search_merging_pending`] takes it before running the
-//!   search it is given.
-//! - **The search's restriction applies to every source's points before
-//!   they compete for its `k`** ([`PendingRestriction`]): a bitmap of the
-//!   ids the search admits (a filter's prefilter, a graph anchor set), and
-//!   whether a post-filter runs on the merged list. Merged unrestricted and
-//!   cut to `k`, unindexed points outside the restriction could take every
-//!   place and leave the post-filter nothing.
+//! - **The unindexed ids are read before the index search**
+//!   ([`Collection::snapshot_pending`]). Each of the three sources drops a
+//!   point only after indexing it, so a snapshot taken before the walk holds
+//!   every point the walk could miss: the point was either indexed before the
+//!   walk started, and the walk can reach it, or still held when the snapshot
+//!   was taken. Read after the walk, a source could already have dropped a
+//!   point the walk had already missed. [`PendingSnapshot`] comes only from
+//!   `snapshot_pending`, and [`Collection::search_merging_pending`] takes it
+//!   before running the search it is given.
+//! - **Storage is the one source of truth for an unindexed point.** Each is
+//!   scored on the vector storage holds for it now: a point deleted since is
+//!   skipped, one written again since is scored on its newest vector, and an
+//!   id several sources hold is scored once. The index's own result for an
+//!   unindexed id is dropped before ranking — it may be an older copy — so
+//!   only the current one competes, and the index is asked for more when
+//!   such ids crowd its `k`, so the next point it ranks is not left out.
+//! - **The search's restriction applies before ranking**
+//!   ([`PendingRestriction`]): a bitmap of the ids the search admits (a
+//!   filter's prefilter, a graph anchor set), and whether a post-filter runs
+//!   on the merged list. Merged unrestricted and cut to `k`, unindexed points
+//!   outside the restriction could take every place and leave the
+//!   post-filter nothing.
 //!
-//! The async builder's points are scored on what the collection holds for
-//! each now: a placed id on the arena slot its mapping names, a buffered id
-//! on the vector storage. A point deleted since is skipped, one upserted
-//! since is scored on its new vector, and an id queued twice is scored once.
-//! The deferred indexer and the delta buffer score the vectors they hold,
-//! the deferred indexer skipping the ids deleted since.
+//! Scoring reads storage in chunks of [`SCORE_CHUNK`] ids, taking and
+//! releasing the `vector_storage` read guard per chunk, so a writer waits at
+//! most one chunk's scan rather than the whole one.
 
 use roaring::RoaringBitmap;
 
-use crate::collection::streaming::PendingIds;
 use crate::collection::types::Collection;
 use crate::distance::DistanceMetric;
 use crate::error::Result;
 use crate::scored_result::ScoredResult;
 use crate::storage::VectorStorage;
 
+/// How many unindexed ids are scored under one `vector_storage` read guard.
+const SCORE_CHUNK: usize = 256;
+
 /// What a search admits, applied to the points written but not indexed yet
 /// before they are ranked against the index's results.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct PendingRestriction<'a> {
     /// Only ids this bitmap holds, admitted as the index's bitmap searches
     /// admit them: an id past `u32::MAX`, which a bitmap cannot hold, passes.
@@ -105,23 +111,41 @@ impl<'a> PendingRestriction<'a> {
     }
 }
 
-/// The async index builder's pending ids, read before an index search.
-pub(crate) struct PendingSnapshot(Option<PendingIds>);
+/// The unindexed ids — the async builder's, the deferred indexer's and the
+/// delta buffer's, each once, sorted — read before an index search.
+pub(crate) struct PendingSnapshot(Vec<u64>);
+
+impl PendingSnapshot {
+    /// Whether `id` is unindexed.
+    fn holds(&self, id: u64) -> bool {
+        self.0.binary_search(&id).is_ok()
+    }
+}
 
 impl Collection {
-    /// Reads the async index builder's pending ids. Take it **before** the
-    /// index search whose results it is merged with (see the module doc).
+    /// Reads every unindexed id. Take it **before** the index search whose
+    /// results it is merged with (see the module doc).
     pub(crate) fn snapshot_pending(&self) -> PendingSnapshot {
-        let slot = self.streaming.async_index_builder.load();
-        PendingSnapshot(
-            slot.as_ref()
-                .map(|aib| aib.pending_ids())
-                .filter(|ids| !ids.is_empty()),
-        )
+        let mut ids = self
+            .streaming
+            .async_index_builder
+            .load()
+            .as_ref()
+            .map(|aib| aib.pending_ids())
+            .unwrap_or_default();
+        if let Some(deferred) = self.streaming.deferred_indexer.load().as_ref() {
+            ids.extend(deferred.ids());
+        }
+        ids.extend(self.streaming.delta_buffer.ids());
+        ids.sort_unstable();
+        ids.dedup();
+        PendingSnapshot(ids)
     }
 
-    /// Runs `index_search` between a pending snapshot and the merge, so a
-    /// single-query search cannot take them in the wrong order.
+    /// Runs `index_search` (given how many results to return) between a
+    /// pending snapshot and the merge, so a single-query search cannot take
+    /// them in the wrong order, and again for more while unindexed ids crowd
+    /// its `k` ([`Self::index_results_past_pending`]).
     ///
     /// # Errors
     ///
@@ -132,106 +156,110 @@ impl Collection {
         k: usize,
         metric: DistanceMetric,
         restriction: PendingRestriction<'_>,
-        index_search: impl FnOnce() -> Result<Vec<ScoredResult>>,
+        index_search: impl Fn(usize) -> Result<Vec<ScoredResult>>,
     ) -> Result<Vec<ScoredResult>> {
         let pending = self.snapshot_pending();
-        let results = index_search()?;
+        let first = index_search(k)?;
+        let results = Self::index_results_past_pending(&pending, k, first, index_search)?;
         Ok(self.merge_pending(results, &pending, query, k, metric, restriction))
     }
 
-    /// Merges `results` with every point written but not indexed yet that
-    /// `restriction` admits — the async index builder's (from `pending`),
-    /// the deferred indexer's and the delta buffer's — keeping the search's
-    /// `k` (all of them for a post-filtered search).
+    /// `results`, an index search for `k`, or — while the unindexed ids among
+    /// them leave fewer than `k` others — `index_search` run again for `k`
+    /// plus that many. The merge drops the index's result for an unindexed
+    /// id, so without the refetch an id the index still holds, overwritten
+    /// since, would take the place of the next point the index ranks rather
+    /// than leave it to that point. Each refetch asks for more than the last,
+    /// at most `k` plus the snapshot's size, so it stops; none runs unless an
+    /// unindexed id is among the results.
     ///
-    /// The three are one candidate list, merged once: an id more than one
-    /// holds is taken from the async builder's current read first, then the
-    /// deferred indexer, then the delta buffer, and any of them replaces the
-    /// index's result for it.
+    /// # Errors
+    ///
+    /// Returns what `index_search` returns.
+    pub(crate) fn index_results_past_pending(
+        pending: &PendingSnapshot,
+        k: usize,
+        mut results: Vec<ScoredResult>,
+        index_search: impl Fn(usize) -> Result<Vec<ScoredResult>>,
+    ) -> Result<Vec<ScoredResult>> {
+        let mut fetched = k;
+        loop {
+            let masked = results.iter().filter(|r| pending.holds(r.id)).count();
+            let wanted = k.saturating_add(masked);
+            // Fewer than asked for: the index has no more to give.
+            if masked == 0 || results.len() < fetched || wanted <= fetched {
+                return Ok(results);
+            }
+            fetched = wanted;
+            results = index_search(fetched)?;
+        }
+    }
+
+    /// Merges `results` with the unindexed points `pending` names that
+    /// `restriction` admits, each scored on its current vector, after
+    /// dropping the index's result for every unindexed id; keeps the
+    /// search's `k` (all of them for a post-filtered search), best first.
     pub(crate) fn merge_pending(
         &self,
-        results: Vec<ScoredResult>,
+        mut results: Vec<ScoredResult>,
         pending: &PendingSnapshot,
         query: &[f32],
         k: usize,
         metric: DistanceMetric,
         restriction: PendingRestriction<'_>,
     ) -> Vec<ScoredResult> {
+        let ids = &pending.0;
+        if ids.is_empty() {
+            return results;
+        }
         let keep = restriction.keep(k);
-        let mut candidates = match &pending.0 {
-            Some(ids) => self.score_pending(ids, query, metric, restriction, keep),
-            None => Vec::new(),
-        };
-        let admits = |id: u64| restriction.admits(id);
-        let deferred_slot = self.streaming.deferred_indexer.load();
-        if let Some(deferred) = deferred_slot.as_ref().filter(|di| di.is_searchable()) {
-            extend_new_ids(
-                &mut candidates,
-                deferred.search_admitted(query, keep, metric, admits),
-            );
-        }
-        if self.streaming.delta_buffer.is_searchable() {
-            extend_new_ids(
-                &mut candidates,
-                self.streaming
-                    .delta_buffer
-                    .search_admitted(query, keep, metric, admits),
-            );
-        }
-        crate::collection::streaming::merge_pending_scored(results, candidates, keep, metric)
-    }
-
-    /// Scores the admitted pending ids on what the collection holds for each
-    /// now, best `keep` first. A placed id is read from its arena slot, a
-    /// buffered one from the vector storage, copied out so the storage lock
-    /// is not held while scoring; an id with neither is gone and skipped.
-    fn score_pending(
-        &self,
-        ids: &PendingIds,
-        query: &[f32],
-        metric: DistanceMetric,
-        restriction: PendingRestriction<'_>,
-        keep: usize,
-    ) -> Vec<(u64, f32)> {
-        let index = &self.storage.index;
-        let placed: Vec<u64> = ids
-            .placed
+        results.retain(|result| !pending.holds(result.id));
+        let admitted: Vec<u64> = ids
             .iter()
             .copied()
             .filter(|&id| restriction.admits(id))
             .collect();
-        let mut scored = index.score_ids(query, &placed, keep);
+        results.extend(self.score_current(query, &admitted));
+        metric.top_k_scored_results(&mut results, keep);
+        results
+    }
 
-        let buffered: Vec<(u64, Vec<f32>)> = {
+    /// Scores each id on the vector storage holds for it now, with the
+    /// index's distance and clamp ([`crate::index::hnsw::HnswIndex::score`]);
+    /// an id storage no longer holds is skipped.
+    fn score_current(&self, query: &[f32], ids: &[u64]) -> Vec<ScoredResult> {
+        let index = &self.storage.index;
+        let mut scored = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(SCORE_CHUNK) {
             let storage = self.storage.vector_storage.read();
-            ids.buffered
-                .iter()
-                .copied()
-                .filter(|&id| restriction.admits(id))
-                .filter_map(|id| storage.retrieve(id).ok().flatten().map(|v| (id, v)))
-                .collect()
-        };
-        scored.extend(
-            buffered
-                .iter()
-                .filter(|(_, v)| v.len() == query.len())
-                .map(|(id, v)| ScoredResult::new(*id, index.compute_distance(query, v))),
-        );
-
-        for result in &mut scored {
-            result.score = metric.clamp_score(result.score);
+            for &id in chunk {
+                let Ok(Some(vector)) = storage.retrieve_ref(id) else {
+                    continue;
+                };
+                if let Ok(vector) = vector.as_slice() {
+                    if vector.len() == query.len() {
+                        scored.push(ScoredResult::new(id, index.score(query, vector)));
+                    }
+                }
+            }
+            drop(storage);
         }
-        metric.top_k_scored_results(&mut scored, keep);
-        scored.into_iter().map(Into::into).collect()
+        scored
     }
-}
 
-/// Appends the `(id, score)` pairs of `more` whose id `candidates` lacks.
-fn extend_new_ids(candidates: &mut Vec<(u64, f32)>, more: Vec<(u64, f32)>) {
-    if candidates.is_empty() {
-        *candidates = more;
-        return;
+    /// What storage holds now for each of `ids`, copied out; an id it no
+    /// longer holds is left out. What a merge of unindexed points inserts.
+    pub(crate) fn current_vectors(&self, ids: &[u64]) -> Vec<(u64, Vec<f32>)> {
+        let mut vectors = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(SCORE_CHUNK) {
+            let storage = self.storage.vector_storage.read();
+            vectors.extend(
+                chunk
+                    .iter()
+                    .filter_map(|&id| storage.retrieve(id).ok().flatten().map(|v| (id, v))),
+            );
+            drop(storage);
+        }
+        vectors
     }
-    let seen: rustc_hash::FxHashSet<u64> = candidates.iter().map(|&(id, _)| id).collect();
-    candidates.extend(more.into_iter().filter(|(id, _)| !seen.contains(id)));
 }

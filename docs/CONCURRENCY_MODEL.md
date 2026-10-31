@@ -409,27 +409,46 @@ two writers to the same id cannot interleave and leave the indexes describing
 a payload storage no longer holds. BM25, the secondary indexes and the
 histograms are still updated after that guard is released.
 
-**Async index builder queues.** `buffer` and `placed` (position 11) are taken
-on the search path as well as the write path: every vector search scores the
-points the builder still holds and merges them with the index's results
-(`collection/search/pending.rs`), so a point `upsert_bulk`'s V2 path has
-returned for is found before a flush links it. A search takes each queue's
-lock only to copy its ids out (`AsyncIndexBuilder::pending_ids`), with no
-other lock held; it scores them afterwards with no queue lock held — a placed
-id under the HNSW index guard, from its arena slot, a buffered id from a copy
-of its vector read under the `vector_storage` (2) read guard and released
-before scoring. A batch search scores them before it takes the storage
-guards it resolves results under.
+**Pending points: async index builder, deferred indexer, delta buffer.**
+Their locks (the delta buffer at position 10; the async index builder's
+`buffer` and `placed` at 11 and the deferred indexer's buffer, both above
+it) are taken on the search path as well
+as the write path: every vector search merges the points they hold but the
+index does not yet reach with the index's results
+(`collection/search/pending.rs`), so a point is found from the moment its
+write returns. A search takes each lock only to copy the ids out, with no
+other lock held. It then scores each id on what vector storage holds for it
+now — read under the `vector_storage` (2) read guard 256 ids at a time, the
+guard released between chunks and before the merge, no position-10 or -11
+lock held — so a point overwritten or deleted since it was queued is scored
+on its new vector or skipped, never on the copy its source took. An index
+result whose id is pending is dropped before the merge: the index may still
+hold an older vector for it, and storage is the one place a search reads a
+pending point's vector from. When the dropped results leave fewer than the
+search's `k`, the index is searched again for that many more, so the next
+point it ranks is not left out. The search's restriction (a filter's bitmap, a
+graph anchor set) applies to the pending ids before they compete for its
+`k`, and a search that post-filters keeps every admitted one. A batch
+search scores them before it takes the storage guards it resolves results
+under.
 
-The ids are copied **before** the index search, and a flush drops an id from
-its queue only after linking or inserting it. Every point the walk can miss
-is therefore in the copy: if the flush's drop came before the copy, the link
-came before the walk, and the walk can reach the point; otherwise the copy
-holds it. Copied after the walk instead, the queue could have lost a point
-the walk had already missed. A point found both ways is returned once. The
-deferred indexer's and the delta buffer's points go through the same merge
-(and the same search restriction), read after the index search under their
-own locks, as before.
+The ids are copied **before** the index search, and each source drops an id
+only after indexing it — insert, then remove:
+
+- the async index builder inserts what storage holds for its buffered ids,
+  or links its placed ids, then drops the prefix it indexed (only a flush
+  removes from its queues, and one flush runs at a time);
+- the deferred indexer copies its entries, inserts what storage holds for
+  them, then retires only the entries whose vector is still the one it
+  copied, so an entry written again meanwhile stays for the next merge;
+- the delta buffer is sealed first (`DRAINING`: it takes no new write and
+  searches still read it), inserted from storage, and only then emptied.
+
+Every point the walk can miss is therefore in the copy: if a source's drop
+came before the copy, the insert came before the walk, and the walk can
+reach the point; otherwise the copy holds it. Copied after the walk
+instead, a source could have lost a point the walk had already missed. A
+point found both ways is returned once, scored from storage.
 
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 

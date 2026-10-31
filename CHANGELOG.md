@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING — `AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a
+  callback that reads their vectors.** `enqueue` took `(id, vector)` copies
+  and a flush inserted them, so a point overwritten or deleted between the
+  two was indexed on its old vector or put back in the graph (see Fixed).
+  `enqueue` now takes the ids (`impl IntoIterator<Item = u64>`) and
+  `flush_sync(index, current_vectors)` asks `current_vectors` for what
+  storage holds for them when it runs.
+  *Migration*: enqueue the ids; pass a closure that reads them from your
+  vector storage, leaving out an id it no longer holds.
+
 ### Removed
 
 - **BREAKING — `AsyncIndexBuilder`'s test-only calls.** `search_buffer`,
@@ -15,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `trigger_build_async` spawned a thread that drained one of the builder's
   two queues and could report a build done with slots still unlinked;
   `drain_buffer`, `buffer_len` and `is_building` served it or its tests, and
-  `search_buffer` was the scan no search called (now private, see Fixed).
-  `enqueue`, `flush_sync` and `merge_threshold` stay.
+  `search_buffer` was a scan no search called: searches now score the
+  builder's pending points themselves (see Fixed). `enqueue`, `flush_sync`
+  (both changed, see Changed) and `merge_threshold` stay.
   *Migration*: `VectorCollection::flush` indexes what the builder holds;
   searching the collection already finds it (see Fixed).
 - **BREAKING — `velesql::match_clause`, a second MATCH parser no query used.**
@@ -54,6 +67,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `persistence`, is now compiled only with it instead of carrying two
   `allow`s, and `velesdb-wasm`'s `delete_edges_where` loses a stale one (the
   memory store calls it). No public API changes.
+- **BREAKING — the delta buffer's and the deferred indexer's own searches
+  and merges.** `DeltaBuffer::search`, `DeferredIndexer::{search,
+  merge_with_hnsw, swap_and_drain, drain_all}` and
+  `collection::streaming::{merge_with_delta, merge_with_delta_scored}` had
+  no caller outside tests: a search merges what both buffers hold through
+  the collection (see Fixed), and a flush indexes it. They scored the copy
+  each buffer took, where a search now scores what storage holds.
+  *Migration*: search the collection; `VectorCollection::flush` indexes
+  what the deferred indexer holds.
 - **The edge property index (`EdgePropertyIndex`).** Every edge write fed it
   (and cloned the edge's properties to do so), every open rebuilt it from the
   edge snapshot and again from the edge WAL replay, and nothing ever read it
@@ -101,6 +123,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under the same restriction: only the ids the search's bitmap admits, and
   every admitted point when the search post-filters.
 
+- **A search could score a point on a vector it no longer has.** An
+  unindexed point was scored on the copy its source took: the async index
+  builder's arena slot, the deferred indexer's or the delta buffer's buffer.
+  A point bulk-loaded and then overwritten before a flush was scored on its
+  first vector, and the index's result for a point overwritten since it was
+  indexed could outrank the newer one, since the newer one won only within
+  each source's own top `k`. Every unindexed point is now scored on what
+  vector storage holds for it, and the index's result for an unindexed id
+  is dropped before ranking, so only the current vector competes; when such
+  ids crowd the index's `k`, it is asked for more, so the next point it
+  ranks keeps its place.
+- **A point deleted and then written again while the deferred indexer
+  buffered it stayed out of search** until the next merge: the delete
+  recorded the id in a set that filtered the buffer's results, and the
+  rewrite did not clear it. The set is gone: a delete removes the point from
+  the buffer, and a search skips a point storage no longer holds.
+- **An async index builder flush indexed the copy `upsert_bulk` queued.** A
+  point overwritten since was indexed on its old vector, and a point deleted
+  since was put back in the graph, where it could take a search's places
+  only to be dropped when results were read. A flush now inserts what
+  storage holds for each queued id when it runs, and leaves out an id it no
+  longer holds.
+- **A search racing a deferred-indexer or delta-buffer merge could miss its
+  points.** Both merges emptied their buffer before inserting what it held.
+  Both now insert first and drop only what they inserted, as the async index
+  builder does: the deferred indexer keeps an entry written again during
+  the merge for the next one, and the delta buffer is sealed (no new writes,
+  still searched) until its points are inserted.
 - **The MATCH pre-filter gave up when one predicate had no index.** A
   `WHERE` of `AND`-ed comparisons on a single-node pattern narrows the nodes
   it scans with the property indexes; one comparison on a property no node

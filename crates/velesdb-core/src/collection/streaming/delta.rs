@@ -2,9 +2,10 @@
 //!
 //! The [`DeltaBuffer`] holds recently inserted vectors that have not yet been
 //! indexed into the HNSW graph (e.g., because a rebuild is in progress).
-//! The search pipeline brute-force scans this buffer and merges results with
-//! HNSW results for immediate searchability via
-//! [`super::delta_merge::merge_with_delta`].
+//! Every search reads its ids (`DeltaBuffer::ids`) before the index search
+//! and scores those points on what storage holds for them
+//! (`collection/search/pending.rs`), so they are found before they are
+//! indexed.
 //!
 //! # State machine
 //!
@@ -15,8 +16,13 @@
 //! ```
 //!
 //! - `push` / `extend`: only write when `ACTIVE`.
-//! - `search`: scan when `ACTIVE` or `DRAINING` (so concurrent searches during
-//!   drain still see the buffered vectors).
+//! - `ids`: read when `ACTIVE` or `DRAINING` (so concurrent searches during
+//!   drain still see the buffered points).
+//!
+//! A drain into the index seals the buffer first (`DeltaBuffer::seal`:
+//! `DRAINING`, no new writes, still read by searches), indexes what it
+//! holds, and only then empties it ([`DeltaBuffer::deactivate_and_drain`]),
+//! so a search racing the drain finds each point in the index or here.
 //!
 //! [`DeltaBuffer::activate`] is an unconditional store kept for the idempotent
 //! callers in the rebuild path. [`DeltaBuffer::try_activate`] is the hardened
@@ -31,7 +37,6 @@
 //! (after `sparse_indexes` at 9). Code must never hold a delta buffer lock
 //! while acquiring a lower-numbered lock.
 
-use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -57,9 +62,8 @@ pub enum ActivateError {
 /// Delta buffer for streaming inserts during HNSW rebuilds.
 ///
 /// Accumulates `(point_id, vector)` pairs that are in storage but not yet in
-/// the HNSW index. When active, search methods brute-force scan the buffer
-/// and merge results with HNSW results via
-/// [`super::delta_merge::merge_with_delta`].
+/// the HNSW index. While active or draining, every search scores its points
+/// itself (see the module doc).
 pub struct DeltaBuffer {
     /// Buffered `(point_id, vector)` pairs awaiting index insertion.
     points: RwLock<Vec<(u64, Vec<f32>)>>,
@@ -245,53 +249,53 @@ impl DeltaBuffer {
         (len, len == 0)
     }
 
-    /// Brute-force searches the delta buffer for the k nearest neighbors.
-    ///
-    /// Returns an empty `Vec` if the buffer is neither `ACTIVE` nor `DRAINING`.
-    /// Computes distances directly under a single read lock — without cloning
-    /// the buffer — and only materializes the compact `(id, score)` result Vec
-    /// (`O(M)`), never a full `O(M×D)` copy of the vector data. The distance
-    /// scan is `O(M×D)` regardless, so the lock is held for the same order of
-    /// work as the previous snapshot copy but does useful computation instead
-    /// of allocating and copying. The (potentially larger) sort runs after the
-    /// lock is released.
+    /// The ids it holds, each once, sorted; empty unless `ACTIVE` or
+    /// `DRAINING`.
     #[must_use]
-    pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
-        self.search_admitted(query, k, metric, |_| true)
-    }
-
-    /// [`Self::search`] over only the ids `admits` accepts: a restricted
-    /// search drops the others before they compete for its `k`.
-    #[must_use]
-    pub(crate) fn search_admitted(
-        &self,
-        query: &[f32],
-        k: usize,
-        metric: DistanceMetric,
-        admits: impl Fn(u64) -> bool,
-    ) -> Vec<(u64, f32)> {
-        let current_state = self.state.load(Ordering::Acquire);
-        if current_state != ACTIVE && current_state != DRAINING {
+    pub(crate) fn ids(&self) -> Vec<u64> {
+        if !self.is_searchable() {
             return Vec::new();
         }
+        let mut ids: Vec<u64> = self.points.read().iter().map(|&(id, _)| id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
 
-        // Compute distances in place under the read lock; only the compact
-        // result Vec escapes it. Sorting/truncation happen after release.
-        let mut results: Vec<(u64, f32)> = {
-            let points = self.points.read();
-            if points.is_empty() {
-                return Vec::new();
-            }
-            points
-                .iter()
-                .filter(|(id, _)| admits(*id))
-                .map(|(id, vec)| (*id, metric.calculate(query, vec)))
-                .collect()
-        };
+    /// A copy of the `(id, vector)` pairs it holds.
+    #[must_use]
+    pub(crate) fn entries(&self) -> Vec<(u64, Vec<f32>)> {
+        self.points.read().clone()
+    }
 
-        metric.sort_results(&mut results);
-        results.truncate(k);
-        results
+    /// Stops accepting writes (`DRAINING`) while staying readable by search,
+    /// and returns the ids it holds: what a drain must index before
+    /// [`Self::deactivate_and_drain`] empties it. A no-op on an inactive
+    /// buffer, which returns nothing.
+    pub(crate) fn seal(&self) -> Vec<u64> {
+        let points = self.points.write();
+        if self
+            .state
+            .compare_exchange(ACTIVE, DRAINING, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+            && self.state.load(Ordering::Acquire) != DRAINING
+        {
+            return Vec::new();
+        }
+        points.iter().map(|&(id, _)| id).collect()
+    }
+
+    /// Removes the entries `indexed` names with the same vector: what a merge
+    /// has indexed. An entry written again since keeps its newer vector and
+    /// stays for the next merge.
+    pub(crate) fn retire(&self, indexed: &[(u64, &[f32])]) {
+        if indexed.is_empty() {
+            return;
+        }
+        let done: rustc_hash::FxHashMap<u64, &[f32]> = indexed.iter().copied().collect();
+        self.points
+            .write()
+            .retain(|(id, v)| done.get(id).is_none_or(|indexed| *indexed != v.as_slice()));
     }
 }
 

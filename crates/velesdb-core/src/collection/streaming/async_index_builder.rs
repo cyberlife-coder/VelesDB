@@ -2,13 +2,14 @@
 //!
 //! Queues what the HNSW index has yet to index, and indexes it in a
 //! synchronous flush ([`AsyncIndexBuilder::flush_sync`]): when a queue reaches
-//! `merge_threshold`, and on `flush`, compaction and reorder. It queues
-//! vectors, which a flush inserts, and the ids of vectors `upsert_bulk`'s
-//! direct writer already placed in the graph's arena, which a flush links
-//! where they are (#2264).
+//! `merge_threshold`, and on `flush`, compaction and reorder. It queues the
+//! ids of stored points the index lacks, which a flush inserts from what
+//! storage holds for them then, and the ids of vectors `upsert_bulk`'s direct
+//! writer already placed in the graph's arena, which a flush links where they
+//! are (#2264).
 //!
 //! A graph walk cannot reach what is queued, so every vector search reads
-//! [`AsyncIndexBuilder::pending_ids`] before its index search, scores those
+//! `AsyncIndexBuilder::pending_ids` before its index search, scores those
 //! points itself and merges them with its results
 //! (`collection/search/pending.rs`): a point `upsert_bulk` has returned for
 //! is found before any flush. What a flush indexes leaves its queue only once
@@ -27,9 +28,14 @@
 //! `placed`) may be held while acquiring any lock at position ≤ 10.
 
 use crate::index::hnsw::HnswIndex;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// `(id, vector)` pairs read from vector storage: what
+/// [`AsyncIndexBuilder::flush_sync`]'s `current_vectors` returns for the ids
+/// it is given, leaving out an id storage no longer holds.
+pub type StoredVectors = Vec<(u64, Vec<f32>)>;
 
 /// Configuration for the async index builder.
 ///
@@ -64,35 +70,18 @@ impl Default for AsyncIndexBuilderConfig {
     }
 }
 
-/// The ids an [`AsyncIndexBuilder`] has yet to index, each once, sorted.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct PendingIds {
-    /// Ids placed in the graph's arena, waiting to be linked.
-    pub(crate) placed: Vec<u64>,
-    /// Ids whose vectors are buffered, waiting to be inserted; none of them
-    /// is also in `placed`.
-    pub(crate) buffered: Vec<u64>,
-}
-
-impl PendingIds {
-    /// `true` when nothing is waiting.
-    #[must_use]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.placed.is_empty() && self.buffered.is_empty()
-    }
-}
-
-/// Deferred HNSW indexing: queues vectors, which a flush inserts via
+/// Deferred HNSW indexing: queues the ids of stored points the index lacks,
+/// which a flush inserts from what storage holds for them then, via
 /// [`HnswIndex::insert_batch_parallel`], and the ids of vectors already placed
 /// in the graph's arena, which a flush links where they are. What it queues is
-/// read by every search through [`Self::pending_ids`] until a flush has
+/// read by every search through `Self::pending_ids` until a flush has
 /// indexed it.
 ///
 /// Lock order position: 11 (after `delta_buffer` at 10).
 pub struct AsyncIndexBuilder {
-    /// Vectors pending indexation, from [`Self::enqueue`]: a flush inserts
-    /// them, which places and links each one.
-    buffer: RwLock<Vec<(u64, Vec<f32>)>>,
+    /// Ids pending insertion, from [`Self::enqueue`]: a flush inserts what
+    /// storage holds for each then, which places and links it.
+    buffer: Mutex<Vec<u64>>,
     /// Ids whose vectors `upsert_bulk`'s direct writer has already placed in
     /// the graph's arena and mapped, from [`Self::enqueue_placed`]: a flush
     /// links them where they are, so no vector is placed twice (#2264).
@@ -110,7 +99,7 @@ impl AsyncIndexBuilder {
     #[must_use]
     pub fn new(config: AsyncIndexBuilderConfig) -> Self {
         Self {
-            buffer: RwLock::new(Vec::new()),
+            buffer: Mutex::new(Vec::new()),
             placed: Mutex::new(Vec::new()),
             config,
             building: AtomicBool::new(false),
@@ -123,13 +112,15 @@ impl AsyncIndexBuilder {
         &self.config
     }
 
-    /// Enqueues vectors for deferred indexation.
+    /// Enqueues the ids of stored points for deferred insertion: the flush
+    /// reads each one's vector from storage then, so a point overwritten or
+    /// deleted in between is indexed as it is, or not at all.
     ///
     /// Returns `true` if the buffer has reached `merge_threshold`,
     /// signaling the caller to trigger a build.
-    pub fn enqueue(&self, vectors: Vec<(u64, Vec<f32>)>) -> bool {
-        let mut buf = self.buffer.write();
-        buf.extend(vectors);
+    pub fn enqueue(&self, ids: impl IntoIterator<Item = u64>) -> bool {
+        let mut buf = self.buffer.lock();
+        buf.extend(ids);
         buf.len() >= self.config.merge_threshold
     }
 
@@ -148,35 +139,34 @@ impl AsyncIndexBuilder {
     /// The number of vectors and placed ids still waiting to be indexed.
     #[cfg(test)]
     pub(crate) fn pending_len(&self) -> usize {
-        self.buffer.read().len() + self.placed.lock().len()
+        self.buffer.lock().len() + self.placed.lock().len()
     }
 
-    /// The ids still waiting to be indexed, each once: the placed ones, and
-    /// the buffered ones not also placed. Copied out under each queue's lock
-    /// in turn, so no lock is held while a search scores them.
+    /// The ids still waiting to be indexed, placed or buffered, each once,
+    /// sorted. Copied out under each queue's lock in turn, so no lock is held
+    /// while a search scores them.
     ///
-    /// The queues keep an id written twice twice, which a flush links once;
+    /// The queues keep an id written twice twice, which a flush indexes once;
     /// deduplicating here rather than at enqueue keeps a second write that
     /// lands while a flush is linking the first from being dropped unlinked.
     #[must_use]
-    pub(crate) fn pending_ids(&self) -> PendingIds {
-        let mut placed = self.placed.lock().clone();
-        placed.sort_unstable();
-        placed.dedup();
-        let mut buffered: Vec<u64> = self.buffer.read().iter().map(|&(id, _)| id).collect();
-        buffered.sort_unstable();
-        buffered.dedup();
-        buffered.retain(|id| placed.binary_search(id).is_err());
-        PendingIds { placed, buffered }
+    pub(crate) fn pending_ids(&self) -> Vec<u64> {
+        let mut ids = self.placed.lock().clone();
+        ids.extend(self.buffer.lock().iter().copied());
+        ids.sort_unstable();
+        ids.dedup();
+        ids
     }
 
-    /// Indexes both queues into the HNSW index: inserts the buffered vectors
-    /// via [`HnswIndex::insert_batch_parallel`], which places and links each
-    /// one, and links the queued ids where the direct writer placed their
+    /// Indexes both queues into the HNSW index: inserts the vectors
+    /// `current_vectors` gives for the buffered ids — what storage holds for
+    /// each now, a deleted one left out — via
+    /// [`HnswIndex::insert_batch_parallel`], which places and links each, and
+    /// links the queued placed ids where the direct writer placed their
     /// vectors, placing nothing. Returns the number of nodes it indexed.
     ///
     /// Each queue keeps what this flush indexes until it is indexed, so
-    /// [`Self::pending_ids`] still names it meanwhile; a failed link
+    /// `Self::pending_ids` still names it meanwhile; a failed link
     /// therefore leaves its ids queued for the next flush.
     ///
     /// Concurrent calls are serialized: the second caller returns
@@ -187,32 +177,42 @@ impl AsyncIndexBuilder {
     ///
     /// Returns an error if the graph's arena does not hold a slot a queued id
     /// is mapped to.
-    pub fn flush_sync(&self, hnsw_index: &HnswIndex) -> crate::error::Result<usize> {
+    pub fn flush_sync(
+        &self,
+        hnsw_index: &HnswIndex,
+        current_vectors: &dyn Fn(&[u64]) -> StoredVectors,
+    ) -> crate::error::Result<usize> {
         if self.building.swap(true, Ordering::AcqRel) {
             // Another build is in progress — skip
             return Ok(0);
         }
-        let inserted = self.insert_buffered(hnsw_index);
+        let inserted = self.insert_buffered(hnsw_index, current_vectors);
         let linked = self.link_placed(hnsw_index);
         self.building.store(false, Ordering::Release);
         Ok(inserted + linked?)
     }
 
-    /// Inserts a copy of the buffered vectors, then drops them from the
-    /// buffer: only this flush removes from it, and `enqueue` only appends.
-    fn insert_buffered(&self, hnsw_index: &HnswIndex) -> usize {
+    /// Inserts what `current_vectors` gives for the buffered ids, then drops
+    /// them from the buffer: only this flush removes from it, and `enqueue`
+    /// only appends.
+    fn insert_buffered(
+        &self,
+        hnsw_index: &HnswIndex,
+        current_vectors: &dyn Fn(&[u64]) -> StoredVectors,
+    ) -> usize {
         // Copied out so the buffer's lock (position 11) is not held across
-        // the index's.
-        let vectors = self.buffer.read().clone();
-        if vectors.is_empty() {
+        // the storage's or the index's.
+        let ids = self.buffer.lock().clone();
+        if ids.is_empty() {
             return 0;
         }
+        let vectors = current_vectors(&ids);
         let inserted =
             hnsw_index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
-        self.buffer.write().drain(..vectors.len());
+        self.buffer.lock().drain(..ids.len());
         tracing::debug!(
-            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} vectors",
-            vectors.len()
+            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} buffered ids",
+            ids.len()
         );
         inserted
     }
@@ -220,7 +220,7 @@ impl AsyncIndexBuilder {
     /// Links the queued ids, then drops them from the queue: only this flush
     /// removes from it, and `enqueue_placed` only appends. `link_placed`
     /// links nothing when it fails, so on error the ids stay queued: their
-    /// slots stay searchable through [`Self::pending_ids`], and the next
+    /// slots stay searchable through `Self::pending_ids`, and the next
     /// flush links them.
     fn link_placed(&self, hnsw_index: &HnswIndex) -> crate::error::Result<usize> {
         let placed = self.placed.lock().clone();

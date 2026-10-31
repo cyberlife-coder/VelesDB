@@ -8,7 +8,8 @@
 //! V2 path: `DirectVectorWriter` places each vector in the graph's
 //! `ContiguousVectors`, and `AsyncIndexBuilder` defers linking it into the
 //! graph for higher throughput. Until it is linked, every vector search finds
-//! the point through the builder (`AsyncIndexBuilder::search_pending`).
+//! the point among the builder's pending ids, scored on what storage holds
+//! for it (`collection/search/pending.rs`).
 
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -98,12 +99,12 @@ impl Collection {
         let writer = DirectVectorWriter::new(&self.storage.index);
         let needs_flush = match writer.write_batch_direct(vector_refs)? {
             Some(_) => aib.enqueue_placed(vector_refs.iter().map(|&(id, _)| id)),
-            None => aib.enqueue(points.iter().map(|p| (p.id, p.vector.clone())).collect()),
+            None => aib.enqueue(points.iter().map(|p| p.id)),
         };
 
         if needs_flush {
             // Buffer reached merge_threshold — flush synchronously.
-            aib.flush_sync(&self.storage.index)?;
+            aib.flush_sync(&self.storage.index, &|ids| self.current_vectors(ids))?;
         }
 
         let count = vector_refs.len();

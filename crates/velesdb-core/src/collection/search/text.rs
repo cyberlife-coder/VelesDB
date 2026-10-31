@@ -67,19 +67,14 @@ fn compute_hybrid_scored(
 ) -> Result<HybridScored> {
     // `search_with_quality`, not `search`: the latter pins `Balanced` and so
     // ignores the configured `[search]` quality (#2430).
-    let vec_res = collection.search_merging_pending(
-        vector_query,
-        overfetch_k,
-        metric,
-        restriction,
-        || {
+    let vec_res =
+        collection.search_merging_pending(vector_query, overfetch_k, metric, restriction, |n| {
             collection.storage.index.search_with_quality(
                 vector_query,
-                overfetch_k,
+                n,
                 collection.runtime_search_quality(),
             )
-        },
-    )?;
+        })?;
     let text_res = collection
         .storage
         .text_index

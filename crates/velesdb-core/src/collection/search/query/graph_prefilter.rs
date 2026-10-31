@@ -167,10 +167,10 @@ impl Collection {
         let restriction = crate::collection::search::pending::PendingRestriction::within(&bitmap)
             .post_filtered_if(metadata_filter.is_some());
         let index_results =
-            self.search_merging_pending(vector, candidates_k, metric, restriction, || {
+            self.search_merging_pending(vector, candidates_k, metric, restriction, |n| {
                 self.storage.index.search_with_quality_and_bitmap(
                     vector,
-                    candidates_k,
+                    n,
                     self.runtime_search_quality(),
                     &bitmap,
                 )

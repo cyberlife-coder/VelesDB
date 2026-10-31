@@ -299,7 +299,7 @@ execution.
 | **upsert_bulk standard** | 77 ms / 10K | 130K vec/s |
 
 The two rows this table also carried measured the builder's buffer alone —
-`drain_buffer` and `search_buffer`, which no longer exist as public calls.
+`drain_buffer` and `search_buffer`, which no longer exist.
 What a caller pays instead is `search_with_10k_pending_768d`: a search while
 the builder still holds 10K bulk-loaded 768-dimensional points, each of which
 every search scores exactly until a flush links it.

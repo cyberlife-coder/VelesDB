@@ -304,38 +304,44 @@ fn direct_written_slots_hold_their_own_vectors_while_the_builder_holds_them() {
     });
 
     let bulk_ids = BULK_BASE..BULK_BASE + ROUNDS * BATCH;
-    let unlinked = unlinked_slots(&coll);
-    let linked: Vec<u64> = bulk_ids
-        .clone()
-        .filter(|&id| {
-            coll.storage
-                .index
-                .mappings
-                .get_idx(id)
-                .is_some_and(|slot| !unlinked.contains(&slot))
-        })
-        .collect();
+    let linked = linked_ids(&coll, bulk_ids.clone());
     assert!(
         linked.is_empty(),
         "premise: the builder already linked {} bulk ids, e.g. {:?}",
         linked.len(),
         &linked[..linked.len().min(8)]
     );
-    let lost: Vec<u64> = (0..ROUNDS * BATCH)
-        .chain(bulk_ids)
-        .filter(|&id| {
-            let hits = coll
-                .search_with_quality(&vector(id), 1, crate::SearchQuality::Perfect)
-                .expect("test: exhaustive search");
-            hits.first().map(|hit| hit.point.id) != Some(id)
-        })
-        .collect();
+    let lost = ids_not_finding_their_vector(&coll, (0..ROUNDS * BATCH).chain(bulk_ids));
     assert!(
         lost.is_empty(),
         "{} ids no longer find their own vector before the drain, e.g. {:?}",
         lost.len(),
         &lost[..lost.len().min(8)]
     );
+}
+
+/// The `ids` mapped to a slot the graph links.
+fn linked_ids(coll: &Collection, ids: impl Iterator<Item = u64>) -> Vec<u64> {
+    let unlinked = unlinked_slots(coll);
+    ids.filter(|&id| {
+        coll.storage
+            .index
+            .mappings
+            .get_idx(id)
+            .is_some_and(|slot| !unlinked.contains(&slot))
+    })
+    .collect()
+}
+
+/// The `ids` whose own vector's exhaustive search does not return them first.
+fn ids_not_finding_their_vector(coll: &Collection, ids: impl Iterator<Item = u64>) -> Vec<u64> {
+    ids.filter(|&id| {
+        let hits = coll
+            .search_with_quality(&vector(id), 1, crate::SearchQuality::Perfect)
+            .expect("test: exhaustive search");
+        hits.first().map(|hit| hit.point.id) != Some(id)
+    })
+    .collect()
 }
 
 /// A V2 collection whose index has its exact-distance features off, loaded
@@ -376,4 +382,37 @@ fn a_buffered_point_is_found_as_it_is_now() {
         "151 is found on the vector it was bulk-loaded with"
     );
     assert_eq!(first_hit(&coll, 10_000), Some(151), "151 on its new vector");
+}
+
+/// A flush inserts what storage holds for each buffered id, not the copy the
+/// builder queued: a point overwritten before the flush keeps its new vector
+/// after it, and a deleted one stays out of the index.
+#[test]
+fn a_flush_indexes_buffered_points_as_they_are_now() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    coll.upsert([Point::without_payload(151, vector(10_000))])
+        .expect("test: upsert");
+    coll.delete(&[150]).expect("test: delete");
+
+    coll.flush().expect("test: flush drains the builder");
+
+    assert_eq!(
+        indexed_vector(&coll, 151).as_deref(),
+        Some(vector(10_000).as_slice()),
+        "the flush gave 151 back the vector it was bulk-loaded with"
+    );
+    assert_eq!(
+        indexed_vector(&coll, 150),
+        None,
+        "the flush indexed deleted 150"
+    );
+    // Exhaustive: 151 went into the graph twice (its upsert, then the
+    // flush), and a `k = 1` walk on this graph can come back empty — an
+    // index behaviour this test does not cover.
+    let hits = coll
+        .search_with_quality(&vector(10_000), 1, crate::SearchQuality::Perfect)
+        .expect("test: exhaustive search");
+    assert_eq!(hits.first().map(|hit| hit.point.id), Some(151));
 }

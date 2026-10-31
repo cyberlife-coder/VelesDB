@@ -1,4 +1,3 @@
-use super::super::delta_merge::merge_with_delta;
 use super::*;
 
 #[test]
@@ -17,33 +16,20 @@ fn test_stream_delta_buffer_default_trait() {
 }
 
 #[test]
-fn test_stream_delta_push_and_search() {
+fn test_stream_delta_push_and_read() {
     let buf = DeltaBuffer::new();
     buf.activate();
     buf.push(1, vec![1.0, 0.0, 0.0]);
     buf.push(2, vec![0.0, 1.0, 0.0]);
-    buf.push(3, vec![0.5, 0.5, 0.0]);
-
-    let query = &[1.0, 0.0, 0.0];
-    let results = buf.search(query, 2, DistanceMetric::Cosine);
-    assert_eq!(results.len(), 2, "should return at most k=2 results");
-    // Cosine: higher is better; [1,0,0] is identical to query -> highest score
-    assert_eq!(
-        results[0].0, 1,
-        "closest match should be id=1 (identical vector)"
-    );
+    assert_eq!(buf.ids(), vec![1, 2]);
 }
 
 #[test]
-fn test_stream_delta_search_returns_empty_when_inactive() {
+fn test_stream_delta_ids_empty_when_inactive() {
     let buf = DeltaBuffer::new();
     buf.push(1, vec![1.0, 0.0, 0.0]);
     // buffer is NOT active — push() is a no-op when inactive
-    let results = buf.search(&[1.0, 0.0, 0.0], 10, DistanceMetric::Cosine);
-    assert!(
-        results.is_empty(),
-        "inactive delta should return no results"
-    );
+    assert!(buf.ids().is_empty(), "inactive delta should hold no ids");
 }
 
 #[test]
@@ -53,93 +39,6 @@ fn test_stream_delta_push_noop_when_inactive() {
     buf.push(1, vec![1.0, 0.0]);
     buf.extend(vec![(2, vec![0.0, 1.0])]);
     assert_eq!(buf.len(), 0, "push/extend should be no-ops when inactive");
-}
-
-#[test]
-fn test_stream_delta_search_cosine_ordering() {
-    let buf = DeltaBuffer::new();
-    buf.activate();
-    // Vec pointing along x-axis
-    buf.push(10, vec![1.0, 0.0]);
-    // Vec pointing along y-axis (orthogonal)
-    buf.push(20, vec![0.0, 1.0]);
-    // Vec at 45 degrees
-    buf.push(30, vec![1.0, 1.0]);
-
-    let query = &[1.0, 0.0];
-    let results = buf.search(query, 3, DistanceMetric::Cosine);
-    // Cosine: higher is better. id=10 should be first (similarity ~1.0)
-    assert_eq!(results[0].0, 10);
-    // id=30 at 45 deg should be next (similarity ~0.707)
-    assert_eq!(results[1].0, 30);
-    // id=20 orthogonal should be last (similarity ~0.0)
-    assert_eq!(results[2].0, 20);
-}
-
-#[test]
-fn test_stream_delta_search_euclidean_ordering() {
-    let buf = DeltaBuffer::new();
-    buf.activate();
-    buf.push(1, vec![0.0, 0.0]);
-    buf.push(2, vec![1.0, 0.0]);
-    buf.push(3, vec![3.0, 4.0]);
-
-    let query = &[0.0, 0.0];
-    let results = buf.search(query, 3, DistanceMetric::Euclidean);
-    // Euclidean: lower is better. id=1 (dist=0) should be first
-    assert_eq!(results[0].0, 1);
-    assert_eq!(results[1].0, 2);
-    assert_eq!(results[2].0, 3);
-}
-
-#[test]
-fn test_stream_delta_merge_with_delta_inactive() {
-    let buf = DeltaBuffer::new();
-    // NOT active
-    let hnsw = vec![(1, 0.9), (2, 0.8)];
-    let merged = merge_with_delta(hnsw.clone(), &buf, &[1.0, 0.0], 5, DistanceMetric::Cosine);
-    assert_eq!(merged, hnsw, "inactive delta should return HNSW unchanged");
-}
-
-#[test]
-fn test_stream_delta_merge_dedup_and_truncate() {
-    let buf = DeltaBuffer::new();
-    buf.activate();
-    // Delta has id=1 with a different score and id=3 (new)
-    buf.push(1, vec![0.9, 0.1]);
-    buf.push(3, vec![0.8, 0.2]);
-
-    // HNSW results (cosine scores, higher is better)
-    let hnsw = vec![(1, 0.95), (2, 0.80)];
-
-    let query = &[1.0, 0.0];
-    let merged = merge_with_delta(hnsw, &buf, query, 2, DistanceMetric::Cosine);
-
-    // Should have at most k=2 results
-    assert_eq!(merged.len(), 2);
-
-    // Delta wins for id=1 — its score should come from delta's brute-force
-    // Check no duplicate ids
-    let ids: Vec<u64> = merged.iter().map(|(id, _)| *id).collect();
-    let unique: HashSet<u64> = ids.iter().copied().collect();
-    assert_eq!(
-        ids.len(),
-        unique.len(),
-        "no duplicate IDs in merged results"
-    );
-}
-
-#[test]
-fn test_stream_delta_merge_empty_delta() {
-    let buf = DeltaBuffer::new();
-    buf.activate();
-    // Delta is active but empty
-    let hnsw = vec![(1, 0.9), (2, 0.8)];
-    let merged = merge_with_delta(hnsw.clone(), &buf, &[1.0, 0.0], 5, DistanceMetric::Cosine);
-    assert_eq!(
-        merged, hnsw,
-        "empty active delta should return HNSW unchanged"
-    );
 }
 
 #[test]
@@ -213,7 +112,7 @@ fn test_stream_delta_stats() {
     assert!(!is_empty);
 }
 
-// ── Bug B0.1: remove() filters deleted points from search ──────────
+// ── Bug B0.1: remove() drops deleted points ──────────
 
 #[test]
 fn test_delta_remove_filters_deleted_point() {
@@ -222,12 +121,7 @@ fn test_delta_remove_filters_deleted_point() {
     buf.push(1, vec![1.0, 2.0, 3.0]);
     buf.push(2, vec![4.0, 5.0, 6.0]);
     buf.remove(1);
-    let results = buf.search(&[1.0, 2.0, 3.0], 10, DistanceMetric::Euclidean);
-    assert!(
-        results.iter().all(|(id, _)| *id != 1),
-        "Deleted point should not appear in search results"
-    );
-    assert_eq!(results.len(), 1, "Only point 2 should remain");
+    assert_eq!(buf.ids(), vec![2], "Only point 2 should remain");
 }
 
 #[test]
@@ -260,12 +154,10 @@ fn test_delta_push_deduplicates_on_same_id() {
     buf.push(1, vec![1.0, 2.0, 3.0]);
     buf.push(1, vec![4.0, 5.0, 6.0]); // Same ID, different vector
     assert_eq!(buf.len(), 1, "Should have deduplicated");
-    let results = buf.search(&[4.0, 5.0, 6.0], 1, DistanceMetric::Euclidean);
-    assert_eq!(results[0].0, 1);
-    // Distance should be ~0 since query matches the updated vector
-    assert!(
-        results[0].1 < 0.01,
-        "Updated vector should match query closely"
+    assert_eq!(
+        buf.entries(),
+        vec![(1, vec![4.0, 5.0, 6.0])],
+        "the newer vector"
     );
 }
 
@@ -278,10 +170,25 @@ fn test_delta_extend_deduplicates_on_same_id() {
     // Extend with updates for id=1 and a new id=3
     buf.extend(vec![(1, vec![0.5, 0.5]), (3, vec![0.0, 0.0])]);
     assert_eq!(buf.len(), 3, "Should have ids 1, 2, 3");
-    let results = buf.search(&[0.5, 0.5], 1, DistanceMetric::Euclidean);
+    let entries = buf.entries();
+    let one = entries
+        .iter()
+        .find(|(id, _)| *id == 1)
+        .map(|(_, v)| v.as_slice());
     assert_eq!(
-        results[0].0, 1,
-        "ID 1 should have updated vector [0.5, 0.5]"
+        one,
+        Some([0.5, 0.5].as_slice()),
+        "ID 1 has its updated vector"
     );
-    assert!(results[0].1 < 0.01, "Updated vector should match query");
+}
+
+#[test]
+fn test_delta_retire_keeps_an_entry_written_again() {
+    let buf = DeltaBuffer::new();
+    buf.activate();
+    buf.push(1, vec![1.0]);
+    buf.push(2, vec![2.0]);
+    buf.push(2, vec![9.0]); // written again after a merge copied [2.0]
+    buf.retire(&[(1, [1.0].as_slice()), (2, [2.0].as_slice())]);
+    assert_eq!(buf.entries(), vec![(2, vec![9.0])]);
 }

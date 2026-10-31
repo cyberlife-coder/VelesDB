@@ -6,9 +6,12 @@
 use crate::collection::graph::{
     EdgeRemoval, GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
 };
+use crate::collection::search::pending::PendingRestriction;
 use crate::collection::types::Collection;
+use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::point::{Point, SearchResult};
+use crate::scored_result::ScoredResult;
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 
 use super::graph_property_index_wiring::extract_labels;
@@ -697,66 +700,54 @@ impl Collection {
     /// Returns `Error::VectorNotAllowed` if no embeddings are configured,
     /// or `Error::DimensionMismatch` if the query dimension is wrong.
     pub fn search_by_embedding(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+        let metric = self.check_embedding_query(query)?;
+        // Not `VectorIndex::search`: it pins `Balanced` and so ignores `[search]` (#2430).
+        let hits =
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+                self.storage
+                    .index
+                    .search_with_quality(query, n, self.runtime_search_quality())
+            })?;
+        Ok(self.hydrate_embedding_hits(&hits))
+    }
+
+    /// Checks that this graph collection has embeddings of `query`'s
+    /// dimension, returning the metric they are compared with.
+    ///
+    /// The existing HNSW index is reused: its dimension is the embedding
+    /// dimension when the collection was created with embeddings, and a graph
+    /// without embeddings (dimension 0) is rejected here.
+    fn check_embedding_query(&self, query: &[f32]) -> Result<DistanceMetric> {
         let config = self.storage.config.read();
         let emb_dim = config
             .embedding_dimension
             .ok_or_else(|| Error::VectorNotAllowed(config.name.clone()))?;
-        drop(config);
-
         if query.len() != emb_dim {
             return Err(Error::DimensionMismatch {
                 expected: emb_dim,
                 actual: query.len(),
             });
         }
+        Ok(config.metric)
+    }
 
-        // Reason: we reuse the existing HNSW index (dimension == emb_dim when created
-        // via create_graph_collection_with_embeddings). For graph-without-embeddings
-        // the HNSW has dimension 0 and the guard above already rejected the call.
-        let metric = self.storage.config.read().metric;
-        // Not `VectorIndex::search`: it pins `Balanced` and so ignores `[search]` (#2430).
-        let ids = self.search_merging_pending(
-            query,
-            k,
-            metric,
-            crate::collection::search::pending::PendingRestriction::NONE,
-            || {
-                self.storage
-                    .index
-                    .search_with_quality(query, k, self.runtime_search_quality())
-            },
-        )?;
-
-        // Acquire each lock once: collect vector data, then collect payload data.
-        // This avoids holding vector_storage while locking payload_storage per item.
-        let vectors: Vec<(u64, f32, Option<Vec<f32>>)> = {
-            let vector_storage = self.storage.vector_storage.read();
-            ids.into_iter()
-                .map(|sr| {
-                    let vec = vector_storage.retrieve(sr.id).ok().flatten();
-                    (sr.id, sr.score, vec)
-                })
-                .collect()
-        };
-        let results = {
-            let payload_storage = self.storage.payload_storage.read();
-            vectors
-                .into_iter()
-                .filter_map(|(id, score, vector)| {
-                    let vector = vector?;
-                    let payload = payload_storage.retrieve(id).ok().flatten();
-                    Some(SearchResult::new(
-                        Point {
-                            id,
-                            vector,
-                            payload,
-                            sparse_vectors: None,
-                        },
-                        score,
-                    ))
-                })
-                .collect()
-        };
-        Ok(results)
+    /// Hydrates embedding hits whose vector is still stored, in hit order,
+    /// reading vector then payload storage (lock order).
+    fn hydrate_embedding_hits(&self, hits: &[ScoredResult]) -> Vec<SearchResult> {
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        hits.iter()
+            .filter_map(|hit| {
+                let vector = vector_storage.retrieve(hit.id).ok().flatten()?;
+                let payload = payload_storage.retrieve(hit.id).ok().flatten();
+                let point = Point {
+                    id: hit.id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                };
+                Some(SearchResult::new(point, hit.score))
+            })
+            .collect()
     }
 }

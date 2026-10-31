@@ -67,8 +67,9 @@ impl Collection {
 
         // The full re-match inside `filter_and_hydrate` is deliberate even on
         // the bitmap path: the prefilter bitmap can be a SUPERSET of the true
-        // matches (non-indexed conditions, mirror false positives) and never
-        // covers delta-buffer points — skipping it would return false positives.
+        // matches (non-indexed conditions, mirror false positives), and the
+        // post-filter path merges every pending point unfiltered (see
+        // `pending.rs`) — skipping it would return false positives.
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
 
@@ -97,8 +98,8 @@ impl Collection {
                 self.search_post_filter(query, k, filter, quality, metric)
             }
             FilterStrategy::PreFilterExact => {
-                self.search_merging_pending(query, k, metric, restriction, || {
-                    self.storage.index.full_scan_with_bitmap(query, k, bitmap)
+                self.search_merging_pending(query, k, metric, restriction, |n| {
+                    self.storage.index.full_scan_with_bitmap(query, n, bitmap)
                 })
             }
             // Exact mode never emits `None`; if it ever did, the bitmap
@@ -107,13 +108,10 @@ impl Collection {
             // and forces an explicit dispatch choice.
             FilterStrategy::PreFilter | FilterStrategy::None => {
                 let candidates_k = compute_oversampled_k(k, filter, Some(&self.get_stats()));
-                self.search_merging_pending(query, candidates_k, metric, restriction, || {
-                    self.storage.index.search_with_quality_and_bitmap(
-                        query,
-                        candidates_k,
-                        quality,
-                        bitmap,
-                    )
+                self.search_merging_pending(query, candidates_k, metric, restriction, |n| {
+                    self.storage
+                        .index
+                        .search_with_quality_and_bitmap(query, n, quality, bitmap)
                 })
             }
         }
@@ -134,11 +132,7 @@ impl Collection {
             candidates_k,
             metric,
             PendingRestriction::post_filtered(),
-            || {
-                self.storage
-                    .index
-                    .search_with_quality(query, candidates_k, quality)
-            },
+            |n| self.storage.index.search_with_quality(query, n, quality),
         )
     }
 
@@ -166,7 +160,8 @@ impl Collection {
                     return None;
                 }
                 // Correctness-bearing re-match (see dispatch above): candidates
-                // may come from an over-approximate bitmap or the delta buffer.
+                // may come from an over-approximate bitmap or be pending points
+                // a post-filtered search merged unfiltered.
                 let matches = match payload.as_ref() {
                     Some(p) => filter.matches(p),
                     None => filter.matches(&serde_json::Value::Null),

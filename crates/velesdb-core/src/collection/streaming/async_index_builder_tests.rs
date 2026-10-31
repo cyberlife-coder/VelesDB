@@ -3,6 +3,7 @@
 use super::async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::HnswIndex;
+use crate::index::VectorIndex;
 
 fn default_config() -> AsyncIndexBuilderConfig {
     AsyncIndexBuilderConfig {
@@ -15,7 +16,7 @@ fn make_index(dim: usize) -> HnswIndex {
     HnswIndex::new(dim, DistanceMetric::Cosine).expect("test index creation")
 }
 
-/// `count` vectors to enqueue, id `i` carrying the `i % dim`-th basis vector.
+/// `count` stored vectors, id `i` carrying the `i % dim`-th basis vector.
 ///
 /// Iterating as `usize` keeps the index arithmetic lossless; the id is a
 /// `u64`, which `usize` cannot overflow on any supported target.
@@ -29,6 +30,26 @@ fn basis_vectors(count: usize, dim: usize) -> Vec<(u64, Vec<f32>)> {
         .collect()
 }
 
+/// The ids of `points`, as `enqueue` takes them.
+fn ids_of(points: &[(u64, Vec<f32>)]) -> Vec<u64> {
+    points.iter().map(|(id, _)| *id).collect()
+}
+
+/// A stand-in for storage: the vector `points` holds for each id asked
+/// about, an id it does not hold left out — as a deleted point is.
+fn stored(points: &[(u64, Vec<f32>)]) -> impl Fn(&[u64]) -> Vec<(u64, Vec<f32>)> + '_ {
+    move |ids| {
+        ids.iter()
+            .filter_map(|id| points.iter().find(|(stored, _)| stored == id).cloned())
+            .collect()
+    }
+}
+
+/// Storage that holds nothing.
+fn nothing_stored(_: &[u64]) -> Vec<(u64, Vec<f32>)> {
+    Vec::new()
+}
+
 #[test]
 fn test_new_creates_empty_builder() {
     let builder = AsyncIndexBuilder::new(default_config());
@@ -39,8 +60,7 @@ fn test_new_creates_empty_builder() {
 #[test]
 fn test_enqueue_adds_vectors() {
     let builder = AsyncIndexBuilder::new(default_config());
-    let vectors = vec![(1_u64, vec![1.0_f32, 0.0, 0.0])];
-    let triggered = builder.enqueue(vectors);
+    let triggered = builder.enqueue([1_u64]);
     assert!(!triggered);
     assert_eq!(builder.pending_len(), 1);
 }
@@ -53,9 +73,9 @@ fn test_enqueue_returns_true_at_threshold() {
     };
     let builder = AsyncIndexBuilder::new(config);
 
-    assert!(!builder.enqueue(vec![(1, vec![1.0])]));
-    assert!(!builder.enqueue(vec![(2, vec![2.0])]));
-    assert!(builder.enqueue(vec![(3, vec![3.0])]));
+    assert!(!builder.enqueue([1]));
+    assert!(!builder.enqueue([2]));
+    assert!(builder.enqueue([3]));
 }
 
 /// Each pending id once, sorted: an id queued twice, and an id both placed
@@ -65,11 +85,9 @@ fn pending_ids_names_each_waiting_id_once() {
     let builder = AsyncIndexBuilder::new(default_config());
     builder.enqueue_placed([7, 3, 7]);
     builder.enqueue_placed([3]);
-    builder.enqueue(vec![(9, vec![1.0]), (3, vec![1.0]), (9, vec![2.0])]);
+    builder.enqueue([9, 3, 9]);
 
-    let ids = builder.pending_ids();
-    assert_eq!(ids.placed, vec![3, 7]);
-    assert_eq!(ids.buffered, vec![9], "3 is placed already, 9 is once");
+    assert_eq!(builder.pending_ids(), vec![3, 7, 9]);
 }
 
 #[test]
@@ -78,10 +96,11 @@ fn test_flush_sync_indexes_vectors() {
     let index = make_index(dim);
     let builder = AsyncIndexBuilder::new(default_config());
 
-    builder.enqueue(basis_vectors(20, dim));
+    let points = basis_vectors(20, dim);
+    builder.enqueue(ids_of(&points));
     assert_eq!(builder.pending_len(), 20);
 
-    let indexed = builder.flush_sync(&index).unwrap();
+    let indexed = builder.flush_sync(&index, &stored(&points)).unwrap();
     assert_eq!(indexed, 20);
     assert_eq!(builder.pending_len(), 0);
     assert_eq!(index.len(), 20);
@@ -91,8 +110,34 @@ fn test_flush_sync_indexes_vectors() {
 fn test_flush_sync_empty_buffer() {
     let index = make_index(4);
     let builder = AsyncIndexBuilder::new(default_config());
-    let indexed = builder.flush_sync(&index).unwrap();
+    let indexed = builder.flush_sync(&index, &nothing_stored).unwrap();
     assert_eq!(indexed, 0);
+}
+
+/// A flush indexes what storage holds for each queued id when it runs: a
+/// point overwritten since it was queued is indexed on its new vector, a
+/// point deleted since is not indexed, and both leave the queue.
+#[test]
+fn a_flush_inserts_what_storage_holds_now() {
+    let dim = 4;
+    let index = make_index(dim);
+    let builder = AsyncIndexBuilder::new(default_config());
+    let queued = basis_vectors(2, dim);
+    builder.enqueue(ids_of(&queued));
+    let now = vec![(0_u64, vec![0.0_f32, 0.0, 1.0, 0.0])];
+
+    let indexed = builder.flush_sync(&index, &stored(&now)).unwrap();
+
+    assert_eq!(indexed, 1, "only the point storage still holds");
+    assert_eq!(index.len(), 1);
+    assert!(builder.pending_ids().is_empty(), "both ids left the queue");
+    let hits = index.search(&now[0].1, 1);
+    assert_eq!(hits[0].id, 0);
+    assert!(
+        (hits[0].score - 1.0).abs() < 1e-5,
+        "id 0 is indexed on its new vector: {}",
+        hits[0].score
+    );
 }
 
 /// A flush that finds another in progress indexes nothing and leaves both
@@ -102,10 +147,13 @@ fn flush_sync_skips_while_another_flush_runs() {
     let dim = 4;
     let index = make_index(dim);
     let builder = AsyncIndexBuilder::new(default_config());
-    builder.enqueue(basis_vectors(5, dim));
+    let points = basis_vectors(5, dim);
+    builder.enqueue(ids_of(&points));
 
     builder.force_set_building(true);
-    let indexed = builder.flush_sync(&index).expect("test: a skipped flush");
+    let indexed = builder
+        .flush_sync(&index, &stored(&points))
+        .expect("test: a skipped flush");
     builder.force_set_building(false);
 
     assert_eq!(indexed, 0);
@@ -174,7 +222,7 @@ fn a_failed_link_leaves_the_ids_on_the_queue() {
     assert_eq!(builder.pending_len(), 1, "premise: one id is queued");
 
     let err = builder
-        .flush_sync(&index)
+        .flush_sync(&index, &nothing_stored)
         .expect_err("a slot outside the arena fails the link");
 
     assert!(
@@ -187,6 +235,6 @@ fn a_failed_link_leaves_the_ids_on_the_queue() {
         "the id is still queued, so a later flush still links it"
     );
     builder
-        .flush_sync(&index)
+        .flush_sync(&index, &nothing_stored)
         .expect_err("the flush flag was cleared: the next flush runs, and fails the same way");
 }

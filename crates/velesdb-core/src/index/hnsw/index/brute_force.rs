@@ -57,24 +57,13 @@ impl HnswIndex {
         Ok(results)
     }
 
-    /// Exact scores of the given ids' vectors, the top `k` by the index
-    /// metric, in the same score space as [`Self::full_scan_with_bitmap`].
-    ///
-    /// It reads each id's slot in the arena whether or not the graph links
-    /// it, so it scores what a graph walk cannot reach yet: the slots
-    /// `upsert_bulk`'s direct writer placed and the async index builder has
-    /// still to link. An id with no mapping (deleted since) is skipped.
-    #[cfg(feature = "persistence")]
-    pub(crate) fn score_ids(&self, query: &[f32], ids: &[u64], k: usize) -> Vec<ScoredResult> {
-        let inner = self.inner.read();
-        let results = inner.with_contiguous_vectors(|vectors| {
-            let mut scored = Vec::with_capacity(ids.len());
-            self.score_mapped_ids(query, ids.iter().copied(), vectors, &mut scored);
-            self.metric.top_k_scored_results(&mut scored, k);
-            scored
-        });
-        drop(inner);
-        results
+    /// The exact score of `vector` against `query` in the index's result
+    /// space: its distance, clamped to the metric's range as graph results
+    /// are. The one scoring rule for every exhaustive scan.
+    #[inline]
+    pub(crate) fn score(&self, query: &[f32], vector: &[f32]) -> f32 {
+        self.metric
+            .clamp_score(self.compute_distance(query, vector))
     }
 
     /// Scores vectors whose IDs are present in the bitmap (u32 range).
@@ -100,8 +89,7 @@ impl HnswIndex {
         for id in ids {
             if let Some(idx) = self.mappings.get_idx(id) {
                 if let Some(vec) = vectors.get(idx) {
-                    let dist = self.compute_distance(query, vec);
-                    scored.push(ScoredResult::new(id, dist));
+                    scored.push(ScoredResult::new(id, self.score(query, vec)));
                 }
             }
         }
@@ -132,8 +120,7 @@ impl HnswIndex {
                 continue;
             }
             if let Some(vec) = vectors.get(idx) {
-                let dist = self.compute_distance(query, vec);
-                scored.push(ScoredResult::new(id, dist));
+                scored.push(ScoredResult::new(id, self.score(query, vec)));
             }
         }
     }

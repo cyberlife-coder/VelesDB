@@ -209,27 +209,26 @@ impl Collection {
         Ok(())
     }
 
-    /// Drains the delta buffer into the HNSW index (if active).
-    ///
-    /// No-op when the delta buffer is inactive (no rebuild in progress).
+    /// Indexes what the delta buffer holds (if a rebuild left it active)
+    /// and only then empties it: sealed first, so it takes no new write and
+    /// searches still read it while its points are inserted (see
+    /// `collection/search/pending.rs`).
     #[cfg(feature = "persistence")]
     fn drain_delta_into_index(&self) {
-        let drained = self.streaming.delta_buffer.deactivate_and_drain();
-        self.filter_and_insert_valid(&drained);
+        let ids = self.streaming.delta_buffer.seal();
+        self.index_current(&ids);
+        let _ = self.streaming.delta_buffer.deactivate_and_drain();
     }
 
     /// No-op stub when persistence is disabled.
     #[cfg(not(feature = "persistence"))]
     fn drain_delta_into_index(&self) {}
 
-    /// Drains the deferred indexer into the HNSW index (if configured).
-    ///
-    /// No-op when deferred indexing is not configured.
+    /// Indexes what the deferred indexer holds (if configured).
     #[cfg(feature = "persistence")]
     fn drain_deferred_into_index(&self) {
         if let Some(di) = self.streaming.deferred_indexer.load().as_ref() {
-            let drained = di.drain_all();
-            self.filter_and_insert_valid(&drained);
+            self.merge_deferred_batch(di);
         }
     }
 
@@ -237,38 +236,39 @@ impl Collection {
     #[cfg(not(feature = "persistence"))]
     fn drain_deferred_into_index(&self) {}
 
-    /// Filters `drained` to live vectors and batch-inserts them into HNSW.
-    ///
-    /// Shared by `drain_delta_into_index` and `drain_deferred_into_index`.
+    /// Inserts what storage holds now for `ids` into the HNSW index, leaving
+    /// out an id it no longer holds, and returns the `(id, vector)` pairs it
+    /// inserted. Shared by the delta, deferred and async-builder merges, so
+    /// each indexes a point as it is, never an older copy it queued.
     ///
     /// # Lock ordering
     ///
-    /// Acquires `vector_storage` (position 2) briefly, releases it before
-    /// calling `insert_batch_parallel` (no index lock held during the
-    /// storage read). Callers must drain their respective buffer lock
-    /// (position 10 or 11) before calling this method.
+    /// Reads `vector_storage` (position 2) in chunks and releases it before
+    /// `insert_batch_parallel`; callers hold no buffer lock (position 10 or
+    /// 11) meanwhile.
     #[cfg(feature = "persistence")]
-    fn filter_and_insert_valid(&self, drained: &[(u64, Vec<f32>)]) {
-        if drained.is_empty() {
-            return;
+    pub(super) fn index_current(&self, ids: &[u64]) -> Vec<(u64, Vec<f32>)> {
+        let vectors = self.current_vectors(ids);
+        if !vectors.is_empty() {
+            let inserted = self
+                .storage
+                .index
+                .insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
+            if inserted < vectors.len() {
+                tracing::warn!(
+                    "index_current: inserted {inserted}/{} vectors",
+                    vectors.len()
+                );
+            }
         }
-        let storage = self.storage.vector_storage.read();
-        let valid: Vec<(u64, &[f32])> = drained
-            .iter()
-            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
-            .map(|(id, v)| (*id, v.as_slice()))
-            .collect();
-        drop(storage);
-        if !valid.is_empty() {
-            self.storage.index.insert_batch_parallel(valid);
-        }
+        vectors
     }
 
     /// Drains the async index builder buffer into the HNSW index.
     ///
     /// Links sub-threshold batches from the V2 `upsert_bulk` path into
     /// HNSW. Search finds them before this too, but by scoring every one
-    /// the builder holds on each query (`AsyncIndexBuilder::search_pending`);
+    /// the builder holds on each query (`collection/search/pending.rs`);
     /// once linked, a graph walk reaches them, and a save persists a graph
     /// that has them.
     ///
@@ -282,7 +282,7 @@ impl Collection {
     /// alert on repeated failures.
     pub(super) fn drain_async_index_builder(&self) -> Result<()> {
         if let Some(aib) = self.streaming.async_index_builder.load().as_ref() {
-            match aib.flush_sync(&self.storage.index) {
+            match aib.flush_sync(&self.storage.index, &|ids| self.current_vectors(ids)) {
                 Ok(count) if count > 0 => {
                     tracing::debug!("flush: drained {count} vectors from async index builder");
                 }

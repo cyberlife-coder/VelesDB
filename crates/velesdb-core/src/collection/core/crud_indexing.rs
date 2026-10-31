@@ -6,7 +6,7 @@ use super::graph_property_index_wiring::NodePayloadChange;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::point::Point;
-use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
+use crate::storage::{LogPayloadStorage, PayloadStorage};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
@@ -457,28 +457,21 @@ impl Collection {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Drains the deferred indexer and batch-inserts into HNSW.
+    /// Indexes what storage holds for the ids the deferred indexer buffers,
+    /// then retires the entries it copied: a point leaves the buffer only
+    /// once indexed, as storage holds it (a deleted one is left out), and an
+    /// entry written again meanwhile stays for the next merge. A no-op while
+    /// another merge runs.
     #[cfg(feature = "persistence")]
     pub(super) fn merge_deferred_batch(&self, di: &crate::collection::streaming::DeferredIndexer) {
-        let drained = di.swap_and_drain();
-        if drained.is_empty() {
+        let Some(entries) = di.begin_merge() else {
             return;
-        }
-        let storage = self.storage.vector_storage.read();
-        let valid: Vec<(u64, &[f32])> = drained
-            .iter()
-            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
-            .map(|(id, v)| (*id, v.as_slice()))
-            .collect();
-        drop(storage);
-        let expected = valid.len();
-        if valid.is_empty() {
-            return;
-        }
-        let inserted = self.storage.index.insert_batch_parallel(valid);
-        if inserted < expected {
-            tracing::warn!("merge_deferred_batch: inserted {inserted}/{expected} vectors");
-        }
+        };
+        let ids: Vec<u64> = entries.iter().map(|&(id, _)| id).collect();
+        self.index_current(&ids);
+        let copied: Vec<(u64, &[f32])> =
+            entries.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        di.end_merge(&copied);
     }
 
     /// Batch-inserts into HNSW or defers into the deferred indexer.

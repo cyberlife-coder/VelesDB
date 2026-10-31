@@ -95,13 +95,14 @@ fn with_deferred_points(dir: &tempfile::TempDir) -> Collection {
 
 /// The pending points are stored and, as during a rebuild, held by the
 /// delta buffer rather than the index. The deferred indexer is how they get
-/// stored without an index insert; its buffer is then emptied, unmerged.
+/// stored without an index insert; its buffer is then retired, unmerged.
 fn with_delta_points(dir: &tempfile::TempDir) -> Collection {
     let coll = with_deferred_points(dir);
-    let held = coll
-        .deferred_indexer()
-        .expect("premise: installed")
-        .drain_all();
+    let indexer = coll.deferred_indexer().expect("premise: installed");
+    let held = indexer.begin_merge().expect("premise: nothing merging");
+    let retired: Vec<(u64, &[f32])> = held.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+    indexer.end_merge(&retired);
+    assert!(indexer.ids().is_empty(), "premise: retired, unmerged");
     assert_eq!(
         held.len(),
         usize::try_from(BATCH).expect("test: fits"),
@@ -198,4 +199,108 @@ fn an_anchored_search_admits_no_delta_or_deferred_point_outside_its_anchors() {
             "{source}: non-anchors returned {outside:?}"
         );
     }
+}
+
+/// A collection whose `upsert_bulk` takes the async builder's V2 path and
+/// whose other writes go through the deferred indexer.
+fn with_async_and_deferred(dir: &tempfile::TempDir) -> Collection {
+    let coll = Collection::create_with_async_builder(
+        dir.path().join("c"),
+        DIM,
+        DistanceMetric::Euclidean,
+        crate::collection::streaming::AsyncIndexBuilderConfig {
+            merge_threshold: 100_000,
+            segment_count: None,
+        },
+    )
+    .expect("test: create");
+    coll.upsert(linked_points()).expect("test: linked");
+    let deferred = DeferredIndexerConfig {
+        enabled: true,
+        merge_threshold: 100_000,
+        ..DeferredIndexerConfig::default()
+    };
+    coll.apply_advanced_config(None, Some(Some(deferred)), None)
+        .expect("test: install the deferred indexer");
+    coll
+}
+
+fn first_id(coll: &Collection, query: &[f32]) -> Option<u64> {
+    coll.search(query, 1)
+        .expect("test: search")
+        .first()
+        .map(|hit| hit.point.id)
+}
+
+const X: u64 = 10_000;
+
+/// A point bulk-loaded through the async builder, then overwritten through
+/// the deferred indexer, is found on what storage holds now: its new vector,
+/// not the arena slot of the first write.
+#[test]
+fn a_point_overwritten_after_its_bulk_load_is_scored_on_its_new_vector() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = with_async_and_deferred(&dir);
+    let (old, new) = (dispersed(X), dispersed(X + 1));
+    coll.upsert_bulk(&[Point::without_payload(X, old.clone())])
+        .expect("test: bulk");
+    coll.upsert([Point::without_payload(X, new.clone())])
+        .expect("test: overwrite");
+
+    assert_eq!(first_id(&coll, &new), Some(X), "found on its new vector");
+    assert_ne!(first_id(&coll, &old), Some(X), "found on its old vector");
+}
+
+/// A linked point overwritten through the deferred indexer with a far
+/// vector is not found on the index's stale copy, near the query.
+#[test]
+fn an_index_result_is_masked_by_a_newer_write_the_index_has_not_seen() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = with_async_and_deferred(&dir);
+    let stale = dispersed(7);
+    coll.upsert([Point::without_payload(7, dispersed(X))])
+        .expect("test: overwrite");
+    assert_ne!(
+        first_id(&coll, &stale),
+        Some(7),
+        "found on its stale vector"
+    );
+    assert_eq!(first_id(&coll, &dispersed(X)), Some(7));
+}
+
+/// A point deleted and upserted again while the deferred indexer holds its
+/// writes is found: the delete does not outlive the write after it.
+#[test]
+fn a_point_deleted_then_upserted_again_while_deferred_is_found() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = with_async_and_deferred(&dir);
+    let v = dispersed(X);
+    coll.upsert([Point::without_payload(X, v.clone())])
+        .expect("test: upsert");
+    coll.delete(&[X]).expect("test: delete");
+    assert_ne!(first_id(&coll, &v), Some(X), "premise: deleted");
+    coll.upsert([Point::without_payload(X, v.clone())])
+        .expect("test: upsert again");
+    assert_eq!(first_id(&coll, &v), Some(X));
+}
+
+/// A deferred write overwritten through the async builder leaves the
+/// deferred buffer at the next merge: the merge indexes what storage holds
+/// and retires the entry it copied, though storage no longer holds that
+/// entry's vector.
+#[test]
+fn a_merge_retires_a_deferred_write_storage_has_moved_past() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = with_async_and_deferred(&dir);
+    let (old, new) = (dispersed(X), dispersed(X + 1));
+    coll.upsert([Point::without_payload(X, old)])
+        .expect("test: deferred write");
+    coll.upsert_bulk(&[Point::without_payload(X, new.clone())])
+        .expect("test: bulk overwrite");
+
+    coll.flush().expect("test: flush merges");
+
+    let deferred = coll.deferred_indexer().expect("premise: installed");
+    assert!(deferred.ids().is_empty(), "the entry left the buffer");
+    assert_eq!(first_id(&coll, &new), Some(X), "indexed on its new vector");
 }
