@@ -167,8 +167,10 @@ locks.
 
 - Writes acquire a **write lock** on the affected subsystems
 - A write blocks other writes to the same collection, but only briefly
-- Writes do **not** block reads on the HNSW index (index rebuild is
-  deferred via a delta buffer)
+- Writes do **not** stop searches of the HNSW index: an insert takes the
+  index's lock shared, as a search does, and a write the deferred indexer
+  or the async index builder holds back is scored exactly by every search
+  until it is indexed
 - Payload writes are append-only (WAL), minimizing lock duration
 
 ### Mixed Workloads
@@ -411,8 +413,8 @@ for details.
 
 Yes. VelesDB uses `RwLock` which allows multiple concurrent readers.
 A write briefly blocks other writers on the same collection, but reads
-continue unimpeded on the HNSW index (writes go through a delta buffer
-first).
+continue on the HNSW index (a write held back for indexing is scored
+exactly by every search until it is indexed).
 
 ### How do I avoid deadlocks?
 

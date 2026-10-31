@@ -166,7 +166,7 @@ Task guides, all moved out of this README so it stays readable:
 | [Collections, metrics, storage](../../docs/guides/CORE_COLLECTIONS_AND_METRICS.md) | Collection model, the 5 distance metrics, embedding dimensions, payload format, quantized storage modes, bulk ingestion, durability |
 | [`VelesQL` reference](../../docs/guides/CORE_VELESQL_REFERENCE.md) | Vector/text/hybrid queries, metadata filters, `WITH` options, operator table, `JOIN` limit, `EXPLAIN` |
 | [Sparse vectors and fusion](../../docs/guides/CORE_SPARSE_AND_FUSION.md) | Named sparse indexes, DAAT `MaxScore`, RRF and Relative Score fusion |
-| [Streaming inserts](../../docs/guides/CORE_STREAMING_INSERTS.md) | `StreamIngester`, backpressure, delta buffer (insert-and-search) |
+| [Streaming inserts](../../docs/guides/CORE_STREAMING_INSERTS.md) | `StreamIngester`, backpressure, when a streamed point is searchable |
 | [Query plan cache](../../docs/guides/CORE_QUERY_PLAN_CACHE.md) | Two-tier LRU cache, write-generation invalidation, `EXPLAIN` cache fields, metrics |
 | [Operations API](../../docs/guides/CORE_OPERATIONS_API.md) | `DatabaseObserver` and governed reads, guard-rails, validation, stable ids, index introspection, `ColumnStore`, metrics |
 | [Agent Memory SDK (Rust)](../../docs/guides/AGENT_MEMORY.md#rust-api) | Semantic, episodic and procedural memory, TTL, eviction, snapshots |

@@ -872,7 +872,7 @@ pub async fn train_pq<R: Runtime>(
 // Streaming Insert Command
 // ============================================================================
 
-/// Stream-inserts points into a collection's delta buffer.
+/// Stream-inserts points into a collection through its streaming pipeline.
 ///
 /// Uses the streaming ingestion pipeline for low-latency writes.
 /// Requires the `persistence` feature and an active stream ingester.

@@ -166,7 +166,7 @@ After WAL replay and HNSW load, `Collection::open()` runs gap detection:
 3. Skips vectors with mismatched dimensions (corruption defense)
 
 This recovers vectors that were written to storage but not yet indexed
-in HNSW due to a crash during deferred merge or delta buffer drain.
+in HNSW due to a crash before a deferred-indexer or async-builder merge.
 
 Unit tests in `collection/core/recovery_tests.rs` cover:
 - No-gap fast path (O(1) count comparison)
