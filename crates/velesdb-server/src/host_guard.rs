@@ -152,7 +152,7 @@ fn canonical_name(name: &str) -> Option<String> {
         && !name.ends_with('.')
         && name
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_'));
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b));
     valid.then(|| name.to_ascii_lowercase())
 }
 

@@ -62,19 +62,7 @@ fn core_routes(max_body_size: usize) -> Router<Arc<AppState>> {
             get(collection_diagnostics),
         )
         .route("/guardrails", get(get_guardrails).put(update_guardrails))
-        // `[server] max_body_size` in full applies to the batch upload routes
-        // only. The NDJSON stream route reads its body incrementally and
-        // never buffers it whole, so no body limit applies to it.
-        .merge(
-            Router::new()
-                .route("/collections/{name}/points", post(upsert_points))
-                .route("/collections/{name}/points/raw", post(upsert_points_raw))
-                .route(
-                    "/collections/{name}/points/stream",
-                    post(stream_upsert_points),
-                )
-                .layer(DefaultBodyLimit::max(max_body_size)),
-        )
+        .merge(upload_routes(max_body_size))
         .route("/collections/{name}/stream/insert", post(stream_insert))
         .route("/collections/{name}/stream/enable", post(enable_streaming))
         .route(
@@ -94,6 +82,20 @@ fn core_routes(max_body_size: usize) -> Router<Arc<AppState>> {
             "/collections/{name}/locality/reorder",
             post(reorder_for_locality),
         )
+}
+
+/// Point-upload routes. `[server] max_body_size` in full applies to the
+/// batch upload routes only. The NDJSON stream route reads its body
+/// incrementally and never buffers it whole, so no body limit applies to it.
+fn upload_routes(max_body_size: usize) -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/collections/{name}/points", post(upsert_points))
+        .route("/collections/{name}/points/raw", post(upsert_points_raw))
+        .route(
+            "/collections/{name}/points/stream",
+            post(stream_upsert_points),
+        )
+        .layer(DefaultBodyLimit::max(max_body_size))
 }
 
 /// Relation (graph edge) and durable TTL routes (any collection type).
