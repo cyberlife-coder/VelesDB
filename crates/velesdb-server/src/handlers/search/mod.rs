@@ -26,7 +26,8 @@ use crate::AppState;
 
 use super::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 use outcome::{
-    finish_search_ids_with_cb, finish_search_with_cb, read_refused, search_timeout_response,
+    finish_search_ids_with_cb, finish_search_with_cb, read_refused, request_timeout_ms,
+    search_timeout_response,
 };
 use pipeline::{
     execute_dense_search_ids, execute_search_request, ids_fast_path_eligible, parse_mode_or_400,
@@ -135,11 +136,12 @@ pub async fn search(
         Err(resp) => return resp,
     };
 
-    // F-03: honour the per-request `timeout_ms` budget. The synchronous
+    // F-03: honour the per-request `timeout_ms` budget, clamped to the
+    // server's limit (`request_timeout_ms`). The synchronous
     // search runs on a blocking worker so the async runtime stays
     // responsive and the timer can actually fire. See
     // `run_search_with_optional_timeout` for the cancellation contract.
-    let timeout_ms = req.timeout_ms;
+    let timeout_ms = request_timeout_ms(&collection, req.timeout_ms);
     let state_for_work = Arc::clone(&state);
     let name_for_work = name.clone();
     let collection_for_work = collection.clone();
@@ -409,11 +411,12 @@ pub async fn search_ids(
         Err(resp) => return resp,
     };
 
-    // F-03: honour the per-request `timeout_ms` budget and run the
+    // F-03: honour the per-request `timeout_ms` budget (clamped to the
+    // server's limit by `request_timeout_ms`) and run the
     // CPU-bound search on a blocking worker so the async runtime stays
     // responsive. Mirrors the pattern used by `search` so both endpoints
     // share the same timeout semantics for the same `SearchRequest` type.
-    let timeout_ms = req.timeout_ms;
+    let timeout_ms = request_timeout_ms(&collection, req.timeout_ms);
     let state_for_work = Arc::clone(&state);
     let name_for_work = name.clone();
     let collection_for_work = collection.clone();

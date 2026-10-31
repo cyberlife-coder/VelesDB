@@ -41,6 +41,10 @@ pub struct GuardRails {
     pub rate_limiter: RateLimiter,
     /// Circuit breaker.
     pub circuit_breaker: CircuitBreaker,
+    /// Milliseconds every context this creates adds to its clock (test-only
+    /// fault hook; see [`QueryClockSkewGuard`]).
+    #[cfg(any(test, feature = "test-fault-injection"))]
+    clock_skew_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl GuardRails {
@@ -60,7 +64,15 @@ impl GuardRails {
                 limits.circuit_recovery_seconds,
             ),
             limits: parking_lot::RwLock::new(limits),
+            #[cfg(any(test, feature = "test-fault-injection"))]
+            clock_skew_ms: std::sync::Arc::default(),
         }
+    }
+
+    /// The skew [`QueryClockSkewGuard::activate`] sets on this manager.
+    #[cfg(any(test, feature = "test-fault-injection"))]
+    fn clock_skew(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+        std::sync::Arc::clone(&self.clock_skew_ms)
     }
 
     /// Creates a query context for tracking execution.
@@ -69,7 +81,11 @@ impl GuardRails {
     /// context owns a consistent copy throughout query execution.
     #[must_use]
     pub fn create_context(&self) -> QueryContext {
-        QueryContext::new(self.limits.read().clone())
+        let context = QueryContext::new(self.limits.read().clone());
+        #[cfg(any(test, feature = "test-fault-injection"))]
+        let context = context
+            .with_clock_skew_ms(self.clock_skew_ms.load(std::sync::atomic::Ordering::SeqCst));
+        context
     }
 
     /// Returns a snapshot of the current query limits.

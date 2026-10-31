@@ -3426,12 +3426,14 @@ async fn test_dimension_mismatch_does_not_open_the_circuit_breaker() {
     }
 }
 
-/// A search's `timeout_ms` is the client's own budget: a `0` times out at
-/// once (`408`), and however often a client sends one, to `/search` or to
-/// `/search/ids`, it records no circuit-breaker failure, so the collection
-/// keeps answering everyone else.
+/// A search's `timeout_ms` of `0` asks for no budget of its own: the server's
+/// limit stays in force (`QueryLimits::client_timeout_ms`, the clamp
+/// `VelesQL` `WITH (timeout_ms)` uses), so the search runs and answers `200`
+/// on `/search` and `/search/ids` — where 7.1.0 timed it out at once with a
+/// `408`. Whose a timeout is, and that the client's never opens the breaker,
+/// is pinned by `timeout_response_tests` and `workers_tests`.
 #[tokio::test]
-async fn test_a_client_timeout_does_not_open_the_circuit_breaker() {
+async fn test_a_zero_timeout_keeps_the_server_limit() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let (app, state) = create_test_app_with_state(&temp_dir);
     let post = |uri: &str, body: &Value| {
@@ -3468,16 +3470,16 @@ async fn test_a_client_timeout_does_not_open_the_circuit_breaker() {
         "/collections/timeout_breaker/search",
         "/collections/timeout_breaker/search/ids",
     ];
-    let timed_out = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "timeout_ms": 0});
+    let zero_budget = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1, "timeout_ms": 0});
     let good = json!({"vector": [1.0, 0.0, 0.0, 0.0], "top_k": 1});
     for uri in uris {
         for _ in 0..threshold {
             let response = app
                 .clone()
-                .oneshot(post(uri, &timed_out))
+                .oneshot(post(uri, &zero_budget))
                 .await
                 .expect("Request failed");
-            assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT, "{uri}");
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
         }
     }
     for uri in uris {
@@ -5213,14 +5215,10 @@ async fn test_search_with_generous_timeout_returns_200() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-/// Negative: a search with `timeout_ms: 0` yields an immediate timeout.
-/// The handler must return 408 Request Timeout with the canonical VELES-027
-/// error code, not 200 with the results. The `tokio::time::timeout`
-/// wrapper fires on the very next runtime tick after the worker is
-/// spawned, so this deterministic test will always see the elapsed
-/// path regardless of how fast the underlying HNSW search is.
+/// A search with `timeout_ms: 0` keeps the server's limit (30 s by
+/// default) instead of timing out at once: `200` with the results.
 #[tokio::test]
-async fn test_search_with_zero_timeout_returns_408() {
+async fn test_search_with_zero_timeout_keeps_the_server_limit() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let app = create_test_app(&temp_dir);
     seed_timeout_collection(&app, "timeout_zero").await;
@@ -5246,28 +5244,16 @@ async fn test_search_with_zero_timeout_returns_408() {
 
     assert_eq!(
         response.status(),
-        StatusCode::REQUEST_TIMEOUT,
-        "F-03: timeout_ms=0 must return 408 Request Timeout"
+        StatusCode::OK,
+        "timeout_ms=0 keeps the server's limit, it does not time out"
     );
-
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("test: read body");
     let json: Value = serde_json::from_slice(&body).expect("test: parse json");
-    assert_eq!(
-        json["code"].as_str(),
-        Some("VELES-027"),
-        "timeout error code must be the canonical VELES-027, got: {}",
-        json["code"]
-    );
-    let error_msg = json["error"].as_str().expect("error field");
     assert!(
-        error_msg.contains("timeout_zero"),
-        "error must include collection name, got: {error_msg}"
-    );
-    assert!(
-        error_msg.contains("0ms"),
-        "error must echo the budget, got: {error_msg}"
+        !json["results"].as_array().expect("results").is_empty(),
+        "{json}"
     );
 }
 

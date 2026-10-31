@@ -17,7 +17,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use common::create_test_app_with_observer;
+use common::{create_full_app, create_test_app_with_observer};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -536,4 +536,108 @@ async fn read_gate_denies_rest_graph_reads_end_to_end() {
         .await,
         "traverse_parallel",
     );
+}
+
+/// Sends `body` (or nothing) to `uri` and returns the status and JSON body.
+async fn send(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    body: Option<&Value>,
+) -> (StatusCode, Value) {
+    let builder = Request::builder().method(method).uri(uri);
+    let request = match body {
+        Some(body) => builder
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string())),
+        None => builder.body(Body::empty()),
+    }
+    .expect("test: build request");
+    let response = app.clone().oneshot(request).await.expect("test: request");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("test: read body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A graph collection with `DIM`-dimensional embeddings, served by the
+/// production router over a database opened with `observer`.
+fn graph_app(dir: &TempDir, observer: Option<Arc<dyn DatabaseObserver>>) -> axum::Router {
+    let db = match observer {
+        Some(observer) => velesdb_core::Database::open_with_observer(dir.path(), observer),
+        None => velesdb_core::Database::open(dir.path()),
+    }
+    .expect("test: open database");
+    db.create_graph_collection_with_embeddings(
+        GRAPH,
+        velesdb_core::GraphSchema::schemaless(),
+        DIM,
+        velesdb_core::DistanceMetric::Cosine,
+    )
+    .expect("test: create graph collection");
+    create_full_app(db).0
+}
+
+const GRAPH: &str = "embedded_graph";
+
+/// Every REST graph read — the plain endpoints and the embedding
+/// `/graph/search` — answers a denied read with the denial error's own
+/// status and code, through the production router (where every graph route
+/// exists, unlike the trimmed test router). The policy here denies with a
+/// `VELES-010` query error, the client's, so each answers `400` with that
+/// code — where all of them used to answer a code-less `403`.
+#[tokio::test]
+async fn graph_read_denials_answer_the_denial_errors_status_and_code() {
+    let dir = TempDir::new().expect("test: dir");
+    let app = graph_app(&dir, Some(Arc::new(DenyingReadObserver)));
+    let base = format!("/collections/{GRAPH}/graph");
+    let reads: [(&str, String, Option<Value>); 9] = [
+        ("GET", format!("{base}/edges?label=KNOWS"), None),
+        ("GET", format!("{base}/edges/count"), None),
+        ("GET", format!("{base}/nodes"), None),
+        ("GET", format!("{base}/nodes/1/edges"), None),
+        ("GET", format!("{base}/nodes/1/payload"), None),
+        ("GET", format!("{base}/nodes/1/degree"), None),
+        (
+            "POST",
+            format!("{base}/traverse"),
+            Some(json!({"source": 1, "strategy": "bfs"})),
+        ),
+        (
+            "POST",
+            format!("{base}/traverse/parallel"),
+            Some(json!({"sources": [1]})),
+        ),
+        (
+            "POST",
+            format!("{base}/search"),
+            Some(json!({"vector": QUERY, "top_k": 1})),
+        ),
+    ];
+    for (method, uri, body) in &reads {
+        let (status, json) = send(&app, method, uri, body.as_ref()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {uri}: {json}");
+        assert_eq!(json["code"], "VELES-010", "{method} {uri}: {json}");
+    }
+}
+
+/// A query vector of the wrong dimension on `/graph/search` is the client's
+/// error: `400` with `VELES-004`, where it used to answer a code-less `500`.
+#[tokio::test]
+async fn graph_search_dimension_mismatch_is_a_400_with_its_code() {
+    let dir = TempDir::new().expect("test: dir");
+    let app = graph_app(&dir, None);
+    let (status, json) = send(
+        &app,
+        "POST",
+        &format!("/collections/{GRAPH}/graph/search"),
+        Some(&json!({"vector": [1.0, 0.0], "top_k": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert_eq!(json["code"], "VELES-004", "{json}");
 }

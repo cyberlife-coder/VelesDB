@@ -106,44 +106,64 @@ requests.
 
 ### REST statuses
 
-Every REST error takes its status from one mapping: `4xx` for the
-client's errors, `5xx` for the engine's.
+Every REST error built from a core error (`velesdb_core::Error`) takes its
+status from one mapping: `4xx` for the client's errors, `5xx` for the
+engine's, with the error's `VELES-NNN` code in the body. Two kinds of
+answer keep a status of their own: a request the server refuses while
+reading it, before core is called (a missing `label` parameter, a
+malformed filter, an unknown fusion strategy, …: `400`, no code), and
+`/query`, `/aggregate` and `/query/explain`, which answer a client's
+failure `422` with a `VELESQL_*` code (their contract).
 
 | Failure | Where | 7.1.0 | 8.0.0 |
 |---|---|---|---|
 | A depth, cardinality or capacity ceiling (`max_collections`, `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`, `max_perfect_mode_vectors`) | `/collections/{name}/match`, collection, point and graph routes | `503` | `400` |
 | The rate limit | `/collections/{name}/match` | `503` | `429` |
-| A missing collection, an engine fault, an open breaker or a guard rail the engine could not carry | `/search`, `/search/ids`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids` | `400` | `404`, `500`, `503` |
-| The client's own error | `/search/text` | `500` | `400` (`404` for a missing collection) |
+| An engine fault or a guard rail the engine could not carry, during the search | `/search`, `/search/ids`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids` | `400` | `500`, `503` |
+| The collection deleted while the search ran | the same | `400` | `404` |
+| The client's own error during the search | `/search/text` | `500` | `400` (`404` for a collection deleted while it ran) |
 | A read the access gate denied | `/search`, `/search/ids`, `/search/hybrid` | `400` | the denial error's status |
 | A read the access gate denied | `/search/text` | `500` | the denial error's status |
-| A read the access gate denied | `/search/batch`, `/search/multi`, `/search/multi/ids` | `403`, no code | the denial error's status and code |
-| A scope narrowing the endpoint cannot apply | `/search/batch`, `/search/multi`, `/search/multi/ids` | `403` | `400` `VELES-009` |
+| A read the access gate denied | `/search/batch`, `/search/multi`, `/search/multi/ids`, every graph read (`/graph/edges`, `/graph/edges/count`, `/graph/nodes`, `/graph/nodes/{id}/edges`, `/graph/nodes/{id}/payload`, `/graph/nodes/{id}/degree`, `/graph/traverse`, `/graph/traverse/parallel`, `/graph/search`) | `403`, no code | the denial error's status and code |
+| A scope narrowing the endpoint cannot apply | the same | `403` | `400` `VELES-009` |
+| Any core error | `/graph/search`, `GET`/`PUT /graph/nodes/{id}/payload` | `500`, no code | its canonical status and code (a query vector of the wrong dimension: `400` `VELES-004`) |
+| An invalid edge | `POST /graph/edges`, `/graph/edges/batch`, `/relations` | `400`, no code | `400` with its code |
+| A core error setting a point's TTL | `/points/{id}/ttl` | `500`, no code | its canonical status and code |
+| A worker that panicked | every endpoint running core work on a blocking worker | `500`, no code (`VELES-INTERNAL-WORKER-FAILURE` on search) | `500` `VELES-013`; on a search, counted by the circuit breaker |
 | A search's `timeout_ms` at or above the server's `timeout_ms`, run out | `/search`, `/search/ids` | `408` | `503` |
+| A search's `timeout_ms` of `0` | `/search`, `/search/ids` | `408` at once | runs under the server's limit |
 | A storage, I/O or internal fault | `/query`, `/aggregate`, `/query/explain` | `422` | `500` |
 | A timeout under the server's limit, the memory budget, an open breaker, a locked database | `/query`, `/aggregate`, `/query/explain` | `422` | `503` |
 
-Unchanged: an open breaker, the memory budget, a timeout under the server's
-limit and a locked database stay `503` on the routes that already used the
-mapping; a search's `timeout_ms` strictly tighter than the server's limit
-stays `408`; a client's own failure on `/query`, `/aggregate` and
-`/query/explain` stays `422`, its `WITH (timeout_ms)` running out included.
-Every body keeps its code (`VELES-NNN`, or the endpoint's `VELESQL_*`).
+Unchanged: a missing collection (`404`) and an open breaker (`503`) found
+before a search starts; an open breaker, the memory budget, a timeout under
+the server's limit and a locked database stay `503` on the routes that
+already used the mapping; a search's `timeout_ms` strictly tighter than the
+server's limit stays `408`; a client's own failure on `/query`,
+`/aggregate` and `/query/explain` stays `422`, its `WITH (timeout_ms)`
+running out included.
 
 **Retry** a `5xx`; a `429` after a backoff; a `408` with a larger budget or a
-simpler query. Any other `4xx` is refused the same way until the request
-changes.
+simpler query. A `400` `VELES-009` scope narrowing is refused until the
+access policy changes, or the read moves to an endpoint that can apply the
+narrowed scope (`/search`, `/search/ids`, `/search/text`, `/search/hybrid`).
+Any other `4xx` is refused the same way until the request changes.
 
 The circuit breaker counts only the engine's failures. A client's own
 error — a `4xx` above, its own `timeout_ms` or `WITH (timeout_ms = N)`, a read
 the access gate denied — no longer opens it for every caller.
 
-### `WITH (timeout_ms = N)` cannot lengthen the server's limit
+### A request's own `timeout_ms` cannot lengthen the server's limit
 
-The budget is the tighter of `N` and the server's `timeout_ms`, and `0`
-keeps the server's limit, where 7.1.0 let `N` replace the limit — longer, or
-`0` to disable it. **Fix:** a query that needs longer than the server's
-limit needs the limit raised (`PUT /guardrails`, `Database::update_guardrails`).
+`VelesQL` `WITH (timeout_ms = N)` and a REST search's `timeout_ms` resolve
+the same way (`QueryLimits::client_timeout_ms`): the budget is the tighter
+of `N` and the server's `timeout_ms`, and `0` keeps the server's limit.
+7.1.0 let `WITH (timeout_ms = N)` replace the limit — longer, or `0` to
+disable it — and let a REST search's `timeout_ms` run longer than the limit,
+or time out at once with `0`. **Fix:** a query that needs longer than the
+server's limit needs the limit raised (`PUT /guardrails`,
+`Database::update_guardrails`); a client that sent `timeout_ms: 0` to fail
+fast sends no search instead.
 
 ## 3. Rust API
 

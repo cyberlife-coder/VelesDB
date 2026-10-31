@@ -9,8 +9,9 @@
 //! timeout under the server's own limit is load the engine could not carry,
 //! and still counts — wherever it fires, the MATCH traversal included.
 //!
-//! Every timeout here is deterministic: a `QueryClockSkewGuard` moves every
-//! query clock past any budget, so no scenario races the wall clock.
+//! Every timeout here is deterministic: a `QueryClockSkewGuard`, scoped to
+//! the collection under test, moves its query clocks past any budget, so no
+//! scenario races the wall clock.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -71,6 +72,15 @@ fn setup(limits: &QueryLimits) -> (TempDir, Database) {
     (dir, db)
 }
 
+/// The `docs` collection's guard rails, which the clock skew is scoped to.
+fn rails(db: &Database) -> std::sync::Arc<crate::guardrails::GuardRails> {
+    std::sync::Arc::clone(
+        db.get_vector_collection("docs")
+            .expect("test: get docs")
+            .guard_rails(),
+    )
+}
+
 fn breaker_is_closed(db: &Database) -> bool {
     db.get_vector_collection("docs")
         .expect("test: get docs")
@@ -106,7 +116,7 @@ const SCAN: &str = "SELECT * FROM docs LIMIT 10";
 fn a_client_chosen_timeout_never_opens_the_breaker() {
     let (_dir, db) = setup(&server_limit());
     {
-        let _skew = QueryClockSkewGuard::activate(SKEW_MS);
+        let _skew = QueryClockSkewGuard::activate(&rails(&db), SKEW_MS);
         for _ in 0..REPEATS {
             assert_stopped_by(
                 run(&db, &format!("{SCAN} WITH (timeout_ms = 100)")),
@@ -135,7 +145,7 @@ fn a_client_budget_that_is_not_tighter_than_the_limit_is_the_servers() {
         "WITH (timeout_ms = 90000)",
     ] {
         let (_dir, db) = setup(&server_limit());
-        let _skew = QueryClockSkewGuard::activate(SKEW_MS);
+        let _skew = QueryClockSkewGuard::activate(&rails(&db), SKEW_MS);
         for _ in 0..THRESHOLD {
             assert_stopped_by(
                 run(&db, &format!("{SCAN} {with}")),
@@ -172,7 +182,7 @@ fn a_cardinality_ceiling_never_opens_the_breaker() {
 #[test]
 fn a_server_limit_timeout_opens_the_breaker() {
     let (_dir, db) = setup(&server_limit());
-    let _skew = QueryClockSkewGuard::activate(SKEW_MS);
+    let _skew = QueryClockSkewGuard::activate(&rails(&db), SKEW_MS);
 
     for _ in 0..THRESHOLD {
         assert_stopped_by(
@@ -195,7 +205,7 @@ fn a_server_limit_timeout_opens_the_breaker() {
 #[test]
 fn a_match_traversal_failure_is_recorded() {
     let (_dir, db) = setup(&server_limit());
-    let _skew = QueryClockSkewGuard::activate(SKEW_MS);
+    let _skew = QueryClockSkewGuard::activate(&rails(&db), SKEW_MS);
 
     for _ in 0..THRESHOLD {
         assert_stopped_by(

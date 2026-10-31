@@ -167,8 +167,9 @@ fn test_a_timeout_is_the_clients_only_when_strictly_tighter_than_the_limit() {
 /// asking for `requested_ms` against a server limit of 1 000 ms; the clock is
 /// skewed past any budget so the timeout fires deterministically.
 fn timeout_under(requested_ms: u64) -> GuardRailViolation {
-    let _skew = QueryClockSkewGuard::activate(10_000_000);
-    let mut ctx = QueryContext::new(QueryLimits::default().with_timeout_ms(1_000));
+    let rails = GuardRails::with_limits(QueryLimits::default().with_timeout_ms(1_000));
+    let _skew = QueryClockSkewGuard::activate(&rails, 10_000_000);
+    let mut ctx = rails.create_context();
     ctx.set_client_timeout_ms(requested_ms);
     ctx.check_timeout()
         .expect_err("the skewed clock is past every budget")
@@ -194,4 +195,21 @@ fn test_set_client_timeout_ms_applies_the_clamp_and_the_classification() {
             other => panic!("requested {requested}: expected a timeout, got {other:?}"),
         }
     }
+}
+
+/// The skew is the one `GuardRails`' own: another collection's contexts keep
+/// the wall clock, so parallel tests cannot cross-contaminate.
+#[test]
+fn test_clock_skew_is_scoped_to_its_guard_rails() {
+    let skewed = GuardRails::with_limits(QueryLimits::default().with_timeout_ms(1_000));
+    let other = GuardRails::with_limits(QueryLimits::default().with_timeout_ms(1_000));
+    {
+        let _skew = QueryClockSkewGuard::activate(&skewed, 10_000_000);
+        assert!(skewed.create_context().check_timeout().is_err());
+        assert!(other.create_context().check_timeout().is_ok());
+    }
+    assert!(
+        skewed.create_context().check_timeout().is_ok(),
+        "drop resets it"
+    );
 }

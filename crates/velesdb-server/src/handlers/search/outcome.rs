@@ -185,6 +185,23 @@ pub(crate) fn finish_search_ids_with_cb(
     finish_search_ids(state, name, start, search_result)
 }
 
+/// The time budget a REST search's `timeout_ms` runs under, resolved against
+/// the collection's limit by the same
+/// [`QueryLimits::client_timeout_ms`](velesdb_core::QueryLimits::client_timeout_ms)
+/// that `VelesQL` `WITH (timeout_ms = N)` uses: never longer than the limit,
+/// and `0` keeps it. `None` when the request sets no budget, or sets `0`
+/// with no server limit — the search then runs without a REST-side timer.
+pub(crate) fn request_timeout_ms(
+    collection: &VectorCollection,
+    requested_ms: Option<u64>,
+) -> Option<u64> {
+    let effective = collection
+        .guard_rails()
+        .limits()
+        .client_timeout_ms(requested_ms?);
+    (effective > 0).then_some(effective)
+}
+
 /// Handles a search that ran past the request's `timeout_ms`.
 ///
 /// Whose timeout it is comes from core's one classification,

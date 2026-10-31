@@ -19,10 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applies a request's own budget. The code stays `VELES-027` and the message
   is unchanged. Match `Error::GuardRail { .. }`, or on `kind`, where you
   matched `Error::GuardRail(_)`.
-- **REST statuses follow core's caller/engine classification everywhere.**
-  Every REST error now takes its status from the one mapping
+- **REST statuses follow core's caller/engine classification.** Every REST
+  error built from a core error now takes its status from the one mapping
   (`http_status_for_error`, which reads `Error::is_caller_error`): `4xx` for
-  the client's errors, `5xx` for the engine's. Changes from 7.1.0:
+  the client's errors, `5xx` for the engine's, with its `VELES-NNN` code. A
+  request the server refuses while reading it, before core is called (a
+  missing parameter, a malformed filter, …), stays `400` with no code;
+  `/query`, `/aggregate` and `/query/explain` keep `422` for a client's
+  failure. Changes from 7.1.0:
   - routes answering with the canonical mapping (`/collections/{name}/match`,
     collection, point and graph routes): a depth, cardinality or capacity
     ceiling (`max_collections`, `max_dimensions`,
@@ -31,17 +35,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `503` → `429`. An open breaker, the memory budget, a timeout under the
     server's limit and a locked database stay `503`;
   - `/search`, `/search/ids`, `/search/hybrid`, `/search/batch`,
-    `/search/multi` and `/search/multi/ids` answered every failed search
-    `400`; `/search/text` answered it `500`. Each now answers the error's
-    canonical status (a missing collection `404`, an engine fault `500`, an
-    open breaker or a guard rail the engine could not carry `503`, the
-    client's errors `400`);
+    `/search/multi` and `/search/multi/ids` answered every failure during
+    the search `400`; `/search/text` answered it `500`. Each now answers the
+    error's canonical status (an engine fault `500`, a guard rail the engine
+    could not carry `503`, a collection deleted while the search ran `404`,
+    the client's errors `400`). A missing collection or an open breaker
+    found before the search starts was already `404` / `503`;
   - a read the access gate denied answered `400` (`/search`, `/search/ids`,
     `/search/hybrid`), `500` (`/search/text`) or `403` with no code
-    (`/search/batch`, `/search/multi`, `/search/multi/ids`); it now answers
-    the denial error's canonical status and code on all of them. A scope
-    narrowing those batch and multi-query endpoints cannot apply is `400`
-    `VELES-009` (was `403`);
+    (`/search/batch`, `/search/multi`, `/search/multi/ids` and every graph
+    read, `/graph/search` included); it now answers the denial error's
+    canonical status and code on all of them. A scope narrowing an endpoint
+    cannot apply (batch, multi-query, graph reads) is `400` `VELES-009`
+    (was `403`);
+  - `/graph/search` and `GET`/`PUT /graph/nodes/{id}/payload` answered every
+    core error `500` with no code (a query vector of the wrong dimension
+    included, now `400` `VELES-004`); an invalid edge on `/graph/edges`,
+    `/graph/edges/batch` and `/relations` gains its code; a core error
+    setting a point's TTL is no longer always `500`;
+  - a blocking worker that panicked answered `500` with no code, or
+    `VELES-INTERNAL-WORKER-FAILURE` outside the `VELES-NNN` namespace on
+    search; it is now `500` `VELES-013`, and on a search it is counted by the
+    circuit breaker as the engine failure it is;
   - a REST search's `timeout_ms` at or above the server's `timeout_ms`
     limit answers `503` (was `408`): the search ran as long as the server's
     own limit. A budget strictly tighter stays `408`;
@@ -50,11 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     under the server's limit, the memory budget, an open breaker and a
     locked database are `503`. The client's own failures stay `422`, its
     `WITH (timeout_ms)` running out included, keeping the `VELESQL_*` code.
-- **`WITH (timeout_ms = N)` can shorten the server's time limit, never
-  lengthen it.** The budget is `min(N, QueryLimits::timeout_ms)` when the
-  server sets a limit, and `0` keeps that limit, where 7.1.0 let `N`
-  replace it, longer or `0` (disabled) included. With no server limit, `N`
-  applies as before.
+- **A request's own `timeout_ms` can shorten the server's time limit, never
+  lengthen it.** `VelesQL` `WITH (timeout_ms = N)` and a REST search's
+  `timeout_ms` resolve the same way, through `QueryLimits::client_timeout_ms`:
+  the budget is `min(N, QueryLimits::timeout_ms)` when the server sets a
+  limit, and `0` keeps that limit. 7.1.0 let `WITH (timeout_ms = N)` replace
+  the limit, longer or `0` (disabled) included, and let a REST search's
+  `timeout_ms` run past the limit, or time out at once (`408`) with `0`.
+  With no server limit, `N` applies as before.
 - **An unsupported MATCH `ORDER BY` is refused at validation, with `V015`
   instead of `VELES-018`.** `ORDER BY COUNT(*)`, `ORDER BY MAX(year)`, a bare
   pattern alias (`ORDER BY d`), a `RETURN` alias (`RETURN d.year AS y ORDER BY
@@ -79,9 +97,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `QueryLimits::client_timeout_ms` (the budget a request's own
   `timeout_ms` resolves to) and `QueryLimits::timeout_budget` (whose budget
   ran out — the one classification `VelesQL` and the REST search share).
-- `QueryClockSkewGuard` (`test-fault-injection` feature, re-exported from
-  `fault_injection`): a test-only hook that skews every query clock so a time
-  budget runs out deterministically.
 
 ### Fixed
 

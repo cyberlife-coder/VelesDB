@@ -720,7 +720,9 @@ validation errors). See [ERROR_CODES.md](ERROR_CODES.md) for the full list of co
 
 For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized. A statement that fails during execution answers `422` when the failure is the client's, and the engine's own status otherwise (`500` for a storage, I/O or internal fault, `503` for a timeout under the server's limit, the memory budget, an open circuit breaker or a locked database). A `WITH (timeout_ms = N)` tighter than the server's limit that runs out is the client's own budget: `422` with `VELESQL_EXECUTION_ERROR` (code `VELES-027` in the message), not `408`.
 
-The search endpoints (`/search`, `/search/ids`, `/search/text`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids`) answer a failed search, and a read the access gate denied, with the error's canonical status: `4xx` for the client's errors, `5xx` for the engine's. A search's `timeout_ms` strictly tighter than the server's `timeout_ms` that runs out answers `408`; one at or above it answers `503`.
+The search endpoints (`/search`, `/search/ids`, `/search/text`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids`) answer a failed search, and a read the access gate denied, with the error's canonical status: `4xx` for the client's errors, `5xx` for the engine's. A search's `timeout_ms` can shorten the server's `timeout_ms`, never lengthen it, and `0` keeps the server's limit (the same resolution as VelesQL `WITH (timeout_ms = N)`); one strictly tighter than the server's limit that runs out answers `408`, the server's limit running out answers `503`.
+
+The graph endpoints answer a core error, and a read the access gate denied, the same way: the error's canonical status and its `VELES-NNN` code. A scope narrowing that batch search, multi-query search or a graph read cannot apply answers `400` `VELES-009`.
 
 ```json
 {

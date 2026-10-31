@@ -358,7 +358,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/EdgesResponse"
         "400":
-          description: Missing required 'label' query parameter
+          description: Missing required 'label' query parameter, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
           content:
             application/json:
               schema:
@@ -370,7 +370,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "500":
-          description: Internal server error
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -480,8 +480,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EdgeCountResponse"
+        "400":
+          description: Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -541,8 +553,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NodeListResponse"
+        "400":
+          description: Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -574,6 +598,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DegreeResponse"
+        "400":
+          description: Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
           content:
@@ -581,7 +611,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "500":
-          description: Internal server error
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -629,8 +659,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EdgesResponse"
+        "400":
+          description: Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -662,6 +704,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/NodePayloadResponse"
+        "400":
+          description: Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Collection not found
           content:
@@ -669,7 +717,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "500":
-          description: Internal server error
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -742,7 +790,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/GraphSearchResponse"
         "400":
-          description: Invalid request
+          description: "Invalid request (a query vector of the wrong dimension: VELES-004), a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)"
           content:
             application/json:
               schema:
@@ -756,7 +804,7 @@ paths:
         "422":
           $ref: "#/components/responses/MalformedBody"
         "500":
-          description: Internal server error
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -787,7 +835,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/TraverseResponse"
         "400":
-          description: Invalid request
+          description: Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
           content:
             application/json:
               schema:
@@ -801,7 +849,7 @@ paths:
         "422":
           $ref: "#/components/responses/MalformedBody"
         "500":
-          description: Internal server error
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
           content:
             application/json:
               schema:
@@ -832,7 +880,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/TraverseResponse"
         "400":
-          description: Invalid request
+          description: Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)
           content:
             application/json:
               schema:
@@ -845,6 +893,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "422":
           $ref: "#/components/responses/MalformedBody"
+        "500":
+          description: An engine fault, or a read the access gate denied with an engine error (its own code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/graph/traverse/stream":
     get:
       tags:
@@ -4037,7 +4091,7 @@ components:
           - integer
           - "null"
           format: int64
-          description: Query timeout in milliseconds.
+          description: "Query timeout in milliseconds. It can shorten the server's\n`timeout_ms` limit, never lengthen it; `0` keeps the server's limit.\nRunning out of a budget strictly tighter than the limit answers `408`;\nrunning out of the limit itself answers `503`."
           example: 30000
           minimum: 0
         top_k:

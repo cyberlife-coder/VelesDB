@@ -20,24 +20,28 @@ pub(crate) fn error_response(status: StatusCode, message: String) -> axum::respo
         .into_response()
 }
 
+/// The error a blocking worker that panicked or was cancelled reports: an
+/// engine fault ([`velesdb_core::Error::Internal`], `VELES-013`, `500`), never
+/// the request's.
+pub(crate) fn worker_failure(task: &str, join_err: &tokio::task::JoinError) -> velesdb_core::Error {
+    velesdb_core::Error::Internal(format!("{task} worker failed: {join_err}"))
+}
+
 /// Runs a synchronous, potentially lock-taking or fsync-bearing core call on
 /// the blocking pool so it cannot starve the async runtime workers.
 ///
 /// Mirrors the established discipline in `points::upsert_points` and
 /// `search::workers`: the closure is moved onto `tokio::task::spawn_blocking`
-/// and a panic or cancellation of the blocking task maps to the canonical
-/// 500 "Task panicked" response.
+/// and a panic or cancellation of the blocking task is answered as the
+/// engine fault it is ([`worker_failure`]).
 pub(crate) async fn run_blocking<T, F>(work: F) -> Result<T, axum::response::Response>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.map_err(|e| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task panicked: {e}"),
-        )
-    })
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| auto_core_error_response(&worker_failure("blocking", &e)))
 }
 
 /// Same as [`run_blocking`] but for handlers whose error type is the
@@ -49,15 +53,33 @@ where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Task panicked: {e}"),
-                code: None,
-            }),
-        )
-    })
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| core_error_body(&worker_failure("blocking", &e)))
+}
+
+/// The read gate for an endpoint with no channel to narrow a read's scope
+/// (batch and multi-query search, the graph endpoints): a scope narrowing
+/// refuses the read (fail closed) as a `VELES-009` configuration error, and
+/// a denial is returned as the error the gate gave, so the endpoint answers
+/// it with that error's canonical status and code.
+///
+/// # Errors
+///
+/// The gate's denial, or [`velesdb_core::Error::Config`] for a scope
+/// narrowing `what` cannot apply.
+pub(crate) fn authorize_unscoped_read(
+    state: &AppState,
+    name: &str,
+    operation: velesdb_core::observer::QueryOperationKind,
+    what: &str,
+) -> velesdb_core::Result<()> {
+    match state.db.authorize_read(name, operation, None, None)? {
+        None => Ok(()),
+        Some(_) => Err(velesdb_core::Error::Config(format!(
+            "scope narrowing is not supported for {what}"
+        ))),
+    }
 }
 
 /// Build an error response from a [`velesdb_core::Error`], including the
@@ -125,10 +147,23 @@ pub(crate) fn http_status_for_error(e: &velesdb_core::Error) -> StatusCode {
     }
 }
 
+/// The canonical answer to a [`velesdb_core::Error`]: its status
+/// ([`http_status_for_error`]) and its message and `VELES-XXX` code — as the
+/// `(StatusCode, Json<ErrorResponse>)` tuple the graph endpoints return.
+pub(crate) fn core_error_body(error: &velesdb_core::Error) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        http_status_for_error(error),
+        Json(ErrorResponse {
+            error: error.to_string(),
+            code: Some(error.code().to_string()),
+        }),
+    )
+}
+
 /// Build an error response from a [`velesdb_core::Error`], automatically
 /// deriving the HTTP status code from the error variant.
 pub(crate) fn auto_core_error_response(error: &velesdb_core::Error) -> axum::response::Response {
-    core_error_response(http_status_for_error(error), error)
+    core_error_body(error).into_response()
 }
 
 /// Look up a type-erased collection by name, returning a 404 response on miss.

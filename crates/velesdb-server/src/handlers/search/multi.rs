@@ -11,11 +11,10 @@ use std::sync::Arc;
 use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchIdsResponse, SearchResponse};
 use crate::AppState;
 
-use super::outcome::{
-    finish_search_ids_with_cb, finish_search_with_cb, read_refused, search_error_response,
-};
+use super::outcome::{finish_search_ids_with_cb, finish_search_with_cb, read_refused};
 use super::pipeline::{id_score_results, parse_filter_or_400, validate_query_dimension};
 use super::workers::run_blocking_search;
+use crate::handlers::helpers::authorize_unscoped_read;
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
 /// Build the `FusionStrategy` a multi-query request asks for, or the message
@@ -178,23 +177,14 @@ pub async fn multi_query_search(
     // Gate the read (CORE-2) before the off-thread fusion. A denied decision —
     // or a scope narrowing, which the multi-query fusion kernel has no channel
     // to apply — refuses the query (fail closed).
-    match state.db.authorize_read(
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
         &name,
         velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
+        "multi-query search",
     ) {
-        Ok(None) => {}
-        Ok(Some(_)) => {
-            state.operational_metrics.inc_errors();
-            return search_error_response(&velesdb_core::Error::Config(
-                "scope narrowing is not supported for multi-query search".to_string(),
-            ));
-        }
-        Err(refusal) => {
-            state.operational_metrics.inc_errors();
-            return read_refused(&refusal);
-        }
+        state.operational_metrics.inc_errors();
+        return read_refused(&refusal);
     }
 
     let start = std::time::Instant::now();
@@ -277,23 +267,14 @@ pub async fn multi_query_search_ids(
     }
 
     // Gate the read (CORE-2) before the off-thread ids-only fusion.
-    match state.db.authorize_read(
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
         &name,
         velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
+        "multi-query search",
     ) {
-        Ok(None) => {}
-        Ok(Some(_)) => {
-            state.operational_metrics.inc_errors();
-            return search_error_response(&velesdb_core::Error::Config(
-                "scope narrowing is not supported for multi-query search".to_string(),
-            ));
-        }
-        Err(refusal) => {
-            state.operational_metrics.inc_errors();
-            return read_refused(&refusal);
-        }
+        state.operational_metrics.inc_errors();
+        return read_refused(&refusal);
     }
 
     let start = std::time::Instant::now();

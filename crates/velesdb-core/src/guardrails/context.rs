@@ -49,6 +49,10 @@ pub struct QueryContext {
     /// the CBO `Parallel` strategy, which runs on a rayon worker thread
     /// (a thread-local channel would silently lose that leg's record).
     executed_filter_strategy: Arc<ExecutedStrategyCell>,
+    /// Milliseconds added to the measured time (test-only fault hook; see
+    /// [`QueryClockSkewGuard`]).
+    #[cfg(any(test, feature = "test-fault-injection"))]
+    clock_skew_ms: u64,
 }
 
 /// Shared cell the executor records the ran filter strategy into.
@@ -90,37 +94,35 @@ impl ExecutedStrategyCell {
     }
 }
 
-/// Milliseconds every query context adds to the time it measures while a
-/// [`QueryClockSkewGuard`] is active (test-only fault hook).
-#[cfg(any(test, feature = "test-fault-injection"))]
-static CLOCK_SKEW_MS: AtomicU64 = AtomicU64::new(0);
-
-/// Test-only fault hook: while bound, every [`QueryContext`] measures its
+/// Test-only fault hook: while bound, every [`QueryContext`] that the
+/// [`GuardRails`](super::GuardRails) it was activated on creates measures its
 /// elapsed time `skew_ms` later than the wall clock, so a test can make a
 /// query run past a time budget deterministically instead of racing one.
 ///
-/// The skew is process-wide (an atomic, like
-/// `fault_injection::SaveConfigFaultGuard`), which is why the test suites run
-/// single-threaded; dropping the guard resets it, panics included. Bind it
-/// to a named variable (`let _skew = ...`): `let _ = ...` drops it at once.
+/// The skew belongs to that one `GuardRails` — one collection — so tests
+/// running in parallel on other collections never see it. Dropping the guard
+/// resets it, panics included. Bind it to a named variable
+/// (`let _skew = ...`): `let _ = ...` drops it at once.
 #[cfg(any(test, feature = "test-fault-injection"))]
 #[derive(Debug)]
-pub struct QueryClockSkewGuard(());
+pub struct QueryClockSkewGuard(Arc<AtomicU64>);
 
 #[cfg(any(test, feature = "test-fault-injection"))]
 impl QueryClockSkewGuard {
-    /// Starts skewing every query clock by `skew_ms`.
+    /// Starts skewing the clock of every query context `guard_rails`
+    /// creates by `skew_ms`.
     #[must_use = "the guard must be bound to a variable or the skew resets immediately"]
-    pub fn activate(skew_ms: u64) -> Self {
-        CLOCK_SKEW_MS.store(skew_ms, Ordering::SeqCst);
-        Self(())
+    pub fn activate(guard_rails: &super::GuardRails, skew_ms: u64) -> Self {
+        let skew = guard_rails.clock_skew();
+        skew.store(skew_ms, Ordering::SeqCst);
+        Self(skew)
     }
 }
 
 #[cfg(any(test, feature = "test-fault-injection"))]
 impl Drop for QueryClockSkewGuard {
     fn drop(&mut self) {
-        CLOCK_SKEW_MS.store(0, Ordering::SeqCst);
+        self.0.store(0, Ordering::SeqCst);
     }
 }
 
@@ -138,7 +140,18 @@ impl QueryContext {
             traversal_nodes_visited: AtomicU64::new(0),
             traversal_edges_traversed: AtomicU64::new(0),
             executed_filter_strategy: Arc::new(ExecutedStrategyCell::default()),
+            #[cfg(any(test, feature = "test-fault-injection"))]
+            clock_skew_ms: 0,
         }
+    }
+
+    /// Measures this context's time `skew_ms` later than the wall clock
+    /// (test-only fault hook; see [`QueryClockSkewGuard`]).
+    #[cfg(any(test, feature = "test-fault-injection"))]
+    #[must_use]
+    pub(crate) fn with_clock_skew_ms(mut self, skew_ms: u64) -> Self {
+        self.clock_skew_ms = skew_ms;
+        self
     }
 
     /// Returns the shared cell the executor records the ran filter strategy
@@ -174,7 +187,7 @@ impl QueryContext {
     fn elapsed_ms(&self) -> u64 {
         let measured = self.start_time.elapsed().as_millis() as u64;
         #[cfg(any(test, feature = "test-fault-injection"))]
-        let measured = measured.saturating_add(CLOCK_SKEW_MS.load(Ordering::SeqCst));
+        let measured = measured.saturating_add(self.clock_skew_ms);
         measured
     }
 

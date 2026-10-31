@@ -19,7 +19,8 @@ use super::outcome::{
 };
 use super::pipeline::validate_query_dimension;
 use crate::handlers::helpers::{
-    apply_pre_check, extract_client_id, get_vector_collection_or_404, notify_query_timing,
+    apply_pre_check, authorize_unscoped_read, extract_client_id, get_vector_collection_or_404,
+    notify_query_timing, worker_failure,
 };
 
 /// Batch search for multiple vectors.
@@ -86,23 +87,14 @@ pub async fn batch_search(
     // Gate the read (CORE-2) before dispatching the off-thread batch. A denied
     // decision — or a scope narrowing, which batch has no per-query channel to
     // apply — refuses the batch (fail closed).
-    match state.db.authorize_read(
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
         &name,
         velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
+        "batch search",
     ) {
-        Ok(None) => {}
-        Ok(Some(_)) => {
-            state.operational_metrics.inc_errors();
-            return search_error_response(&velesdb_core::Error::Config(
-                "scope narrowing is not supported for batch search".to_string(),
-            ));
-        }
-        Err(refusal) => {
-            state.operational_metrics.inc_errors();
-            return read_refused(&refusal);
-        }
+        state.operational_metrics.inc_errors();
+        return read_refused(&refusal);
     }
 
     // F-01 sweep: batch search is CPU-bound (one HNSW pass per query) and must
@@ -122,17 +114,8 @@ pub async fn batch_search(
     .await
     {
         Ok(inner) => inner,
-        Err(_) => {
-            state.operational_metrics.inc_errors();
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Batch search worker failed".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
-        }
+        // A panicked worker is the engine's fault: recorded below like any.
+        Err(join_err) => Err(worker_failure("batch search", &join_err)),
     };
     record_circuit_breaker(&collection, &batch_result);
 

@@ -55,3 +55,37 @@ async fn test_a_budget_not_tighter_than_the_limit_is_a_503_the_breaker_counts() 
     }
     assert!(docs.guard_rails().circuit_breaker.check().is_err());
 }
+
+/// A REST search's `timeout_ms` resolves against the collection's limit
+/// (30 000 ms by default) with the clamp `VelesQL` `WITH (timeout_ms)` uses:
+/// `0` keeps the limit, a tighter budget applies, a longer one is clamped.
+#[test]
+fn test_request_timeout_is_clamped_to_the_server_limit() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let docs = docs(&dir);
+    let limit = docs.guard_rails().limits().timeout_ms;
+    assert_eq!(limit, 30_000, "the default limit this test assumes");
+
+    assert_eq!(
+        super::request_timeout_ms(&docs, None),
+        None,
+        "no budget asked"
+    );
+    assert_eq!(super::request_timeout_ms(&docs, Some(0)), Some(limit));
+    assert_eq!(super::request_timeout_ms(&docs, Some(250)), Some(250));
+    assert_eq!(super::request_timeout_ms(&docs, Some(limit)), Some(limit));
+    assert_eq!(super::request_timeout_ms(&docs, Some(90_000)), Some(limit));
+}
+
+/// With no server limit, the request's own budget applies, and `0` leaves
+/// the search without a REST-side timer.
+#[test]
+fn test_request_timeout_without_a_server_limit_is_the_requests_own() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let docs = docs(&dir);
+    let unlimited = docs.guard_rails().limits().with_timeout_ms(0);
+    docs.guard_rails().update_limits(&unlimited);
+
+    assert_eq!(super::request_timeout_ms(&docs, Some(0)), None);
+    assert_eq!(super::request_timeout_ms(&docs, Some(90_000)), Some(90_000));
+}
