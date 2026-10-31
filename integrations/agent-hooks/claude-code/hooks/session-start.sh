@@ -30,8 +30,10 @@ if [ -z "$cwd" ]; then
 fi
 
 resolve_config "$cwd"
-# Open the window a later Stop reads reverts from (lib/common.sh); kept when
+# Evidence no checkpoint will ever consume is removed by age, then the window
+# a later Stop reads reverts from is opened (lib/common.sh); it is kept when
 # this is a resume or a post-compaction start of the same session.
+prune_stale_evidence || true
 if [ -n "$session_id" ] \
   && read_exact evidence_since sentinel_path "evidence-since" "$session_id"; then
   # shellcheck disable=SC2154 # read_exact sets evidence_since (printf -v)

@@ -18,8 +18,8 @@ tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null ||
 [ -n "$cwd" ] || cwd="$PWD"
 
 resolve_config "$cwd"
+pending_status=2
 if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload"; then
-  pending_status=2
   if read_exact pending_dir record_dir_path "codex-pending-recall" "$session_id"; then
     # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
     if promote_pending_recall \
@@ -45,11 +45,16 @@ if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload"; the
 fi
 
 # Credit assignment (lib/common.sh): the ids a successful recall returned, for
-# the Stop checklist to name. Check outcomes are not read here: the shell
-# result shape of a Codex PostToolUse payload has not been measured.
+# the Stop checklist to name — only where the learning loop runs: the
+# repository the session is in opted in, this recall unlocked an opted-in
+# patch target elsewhere (0), or such a target already waits for its
+# checkpoint in this session's edit queue. Check outcomes are not read here:
+# the shell result shape of a Codex PostToolUse payload has not been measured.
+# shellcheck disable=SC2154 # read_exact sets recalled_dir and dirty_dir (printf -v)
 if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload" \
-  && read_exact recalled_dir record_dir_path "codex-recalled-memories" "$session_id"; then
-  # shellcheck disable=SC2154 # read_exact sets recalled_dir (printf -v)
+  && read_exact recalled_dir record_dir_path "codex-recalled-memories" "$session_id" \
+  && read_exact dirty_dir record_dir_path "codex-learning-dirty" "$session_id" \
+  && { learning_loop_enabled || [ "$pending_status" -eq 0 ] || [ -d "$dirty_dir" ]; }; then
   record_recalled_memories "$recalled_dir" "$tool_name" "$payload" || true
 fi
 

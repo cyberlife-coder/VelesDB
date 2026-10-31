@@ -33,6 +33,17 @@
 //! confidence ([`MemoryService::feedback`](crate::MemoryService::feedback))
 //! untouched. Reverting the file makes the lesson fresh again.
 //!
+//! # One checkout, one verdict
+//!
+//! An [`AnchorSet`](crate::anchor::AnchorSet) records the canonical checkout
+//! root its files were read under. A recall judges a lesson only against that
+//! same root: a probe of another checkout (another clone, another worktree, a
+//! moved directory) has nothing to compare, so the lesson reads
+//! [`Freshness::Unverified`](crate::anchor::Freshness::Unverified) there and
+//! keeps its rank. Two repositories that happen to hold `src/lib.rs` never
+//! make each other's lessons stale. A moved checkout reads as unverified
+//! until the lesson is anchored again from its new place.
+//!
 //! # Storage
 //!
 //! Anchors live in the reserved `_veles_anchors` payload key, so they never
@@ -52,6 +63,8 @@ use crate::service::Metadata;
 #[path = "anchor_root.rs"]
 mod root;
 pub use root::AnchorRoot;
+
+pub use crate::service::AnchoredCandidates;
 
 /// Reserved payload key holding a fact's anchors.
 pub(crate) const ANCHORS_KEY: &str = "_veles_anchors";
@@ -238,6 +251,17 @@ pub struct FileAnchor {
     pub digest: ContentDigest,
 }
 
+/// A lesson's anchors: the checkout they were read in, and the files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnchorSet {
+    /// The canonical checkout root the files were read under. A probe of any
+    /// other root cannot judge them.
+    pub root: String,
+    /// The anchored files, relative to `root`.
+    pub files: Vec<FileAnchor>,
+}
+
 /// What a probe saw when it looked at an anchored file again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -253,8 +277,11 @@ pub enum AnchorObservation {
     Unverifiable,
 }
 
-/// Something that can look at an anchored file now.
+/// Something that can look at an anchored file now, below one checkout.
 pub trait AnchorProbe {
+    /// The canonical checkout root this probe reads under; an
+    /// [`AnchorSet`] recorded under another root is not judged by it.
+    fn root(&self) -> &str;
     /// Observe `anchor`'s file and compare it with the anchored digest.
     fn observe(&mut self, anchor: &FileAnchor) -> AnchorObservation;
 }
@@ -272,8 +299,9 @@ pub enum Freshness {
         /// The anchored paths whose file changed or disappeared.
         changed: Vec<RepoPath>,
     },
-    /// No anchored file changed, but at least one could not be checked, or
-    /// the stored anchors are unreadable.
+    /// No anchored file changed, but at least one could not be checked, the
+    /// stored anchors are unreadable, or they were recorded under another
+    /// checkout root than the one probed.
     Unverified,
 }
 
@@ -291,14 +319,19 @@ impl Freshness {
 
 /// Judge `anchors` through `probe`. A change or a disappearance anywhere
 /// makes the lesson stale, and only a change can: an unverifiable file never
-/// does, since not being able to look is not evidence.
-pub fn assess_freshness(anchors: &[FileAnchor], probe: &mut dyn AnchorProbe) -> Freshness {
-    if anchors.is_empty() {
+/// does, since not being able to look is not evidence. Anchors recorded under
+/// another checkout root than the probe's are not looked at at all: they are
+/// unverified, never stale.
+pub fn assess_freshness(anchors: &AnchorSet, probe: &mut dyn AnchorProbe) -> Freshness {
+    if anchors.files.is_empty() {
         return Freshness::Unanchored;
+    }
+    if anchors.root != probe.root() {
+        return Freshness::Unverified;
     }
     let mut changed = Vec::new();
     let mut unverified = false;
-    for anchor in anchors {
+    for anchor in &anchors.files {
         match probe.observe(anchor) {
             AnchorObservation::Unchanged => {}
             AnchorObservation::Changed | AnchorObservation::Missing => {
@@ -341,7 +374,7 @@ pub fn check_anchor_count(count: usize) -> Result<(), AnchorError> {
 }
 
 /// The reserved payload entry recording `anchors`.
-pub(crate) fn anchors_entry(anchors: &[FileAnchor]) -> Metadata {
+pub(crate) fn anchors_entry(anchors: &AnchorSet) -> Metadata {
     let mut entry = Metadata::new();
     entry.insert(
         ANCHORS_KEY.to_owned(),
@@ -350,15 +383,28 @@ pub(crate) fn anchors_entry(anchors: &[FileAnchor]) -> Metadata {
     entry
 }
 
-/// The anchors a raw payload records: `Some(vec![])` for an unanchored
-/// lesson, `None` when the stored entry is unreadable — a corrupt entry must
-/// read as "cannot verify", never as "fresh".
-pub(crate) fn stored_anchors(payload: Option<&Metadata>) -> Option<Vec<FileAnchor>> {
-    match payload.and_then(|payload| payload.get(ANCHORS_KEY)) {
-        None => Some(Vec::new()),
-        Some(value) => serde_json::from_value::<Vec<FileAnchor>>(value.clone())
-            .ok()
-            .filter(|anchors| anchors.len() <= MAX_ANCHORS_PER_FACT),
+/// What a raw payload records about anchors.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StoredAnchors {
+    /// No anchor entry: an unanchored lesson.
+    Unanchored,
+    /// A well-formed entry.
+    Anchored(AnchorSet),
+    /// An entry that does not parse, holds no file or too many: it must read
+    /// as "cannot verify", never as "fresh".
+    Unreadable,
+}
+
+/// The anchors a raw payload records.
+pub(crate) fn stored_anchors(payload: Option<&Metadata>) -> StoredAnchors {
+    let Some(value) = payload.and_then(|payload| payload.get(ANCHORS_KEY)) else {
+        return StoredAnchors::Unanchored;
+    };
+    match serde_json::from_value::<AnchorSet>(value.clone()) {
+        Ok(set) if (1..=MAX_ANCHORS_PER_FACT).contains(&set.files.len()) => {
+            StoredAnchors::Anchored(set)
+        }
+        _ => StoredAnchors::Unreadable,
     }
 }
 
@@ -368,8 +414,9 @@ pub(crate) fn payload_freshness(
     probe: &mut dyn AnchorProbe,
 ) -> Freshness {
     match stored_anchors(payload) {
-        Some(anchors) => assess_freshness(&anchors, probe),
-        None => Freshness::Unverified,
+        StoredAnchors::Unanchored => Freshness::Unanchored,
+        StoredAnchors::Anchored(anchors) => assess_freshness(&anchors, probe),
+        StoredAnchors::Unreadable => Freshness::Unverified,
     }
 }
 

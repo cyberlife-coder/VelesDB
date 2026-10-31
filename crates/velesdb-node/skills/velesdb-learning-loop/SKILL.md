@@ -122,8 +122,17 @@ it. If not, it is noise.
 Before proposing an approach or writing code for a feature/module/area, run:
 
 ```
-recall_fused("<area> design decisions and known pitfalls", filter={"project":"velesdb"})
+recall("<area> design decisions and known pitfalls", filter={"project":"velesdb"}, anchor_root="<absolute path of this checkout>")
 ```
+
+Only `recall` judges anchors: given `anchor_root`, it marks a lesson whose
+anchored file changed `stale` and ranks it lower. `recall_fused`,
+`recall_where` and `why` never report freshness, so a stale lesson reached
+through them looks current. Use them for what they add (`recall_fused` follows
+the graph, `recall_where` filters by range), and re-check with `recall` and
+`anchor_root` before relying on an anchored lesson they return. Omit
+`anchor_root` when the server has no `VELESDB_MEMORY_INGEST_ROOTS`: it is
+refused there.
 
 Read what comes back for:
 
@@ -222,13 +231,21 @@ from your own impression that a memory helped. Two things make that concrete:
 - **Which memories.** The hooks record the ids every successful `recall`,
   `recall_where`, `recall_fused` and `why` actually returned in this session,
   and the `Stop` checklist names exactly those ids — not "every recalled
-  memory". Feedback goes to a listed id or to none.
+  memory". Feedback goes to a listed id or to none. At most 64 are kept
+  between checkpoints: past that the oldest are dropped, and the checklist
+  says the list is truncated and how many. A `stale` mark stays on an id
+  until the checkpoint, even when a later recall did not judge its anchors.
+  Recalls are recorded only where the loop runs: an opted-in repository, or
+  an opted-in edit target the session is working on.
 - **Which outcomes.** The hooks observe outcomes the host reports, not ones
   the model describes: a test, build or lint command that failed and then
   passed, or still fails (Claude Code only — the exit status comes from
   `PostToolUse`/`PostToolUseFailure`); a commit reverting another in an
   edited repository since the last checkpoint (both hosts, read from git at
-  `Stop`). The checklist lists them next to the ids.
+  `Stop`). The checklist lists them next to the ids. A command launched in
+  the background, moved there past its timeout, or interrupted reported no
+  exit status, and exit 126/127 (or `flock`'s own 64–78) report the launch,
+  not the check: none of them is an outcome.
 
 Call `feedback(id_str, true)` or `feedback(id_str, false)` only for a listed
 memory whose effect one of those outcomes demonstrates, and say which outcome.
@@ -242,8 +259,11 @@ model call that cites its evidence. The one signal applied automatically is
 remembered with `anchors` (repo-relative paths, read by the server under an
 `anchor_root` inside its ingest roots) is marked `stale` by a `recall` with the
 same `anchor_root` once an anchored file changed or was deleted, and ranked
-lower. A stale memory is not a wrong one: re-verify it, then either forget and
-replace it, or remember it again with its anchors to re-anchor it.
+lower. A `recall` naming another checkout leaves it `unverified` and keeps its
+rank: the anchors record the checkout they were read in, and another clone
+says nothing about that code. A stale memory is not a wrong one: re-verify
+it, then either forget and replace it, or remember it again with its anchors
+to re-anchor it.
 
 User corrections are not recorded as evidence: a correction cannot be told
 apart reliably from a question, a quotation or a change of plan in a prompt's
@@ -259,7 +279,7 @@ Before marking a change "tested" or a PR "ready", recall the project's own
 test standard rather than trusting a green suite or a coverage number:
 
 ```
-recall_fused("test standard adversarial axes", filter={"project":"velesdb","topic":"test-standard"})
+recall("test standard adversarial axes", filter={"project":"velesdb","topic":"test-standard"}, anchor_root="<absolute path of this checkout>")
 ```
 
 Confirm, for the change at hand, that the four axes were exercised — not
@@ -311,7 +331,7 @@ against:
   "measurement"`
 - `project`: `"velesdb"`
 - `area`: the subsystem (`"raft"`, `"wal"`, `"hnsw"`, `"context-compiler"`,
-  `"velesql"`, …) — this is what makes an area-scoped `recall_fused` filter
+  `"velesql"`, …) — this is what makes an area-scoped `recall` filter
   useful before a design.
 - `date`: numeric `YYYYMMDD` (`recall_where`'s comparisons are type-strict —
   see the velesdb-memory skill's date-format note).
@@ -321,8 +341,8 @@ against:
 A crash-recovery test finds that a compaction mid-write can leave a torn WAL
 tail (already fixed once, PR #1011).
 
-- Before writing a NEW compaction-adjacent fix, `recall_fused("compaction
-  torn WAL tail write path")` — this should surface PR #1011's fix and its
+- Before writing a NEW compaction-adjacent fix, `recall("compaction torn WAL
+  tail write path", anchor_root=…)` — this should surface PR #1011's fix and its
   reasoning *before* re-deriving the same analysis or, worse, reintroducing
   the same gap in a different code path.
 - If a second, distinct torn-tail bug shows up in a different subsystem later,

@@ -23,9 +23,12 @@ struct GateWitness<'a> {
     looks: usize,
 }
 
+/// The checkout root the gate test's anchors are recorded under.
+const ROOT: &str = "/work/repo";
+
 impl AnchorProbe for GateWitness<'_> {
     fn root(&self) -> &str {
-        "/work/repo"
+        ROOT
     }
 
     fn observe(&mut self, _anchor: &FileAnchor) -> AnchorObservation {
@@ -43,7 +46,7 @@ impl AnchorProbe for GateWitness<'_> {
 fn anchored_recall_judges_freshness_outside_the_generation_gate() {
     let (_dir, svc) = service();
     let anchors = AnchorSet {
-        root: "/work/repo".to_owned(),
+        root: ROOT.to_owned(),
         files: vec![FileAnchor {
             path: RepoPath::parse("src/lib.rs").unwrap(),
             digest: ContentDigest::of(b"fn main() {}\n"),

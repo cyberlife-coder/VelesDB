@@ -87,12 +87,6 @@ read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 # not candidates for context compression.
 resolve_config "$cwd"
 if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
-  # Credit assignment: the ids this recall returned, for the Stop checklist to
-  # name instead of "every recalled memory".
-  if read_exact recalled_dir record_dir_path "recalled-memories" "$session_id"; then
-    # shellcheck disable=SC2154 # read_exact sets recalled_dir (printf -v)
-    record_recalled_memories "$recalled_dir" "$tool_name" "$payload" || true
-  fi
   pending_status=2
   if read_exact pending_dir record_dir_path "pending-recall" "$session_id"; then
     # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
@@ -116,13 +110,42 @@ if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
       touch_private_marker "$marker_path" || true
     fi
   fi
+  # Credit assignment: the ids this recall returned, for the Stop checklist to
+  # name instead of "every recalled memory" — only where the learning loop
+  # runs: the repository the session is in opted in, this recall unlocked an
+  # opted-in edit target elsewhere (0), or such a target already waits for
+  # its checkpoint in this session's edit queue.
+  # shellcheck disable=SC2154 # read_exact sets recalled_dir and dirty_dir (printf -v)
+  if read_exact recalled_dir record_dir_path "recalled-memories" "$session_id" \
+    && read_exact dirty_dir record_dir_path "learning-dirty" "$session_id" \
+    && { learning_loop_enabled || [ "$pending_status" -eq 0 ] || [ -d "$dirty_dir" ]; }; then
+    record_recalled_memories "$recalled_dir" "$tool_name" "$payload" || true
+  fi
 fi
+# bash_ran_to_completion PAYLOAD: this Bash PostToolUse reports a command that
+# ran to its end in the foreground, so its exit status was 0. One launched with
+# `run_in_background`, or moved to the background past its timeout, fires at
+# launch (a `backgroundTaskId`, no exit status yet); an interrupted one never
+# finished; a result that is not the documented object says neither.
+bash_ran_to_completion() {
+  printf '%s' "$1" | jq -e '
+    (.tool_input.run_in_background // false) != true
+    and (.tool_response | type) == "object"
+    and .tool_response.interrupted == false
+    and ([.tool_response | to_entries[]
+      | select((.key | ascii_downcase | test("background"))
+        and .value != null and .value != false)] | length) == 0
+  ' >/dev/null 2>&1
+}
+
 # A verifiable outcome (lib/common.sh): the exit status of a check command,
 # evidence for the Stop checklist, never a reward on its own.
 if [ -n "$session_id" ] && [ "$tool_name" = "Bash" ] && learning_loop_enabled \
+  && bash_ran_to_completion "$payload" \
   && read_exact checks_dir record_dir_path "check-outcomes" "$session_id" \
   && read_exact check_command jq -j '.tool_input.command // empty' <<<"$payload"; then
-  # PostToolUse fires only once a Bash call succeeded: its exit status was 0.
+  # PostToolUse fires only once a Bash call succeeded, and the call ran to its
+  # end (bash_ran_to_completion): its exit status was 0.
   # shellcheck disable=SC2154 # read_exact sets checks_dir and check_command (printf -v)
   record_check_outcome "$checks_dir" "$check_command" pass || true
 fi

@@ -237,7 +237,9 @@ fn a_fifo_swapped_in_under_an_anchor_never_blocks_the_probe() {
         }
         // The blocked observer is left behind: nothing will ever open the
         // FIFO it waits on, and the test process exits without it.
-        Err(_) => panic!("an observation blocked on a FIFO swapped in under the anchor"),
+        Err(waited) => {
+            panic!("an observation blocked on a FIFO swapped in under the anchor ({waited})")
+        }
     }
 }
 

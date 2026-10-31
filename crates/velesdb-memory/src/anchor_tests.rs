@@ -165,10 +165,11 @@ fn an_unverifiable_file_is_never_evidence_of_staleness() {
 /// the lesson is unverified, never stale, and nothing is looked at.
 #[test]
 fn anchors_from_another_checkout_are_unverified_never_stale() {
+    const OTHER_ROOT: &str = "/work/other-clone";
     struct Elsewhere(usize);
     impl AnchorProbe for Elsewhere {
         fn root(&self) -> &str {
-            "/work/other-clone"
+            OTHER_ROOT
         }
         fn observe(&mut self, _anchor: &FileAnchor) -> AnchorObservation {
             self.0 += 1;

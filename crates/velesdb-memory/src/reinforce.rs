@@ -44,7 +44,7 @@ const RL_RERANK_WEIGHT: f32 = 0.5;
 use super::recall::{Candidates, Hit};
 
 /// A hit with its raw payload and the caller's tag, in re-rank order.
-type TaggedHit<T> = (Hit, Option<Metadata>, T);
+pub(super) type TaggedHit<T> = (Hit, Option<Metadata>, T);
 
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Record an outcome for a recalled fact and return its new confidence.
@@ -115,36 +115,10 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// order exactly.
     pub(crate) fn rl_rerank(hits: Vec<Hit>, payloads: Vec<Option<Metadata>>) -> Candidates {
         let tags = vec![(); hits.len()];
-        Self::rl_rerank_tagged(hits, payloads, tags, |()| 1.0)
+        rerank_tagged(hits, payloads, tags, |()| 1.0)
             .into_iter()
             .map(|(hit, payload, ())| (hit, payload))
             .unzip()
-    }
-
-    /// [`Self::rl_rerank`] with one tag per hit, carried through the sort,
-    /// whose `factor` further scales that hit's blended key — how anchored
-    /// recall down-weights a stale lesson in the same single sort.
-    pub(crate) fn rl_rerank_tagged<T>(
-        hits: Vec<Hit>,
-        payloads: Vec<Option<Metadata>>,
-        tags: Vec<T>,
-        factor: impl Fn(&T) -> f32,
-    ) -> Vec<TaggedHit<T>> {
-        let mut ranked: Vec<(f32, TaggedHit<T>)> = hits
-            .into_iter()
-            .zip(payloads)
-            .zip(tags)
-            .map(|((hit, payload), tag)| {
-                let confidence = payload
-                    .as_ref()
-                    .map_or(RL_NEUTRAL_CONFIDENCE, read_confidence);
-                let key = blended_score(hit.1, confidence) * factor(&tag);
-                (key, (hit, payload, tag))
-            })
-            .collect();
-        // Stable sort: equal keys (e.g. all-neutral) keep input order.
-        ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-        ranked.into_iter().map(|(_, item)| item).collect()
     }
 }
 
@@ -195,6 +169,34 @@ fn success_rate(success_count: u64, total: u64) -> Option<f32> {
     } else {
         Some(success_count as f32 / total as f32)
     }
+}
+
+/// [`MemoryService::rl_rerank`] with one tag per hit, carried through the
+/// sort, whose `factor` further scales that hit's blended key — how anchored
+/// recall down-weights a stale lesson in the same single sort. A free
+/// function, since it reads nothing of the service: anchored recall runs it
+/// after the store's locks are released.
+pub(super) fn rerank_tagged<T>(
+    hits: Vec<Hit>,
+    payloads: Vec<Option<Metadata>>,
+    tags: Vec<T>,
+    factor: impl Fn(&T) -> f32,
+) -> Vec<TaggedHit<T>> {
+    let mut ranked: Vec<(f32, TaggedHit<T>)> = hits
+        .into_iter()
+        .zip(payloads)
+        .zip(tags)
+        .map(|((hit, payload), tag)| {
+            let confidence = payload
+                .as_ref()
+                .map_or(RL_NEUTRAL_CONFIDENCE, read_confidence);
+            let key = blended_score(hit.1, confidence) * factor(&tag);
+            (key, (hit, payload, tag))
+        })
+        .collect();
+    // Stable sort: equal keys (e.g. all-neutral) keep input order.
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    ranked.into_iter().map(|(_, item)| item).collect()
 }
 
 #[cfg(all(test, feature = "persistence"))]
