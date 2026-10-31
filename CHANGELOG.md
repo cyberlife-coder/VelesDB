@@ -144,7 +144,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since was put back in the graph, where it could take a search's places
   only to be dropped when results were read. A flush now inserts what
   storage holds for each queued id when it runs, and leaves out an id it no
-  longer holds.
+  longer holds. It also leaves out an id the graph already holds as storage
+  does — a point upserted straight into the graph after `upsert_bulk`
+  queued it — which 7.1.0 inserted a second time, leaving its first node in
+  the graph, unmapped, until `vacuum`. The deferred indexer's and the delta
+  buffer's merges skip such an id the same way.
+- **A search could return fewer than `k` results, or none, near a point
+  deleted or overwritten since the last `vacuum`.** A delete or an upsert
+  leaves the point's old node in the graph, mapped to no id. The graph walk
+  ranked those nodes with the rest and was cut to `k` before they were
+  dropped, so a `k = 1` search at a deleted or moved point's old vector
+  could come back empty; most visibly without reranking (`Fast` quality, or
+  an index built without exact-distance features). Present in 7.1.0.
+  `HnswIndex` and `NativeHnswIndex` now take the walk's whole `ef` pool and
+  keep its first `k` nodes an id still maps to.
 - **A search racing a deferred-indexer or delta-buffer merge could miss its
   points.** Both merges emptied their buffer before inserting what it held.
   Both now insert first and drop only what they inserted, as the async index

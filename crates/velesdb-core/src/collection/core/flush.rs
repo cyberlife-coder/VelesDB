@@ -237,26 +237,25 @@ impl Collection {
     fn drain_deferred_into_index(&self) {}
 
     /// Inserts what storage holds now for `ids` into the HNSW index, leaving
-    /// out an id it no longer holds, and returns the `(id, vector)` pairs it
-    /// inserted. Shared by the delta, deferred and async-builder merges, so
-    /// each indexes a point as it is, never an older copy it queued.
+    /// out an id it no longer holds and one the graph already holds as it is
+    /// (`HnswIndex::insert_batch_unless_indexed`), and returns the `(id,
+    /// vector)` pairs storage gave. Shared by the delta and deferred merges,
+    /// so each indexes a point as it is, never an older copy it queued, and
+    /// never twice.
     ///
     /// # Lock ordering
     ///
     /// Reads `vector_storage` (position 2) in chunks and releases it before
-    /// `insert_batch_parallel`; callers hold no buffer lock (position 10 or
-    /// 11) meanwhile.
+    /// the index insert; callers hold no buffer lock (position 10 or 11)
+    /// meanwhile.
     #[cfg(feature = "persistence")]
     pub(super) fn index_current(&self, ids: &[u64]) -> Vec<(u64, Vec<f32>)> {
         let vectors = self.current_vectors(ids);
         if !vectors.is_empty() {
-            let inserted = self
-                .storage
-                .index
-                .insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
-            if inserted < vectors.len() {
+            let (held, inserted) = self.storage.index.insert_batch_unless_indexed(&vectors);
+            if held + inserted < vectors.len() {
                 tracing::warn!(
-                    "index_current: inserted {inserted}/{} vectors",
+                    "index_current: inserted {inserted}/{} vectors ({held} indexed already)",
                     vectors.len()
                 );
             }

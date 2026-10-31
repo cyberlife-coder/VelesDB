@@ -71,8 +71,8 @@ impl Default for AsyncIndexBuilderConfig {
 }
 
 /// Deferred HNSW indexing: queues the ids of stored points the index lacks,
-/// which a flush inserts from what storage holds for them then, via
-/// [`HnswIndex::insert_batch_parallel`], and the ids of vectors already placed
+/// which a flush inserts from what storage holds for them then (unless the
+/// graph holds that already), and the ids of vectors already placed
 /// in the graph's arena, which a flush links where they are. What it queues is
 /// read by every search through `Self::pending_ids` until a flush has
 /// indexed it.
@@ -160,9 +160,10 @@ impl AsyncIndexBuilder {
 
     /// Indexes both queues into the HNSW index: inserts the vectors
     /// `current_vectors` gives for the buffered ids — what storage holds for
-    /// each now, a deleted one left out — via
-    /// [`HnswIndex::insert_batch_parallel`], which places and links each, and
-    /// links the queued placed ids where the direct writer placed their
+    /// each now, a deleted one left out, and one the graph already holds as
+    /// it is skipped rather than placed twice — via
+    /// `HnswIndex::insert_batch_unless_indexed`, which places and links each,
+    /// and links the queued placed ids where the direct writer placed their
     /// vectors, placing nothing. Returns the number of nodes it indexed.
     ///
     /// Each queue keeps what this flush indexes until it is indexed, so
@@ -207,11 +208,10 @@ impl AsyncIndexBuilder {
             return 0;
         }
         let vectors = current_vectors(&ids);
-        let inserted =
-            hnsw_index.insert_batch_parallel(vectors.iter().map(|(id, v)| (*id, v.as_slice())));
+        let (held, inserted) = hnsw_index.insert_batch_unless_indexed(&vectors);
         self.buffer.lock().drain(..ids.len());
         tracing::debug!(
-            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} buffered ids",
+            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} buffered ids ({held} indexed already)",
             ids.len()
         );
         inserted

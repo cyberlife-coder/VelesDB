@@ -1208,3 +1208,36 @@ fn test_eviction_respects_distance_when_all_equally_diverse() {
         );
     }
 }
+
+/// `NativeHnswIndex` keeps a moved point's old node in the graph, mapped to
+/// no id. A `k = 1` search at the old vector must return the point's live
+/// node, not come back empty because that dead node ranked first. Inserted
+/// one at a time, so the graph is the same on every run; 50 ids each moved.
+#[test]
+fn native_index_skips_a_node_an_upsert_left_behind() {
+    use crate::index::hnsw::native_index::NativeHnswIndex;
+
+    let point = |id: u64| -> Vec<f32> {
+        let mut state = id.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        (0..16)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                f32::from(u16::try_from(state >> 48).expect("test: 16 bits")) / 65_536.0
+            })
+            .collect()
+    };
+    let index = NativeHnswIndex::new_fast_insert(16, DistanceMetric::Euclidean).expect("test");
+    for id in 0..300 {
+        index.insert(id, &point(id)).expect("test: insert");
+    }
+    for id in 0..50 {
+        let old = point(id);
+        let mut moved = old.clone();
+        moved[0] += 1e-3;
+        index.insert(id, &moved).expect("test: upsert");
+        let hits = index.search_with_quality(&old, 1, crate::SearchQuality::Fast);
+        assert_eq!(hits.first().map(|hit| hit.id), Some(id), "id {id}");
+    }
+}

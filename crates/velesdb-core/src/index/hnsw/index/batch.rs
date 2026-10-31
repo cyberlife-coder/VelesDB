@@ -205,6 +205,62 @@ impl HnswIndex {
         }
     }
 
+    /// [`Self::insert_batch_parallel`] for the pairs whose id the graph does
+    /// not already hold as it is: an id mapped to a linked node holding
+    /// exactly that vector is left alone. Returns how many pairs the graph
+    /// held already and how many it inserted; the two fall short of the
+    /// pairs only when the insert failed (logged).
+    ///
+    /// A merge into the index (the async builder's flush, the deferred
+    /// indexer's and the delta buffer's drains) reads each id's vector from
+    /// storage, and the graph may already hold it: an upsert that went
+    /// straight to the graph after the id was queued. Inserting it again
+    /// would only leave the node it has behind, unmapped, for every search
+    /// to walk past until `vacuum`.
+    pub(crate) fn insert_batch_unless_indexed(&self, pairs: &[(u64, Vec<f32>)]) -> (usize, usize) {
+        let held = self.slots_holding(pairs);
+        let fresh: Vec<(u64, &[f32])> = pairs
+            .iter()
+            .zip(held)
+            .filter(|(_, held)| !held)
+            .map(|((id, vector), _)| (*id, vector.as_slice()))
+            .collect();
+        let already = pairs.len() - fresh.len();
+        if fresh.is_empty() {
+            return (already, 0);
+        }
+        (already, self.insert_batch_parallel(fresh))
+    }
+
+    /// For each pair, whether its id maps to a linked node holding exactly
+    /// its vector. Read under one graph guard, so no renumber moves a slot
+    /// between the lookups.
+    fn slots_holding(&self, pairs: &[(u64, Vec<f32>)]) -> Vec<bool> {
+        let inner = self.inner.read();
+        let same_vector: Vec<Option<usize>> = inner.with_contiguous_vectors(|arena| {
+            pairs
+                .iter()
+                .map(|(id, vector)| {
+                    let slot = self.mappings.get_idx(*id)?;
+                    (arena.get(slot) == Some(vector.as_slice())).then_some(slot)
+                })
+                .collect()
+        });
+        if same_vector.len() != pairs.len() {
+            // No arena to compare against: hold nothing, insert everything.
+            return vec![false; pairs.len()];
+        }
+        let unlinked: rustc_hash::FxHashSet<usize> = inner
+            .unlinked_nodes(same_vector.iter().flatten().copied())
+            .into_iter()
+            .collect();
+        drop(inner);
+        same_vector
+            .into_iter()
+            .map(|slot| slot.is_some_and(|slot| !unlinked.contains(&slot)))
+            .collect()
+    }
+
     /// Links into the graph, where they are, the nodes `upsert_bulk`'s direct
     /// writer placed for `ids`: the async builder's drain (#2264). Returns the
     /// number of nodes linked.

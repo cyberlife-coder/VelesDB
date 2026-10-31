@@ -408,11 +408,10 @@ fn a_flush_indexes_buffered_points_as_they_are_now() {
         None,
         "the flush indexed deleted 150"
     );
-    // Exhaustive: 151 went into the graph twice (its upsert, then the
-    // flush), and a `k = 1` walk on this graph can come back empty — an
-    // index behaviour this test does not cover.
-    let hits = coll
-        .search_with_quality(&vector(10_000), 1, crate::SearchQuality::Perfect)
-        .expect("test: exhaustive search");
-    assert_eq!(hits.first().map(|hit| hit.point.id), Some(151));
+    assert_eq!(
+        coll.storage.index.tombstone_count(),
+        0,
+        "151 already held its new vector in the graph: the flush left no node behind"
+    );
+    assert_eq!(first_hit(&coll, 10_000), Some(151));
 }
