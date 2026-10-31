@@ -20,12 +20,16 @@ fn test_choose_strategy_vector_first() {
     );
 }
 
+/// The band between the two thresholds plans GraphFirst. It planned
+/// `Parallel`, which ran GraphFirst's exact scan of the filter's matches and
+/// the VectorFirst search on top: the union added nothing the scan had not
+/// found, and cost both legs.
 #[test]
-fn test_choose_strategy_parallel() {
+fn test_choose_strategy_middle_band_is_graph_first() {
     let planner = QueryPlanner::new();
     assert_eq!(
         planner.choose_strategy(Some(0.2)),
-        ExecutionStrategy::Parallel
+        ExecutionStrategy::GraphFirst
     );
 }
 
@@ -75,7 +79,7 @@ fn test_custom_thresholds() {
     );
     assert_eq!(
         planner.choose_strategy(Some(0.15)),
-        ExecutionStrategy::Parallel
+        ExecutionStrategy::GraphFirst
     );
     assert_eq!(
         planner.choose_strategy(Some(0.40)),

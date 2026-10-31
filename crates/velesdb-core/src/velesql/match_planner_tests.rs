@@ -321,3 +321,30 @@ fn test_planner_is_null_on_edge_alias_forces_graph_first() {
         "IS NULL on an edge alias must force GraphFirst, got {strategy:?}"
     );
 }
+
+/// A similarity on a non-start alias over a large, dense graph plans
+/// GraphFirst. It planned `Parallel`, which ran GraphFirst's exact
+/// enumeration of the pattern — every row VectorFirst's approximate top-k
+/// could return — and then VectorFirst on top: the union added nothing and
+/// cost both legs.
+#[test]
+fn test_planner_never_runs_vector_first_beside_graph_first() {
+    let mut match_clause = make_match_clause(true, Some(10));
+    if let Some(Condition::Similarity(sim)) = match_clause.where_clause.as_mut() {
+        sim.field = "b.embedding".to_string();
+        sim.threshold = 0.85;
+    }
+    let stats = MatchGraphStats {
+        total_nodes: 50_000,
+        total_edges: 500_000,
+        avg_degree: 10.0,
+        label_count: 10,
+        label_selectivity: 0.1,
+    };
+
+    let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
+    assert!(
+        matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
+        "got {strategy:?}"
+    );
+}
