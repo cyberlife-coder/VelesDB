@@ -75,6 +75,20 @@ pub struct AggregateFunction {
     pub alias: Option<String>,
 }
 
+impl AggregateType {
+    /// The lowercase name an unaliased aggregate's output field starts with.
+    const fn key_prefix(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::First => "first",
+        }
+    }
+}
+
 impl AggregateFunction {
     /// The output field of this aggregate in every engine and result shape —
     /// SQL aggregation rows, vector `GROUP BY` results, the WASM executor: its
@@ -85,14 +99,7 @@ impl AggregateFunction {
         if let Some(alias) = &self.alias {
             return alias.clone();
         }
-        let prefix = match self.function_type {
-            AggregateType::Count => "count",
-            AggregateType::Sum => "sum",
-            AggregateType::Avg => "avg",
-            AggregateType::Min => "min",
-            AggregateType::Max => "max",
-            AggregateType::First => "first",
-        };
+        let prefix = self.function_type.key_prefix();
         match &self.argument {
             AggregateArg::Wildcard => prefix.to_string(),
             AggregateArg::Score => format!("{prefix}_score"),

@@ -9,6 +9,8 @@ use crate::velesql::{ColumnRef, JoinClause, JoinCondition};
 /// Effectively unbounded row budget for tests asserting full (unbounded) output.
 const NO_LIMIT: usize = usize::MAX;
 
+/// A product row: point `id`, whose payload carries an `id` of its own,
+/// `payload_id`, which no join reads (`products.id` is the point id).
 fn make_search_result(id: u64, payload_id: i64) -> SearchResult {
     SearchResult::new(
         Point {
@@ -125,6 +127,17 @@ fn test_extract_join_keys() {
 }
 
 #[test]
+fn test_an_id_join_key_is_the_point_id_not_a_payload_field() {
+    // The payload carries an `id` of its own (30); `id` is the point id (3).
+    let results = vec![make_search_result(3, 30)];
+    let join = make_join_clause();
+
+    let keys = extract_join_keys(&results, join.condition.as_ref().unwrap());
+
+    assert_eq!(keys, vec![(0, 3)]);
+}
+
+#[test]
 fn test_execute_join_basic() {
     let results = vec![
         make_search_result(1, 1),
@@ -151,7 +164,7 @@ fn test_execute_join_basic() {
 fn test_execute_join_inner_skips_missing() {
     let results = vec![
         make_search_result(1, 1),
-        make_search_result(2, 99),
+        make_search_result(99, 99),
         make_search_result(3, 3),
     ];
     let column_store = make_column_store();
@@ -383,7 +396,7 @@ fn test_execute_join_using_rejects_multi_column() {
 
 #[test]
 fn test_execute_left_join_keeps_unmatched_left_rows() {
-    let results = vec![make_search_result(1, 1), make_search_result(2, 99)];
+    let results = vec![make_search_result(1, 1), make_search_result(99, 99)];
     let column_store = make_column_store();
     let join = JoinClause {
         join_type: crate::velesql::JoinType::Left,
@@ -438,7 +451,7 @@ fn test_execute_right_join_includes_unmatched_right_rows() {
 
 #[test]
 fn test_execute_full_join_combines_left_and_right_unmatched() {
-    let results = vec![make_search_result(1, 1), make_search_result(2, 99)];
+    let results = vec![make_search_result(1, 1), make_search_result(99, 99)];
     let column_store = make_column_store();
     let join = JoinClause {
         join_type: crate::velesql::JoinType::Full,

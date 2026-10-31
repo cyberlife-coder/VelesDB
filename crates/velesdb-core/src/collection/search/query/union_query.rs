@@ -142,11 +142,9 @@ impl Collection {
         condition: &crate::velesql::Condition,
     ) -> bool {
         let filter = crate::filter::Filter::new(crate::filter::Condition::from(condition.clone()));
-        // No payload means the filter doesn't match.
-        point
-            .payload
-            .as_ref()
-            .is_some_and(|payload| filter.matches_point(point.id, Some(payload)))
+        // A point without payload is tested with a `null` payload, as on
+        // every path.
+        filter.matches_point(point.id, point.payload.as_ref())
     }
 
     /// Split an OR condition into similarity and metadata parts, extracting outer AND filters.

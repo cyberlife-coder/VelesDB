@@ -310,11 +310,8 @@ impl Collection {
                 query_results
                     .into_iter()
                     .filter(|(id, _score)| {
-                        if let Ok(Some(payload)) = payload_storage.retrieve(*id) {
-                            f.matches_point(*id, Some(&payload))
-                        } else {
-                            false
-                        }
+                        let payload = payload_storage.retrieve(*id).ok().flatten();
+                        f.matches_point(*id, payload.as_ref())
                     })
                     .collect()
             })

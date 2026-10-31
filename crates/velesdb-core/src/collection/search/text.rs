@@ -172,9 +172,9 @@ impl Collection {
                     return None;
                 }
 
-                // Apply filter - if no payload, filter fails
-                let payload_ref = payload.as_ref()?;
-                if !filter.matches_point(id, Some(payload_ref)) {
+                // A point without payload is tested with a `null` payload, as
+                // on every path.
+                if !filter.matches_point(id, payload.as_ref()) {
                     return None;
                 }
 
@@ -418,13 +418,7 @@ impl Collection {
         Ok(self.resolve_scored_ids_with_components(
             &scored_ids,
             &component_map,
-            |result| {
-                result
-                    .point
-                    .payload
-                    .as_ref()
-                    .is_some_and(|payload| filter.matches_point(result.point.id, Some(payload)))
-            },
+            |result| filter.matches_point(result.point.id, result.point.payload.as_ref()),
             k,
         ))
     }

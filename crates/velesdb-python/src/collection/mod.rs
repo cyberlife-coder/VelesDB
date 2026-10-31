@@ -325,9 +325,10 @@ fn and_scope(caller: Option<Filter>, scope: Option<Filter>) -> Option<Filter> {
 }
 
 /// Post-filters search results in place, dropping any row failing the caller
-/// filter or the observer scope filter (either may be absent). A row with no
-/// payload is dropped whenever a filter is active, matching the pre-existing
-/// hybrid-sparse post-filter semantics.
+/// filter or the observer scope filter (either may be absent). Each row is
+/// tested as core tests a point — its id included, which a scope's `id`
+/// reads, and a missing payload as `null` — so a scope such as `id != 2`
+/// narrows here exactly as it does in core.
 ///
 /// Exposed `pub(crate)` so leaf-only search paths that take no metadata filter
 /// (sparse, parallel batch, graph embedding search) can apply an observer scope
@@ -341,9 +342,9 @@ pub(crate) fn retain_by_filters(
         return;
     }
     results.retain(|r| {
-        r.point.payload.as_ref().is_some_and(|p| {
-            caller.is_none_or(|f| f.matches(p)) && scope.is_none_or(|f| f.matches(p))
-        })
+        let (id, payload) = (r.point.id, r.point.payload.as_ref());
+        caller.is_none_or(|f| f.matches_point(id, payload))
+            && scope.is_none_or(|f| f.matches_point(id, payload))
     });
 }
 

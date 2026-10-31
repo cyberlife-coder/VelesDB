@@ -404,12 +404,26 @@ impl Collection {
         }
     }
 
+    /// The exact bitmap of `id = n` / `id IN (...)`: the points `values`
+    /// name, none of which needs an index. `None` (full scan) for an id a
+    /// bitmap cannot hold, above `u32::MAX`, or a value that is not a
+    /// non-negative integer.
+    fn bitmap_for_point_ids(values: &[serde_json::Value]) -> Option<roaring::RoaringBitmap> {
+        values
+            .iter()
+            .map(|value| u32::try_from(value.as_u64()?).ok())
+            .collect()
+    }
+
     /// Looks up a single equality field in the secondary indexes.
     fn bitmap_for_eq_field(
         indexes: &SecondaryIndexMap,
         field: &str,
         value: &serde_json::Value,
     ) -> Option<roaring::RoaringBitmap> {
+        if field == crate::filter::POINT_ID_FIELD {
+            return Self::bitmap_for_point_ids(std::slice::from_ref(value));
+        }
         let key = JsonValue::from_json(value)?;
         let guard = indexes.read();
         let index = guard.get(field)?;
@@ -434,6 +448,9 @@ impl Collection {
         field: &str,
         values: &[serde_json::Value],
     ) -> Option<roaring::RoaringBitmap> {
+        if field == crate::filter::POINT_ID_FIELD {
+            return Self::bitmap_for_point_ids(values);
+        }
         if values.is_empty() {
             return Some(roaring::RoaringBitmap::new());
         }
@@ -473,6 +490,12 @@ impl Collection {
         cond: &crate::filter::Condition,
     ) -> Option<roaring::RoaringBitmap> {
         use std::ops::Bound;
+        // The index keys numbers by `f64`: past 2^53 a bound can share its
+        // key with a neighbour the filter orders exactly, and a range would
+        // drop it.
+        if !crate::filter::exact_as_f64(value) {
+            return None;
+        }
 
         let key = JsonValue::from_json(value)?;
         let guard = indexes.read();

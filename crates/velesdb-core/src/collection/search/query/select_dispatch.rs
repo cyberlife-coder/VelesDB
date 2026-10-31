@@ -549,6 +549,7 @@ impl Collection {
                     r.score,
                     r.point.payload.as_ref(),
                     r.component_scores.as_deref(),
+                    Some(r.point.id),
                 )
             })
             .collect()

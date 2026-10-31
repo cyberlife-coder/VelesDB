@@ -114,8 +114,13 @@ impl Database {
         let assignments = Self::resolve_update_assignments(stmt, params)?;
         let filter = Self::build_update_filter(stmt.where_clause.as_ref(), params)?;
 
-        let all_ids = collection.all_ids();
-        let rows = collection.get(&all_ids);
+        // `WHERE id = n` / `id IN (...)` name their points, as DELETE's
+        // WHERE does: read those, not the whole collection.
+        let ids = filter
+            .as_ref()
+            .and_then(|f| f.condition.point_ids())
+            .unwrap_or_else(|| collection.all_ids());
+        let rows = collection.get(&ids);
         let updated_points =
             Self::apply_update_assignments(&collection, rows, filter.as_ref(), &assignments)?;
 

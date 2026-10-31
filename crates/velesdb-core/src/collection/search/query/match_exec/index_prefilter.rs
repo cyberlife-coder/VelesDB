@@ -77,7 +77,7 @@ pub(super) fn compute_index_prefilter(
         }
 
         let label = resolve_label(&pred.alias, &alias_to_labels)?;
-        let ids = execute_single_lookup(collection, label, &pred.property, &pred.kind)?;
+        let ids = predicate_candidates(collection, label, pred)?;
         let id_set: HashSet<u64> = ids.into_iter().collect();
         result_set = Some(intersect_sets(result_set, id_set));
     }
@@ -126,9 +126,10 @@ fn try_composite_lookup(
     predicates: &[ExtractedPredicate],
     alias_to_labels: &HashMap<String, Vec<String>>,
 ) -> Option<HashSet<u64>> {
-    // Group equality predicates by alias.
+    // Group equality predicates by alias; `id` is the node id, which no
+    // composite index holds.
     let mut eq_by_alias: HashMap<&str, Vec<(&str, &serde_json::Value)>> = HashMap::new();
-    for pred in predicates {
+    for pred in predicates.iter().filter(|pred| pred.property != "id") {
         if let PredicateKind::Exact(ref val) = pred.kind {
             eq_by_alias
                 .entry(&pred.alias)
@@ -151,6 +152,29 @@ fn try_composite_lookup(
         }
     }
     None
+}
+
+/// The nodes a predicate keeps: for `alias.id`, the node id names its node,
+/// which no property index answers for; for any other property, an index
+/// lookup.
+fn predicate_candidates(
+    collection: &Collection,
+    label: &str,
+    pred: &ExtractedPredicate,
+) -> Option<Vec<u64>> {
+    if pred.property == "id" {
+        return node_id_candidates(&pred.kind);
+    }
+    execute_single_lookup(collection, label, &pred.property, &pred.kind)
+}
+
+/// The node an `alias.id = n` predicate names. Only an exact, non-negative
+/// integer names one; any other `id` predicate is never extracted.
+fn node_id_candidates(kind: &PredicateKind) -> Option<Vec<u64>> {
+    match kind {
+        PredicateKind::Exact(value) => Some(vec![value.as_u64()?]),
+        _ => None,
+    }
 }
 
 /// Executes a single-property index lookup.
@@ -234,6 +258,10 @@ fn comparison_to_predicate(
     let (alias, property) = split_alias_property(&cmp.column)?;
     let resolved = Collection::resolve_where_param(&cmp.value, params).ok()?;
     let kind = predicate_kind(cmp.operator, &resolved)?;
+    // `alias.id` is the node id: only an exact integer narrows to one node.
+    if property == "id" && node_id_candidates(&kind).is_none() {
+        return None;
+    }
 
     Some(ExtractedPredicate {
         alias: alias.to_string(),
@@ -297,6 +325,9 @@ fn between_to_predicate(
     params: &HashMap<String, serde_json::Value>,
 ) -> Option<ExtractedPredicate> {
     let (alias, property) = split_alias_property(&btw.column)?;
+    if property == "id" {
+        return None; // the node id, which no range index orders
+    }
     let low_resolved = Collection::resolve_where_param(&btw.low, params).ok()?;
     let high_resolved = Collection::resolve_where_param(&btw.high, params).ok()?;
 

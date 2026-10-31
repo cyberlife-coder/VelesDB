@@ -51,14 +51,14 @@ fn every_core_condition_kind_selects_what_core_selects() {
             .unwrap_or_else(|e| panic!("case {} must parse: {e}", case.id));
         for payload in &case.matches {
             assert!(
-                filter.matches(payload),
+                filter.matches_point(0, Some(payload)),
                 "case {} must match {payload}",
                 case.id
             );
         }
         for payload in &case.rejects {
             assert!(
-                !filter.matches(payload),
+                !filter.matches_point(0, Some(payload)),
                 "case {} must not match {payload}",
                 case.id
             );

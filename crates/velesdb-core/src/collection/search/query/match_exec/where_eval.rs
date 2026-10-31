@@ -293,18 +293,16 @@ impl Collection {
         }
 
         let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
-
-        let Some(target_payload) = ctx.guards.payload_memo.get(target_id) else {
-            return Ok(false);
-        };
-
+        let target_payload = ctx.guards.payload_memo.get(target_id);
         let column_path = strip_alias(&cmp.column, &alias_in(ctx.bindings));
-        let Some(actual) = Self::json_get_path(&target_payload, column_path) else {
+        let Some(actual) = element_property(target_id, column_path, |path| {
+            Self::json_get_path(target_payload.as_deref()?, path)
+        }) else {
             return Ok(false);
         };
 
         let resolved_value = Self::resolve_where_param(&cmp.value, ctx.params)?;
-        Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
+        Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
     }
 
     /// Evaluates a comparison whose column refers to a bound relationship
@@ -319,11 +317,13 @@ impl Collection {
             return Ok(false);
         };
         let property = cmp.column.split_once('.').map_or("", |(_, rest)| rest);
-        let Some(actual) = edge_property_path(&edge, property) else {
+        let Some(actual) =
+            element_property(edge_id, property, |path| edge_property_path(&edge, path))
+        else {
             return Ok(false);
         };
         let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
-        Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
+        Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
     }
 
     /// Evaluates a metadata condition (IN, BETWEEN, LIKE, IS NULL, MATCH)
@@ -357,9 +357,9 @@ impl Collection {
             resolve_target_id(col, ctx.bindings, ctx.node_id)
         });
 
-        let Some(payload) = ctx.guards.payload_memo.get(target_id) else {
-            return Ok(false);
-        };
+        // A node without payload is tested with a `null` payload, as on
+        // every path: `n.id` still reads its id.
+        let payload = ctx.guards.payload_memo.get(target_id);
 
         // Compile-once per (leaf, strip-decision): the rewrite depends only
         // on whether the leaf column's alias prefix is bound — a bit, not a
@@ -371,7 +371,7 @@ impl Collection {
         let key = (std::ptr::from_ref(condition) as usize, u8::from(stripped));
         ctx.guards
             .where_filters
-            .matches_with(key, target_id, &payload, || {
+            .matches_with(key, target_id, payload.as_deref(), || {
                 let rewritten =
                     rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
                 // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
@@ -427,7 +427,7 @@ impl Collection {
         );
         ctx.guards
             .where_filters
-            .matches_with(key, edge_id, &payload, || {
+            .matches_with(key, edge_id, Some(&payload), || {
                 // Strip the alias against the FULL edge-alias namespace (scalar
                 // AND variable-length). Using only the scalar map here left
                 // var-length columns like `r.w` unstripped, so the filter engine
@@ -614,6 +614,21 @@ pub(super) fn edge_property_path<'a>(
 ) -> Option<&'a serde_json::Value> {
     let (first, rest) = path.split_once('.').map_or((path, ""), |(f, r)| (f, r));
     Collection::json_get_path(edge.property(first)?, rest)
+}
+
+/// The value a MATCH reads for `property` of a bound element, node or
+/// relationship: its id for `id` — as `id` reads in every clause, whatever
+/// property of that name the element carries — else the property path,
+/// read by `lookup`. WHERE, RETURN and ORDER BY all read through it.
+pub(super) fn element_property<'a>(
+    id: u64,
+    property: &str,
+    lookup: impl FnOnce(&str) -> Option<&'a serde_json::Value>,
+) -> Option<std::borrow::Cow<'a, serde_json::Value>> {
+    if property == "id" {
+        return Some(std::borrow::Cow::Owned(serde_json::Value::from(id)));
+    }
+    lookup(property).map(std::borrow::Cow::Borrowed)
 }
 
 /// Strips the alias prefix from a column path when `is_alias` accepts it.

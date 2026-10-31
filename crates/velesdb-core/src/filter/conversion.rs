@@ -154,6 +154,16 @@ fn convert_contains(cc: crate::velesql::ContainsCondition) -> Condition {
     }
 }
 
+/// Converts `IS NULL` / `IS NOT NULL`.
+fn convert_is_null(isn: crate::velesql::IsNullCondition) -> Condition {
+    let field = field(isn.column);
+    if isn.is_null {
+        Condition::IsNull { field }
+    } else {
+        Condition::IsNotNull { field }
+    }
+}
+
 impl From<crate::velesql::Condition> for Condition {
     fn from(cond: crate::velesql::Condition) -> Self {
         match cond {
@@ -161,17 +171,7 @@ impl From<crate::velesql::Condition> for Condition {
                 convert_comparison(cmp.column, cmp.operator, cmp.value)
             }
             crate::velesql::Condition::In(inc) => convert_in(inc),
-            crate::velesql::Condition::IsNull(isn) => {
-                if isn.is_null {
-                    Self::IsNull {
-                        field: field(isn.column),
-                    }
-                } else {
-                    Self::IsNotNull {
-                        field: field(isn.column),
-                    }
-                }
-            }
+            crate::velesql::Condition::IsNull(isn) => convert_is_null(isn),
             crate::velesql::Condition::And(left, right) => Self::And {
                 conditions: vec![Self::from(*left), Self::from(*right)],
             },

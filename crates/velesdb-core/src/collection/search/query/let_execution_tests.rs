@@ -394,7 +394,7 @@ fn test_evaluate_let_bindings_single_literal() {
         expr: ArithmeticExpr::Literal(0.42),
     }];
 
-    let result = evaluate_let_bindings(&bindings, 0.5, None, None);
+    let result = evaluate_let_bindings(&bindings, 0.5, None, None, None);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].0, "x");
     assert!((result[0].1 - 0.42).abs() < 1e-5);
@@ -421,7 +421,7 @@ fn test_evaluate_let_bindings_chained() {
         },
     ];
 
-    let result = evaluate_let_bindings(&bindings, 0.0, None, None);
+    let result = evaluate_let_bindings(&bindings, 0.0, None, None, None);
     assert_eq!(result.len(), 2);
     assert!((result[0].1 - 2.0).abs() < 1e-5, "a = 2.0");
     assert!(
@@ -442,7 +442,7 @@ fn test_evaluate_let_bindings_similarity() {
         expr: ArithmeticExpr::Similarity(Box::new(OrderByExpr::SimilarityBare)),
     }];
 
-    let result = evaluate_let_bindings(&bindings, 0.77, None, None);
+    let result = evaluate_let_bindings(&bindings, 0.77, None, None, None);
     assert!((result[0].1 - 0.77).abs() < 1e-5);
 }
 
@@ -501,7 +501,7 @@ fn test_match_without_let_still_works() {
 fn test_evaluate_let_bindings_empty() {
     use crate::collection::search::query::ordering::evaluate_let_bindings;
 
-    let result = evaluate_let_bindings(&[], 0.5, None, None);
+    let result = evaluate_let_bindings(&[], 0.5, None, None, None);
     assert!(result.is_empty());
 }
 

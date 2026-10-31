@@ -1,13 +1,29 @@
 use super::{Collection, SearchResult};
 
 impl Collection {
-    /// Attempts to resolve a metadata-only query using secondary indexes.
+    /// Attempts to resolve a metadata-only query without a full scan: by the
+    /// points `id = n` / `id IN (...)` name (alone or in an AND), visited in
+    /// id order, else by a secondary index. Returns `None` when neither
+    /// covers the condition, signaling the caller to fall back to a
+    /// sequential scan.
+    pub(super) fn execute_indexed_metadata_query(
+        &self,
+        cond: &crate::velesql::Condition,
+        execution_limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+        match filter.condition.point_ids() {
+            Some(ids) => Some(self.scan_ids_with_filter(&ids, &filter, execution_limit)),
+            None => self.execute_secondary_index_query(cond, execution_limit),
+        }
+    }
+
+    /// Resolves a metadata-only query using secondary indexes.
     ///
     /// Tries an Eq lookup on the first matching indexed field (fastest path).
     /// For AND conditions, flattens the tree and probes each leaf for an indexed Eq.
-    /// Returns `None` when no index covers the condition, signaling the caller
-    /// to fall back to a sequential scan.
-    pub(super) fn execute_indexed_metadata_query(
+    /// Returns `None` when no index covers the condition.
+    fn execute_secondary_index_query(
         &self,
         cond: &crate::velesql::Condition,
         execution_limit: usize,

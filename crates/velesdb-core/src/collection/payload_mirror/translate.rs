@@ -128,8 +128,10 @@ fn or_bitmap(state: &MirrorState, conditions: &[Condition]) -> Option<Eval> {
 /// Returns `None` when the field must fall back to the JSON filter
 /// (dotted path, capped-out field, or unexpected column kind).
 fn classify_field(state: &MirrorState, field: &str) -> Option<FieldCol> {
-    if field.contains('.') || field == crate::filter::POINT_ID_FIELD {
-        return None; // nested paths and the point id are not mirrored
+    if field.contains('.') {
+        // Nested paths are not mirrored; nor is the point-id field, whose
+        // name is dotted for that reason.
+        return None;
     }
     match state.store.get_column(field) {
         Some(TypedColumn::Float(_)) => Some(FieldCol::Float),
@@ -141,11 +143,26 @@ fn classify_field(state: &MirrorState, field: &str) -> Option<FieldCol> {
     }
 }
 
+/// [`classify_field`] for a leaf comparing with `literals`, or `None` (the
+/// filter decides) when one is an integer an `f64` column cannot single out
+/// (2^53 or more), which the filter compares exactly.
+fn classify_literals(
+    state: &MirrorState,
+    field: &str,
+    literals: &[serde_json::Value],
+) -> Option<FieldCol> {
+    if !literals.iter().all(crate::filter::exact_as_f64) {
+        return None;
+    }
+    classify_field(state, field)
+}
+
 /// Equality leaf. Eligible only for type-matched scalar literals; replicates
 /// `values_equal` exactly (epsilon equality for numbers, interned equality
-/// for strings).
+/// for strings). An integer literal an `f64` cannot single out (2^53 or
+/// more), which the filter compares exactly, falls back to the filter.
 fn leaf_eq(state: &MirrorState, field: &str, value: &serde_json::Value) -> Option<Eval> {
-    let col = classify_field(state, field)?;
+    let col = classify_literals(state, field, std::slice::from_ref(value))?;
     let bits = match (col, value) {
         (FieldCol::Absent, v) if is_scalar(v) => RoaringBitmap::new(),
         (FieldCol::Float, serde_json::Value::Number(n)) => {
@@ -173,7 +190,7 @@ fn leaf_ord(
     value: &serde_json::Value,
     holds: impl Fn(std::cmp::Ordering) -> bool,
 ) -> Option<Eval> {
-    let col = classify_field(state, field)?;
+    let col = classify_literals(state, field, std::slice::from_ref(value))?;
     match (col, value) {
         // Non-orderable literal types compare to nothing, on any column.
         (_, v) if !v.is_number() && !v.is_string() => Some(Eval::empty()),
@@ -193,7 +210,7 @@ fn leaf_ord(
 /// IN leaf. Eligible only when every list value matches the column type —
 /// a single off-type value could match rows the mirror stored as null.
 fn leaf_in(state: &MirrorState, field: &str, values: &[serde_json::Value]) -> Option<Eval> {
-    let col = classify_field(state, field)?;
+    let col = classify_literals(state, field, values)?;
     if values.is_empty() {
         return Some(Eval::empty());
     }

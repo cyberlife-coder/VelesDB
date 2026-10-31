@@ -128,12 +128,9 @@ impl Collection {
         }
     }
 
-    /// Returns `true` if the point passes the optional filter.
+    /// Returns `true` if the point passes the optional filter. A point
+    /// without payload is tested with a `null` payload, as on every path.
     fn passes_filter(point: &Point, filter: Option<&Filter>) -> bool {
-        match (filter, &point.payload) {
-            (Some(f), Some(payload)) => f.matches_point(point.id, Some(payload)),
-            (Some(_), None) => false,
-            (None, _) => true,
-        }
+        filter.is_none_or(|f| f.matches_point(point.id, point.payload.as_ref()))
     }
 }

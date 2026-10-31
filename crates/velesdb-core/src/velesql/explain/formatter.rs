@@ -257,6 +257,7 @@ impl IndexType {
             Self::Flat => "Flat",
             Self::BinaryQuantization => "BinaryQuantization",
             Self::Property => "PropertyIndex",
+            Self::PointId => "PointIdLookup",
         }
     }
 }

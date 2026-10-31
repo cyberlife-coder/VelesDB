@@ -269,16 +269,17 @@ impl Database {
         let source_column = &condition.right.column;
 
         // Phase 1: one key per left row (same payload->key conversion as
-        // index maintenance, with the `id` fallback the PK extractor honours).
+        // index maintenance); `id` is the point id, as in every clause.
         let keys: Vec<Option<crate::index::JsonValue>> = results
             .iter()
             .map(|left| {
+                if source_column == "id" {
+                    return crate::index::JsonValue::from_json(&serde_json::json!(left.point.id));
+                }
                 left.point
                     .payload
                     .as_ref()
-                    .and_then(|p| p.get(source_column).cloned())
-                    .or_else(|| (source_column == "id").then(|| serde_json::json!(left.point.id)))
-                    .as_ref()
+                    .and_then(|p| p.get(source_column))
                     .and_then(crate::index::JsonValue::from_json)
             })
             .collect();

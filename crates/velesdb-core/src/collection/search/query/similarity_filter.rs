@@ -506,27 +506,22 @@ impl Collection {
     ) -> Option<Vec<u64>> {
         use crate::filter::Condition;
         match condition {
-            Condition::Eq { field, value } => {
-                if let Some(jv) = crate::index::JsonValue::from_json(value) {
-                    return self.secondary_index_lookup(field, &jv);
-                }
-                None
-            }
-            Condition::And { conditions } => {
-                // Find the smallest indexed candidate set among AND children.
-                let mut best: Option<Vec<u64>> = None;
-                for sub in conditions {
-                    if let Some(ids) = self.extract_bitmap_ids_from_filter(sub) {
-                        best = Some(match best {
-                            Some(prev) if prev.len() <= ids.len() => prev,
-                            _ => ids,
-                        });
-                    }
-                }
-                best
-            }
-            _ => None,
+            Condition::And { conditions } => conditions
+                .iter()
+                .filter_map(|sub| self.extract_bitmap_ids_from_filter(sub))
+                .min_by_key(Vec::len),
+            // `id = n` / `id IN (...)` name their points: no index needed.
+            leaf => leaf.point_ids().or_else(|| self.indexed_eq_ids(leaf)),
         }
+    }
+
+    /// The ids a secondary index holds for an `Eq` leaf on an indexed field.
+    fn indexed_eq_ids(&self, condition: &crate::filter::Condition) -> Option<Vec<u64>> {
+        let crate::filter::Condition::Eq { field, value } = condition else {
+            return None;
+        };
+        let key = crate::index::JsonValue::from_json(value)?;
+        self.secondary_index_lookup(field, &key)
     }
 
     /// Scans a pre-filtered set of candidate IDs with the full filter,

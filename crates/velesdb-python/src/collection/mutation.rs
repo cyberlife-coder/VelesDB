@@ -264,7 +264,7 @@ impl Collection {
             .map(|opt_point| {
                 opt_point
                     .filter(|p| match scope.as_ref() {
-                        Some(s) => p.payload.as_ref().is_some_and(|pl| s.matches(pl)),
+                        Some(s) => s.matches_point(p.id, p.payload.as_ref()),
                         None => true,
                     })
                     .map(|p| crate::collection_helpers::point_to_dict(py, &p))

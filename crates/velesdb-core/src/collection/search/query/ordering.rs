@@ -66,9 +66,7 @@ impl Collection {
             .iter()
             .map(|ob| match &ob.expr {
                 crate::velesql::OrderByExpr::Field(field_name)
-                    if per_result_let.is_empty()
-                        && !is_builtin_score_variable(field_name)
-                        && field_name != "id" =>
+                    if per_result_let.is_empty() && is_payload_field(field_name) =>
                 {
                     Some(
                         results
@@ -339,15 +337,23 @@ impl Collection {
             results[i].point.payload.as_ref(),
             results[i].component_scores.as_deref(),
             per_result_let.get(i).map(Vec::as_slice),
-        );
+        )
+        .for_point(results[i].point.id);
         let ctx_j = ScoreContext::with_let_bindings(
             results[j].score,
             results[j].point.payload.as_ref(),
             results[j].component_scores.as_deref(),
             per_result_let.get(j).map(Vec::as_slice),
-        );
+        )
+        .for_point(results[j].point.id);
         (ctx_i, ctx_j)
     }
+}
+
+/// Whether an ORDER BY `name` reads a payload field: neither a built-in
+/// score variable nor `id`, the point id.
+fn is_payload_field(name: &str) -> bool {
+    name != "id" && !is_builtin_score_variable(name)
 }
 
 /// Whether `name` is a built-in score variable resolved from the component-score
@@ -427,6 +433,9 @@ pub(crate) struct ScoreContext<'a> {
     ///
     /// Resolution priority: LET bindings > component_scores > search_score > payload.
     let_bindings: Option<&'a [(String, f32)]>,
+    /// The point id, which `id` reads, as in every clause; `None` where the
+    /// caller has no point (tests), and `id` then reads the payload.
+    point_id: Option<u64>,
 }
 
 impl<'a> ScoreContext<'a> {
@@ -439,6 +448,7 @@ impl<'a> ScoreContext<'a> {
             payload,
             component_scores: None,
             let_bindings: None,
+            point_id: None,
         }
     }
 
@@ -454,6 +464,7 @@ impl<'a> ScoreContext<'a> {
             payload,
             component_scores,
             let_bindings: None,
+            point_id: None,
         }
     }
 
@@ -469,7 +480,15 @@ impl<'a> ScoreContext<'a> {
             payload,
             component_scores,
             let_bindings,
+            point_id: None,
         }
+    }
+
+    /// This context for the point `id`, which the variable `id` reads.
+    #[must_use]
+    pub(crate) const fn for_point(mut self, id: u64) -> Self {
+        self.point_id = Some(id);
+        self
     }
 
     /// Resolves a variable name to a numeric value.
@@ -533,8 +552,13 @@ impl<'a> ScoreContext<'a> {
             .map(|(_, v)| *v)
     }
 
-    /// Resolves a variable name from the payload.
+    /// Resolves a variable name from the payload; `id` is the point id.
     fn resolve_payload_variable(&self, name: &str) -> f32 {
+        if let (Some(id), "id") = (self.point_id, name) {
+            // Reason: an arithmetic score is an f32, ids included.
+            #[allow(clippy::cast_precision_loss)]
+            return id as f32;
+        }
         self.payload
             .and_then(|p| crate::velesql::row_field(p, name))
             .and_then(serde_json::Value::as_f64)
@@ -557,15 +581,19 @@ pub(crate) fn evaluate_let_bindings(
     search_score: f32,
     payload: Option<&serde_json::Value>,
     component_scores: Option<&[(&'static str, f32)]>,
+    point_id: Option<u64>,
 ) -> Vec<(String, f32)> {
     let mut evaluated: Vec<(String, f32)> = Vec::with_capacity(bindings.len());
     for binding in bindings {
-        let ctx = ScoreContext::with_let_bindings(
+        let mut ctx = ScoreContext::with_let_bindings(
             search_score,
             payload,
             component_scores,
             Some(&evaluated),
         );
+        if let Some(id) = point_id {
+            ctx = ctx.for_point(id);
+        }
         let value = evaluate_arithmetic(&binding.expr, &ctx);
         evaluated.push((binding.name.clone(), value));
     }

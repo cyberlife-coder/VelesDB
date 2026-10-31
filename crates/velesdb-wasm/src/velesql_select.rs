@@ -53,22 +53,28 @@ pub(crate) fn execute(
         return crate::velesql_join::execute(db, &query.select, params);
     }
 
-    let rows = if let Some(vfs) =
-        crate::velesql_fused::find_fused_search(query.select.where_clause.as_ref())
-    {
-        crate::velesql_fused::execute_fused_search(db, &query.select, vfs, params)?
-    } else if let Some(vs) = find_vector_search(query.select.where_clause.as_ref()) {
-        execute_vector_search(db, &query.select, vs, params)?
-    } else {
-        execute_plain(db, &query.select, params)?
-    };
-
+    let rows = scan(db, &query.select, params)?;
     let higher_is_better = db
         .get_shared_store(&query.select.from)?
         .borrow()
         .metric
         .higher_is_better();
     finalize(&query.select, rows, params, higher_is_better)
+}
+
+/// The rows a SELECT keeps, by a fused, a vector or a plain scan.
+fn scan(
+    db: &mut DatabaseInner,
+    stmt: &SelectStatement,
+    params: &Params,
+) -> Result<Vec<OwnedScanRow>, String> {
+    if let Some(vfs) = crate::velesql_fused::find_fused_search(stmt.where_clause.as_ref()) {
+        crate::velesql_fused::execute_fused_search(db, stmt, vfs, params)
+    } else if let Some(vs) = find_vector_search(stmt.where_clause.as_ref()) {
+        execute_vector_search(db, stmt, vs, params)
+    } else {
+        execute_plain(db, stmt, params)
+    }
 }
 
 // --- Plain scan ----------------------------------------------------------

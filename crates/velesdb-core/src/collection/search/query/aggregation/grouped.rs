@@ -95,7 +95,7 @@ impl Collection {
                 };
                 self.runtime_where_passes(id, payload.as_ref(), &mut rt_ctx)?
             } else if let Some(ref f) = filter {
-                Self::point_passes_filter(f, id, payload.as_ref())
+                f.matches_point(id, payload.as_ref())
             } else {
                 true
             };

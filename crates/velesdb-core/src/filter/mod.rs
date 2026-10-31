@@ -23,15 +23,44 @@ mod conversion;
 #[cfg(test)]
 mod conversion_tests;
 mod matching;
+mod point_ids;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub(crate) use point_ids::exact_as_f64;
+
 /// A filter for metadata-based search refinement.
+///
+/// A filter is evaluated against a point — [`Filter::matches_point`] — so a
+/// condition converted from a `VelesQL` `id` column reads the point id. A
+/// JSON filter names payload fields only: deserializing one that names the
+/// internal point-id field fails.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "FilterRepr")]
 pub struct Filter {
     /// The root condition of the filter.
     pub condition: Condition,
+}
+
+/// The wire shape of a [`Filter`], checked before it becomes one.
+#[derive(Deserialize)]
+struct FilterRepr {
+    condition: Condition,
+}
+
+impl TryFrom<FilterRepr> for Filter {
+    type Error = String;
+
+    fn try_from(repr: FilterRepr) -> Result<Self, Self::Error> {
+        if repr.condition.names_field(POINT_ID_FIELD) {
+            return Err(format!(
+                "field `{POINT_ID_FIELD}` is reserved for VelesQL's point id; \
+                 a JSON filter's fields are payload paths"
+            ));
+        }
+        Ok(Self::new(repr.condition))
+    }
 }
 
 impl Filter {
@@ -51,25 +80,30 @@ impl Filter {
         serde_json::from_value(value).map_err(|e| format!("Invalid filter: {e}"))
     }
 
-    /// Evaluates the filter against a payload.
-    ///
-    /// Returns `true` if the payload matches the filter conditions.
-    #[must_use]
-    pub fn matches(&self, payload: &Value) -> bool {
-        self.condition.matches(payload)
-    }
-
     /// Evaluates the filter against a point: its payload (`None` reads as
-    /// `null`) and its id, which a `VelesQL` `id` column reads.
+    /// `null`, the same on every path) and its id, which a `VelesQL` `id`
+    /// column reads. There is no payload-only evaluation outside the crate:
+    /// a scope or WHERE built from `VelesQL` and tested without the id could
+    /// let `id != x` match every row.
     #[must_use]
     pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
         self.condition.matches_point(id, payload)
+    }
+
+    /// Evaluates the filter against a payload alone; a `VelesQL` `id`
+    /// column reads nothing. Crate tests only.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn matches(&self, payload: &Value) -> bool {
+        self.condition.matches(payload)
     }
 }
 
 /// The field a `VelesQL` `id` column becomes in a filter: the point id, as
 /// `id` reads in every clause of a query, never a payload field named `id`.
-/// A JSON filter's `"id"` field stays a payload field.
+/// A JSON filter's `"id"` field stays a payload field, and a JSON filter
+/// cannot name this one. The name is dotted, so a payload path never reaches
+/// it and the payload mirror, which mirrors no dotted path, never answers it.
 pub(crate) const POINT_ID_FIELD: &str = "@velesql.point_id";
 
 /// A condition for filtering metadata.

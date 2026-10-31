@@ -161,10 +161,12 @@ impl Collection {
         let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
             return;
         };
-        let Some(value) = super::where_eval::edge_property_path(&edge, property) else {
+        let Some(value) = super::where_eval::element_property(edge_id, property, |path| {
+            super::where_eval::edge_property_path(&edge, path)
+        }) else {
             return;
         };
-        projected.insert(projection_key(item), value.clone());
+        projected.insert(projection_key(item), value.into_owned());
     }
 
     /// Projects a dotted property across a variable-length alias's edge list
@@ -184,7 +186,12 @@ impl Collection {
                     .edge_store
                     .get_edge(edge_id)
                     .as_ref()
-                    .and_then(|edge| super::where_eval::edge_property_path(edge, property).cloned())
+                    .and_then(|edge| {
+                        super::where_eval::element_property(edge_id, property, |path| {
+                            super::where_eval::edge_property_path(edge, path)
+                        })
+                        .map(std::borrow::Cow::into_owned)
+                    })
                     .unwrap_or(serde_json::Value::Null)
             })
             .collect();
@@ -215,7 +222,13 @@ impl Collection {
         };
         if let Some(map) = payload.as_object() {
             for (key, value) in map {
-                projected.insert(format!("{alias}.{key}"), value.clone());
+                // `alias.id` is the node id, as everywhere in a MATCH.
+                let value = if key == "id" {
+                    serde_json::Value::from(node_id)
+                } else {
+                    value.clone()
+                };
+                projected.insert(format!("{alias}.{key}"), value);
             }
         }
     }
@@ -232,14 +245,12 @@ impl Collection {
         let Some(&node_id) = bindings.get(alias) else {
             return;
         };
-        let Some(payload) = memo.get(node_id) else {
-            return;
-        };
-        let Some(payload_map) = payload.as_object() else {
-            return;
-        };
-        if let Some(value) = Self::get_nested_property(payload_map, property) {
-            projected.insert(projection_key(item), value.clone());
+        let payload = memo.get(node_id);
+        let value = super::where_eval::element_property(node_id, property, |path| {
+            Self::get_nested_property(payload.as_deref()?.as_object()?, path)
+        });
+        if let Some(value) = value {
+            projected.insert(projection_key(item), value.into_owned());
         }
     }
 
@@ -463,9 +474,11 @@ impl Collection {
         results.sort_by(|a, b| {
             let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
                 let node_id = *r.bindings.get(alias)?;
-                let payload = payload_storage.retrieve(node_id).ok().flatten()?;
-                let object = payload.as_object()?;
-                Self::get_nested_property(object, property).cloned()
+                let payload = payload_storage.retrieve(node_id).ok().flatten();
+                super::where_eval::element_property(node_id, property, |path| {
+                    Self::get_nested_property(payload.as_ref()?.as_object()?, path)
+                })
+                .map(std::borrow::Cow::into_owned)
             };
 
             let a_value = get_value(a);

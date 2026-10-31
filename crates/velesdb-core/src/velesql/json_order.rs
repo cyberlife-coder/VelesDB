@@ -29,7 +29,7 @@ pub fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
 /// exactly, two floats as `f64`. Comparing an integer with a float as `f64`
 /// would round the integer and break transitivity: `2^53 + 1` would equal
 /// `2^53` as a float, which is less than it as an integer.
-fn compare_numbers(x: &serde_json::Number, y: &serde_json::Number) -> Ordering {
+pub(crate) fn compare_numbers(x: &serde_json::Number, y: &serde_json::Number) -> Ordering {
     match (integer(x), integer(y)) {
         (Some(x), Some(y)) => x.cmp(&y),
         (Some(x), None) => compare_integer_float(x, float(y)),

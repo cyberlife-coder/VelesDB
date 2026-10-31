@@ -51,10 +51,9 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
     match (a, b) {
         (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-        (Value::Number(a), Value::Number(b)) => a
-            .as_f64()
-            .zip(b.as_f64())
-            .map_or(Ordering::Equal, |(fa, fb)| fa.total_cmp(&fb)),
+        // Exactly, as `values_equal` compares two integers: the binary
+        // search below must not tie 2^53 with 2^53 + 1.
+        (Value::Number(a), Value::Number(b)) => crate::velesql::compare_numbers(a, b),
         (Value::String(a), Value::String(b)) => a.cmp(b),
         _ => Ordering::Equal,
     }
@@ -160,10 +159,12 @@ fn extract_geo_point(v: &Value) -> Option<(f64, f64)> {
 }
 
 impl Condition {
-    /// Evaluates the condition against a payload. A `VelesQL` `id` column
-    /// reads nothing here: no point id is known.
+    /// Evaluates the condition against a payload alone: a `VelesQL` `id`
+    /// column reads nothing here, no point id being known. Crate tests only:
+    /// every other caller supplies the point id ([`Self::matches_point`]).
+    #[cfg(test)]
     #[must_use]
-    pub fn matches(&self, payload: &Value) -> bool {
+    pub(crate) fn matches(&self, payload: &Value) -> bool {
         self.matches_record(Record { id: None, payload })
     }
 
@@ -179,34 +180,75 @@ impl Condition {
 
     fn matches_record(&self, record: Record<'_>) -> bool {
         match self {
+            Self::And { conditions } => conditions.iter().all(|c| c.matches_record(record)),
+            Self::Or { conditions } => conditions.iter().any(|c| c.matches_record(record)),
+            Self::Not { condition } => !condition.matches_record(record),
+            Self::Eq { .. }
+            | Self::Neq { .. }
+            | Self::Gt { .. }
+            | Self::Gte { .. }
+            | Self::Lt { .. }
+            | Self::Lte { .. }
+            | Self::In { .. }
+            | Self::IsNull { .. }
+            | Self::IsNotNull { .. } => self.matches_scalar(record),
+            _ => self.matches_text_array_geo(record),
+        }
+    }
+
+    /// Comparison, `IN` and null leaves.
+    fn matches_scalar(&self, record: Record<'_>) -> bool {
+        match self {
             Self::Eq { field, value } => {
                 get_field(record, field).is_some_and(|v| values_equal(&v, value))
             }
             Self::Neq { field, value } => {
                 get_field(record, field).is_none_or(|v| !values_equal(&v, value))
             }
-            Self::Gt { field, value } => get_field(record, field)
-                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_gt)),
-            Self::Gte { field, value } => get_field(record, field)
-                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_ge)),
-            Self::Lt { field, value } => get_field(record, field)
-                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_lt)),
-            Self::Lte { field, value } => get_field(record, field)
-                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_le)),
+            Self::Gt { .. } | Self::Gte { .. } | Self::Lt { .. } | Self::Lte { .. } => {
+                self.matches_ordering(record)
+            }
             Self::In { field, values } => {
                 get_field(record, field).is_some_and(|v| in_list_matches(&v, values))
             }
-            Self::Contains { field, value } => get_field(record, field)
-                .is_some_and(|v| v.as_str().is_some_and(|s| s.contains(value.as_str()))),
             Self::IsNull { field } => get_field(record, field).is_none_or(|v| v.is_null()),
             Self::IsNotNull { field } => get_field(record, field).is_some_and(|v| !v.is_null()),
-            Self::And { conditions } => conditions.iter().all(|c| c.matches_record(record)),
-            Self::Or { conditions } => conditions.iter().any(|c| c.matches_record(record)),
-            Self::Not { condition } => !condition.matches_record(record),
+            _ => false,
+        }
+    }
+
+    /// `>`, `>=`, `<` and `<=` leaves.
+    fn matches_ordering(&self, record: Record<'_>) -> bool {
+        use std::cmp::Ordering;
+        let (field, value, holds): (&str, &Value, fn(Ordering) -> bool) = match self {
+            Self::Gt { field, value } => (field, value, Ordering::is_gt),
+            Self::Gte { field, value } => (field, value, Ordering::is_ge),
+            Self::Lt { field, value } => (field, value, Ordering::is_lt),
+            Self::Lte { field, value } => (field, value, Ordering::is_le),
+            _ => return false,
+        };
+        get_field(record, field).is_some_and(|v| compare_values(&v, value).is_some_and(holds))
+    }
+
+    /// Text, array and geospatial leaves.
+    fn matches_text_array_geo(&self, record: Record<'_>) -> bool {
+        match self {
+            Self::Contains { field, value } => get_field(record, field)
+                .is_some_and(|v| v.as_str().is_some_and(|s| s.contains(value.as_str()))),
             Self::Like { field, pattern } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
             Self::ILike { field, pattern } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
+            Self::ArrayContains { .. }
+            | Self::ArrayContainsAny { .. }
+            | Self::ArrayContainsAll { .. } => self.matches_array(record),
+            _ => self.matches_geo(record),
+        }
+    }
+
+    /// Array leaves.
+    fn matches_array(&self, record: Record<'_>) -> bool {
+        match self {
             Self::ArrayContains { field, value } => match_array_condition(
                 record,
                 field,
@@ -219,6 +261,13 @@ impl Condition {
             Self::ArrayContainsAll { field, values } => {
                 match_array_condition(record, field, values, ArrayMode::All)
             }
+            _ => false,
+        }
+    }
+
+    /// Geospatial leaves.
+    fn matches_geo(&self, record: Record<'_>) -> bool {
+        match self {
             Self::GeoDistance {
                 field,
                 lat,
@@ -233,6 +282,7 @@ impl Condition {
                 lat_max,
                 lng_max,
             } => match_geo_bbox(record, field, *lat_min, *lng_min, *lat_max, *lng_max),
+            _ => false,
         }
     }
 }
@@ -250,17 +300,26 @@ fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
     Some(Cow::Borrowed(current))
 }
 
-/// Compares two JSON values for equality.
+/// An integer number widened to `i128`, which holds every `i64` and `u64`.
+fn integer(n: &serde_json::Number) -> Option<i128> {
+    n.as_i64()
+        .map(i128::from)
+        .or_else(|| n.as_u64().map(i128::from))
+}
+
+/// Compares two JSON values for equality: two integers exactly (beyond
+/// 2^53, as point ids can be), any other two numbers within `f64::EPSILON`.
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Number(a), Value::Number(b)) => {
-            // Compare as f64 for numeric comparison
-            a.as_f64()
+        (Value::Number(a), Value::Number(b)) => match (integer(a), integer(b)) {
+            (Some(a), Some(b)) => a == b,
+            _ => a
+                .as_f64()
                 .zip(b.as_f64())
-                .is_some_and(|(a, b)| (a - b).abs() < f64::EPSILON)
-        }
+                .is_some_and(|(a, b)| (a - b).abs() < f64::EPSILON),
+        },
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Array(a), Value::Array(b)) => a == b,
         (Value::Object(a), Value::Object(b)) => a == b,
@@ -276,10 +335,13 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 /// matches SQL three-valued logic where `NULL op X` yields `UNKNOWN` (false).
 fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => a
-            .as_f64()
-            .zip(b.as_f64())
-            .and_then(|(fa, fb)| fa.partial_cmp(&fb)),
+        (Value::Number(a), Value::Number(b)) => match (integer(a), integer(b)) {
+            (Some(a), Some(b)) => Some(a.cmp(&b)),
+            _ => a
+                .as_f64()
+                .zip(b.as_f64())
+                .and_then(|(fa, fb)| fa.partial_cmp(&fb)),
+        },
         (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
         _ => None,
     }

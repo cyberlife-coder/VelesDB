@@ -422,6 +422,9 @@ pub enum IndexType {
     BinaryQuantization,
     /// Property index for equality lookups.
     Property,
+    /// Direct lookup of the points `id = n` or `id IN (...)` names: `id` is
+    /// the point id, which needs no index.
+    PointId,
 }
 
 /// Strategy for applying filters.

@@ -94,8 +94,7 @@ impl QueryValidator {
         }
         Self::validate_similarity_context(stmt)?;
         Self::validate_qualified_wildcards(stmt)?;
-        Self::validate_vector_group_by(stmt)?;
-        super::grouped_order::validate_grouped_rows(stmt)?;
+        Self::validate_aggregation(stmt)?;
         super::validation_fusion::validate_fusion(stmt)?;
         #[cfg(feature = "persistence")]
         Self::validate_with_options(stmt)?;
@@ -501,11 +500,13 @@ impl QueryValidator {
         }
     }
 
-    /// Validates vector-search GROUP BY semantic constraints.
+    /// Validates aggregates and the rows they output.
     ///
     /// - `FIRST(column)` requires GROUP BY
     /// - `MAX(score)` / `AVG(score)` requires vector NEAR in WHERE
-    fn validate_vector_group_by(stmt: &super::ast::SelectStatement) -> Result<(), ValidationError> {
+    /// - output names, ORDER BY and HAVING over grouped rows (`V016`–`V018`,
+    ///   in `grouped_order.rs`)
+    fn validate_aggregation(stmt: &super::ast::SelectStatement) -> Result<(), ValidationError> {
         let aggregations = Self::collect_aggregations(&stmt.columns);
         let has_group_by = stmt.group_by.is_some();
         let has_vector_near = stmt
@@ -516,7 +517,7 @@ impl QueryValidator {
         for agg in &aggregations {
             Self::validate_single_aggregate(agg, has_group_by, has_vector_near)?;
         }
-        Ok(())
+        super::grouped_order::validate_grouped_rows(stmt)
     }
 
     /// Validates a single aggregate function for vector GROUP BY constraints.

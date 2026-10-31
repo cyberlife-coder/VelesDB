@@ -76,7 +76,7 @@ fn bench_filter_eq_string(c: &mut Criterion) {
                 let matches: Vec<_> = payloads
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| filter.matches(black_box(p)))
+                    .filter(|(_, p)| filter.matches_point(0, Some(black_box(p))))
                     .map(|(i, _)| i)
                     .collect();
                 black_box(matches)
@@ -111,7 +111,7 @@ fn bench_filter_eq_int(c: &mut Criterion) {
                 let matches: Vec<_> = payloads
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| filter.matches(black_box(p)))
+                    .filter(|(_, p)| filter.matches_point(0, Some(black_box(p))))
                     .map(|(i, _)| i)
                     .collect();
                 black_box(matches)
@@ -155,7 +155,7 @@ fn bench_filter_range_int(c: &mut Criterion) {
                 let matches: Vec<_> = payloads
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| filter.matches(black_box(p)))
+                    .filter(|(_, p)| filter.matches_point(0, Some(black_box(p))))
                     .map(|(i, _)| i)
                     .collect();
                 black_box(matches)
@@ -199,7 +199,7 @@ fn bench_filter_in_string(c: &mut Criterion) {
                 let matches: Vec<_> = payloads
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| filter.matches(black_box(p)))
+                    .filter(|(_, p)| filter.matches_point(0, Some(black_box(p))))
                     .map(|(i, _)| i)
                     .collect();
                 black_box(matches)
@@ -239,7 +239,7 @@ fn bench_throughput_scaling(c: &mut Criterion) {
             bencher.iter(|| {
                 payloads
                     .iter()
-                    .filter(|p| filter.matches(black_box(p)))
+                    .filter(|p| filter.matches_point(0, Some(black_box(p))))
                     .count()
             });
         });

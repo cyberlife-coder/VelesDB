@@ -60,23 +60,7 @@ pub(crate) fn apply(
     params: &Params,
     higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
-    let having = stmt
-        .having
-        .as_ref()
-        .map(|having| bind_having(having, params))
-        .transpose()?;
-    let mut grouper =
-        Grouper::new(stmt, having.as_ref(), higher_is_better).map_err(|e| e.to_string())?;
-    // Id order, as core feeds its grouper: a float SUM or AVG then adds its
-    // values in the same order in both engines.
-    let mut ordered: Vec<&ScannedRow<'_>> = rows.iter().collect();
-    ordered.sort_unstable_by_key(|row| row.0);
-    for &&(id, score, payload) in &ordered {
-        grouper
-            .push(GroupInput::new(id, score, payload))
-            .map_err(|e| e.to_string())?;
-    }
-    let groups = grouper.finish();
+    let groups = group_rows(stmt, rows, params, higher_is_better)?;
     if stmt.is_vector_group_by() {
         return crate::velesql_vector_group::order_groups(stmt, groups, higher_is_better);
     }
@@ -94,6 +78,33 @@ pub(crate) fn apply(
         .into_iter()
         .map(QueryResultRow::synthetic)
         .collect()
+}
+
+/// The groups of `rows`, HAVING (its parameters bound from `params`)
+/// applied, in the grouper's order.
+fn group_rows(
+    stmt: &SelectStatement,
+    rows: &[ScannedRow<'_>],
+    params: &Params,
+    higher_is_better: bool,
+) -> Result<Vec<GroupOutput>, String> {
+    let having = stmt
+        .having
+        .as_ref()
+        .map(|having| bind_having(having, params))
+        .transpose()?;
+    let mut grouper =
+        Grouper::new(stmt, having.as_ref(), higher_is_better).map_err(|e| e.to_string())?;
+    // Id order, as core feeds its grouper: a float SUM or AVG then adds its
+    // values in the same order in both engines.
+    let mut ordered: Vec<&ScannedRow<'_>> = rows.iter().collect();
+    ordered.sort_unstable_by_key(|row| row.0);
+    for &&(id, score, payload) in &ordered {
+        grouper
+            .push(GroupInput::new(id, score, payload))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(grouper.finish())
 }
 
 /// `having` with each threshold parameter bound from `params`.
@@ -124,20 +135,23 @@ fn threshold(value: &Value, params: &Params) -> Result<Value, String> {
         return Ok(value.clone());
     }
     Ok(match resolve_value(value, params)? {
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Integer(i)
-            } else if let Some(u) = n.as_u64() {
-                Value::UnsignedInteger(u)
-            } else {
-                Value::Float(n.as_f64().unwrap_or(f64::NAN))
-            }
-        }
+        serde_json::Value::Number(n) => number_literal(&n),
         serde_json::Value::String(s) => Value::String(s),
         serde_json::Value::Bool(b) => Value::Boolean(b),
         serde_json::Value::Null => Value::Null,
         other => return Err(format!("Unsupported parameter type for HAVING: {other}")),
     })
+}
+
+/// A JSON number as the `VelesQL` literal core binds it to.
+fn number_literal(n: &serde_json::Number) -> Value {
+    if let Some(i) = n.as_i64() {
+        Value::Integer(i)
+    } else if let Some(u) = n.as_u64() {
+        Value::UnsignedInteger(u)
+    } else {
+        Value::Float(n.as_f64().unwrap_or(f64::NAN))
+    }
 }
 
 /// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved to row

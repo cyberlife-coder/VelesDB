@@ -61,6 +61,7 @@ mod explain_tests;
 mod graph_pattern;
 #[cfg(test)]
 mod graph_pattern_tests;
+mod group_key;
 #[cfg(test)]
 mod groupby_tests;
 mod grouped_order;
@@ -69,6 +70,7 @@ mod grouped_order_tests;
 pub(crate) mod grouping;
 #[cfg(test)]
 mod grouping_tests;
+mod having_eval;
 #[cfg(test)]
 mod having_tests;
 #[cfg(test)]
@@ -299,6 +301,7 @@ pub use explain::{
 };
 pub use grouping::{row_field, GroupInput, GroupOutput, Grouper};
 pub use json_order::compare_json_values;
+pub(crate) use json_order::compare_numbers;
 pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{

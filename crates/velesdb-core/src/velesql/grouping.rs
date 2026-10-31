@@ -6,18 +6,18 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 use rustc_hash::FxHasher;
 
 use super::aggregator::{AggregateResult, Aggregator};
 use super::ast::{
-    AggregateFunction, AggregateType, CompareOp, HavingClause, LogicalOp, SelectColumns,
-    SelectStatement, Value, WithClause, WithValue,
+    AggregateFunction, AggregateType, HavingClause, SelectColumns, SelectStatement, WithClause,
+    WithValue,
 };
+use super::group_key::{hash_key_value, normalise, same_key};
 use super::grouped_order::vector_group_score_is_average;
 use super::json_order::compare_json_values;
-use super::validation::{ValidationError, ValidationErrorKind};
 
 /// A row offered to a [`Grouper`].
 #[derive(Debug, Clone, Copy)]
@@ -430,70 +430,6 @@ fn read<'r>(
     }
 }
 
-/// A number as a group key: an integer — an integral float that an `i64` or
-/// `u64` holds included (`1.0`, `-0.0`, `2^53`) — or any other float by its
-/// bits. Two numbers are one key exactly when [`compare_json_values`] finds
-/// them equal: no other float equals an integer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum NumberKey {
-    Integer(i128),
-    Float(u64),
-}
-
-/// 2^64: an integral float below it, and at least -2^63, is an `i64` or a
-/// `u64`.
-const U64_RANGE_END: f64 = 18_446_744_073_709_551_616.0;
-const I64_RANGE_START: f64 = -9_223_372_036_854_775_808.0;
-
-impl NumberKey {
-    fn of(n: &serde_json::Number) -> Self {
-        if let Some(integer) = super::json_order::integer(n) {
-            return Self::Integer(integer);
-        }
-        let f = n.as_f64().unwrap_or(0.0);
-        let integral = matches!(f.fract().classify(), std::num::FpCategory::Zero);
-        if integral && (I64_RANGE_START..U64_RANGE_END).contains(&f) {
-            // Reason: `f` is integral and within the i64/u64 range: exact.
-            #[allow(clippy::cast_possible_truncation)]
-            Self::Integer(f as i128)
-        } else {
-            Self::Float(f.to_bits())
-        }
-    }
-
-    /// The number this key stands for, one representation per key.
-    fn to_json(self, original: &serde_json::Number) -> serde_json::Value {
-        match self {
-            Self::Integer(i) => i64::try_from(i)
-                .map(serde_json::Value::from)
-                .or_else(|_| u64::try_from(i).map(serde_json::Value::from))
-                .unwrap_or_else(|_| serde_json::Value::Number(original.clone())),
-            Self::Float(_) => serde_json::Value::Number(original.clone()),
-        }
-    }
-}
-
-/// A group key value with one representation per number ([`NumberKey`]):
-/// `1.0` is stored as `1`, `-0.0` as `0`. Every other value is kept.
-fn normalise(value: Cow<'_, serde_json::Value>) -> serde_json::Value {
-    match value.as_ref() {
-        serde_json::Value::Number(n) => NumberKey::of(n).to_json(n),
-        _ => value.into_owned(),
-    }
-}
-
-/// Whether a row's key value is the stored (normalised) one.
-fn same_key(stored: &serde_json::Value, value: Option<&serde_json::Value>) -> bool {
-    match (stored, value) {
-        (serde_json::Value::Null, None) => true,
-        (serde_json::Value::Number(a), Some(serde_json::Value::Number(b))) => {
-            NumberKey::of(a) == NumberKey::of(b)
-        }
-        (stored, Some(value)) => stored == value,
-        (_, None) => false,
-    }
-}
-
 /// Orders group keys column by column in ORDER BY's value order.
 fn compare_keys(a: &[serde_json::Value], b: &[serde_json::Value]) -> std::cmp::Ordering {
     a.iter()
@@ -503,106 +439,11 @@ fn compare_keys(a: &[serde_json::Value], b: &[serde_json::Value]) -> std::cmp::O
         .unwrap_or(std::cmp::Ordering::Equal)
 }
 
-impl HavingClause {
-    /// Whether a group whose aggregates are `result` passes this HAVING, with
-    /// SQL's precedence: `AND` binds tighter than `OR`, so `a OR b AND c` is
-    /// `a OR (b AND c)`.
-    pub(crate) fn accepts(&self, result: &AggregateResult) -> bool {
-        let mut verdicts = self
-            .conditions
-            .iter()
-            .map(|c| compare(result.value_of(&c.aggregate).as_f64(), c.operator, &c.value));
-        let Some(first) = verdicts.next() else {
-            return true;
-        };
-        let (mut any, mut all) = (false, first);
-        for (i, verdict) in verdicts.enumerate() {
-            match self.operators.get(i).copied().unwrap_or(LogicalOp::And) {
-                LogicalOp::And => all = all && verdict,
-                LogicalOp::Or => {
-                    any = any || all;
-                    all = verdict;
-                }
-            }
-        }
-        any || all
-    }
-
-    /// `V018` unless every threshold is a number or `NULL`, which, SQL's
-    /// UNKNOWN, matches no group. Before execution (`bound == false`) a
-    /// `$parameter` or a scalar subquery passes too: both are replaced by
-    /// their value before the query runs, and checked again then, by
-    /// [`Grouper::new`].
-    pub(crate) fn check_thresholds(&self, bound: bool) -> Result<(), ValidationError> {
-        let accepted = |value: &Value| match value {
-            Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_) | Value::Null => true,
-            Value::Parameter(_) | Value::Subquery(_) => !bound,
-            _ => false,
-        };
-        match self.conditions.iter().find(|c| !accepted(&c.value)) {
-            Some(condition) => {
-                let threshold = threshold_text(&condition.value);
-                Err(ValidationError::new(
-                    ValidationErrorKind::InvalidHaving,
-                    None,
-                    threshold.clone(),
-                    format!(
-                        "HAVING compares an aggregate with {threshold}: a threshold must be \
-                         a number (or NULL, which matches no group)"
-                    ),
-                ))
-            }
-            None => Ok(()),
-        }
-    }
-}
-
-/// A threshold as the query states it: a literal as JSON (`"many"`,
-/// `true`), anything else as VelesQL writes it.
-fn threshold_text(value: &Value) -> String {
-    match value {
-        Value::String(s) => serde_json::Value::String(s.clone()).to_string(),
-        Value::Boolean(b) => b.to_string(),
-        Value::Integer(i) => i.to_string(),
-        Value::UnsignedInteger(u) => u.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Parameter(name) => format!("${name}"),
-        Value::Temporal(_) => "a date or time".to_string(),
-        Value::Subquery(_) => "a subquery".to_string(),
-    }
-}
-
 /// The mean of `rows` scores summing to `sum`.
 // Reason: a mean of f32 scores; the row count is bounded by the result set.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn mean(sum: f64, rows: u64) -> f32 {
     (sum / rows as f64) as f32
-}
-
-/// Compares an aggregate against a HAVING threshold. A missing aggregate or a
-/// non-numeric threshold fails; equality allows for float rounding in sums.
-fn compare(aggregate: Option<f64>, op: CompareOp, threshold: &Value) -> bool {
-    let Some(value) = aggregate else {
-        return false;
-    };
-    // Reason: thresholds compare as f64, like the aggregates they test.
-    #[allow(clippy::cast_precision_loss)]
-    let threshold = match threshold {
-        Value::Integer(i) => *i as f64,
-        Value::UnsignedInteger(u) => *u as f64,
-        Value::Float(f) => *f,
-        _ => return false,
-    };
-    let epsilon = f64::EPSILON * value.abs().max(threshold.abs()).max(1.0);
-    match op {
-        CompareOp::Eq => (value - threshold).abs() < epsilon,
-        CompareOp::NotEq => (value - threshold).abs() >= epsilon,
-        CompareOp::Gt => value > threshold,
-        CompareOp::Gte => value >= threshold,
-        CompareOp::Lt => value < threshold,
-        CompareOp::Lte => value <= threshold,
-    }
 }
 
 /// A payload value by dotted path (`meta.lang`), as WHERE reads it.
@@ -646,29 +487,5 @@ fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
         (false, true) => std::cmp::Ordering::Less,
         (false, false) if higher_is_better => b.total_cmp(&a),
         (false, false) => a.total_cmp(&b),
-    }
-}
-
-/// Hashes a row's key value, a missing one as `null`, numbers by
-/// [`NumberKey`], so values [`same_key`] finds equal hash alike.
-fn hash_key_value(value: Option<&serde_json::Value>, hasher: &mut FxHasher) {
-    match value.unwrap_or(&serde_json::Value::Null) {
-        serde_json::Value::Null => 0u8.hash(hasher),
-        serde_json::Value::Bool(b) => {
-            1u8.hash(hasher);
-            b.hash(hasher);
-        }
-        serde_json::Value::Number(n) => {
-            2u8.hash(hasher);
-            NumberKey::of(n).hash(hasher);
-        }
-        serde_json::Value::String(s) => {
-            3u8.hash(hasher);
-            s.hash(hasher);
-        }
-        other => {
-            4u8.hash(hasher);
-            other.to_string().hash(hasher);
-        }
     }
 }

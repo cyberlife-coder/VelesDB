@@ -168,8 +168,9 @@ impl Collection {
             ),
             where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
         };
-        // Id order, so a float SUM or AVG adds its values in the same order
-        // on every run, whatever the storage order.
+        // Id order, so a float SUM or AVG is the same on every run, whatever
+        // the storage order: the parallel path sums fixed chunks of this
+        // order and merges them in order.
         let mut ids: Vec<u64> = vector_storage.ids();
         ids.sort_unstable();
 
@@ -195,16 +196,6 @@ impl Collection {
         }
     }
 
-    /// Returns true if the point — its id and payload — passes the static
-    /// filter; a `VelesQL` `id` column reads the point id.
-    pub(super) fn point_passes_filter(
-        filter: &crate::filter::Filter,
-        id: u64,
-        payload: Option<&serde_json::Value>,
-    ) -> bool {
-        filter.matches_point(id, payload)
-    }
-
     /// Parallel aggregation that streams payloads per chunk (#901).
     ///
     /// Each chunk of IDs retrieves its own payloads inside the rayon closure,
@@ -223,7 +214,7 @@ impl Collection {
                 for &id in chunk {
                     let payload = payload_storage.retrieve(id).ok().flatten();
                     if let Some(f) = filter {
-                        if !Self::point_passes_filter(f, id, payload.as_ref()) {
+                        if !f.matches_point(id, payload.as_ref()) {
                             continue;
                         }
                     }
@@ -287,7 +278,7 @@ impl Collection {
             };
             self.runtime_where_passes(id, payload, &mut where_ctx)
         } else if let Some(f) = ctx.filter {
-            Ok(Self::point_passes_filter(f, id, payload))
+            Ok(f.matches_point(id, payload))
         } else {
             Ok(true)
         }
