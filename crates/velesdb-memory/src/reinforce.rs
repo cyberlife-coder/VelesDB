@@ -60,18 +60,17 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// agent's memory learns which facts are worth surfacing.
     ///
     /// # Concurrency
-    /// The update is a read-modify-write that is **not** atomic across the
-    /// `get_metadata`/`update_metadata` pair. Two `feedback` calls racing on the
-    /// same `id` are last-writer-wins: one increment can be lost. This is
-    /// acceptable for a soft, approximate ranking signal — feedback still moves
-    /// confidence in the right direction — but callers needing exact tallies
-    /// must serialize their own calls per id.
+    /// Atomic per fact: the read of the current confidence and tallies and
+    /// the write of the update happen under the fact's write lock, which a
+    /// re-store of the same fact also takes. Concurrent `feedback` calls on
+    /// one id are applied one after another, each counted exactly once.
     ///
     /// # Errors
     /// Returns [`MemoryError::UnknownMemory`] if `id` is not a live fact, or a
     /// storage error if the read-back or persist fails.
     pub fn feedback(&self, id: u64, success: bool) -> Result<f32, MemoryError> {
         let _generation = self.enter_generation();
+        let _fact = self.fact_locks.for_fact(id);
         // Raw payload (reserved keys included) so we can read the current RL
         // state the caller-facing metadata hides.
         let payload = self

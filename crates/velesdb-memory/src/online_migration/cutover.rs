@@ -196,6 +196,7 @@ fn retire<E: Embedder>(generation: ActiveGeneration<E>) -> RetiredGeneration<E> 
         autograph,
         autograph_queue,
         generation_gate: _,
+        fact_locks: _,
     } = generation.service;
     drop(store);
     RetiredGeneration {
@@ -251,6 +252,9 @@ fn assemble<E: Embedder>(
             autograph: runtime.autograph,
             autograph_queue: runtime.autograph_queue,
             generation_gate: crate::service::GenerationGate::new(),
+            // A new store, so a new table: the swap holds the generation gate
+            // exclusively, so no write still holds a stripe of the old one.
+            fact_locks: crate::service::FactWriteLocks::default(),
         },
         model,
     }

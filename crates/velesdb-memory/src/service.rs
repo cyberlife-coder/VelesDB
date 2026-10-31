@@ -153,6 +153,7 @@ pub struct MemoryService<E: Embedder, S: FactStore = NativeStore> {
     autograph: Option<crate::extract::DynExtractor>,
     autograph_queue: AutographQueue,
     generation_gate: GenerationGate,
+    fact_locks: FactWriteLocks,
 }
 #[cfg(not(feature = "persistence"))]
 pub struct MemoryService<E: Embedder, S: FactStore> {
@@ -161,11 +162,16 @@ pub struct MemoryService<E: Embedder, S: FactStore> {
     autograph: Option<crate::extract::DynExtractor>,
     autograph_queue: AutographQueue,
     generation_gate: GenerationGate,
+    fact_locks: FactWriteLocks,
 }
 
 #[path = "service_generation.rs"]
 mod service_generation;
 use service_generation::{GenerationGate, GenerationGuard};
+
+#[path = "service_fact_locks.rs"]
+mod service_fact_locks;
+use service_fact_locks::FactWriteLocks;
 
 /// One deferred autograph: the stored fact a background worker will read for
 /// entities, edges and attributes (#1846).
@@ -251,6 +257,7 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
             autograph: None,
             autograph_queue: AutographQueue::default(),
             generation_gate: GenerationGate::new(),
+            fact_locks: FactWriteLocks::default(),
         })
     }
 
@@ -286,6 +293,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             autograph: None,
             autograph_queue: AutographQueue::default(),
             generation_gate: GenerationGate::new(),
+            fact_locks: FactWriteLocks::default(),
         }
     }
 
@@ -348,6 +356,10 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     ) -> Result<(), MemoryError> {
         let embedding = self.embedder.embed(fact)?;
         let stamped = stamp_with_today(metadata);
+        // Serialized per fact with `feedback`: a re-store carries the fact's
+        // learned `_veles_*` state forward, and must not interleave with a
+        // confidence update it would then overwrite.
+        let _fact = self.fact_locks.for_fact(fact_id);
         // `ttl_seconds` is already known positive-or-absent: `validate_write`
         // refuses an explicit `Some(0)` before any of this runs.
         self.store_fact(fact_id, fact, &embedding, stamped.as_ref(), ttl_seconds)
