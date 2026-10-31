@@ -124,8 +124,8 @@ async fn setup() -> (TempDir, Router, Arc<PolicyObserver>) {
     (dir, app, observer)
 }
 
-fn query_body(sql: &str) -> Option<Value> {
-    Some(json!({"query": sql, "params": {}}))
+fn query_body(sql: &str) -> Value {
+    json!({"query": sql, "params": {}})
 }
 
 /// GIVEN `items` scoped to `cat = 'a'`
@@ -138,7 +138,7 @@ async fn aggregate_endpoints_count_only_the_scoped_rows() {
         &app,
         "POST",
         "/aggregate",
-        query_body("SELECT COUNT(*) AS n FROM items"),
+        Some(query_body("SELECT COUNT(*) AS n FROM items")),
     )
     .await;
     assert_eq!(unscoped["result"]["n"], 6, "{unscoped}");
@@ -150,7 +150,7 @@ async fn aggregate_endpoints_count_only_the_scoped_rows() {
             &app,
             "POST",
             endpoint,
-            query_body("SELECT COUNT(*) AS n FROM items"),
+            Some(query_body("SELECT COUNT(*) AS n FROM items")),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{endpoint}: {body}");
@@ -170,7 +170,9 @@ async fn aggregate_group_by_returns_only_the_scoped_groups() {
         &app,
         "POST",
         "/aggregate",
-        query_body("SELECT cat, COUNT(*) AS n FROM items GROUP BY cat"),
+        Some(query_body(
+            "SELECT cat, COUNT(*) AS n FROM items GROUP BY cat",
+        )),
     )
     .await;
 
@@ -193,7 +195,7 @@ async fn aggregate_endpoints_refuse_a_denied_read() {
             &app,
             "POST",
             endpoint,
-            query_body("SELECT COUNT(*) AS n FROM items"),
+            Some(query_body("SELECT COUNT(*) AS n FROM items")),
         )
         .await;
         assert!(
