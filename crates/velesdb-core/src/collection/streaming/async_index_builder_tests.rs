@@ -1,6 +1,6 @@
 //! Tests for `AsyncIndexBuilder`.
 
-use super::async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
+use super::async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig, FlushOutcome};
 use crate::distance::DistanceMetric;
 use crate::index::hnsw::HnswIndex;
 use crate::index::VectorIndex;
@@ -112,10 +112,11 @@ fn test_flush_sync_indexes_vectors() {
     builder.enqueue(ids_of(&points));
     assert_eq!(builder.pending_len(), 20);
 
-    let indexed = builder
+    let outcome = builder
         .flush_sync(&index, &indexing(&index, &points))
         .unwrap();
-    assert_eq!(indexed, 20);
+    assert_eq!(outcome.indexed, 20);
+    assert_eq!(outcome.kept, 0);
     assert_eq!(builder.pending_len(), 0);
     assert_eq!(index.len(), 20);
 }
@@ -124,8 +125,8 @@ fn test_flush_sync_indexes_vectors() {
 fn test_flush_sync_empty_buffer() {
     let index = make_index(4);
     let builder = AsyncIndexBuilder::new(default_config());
-    let indexed = builder.flush_sync(&index, &nothing_stored).unwrap();
-    assert_eq!(indexed, 0);
+    let outcome = builder.flush_sync(&index, &nothing_stored).unwrap();
+    assert_eq!(outcome, FlushOutcome::default());
 }
 
 /// A flush indexes what storage holds for each queued id when it runs: a
@@ -140,7 +141,10 @@ fn a_flush_inserts_what_storage_holds_now() {
     builder.enqueue(ids_of(&queued));
     let now = vec![(0_u64, vec![0.0_f32, 0.0, 1.0, 0.0])];
 
-    let settled = builder.flush_sync(&index, &indexing(&index, &now)).unwrap();
+    let settled = builder
+        .flush_sync(&index, &indexing(&index, &now))
+        .unwrap()
+        .indexed;
 
     assert_eq!(settled, 2, "one id inserted, one found deleted");
     assert_eq!(index.len(), 1);
@@ -165,12 +169,12 @@ fn flush_sync_skips_while_another_flush_runs() {
     builder.enqueue(ids_of(&points));
 
     builder.force_set_building(true);
-    let indexed = builder
+    let outcome = builder
         .flush_sync(&index, &indexing(&index, &points))
         .expect("test: a skipped flush");
     builder.force_set_building(false);
 
-    assert_eq!(indexed, 0);
+    assert_eq!(outcome, FlushOutcome::default());
     assert_eq!(builder.pending_len(), 5, "the buffer is untouched");
     assert_eq!(index.len(), 0, "the index did not change");
 }
@@ -254,22 +258,21 @@ fn a_failed_link_leaves_the_ids_on_the_queue() {
 }
 
 /// An id the flush's indexing did not settle (its read or insert failed)
-/// stays queued, and searchable, for the next flush — and the flush says
-/// so, rather than reporting success.
+/// stays queued, and searchable, for the next flush. The flush succeeds and
+/// counts it: a state a later flush retries is no failure for its caller.
+/// An id queued twice is counted once.
 #[test]
 fn an_id_a_flush_did_not_settle_stays_queued() {
     let index = make_index(4);
     let builder = AsyncIndexBuilder::new(default_config());
-    builder.enqueue([1, 2, 3]);
+    builder.enqueue([1, 2, 3, 1]);
 
-    let err = builder
+    let outcome = builder
         .flush_sync(&index, &|_| vec![2])
-        .expect_err("test: two ids were not indexed");
+        .expect("test: kept ids do not fail the flush");
 
-    assert!(
-        err.to_string().contains('2'),
-        "the error counts them: {err}"
-    );
+    assert_eq!(outcome.kept, 2, "ids 1 and 3, each once");
+    assert_eq!(outcome.indexed, 1);
     assert_eq!(builder.pending_ids(), vec![1, 3]);
 }
 
@@ -308,7 +311,8 @@ fn a_flush_that_panics_lets_the_next_one_run() {
 
     let settled = builder
         .flush_sync(&index, &nothing_stored)
-        .expect("test: flush");
+        .expect("test: flush")
+        .indexed;
 
     assert_eq!(settled, 1, "the second flush ran");
     assert!(builder.pending_ids().is_empty());

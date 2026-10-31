@@ -16,7 +16,7 @@ pub mod deferred;
 #[cfg(feature = "persistence")]
 mod ingester;
 
-pub use async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
+pub use async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig, FlushOutcome};
 
 #[cfg(feature = "persistence")]
 pub use deferred::{DeferredIndexer, DeferredIndexerConfig};

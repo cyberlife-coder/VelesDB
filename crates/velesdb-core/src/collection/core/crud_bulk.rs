@@ -102,10 +102,13 @@ impl Collection {
             None => aib.enqueue(points.iter().map(|p| p.id)),
         };
 
-        if needs_flush {
-            // Buffer reached merge_threshold — flush synchronously.
-            aib.flush_sync(&self.storage.index, &|ids| self.index_current(ids))?;
-        }
+        // Buffer reached merge_threshold — flush synchronously. Its ids the
+        // flush keeps stay queued, and searchable, for the next one: the
+        // builder logs them, and the write still succeeds. A failed link
+        // still fails it — after the bookkeeping below, which the stored
+        // points need whatever the index did with them.
+        let flushed = needs_flush
+            .then(|| aib.flush_sync(&self.storage.index, &|ids| self.index_current(ids)));
 
         let count = vector_refs.len();
         self.finalize_bulk_upsert(points, entries.len(), sparse_batch)?;
@@ -120,6 +123,7 @@ impl Collection {
             "upsert_bulk V2 path: inserted {count} vectors via DirectVectorWriter + AsyncIndexBuilder"
         );
 
+        flushed.transpose()?;
         Ok(count)
     }
 

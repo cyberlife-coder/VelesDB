@@ -18,9 +18,11 @@
 //!
 //! A queue can outgrow `merge_threshold`: a call that finds another flush
 //! running leaves what it queued to the next one, and a flush whose link
-//! fails keeps its ids queued. Every `upsert_bulk` that finds a queue at or
-//! over the threshold flushes again, and returns the error of a link that
-//! keeps failing, so the queue grows only while every write reports why.
+//! fails keeps its ids queued, as does one whose indexing could not settle an
+//! id. Every `upsert_bulk` that finds a queue at or over the threshold
+//! flushes again: it returns the error of a link that keeps failing, and logs
+//! a warning counting the ids a flush kept, so the queue grows only while
+//! every write reports why.
 //!
 //! # Lock ordering
 //!
@@ -47,6 +49,18 @@ impl Drop for Building<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
+}
+
+/// What one [`AsyncIndexBuilder::flush_sync`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct FlushOutcome {
+    /// Buffered ids settled plus placed ids linked.
+    pub indexed: usize,
+    /// Distinct buffered ids the flush could not settle. They stay queued,
+    /// and searchable, for the next flush; a caller reports them, it does
+    /// not fail on them.
+    pub kept: usize,
 }
 
 /// Configuration for the async index builder.
@@ -175,46 +189,51 @@ impl AsyncIndexBuilder {
     /// returns the ids it settled (inserted, held by the graph already as
     /// storage holds them, or deleted), and links the queued placed ids
     /// where the direct writer placed their vectors, placing nothing.
-    /// Returns the number of buffered ids settled plus the nodes linked.
     ///
     /// Each queue keeps an id until it is indexed, so `Self::pending_ids`
-    /// still names it meanwhile; an id `index_current` did not settle, and
-    /// the ids of a failed link, stay queued for the next flush, and the
-    /// flush returns an error that says so.
+    /// still names it meanwhile. An id `index_current` did not settle stays
+    /// queued for the next flush and is counted in [`FlushOutcome::kept`]:
+    /// it is a state a later flush retries, not a failure, so the flush
+    /// still succeeds. The ids of a failed link stay queued too, and the
+    /// flush returns the link's error.
     ///
-    /// Concurrent calls are serialized: the second caller returns
-    /// `Ok(0)` while the first is in progress. What it would have indexed
+    /// Concurrent calls are serialized: the second caller returns an empty
+    /// outcome while the first is in progress. What it would have indexed
     /// stays queued, and searchable.
     ///
     /// # Errors
     ///
     /// Returns an error if the graph's arena does not hold a slot a queued id
-    /// is mapped to, or if `index_current` left buffered ids unsettled.
+    /// is mapped to.
     pub fn flush_sync(
         &self,
         hnsw_index: &HnswIndex,
         index_current: &dyn Fn(&[u64]) -> Vec<u64>,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<FlushOutcome> {
         let Some(_building) = Building::start(&self.building) else {
             // Another build is in progress — skip
-            return Ok(0);
+            return Ok(FlushOutcome::default());
         };
         let (settled, kept) = self.index_buffered(index_current);
         let linked = self.link_placed(hnsw_index)?;
         if kept > 0 {
-            return Err(crate::error::Error::Internal(format!(
+            tracing::warn!(
+                kept,
                 "async index builder: {kept} buffered ids could not be indexed; they stay \
                  queued, and searchable, for the next flush"
-            )));
+            );
         }
-        Ok(settled + linked)
+        Ok(FlushOutcome {
+            indexed: settled + linked,
+            kept,
+        })
     }
 
     /// Hands the buffered ids, each once, to `index_current`, then drops
     /// from the buffer the ones it settled; the others stay, ahead of what
     /// was queued since. Only this flush removes from the buffer, and
     /// `enqueue` only appends, so the ids copied are still the buffer's
-    /// prefix. Returns the entries settled and the entries kept.
+    /// prefix. Returns the distinct ids settled and the distinct ids kept.
     fn index_buffered(&self, index_current: &dyn Fn(&[u64]) -> Vec<u64>) -> (usize, usize) {
         // Copied out so the buffer's lock (position 11) is not held across
         // the storage's or the index's.
@@ -229,15 +248,15 @@ impl AsyncIndexBuilder {
         let mut buffer = self.buffer.lock();
         let queued_since = buffer.split_off(ids.len());
         buffer.retain(|id| !settled.contains(id));
-        let kept = buffer.len();
         buffer.extend(queued_since);
         drop(buffer);
+        let kept = unique.iter().filter(|id| !settled.contains(id)).count();
         tracing::debug!(
             "AsyncIndexBuilder::flush_sync: settled {}/{} buffered ids",
-            ids.len() - kept,
-            ids.len()
+            unique.len() - kept,
+            unique.len()
         );
-        (ids.len() - kept, kept)
+        (unique.len() - kept, kept)
     }
 
     /// Links the queued ids, then drops them from the queue: only this flush

@@ -297,7 +297,10 @@ impl Collection {
             let storage = self.storage.vector_storage.read();
             let mut present = Vec::with_capacity(chunk.len());
             for &id in chunk {
-                match storage.retrieve(id) {
+                let read = storage.retrieve(id);
+                #[cfg(test)]
+                let read = merge_hooks::read(id, read);
+                match read {
                     Ok(Some(vector)) if vector.len() == dimension => present.push((id, vector)),
                     Ok(Some(vector)) => {
                         tracing::error!(

@@ -290,9 +290,10 @@ fast sends no search instead.
   It inserts what your storage holds for those ids into the index and
   returns the ids it settled: inserted, already held by the graph as
   storage holds them, or no longer stored. The builder keeps any other id
-  queued for the next flush, and `flush_sync` then returns an error
-  counting them. A flush indexes what storage holds when it runs, not a
-  copy taken at enqueue.
+  queued for the next flush. `flush_sync` returns a `FlushOutcome`
+  (`indexed`, `kept`) rather than a count: read `outcome.indexed` where the
+  count was used. Kept ids are not an error; a failed link is. A flush
+  indexes what storage holds when it runs, not a copy taken at enqueue.
 
 ### Added
 

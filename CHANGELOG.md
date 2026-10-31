@@ -35,11 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `index_current`, which indexes what storage holds for them and returns
   the ids it settled: inserted, already held by the graph as storage holds
   them, or no longer stored. The builder drops only those and keeps the
-  rest queued; it returns the entries settled plus the placed ids linked,
-  or an error counting the ids it kept.
+  rest queued. It returns a `FlushOutcome`: `indexed`, the ids settled plus
+  the placed ids linked, and `kept`, the distinct ids it kept queued — a
+  state the next flush retries, logged as a warning, not an error. Only a
+  failed link is an error.
   *Migration*: enqueue the ids; pass a closure that inserts what your
   vector storage holds for them into the index and returns the ids it
-  inserted, found indexed already, or found deleted.
+  inserted, found indexed already, or found deleted; read the count from
+  `outcome.indexed`.
 - **BREAKING (behaviour): `velesdb-server` sends no CORS header unless origins
   are configured.** 7.1.0 answered every origin with
   `Access-Control-Allow-Origin: *` by default, so any web page open in a
@@ -431,6 +434,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every global-pool submission in core panics when its thread holds one; 81
   unit tests failed that way before the fix. The `Parallel` strategies now
   cost both legs' time, not the longer one's.
+
+- **Ids a flush could not index failed the calls that flushed.**
+  `upsert_bulk` returned the error before refreshing the point count,
+  applying the batch's sparse vectors and moving the write generation, for
+  points it had stored; `flush` and `flush_full` stopped before the HNSW
+  save, the quantizers, the sparse, BM25 and secondary indexes and
+  `vectors.idx`, and so did the bindings' `flush`. Kept ids stay queued, and
+  searchable, for the next flush and are logged; every flush step now runs
+  whatever an earlier one did, the first error being returned at the end,
+  and the HNSW save waits only on a drain whose link failed.
 
 - **`upsert_bulk` with an async index builder returned before its points
   could be found.** Its V2 path places each vector in the graph's arena and

@@ -487,3 +487,101 @@ fn an_upsert_racing_a_flush_is_not_overwritten_by_it() {
         "the flush overwrote 151's newer vector with the one it read"
     );
 }
+
+// =========================================================================
+// Ids a flush keeps are a state a later flush retries, not a failure
+// =========================================================================
+
+/// `fast_insert_v2_collection` with a builder that flushes every
+/// `merge_threshold` buffered ids.
+fn fast_insert_v2_collection_flushing_at(
+    merge_threshold: usize,
+) -> (tempfile::TempDir, Collection) {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let path = dir.path().join("v2");
+    drop(v2_collection(path.clone(), merge_threshold));
+    crate::index::HnswIndex::new_fast_insert(DIM, DistanceMetric::Euclidean)
+        .expect("test: fast-insert index")
+        .save(&path)
+        .expect("test: save it over the collection's index");
+    let coll = Collection::open(path).expect("test: reopen the collection");
+    (dir, coll)
+}
+
+fn builder_pending(coll: &Collection) -> Vec<u64> {
+    coll.streaming
+        .async_index_builder
+        .load()
+        .as_ref()
+        .expect("test: a V2 collection has a builder")
+        .pending_ids()
+}
+
+/// An `upsert_bulk` whose flush keeps an id it could not read succeeds, and
+/// does its bookkeeping: the point count, the sparse batch, the generation.
+/// The kept id stays queued and is found by search. It used to return the
+/// flush's error before any of that, so the call failed for points it had
+/// stored and left the sparse vectors of the whole batch unapplied.
+#[test]
+fn an_upsert_bulk_whose_flush_keeps_an_id_succeeds_and_finishes_its_bookkeeping() {
+    let (_dir, coll) = fast_insert_v2_collection_flushing_at(10);
+    crate::collection::search::pending::merge_hooks::set_unreadable(&[3]);
+    let generation = coll.write_generation();
+    let sparse = crate::index::sparse::SparseVector::new(vec![(1, 1.0)]);
+    let batch: Vec<Point> = points(0..20)
+        .into_iter()
+        .map(|mut p| {
+            p.sparse_vectors = Some([("title".to_string(), sparse.clone())].into());
+            p
+        })
+        .collect();
+
+    let stored = coll
+        .upsert_bulk(&batch)
+        .expect("test: kept ids do not fail it");
+
+    assert_eq!(stored, 20);
+    assert_eq!(coll.len(), 20, "the point count was refreshed");
+    assert!(
+        coll.query.sparse_indexes.read().contains_key("title"),
+        "the sparse batch was applied"
+    );
+    assert!(coll.write_generation() > generation, "the generation moved");
+    assert_eq!(
+        builder_pending(&coll),
+        vec![3],
+        "only the unread id is kept"
+    );
+    assert_eq!(first_hit(&coll, 3), Some(3), "and it is still found");
+}
+
+/// A flush, and a full one, whose drain keeps an id run every step and
+/// succeed: the kept id stays queued, and searchable, for the next flush.
+/// Both used to stop at the drain's error, before the HNSW save, the
+/// quantizers, the sparse, BM25 and secondary indexes and `vectors.idx`.
+#[test]
+fn a_flush_whose_drain_keeps_an_id_runs_every_step_and_succeeds() {
+    let (_dir, coll) = fast_insert_v2_collection_flushing_at(HOLD_ALL);
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    crate::collection::search::pending::merge_hooks::set_unreadable(&[7]);
+
+    coll.flush().expect("test: kept ids do not fail a flush");
+    assert_eq!(builder_pending(&coll), vec![7]);
+
+    coll.flush_full()
+        .expect("test: kept ids do not fail a full flush");
+    assert_eq!(
+        coll.generations
+            .inserts_since_last_hnsw_save
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "the full flush saved the HNSW index"
+    );
+    assert!(
+        coll.storage.path.join("vectors.idx").exists(),
+        "the full flush wrote vectors.idx, its last step"
+    );
+    assert_eq!(builder_pending(&coll), vec![7]);
+    assert_eq!(first_hit(&coll, 7), Some(7), "the kept id is still found");
+}
