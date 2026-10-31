@@ -285,11 +285,13 @@ fast sends no search instead.
 - **`AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a callback
   that indexes them.** `enqueue(ids)` takes any `IntoIterator<Item = u64>`
   instead of a `Vec<(u64, Vec<f32>)>`, and `flush_sync(index,
-  index_current)` calls `index_current(&ids)`, which inserts what your
-  storage holds for those ids into the index and returns the ids it
-  settled (inserted, or no longer stored). The builder keeps any other id
-  queued for the next flush. A flush indexes what storage holds when it
-  runs, not a copy taken at enqueue.
+  index_current)` calls `index_current(&ids)` with each buffered id once.
+  It inserts what your storage holds for those ids into the index and
+  returns the ids it settled: inserted, already held by the graph as
+  storage holds them, or no longer stored. The builder keeps any other id
+  queued for the next flush, and `flush_sync` then returns an error
+  counting them. A flush indexes what storage holds when it runs, not a
+  copy taken at enqueue.
 
 ### Added
 

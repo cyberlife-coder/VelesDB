@@ -278,7 +278,9 @@ impl Collection {
 
     /// Indexes what storage holds now for `ids` and returns the ids it
     /// settled: inserted, already held by the graph as storage holds them
-    /// (`HnswIndex::insert_batch_unless_indexed`), or no longer in storage.
+    /// (`HnswIndex::insert_batch_unless_indexed`), no longer in storage, or
+    /// holding a vector of the wrong dimension, which no merge could index
+    /// (logged, and left out of the index rather than re-queued forever).
     /// An id it could not read or insert is not returned, so the merge that
     /// asked keeps it queued.
     ///
@@ -291,13 +293,22 @@ impl Collection {
     /// puts a deleted point back nor overwrites a newer write with the
     /// vector it read. A writer waits at most one chunk's insert.
     pub(crate) fn index_current(&self, ids: &[u64]) -> Vec<u64> {
+        let dimension = self.storage.config.read().dimension;
         let mut settled = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(MERGE_CHUNK) {
             let storage = self.storage.vector_storage.read();
             let mut present = Vec::with_capacity(chunk.len());
             for &id in chunk {
                 match storage.retrieve(id) {
-                    Ok(Some(vector)) => present.push((id, vector)),
+                    Ok(Some(vector)) if vector.len() == dimension => present.push((id, vector)),
+                    Ok(Some(vector)) => {
+                        tracing::error!(
+                            "index_current: id {id} holds a {}-d vector in a {dimension}-d \
+                             collection; left out of the index",
+                            vector.len()
+                        );
+                        settled.push(id);
+                    }
                     Ok(None) => settled.push(id),
                     Err(e) => tracing::warn!("index_current: id {id} unread, kept queued: {e}"),
                 }

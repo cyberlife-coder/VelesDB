@@ -468,7 +468,16 @@ impl Collection {
         let Some(merge) = di.begin_merge() else {
             return;
         };
-        let settled = self.index_current(&merge.ids());
+        let ids = merge.ids();
+        let settled = self.index_current(&ids);
+        if settled.len() < ids.len() {
+            tracing::warn!(
+                "deferred merge: {} of {} buffered ids could not be indexed; they stay \
+                 buffered, and searchable, for the next merge",
+                ids.len() - settled.len(),
+                ids.len()
+            );
+        }
         merge.finish(&settled);
     }
 

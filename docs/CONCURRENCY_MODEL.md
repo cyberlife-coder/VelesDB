@@ -475,8 +475,13 @@ index write comes last. A merge therefore never puts a deleted point back
 in the graph nor overwrites a newer write with the vector it read; a writer
 waits at most one chunk's insert. An id the graph already holds as storage
 does (compared normalized for Cosine, as the graph keeps it) is not
-inserted again. The merge settles an id it inserted, found held already, or
-found deleted; one it could not read or insert stays queued. The flags that
+inserted again. The merge settles an id it inserted, found held already,
+found deleted, or found holding a vector of the wrong dimension (logged and
+left out of the index: no merge could insert it). One it could not read or
+insert stays queued — a chunk the graph refuses is retried one vector at a
+time, so only the refused ones stay — and a builder flush that keeps any
+returns an error counting them. A deferred merge that keeps entries
+restarts the buffer's age. The flags that
 keep one flush and one deferred merge running at a time are held by guards
 that clear them when dropped, so a merge that panics does not leave every
 later one skipping.

@@ -208,8 +208,9 @@ impl HnswIndex {
     /// [`Self::insert_batch_parallel`] for the pairs whose id the graph does
     /// not already hold as it is: an id mapped to a linked node holding
     /// exactly that vector is left alone. Returns the ids it settled: those
-    /// the graph held already and, unless the insert failed (logged), those
-    /// it inserted. A caller keeps the others queued.
+    /// the graph held already and those it inserted. A batch the graph
+    /// refuses is retried one pair at a time, so one refused pair (logged)
+    /// does not keep the rest out; the caller keeps the refused ones.
     ///
     /// A merge into the index (the async builder's flush, the deferred
     /// indexer's merge) reads each id's vector from
@@ -228,9 +229,25 @@ impl HnswIndex {
                 fresh.push((*id, vector.as_slice()));
             }
         }
+        if fresh.is_empty() {
+            return settled;
+        }
         let fresh_ids: Vec<u64> = fresh.iter().map(|&(id, _)| id).collect();
-        if !fresh.is_empty() && self.insert_batch_parallel(fresh) > 0 {
+        if fresh.len() == 1 {
+            if self.insert_batch_parallel(fresh) > 0 {
+                settled.extend(fresh_ids);
+            }
+            return settled;
+        }
+        if self.insert_batch_parallel(fresh.iter().copied()) > 0 {
             settled.extend(fresh_ids);
+            return settled;
+        }
+        // The batch is all-or-nothing: find the pairs the graph takes.
+        for (id, vector) in fresh {
+            if self.insert_batch_parallel([(id, vector)]) > 0 {
+                settled.push(id);
+            }
         }
         settled
     }

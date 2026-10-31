@@ -254,19 +254,44 @@ fn a_failed_link_leaves_the_ids_on_the_queue() {
 }
 
 /// An id the flush's indexing did not settle (its read or insert failed)
-/// stays queued, and searchable, for the next flush.
+/// stays queued, and searchable, for the next flush — and the flush says
+/// so, rather than reporting success.
 #[test]
 fn an_id_a_flush_did_not_settle_stays_queued() {
     let index = make_index(4);
     let builder = AsyncIndexBuilder::new(default_config());
     builder.enqueue([1, 2, 3]);
 
-    let settled = builder
+    let err = builder
         .flush_sync(&index, &|_| vec![2])
+        .expect_err("test: two ids were not indexed");
+
+    assert!(
+        err.to_string().contains('2'),
+        "the error counts them: {err}"
+    );
+    assert_eq!(builder.pending_ids(), vec![1, 3]);
+}
+
+/// An id queued twice is handed to the indexing once.
+#[test]
+fn an_id_queued_twice_is_indexed_once() {
+    let index = make_index(4);
+    let builder = AsyncIndexBuilder::new(default_config());
+    builder.enqueue([5, 5, 6]);
+    let asked = std::cell::RefCell::new(Vec::new());
+
+    builder
+        .flush_sync(&index, &|ids| {
+            asked.borrow_mut().extend_from_slice(ids);
+            ids.to_vec()
+        })
         .expect("test: flush");
 
-    assert_eq!(settled, 1);
-    assert_eq!(builder.pending_ids(), vec![1, 3]);
+    let mut asked = asked.into_inner();
+    asked.sort_unstable();
+    assert_eq!(asked, vec![5, 6]);
+    assert!(builder.pending_ids().is_empty());
 }
 
 /// A flush that panics half-way does not leave the builder's flag set:

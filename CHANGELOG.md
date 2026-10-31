@@ -31,13 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flush inserted them, so a point overwritten or deleted between the two
   was indexed on its old vector or put back in the graph (see Fixed).
   `enqueue` now takes the ids (`impl IntoIterator<Item = u64>`), and
-  `flush_sync(index, index_current)` hands the buffered ids to
+  `flush_sync(index, index_current)` hands the buffered ids, each once, to
   `index_current`, which indexes what storage holds for them and returns
-  the ids it settled; the builder drops only those, and keeps the rest
-  queued. It returns the ids settled plus the placed ids linked.
+  the ids it settled: inserted, already held by the graph as storage holds
+  them, or no longer stored. The builder drops only those and keeps the
+  rest queued; it returns the entries settled plus the placed ids linked,
+  or an error counting the ids it kept.
   *Migration*: enqueue the ids; pass a closure that inserts what your
   vector storage holds for them into the index and returns the ids it
-  inserted or found deleted.
+  inserted, found indexed already, or found deleted.
 - **BREAKING (behaviour): `velesdb-server` sends no CORS header unless origins
   are configured.** 7.1.0 answered every origin with
   `Access-Control-Allow-Origin: *` by default, so any web page open in a
@@ -506,7 +508,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the ids the merge settled — inserted, held already, or deleted — and
   keep the rest queued, and the flags that serialize their merges are now
   cleared by a guard, so a merge that panics no longer leaves every later
-  flush skipping.
+  flush skipping. A chunk the graph refuses is retried one vector at a
+  time, so one refused vector no longer keeps the rest of its chunk out; a
+  stored vector of the wrong dimension is logged and left out of the index
+  instead of being retried forever; a builder flush that keeps ids returns
+  an error saying how many; and a deferred merge that keeps entries
+  restarts the buffer's age, so the age trigger does not fire on every
+  write that follows.
 - **Sparse and fused hybrid searches returned fewer than `k` results when a
   TTL-expired point ranked among the first `k`.** Their resolution took the
   first `k` hits, then dropped the expired ones, so each expired hit cost a

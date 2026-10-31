@@ -156,9 +156,7 @@ impl DeferredIndexer {
     #[inline]
     fn note_push_time(&self) {
         if self.first_push_millis.load(Ordering::Relaxed) == AGE_EMPTY {
-            #[allow(clippy::cast_possible_truncation)]
-            // Reason: millis since indexer creation; u64 covers 584M years.
-            let now = self.epoch.elapsed().as_millis() as u64;
+            let now = self.age_now();
             let _ = self.first_push_millis.compare_exchange(
                 AGE_EMPTY,
                 now,
@@ -166,6 +164,13 @@ impl DeferredIndexer {
                 Ordering::Relaxed,
             );
         }
+    }
+
+    /// Milliseconds since the indexer was created: the buffer age's clock.
+    #[allow(clippy::cast_possible_truncation)]
+    // Reason: millis since indexer creation; u64 covers 584M years.
+    fn age_now(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
     }
 
     /// Returns `true` if the oldest buffered entry has exceeded
@@ -176,10 +181,7 @@ impl DeferredIndexer {
         if first == AGE_EMPTY {
             return false;
         }
-        #[allow(clippy::cast_possible_truncation)]
-        // Reason: same clock domain as note_push_time.
-        let now = self.epoch.elapsed().as_millis() as u64;
-        now.saturating_sub(first) >= self.config.max_buffer_age_ms
+        self.age_now().saturating_sub(first) >= self.config.max_buffer_age_ms
     }
 
     /// Whether deferred indexing is enabled.
@@ -325,12 +327,17 @@ impl DeferredMerge<'_> {
 }
 
 impl Drop for DeferredMerge<'_> {
+    /// Clears the merge flag, and restarts the buffer's age: empty, it has
+    /// none; holding entries the merge kept, they were just tried, so the
+    /// age-triggered merge waits a full `max_buffer_age_ms` again rather
+    /// than firing on the very next write.
     fn drop(&mut self) {
-        if self.indexer.buffer.is_empty() {
-            self.indexer
-                .first_push_millis
-                .store(AGE_EMPTY, Ordering::Relaxed);
-        }
+        let age = if self.indexer.buffer.is_empty() {
+            AGE_EMPTY
+        } else {
+            self.indexer.age_now()
+        };
+        self.indexer.first_push_millis.store(age, Ordering::Relaxed);
         self.indexer.merging.store(false, Ordering::Release);
     }
 }
@@ -475,6 +482,25 @@ mod tests {
         let merge = idx.begin_merge().expect("test: no merge running");
         merge.finish(&[1]);
         assert_eq!(idx.ids(), vec![2]);
+    }
+
+    /// A merge that leaves entries behind restarts the buffer's age: the
+    /// entries it kept were just tried, and an age-triggered merge must not
+    /// fire again on the very next write.
+    #[test]
+    fn a_merge_that_keeps_entries_restarts_the_buffer_age() {
+        let idx = DeferredIndexer::new(DeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 1_000,
+            max_buffer_age_ms: 50,
+        });
+        idx.push(1, vec![1.0]);
+        idx.push(2, vec![2.0]);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        assert!(idx.should_merge(), "premise: the buffer aged out");
+        let merge = idx.begin_merge().expect("test: no merge running");
+        merge.finish(&[1]);
+        assert!(!idx.should_merge(), "the kept entry's age restarted");
     }
 
     /// A merge that never finishes — dropped, as on a panic — still clears

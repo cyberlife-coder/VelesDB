@@ -179,7 +179,8 @@ impl AsyncIndexBuilder {
     ///
     /// Each queue keeps an id until it is indexed, so `Self::pending_ids`
     /// still names it meanwhile; an id `index_current` did not settle, and
-    /// the ids of a failed link, stay queued for the next flush.
+    /// the ids of a failed link, stay queued for the next flush, and the
+    /// flush returns an error that says so.
     ///
     /// Concurrent calls are serialized: the second caller returns
     /// `Ok(0)` while the first is in progress. What it would have indexed
@@ -188,7 +189,7 @@ impl AsyncIndexBuilder {
     /// # Errors
     ///
     /// Returns an error if the graph's arena does not hold a slot a queued id
-    /// is mapped to.
+    /// is mapped to, or if `index_current` left buffered ids unsettled.
     pub fn flush_sync(
         &self,
         hnsw_index: &HnswIndex,
@@ -198,23 +199,33 @@ impl AsyncIndexBuilder {
             // Another build is in progress — skip
             return Ok(0);
         };
-        let settled = self.index_buffered(index_current);
+        let (settled, kept) = self.index_buffered(index_current);
         let linked = self.link_placed(hnsw_index)?;
+        if kept > 0 {
+            return Err(crate::error::Error::Internal(format!(
+                "async index builder: {kept} buffered ids could not be indexed; they stay \
+                 queued, and searchable, for the next flush"
+            )));
+        }
         Ok(settled + linked)
     }
 
-    /// Hands the buffered ids to `index_current`, then drops from the buffer
-    /// the ones it settled; the others stay, ahead of what was queued since.
-    /// Only this flush removes from the buffer, and `enqueue` only appends,
-    /// so the ids copied are still the buffer's prefix.
-    fn index_buffered(&self, index_current: &dyn Fn(&[u64]) -> Vec<u64>) -> usize {
+    /// Hands the buffered ids, each once, to `index_current`, then drops
+    /// from the buffer the ones it settled; the others stay, ahead of what
+    /// was queued since. Only this flush removes from the buffer, and
+    /// `enqueue` only appends, so the ids copied are still the buffer's
+    /// prefix. Returns the entries settled and the entries kept.
+    fn index_buffered(&self, index_current: &dyn Fn(&[u64]) -> Vec<u64>) -> (usize, usize) {
         // Copied out so the buffer's lock (position 11) is not held across
         // the storage's or the index's.
         let ids = self.buffer.lock().clone();
         if ids.is_empty() {
-            return 0;
+            return (0, 0);
         }
-        let settled: rustc_hash::FxHashSet<u64> = index_current(&ids).into_iter().collect();
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        let settled: rustc_hash::FxHashSet<u64> = index_current(&unique).into_iter().collect();
         let mut buffer = self.buffer.lock();
         let queued_since = buffer.split_off(ids.len());
         buffer.retain(|id| !settled.contains(id));
@@ -226,7 +237,7 @@ impl AsyncIndexBuilder {
             ids.len() - kept,
             ids.len()
         );
-        ids.len() - kept
+        (ids.len() - kept, kept)
     }
 
     /// Links the queued ids, then drops them from the queue: only this flush

@@ -4648,3 +4648,21 @@ fn an_id_the_graph_holds_as_it_is_is_not_inserted_again() {
         );
     }
 }
+
+/// One pair the graph refuses (here, of the wrong dimension) does not keep
+/// the rest of its batch out of the index: the others are inserted and
+/// settled, and only the refused one is left for its caller to keep.
+#[test]
+fn one_refused_pair_does_not_keep_its_batch_out() {
+    let index = HnswIndex::new_fast_insert(8, DistanceMetric::Euclidean).expect("test: index");
+    let mut pairs: Vec<(u64, Vec<f32>)> = (0..10_u64)
+        .map(|id| (id, (0..8).map(|d| (id * 8 + d) as f32).collect()))
+        .collect();
+    pairs.push((99, vec![1.0; 3]));
+
+    let mut settled = index.insert_batch_unless_indexed(&pairs);
+    settled.sort_unstable();
+
+    assert_eq!(settled, (0..10).collect::<Vec<u64>>());
+    assert_eq!(index.len(), 10);
+}
