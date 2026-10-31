@@ -202,9 +202,19 @@ impl Default for RuntimeLimits {
 // index while holding the storage write guard, and a merge into the index
 // (`Collection::index_current`) inserts each chunk while holding the storage
 // read guard. No path takes `vector_storage` while holding an index lock.
-// That merge holds the read guard for one chunk's insert, so a writer can
-// wait that long: 256 768-d vectors into a 10K-vector graph take ~69 ms
-// (`bulk_insert_v2_benchmark`'s `merge_chunk_256_into_10k_768d`).
+// That merge holds the read guard for one chunk's read and insert, so a
+// writer can wait that long: 234 ms (95% CI 229–239 ms) for 256 768-d
+// vectors into a 10K-vector Cosine collection, timed inside `index_current`
+// from taking the guard to releasing it (`merge_chunk_hold_benchmark`, needs
+// `internal-bench`; measured 2026-10-31 on a shared 4-vCPU cloud sandbox,
+// not the reference machine, 10 samples). It grows with the dimension and
+// with the graph.
+//
+// Rayon: no job on a rayon pool takes any of these locks, and no thread
+// holding one waits on the global pool; parallel work over guarded data runs
+// on `collection::guarded_pool`. `crate::lock_audit` (these fields' lock
+// types) checks both in every unit test. See `docs/CONCURRENCY_MODEL.md`,
+// "Collection locks and rayon".
 //
 // `edge_wal_lock` (3b) has two call patterns, both consistent with 3 → 3b:
 //   - `add_edge`/`add_edges_batch` (collection/core/graph_api.rs) acquire it

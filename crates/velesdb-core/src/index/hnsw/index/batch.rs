@@ -56,6 +56,18 @@ pub(super) fn graph_pool() -> crate::error::Result<&'static rayon::ThreadPool> {
     })
 }
 
+/// What [`HnswIndex::insert_batch_unless_indexed`] did with a batch.
+#[derive(Debug)]
+pub(crate) struct UnlessIndexed {
+    /// The ids the graph held already as they are, and those it inserted.
+    pub(crate) settled: Vec<u64>,
+    /// The ids of the pairs a refused batch did not insert: every pair the
+    /// graph lacked, the batch being all-or-nothing.
+    pub(crate) refused: Vec<u64>,
+    /// Why the graph refused the batch.
+    pub(crate) error: Option<crate::error::Error>,
+}
+
 impl HnswIndex {
     /// Inserts multiple vectors in parallel using rayon.
     ///
@@ -117,15 +129,33 @@ impl HnswIndex {
         I: IntoIterator<Item = (u64, &'a [f32])>,
     {
         let items: Vec<(u64, &'a [f32])> = vectors.into_iter().collect();
+        match self.try_insert_batch(&items) {
+            Ok(inserted) => inserted,
+            Err(e) => {
+                tracing::error!("insert_batch_parallel: {e}");
+                0
+            }
+        }
+    }
+
+    /// [`Self::insert_batch_parallel`], returning why the graph refused a
+    /// batch instead of logging it: a caller retrying the batch's pairs one
+    /// by one reports their refusals once, together.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a vector has the wrong dimension, if the dedicated
+    /// pool is unavailable, or if the graph refuses the batch; it inserts
+    /// nothing then.
+    fn try_insert_batch(&self, items: &[(u64, &[f32])]) -> crate::error::Result<usize> {
         if let Some(e) = items
             .iter()
             .find_map(|(_, vector)| validate_dimension_match(self.dimension, vector.len()).err())
         {
-            tracing::error!("insert_batch_parallel: dimension validation failed: {e}");
-            return 0;
+            return Err(e);
         }
         if items.is_empty() {
-            return 0;
+            return Ok(0);
         }
 
         // A batch large enough for `place_batch` to connect in parallel joins
@@ -165,13 +195,7 @@ impl HnswIndex {
                  calling it from a rayon worker lets that worker steal a job which \
                  takes inner.read(), re-closing #2343's cycle"
             );
-            match graph_pool() {
-                Ok(pool) => Some(pool),
-                Err(e) => {
-                    tracing::error!("insert_batch_parallel: {e}");
-                    return 0;
-                }
-            }
+            Some(graph_pool()?)
         } else {
             None
         };
@@ -196,21 +220,17 @@ impl HnswIndex {
             }
         });
         drop(inner);
-        match outcome {
-            Ok(()) => items.len(),
-            Err(e) => {
-                tracing::error!("insert_batch_parallel: parallel_insert failed: {e}");
-                0
-            }
-        }
+        outcome.map(|()| items.len())
     }
 
     /// [`Self::insert_batch_parallel`] for the pairs whose id the graph does
     /// not already hold as it is: an id mapped to a linked node holding
-    /// exactly that vector is left alone. Returns the ids it settled: those
-    /// the graph held already and those it inserted. A batch the graph
-    /// refuses is retried one pair at a time, so one refused pair (logged)
-    /// does not keep the rest out; the caller keeps the refused ones.
+    /// exactly that vector is left alone. Returns the ids it settled — those
+    /// the graph held already and those it inserted — and, when the graph
+    /// refused the batch, the ids of the pairs it did not insert and why.
+    /// The batch is all-or-nothing, so one refused pair refuses every pair
+    /// the graph lacked: a caller retries them one by one, each under its own
+    /// hold of whatever lock it reads them under, and logs the refusals once.
     ///
     /// A merge into the index (the async builder's flush, the deferred
     /// indexer's merge) reads each id's vector from
@@ -218,7 +238,7 @@ impl HnswIndex {
     /// straight to the graph after the id was queued. Inserting it again
     /// would only leave the node it has behind, unmapped, for every search
     /// to walk past until `vacuum`.
-    pub(crate) fn insert_batch_unless_indexed(&self, pairs: &[(u64, Vec<f32>)]) -> Vec<u64> {
+    pub(crate) fn insert_batch_unless_indexed(&self, pairs: &[(u64, Vec<f32>)]) -> UnlessIndexed {
         let held = self.slots_holding(pairs);
         let mut settled = Vec::with_capacity(pairs.len());
         let mut fresh: Vec<(u64, &[f32])> = Vec::with_capacity(pairs.len());
@@ -229,27 +249,22 @@ impl HnswIndex {
                 fresh.push((*id, vector.as_slice()));
             }
         }
-        settled.extend(self.insert_each_taken(&fresh));
-        settled
-    }
-
-    /// Inserts `pairs` as one batch, or — the batch being all-or-nothing,
-    /// and refused — one pair at a time; returns the ids the graph took.
-    fn insert_each_taken(&self, pairs: &[(u64, &[f32])]) -> Vec<u64> {
-        if pairs.is_empty() {
-            return Vec::new();
+        let fresh_ids = fresh.iter().map(|&(id, _)| id);
+        match self.try_insert_batch(&fresh) {
+            Ok(_) => {
+                settled.extend(fresh_ids);
+                UnlessIndexed {
+                    settled,
+                    refused: Vec::new(),
+                    error: None,
+                }
+            }
+            Err(e) => UnlessIndexed {
+                settled,
+                refused: fresh_ids.collect(),
+                error: Some(e),
+            },
         }
-        if self.insert_batch_parallel(pairs.iter().copied()) > 0 {
-            return pairs.iter().map(|&(id, _)| id).collect();
-        }
-        if pairs.len() == 1 {
-            return Vec::new();
-        }
-        pairs
-            .iter()
-            .filter(|&&pair| self.insert_batch_parallel([pair]) > 0)
-            .map(|&(id, _)| id)
-            .collect()
     }
 
     /// For each pair, whether its id maps to a linked node holding exactly

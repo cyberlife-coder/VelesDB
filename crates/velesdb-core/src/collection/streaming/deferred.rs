@@ -318,13 +318,30 @@ impl Drop for DeferredMerge<'_> {
     /// none; holding entries the merge kept, they were just tried, so the
     /// age-triggered merge waits a full `max_buffer_age_ms` again rather
     /// than firing on the very next write.
+    ///
+    /// A push can land between the emptiness check and the store of
+    /// [`AGE_EMPTY`]: it found the stamp of the merge's own entries still
+    /// set and left it, and the store would then erase the only age its
+    /// entry has, so no age-triggered merge would fire for it until another
+    /// push. So the buffer is looked at again after the store, and an entry
+    /// found there gets an age by compare-and-swap — unless a push set one
+    /// first. The buffer's lock orders the two: a push it does not see takes
+    /// its lock after this store and finds `AGE_EMPTY`.
     fn drop(&mut self) {
-        let age = if self.indexer.buffer.is_empty() {
-            AGE_EMPTY
+        let first_push = &self.indexer.first_push_millis;
+        if self.indexer.buffer.is_empty() {
+            first_push.store(AGE_EMPTY, Ordering::Relaxed);
+            if !self.indexer.buffer.is_empty() {
+                let _ = first_push.compare_exchange(
+                    AGE_EMPTY,
+                    self.indexer.age_now(),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+            }
         } else {
-            self.indexer.age_now()
-        };
-        self.indexer.first_push_millis.store(age, Ordering::Relaxed);
+            first_push.store(self.indexer.age_now(), Ordering::Relaxed);
+        }
         self.indexer.merging.store(false, Ordering::Release);
     }
 }

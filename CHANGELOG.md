@@ -434,7 +434,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every global-pool submission in core panics when its thread holds one; 81
   unit tests failed that way before the fix. The `Parallel` strategies now
   cost both legs' time, not the longer one's.
-
 - **Ids a flush could not index failed the calls that flushed.**
   `upsert_bulk` returned the error before refreshing the point count,
   applying the batch's sparse vectors and moving the write generation, for
@@ -444,12 +443,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   searchable, for the next flush and are logged; every flush step now runs
   whatever an earlier one did, the first error being returned at the end,
   and the HNSW save waits only on a drain whose link failed.
-
 - **Adaptive and AutoTune searches walked the graph again for candidates
   they did not need.** A PQ rescore or a forced rerank over-fetches
   candidates and keeps `k`; under those qualities, nodes a delete left
   behind among the fetched candidates made the walk run again although the
   live ones were enough for `k`, as other qualities already knew.
+- **A merge chunk the graph refused held the storage guard through every
+  retry.** Its ids were retried one by one under the read guard the chunk
+  had taken, each refusal logged on its own. Each retry now reads and
+  inserts its id under a guard of its own, and a merge logs one warning
+  counting what it kept. A deferred merge that empties its buffer also no
+  longer erases the age of an entry pushed while it ended, which left that
+  entry without an age-triggered merge until the next push.
 
 - **`upsert_bulk` with an async index builder returned before its points
   could be found.** Its V2 path places each vector in the graph's arena and

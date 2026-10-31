@@ -49,7 +49,7 @@ const SCORE_CHUNK: usize = 256;
 
 /// How many ids a merge reads and inserts under one `vector_storage` read
 /// guard ([`Collection::index_current`]).
-const MERGE_CHUNK: usize = 256;
+pub(crate) const MERGE_CHUNK: usize = 256;
 
 /// What a search admits, applied to the points written but not indexed yet
 /// before they are ranked against the index's results.
@@ -280,7 +280,7 @@ impl Collection {
     /// holding a vector of the wrong dimension, which no merge could index
     /// (logged, and left out of the index rather than re-queued forever).
     /// An id it could not read or insert is not returned, so the merge that
-    /// asked keeps it queued.
+    /// asked keeps it queued; one warning counts those, whatever their number.
     ///
     /// Each chunk of [`MERGE_CHUNK`] ids is read and inserted under one
     /// `vector_storage` (position 2) read guard. A delete or an upsert writes
@@ -289,37 +289,133 @@ impl Collection {
     /// the chunk is read, and the merge indexes what it left, or after the
     /// chunk is inserted, and its own index write comes last: a merge never
     /// puts a deleted point back nor overwrites a newer write with the
-    /// vector it read. A writer waits at most one chunk's insert.
+    /// vector it read. A writer waits at most one chunk's insert. A chunk the
+    /// graph refuses is all-or-nothing, so its ids are retried one at a time,
+    /// each read and inserted under a guard of its own: the retries never
+    /// hold a writer for longer than one vector's insert.
     pub(crate) fn index_current(&self, ids: &[u64]) -> Vec<u64> {
         let dimension = self.storage.config.read().dimension;
         let mut settled = Vec::with_capacity(ids.len());
+        let mut kept = KeptIds::default();
         for chunk in ids.chunks(MERGE_CHUNK) {
-            let storage = self.storage.vector_storage.read();
-            let mut present = Vec::with_capacity(chunk.len());
-            for &id in chunk {
-                let read = storage.retrieve(id);
-                #[cfg(test)]
-                let read = merge_hooks::read(id, read);
-                match read {
-                    Ok(Some(vector)) if vector.len() == dimension => present.push((id, vector)),
-                    Ok(Some(vector)) => {
-                        tracing::error!(
-                            "index_current: id {id} holds a {}-d vector in a {dimension}-d \
-                             collection; left out of the index",
-                            vector.len()
-                        );
-                        settled.push(id);
-                    }
-                    Ok(None) => settled.push(id),
-                    Err(e) => tracing::warn!("index_current: id {id} unread, kept queued: {e}"),
-                }
+            let refused = self.index_chunk(chunk, dimension, &mut settled, &mut kept);
+            if chunk.len() == 1 {
+                kept.refused(&refused);
+                continue;
             }
-            #[cfg(test)]
-            merge_hooks::after_read();
-            settled.extend(self.storage.index.insert_batch_unless_indexed(&present));
-            drop(storage);
+            for id in refused.ids {
+                let refused = self.index_chunk(&[id], dimension, &mut settled, &mut kept);
+                kept.refused(&refused);
+            }
         }
+        kept.report(ids.len());
         settled
+    }
+
+    /// Removes `ids` from the HNSW index only (`internal_bench::unindex`).
+    #[cfg(feature = "internal-bench")]
+    pub(crate) fn remove_from_index_for_bench(&self, ids: &[u64]) {
+        for &id in ids {
+            self.storage.index.remove(id);
+        }
+    }
+
+    /// Reads `chunk` from storage and inserts it, under one `vector_storage`
+    /// read guard; settles what [`index_current`](Self::index_current)
+    /// settles into `settled`, counts what it could not read into `kept`, and
+    /// returns what the graph refused.
+    fn index_chunk(
+        &self,
+        chunk: &[u64],
+        dimension: usize,
+        settled: &mut Vec<u64>,
+        kept: &mut KeptIds,
+    ) -> Refused {
+        let storage = self.storage.vector_storage.read();
+        #[cfg(feature = "internal-bench")]
+        let held_since = std::time::Instant::now();
+        let mut present = Vec::with_capacity(chunk.len());
+        for &id in chunk {
+            let read = storage.retrieve(id);
+            #[cfg(test)]
+            let read = merge_hooks::read(id, read);
+            match read {
+                Ok(Some(vector)) if vector.len() == dimension => present.push((id, vector)),
+                Ok(Some(vector)) => {
+                    tracing::error!(
+                        "index_current: id {id} holds a {}-d vector in a {dimension}-d \
+                         collection; left out of the index",
+                        vector.len()
+                    );
+                    settled.push(id);
+                }
+                Ok(None) => settled.push(id),
+                Err(e) => kept.unread(&e),
+            }
+        }
+        #[cfg(test)]
+        merge_hooks::after_read();
+        #[cfg(test)]
+        let outcome = merge_hooks::insert(&present)
+            .unwrap_or_else(|| self.storage.index.insert_batch_unless_indexed(&present));
+        #[cfg(not(test))]
+        let outcome = self.storage.index.insert_batch_unless_indexed(&present);
+        #[cfg(feature = "internal-bench")]
+        crate::internal_bench::note_merge_chunk_hold(held_since.elapsed());
+        drop(storage);
+        settled.extend(outcome.settled);
+        Refused {
+            ids: outcome.refused,
+            error: outcome.error,
+        }
+    }
+}
+
+/// The ids of a batch the graph refused, and why.
+struct Refused {
+    ids: Vec<u64>,
+    error: Option<crate::error::Error>,
+}
+
+/// The ids one [`Collection::index_current`] could not settle, counted, with
+/// the first reason of each kind, so a merge reports them in one warning
+/// rather than one per id.
+#[derive(Default)]
+struct KeptIds {
+    unread: usize,
+    first_unread: Option<String>,
+    refused: usize,
+    first_refusal: Option<String>,
+}
+
+impl KeptIds {
+    fn unread(&mut self, error: &std::io::Error) {
+        self.unread += 1;
+        self.first_unread.get_or_insert_with(|| error.to_string());
+    }
+
+    fn refused(&mut self, refused: &Refused) {
+        self.refused += refused.ids.len();
+        if let (None, Some(error)) = (&self.first_refusal, &refused.error) {
+            self.first_refusal = Some(error.to_string());
+        }
+    }
+
+    fn report(&self, asked: usize) {
+        if self.unread == 0 && self.refused == 0 {
+            return;
+        }
+        tracing::warn!(
+            unread = self.unread,
+            refused = self.refused,
+            "index_current: {} of {asked} ids kept queued for the next merge: {} unread \
+             (first: {}), {} refused by the graph (first: {})",
+            self.unread + self.refused,
+            self.unread,
+            self.first_unread.as_deref().unwrap_or("-"),
+            self.refused,
+            self.first_refusal.as_deref().unwrap_or("-"),
+        );
     }
 }
 

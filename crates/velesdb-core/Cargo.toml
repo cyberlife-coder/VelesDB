@@ -511,6 +511,13 @@ harness = false
 name = "bulk_insert_v2_benchmark"
 harness = false
 
+# How long a merge holds the `vector_storage` read guard, timed inside
+# `Collection::index_current` through an `internal-bench` seam.
+[[bench]]
+name = "merge_chunk_hold_benchmark"
+harness = false
+required-features = ["internal-bench", "persistence"]
+
 [[bench]]
 name = "search_layer_benchmark"
 harness = false

@@ -52,7 +52,7 @@ fn indexing<'a>(
             .copied()
             .filter(|id| !present.iter().any(|(stored, _)| stored == id))
             .collect();
-        settled.extend(index.insert_batch_unless_indexed(&present));
+        settled.extend(index.insert_batch_unless_indexed(&present).settled);
         settled
     }
 }

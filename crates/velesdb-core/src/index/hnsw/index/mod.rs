@@ -27,6 +27,8 @@
 #![allow(clippy::doc_markdown)] // API names and parameter labels are kept verbatim in docs.
 
 mod batch;
+#[cfg(test)]
+pub(crate) use batch::UnlessIndexed;
 mod brute_force;
 mod constructors;
 mod rerank;

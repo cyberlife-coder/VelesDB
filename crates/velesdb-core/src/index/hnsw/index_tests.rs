@@ -4638,9 +4638,10 @@ fn an_id_the_graph_holds_as_it_is_is_not_inserted_again() {
         }
         let before = index.tombstone_count();
 
-        let settled = index.insert_batch_unless_indexed(&points);
+        let outcome = index.insert_batch_unless_indexed(&points);
 
-        assert_eq!(settled.len(), 20, "{metric:?}: every id settled");
+        assert_eq!(outcome.settled.len(), 20, "{metric:?}: every id settled");
+        assert!(outcome.refused.is_empty(), "{metric:?}: nothing refused");
         assert_eq!(
             index.tombstone_count(),
             before,
@@ -4649,22 +4650,26 @@ fn an_id_the_graph_holds_as_it_is_is_not_inserted_again() {
     }
 }
 
-/// One pair the graph refuses (here, of the wrong dimension) does not keep
-/// the rest of its batch out of the index: the others are inserted and
-/// settled, and only the refused one is left for its caller to keep.
+/// A batch holding one pair the graph refuses (here, of the wrong
+/// dimension) is refused whole: every pair the graph lacked comes back as
+/// refused, with the reason, for the caller to retry one by one — under its
+/// own lock, held per pair rather than across all of them.
 #[test]
-fn one_refused_pair_does_not_keep_its_batch_out() {
+fn a_refused_batch_names_every_pair_it_did_not_insert() {
     let index = HnswIndex::new_fast_insert(8, DistanceMetric::Euclidean).expect("test: index");
     let mut pairs: Vec<(u64, Vec<f32>)> = (0..10_u64)
         .map(|id| (id, (0..8).map(|d| (id * 8 + d) as f32).collect()))
         .collect();
     pairs.push((99, vec![1.0; 3]));
 
-    let mut settled = index.insert_batch_unless_indexed(&pairs);
-    settled.sort_unstable();
+    let outcome = index.insert_batch_unless_indexed(&pairs);
 
-    assert_eq!(settled, (0..10).collect::<Vec<u64>>());
-    assert_eq!(index.len(), 10);
+    assert!(outcome.settled.is_empty());
+    let mut refused = outcome.refused;
+    refused.sort_unstable();
+    assert_eq!(refused, (0..10).chain([99]).collect::<Vec<u64>>());
+    assert!(outcome.error.is_some(), "the reason comes back");
+    assert_eq!(index.len(), 0);
 }
 
 // =========================================================================

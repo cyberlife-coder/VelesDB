@@ -463,11 +463,14 @@ its index removal — so it lands wholly before a chunk is read, and the
 merge indexes what it left, or after the chunk is inserted, and its own
 index write comes last. A merge therefore never puts a deleted point back
 in the graph nor overwrites a newer write with the vector it read; a writer
-waits at most one chunk's insert: 69 ms (95% CI 64–71 ms) for 256 768-d
-vectors into a 10 000-vector Cosine graph
-(`bulk_insert_v2_benchmark`'s `merge_chunk_256_into_10k_768d`, measured
-2026-10-31 on the shared 4-vCPU cloud sandbox, 10 samples; it grows with
-the dimension and, slowly, with the graph). The index's own locks
+waits at most one chunk's read and insert: 234 ms (95% CI 229–239 ms) for
+256 768-d vectors into a 10 000-vector Cosine collection
+(`merge_chunk_hold_benchmark`'s `chunk_guard_hold_256_into_10k_768d`, timed
+inside `Collection::index_current` from taking the guard to releasing it;
+measured 2026-10-31 on the shared 4-vCPU cloud sandbox, 10 samples; it
+grows with the dimension and with the graph). An earlier figure, 69 ms,
+timed the graph insert alone on a bare index with default parameters, not
+what the guard covers. The index's own locks
 (`HnswIndex::publishing`, `inner`, the graph's) rank after `vector_storage`
 (2): a delete removes from the index under the storage write guard, a
 merge inserts under the read guard, and no path takes `vector_storage`
@@ -476,10 +479,18 @@ does (compared normalized for Cosine, as the graph keeps it) is not
 inserted again. The merge settles an id it inserted, found held already,
 found deleted, or found holding a vector of the wrong dimension (logged and
 left out of the index: no merge could insert it). One it could not read or
-insert stays queued — a chunk the graph refuses is retried one vector at a
-time, so only the refused ones stay — and a builder flush that keeps any
-returns an error counting them. A deferred merge that keeps entries
-restarts the buffer's age. The flags that
+insert stays queued, for the next merge. A chunk the graph refuses (its
+insert is all-or-nothing) is retried one id at a time, each read and
+inserted under a read guard of its own, so only the refused ones stay and
+the retries hold a writer for one vector's insert at a time; the merge logs
+one warning counting what it kept. Kept ids are a state the next flush
+retries, not a failure: a builder flush returns them in its `FlushOutcome`,
+and `upsert_bulk`, `flush` and `flush_full` succeed. Only a failed link of
+placed ids is an error, and then `flush` and `flush_full` skip the HNSW save
+(it would persist mappings for nodes the graph has not linked) but run
+every other step before returning it. A deferred merge that keeps entries
+restarts the buffer's age; one that empties the buffer clears it, then
+looks again and stamps an entry a racing push left unaged. The flags that
 keep one flush and one deferred merge running at a time are held by guards
 that clear them when dropped, so a merge that panics does not leave every
 later one skipping.

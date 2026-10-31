@@ -585,3 +585,27 @@ fn a_flush_whose_drain_keeps_an_id_runs_every_step_and_succeeds() {
     assert_eq!(builder_pending(&coll), vec![7]);
     assert_eq!(first_hit(&coll, 7), Some(7), "the kept id is still found");
 }
+
+/// A chunk the graph refuses is retried one id at a time, each read and
+/// inserted under a storage guard of its own: a writer waits for at most one
+/// vector's insert, not the whole chunk's retries.
+#[test]
+fn a_refused_chunk_is_retried_one_id_at_a_time_each_under_its_own_guard() {
+    use crate::collection::search::pending::merge_hooks;
+    let (_dir, coll) = fast_insert_v2_collection_flushing_at(HOLD_ALL);
+    coll.upsert_bulk(&points(0..5)).expect("test: upsert_bulk");
+    merge_hooks::set_refused_in_a_batch(&[2]);
+    let holds = merge_hooks::guard_holds();
+
+    coll.flush().expect("test: flush");
+
+    assert_eq!(
+        merge_hooks::guard_holds() - holds,
+        1 + 5,
+        "the chunk once, then each of its 5 ids under a guard of its own"
+    );
+    assert!(
+        builder_pending(&coll).is_empty(),
+        "each id was inserted alone"
+    );
+}
