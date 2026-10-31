@@ -369,3 +369,18 @@ fn test_an_integer_and_a_float_order_exactly() {
     };
     assert!(gt.matches(&payload));
 }
+
+#[test]
+fn test_an_integer_equals_a_float_only_at_its_exact_value() {
+    // As `>` holds between them, `=` cannot: 2^53 + 1 is not 2^53.0.
+    let eq = |n: serde_json::Value, value: serde_json::Value| {
+        Condition::Eq {
+            field: "n".to_string(),
+            value,
+        }
+        .matches(&json!({ "n": n }))
+    };
+    assert!(!eq(json!(9_007_199_254_740_993_u64), json!(9_007_199_254_740_992.0_f64)));
+    assert!(eq(json!(9_007_199_254_740_992_u64), json!(9_007_199_254_740_992.0_f64)));
+    assert!(eq(json!(3), json!(3.0)));
+}
