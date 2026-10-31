@@ -54,8 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ascending (was first-seen order), groups an ORDER BY ties come by key,
   `FIRST(col)` reads the row with the smallest point id (the most similar
   row, smallest id on a tie, in a vector `GROUP BY`), `1` and `1.0` are
-  one group, and rows are aggregated in id order, so a float `SUM` matches
-  core's.
+  one group, and rows are aggregated in id order, so a `GROUP BY`'s float
+  `SUM` matches core's (an aggregate without `GROUP BY` over more than
+  10,000 rows sums per chunk in core and can differ in its last digits).
 - **BREAKING (behavior) — a SQL `GROUP BY` holds at most `WITH (max_groups =
   N)` groups, 10,000 by default**, as in core; past it the query fails with
   `Too many groups (limit: N)`.

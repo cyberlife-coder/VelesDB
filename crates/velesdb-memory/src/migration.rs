@@ -31,11 +31,12 @@
 //!   id, exclusive and ascending, which bypasses the query pipeline and so
 //!   carries neither the clamp nor the re-sort.
 //!
-//! The first was written first because `WHERE id > n` genuinely does not work —
-//! filters read the payload and the id is not in it. That ruled out expressing
-//! a cursor *in `VelesQL`*; it did not rule out the cursor, and treating the
-//! query language's limit as the architecture's limit is the error this module
-//! now records rather than repeats.
+//! The first was written first because `WHERE id > n` did not work then —
+//! filters read the payload and the id is not in it. Since 8.0.0 `id` is the
+//! point id in every `VelesQL` clause, so a cursor could be expressed in
+//! `VelesQL`, but it would still run through the query pipeline and its clamp:
+//! the language's limit was never the architecture's, which is the error this
+//! module records rather than repeats.
 //!
 //! That either *parses* is not the proof. Both are measured by running them
 //! against a seeded store and comparing what comes back, field by field, and

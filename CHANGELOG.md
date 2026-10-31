@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DuplicateOutputColumn` (`V017`) and `InvalidHaving` (`V018`).
 - `Filter::matches_point` and `filter::Condition::matches_point`: evaluate a
   filter against a point, its id included, which a VelesQL `id` column
-  reads.
+  reads. `velesql::explain::IndexType::PointId` (`PointIdLookup`).
 
 - **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
   node relationships as edges.** The option was documented but never read, and
@@ -369,27 +369,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `-0.0`, `2^53` as an integer and as a float (separate groups in 7.1.0);
   - groups whose keys compare equal (two arrays) come by their best row's
     id;
-  - rows are aggregated in point id order, so a float `SUM` or `AVG` adds
-    its values in the same order on every run (core followed storage
-    order).
+  - rows are aggregated in point id order, so a float `SUM` or `AVG` is the
+    same on every run (core followed storage order); above 10,000 rows an
+    aggregate without `GROUP BY` sums per 1,000-row chunk in core, so its
+    last digits can differ from WASM's.
   Migration: add an ORDER BY to pin another order (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
 - **BREAKING (behavior) — `id` is the point id in every VelesQL clause, in
   core as in WASM.** Core 7.1.0 read a payload field named `id` in a
-  SELECT's WHERE (plain or aggregate), ORDER BY, GROUP BY and aggregates,
-  and in a MATCH `WHERE n.id`, while its projection, its `UPDATE` / `DELETE`
-  WHERE and its JOIN filters, and every WASM clause, read the point id. For a payload
-  carrying its own `id`, `WHERE id = 3`, `ORDER BY id`, `GROUP BY id`,
-  `COUNT(id)` / `MAX(id)` and `WHERE n.id = 3` in a MATCH now read the
-  point (node, edge) id. Without such a payload field, `GROUP BY id` grouped
-  every row into one `NULL` group and `WHERE id < 100` matched nothing.
+  SELECT's WHERE (plain or aggregate), ORDER BY (plain or arithmetic),
+  GROUP BY and aggregates, in a JOIN key read from the payload first, and in
+  a MATCH's WHERE (`=` and `IN`), ORDER BY and RETURN (`n.id`, `r.id`),
+  while its projection, its `UPDATE` / `DELETE` WHERE, and every WASM
+  clause, read the point id. For a payload carrying its own `id`, all of
+  these now read the point (node, relationship) id; `RETURN n` projects the
+  node id under `n.id`; a property index on `(Label, "id")` no longer
+  answers a MATCH `n.id` predicate. Without such a payload field, `GROUP BY
+  id` grouped every row into one `NULL` group and `WHERE id < 100` matched
+  nothing. `id = n` and `id IN (...)` now visit those points directly
+  (a SELECT, `NEAR … AND id IN (...)`, UPDATE), and EXPLAIN reports a
+  `PointIdLookup`.
   VelesQL cannot reach a payload field named `id`: `SELECT *` already
   returned the point id under that name. Migration: rename the payload field
   (`doc_id`) to filter or sort on it in VelesQL; a JSON filter (REST search
-  and scroll `filter`, `{"field": "id"}`) still reads the payload field (see
-  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9). In
-  Rust, a `filter::Condition` converted from a VelesQL condition reads `id`
-  only through `matches_point`; `matches` knows no point id.
+  and scroll `filter`,
+  `{"condition": {"type": "eq", "field": "id", "value": 3}}`) still reads the
+  payload field (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
+- **Security — an observer scope on `id` narrows Python reads.** A scope
+  such as `id != 2` was tested against the payload alone in the Python
+  binding's post-filtered reads (`get`, batch, sparse and hybrid-sparse
+  search, graph embedding search): with no payload `id`, `id != 2`, `NOT
+  IN` or `IS NULL` matched every row, and the scope widened instead of
+  narrowing. Every filter is now tested against the point, its id included.
+- **BREAKING (behavior) — a filter compares two integers exactly.** WHERE
+  (and a JSON filter) compared numbers as `f64`, so `id = 9007199254740993`
+  matched the integer `9007199254740992`. Two integers now compare exactly;
+  an integer and a float, or two floats, still within `f64::EPSILON`.
+- **BREAKING (behavior) — a point without payload is tested with a `null`
+  payload on every filtered path.** REST search and scroll filters, text
+  and hybrid search, batch search and MATCH dropped it outright, while a
+  SELECT kept it when the filter matched a `null` payload (`IS NULL`,
+  `!=`): `WHERE id = 5` and `{"type": "is_null", ...}` now match it
+  everywhere.
 - **BREAKING (behavior) — `Collection::execute_aggregate` and
   `Database::execute_aggregate` refuse a vector `GROUP BY`** (`NEAR` +
   `GROUP BY`) with `Error::Query`. It grouped every point of the collection,
@@ -464,6 +486,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING — `Filter::matches` and `filter::Condition::matches`.** They
+  tested a payload alone, so a filter converted from VelesQL could not read
+  its `id` column, and an observer scope such as `id != 2` matched every row
+  (fail-open). Call `matches_point(id, payload)`. A JSON filter naming the
+  internal point-id field `@velesql.point_id` is refused when deserialized.
 - **BREAKING — `AggregateResult::to_json`.** It named columns its own way
   (`count` only when non-zero, no `COUNT(column)` key), which no engine
   returned. Read the `count`, `counts`, `sums`, `avgs`, `mins` and `maxs`

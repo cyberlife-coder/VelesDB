@@ -124,9 +124,9 @@ pub fn enumerate_page(
 ///   clamps the total to `MAX_LIMIT` (`100_000`), so an `OFFSET` walk goes blind
 ///   past that mark. A cursor never accumulates an offset, so it has no such
 ///   bound.
-/// * `WHERE id > n` really is unavailable — filters read the payload and the id
-///   is not in it — but that only ever ruled out expressing the cursor *in
-///   `VelesQL`*. It never ruled out the cursor.
+/// * `WHERE id > n` reads the point id since 8.0.0 (before, filters read the
+///   payload, where the id is not), but a `VelesQL` cursor would still pass
+///   through the query pipeline and its clamp. `scroll_page` needs neither.
 ///
 /// Returns the batch and the cursor to pass next; `None` means the collection
 /// is exhausted.

@@ -237,8 +237,14 @@ Every engine groups the same way:
   ascending, `NULL` last. Groups an ORDER BY ties also fall back to that
   order, and groups whose keys compare equal (two arrays) come by their best
   row's id.
-- Rows are aggregated in point id order, so a float `SUM` or `AVG` adds its
-  values in the same order on every run and in every engine.
+- Rows are aggregated in point id order, so a float `SUM` or `AVG` is the
+  same on every run. Core sums an aggregate without `GROUP BY` over more
+  than 10,000 rows per 1,000-row chunk, then adds the chunk sums, so its
+  last digits there can differ from WASM's row-by-row sum; a `GROUP BY` sums
+  row by row in both engines.
+- A group key normalises a number (`1.0` is the key `1`); a number nested in
+  an array or object key is compared as JSON, so `[1]` and `[1.0]` are two
+  groups.
 - A SQL `GROUP BY` holds at most `WITH (max_groups = N)` groups, 10,000 by
   default and 1,000,000 at most, in every engine; one more group fails the
   query (`Too many groups`). A vector `GROUP BY` groups its search results,
@@ -407,15 +413,21 @@ The WHERE clause filters rows using conditions. Multiple conditions are combined
 with `AND`, `OR`, and `NOT`.
 
 `id` is the point id in every clause of a SELECT — WHERE, the projection,
-ORDER BY, GROUP BY and aggregates — in core and WASM alike, and in a MATCH
-`WHERE` (`n.id` is the node id). A payload field named `id` is not reachable
+ORDER BY (arithmetic and `LET` included), GROUP BY, aggregates and JOIN keys
+— in core and WASM alike. In a MATCH, `n.id` is the node id and `r.id` the
+relationship id, in WHERE, ORDER BY and RETURN (`RETURN n` projects it under
+`n.id`). `id = n` and `id IN (...)` visit the points they name directly
+(EXPLAIN: `PointIdLookup`); no payload or property index named `id` answers
+for them. A payload field named `id` is not reachable
 from VelesQL: `SELECT *` returns the point id under `id`, and `WHERE id = 3`
-compares the point id. A JSON filter (`{"type": "eq", "field": "id", ...}`
-on a REST search or scroll) still reads the payload field.
+compares the point id. A JSON filter on a REST search or scroll,
+`{"condition": {"type": "eq", "field": "id", "value": 3}}`, still reads the
+payload field.
 
-Numbers compare by value. WHERE's `=` (and `IN`) treats two numbers less
-than `f64::EPSILON` (about 2.2e-16) apart as equal, while GROUP BY and ORDER
-BY compare exactly, an integer beyond 2^53 included.
+Numbers compare by value. WHERE compares two integers exactly, beyond 2^53
+included; its `=` (and `IN`) treats an integer and a float, or two floats,
+less than `f64::EPSILON` (about 2.2e-16) apart as equal. GROUP BY and ORDER
+BY compare every number exactly.
 
 ### Comparison Operators
 

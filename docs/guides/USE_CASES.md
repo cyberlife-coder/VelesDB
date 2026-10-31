@@ -376,7 +376,7 @@ for (const article of results.results) {
 ### VelesQL Query
 
 ```sql
--- Find items similar to what user has liked
+-- Find items similar to what user has liked (`u.id` is the user's node id)
 MATCH (u:User)-[:LIKED]->(liked:Item)
 WHERE u.id = $user_id
   AND similarity(liked.embedding, $candidate) > 0.7
@@ -405,7 +405,7 @@ user_likes = items.match_query("""
     WHERE u.id = $user_id
     RETURN i
     LIMIT 100
-""", params={"user_id": user_id})
+""", params={"user_id": user_id})  # the user's node id (an integer)
 
 # Compute preference centroid from the matched item payloads
 preference_vector = compute_centroid([m['bindings']['embedding'] for m in user_likes])
@@ -598,7 +598,8 @@ plt.show()
 ### VelesQL Query
 
 ```sql
--- Find all components affected by a change (up to 5 hops)
+-- Find all components affected by a change (up to 5 hops);
+-- `source.id` is the component's node id (an integer)
 MATCH (source:Component)-[:DEPENDS_ON*1..5]->(affected:Component)
 WHERE source.id = $component_id
 RETURN affected
@@ -620,8 +621,8 @@ LIMIT 50
 ### Python Example
 
 ```python
-def analyze_impact(component_id: str, max_depth: int = 5) -> dict:
-    """Analyze the impact of changing a component."""
+def analyze_impact(component_id: int, max_depth: int = 5) -> dict:
+    """Analyze the impact of changing the component with node id `component_id`."""
     
     components = db.get_collection("components")
     affected = components.match_query(f"""

@@ -268,6 +268,7 @@ fast sends no search instead.
 | `velesdb-migrate` `PineconeConfig::environment` | drop the field |
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
 | `velesql::AggregateResult::to_json` | the `count`, `counts`, `sums`, `avgs`, `mins`, `maxs` fields, or `Database::execute_aggregate` |
+| `Filter::matches(payload)`, `filter::Condition::matches(payload)` | `matches_point(id, Some(payload))`: a filter is tested against a point, its id included |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a
   `usize`. The removed helper returned `usize::MAX` for `perfect`. Without the
@@ -317,8 +318,9 @@ under `validation`. `GuardRailKind`, `TimeoutBudget`, `Error::is_caller_error`,
 `ValidationErrorKind::{OrderByNotInResult, DuplicateOutputColumn,
 InvalidHaving}` (`V016`–`V018`). `Filter::matches_point` and
 `filter::Condition::matches_point` evaluate a filter against a point, its id
-included (a filter built from VelesQL reads `id` as the point id; `matches`
-knows no id).
+included (a filter built from VelesQL reads `id` as the point id), and
+`explain::IndexType::PointId` reports a point-id lookup. Deserializing a
+`Filter` that names the internal field `@velesql.point_id` fails.
 
 ## 4. Python and the integrations
 
@@ -556,7 +558,8 @@ Rejections carry core's codes and a new `recoverable` field:
     `-0.0`, `2^53` as an integer and as a float);
   - groups whose keys compare equal (two arrays) come by best row id, and
     rows are aggregated in id order, so a float `SUM` is the same on every
-    run.
+    run (above 10,000 rows, core's aggregate without `GROUP BY` sums per
+    chunk, so its last digits can differ from WASM's).
 
   Add an ORDER BY to pin another order.
 
@@ -571,14 +574,18 @@ Rejections carry core's codes and a new `recoverable` field:
   | `WHERE id = 3`, `WHERE id IN (...)`, `WHERE id < 100` | payload `id` | point id |
   | `ORDER BY id` | payload `id` | point id |
   | `GROUP BY id`, `COUNT(id)`, `MAX(id)` | payload `id` | point id |
-  | MATCH `WHERE n.id = 3` (`r.id` on an edge) | node (edge) property `id` | node (edge) id |
+  | `ORDER BY 0 - id`, a `LET` reading `id` | payload `id` | point id |
+  | `JOIN ... ON a.x = b.id` (the left key `id`) | payload `id`, else point id | point id |
+  | MATCH `WHERE n.id = 3`, `n.id IN (...)`, `ORDER BY n.id`, `RETURN n.id` (`r.id` on a relationship) | node (relationship) property `id` | node (relationship) id |
+  | MATCH `RETURN n` | payload `id` under `n.id` | node id under `n.id` |
 
   Without such a payload field, 7.1.0 `GROUP BY id` put every row in one
   `NULL` group and `WHERE id < 100` matched nothing. VelesQL cannot reach a
   payload field named `id` (`SELECT *` returns the point id under that
   name): rename it (`doc_id`) to filter or sort on it, or use a JSON filter
-  (`{"type": "eq", "field": "id", ...}` on a REST search or scroll), which
-  still reads the payload field.
+  on a REST search or scroll,
+  `{"condition": {"type": "eq", "field": "id", "value": 3}}`, which still
+  reads the payload field.
 
 - **ORDER BY compares an integer and a float exactly**, a total order: 7.1.0
   compared them as `f64`, so `2^53 + 1` tied the float `2^53` and a sort
@@ -654,6 +661,16 @@ Rejections carry core's codes and a new `recoverable` field:
     measured cost and the benchmark that reproduces it.
   - An `f32` is parsed directly, so a vector component can differ from 7.1.0
     by one `f32` ULP, toward the exact value.
+- **Filters compare two integers exactly** (`id = 9007199254740993` no
+  longer matches `9007199254740992`), and **a point without payload is
+  tested with a `null` payload on every filtered path**: REST search and
+  scroll filters, text, hybrid and batch search, and MATCH used to drop it,
+  so `{"type": "is_null", ...}` or `neq` now match it there as in a SELECT.
+
+- **Python: an observer scope on `id` narrows every read.** Post-filtered
+  reads (`get`, batch, sparse, hybrid-sparse and graph embedding search)
+  tested a scope against the payload alone, so `id != 2` matched every row.
+
 - **Caller-chosen sizes no longer abort the process.** A huge scroll
   `batch_size`, streaming `batch_size` or HNSW `max_elements` reserved that
   much memory up front. They are now capacity hints: an HNSW index reserves
