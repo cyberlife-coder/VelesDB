@@ -32,10 +32,22 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// `(id, vector)` pairs read from vector storage: what
-/// [`AsyncIndexBuilder::flush_sync`]'s `current_vectors` returns for the ids
-/// it is given, leaving out an id storage no longer holds.
-pub type StoredVectors = Vec<(u64, Vec<f32>)>;
+/// Holds a builder's `building` flag for one flush and clears it when
+/// dropped, so a flush that panics does not leave every later one skipping.
+struct Building<'a>(&'a AtomicBool);
+
+impl<'a> Building<'a> {
+    /// Sets the flag, or `None` when another flush holds it.
+    fn start(flag: &'a AtomicBool) -> Option<Self> {
+        (!flag.swap(true, Ordering::AcqRel)).then_some(Self(flag))
+    }
+}
+
+impl Drop for Building<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 /// Configuration for the async index builder.
 ///
@@ -158,17 +170,16 @@ impl AsyncIndexBuilder {
         ids
     }
 
-    /// Indexes both queues into the HNSW index: inserts the vectors
-    /// `current_vectors` gives for the buffered ids — what storage holds for
-    /// each now, a deleted one left out, and one the graph already holds as
-    /// it is skipped rather than placed twice — via
-    /// `HnswIndex::insert_batch_unless_indexed`, which places and links each,
-    /// and links the queued placed ids where the direct writer placed their
-    /// vectors, placing nothing. Returns the number of nodes it indexed.
+    /// Indexes both queues into the HNSW index: hands the buffered ids to
+    /// `index_current`, which indexes what storage holds for each now and
+    /// returns the ids it settled (inserted, held by the graph already as
+    /// storage holds them, or deleted), and links the queued placed ids
+    /// where the direct writer placed their vectors, placing nothing.
+    /// Returns the number of buffered ids settled plus the nodes linked.
     ///
-    /// Each queue keeps what this flush indexes until it is indexed, so
-    /// `Self::pending_ids` still names it meanwhile; a failed link
-    /// therefore leaves its ids queued for the next flush.
+    /// Each queue keeps an id until it is indexed, so `Self::pending_ids`
+    /// still names it meanwhile; an id `index_current` did not settle, and
+    /// the ids of a failed link, stay queued for the next flush.
     ///
     /// Concurrent calls are serialized: the second caller returns
     /// `Ok(0)` while the first is in progress. What it would have indexed
@@ -181,40 +192,41 @@ impl AsyncIndexBuilder {
     pub fn flush_sync(
         &self,
         hnsw_index: &HnswIndex,
-        current_vectors: &dyn Fn(&[u64]) -> StoredVectors,
+        index_current: &dyn Fn(&[u64]) -> Vec<u64>,
     ) -> crate::error::Result<usize> {
-        if self.building.swap(true, Ordering::AcqRel) {
+        let Some(_building) = Building::start(&self.building) else {
             // Another build is in progress — skip
             return Ok(0);
-        }
-        let inserted = self.insert_buffered(hnsw_index, current_vectors);
-        let linked = self.link_placed(hnsw_index);
-        self.building.store(false, Ordering::Release);
-        Ok(inserted + linked?)
+        };
+        let settled = self.index_buffered(index_current);
+        let linked = self.link_placed(hnsw_index)?;
+        Ok(settled + linked)
     }
 
-    /// Inserts what `current_vectors` gives for the buffered ids, then drops
-    /// them from the buffer: only this flush removes from it, and `enqueue`
-    /// only appends.
-    fn insert_buffered(
-        &self,
-        hnsw_index: &HnswIndex,
-        current_vectors: &dyn Fn(&[u64]) -> StoredVectors,
-    ) -> usize {
+    /// Hands the buffered ids to `index_current`, then drops from the buffer
+    /// the ones it settled; the others stay, ahead of what was queued since.
+    /// Only this flush removes from the buffer, and `enqueue` only appends,
+    /// so the ids copied are still the buffer's prefix.
+    fn index_buffered(&self, index_current: &dyn Fn(&[u64]) -> Vec<u64>) -> usize {
         // Copied out so the buffer's lock (position 11) is not held across
         // the storage's or the index's.
         let ids = self.buffer.lock().clone();
         if ids.is_empty() {
             return 0;
         }
-        let vectors = current_vectors(&ids);
-        let (held, inserted) = hnsw_index.insert_batch_unless_indexed(&vectors);
-        self.buffer.lock().drain(..ids.len());
+        let settled: rustc_hash::FxHashSet<u64> = index_current(&ids).into_iter().collect();
+        let mut buffer = self.buffer.lock();
+        let queued_since = buffer.split_off(ids.len());
+        buffer.retain(|id| !settled.contains(id));
+        let kept = buffer.len();
+        buffer.extend(queued_since);
+        drop(buffer);
         tracing::debug!(
-            "AsyncIndexBuilder::flush_sync: inserted {inserted}/{} buffered ids ({held} indexed already)",
+            "AsyncIndexBuilder::flush_sync: settled {}/{} buffered ids",
+            ids.len() - kept,
             ids.len()
         );
-        inserted
+        ids.len() - kept
     }
 
     /// Links the queued ids, then drops them from the queue: only this flush

@@ -409,19 +409,18 @@ two writers to the same id cannot interleave and leave the indexes describing
 a payload storage no longer holds. BM25, the secondary indexes and the
 histograms are still updated after that guard is released.
 
-**Pending points: async index builder, deferred indexer, delta buffer.**
-Their locks (the delta buffer at position 10; the async index builder's
-`buffer` and `placed` at 11 and the deferred indexer's buffer, both above
-it) are taken on the search path as well
+**Pending points: async index builder, deferred indexer.** Their locks
+(the async index builder's `buffer` and `placed`, and the deferred
+indexer's buffer, all at position 11) are taken on the search path as well
 as the write path: every vector search merges the points they hold but the
 index does not yet reach with the index's results
 (`collection/search/pending.rs`), so a point is found from the moment its
 write returns. A search takes each lock only to copy the ids out, with no
 other lock held. It then scores each id on what vector storage holds for it
 now — read under the `vector_storage` (2) read guard 256 ids at a time, the
-guard released between chunks and before the merge, no position-10 or -11
-lock held — so a point overwritten or deleted since it was queued is scored
-on its new vector or skipped, never on the copy its source took. An index
+guard released between chunks and before the merge, no position-11 lock
+held — so a point overwritten or deleted since it was queued is scored on
+its new vector or skipped, never on the copy its source took. An index
 result whose id is pending is dropped before the merge: the index may still
 hold an older vector for it, and storage is the one place a search reads a
 pending point's vector from. When the dropped results leave fewer than the
@@ -435,20 +434,45 @@ under.
 The ids are copied **before** the index search, and each source drops an id
 only after indexing it — insert, then remove:
 
-- the async index builder inserts what storage holds for its buffered ids,
-  or links its placed ids, then drops the prefix it indexed (only a flush
-  removes from its queues, and one flush runs at a time);
-- the deferred indexer copies its entries, inserts what storage holds for
-  them, then retires only the entries whose vector is still the one it
-  copied, so an entry written again meanwhile stays for the next merge;
-- the delta buffer is sealed first (`DRAINING`: it takes no new write and
-  searches still read it), inserted from storage, and only then emptied.
+- the async index builder hands its buffered ids to the merge below and
+  drops only the ids it settled, or links its placed ids and drops them
+  once linked (only a flush removes from its queues, and one flush runs at
+  a time);
+- the deferred indexer copies its entries, has the merge below index their
+  ids, then retires only the copied entries of the ids it settled, so an
+  entry written again meanwhile, or whose insert failed, stays for the next
+  merge.
 
 Every point the walk can miss is therefore in the copy: if a source's drop
 came before the copy, the insert came before the walk, and the walk can
 reach the point; otherwise the copy holds it. Copied after the walk
 instead, a source could have lost a point the walk had already missed. A
 point found both ways is returned once, scored from storage.
+
+**The merge into the index** (`Collection::index_current`) reads the ids'
+vectors from storage and inserts them 256 at a time, holding the
+`vector_storage` (2) read guard across each chunk's read **and** its index
+insert. A delete or an upsert writes storage under the write guard before
+it touches the index — `delete_vector_core_stores` holds that guard across
+its index removal — so it lands wholly before a chunk is read, and the
+merge indexes what it left, or after the chunk is inserted, and its own
+index write comes last. A merge therefore never puts a deleted point back
+in the graph nor overwrites a newer write with the vector it read; a writer
+waits at most one chunk's insert. An id the graph already holds as storage
+does (compared normalized for Cosine, as the graph keeps it) is not
+inserted again. The merge settles an id it inserted, found held already, or
+found deleted; one it could not read or insert stays queued. The flags that
+keep one flush and one deferred merge running at a time are held by guards
+that clear them when dropped, so a merge that panics does not leave every
+later one skipping.
+
+The deferred indexer retires an entry by value: an id rewritten during a
+merge back to the very vector the merge copied (A, then B, then A again,
+with the merge reading B in between) is retired although the index then
+holds B. That takes two rewrites of one id inside one merge, the last back
+to the copied vector; until the id's next write, a search reaches it at B
+while storage holds A. A per-entry write sequence would close it; it is
+not kept.
 
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 

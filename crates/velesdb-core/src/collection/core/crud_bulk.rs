@@ -104,7 +104,7 @@ impl Collection {
 
         if needs_flush {
             // Buffer reached merge_threshold — flush synchronously.
-            aib.flush_sync(&self.storage.index, &|ids| self.current_vectors(ids))?;
+            aib.flush_sync(&self.storage.index, &|ids| self.index_current(ids))?;
         }
 
         let count = vector_refs.len();

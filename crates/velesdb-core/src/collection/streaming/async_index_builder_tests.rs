@@ -35,19 +35,31 @@ fn ids_of(points: &[(u64, Vec<f32>)]) -> Vec<u64> {
     points.iter().map(|(id, _)| *id).collect()
 }
 
-/// A stand-in for storage: the vector `points` holds for each id asked
-/// about, an id it does not hold left out — as a deleted point is.
-fn stored(points: &[(u64, Vec<f32>)]) -> impl Fn(&[u64]) -> Vec<(u64, Vec<f32>)> + '_ {
+/// A stand-in for `Collection::index_current` over storage holding
+/// `points`: inserts what `points` holds for each id asked about and
+/// settles it, and settles an id it does not hold, as a deleted one.
+fn indexing<'a>(
+    index: &'a HnswIndex,
+    points: &'a [(u64, Vec<f32>)],
+) -> impl Fn(&[u64]) -> Vec<u64> + 'a {
     move |ids| {
-        ids.iter()
+        let present: Vec<(u64, Vec<f32>)> = ids
+            .iter()
             .filter_map(|id| points.iter().find(|(stored, _)| stored == id).cloned())
-            .collect()
+            .collect();
+        let mut settled: Vec<u64> = ids
+            .iter()
+            .copied()
+            .filter(|id| !present.iter().any(|(stored, _)| stored == id))
+            .collect();
+        settled.extend(index.insert_batch_unless_indexed(&present));
+        settled
     }
 }
 
-/// Storage that holds nothing.
-fn nothing_stored(_: &[u64]) -> Vec<(u64, Vec<f32>)> {
-    Vec::new()
+/// Storage that holds nothing: every id is settled as deleted.
+fn nothing_stored(ids: &[u64]) -> Vec<u64> {
+    ids.to_vec()
 }
 
 #[test]
@@ -100,7 +112,9 @@ fn test_flush_sync_indexes_vectors() {
     builder.enqueue(ids_of(&points));
     assert_eq!(builder.pending_len(), 20);
 
-    let indexed = builder.flush_sync(&index, &stored(&points)).unwrap();
+    let indexed = builder
+        .flush_sync(&index, &indexing(&index, &points))
+        .unwrap();
     assert_eq!(indexed, 20);
     assert_eq!(builder.pending_len(), 0);
     assert_eq!(index.len(), 20);
@@ -126,9 +140,9 @@ fn a_flush_inserts_what_storage_holds_now() {
     builder.enqueue(ids_of(&queued));
     let now = vec![(0_u64, vec![0.0_f32, 0.0, 1.0, 0.0])];
 
-    let indexed = builder.flush_sync(&index, &stored(&now)).unwrap();
+    let settled = builder.flush_sync(&index, &indexing(&index, &now)).unwrap();
 
-    assert_eq!(indexed, 1, "only the point storage still holds");
+    assert_eq!(settled, 2, "one id inserted, one found deleted");
     assert_eq!(index.len(), 1);
     assert!(builder.pending_ids().is_empty(), "both ids left the queue");
     let hits = index.search(&now[0].1, 1);
@@ -152,7 +166,7 @@ fn flush_sync_skips_while_another_flush_runs() {
 
     builder.force_set_building(true);
     let indexed = builder
-        .flush_sync(&index, &stored(&points))
+        .flush_sync(&index, &indexing(&index, &points))
         .expect("test: a skipped flush");
     builder.force_set_building(false);
 
@@ -237,4 +251,40 @@ fn a_failed_link_leaves_the_ids_on_the_queue() {
     builder
         .flush_sync(&index, &nothing_stored)
         .expect_err("the flush flag was cleared: the next flush runs, and fails the same way");
+}
+
+/// An id the flush's indexing did not settle (its read or insert failed)
+/// stays queued, and searchable, for the next flush.
+#[test]
+fn an_id_a_flush_did_not_settle_stays_queued() {
+    let index = make_index(4);
+    let builder = AsyncIndexBuilder::new(default_config());
+    builder.enqueue([1, 2, 3]);
+
+    let settled = builder
+        .flush_sync(&index, &|_| vec![2])
+        .expect("test: flush");
+
+    assert_eq!(settled, 1);
+    assert_eq!(builder.pending_ids(), vec![1, 3]);
+}
+
+/// A flush that panics half-way does not leave the builder's flag set:
+/// the next flush runs.
+#[test]
+fn a_flush_that_panics_lets_the_next_one_run() {
+    let index = make_index(4);
+    let builder = AsyncIndexBuilder::new(default_config());
+    builder.enqueue([1]);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = builder.flush_sync(&index, &|_| panic!("test: indexing fails half-way"));
+    }));
+    assert!(unwound.is_err(), "premise: the flush panicked");
+
+    let settled = builder
+        .flush_sync(&index, &nothing_stored)
+        .expect("test: flush");
+
+    assert_eq!(settled, 1, "the second flush ran");
+    assert!(builder.pending_ids().is_empty());
 }

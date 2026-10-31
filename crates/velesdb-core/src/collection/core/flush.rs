@@ -217,33 +217,6 @@ impl Collection {
     #[cfg(not(feature = "persistence"))]
     fn drain_deferred_into_index(&self) {}
 
-    /// Inserts what storage holds now for `ids` into the HNSW index, leaving
-    /// out an id it no longer holds and one the graph already holds as it is
-    /// (`HnswIndex::insert_batch_unless_indexed`), and returns the `(id,
-    /// vector)` pairs storage gave. Shared by the delta and deferred merges,
-    /// so each indexes a point as it is, never an older copy it queued, and
-    /// never twice.
-    ///
-    /// # Lock ordering
-    ///
-    /// Reads `vector_storage` (position 2) in chunks and releases it before
-    /// the index insert; callers hold no buffer lock (position 10 or 11)
-    /// meanwhile.
-    #[cfg(feature = "persistence")]
-    pub(super) fn index_current(&self, ids: &[u64]) -> Vec<(u64, Vec<f32>)> {
-        let vectors = self.current_vectors(ids);
-        if !vectors.is_empty() {
-            let (held, inserted) = self.storage.index.insert_batch_unless_indexed(&vectors);
-            if held + inserted < vectors.len() {
-                tracing::warn!(
-                    "index_current: inserted {inserted}/{} vectors ({held} indexed already)",
-                    vectors.len()
-                );
-            }
-        }
-        vectors
-    }
-
     /// Drains the async index builder buffer into the HNSW index.
     ///
     /// Links sub-threshold batches from the V2 `upsert_bulk` path into
@@ -262,7 +235,7 @@ impl Collection {
     /// alert on repeated failures.
     pub(super) fn drain_async_index_builder(&self) -> Result<()> {
         if let Some(aib) = self.streaming.async_index_builder.load().as_ref() {
-            match aib.flush_sync(&self.storage.index, &|ids| self.current_vectors(ids)) {
+            match aib.flush_sync(&self.storage.index, &|ids| self.index_current(ids)) {
                 Ok(count) if count > 0 => {
                     tracing::debug!("flush: drained {count} vectors from async index builder");
                 }

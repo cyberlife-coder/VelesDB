@@ -457,21 +457,19 @@ impl Collection {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Indexes what storage holds for the ids the deferred indexer buffers,
-    /// then retires the entries it copied: a point leaves the buffer only
-    /// once indexed, as storage holds it (a deleted one is left out), and an
-    /// entry written again meanwhile stays for the next merge. A no-op while
+    /// Indexes what storage holds for the ids the deferred indexer buffers
+    /// ([`Collection::index_current`]), then retires the copied entries of
+    /// the ids it settled: a point leaves the buffer only once indexed as
+    /// storage holds it, or found deleted; an id whose insert failed, and an
+    /// entry written again meanwhile, stay for the next merge. A no-op while
     /// another merge runs.
     #[cfg(feature = "persistence")]
     pub(super) fn merge_deferred_batch(&self, di: &crate::collection::streaming::DeferredIndexer) {
-        let Some(entries) = di.begin_merge() else {
+        let Some(merge) = di.begin_merge() else {
             return;
         };
-        let ids: Vec<u64> = entries.iter().map(|&(id, _)| id).collect();
-        self.index_current(&ids);
-        let copied: Vec<(u64, &[f32])> =
-            entries.iter().map(|(id, v)| (*id, v.as_slice())).collect();
-        di.end_merge(&copied);
+        let settled = self.index_current(&merge.ids());
+        merge.finish(&settled);
     }
 
     /// Batch-inserts into HNSW or defers into the deferred indexer.

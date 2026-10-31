@@ -12,7 +12,7 @@
 //!
 //! The indexer holds one buffer that accepts writes. When the buffer reaches
 //! `merge_threshold` (or on flush), the collection indexes what it holds from
-//! storage and then retires those entries (`DeferredIndexer::end_merge`): an
+//! storage and then retires those entries (`DeferredMerge::finish`): an
 //! entry leaves the buffer only once indexed, so a search racing the merge
 //! finds each point in the index or here, and an entry written again since
 //! stays for the next merge.
@@ -25,7 +25,8 @@
 //!
 //! # Lock ordering
 //!
-//! `DeferredIndexer` is above `DeltaBuffer` (position 10) in the lock order.
+//! `DeferredIndexer` is at position 11 in the collection lock order; its
+//! buffer (a `DeltaBuffer`) ranks with it.
 //! A merge is serialized by an atomic flag, not a lock, so nothing is held
 //! while it takes the storage and index locks.
 
@@ -240,25 +241,16 @@ impl DeferredIndexer {
         self.buffer.ids()
     }
 
-    /// Starts a merge: returns a copy of the buffered entries, or `None`
-    /// while another merge runs. Pair it with [`Self::end_merge`].
-    pub(crate) fn begin_merge(&self) -> Option<Vec<(u64, Vec<f32>)>> {
+    /// Starts a merge: a copy of the buffered entries, held as a
+    /// [`DeferredMerge`], or `None` while another merge runs.
+    pub(crate) fn begin_merge(&self) -> Option<DeferredMerge<'_>> {
         if self.merging.swap(true, Ordering::AcqRel) {
             return None;
         }
-        Some(self.buffer.entries())
-    }
-
-    /// Ends a merge begun by [`Self::begin_merge`], retiring the entries it
-    /// returned, once the merge has indexed what storage holds for their ids.
-    /// An entry written again since holds a newer vector, so it stays
-    /// buffered for the next merge.
-    pub(crate) fn end_merge(&self, indexed: &[(u64, &[f32])]) {
-        self.buffer.retire(indexed);
-        if self.buffer.is_empty() {
-            self.first_push_millis.store(AGE_EMPTY, Ordering::Relaxed);
-        }
-        self.merging.store(false, Ordering::Release);
+        Some(DeferredMerge {
+            indexer: self,
+            entries: self.buffer.entries(),
+        })
     }
 
     /// Total number of pending (not yet indexed) vectors in the buffer.
@@ -289,6 +281,57 @@ impl DeferredIndexer {
     /// path (the buffer stays active across many pushes) and is ignored here.
     fn ensure_buffer_active(&self) {
         let _ = self.buffer.try_activate();
+    }
+}
+
+/// A merge of the deferred indexer's buffer into the index: the entries it
+/// copied when it began. It holds the indexer's `merging` flag until it is
+/// dropped — finished or not, a panic included — so no merge can leave every
+/// later one skipping.
+pub(crate) struct DeferredMerge<'a> {
+    indexer: &'a DeferredIndexer,
+    entries: Vec<(u64, Vec<f32>)>,
+}
+
+impl DeferredMerge<'_> {
+    /// The ids the merge copied, for the caller to index.
+    pub(crate) fn ids(&self) -> Vec<u64> {
+        self.entries.iter().map(|&(id, _)| id).collect()
+    }
+
+    /// Ends the merge, retiring the copied entries of the ids `settled`
+    /// names: those the merge indexed from storage, found indexed already,
+    /// or found deleted. An id it did not settle (its read or insert
+    /// failed) stays buffered, as does an entry written again since it was
+    /// copied, which holds a newer vector, for the next merge.
+    ///
+    /// Entries are compared by value: an id rewritten during the merge to
+    /// the very vector the merge copied (A, then B, then A again, with the
+    /// merge reading B in between) is retired although the index then holds
+    /// B. That takes two rewrites of one id inside one merge, the last back
+    /// to the copied vector; until the id's next write, a search reaches it
+    /// at B while storage holds A. A per-entry write sequence would close it;
+    /// it is not kept.
+    pub(crate) fn finish(self, settled: &[u64]) {
+        let settled: rustc_hash::FxHashSet<u64> = settled.iter().copied().collect();
+        let retired: Vec<(u64, &[f32])> = self
+            .entries
+            .iter()
+            .filter(|(id, _)| settled.contains(id))
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        self.indexer.buffer.retire(&retired);
+    }
+}
+
+impl Drop for DeferredMerge<'_> {
+    fn drop(&mut self) {
+        if self.indexer.buffer.is_empty() {
+            self.indexer
+                .first_push_millis
+                .store(AGE_EMPTY, Ordering::Relaxed);
+        }
+        self.indexer.merging.store(false, Ordering::Release);
     }
 }
 
@@ -333,9 +376,10 @@ mod tests {
         assert!(indexer.should_merge());
         // A merge that empties the buffer clears the age stamp; an empty
         // buffer never reports expiry on its own.
-        let entries = indexer.begin_merge().expect("test: no merge running");
-        assert_eq!(entries.len(), 1);
-        indexer.end_merge(&indexed(&entries));
+        let merge = indexer.begin_merge().expect("test: no merge running");
+        assert_eq!(merge.ids(), vec![1]);
+        let settled = all_of(&merge);
+        merge.finish(&settled);
         assert!(!indexer.should_merge());
     }
 
@@ -376,9 +420,9 @@ mod tests {
         assert!(idx.extend(entries), "batch should hit threshold");
     }
 
-    /// The `(id, vector)` pairs a merge indexed, as `end_merge` takes them.
-    fn indexed(entries: &[(u64, Vec<f32>)]) -> Vec<(u64, &[f32])> {
-        entries.iter().map(|(id, v)| (*id, v.as_slice())).collect()
+    /// The ids a merge settled, as `finish` takes them: every one it copied.
+    fn all_of(merge: &DeferredMerge<'_>) -> Vec<u64> {
+        merge.ids()
     }
 
     // ── Ids ──────────────────────────────────────────────────────────────
@@ -410,22 +454,51 @@ mod tests {
         let idx = DeferredIndexer::new(enabled_config(1024));
         idx.push(1, vec![1.0]);
         idx.push(2, vec![2.0]);
-        let entries = idx.begin_merge().expect("test: no merge running");
+        let merge = idx.begin_merge().expect("test: no merge running");
         assert!(idx.begin_merge().is_none(), "one merge at a time");
         // Written again while the merge indexes the first copy.
         idx.push(2, vec![9.0]);
-        idx.end_merge(&indexed(&entries));
+        let settled = all_of(&merge);
+        merge.finish(&settled);
 
         assert_eq!(idx.ids(), vec![2], "the newer write of 2 stays buffered");
         assert!(idx.begin_merge().is_some(), "the merge flag is cleared");
+    }
+
+    /// An id the merge did not settle (its read or insert failed) stays
+    /// buffered for the next merge.
+    #[test]
+    fn a_merge_keeps_what_it_did_not_settle() {
+        let idx = DeferredIndexer::new(enabled_config(1024));
+        idx.push(1, vec![1.0]);
+        idx.push(2, vec![2.0]);
+        let merge = idx.begin_merge().expect("test: no merge running");
+        merge.finish(&[1]);
+        assert_eq!(idx.ids(), vec![2]);
+    }
+
+    /// A merge that never finishes — dropped, as on a panic — still clears
+    /// the flag, so the next merge runs.
+    #[test]
+    fn a_dropped_merge_lets_the_next_one_run() {
+        let idx = DeferredIndexer::new(enabled_config(1024));
+        idx.push(1, vec![1.0]);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _merge = idx.begin_merge().expect("test: no merge running");
+            panic!("test: a merge that fails half-way");
+        }));
+        assert!(unwound.is_err(), "premise: the merge panicked");
+        assert!(idx.begin_merge().is_some(), "the merge flag was cleared");
+        assert_eq!(idx.ids(), vec![1], "nothing was retired");
     }
 
     #[test]
     fn the_buffer_stays_writable_after_a_merge() {
         let idx = DeferredIndexer::new(enabled_config(1024));
         idx.push(1, vec![1.0]);
-        let entries = idx.begin_merge().expect("test: no merge running");
-        idx.end_merge(&indexed(&entries));
+        let merge = idx.begin_merge().expect("test: no merge running");
+        let settled = all_of(&merge);
+        merge.finish(&settled);
         idx.push(2, vec![2.0]);
         assert_eq!(idx.pending_count(), 1, "push after a merge must succeed");
         assert!(idx.is_searchable());

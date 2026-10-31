@@ -145,12 +145,13 @@ requests.
   (section 2) with `Error::Config`, and leave the current ingester running.
   Handle the result or `?` it.
 - **`AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a callback
-  that reads their vectors.** `enqueue(ids)` takes any `IntoIterator<Item =
-  u64>` instead of a `Vec<(u64, Vec<f32>)>`, and `flush_sync(index,
-  current_vectors)` calls `current_vectors(&ids)` for the `(id, vector)`
-  pairs to insert, leaving out an id it no longer holds. A flush indexes
-  what storage holds when it runs, not a copy taken at enqueue. Pass the ids
-  you enqueued before, and a closure over your vector storage.
+  that indexes them.** `enqueue(ids)` takes any `IntoIterator<Item = u64>`
+  instead of a `Vec<(u64, Vec<f32>)>`, and `flush_sync(index,
+  index_current)` calls `index_current(&ids)`, which inserts what your
+  storage holds for those ids into the index and returns the ids it
+  settled (inserted, or no longer stored). The builder keeps any other id
+  queued for the next flush. A flush indexes what storage holds when it
+  runs, not a copy taken at enqueue.
 
 ### Added
 

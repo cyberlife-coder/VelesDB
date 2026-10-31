@@ -4638,13 +4638,9 @@ fn an_id_the_graph_holds_as_it_is_is_not_inserted_again() {
         }
         let before = index.tombstone_count();
 
-        let (held, inserted) = index.insert_batch_unless_indexed(&points);
+        let settled = index.insert_batch_unless_indexed(&points);
 
-        assert_eq!(
-            (held, inserted),
-            (20, 0),
-            "{metric:?}: every id held already"
-        );
+        assert_eq!(settled.len(), 20, "{metric:?}: every id settled");
         assert_eq!(
             index.tombstone_count(),
             before,

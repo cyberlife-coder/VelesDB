@@ -207,9 +207,9 @@ impl HnswIndex {
 
     /// [`Self::insert_batch_parallel`] for the pairs whose id the graph does
     /// not already hold as it is: an id mapped to a linked node holding
-    /// exactly that vector is left alone. Returns how many pairs the graph
-    /// held already and how many it inserted; the two fall short of the
-    /// pairs only when the insert failed (logged).
+    /// exactly that vector is left alone. Returns the ids it settled: those
+    /// the graph held already and, unless the insert failed (logged), those
+    /// it inserted. A caller keeps the others queued.
     ///
     /// A merge into the index (the async builder's flush, the deferred
     /// indexer's merge) reads each id's vector from
@@ -217,19 +217,22 @@ impl HnswIndex {
     /// straight to the graph after the id was queued. Inserting it again
     /// would only leave the node it has behind, unmapped, for every search
     /// to walk past until `vacuum`.
-    pub(crate) fn insert_batch_unless_indexed(&self, pairs: &[(u64, Vec<f32>)]) -> (usize, usize) {
+    pub(crate) fn insert_batch_unless_indexed(&self, pairs: &[(u64, Vec<f32>)]) -> Vec<u64> {
         let held = self.slots_holding(pairs);
-        let fresh: Vec<(u64, &[f32])> = pairs
-            .iter()
-            .zip(held)
-            .filter(|(_, held)| !held)
-            .map(|((id, vector), _)| (*id, vector.as_slice()))
-            .collect();
-        let already = pairs.len() - fresh.len();
-        if fresh.is_empty() {
-            return (already, 0);
+        let mut settled = Vec::with_capacity(pairs.len());
+        let mut fresh: Vec<(u64, &[f32])> = Vec::with_capacity(pairs.len());
+        for ((id, vector), held) in pairs.iter().zip(held) {
+            if held {
+                settled.push(*id);
+            } else {
+                fresh.push((*id, vector.as_slice()));
+            }
         }
-        (already, self.insert_batch_parallel(fresh))
+        let fresh_ids: Vec<u64> = fresh.iter().map(|&(id, _)| id).collect();
+        if !fresh.is_empty() && self.insert_batch_parallel(fresh) > 0 {
+            settled.extend(fresh_ids);
+        }
+        settled
     }
 
     /// For each pair, whether its id maps to a linked node holding exactly

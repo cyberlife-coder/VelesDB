@@ -415,3 +415,75 @@ fn a_flush_indexes_buffered_points_as_they_are_now() {
     );
     assert_eq!(first_hit(&coll, 10_000), Some(151));
 }
+
+/// Runs `write` on another thread once a flush has read the vectors it is
+/// about to index, and gives it up to 300 ms to land before the insert: a
+/// merge that has let go of storage by then lets the write in between.
+/// Returns the thread, to join once the flush is done.
+fn race_the_flush(
+    coll: &Collection,
+    write: impl FnOnce(Collection) + Send + 'static,
+) -> std::sync::Arc<std::sync::Mutex<Option<std::thread::JoinHandle<()>>>> {
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (coll, handle_slot) = (coll.clone(), std::sync::Arc::clone(&slot));
+    crate::collection::search::pending::merge_hooks::set_after_read(move || {
+        let writer = std::thread::spawn(move || write(coll));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+        while !writer.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        *handle_slot.lock().expect("test: slot") = Some(writer);
+    });
+    slot
+}
+
+fn join_racer(slot: &std::sync::Mutex<Option<std::thread::JoinHandle<()>>>) {
+    let writer = slot.lock().expect("test: slot").take();
+    writer
+        .expect("premise: the flush ran the hook")
+        .join()
+        .expect("test: writer");
+}
+
+/// A delete landing while a flush indexes the deleted point stays a delete:
+/// the flush must not put the point back in the graph.
+#[test]
+fn a_delete_racing_a_flush_is_not_undone_by_it() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    let racer = race_the_flush(&coll, |coll| {
+        coll.delete(&[150]).expect("test: delete");
+    });
+
+    coll.flush().expect("test: flush");
+    join_racer(&racer);
+
+    assert_eq!(
+        indexed_vector(&coll, 150),
+        None,
+        "the flush re-indexed deleted 150"
+    );
+}
+
+/// An upsert landing while a flush indexes the point keeps its vector: the
+/// flush must not overwrite it with the one it read before.
+#[test]
+fn an_upsert_racing_a_flush_is_not_overwritten_by_it() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    let racer = race_the_flush(&coll, |coll| {
+        coll.upsert([Point::without_payload(151, vector(10_000))])
+            .expect("test: upsert");
+    });
+
+    coll.flush().expect("test: flush");
+    join_racer(&racer);
+
+    assert_eq!(
+        indexed_vector(&coll, 151).as_deref(),
+        Some(vector(10_000).as_slice()),
+        "the flush overwrote 151's newer vector with the one it read"
+    );
+}

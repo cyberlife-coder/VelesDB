@@ -10,14 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING — `AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a
-  callback that reads their vectors.** `enqueue` took `(id, vector)` copies
-  and a flush inserted them, so a point overwritten or deleted between the
-  two was indexed on its old vector or put back in the graph (see Fixed).
-  `enqueue` now takes the ids (`impl IntoIterator<Item = u64>`) and
-  `flush_sync(index, current_vectors)` asks `current_vectors` for what
-  storage holds for them when it runs.
-  *Migration*: enqueue the ids; pass a closure that reads them from your
-  vector storage, leaving out an id it no longer holds.
+  callback that indexes them.** `enqueue` took `(id, vector)` copies and a
+  flush inserted them, so a point overwritten or deleted between the two
+  was indexed on its old vector or put back in the graph (see Fixed).
+  `enqueue` now takes the ids (`impl IntoIterator<Item = u64>`), and
+  `flush_sync(index, index_current)` hands the buffered ids to
+  `index_current`, which indexes what storage holds for them and returns
+  the ids it settled; the builder drops only those, and keeps the rest
+  queued. It returns the ids settled plus the placed ids linked.
+  *Migration*: enqueue the ids; pass a closure that inserts what your
+  vector storage holds for them into the index and returns the ids it
+  inserted or found deleted.
 
 ### Removed
 
@@ -178,6 +181,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   merge emptied its buffer before inserting what it held. It now inserts
   first and drops only what it inserted, as the async index builder does,
   and keeps an entry written again during the merge for the next one.
+- **A merge could undo a delete or an upsert that raced it.** The async
+  index builder's flush and the deferred indexer's merge read the vectors
+  to insert, let go of storage, then inserted them: a delete landing in
+  between was undone (the point put back in the graph), and an upsert
+  landing in between was overwritten by the vector read before it. Each
+  chunk of 256 ids is now read and inserted under one `vector_storage` read
+  guard, which a delete or an upsert must wait for before it writes; a
+  writer waits at most one chunk's insert.
+- **A merge dropped ids it had failed to insert, and a panicking merge
+  stopped every later one.** The builder and the deferred indexer drop only
+  the ids the merge settled — inserted, held already, or deleted — and
+  keep the rest queued, and the flags that serialize their merges are now
+  cleared by a guard, so a merge that panics no longer leaves every later
+  flush skipping.
 - **Filtered hybrid and batch searches copied the vector of every
   candidate.** `hybrid_search_with_filter`, a filtered VelesQL `NEAR` +
   `MATCH` under a score-level `USING FUSION` (`maximum`, `average`, `rsf`)

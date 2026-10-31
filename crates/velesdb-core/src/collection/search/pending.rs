@@ -47,6 +47,10 @@ use crate::storage::VectorStorage;
 /// How many unindexed ids are scored under one `vector_storage` read guard.
 const SCORE_CHUNK: usize = 256;
 
+/// How many ids a merge reads and inserts under one `vector_storage` read
+/// guard ([`Collection::index_current`]).
+const MERGE_CHUNK: usize = 256;
+
 /// What a search admits, applied to the points written but not indexed yet
 /// before they are ranked against the index's results.
 #[derive(Clone, Copy)]
@@ -245,19 +249,62 @@ impl Collection {
         scored
     }
 
-    /// What storage holds now for each of `ids`, copied out; an id it no
-    /// longer holds is left out. What a merge of unindexed points inserts.
-    pub(crate) fn current_vectors(&self, ids: &[u64]) -> Vec<(u64, Vec<f32>)> {
-        let mut vectors = Vec::with_capacity(ids.len());
-        for chunk in ids.chunks(SCORE_CHUNK) {
+    /// Indexes what storage holds now for `ids` and returns the ids it
+    /// settled: inserted, already held by the graph as storage holds them
+    /// (`HnswIndex::insert_batch_unless_indexed`), or no longer in storage.
+    /// An id it could not read or insert is not returned, so the merge that
+    /// asked keeps it queued.
+    ///
+    /// Each chunk of [`MERGE_CHUNK`] ids is read and inserted under one
+    /// `vector_storage` (position 2) read guard. A delete or an upsert writes
+    /// storage under the write guard before it touches the index (the order
+    /// `delete_vector_core_stores` holds it in), so it lands wholly before
+    /// the chunk is read, and the merge indexes what it left, or after the
+    /// chunk is inserted, and its own index write comes last: a merge never
+    /// puts a deleted point back nor overwrites a newer write with the
+    /// vector it read. A writer waits at most one chunk's insert.
+    pub(crate) fn index_current(&self, ids: &[u64]) -> Vec<u64> {
+        let mut settled = Vec::with_capacity(ids.len());
+        for chunk in ids.chunks(MERGE_CHUNK) {
             let storage = self.storage.vector_storage.read();
-            vectors.extend(
-                chunk
-                    .iter()
-                    .filter_map(|&id| storage.retrieve(id).ok().flatten().map(|v| (id, v))),
-            );
+            let mut present = Vec::with_capacity(chunk.len());
+            for &id in chunk {
+                match storage.retrieve(id) {
+                    Ok(Some(vector)) => present.push((id, vector)),
+                    Ok(None) => settled.push(id),
+                    Err(e) => tracing::warn!("index_current: id {id} unread, kept queued: {e}"),
+                }
+            }
+            #[cfg(test)]
+            merge_hooks::after_read();
+            settled.extend(self.storage.index.insert_batch_unless_indexed(&present));
             drop(storage);
         }
-        vectors
+        settled
+    }
+}
+
+/// A test's hook into a merge, run once a chunk's vectors are read and before
+/// they are inserted: where a delete or an upsert racing the merge would
+/// land if the merge let go of storage in between.
+#[cfg(test)]
+pub(crate) mod merge_hooks {
+    use std::cell::RefCell;
+
+    type Hook = Box<dyn FnOnce()>;
+
+    thread_local! {
+        static AFTER_READ: RefCell<Option<Hook>> = RefCell::new(None);
+    }
+
+    /// Runs `hook` the next time a merge on this thread has read its vectors.
+    pub(crate) fn set_after_read(hook: impl FnOnce() + 'static) {
+        AFTER_READ.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(crate) fn after_read() {
+        if let Some(hook) = AFTER_READ.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 }
