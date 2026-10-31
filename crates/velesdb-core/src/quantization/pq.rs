@@ -156,6 +156,7 @@ impl ProductQuantizer {
     /// # Errors
     ///
     /// As [`train`](Self::train).
+    #[cfg(feature = "persistence")]
     pub(crate) fn train_sequential(
         vectors: &[Vec<f32>],
         num_subspaces: usize,

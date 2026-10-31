@@ -5802,6 +5802,18 @@
         "granted": "2026-10-29",
         "for_workspace_major": 8
       }
+    },
+    {
+      "id": "concurrency_merge_chunk_guard_hold",
+      "file": "docs/CONCURRENCY_MODEL.md",
+      "must_contain": "waits at most one chunk's read and insert: 234 ms (95% CI 229–239 ms) for",
+      "validation_command": "cargo bench -p velesdb-core --features internal-bench --bench merge_chunk_hold_benchmark",
+      "executable": false,
+      "source": "merge_chunk_hold_benchmark's merge/chunk_guard_hold_256_into_10k_768d: one MERGE_CHUNK (256) of Collection::index_current over a 10 000-point 768-d Cosine collection, the time between taking the vector_storage read guard and releasing it, recorded inside the merge (internal_bench::merge_one_chunk). Criterion, 10 samples, printed [228.86 ms 233.76 ms 238.91 ms], on the tree committed as 05be46560, 2026-10-31. A wall-clock figure on a shared sandbox other jobs were using: it states an order of magnitude for how long a writer waits on a merge, not a reference-machine latency.",
+      "last_updated": "2026-10-31",
+      "measured_on": "2026-10-31",
+      "measured_machine": "Intel(R) Xeon(R) Processor @ 2.10GHz, 4 vCPU, x86_64 Linux (shared cloud sandbox, not the reference machine)",
+      "measured_version": "8.0.0"
     }
   ],
   "claim_families": [
