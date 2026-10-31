@@ -457,14 +457,10 @@ impl HnswIndex {
         // `search_hnsw_only` would be a recursive `read()` on a parking_lot
         // `RwLock`, which can deadlock behind a queued writer.
         let inner = self.inner.read();
-        let (neighbours, mut resume) = inner.search_resumable(query, k, min_ef);
-        let mut results = self.map_graph_results(&inner, &neighbours, k);
-        if results.len() < k && neighbours.len() > results.len() {
-            // Unmapped nodes cut the walk short: walk past them, and restart
-            // rather than resume any escalation.
-            results = self.search_live(&inner, query, k, min_ef);
-            resume = None;
-        }
+        let (neighbours, resume) = inner.search_resumable(query, k, min_ef);
+        let (results, rewalked) = self.live_or_rewalk(&inner, query, k, min_ef, &neighbours);
+        // A re-walk restarted the traversal: there is no state to resume.
+        let resume = if rewalked { None } else { resume };
         if results.len() < 2 {
             return results;
         }
@@ -493,15 +489,29 @@ impl HnswIndex {
         // resumed pass does not reconsider: `adaptive_resume_evals` holds its
         // recall within 2% of a from-scratch pass at ef2, on one 3,000 x 256
         // corpus.
-        let Some(r) = resume else {
-            return self.search_live(&inner, query, k, escalated_ef);
+        let escalated = match resume {
+            Some(r) => inner.resume_search(r, query, k, escalated_ef),
+            None => return self.search_live(&inner, query, k, escalated_ef),
         };
-        let escalated = inner.resume_search(r, query, k, escalated_ef);
-        let mapped = self.map_graph_results(&inner, &escalated, k);
-        if mapped.len() < k && escalated.len() > mapped.len() {
-            return self.search_live(&inner, query, k, escalated_ef);
+        self.live_or_rewalk(&inner, query, k, escalated_ef, &escalated)
+            .0
+    }
+
+    /// `walked` mapped to its first `k` results, or — when nodes no id maps
+    /// cut it short — a fresh [`Self::search_live`] at `ef`, flagged `true`.
+    fn live_or_rewalk(
+        &self,
+        inner: &crate::index::hnsw::native_inner::NativeHnswInner,
+        query: &[f32],
+        k: usize,
+        ef: usize,
+        walked: &[(usize, f32)],
+    ) -> (Vec<ScoredResult>, bool) {
+        let mapped = self.map_graph_results(inner, walked, k);
+        if mapped.len() < k && walked.len() > mapped.len() {
+            return (self.search_live(inner, query, k, ef), true);
         }
-        mapped
+        (mapped, false)
     }
 
     /// Sets the index to searching mode after bulk insertions.
