@@ -24,6 +24,11 @@ The three things worth knowing before you read it:
   The enforcing policy (RBAC, tenancy, audit) lives in `velesdb-private` as a
   `DatabaseObserver` impl against the policy-free port in `core/src/observer/`.
 
+Subagent roles, and the model each one runs on, are defined in
+[`.claude/agents/`](.claude/agents/): `opus` for engine changes and
+independent reviews, `sonnet` for documentation and CI triage, `haiku` for
+searches and release checks. Delegate through them rather than ad hoc agents.
+
 Other authoritative docs, to read rather than duplicate:
 [QUALITY_BAR.md](QUALITY_BAR.md), [CONTRIBUTING.md](CONTRIBUTING.md),
 [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md),
