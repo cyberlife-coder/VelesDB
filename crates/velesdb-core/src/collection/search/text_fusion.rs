@@ -154,8 +154,31 @@ impl Collection {
             self.hybrid_score_streams(vector_query, text_query, candidate_k, restriction)?;
         let direction = self.storage.config.read().metric.score_direction();
         let fused = fuse_streams(strategy, vector_stream, direction, text_stream)?;
-        let resolved = self.resolve_fused_results(&fused, fused.len());
-        Ok(apply_post_filter(resolved, filter, k))
+        Ok(match filter {
+            Some(filter) => self.resolve_fused_matching(&fused, filter, k),
+            None => self.resolve_fused_results(&fused, k),
+        })
+    }
+
+    /// Resolves the first `k` fused points whose payload `filter` matches,
+    /// in fused order, reading each candidate's payload before copying its
+    /// vector: a point without a payload matches no filter.
+    fn resolve_fused_matching(
+        &self,
+        fused: &[(u64, f32)],
+        filter: &crate::filter::Filter,
+        k: usize,
+    ) -> Vec<SearchResult> {
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        crate::collection::search::resolve::hydrate_accepted(
+            fused.iter().copied(),
+            k,
+            crate::collection::expiry::now_unix_secs(),
+            &*vector_storage,
+            &*payload_storage,
+            |payload| payload.is_some_and(|payload| filter.matches(payload)),
+        )
     }
 
     /// Builds the `(id, score)` vector-similarity and BM25 streams used by
@@ -246,23 +269,4 @@ fn score_fusion_strategy(fc: &FusionClause) -> FusionStrategy {
         }
         _ => FusionStrategy::Average,
     }
-}
-
-/// Applies an optional metadata filter to fused results, truncating to `k`.
-fn apply_post_filter(
-    results: Vec<SearchResult>,
-    filter: Option<&crate::filter::Filter>,
-    k: usize,
-) -> Vec<SearchResult> {
-    let Some(filter) = filter else {
-        return results.into_iter().take(k).collect();
-    };
-    results
-        .into_iter()
-        .filter(|r| match r.point.payload.as_ref() {
-            Some(p) => filter.matches(p),
-            None => false,
-        })
-        .take(k)
-        .collect()
 }

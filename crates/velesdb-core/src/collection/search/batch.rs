@@ -2,9 +2,11 @@
 
 use super::pending::PendingRestriction;
 use super::resolve;
+use crate::collection::expiry::now_unix_secs;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
-use crate::point::{Point, SearchResult};
+use crate::filter::Filter;
+use crate::point::SearchResult;
 use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
@@ -31,50 +33,33 @@ impl Collection {
         &self,
         queries: &[&[f32]],
         k: usize,
-        filters: &[Option<crate::filter::Filter>],
+        filters: &[Option<Filter>],
     ) -> Result<Vec<Vec<SearchResult>>> {
-        if queries.len() != filters.len() {
-            return Err(Error::Config(format!(
-                "Queries count ({}) does not match filters count ({})",
-                queries.len(),
-                filters.len()
-            )));
-        }
-
-        let (dimension, metric) = {
-            let cfg = self.storage.config.read();
-            (cfg.dimension, cfg.metric)
-        };
-        for query in queries {
-            validate_dimension_match(dimension, query.len())?;
-        }
-
+        let metric = self.validate_filtered_batch(queries, filters)?;
         let candidates_k = k.saturating_mul(4).max(k + 10);
-        let higher_is_better = metric.higher_is_better();
         let restrictions = filters
             .iter()
             .map(|filter| PendingRestriction::NONE.post_filtered_if(filter.is_some()));
         // Merged per query before the storage guards are taken: scoring the
         // pending points holds no lock a writer waits on.
-        let merged =
+        let mut merged =
             self.batch_search_merging_pending(queries, candidates_k, metric, restrictions)?;
+        for candidates in &mut merged {
+            resolve::sort_scored_by_metric(candidates, metric.higher_is_better());
+        }
 
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-
-        // Parallel filter + resolve across queries (P0 QPS optimization)
         let vs: &dyn VectorStorage = &*vector_storage;
         let ps: &dyn PayloadStorage = &*payload_storage;
+        let now_secs = now_unix_secs();
 
-        let all_results: Vec<Vec<SearchResult>> = merged
+        // Parallel filter + resolve across queries (P0 QPS optimization)
+        let all_results = merged
             .par_iter()
             .zip(filters.par_iter())
-            .map(|(query_results, filter_opt)| {
-                let mut filtered =
-                    Self::filter_and_resolve_batch(query_results, filter_opt.as_ref(), vs, ps);
-                resolve::sort_results_by_metric(&mut filtered, higher_is_better);
-                filtered.truncate(k);
-                filtered
+            .map(|(candidates, filter)| {
+                Self::filter_and_resolve_batch(candidates, filter.as_ref(), k, now_secs, vs, ps)
             })
             .collect();
         drop(payload_storage);
@@ -83,38 +68,46 @@ impl Collection {
         Ok(all_results)
     }
 
-    /// Filters and resolves a single batch query's results.
+    /// Checks a filtered batch's shape and query dimensions, returning the
+    /// collection's metric.
+    fn validate_filtered_batch(
+        &self,
+        queries: &[&[f32]],
+        filters: &[Option<Filter>],
+    ) -> Result<crate::DistanceMetric> {
+        if queries.len() != filters.len() {
+            return Err(Error::Config(format!(
+                "Queries count ({}) does not match filters count ({})",
+                queries.len(),
+                filters.len()
+            )));
+        }
+        let (dimension, metric) = {
+            let cfg = self.storage.config.read();
+            (cfg.dimension, cfg.metric)
+        };
+        for query in queries {
+            validate_dimension_match(dimension, query.len())?;
+        }
+        Ok(metric)
+    }
+
+    /// Resolves one query's best-first candidates into its first `k` results
+    /// whose payload `filter` matches (a point without payload is judged as
+    /// `null`). Payloads are judged before any vector is copied, so only the
+    /// returned points' vectors are read.
     fn filter_and_resolve_batch(
-        results: &[ScoredResult],
-        filter: Option<&crate::filter::Filter>,
+        candidates: &[ScoredResult],
+        filter: Option<&Filter>,
+        k: usize,
+        now_secs: u64,
         vector_storage: &dyn VectorStorage,
         payload_storage: &dyn PayloadStorage,
     ) -> Vec<SearchResult> {
-        results
-            .iter()
-            .filter_map(|sr| {
-                let payload = payload_storage.retrieve(sr.id).ok().flatten();
-                if let Some(f) = filter {
-                    let matches = match payload.as_ref() {
-                        Some(p) => f.matches(p),
-                        None => f.matches(&serde_json::Value::Null),
-                    };
-                    if !matches {
-                        return None;
-                    }
-                }
-                let vector = vector_storage.retrieve(sr.id).ok().flatten()?;
-                Some(SearchResult::new(
-                    Point {
-                        id: sr.id,
-                        vector,
-                        payload,
-                        sparse_vectors: None,
-                    },
-                    sr.score,
-                ))
-            })
-            .collect()
+        let pairs = candidates.iter().map(|sr| (sr.id, sr.score));
+        resolve::hydrate_accepted(pairs, k, now_secs, vector_storage, payload_storage, |p| {
+            filter.is_none_or(|f| f.matches(p.unwrap_or(&serde_json::Value::Null)))
+        })
     }
 
     /// Performs batch search for multiple query vectors in parallel.

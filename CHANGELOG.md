@@ -151,6 +151,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   builder does: the deferred indexer keeps an entry written again during
   the merge for the next one, and the delta buffer is sealed (no new writes,
   still searched) until its points are inserted.
+- **Filtered hybrid and batch searches copied the vector of every
+  candidate.** `hybrid_search_with_filter`, a filtered VelesQL `NEAR` +
+  `MATCH` under a score-level `USING FUSION` (`maximum`, `average`, `rsf`)
+  and `search_batch_with_filters` read each candidate's vector before
+  testing its payload, then kept `k`; they now test the payload first and
+  read the vectors of the `k` points they return.
+  `search_batch_with_filters` also no longer returns a TTL-expired point,
+  which every other search already hid.
 - **The MATCH pre-filter gave up when one predicate had no index.** A
   `WHERE` of `AND`-ed comparisons on a single-node pattern narrows the nodes
   it scans with the property indexes; one comparison on a property no node

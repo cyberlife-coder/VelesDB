@@ -340,37 +340,32 @@ impl Collection {
     }
 
     /// Resolves scored IDs to `SearchResult` with per-component score
-    /// breakdown, keeping the first `limit` results `keep` accepts, in
-    /// `scored_ids` order.
+    /// breakdown, keeping the first `limit` points whose payload `accept`
+    /// takes, in `scored_ids` order; a rejected point's vector is never
+    /// copied ([`resolve::hydrate_accepted`]).
     fn resolve_scored_ids_with_components(
         &self,
         scored_ids: &[(u64, f32)],
         component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
-        keep: impl Fn(&SearchResult) -> bool,
+        accept: impl Fn(Option<&serde_json::Value>) -> bool,
         limit: usize,
     ) -> Vec<SearchResult> {
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-        let now_secs = now_unix_secs();
-
-        scored_ids
-            .iter()
-            .filter_map(|&(id, score)| {
-                let mut result = resolve::hydrate_point(
-                    id,
-                    score,
-                    now_secs,
-                    &*vector_storage,
-                    &*payload_storage,
-                )?;
-                if !keep(&result) {
-                    return None;
-                }
-                attach_rrf_components(&mut result, component_map);
-                Some(result)
-            })
-            .take(limit)
-            .collect()
+        let mut results = resolve::hydrate_accepted(
+            scored_ids.iter().copied(),
+            limit,
+            now_unix_secs(),
+            &*vector_storage,
+            &*payload_storage,
+            accept,
+        );
+        drop(payload_storage);
+        drop(vector_storage);
+        for result in &mut results {
+            attach_rrf_components(result, component_map);
+        }
+        results
     }
 
     /// Performs hybrid search (vector + text) with metadata filtering.
@@ -424,13 +419,7 @@ impl Collection {
         Ok(self.resolve_scored_ids_with_components(
             &scored_ids,
             &component_map,
-            |result| {
-                result
-                    .point
-                    .payload
-                    .as_ref()
-                    .is_some_and(|payload| filter.matches(payload))
-            },
+            |payload| payload.is_some_and(|payload| filter.matches(payload)),
             k,
         ))
     }
