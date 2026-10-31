@@ -18,7 +18,7 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
-use common::create_test_app_with_observer;
+use common::create_full_app;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -88,7 +88,9 @@ async fn send(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (St
 async fn setup() -> (TempDir, Router, Arc<PolicyObserver>) {
     let dir = TempDir::new().expect("test: dir");
     let observer = Arc::new(PolicyObserver::default());
-    let app = create_test_app_with_observer(&dir, observer.clone());
+    let db = velesdb_core::Database::open_with_observer(dir.path(), observer.clone())
+        .expect("test: open db");
+    let (app, _state) = create_full_app(db);
     let (status, _) = send(
         &app,
         "POST",
@@ -260,4 +262,27 @@ async fn scroll_honours_the_read_gate() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["points"].as_array().map(Vec::len), Some(3), "{body}");
+}
+
+/// GIVEN the observer denies `items`, then scopes it
+/// WHEN a point's relations are listed (a graph read with no filter channel)
+/// THEN the denial refuses it, and the scope refuses it rather than run
+///      unscoped (`400` `VELES-009`), as the other graph reads do.
+#[tokio::test]
+async fn point_relations_honour_the_read_gate() {
+    let (_dir, app, observer) = setup().await;
+    let (status, _) = send(&app, "GET", "/collections/items/points/1/relations", None).await;
+    assert_eq!(status, StatusCode::OK, "allowed relations read");
+
+    observer.set(Rule::Deny);
+    let (status, body) = send(&app, "GET", "/collections/items/points/1/relations", None).await;
+    assert!(
+        !status.is_success(),
+        "denied relations must refuse, got {status}: {body}"
+    );
+
+    observer.set(Rule::ScopeToA);
+    let (status, body) = send(&app, "GET", "/collections/items/points/1/relations", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "VELES-009", "{body}");
 }
