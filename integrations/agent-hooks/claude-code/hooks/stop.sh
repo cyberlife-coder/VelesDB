@@ -48,13 +48,12 @@ fi
 # acknowledgement and can be consumed before checking for a newer edit batch.
 # shellcheck disable=SC2154 # read_exact sets checkpoint_manifest (printf -v)
 if valid_private_marker "$checkpoint_manifest"; then
-  if ! jq -e '
+  # Each evidence entry is held to its record's rules (EVIDENCE_JQ_DEFS): the
+  # manifest is re-emitted into the checklist, so a forged entry blocks here.
+  if ! jq -e "$EVIDENCE_JQ_DEFS"'
     type == "object"
     and ((keys | sort) == ["state", "targets"] or (keys | sort) == ["evidence", "state", "targets"])
-    and ((has("evidence") | not)
-      or ((.evidence | type) == "object"
-        and ((.evidence | keys | sort) == ["checks", "recalled", "reverts"])
-        and all(.evidence[]; type == "array")))
+    and ((has("evidence") | not) or (.evidence | evidence_ok))
     and (.state == "pending" or .state == "delivered")
     and ((.targets | type) == "array" and (.targets | length) > 0)
     and all(.targets[];

@@ -650,11 +650,46 @@ promote_pending_recall() {
 # recall does not prove the memory helped. The checklist presents them as
 # evidence and asks the model to cite one for every feedback it sends.
 
-# Records kept per evidence kind and host session; later ones are dropped.
+# Records kept per evidence kind and host session. Past it the OLDEST record
+# is evicted, and counted, so the checklist names the most recent ones and
+# says how many were dropped.
 EVIDENCE_RECORD_CAP=64
 
 # The longest command text a check record keeps.
 EVIDENCE_COMMAND_MAX=300
+
+# Evidence of a session untouched for longer than this many days is removed
+# at the next SessionStart: no checkpoint will ever consume it.
+EVIDENCE_MAX_AGE_DAYS=7
+
+# jq definitions validating the evidence a checkpoint manifest carries, entry
+# by entry, with the rules the record files are held to: a recovered manifest
+# is re-emitted into the checklist, so a forged entry must block Stop instead
+# of reaching the model as text.
+# shellcheck disable=SC2016,SC2034 # a jq program, read by stop.sh; its $names are jq's
+EVIDENCE_JQ_DEFS='
+  def plain_text($max): type == "string" and length > 0 and length <= $max
+    and (test("[[:cntrl:]]") | not);
+  def count: type == "number" and . >= 0 and . == floor and . <= 1000000000;
+  def recalled_ok: type == "object" and ((keys | sort) == ["id", "stale"])
+    and (.id | type == "string" and test("\\A[0-9]{1,20}\\z"))
+    and (.stale | type == "boolean");
+  def check_ok: type == "object" and ((keys | sort) == ["command", "kind", "verdict"])
+    and (.kind == "test" or .kind == "build" or .kind == "lint")
+    and (.command | plain_text(300) and (test("`") | not))
+    and (.verdict == "still failing" or .verdict == "failed, then passed");
+  def revert_ok: type == "object" and ((keys | sort) == ["commit", "repository", "reverted"])
+    and (.repository | plain_text(4096))
+    and (.commit | type == "string" and test("\\A[0-9a-f]{40}\\z"))
+    and (.reverted | type == "string" and test("\\A[0-9a-f]{40}\\z"));
+  def evidence_ok: type == "object"
+    and ((keys | sort) == ["checks", "recalled", "reverts"]
+      or (keys | sort) == ["checks", "dropped", "recalled", "reverts"])
+    and (.recalled | type == "array" and length <= 64 and all(.[]; recalled_ok))
+    and (.checks | type == "array" and length <= 64 and all(.[]; check_ok))
+    and (.reverts | type == "array" and length <= 1000 and all(.[]; revert_ok))
+    and ((has("dropped") | not) or (.dropped | type == "object"
+      and ((keys | sort) == ["checks", "recalled"]) and all(.[]; count)));'
 
 # jq: the decoded result object of an MCP call, from whichever of the three
 # shapes successful_tool_response reads.
@@ -669,11 +704,42 @@ TOOL_RESULT_OBJECT='
     else null end'
 
 # jq: one compact record per memory a recall returned, keyed by its decimal id.
+# shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
 RECALLED_MEMORIES="$TOOL_RESULT_OBJECT"'
   | select(type == "object")
   | ([(.memories? | arrays), (.nodes? | arrays)] | add // [])[]
   | select(type == "object" and (.id_str | type) == "string" and (.id_str | test("\\A[0-9]{1,20}\\z")))
   | {id: .id_str, tool: $tool, stale: (((.freshness? | type) == "object") and .freshness.state == "stale")}'
+
+# safe_git ARG...: git with the repository's own config kept from running a
+# program or redirecting the call. A repository chooses its .git/config, and
+# signature verification (log.showSignature with gpg.program), an fsmonitor
+# hook or a pager named there would otherwise run inside this hook. The
+# variables that point git at another repository, index, object store or
+# config are dropped, the system config is skipped, and the `-c` options take
+# precedence over every config file. Every git call of the hooks goes through
+# here; test/hooks.test.sh checks that none bypasses it.
+safe_git() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_NAMESPACE \
+    -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT \
+    -u GIT_EXTERNAL_DIFF -u GIT_PAGER -u PAGER \
+    GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 \
+    git --no-pager --no-optional-locks -c log.showSignature=false \
+    -c core.fsmonitor= -c core.pager=cat "$@" # exact-read-ok: `env -u` only removes these names from git's environment; no value lands on them
+}
+
+# prune_stale_evidence: remove the evidence of sessions untouched for more
+# than EVIDENCE_MAX_AGE_DAYS days. A session that never reaches a checkpoint
+# never consumes its records, so without this they would only accumulate.
+prune_stale_evidence() {
+  local dir
+  read_exact dir marker_base_dir || return 1
+  find "$dir" -mindepth 1 -maxdepth 1 -mtime "+$EVIDENCE_MAX_AGE_DAYS" \
+    \( \( -type d \( -name '*recalled-memories-*.records' -o -name '*check-outcomes-*.records' \) \) \
+    -o \( -type f -name '*evidence-since-*.marker' \) \) \
+    -exec rm -rf {} + 2>/dev/null || true
+}
 
 # evidence_dir DIR: DIR exists as a private directory of this user, not a link.
 evidence_dir() {
@@ -684,20 +750,55 @@ evidence_dir() {
   [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]
 }
 
-# record_evidence DIR NAME RECORD: atomically write DIR/NAME.json, refusing a
-# link or a non-file there. A new record past EVIDENCE_RECORD_CAP is dropped.
+# evidence_counter DIR NAME: print the count DIR/NAME holds, 0 when there is
+# none; fail when it is linked or not a plain count.
+evidence_counter() {
+  local value=0
+  if [ -e "$1/$2" ] || [ -L "$1/$2" ]; then
+    valid_private_marker "$1/$2" || return 1
+    read_exact_line value cat "$1/$2" || return 1
+    [[ "$value" =~ ^(0|[1-9][0-9]{0,8})$ ]] || return 1
+  fi
+  printf '%s' "$value"
+}
+
+# record_evidence DIR NAME RECORD: atomically write DIR/NAME.json, RECORD with
+# the next sequence number of DIR, refusing a link or a non-file there. A new
+# record past EVIDENCE_RECORD_CAP evicts the record with the lowest sequence
+# number, the oldest, and DIR/dropped counts it.
 record_evidence() {
   local path="$1/$2.json"
   local count
+  local seq
+  local oldest
+  local dropped
+  read_exact seq evidence_counter "$1" seq || return 1
+  # shellcheck disable=SC2154 # read_exact sets seq (printf -v)
+  seq=$((seq + 1))
+  write_private_marker "$1/seq" "$seq" || return 1
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
     count="$(find "$1" -maxdepth 1 -name '*.json' | wc -l | tr -d '[:space:]')"
-    [ "$count" -lt "$EVIDENCE_RECORD_CAP" ] || return 0
+    if [ "$count" -ge "$EVIDENCE_RECORD_CAP" ]; then
+      # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+      read_exact oldest jq -j -n 'reduce inputs as $record (null;
+          if . == null or $record.seq < .seq then {seq: $record.seq, name: input_filename} else . end)
+        | .name' "$1"/*.json || return 1
+      # shellcheck disable=SC2154 # read_exact sets oldest and dropped (printf -v)
+      [ -n "$oldest" ] && [ "${oldest%/*}" = "$1" ] || return 1
+      read_exact dropped evidence_counter "$1" dropped || return 1
+      rm -f "$oldest" || return 1
+      write_private_marker "$1/dropped" "$((dropped + 1))" || return 1
+    fi
   fi
-  write_private_marker "$path" "$3"
+  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  write_private_marker "$path" "$(printf '%s' "$3" | jq -c --argjson seq "$seq" '. + {seq: $seq}')"
 }
 
 # record_recalled_memories DIR TOOL_NAME PAYLOAD: keep the id of every memory a
-# successful recall returned, one record per id, the latest stale verdict kept.
+# successful recall returned, one record per id. A stale verdict is kept until
+# the checkpoint consumes it: stale outranks fresh, which outranks no verdict,
+# and a later recall that did not judge the anchors (no `anchor_root`, or
+# `recall_fused`) must not clear it.
 record_recalled_memories() {
   local dir="$1"
   local records
@@ -708,6 +809,10 @@ record_recalled_memories() {
   evidence_dir "$dir" || return 1
   while IFS= read -r record; do
     id="$(printf '%s' "$record" | jq -r '.id')" || return 1
+    if valid_private_marker "$dir/$id.json" \
+      && jq -e '.stale == true' "$dir/$id.json" >/dev/null 2>&1; then
+      record="$(printf '%s' "$record" | jq -c '.stale = true')" || return 1
+    fi
     record_evidence "$dir" "$id" "$record" || return 1
   done <<<"$records"
 }
@@ -716,22 +821,56 @@ record_recalled_memories() {
 # whose exit status is its own; fail otherwise. A pipe, a chain, a subshell, an
 # expansion or a redirected input makes the status someone else's (or the
 # command something else), so it is never evidence. `2>&1` is the one
-# redirection removed first, since it changes no status.
+# redirection removed first, as a word of its own only, since it changes no
+# status. A run that only builds, lists or describes the checks (`--no-run`,
+# `--list`, `--help`, `--collect-only`) runs none of them. `flock FILE` may
+# lead, with no option of its own: its exit status is then the command's,
+# except for the codes check_failure_counts sets aside.
 check_kind() {
-  local text="${1//2>&1/}"
+  local text=" $1 "
+  local word
   local -a words=()
+  while [[ "$text" == *' 2>&1 '* ]]; do
+    text="${text/ 2>&1 / }"
+  done
   case "$text" in
-    '' | *[\|\;\&\`\$\(\)\<]* | *[[:cntrl:]]*) return 1 ;;
+    *[\|\;\&\`\$\(\)\<]* | *[[:cntrl:]]*) return 1 ;;
   esac
   read -r -a words <<<"$text"
   while [ "${#words[@]}" -gt 0 ] && [[ "${words[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
     words=("${words[@]:1}")
   done
   if [ "${words[0]:-}" = flock ] && [ "${#words[@]}" -gt 2 ]; then
+    case "${words[1]}" in -*) return 1 ;; esac
     words=("${words[@]:2}")
   fi
   [ "${#words[@]}" -gt 0 ] || return 1
+  for word in "${words[@]}"; do
+    case "$word" in
+      --no-run | --list | -list | --help | -h | --version | -V | --collect-only | --co) return 1 ;;
+    esac
+  done
   check_kind_of "${words[@]}"
+}
+
+# check_failure_counts COMMAND CODE: exit status CODE reports COMMAND's check,
+# not its launch. 126 (not executable) and 127 (not found) say the program
+# never ran. A `flock`-wrapped command exits with flock's own code, in the
+# sysexits range 64-78, when the lock file cannot be opened or the command
+# cannot be started; that range says nothing about the check there.
+check_failure_counts() {
+  local code="$2"
+  local -a words=()
+  [[ "$code" =~ ^[1-9][0-9]{0,2}$ ]] || return 1
+  [ "$code" -ne 126 ] && [ "$code" -ne 127 ] || return 1
+  read -r -a words <<<"$1"
+  while [ "${#words[@]}" -gt 0 ] && [[ "${words[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
+    words=("${words[@]:1}")
+  done
+  if [ "${words[0]:-}" = flock ] && [ "$code" -ge 64 ] && [ "$code" -le 78 ]; then
+    return 1
+  fi
+  return 0
 }
 
 # check_kind_of WORD...: the kind of check a command's words name.
@@ -819,18 +958,37 @@ open_evidence_window() {
 }
 
 # What collect_learning_evidence found: the record files it read, which the
-# checkpoint naming them consumes, and the three evidence arrays.
+# checkpoint naming them consumes, the three evidence arrays, and how many
+# records of each kind the cap evicted.
 EVIDENCE_FILES=()
 EVIDENCE_RECALLED='[]'
 EVIDENCE_CHECKS='[]'
+EVIDENCE_DROPPED_RECALLED=0
+EVIDENCE_DROPPED_CHECKS=0
+# shellcheck disable=SC2034 # read by stop.sh after collect_learning_evidence
 LEARNING_EVIDENCE=
 
+# collect_dropped DIR: print how many records DIR's cap evicted, adding the
+# counter to EVIDENCE_FILES so the checkpoint naming the count resets it;
+# return 2 when the counter is linked or malformed. Never run in a subshell.
+collect_dropped() {
+  local dropped
+  read_exact dropped evidence_counter "$1" dropped || return 2
+  # shellcheck disable=SC2154 # read_exact sets dropped (printf -v)
+  [ "$dropped" = 0 ] || EVIDENCE_FILES+=("$1/dropped")
+  DROPPED_COUNT="$dropped"
+}
+DROPPED_COUNT=0
+
 # collect_recalled DIR: set EVIDENCE_RECALLED to the recalled-memory records of
-# DIR as one JSON array; return 2 when DIR or one of its records is linked or
-# malformed. Never run in a subshell: it adds what it read to EVIDENCE_FILES.
+# DIR as one JSON array, oldest first; return 2 when DIR or one of its records
+# is linked or malformed. Never run in a subshell: it adds what it read to
+# EVIDENCE_FILES.
 collect_recalled() {
   local file
   local -a files=()
+  EVIDENCE_RECALLED='[]'
+  EVIDENCE_DROPPED_RECALLED=0
   [ -L "$1" ] && return 2
   if [ -d "$1" ]; then
     for file in "$1"/*.json; do
@@ -838,25 +996,27 @@ collect_recalled() {
       [ -f "$file" ] && [ ! -L "$file" ] && [ -O "$file" ] || return 2
       jq -s -e --arg name "${file##*/}" '
         length == 1 and (.[0] | type == "object"
-          and ((keys | sort) == ["id", "stale", "tool"])
+          and ((keys | sort) == ["id", "seq", "stale", "tool"])
           and (.id | type == "string" and test("\\A[0-9]{1,20}\\z"))
+          and (.seq | type == "number" and . >= 1 and . == floor)
           and (.stale | type == "boolean")
           and (.tool | type == "string" and test("\\A[a-z_]{1,32}\\z"))
           and (.id + ".json") == $name)
       ' "$file" >/dev/null 2>&1 || return 2
       files+=("$file")
     done
+    collect_dropped "$1" || return 2
+    EVIDENCE_DROPPED_RECALLED="$DROPPED_COUNT"
   elif [ -e "$1" ]; then
     return 2
   fi
   # An empty array is never expanded: bash 3.2 reads "${files[@]}" of an
   # empty array as an unbound variable under `set -u`.
-  EVIDENCE_RECALLED='[]'
   if [ "${#files[@]}" -eq 0 ]; then
     return 0
   fi
   EVIDENCE_FILES+=("${files[@]}")
-  EVIDENCE_RECALLED="$(jq -sc 'map({id, stale})' "${files[@]}")" || return 2
+  EVIDENCE_RECALLED="$(jq -sc 'sort_by(.seq) | map({id, stale})' "${files[@]}")" || return 2
 }
 
 # valid_check_record FILE NAME_KEY: FILE holds one check record whose command
@@ -865,7 +1025,8 @@ valid_check_record() {
   local key
   jq -s -e '
     length == 1 and (.[0] | type == "object"
-      and ((keys | sort) == ["command", "kind", "status"])
+      and ((keys | sort) == ["command", "kind", "seq", "status"])
+      and (.seq | type == "number" and . >= 1 and . == floor)
       and (.kind == "test" or .kind == "build" or .kind == "lint")
       and (.status == "pass" or .status == "fail")
       and (.command | type == "string" and length > 0 and (test("[[:cntrl:]]") | not)))
@@ -886,11 +1047,14 @@ collect_checks() {
   local failed
   local -a verdicts=()
   EVIDENCE_CHECKS='[]'
+  EVIDENCE_DROPPED_CHECKS=0
   [ -L "$1" ] && return 2
   if [ ! -d "$1" ]; then
     [ -e "$1" ] && return 2
     return 0
   fi
+  collect_dropped "$1" || return 2
+  EVIDENCE_DROPPED_CHECKS="$DROPPED_COUNT"
   for file in "$1"/*.json; do
     [ -e "$file" ] || [ -L "$file" ] || continue
     [ -f "$file" ] && [ ! -L "$file" ] && [ -O "$file" ] || return 2
@@ -930,18 +1094,18 @@ collect_reverts() {
   command -v git >/dev/null 2>&1 || { printf '[]'; return 0; }
   while IFS= read -r -d '' repo; do # exact-read-ok: NUL-delimited, so no newline separates anything
     while IFS= read -r commit; do
-      read_exact body git -C "$repo" show -s --format=%B "$commit" || continue
+      read_exact body safe_git -C "$repo" show -s --no-show-signature --format=%B "$commit" || continue
       [[ "$body" =~ This\ reverts\ commit\ ([0-9a-f]{40}) ]] || continue
       # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
       jq -cn --arg repo "$repo" --arg commit "$commit" --arg reverted "${BASH_REMATCH[1]}" \
         '{repository: $repo, commit: $commit, reverted: $reverted}'
-    done < <(git -C "$repo" log --since="@$((since - 1))" -n 20 --format=%H \
+    done < <(safe_git -C "$repo" log --no-show-signature --since="@$((since - 1))" -n 20 --format=%H \
       --grep='^This reverts commit [0-9a-f]\{40\}' 2>/dev/null || true)
   done < <(printf '%s' "$2" | jq -j '[.[].root] | unique[] | . + "\u0000"') | jq -sc '.' # exact-read-ok: NUL-delimited, so no newline separates anything
 }
 
 # collect_learning_evidence RECALLED_DIR CHECKS_DIR SINCE_MARKER ROOTS_JSON:
-# set LEARNING_EVIDENCE to {recalled, checks, reverts} for the checkpoint about
+# set LEARNING_EVIDENCE to {recalled, checks, reverts, dropped} for the checkpoint about
 # to be emitted, and EVIDENCE_FILES to the records it read. Returns 2 when a
 # record directory or a record in it is linked or malformed: such state is
 # reported, never consumed or followed. Never run in a subshell.
@@ -952,15 +1116,19 @@ collect_learning_evidence() {
   collect_recalled "$1" || return 2
   collect_checks "$2" || return 2
   reverts="$(collect_reverts "$3" "$4")" || reverts='[]'
-  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  # shellcheck disable=SC2016,SC2034 # jq's own names; stop.sh reads LEARNING_EVIDENCE
   LEARNING_EVIDENCE="$(jq -cn --argjson recalled "$EVIDENCE_RECALLED" \
     --argjson checks "$EVIDENCE_CHECKS" --argjson reverts "$reverts" \
-    '{recalled: $recalled, checks: $checks, reverts: $reverts}')" || return 2
+    --argjson dropped_recalled "$EVIDENCE_DROPPED_RECALLED" \
+    --argjson dropped_checks "$EVIDENCE_DROPPED_CHECKS" \
+    '{recalled: $recalled, checks: $checks, reverts: $reverts,
+      dropped: {recalled: $dropped_recalled, checks: $dropped_checks}}')" || return 2
 }
 
 # evidence_present EVIDENCE: EVIDENCE holds at least one record.
 evidence_present() {
-  printf '%s' "$1" | jq -e '(.recalled + .checks + .reverts) | length > 0' >/dev/null 2>&1
+  printf '%s' "$1" | jq -e '((.recalled + .checks + .reverts) | length > 0)
+    or ((.dropped.recalled // 0) + (.dropped.checks // 0) > 0)' >/dev/null 2>&1
 }
 
 # consume_learning_evidence SINCE_MARKER: remove the records the checkpoint
@@ -980,11 +1148,19 @@ feedback_step() {
   printf '%s' "$1" | jq -r '
     def memories: [.recalled[] | .id + (if .stale then " (stale: an anchored file changed; re-verify it, then forget and replace it if wrong or remember it again with its anchors if still right)" else "" end)];
     def outcomes: [(.checks[] | "`\(.command)` (\(.kind)): \(.verdict)"), (.reverts[] | "commit \(.commit) in \(.repository) reverts \(.reverted)")];
-    (outcomes | if length == 0 then "none" else join("; ") end) as $seen
+    (.dropped.recalled // 0) as $dropped_recalled
+    | (.dropped.checks // 0) as $dropped_checks
+    | (outcomes | if length == 0 then "none" else join("; ") end)
+      + (if $dropped_checks > 0 then " (the check list is truncated: \($dropped_checks) older check records were dropped)" else "" end) as $seen
     | if (.recalled | length) == 0 then
         "4. Feedback: no recall result was observed since the last checkpoint, so no memory has earned feedback; send none. Verified outcomes observed: \($seen)."
       else
-        "4. Feedback: the recalls since the last checkpoint returned exactly these memories: \(memories | join(", ")). Verified outcomes observed: \($seen). Call feedback(id_str, true|false) only for a listed memory whose effect one of these outcomes demonstrates, and name that outcome; leave every other listed memory without feedback. Never score a memory on your own impression that it helped or misled."
+        (if $dropped_recalled > 0 then
+          "the recalls since the last checkpoint returned more memories than are kept, so this list is truncated: \($dropped_recalled) older ones were dropped, and these are the most recent, oldest first"
+        else
+          "the recalls since the last checkpoint returned exactly these memories"
+        end) as $which
+        | "4. Feedback: \($which): \(memories | join(", ")). Verified outcomes observed: \($seen). Call feedback(id_str, true|false) only for a listed memory whose effect one of these outcomes demonstrates, and name that outcome; leave every other listed memory without feedback. Never score a memory on your own impression that it helped or misled."
       end'
 }
 

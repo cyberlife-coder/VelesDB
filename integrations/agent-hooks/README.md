@@ -329,8 +329,8 @@ install section above — it folds the same load/save loop into one event.)
 | `Stop` | Fires whenever Claude is about to stop responding, not only at final session exit. In an opted-in repository it blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; each continuation passes. Without enforcement it retains the legacy first-Stop save reminder. Either names only a session this conversation saved, and otherwise the configured one: never one it only loaded. The checklist names each edited repository's own. | `{"decision":"block","reason":"..."}` plus repository-and-session first-Stop markers, a session-wide queue carrying every edited repository identity, and an atomic pending/delivered manifest that makes an interrupted checklist recoverable. |
 | `PreCompact` | Fires before the transcript is compacted (manual or auto-triggered). The **first** `PreCompact` per session is blocked with a reason telling the model to `compile_transcript` the about-to-be-compacted transcript (deterministic compression, not lossy compaction) and `save_working_context` first, naming only a session this conversation saved, and otherwise the configured one; later ones pass through. | Its own block-once-then-pass sentinel, separate from edit checkpoints. |
 | `PreToolUse` | In an opted-in project, refuses the first `Edit`/`Write` until the same host session has completed a successful VelesDB recall in that repository. | Exit 2 with an actionable reason; the refused target is queued so a successful recall remains bound to it even if the host `cwd` is elsewhere. |
-| `PostToolUse` | Marks a successful VelesDB recall for the edit guard and records the ids it returned, and records the session of a successful `save_working_context`, or of a `load_working_context` that found one, for the reminders above. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
-| `PostToolUseFailure` | In an opted-in repository, records a single test, build or lint command whose `Bash` call failed with a documented `Exit code N`; `PostToolUse` records the same command's later success. A pipe, a chain, a subshell or an expansion is never recorded: its exit status is not the check's own. | Private per-session records, two per command, each replaced atomically. |
+| `PostToolUse` | Marks a successful VelesDB recall for the edit guard and, where the learning loop runs, records the ids it returned, and records the session of a successful `save_working_context`, or of a `load_working_context` that found one, for the reminders above. Separately, when a schema-valid `Bash` result exceeds the size threshold, compiles it through `velesdb-memory compile-stdin` and replaces the view only if fidelity and net-savings gates pass. | Success-gated sentinel plus shape-preserving `hookSpecificOutput.updatedToolOutput` for compression. |
+| `PostToolUseFailure` | In an opted-in repository, records a single test, build or lint command whose `Bash` call failed with a documented `Exit code N` (not 126 or 127, nor `flock`'s own 64–78: those report the launch); `PostToolUse` records the same command's later success, only for a call that ran to its end in the foreground. A pipe, a chain, a subshell or an expansion is never recorded: its exit status is not the check's own. | Private per-session records, two per command, each replaced atomically. |
 
 **Design note — the only hook that reduces the payload itself.** The three
 lifecycle continuations can only ask the model to call a tool; whether context
@@ -429,9 +429,21 @@ than asking for its impression. It names:
   `stale` (an anchored file changed, see the velesdb-memory README);
 - **check outcomes** (Claude Code only) — a test, build or lint command that
   failed and then passed, or still fails. A command that only passed is not
-  listed: a green run after a recall does not show that the memory helped;
+  listed: a green run after a recall does not show that the memory helped.
+  Neither is a run that reported no exit status of its own: a `Bash` call
+  launched with `run_in_background`, moved to the background past its
+  timeout, or interrupted fires `PostToolUse` before or without finishing, so
+  it is never a pass; exit 126 or 127, or a `flock` wrapper's own 64–78, say
+  the check never ran, so they are never a failure. Nor is a run that only
+  builds, lists or describes the checks (`--no-run`, `--list`, `--help`,
+  `--collect-only`);
 - **reverts** — a commit in an edited repository, since the last checkpoint,
-  whose message says `This reverts commit <sha>`.
+  whose message says `This reverts commit <sha>`. Git runs through one helper
+  that keeps the repository's own config from running anything: signature
+  verification is off, `core.fsmonitor` and the pager are overridden, the
+  system config is skipped, and the variables that would point git elsewhere
+  (`GIT_DIR`, `GIT_CONFIG_PARAMETERS`, …) are dropped. A cloned repository
+  chooses its `.git/config`; reading its log must not execute it.
 
 **No signal drives `feedback` by itself.** A hook never opens the store (see
 the constraint below), and no observed outcome names the memory that caused
@@ -447,10 +459,20 @@ self-assessment this design removes.
 
 The records live beside the edit records, under the same rules: one private
 directory per kind and host session, one atomically replaced file per memory or
-per check, at most 64 of each, and a link or a malformed record makes `Stop`
-block and report it instead of following or discarding it. The checkpoint that
-names them consumes them, through the same pending/delivered manifest as the
-edited repositories, so an interrupted `Stop` re-emits the same evidence.
+per check, and a link or a malformed record makes `Stop` block and report it
+instead of following or discarding it. At most 64 of each are kept: past that
+the oldest is evicted and counted, and the checklist names the most recent and
+says the list is truncated and by how many, instead of calling it exact. A
+memory's `stale` mark is kept until the checkpoint: a later recall that did not
+judge anchors (no `anchor_root`, or `recall_fused`) never clears it. Recalls are
+recorded only where the learning loop runs — the session's repository opted
+in, the recall unlocked an opted-in edit target elsewhere, or such a target is
+queued in the session — and the evidence of a session untouched for more than
+seven days is removed at the next `SessionStart`, so nothing accumulates. The
+checkpoint that names them consumes them, through the same pending/delivered
+manifest as the edited repositories, so an interrupted `Stop` re-emits the same
+evidence; every entry that manifest carries is validated like the record it
+came from, so a forged one blocks `Stop` instead of reaching the checklist.
 
 ## `.velesdb-hooks.json` config format
 
