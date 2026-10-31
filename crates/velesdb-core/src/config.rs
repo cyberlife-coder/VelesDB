@@ -567,7 +567,7 @@ impl VelesConfig {
     /// are layered on top of the (filtered) file and can still override an
     /// engine value — e.g. `VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a
     /// `[limits] max_collections` from the file. The environment is filtered
-    /// the same way the file is, by [`Self::is_engine_path`]: a variable for
+    /// the same way the file is, by the engine-table filter ([`Self::is_engine_table`]): a variable for
     /// a non-engine section (`VELESDB_SERVER_*`, `VELESDB_LOGGING_*`) is not
     /// read here at all. It used to be — `server` and `logging` are fields of
     /// this struct, so such a variable reached them and was validated against
