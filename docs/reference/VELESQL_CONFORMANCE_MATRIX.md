@@ -11,10 +11,10 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | Feature | Parser source | Executor source | Notes |
 |---------|--------------|-----------------|-------|
 | `SELECT *` / named columns | `grammar.pest:select_list` | `query_engine.rs` | Full support |
-| `SELECT DISTINCT` | `grammar.pest:distinct_modifier` | `query_engine.rs` | EPIC-052 US-001 |
+| `SELECT DISTINCT` | `grammar.pest:distinct_modifier` | `query_engine.rs` | EPIC-052 US-001; `id` is the point id, numbers keyed as `GROUP BY` keys them |
 | `FROM <collection>` | `grammar.pest:from_clause` | `query_engine.rs` | Single collection |
 | `FROM <collection> AS <alias>` | `grammar.pest:from_clause` | `query_engine.rs` | BUG-8 fix |
-| `WHERE <condition>` | `grammar.pest:where_clause` | `search/query/` | Equality, comparison, logical |
+| `WHERE <condition>` | `grammar.pest:where_clause` | `search/query/` | Equality, comparison, logical; numbers by exact value (`velesql::compare_numbers`), no tolerance, through a scan, an index or the payload mirror |
 | `WHERE vector NEAR $v` | `grammar.pest:vector_search` | `search/query/planner.rs` | kNN via HNSW |
 | `WHERE vector SPARSE_NEAR $sv` | `grammar.pest:sparse_vector_search` | `search/query/hybrid_sparse.rs` | SPLADE/BM42 |
 | `WHERE content MATCH 'term'` | `grammar.pest:match_expr` | `search/query/planner.rs` | BM25 full-text |
@@ -27,8 +27,8 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `RIGHT JOIN` | `ast/join.rs:JoinType::Right` | `search/query/join.rs` | EPIC-031 US-004 |
 | `FULL JOIN` | `ast/join.rs:JoinType::Full` | `search/query/join.rs` | EPIC-031 US-004 |
 | `GROUP BY` | `ast/aggregation.rs:GroupByClause` | `velesql/grouping.rs:Grouper` | One grouping for core SQL `GROUP BY`, vector `GROUP BY` and the WASM executor; ORDER BY over grouped rows resolves through `velesql/grouped_order.rs` |
-| `HAVING` | `ast/aggregation.rs:HavingClause` | `velesql/having_eval.rs:HavingClause::accepts` | Any aggregate, listed in SELECT or not; `AND` binds tighter than `OR`; integers compare exactly |
-| Aggregate functions | `ast/aggregation.rs` | `velesql/aggregator.rs` | COUNT, SUM, AVG, MIN, MAX, FIRST; output key `AggregateFunction::result_key` in every engine; MIN and MAX keep an integer exact |
+| `HAVING` | `ast/aggregation.rs:HavingClause` | `velesql/having_eval.rs:HavingClause::accepts` | Any aggregate, listed in SELECT or not; `AND` binds tighter than `OR`; numbers compare by exact value |
+| Aggregate functions | `ast/aggregation.rs` | `velesql/aggregator.rs` | COUNT, SUM, AVG, MIN, MAX, FIRST; output key `AggregateFunction::result_key` in every engine; MIN and MAX keep an integer exact, the integer winning among equal values |
 | `USING FUSION(strategy=...)` | `ast/fusion.rs:FusionClause` | `search/query/sparse_dispatch.rs:resolve_fusion_strategy` + `hybrid_sparse.rs` | Honored: RRF, RSF, average, maximum, weighted (RSF/weighted use `dense_weight`/`sparse_weight`) |
 | `WHERE vector NEAR_FUSED [...]` | `grammar.pest:vector_fused_search` | `search/query/fused_dispatch.rs` | Executable multi-vector fusion via `multi_query_search`; honors `rrf`/`average`/`maximum` (others fall back to RRF). Must be the only vector predicate, `AND`-able with a metadata filter only |
 | `ALTER COLLECTION ... SET (auto_reindex=...)` | `ast/ddl.rs` | `database/ddl_executor.rs:execute_alter_collection` | Applies and persists the auto-reindex policy (restored on next open) |
