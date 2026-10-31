@@ -495,7 +495,7 @@ impl HnswIndex {
         // `RwLock`, which can deadlock behind a queued writer.
         let inner = self.inner.read();
         let (neighbours, resume) = inner.search_resumable(query, k, min_ef);
-        let (results, rewalked) = self.live_or_rewalk(&inner, query, k, min_ef, neighbours);
+        let (results, rewalked) = self.live_or_rewalk(&inner, query, k, min_ef, &neighbours);
         // A re-walk restarted the traversal: there is no state to resume.
         let resume = if rewalked { None } else { resume };
         if results.len() < 2 {
@@ -530,7 +530,7 @@ impl HnswIndex {
             Some(r) => inner.resume_search(r, query, k, escalated_ef),
             None => return self.search_live(&inner, query, k, k, escalated_ef),
         };
-        self.live_or_rewalk(&inner, query, k, escalated_ef, escalated)
+        self.live_or_rewalk(&inner, query, k, escalated_ef, &escalated)
             .0
     }
 
@@ -545,9 +545,9 @@ impl HnswIndex {
         query: &[f32],
         k: usize,
         ef: usize,
-        walked: Vec<(usize, f32)>,
+        walked: &[(usize, f32)],
     ) -> (Vec<ScoredResult>, bool) {
-        let mapped = self.map_graph_results(inner, &walked, k);
+        let mapped = self.map_graph_results(inner, walked, k);
         if mapped.len() >= k || walked.len() <= mapped.len() {
             return (mapped, false);
         }

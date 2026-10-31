@@ -78,13 +78,13 @@ pub(crate) fn search_past_unmapped(
     live: impl Fn(&[(usize, f32)], usize) -> Vec<ScoredResult>,
 ) -> Vec<ScoredResult> {
     let walked = walk(fetch, ef);
-    search_past_unmapped_from(walked, fetch, needed, ef, walk, live)
+    search_past_unmapped_from(&walked, fetch, needed, ef, walk, live)
 }
 
 /// [`search_past_unmapped`] from a first walk (at `fetch` and `ef`) the
 /// caller has already run: it is mapped, not run again.
 pub(crate) fn search_past_unmapped_from(
-    walked: Vec<(usize, f32)>,
+    walked: &[(usize, f32)],
     fetch: usize,
     needed: usize,
     ef: usize,
@@ -92,8 +92,8 @@ pub(crate) fn search_past_unmapped_from(
     live: impl Fn(&[(usize, f32)], usize) -> Vec<ScoredResult>,
 ) -> Vec<ScoredResult> {
     let needed = needed.min(fetch);
-    let results = live(&walked, fetch);
-    if !cut_short(&walked, &results, needed) {
+    let results = live(walked, fetch);
+    if !cut_short(walked, &results, needed) {
         return results;
     }
     let (results, pool_used) = if ef > fetch {

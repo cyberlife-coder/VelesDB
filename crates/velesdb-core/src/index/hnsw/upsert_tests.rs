@@ -101,7 +101,7 @@ fn a_walk_already_run_is_not_repeated() {
     let order: Vec<usize> = [FIRST_UNMAPPED].into_iter().chain(0..200).collect();
     let calls = RefCell::new(Vec::new());
     let first: Vec<(usize, f32)> = order.iter().take(1).map(|&n| (n, 0.0)).collect();
-    let results = search_past_unmapped_from(first, 1, 1, 64, recording_walk(&order, &calls), live);
+    let results = search_past_unmapped_from(&first, 1, 1, 64, recording_walk(&order, &calls), live);
     assert_eq!(ids(&results), vec![0]);
     assert_eq!(calls.into_inner(), vec![(64, 64)]);
 }
