@@ -1621,6 +1621,22 @@ fn test_observer_deny_blocks_text_hybrid_and_velesql() {
     );
 }
 
+/// GIVEN a database whose observer denies every read
+/// WHEN a point is fetched by id, singly or in a batch
+/// THEN the lookup fails with the denial instead of returning the payload,
+///      as every other mobile read already does.
+#[test]
+fn test_observer_deny_blocks_point_lookup() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = seed_gated_db(path, std::sync::Arc::new(DenyAllObserver));
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    assert!(col.get(vec![1]).is_err(), "get must be gated");
+    assert!(col.get_by_id(1).is_err(), "get_by_id must be gated");
+}
+
 #[test]
 fn test_observer_deny_blocks_sparse_and_multi_query() {
     let tmp = TempDir::new().unwrap();
