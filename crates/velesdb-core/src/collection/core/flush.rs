@@ -98,33 +98,41 @@ impl Collection {
     /// and WAL replay on the next startup.
     ///
     /// Every step runs, whatever an earlier one did, as in
-    /// [`flush`](Self::flush): the HNSW save, the quantizers, the sparse,
-    /// BM25 and secondary indexes and `vectors.idx` all reach disk even when
-    /// one of them, or the builder's drain, fails.
+    /// [`flush`](Self::flush): the HNSW save, the quantizers and the sparse,
+    /// BM25 and secondary indexes reach disk even when one of them, or the
+    /// builder's drain, fails. Only `vectors.idx` waits on the vector storage
+    /// flush: written after a failed one, it would record offsets over data
+    /// that never reached disk, and the next open would refuse it before
+    /// replaying the WAL. An HNSW index saved then is reconciled by the open's
+    /// orphan pass.
     ///
     /// # Errors
     ///
     /// Returns the first error a step returned.
     pub fn flush_full(&self) -> Result<()> {
         let mut steps = FlushSteps::default();
-        self.flush_core_storage(&mut steps);
+        let vectors_durable = self.flush_core_storage(&mut steps);
         self.flush_derived_indexes(&mut steps);
-        // Write the deferred vectors.idx AFTER all other flush steps.
-        let index_file = self.storage.vector_storage.read().flush_index();
-        steps.run("vectors.idx", index_file.map_err(Error::from));
+        // Write the deferred vectors.idx AFTER all other flush steps, and only
+        // over vectors that reached disk (`MmapStorage::flush_full`).
+        if vectors_durable {
+            let index_file = self.storage.vector_storage.read().flush_index();
+            steps.run("vectors.idx", index_file.map_err(Error::from));
+        }
         steps.finish()
     }
 
-    /// Flushes config + vector/payload storage + drains + HNSW save.
+    /// Flushes config + vector/payload storage + drains + HNSW save, and
+    /// returns whether the vector storage flush succeeded.
     ///
     /// Extracted from `flush_full` to keep its CC under the Codacy limit
     /// after adding the BM25 snapshot/WAL step (#389).
-    fn flush_core_storage(&self, steps: &mut FlushSteps) {
+    fn flush_core_storage(&self, steps: &mut FlushSteps) -> bool {
         steps.run("config", self.save_config());
         let vectors = self.storage.vector_storage.write().flush();
         #[cfg(test)]
         let vectors = flush_hooks::vector_flush(vectors);
-        steps.run("vector storage", vectors.map_err(Error::from));
+        let vectors_durable = steps.run("vector storage", vectors.map_err(Error::from));
         let payloads = self.storage.payload_storage.write().flush();
         steps.run("payload storage", payloads.map_err(Error::from));
         self.drain_deferred_into_index();
@@ -148,6 +156,7 @@ impl Collection {
         steps.run("PQ codebook", self.flush_pq_codebook());
         steps.run("RaBitQ quantizer", self.flush_rabitq_quantizer());
         steps.run("SQ8 quantizer", self.flush_sq8_quantizer());
+        vectors_durable
     }
 
     /// Persists all derived indexes (secondary, sparse, BM25) in order.
