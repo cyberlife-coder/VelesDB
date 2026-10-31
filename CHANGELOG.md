@@ -156,8 +156,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped, so a `k = 1` search at a deleted or moved point's old vector
   could come back empty; most visibly without reranking (`Fast` quality, or
   an index built without exact-distance features). Present in 7.1.0.
-  `HnswIndex` and `NativeHnswIndex` now take the walk's whole `ef` pool and
-  keep its first `k` nodes an id still maps to.
+  When such nodes cut a search short, `HnswIndex` and `NativeHnswIndex` now
+  walk again for the walk's whole `ef` pool and keep its first `k` mapped
+  nodes; if that pool was all used and still falls short, once more at
+  twice the `ef` (at most 10 000). A search near no such node runs one
+  walk, exactly as before. A neighbourhood so dense with deleted points
+  that this still falls short needs `vacuum`.
 - **A search racing a deferred-indexer or delta-buffer merge could miss its
   points.** Both merges emptied their buffer before inserting what it held.
   Both now insert first and drop only what they inserted, as the async index

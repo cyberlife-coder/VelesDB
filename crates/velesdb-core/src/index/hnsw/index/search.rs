@@ -88,10 +88,27 @@ impl HnswIndex {
         ef_search: usize,
     ) -> Vec<ScoredResult> {
         let inner = self.inner.read();
-        let neighbours = inner.search_auto(query, graph_k(k, ef_search), ef_search);
-        let mapped = self.map_graph_results(&inner, &neighbours, k);
+        let mapped = self.search_live(&inner, query, k, ef_search);
         drop(inner);
         mapped
+    }
+
+    /// `search_auto` at `k` and `ef`, mapped to ids, walked again only when
+    /// nodes a delete or an upsert left behind cut it short
+    /// ([`upsert::search_past_unmapped`](crate::index::hnsw::upsert::search_past_unmapped)).
+    fn search_live(
+        &self,
+        inner: &crate::index::hnsw::native_inner::NativeHnswInner,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Vec<ScoredResult> {
+        crate::index::hnsw::upsert::search_past_unmapped(
+            k,
+            ef_search,
+            |k, ef| inner.search_auto(query, k, ef),
+            |nodes, k| self.map_graph_results(inner, nodes, k),
+        )
     }
 
     /// Maps raw graph results `(node_id, raw_dist)`, nearest first, to the
@@ -168,7 +185,7 @@ impl HnswIndex {
         let inner = self.inner.read();
         // GPU-aware entry point (falls back to CPU for < 500K vectors, RaBitQ,
         // or GPU errors). See `search_hnsw_only` for rationale.
-        let neighbours = inner.search_auto(query, graph_k(candidates_k, ef_search), ef_search);
+        let neighbours = inner.search_auto(query, candidates_k, ef_search);
 
         let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
         for &(node_id, raw_dist) in &neighbours {
@@ -440,8 +457,14 @@ impl HnswIndex {
         // `search_hnsw_only` would be a recursive `read()` on a parking_lot
         // `RwLock`, which can deadlock behind a queued writer.
         let inner = self.inner.read();
-        let (neighbours, resume) = inner.search_resumable(query, graph_k(k, min_ef), min_ef);
-        let results = self.map_graph_results(&inner, &neighbours, k);
+        let (neighbours, mut resume) = inner.search_resumable(query, k, min_ef);
+        let mut results = self.map_graph_results(&inner, &neighbours, k);
+        if results.len() < k && neighbours.len() > results.len() {
+            // Unmapped nodes cut the walk short: walk past them, and restart
+            // rather than resume any escalation.
+            results = self.search_live(&inner, query, k, min_ef);
+            resume = None;
+        }
         if results.len() < 2 {
             return results;
         }
@@ -470,12 +493,15 @@ impl HnswIndex {
         // resumed pass does not reconsider: `adaptive_resume_evals` holds its
         // recall within 2% of a from-scratch pass at ef2, on one 3,000 x 256
         // corpus.
-        let fetch = graph_k(k, escalated_ef);
-        let escalated = match resume {
-            Some(r) => inner.resume_search(r, query, fetch, escalated_ef),
-            None => inner.search_auto(query, fetch, escalated_ef),
+        let Some(r) = resume else {
+            return self.search_live(&inner, query, k, escalated_ef);
         };
-        self.map_graph_results(&inner, &escalated, k)
+        let escalated = inner.resume_search(r, query, k, escalated_ef);
+        let mapped = self.map_graph_results(&inner, &escalated, k);
+        if mapped.len() < k && escalated.len() > mapped.len() {
+            return self.search_live(&inner, query, k, escalated_ef);
+        }
+        mapped
     }
 
     /// Sets the index to searching mode after bulk insertions.
@@ -492,17 +518,6 @@ impl HnswIndex {
 /// Spread at or above which `search_adaptive` widens `ef` and runs a second
 /// pass. No recorded run measures the spreads queries produce (#2266).
 const ESCALATION_SPREAD_THRESHOLD: f32 = 2.0;
-
-/// How many nodes to take from a graph walk that must yield `k` results: its
-/// whole `ef` pool when that is larger. The walk ranks every node it reaches,
-/// including those no id maps any more (a delete or an upsert leaves its old
-/// node in the graph until `vacuum`); asked for only `k`, it can return just
-/// those, and the search comes back short — even empty for `k = 1` at a
-/// moved or deleted point's old vector. The pool is already computed, so
-/// taking all of it costs only the mapping lookups.
-fn graph_k(k: usize, ef_search: usize) -> usize {
-    k.max(ef_search)
-}
 
 /// Whether the phase-1 result spread marks this as a hard query.
 ///

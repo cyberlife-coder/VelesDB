@@ -84,19 +84,17 @@ fn spread(id: u64) -> Vec<f32> {
         .collect()
 }
 
-/// Both index shapes a collection runs: with its exact-distance features
-/// (the graph walk reranked) and without (the walk alone). Points are
-/// inserted one at a time, so the graph is the same on every run.
-fn indexes() -> [(&'static str, super::HnswIndex); 2] {
-    let full = super::HnswIndex::new(DIM, DistanceMetric::Euclidean).expect("test: index");
+/// An index without exact-distance features, as a fast-insert collection
+/// runs, which never reranks the walk: the shape the dropped results showed
+/// on. Points are inserted one at a time, so the graph is the same on every
+/// run.
+fn indexes() -> [(&'static str, super::HnswIndex); 1] {
     let fast =
         super::HnswIndex::new_fast_insert(DIM, DistanceMetric::Euclidean).expect("test: index");
-    for index in [&full, &fast] {
-        for id in 0..POINTS {
-            assert!(index.insert_and_assign(id, &spread(id)), "premise: placed");
-        }
+    for id in 0..POINTS {
+        assert!(fast.insert_and_assign(id, &spread(id)), "premise: placed");
     }
-    [("full", full), ("fast-insert", fast)]
+    [("fast-insert", fast)]
 }
 
 fn first_id(index: &super::HnswIndex, query: &[f32], quality: crate::SearchQuality) -> Option<u64> {

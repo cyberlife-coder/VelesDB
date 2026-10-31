@@ -172,20 +172,24 @@ impl NativeHnswIndex {
     ) -> Vec<ScoredResult> {
         let ef_search = quality.ef_search_for_scale(k, self.len());
         let inner = self.inner.read();
-        // The whole `ef` pool, not `k`: a node a delete or an upsert left
-        // behind maps to no id, and must not take a result's place.
-        let neighbors = inner.search_auto(query, k.max(ef_search), ef_search);
-
-        let results: Vec<ScoredResult> = neighbors
-            .into_iter()
-            .filter_map(|(node_id, raw_dist)| {
-                self.mappings.get_id(node_id).map(|id| {
-                    let score = inner.transform_score(raw_dist);
-                    ScoredResult::new(id, score)
-                })
-            })
-            .take(k)
-            .collect();
+        // A node a delete or an upsert left behind maps to no id: walked
+        // past rather than left to take a result's place.
+        let results = super::upsert::search_past_unmapped(
+            k,
+            ef_search,
+            |k, ef| inner.search_auto(query, k, ef),
+            |nodes, k| {
+                nodes
+                    .iter()
+                    .filter_map(|&(node_id, raw_dist)| {
+                        self.mappings
+                            .get_id(node_id)
+                            .map(|id| ScoredResult::new(id, inner.transform_score(raw_dist)))
+                    })
+                    .take(k)
+                    .collect()
+            },
+        );
         drop(inner);
         results
     }
