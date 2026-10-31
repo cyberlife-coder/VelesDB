@@ -131,7 +131,7 @@ impl Collection {
     /// Returns `true` if the point passes the optional filter.
     fn passes_filter(point: &Point, filter: Option<&Filter>) -> bool {
         match (filter, &point.payload) {
-            (Some(f), Some(payload)) => f.matches(payload),
+            (Some(f), Some(payload)) => f.matches_point(point.id, Some(payload)),
             (Some(_), None) => false,
             (None, _) => true,
         }

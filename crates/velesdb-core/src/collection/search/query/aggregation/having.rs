@@ -14,7 +14,9 @@ use std::collections::HashMap;
 impl Collection {
     /// Sorts grouped rows by `(field, descending)` keys, in order — the row
     /// fields [`crate::velesql::SelectStatement::grouped_sort_keys`] resolved
-    /// the ORDER BY to, GROUP BY columns last, so no two groups tie.
+    /// the ORDER BY to, GROUP BY columns last. The sort is stable: groups
+    /// tied on every key (two array keys) keep the grouper's order, by best
+    /// row id.
     pub(crate) fn sort_aggregation_results(
         results: &mut [serde_json::Value],
         sort_columns: &[(String, bool)],

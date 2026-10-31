@@ -545,8 +545,9 @@ fn test_unsigned_integer_numeric_to_json() {
                     value: high,
                 },
             ) => {
-                assert_eq!(field, "id");
-                assert_eq!(f2, "id");
+                // `id` is the point id: it converts to the point-id field.
+                assert_eq!(field, super::POINT_ID_FIELD);
+                assert_eq!(f2, super::POINT_ID_FIELD);
                 assert_eq!(low.as_u64(), Some(10_000_000_000_000_000_000));
                 assert_eq!(high.as_u64(), Some(u64::MAX));
             }
@@ -555,4 +556,33 @@ fn test_unsigned_integer_numeric_to_json() {
     } else {
         panic!("expected Condition::And, got {result:?}");
     }
+}
+
+#[test]
+fn test_a_velesql_id_column_reads_the_point_id_and_a_json_filter_id_the_payload() {
+    let velesql = crate::velesql::Condition::Comparison(crate::velesql::Comparison {
+        column: "id".to_string(),
+        operator: crate::velesql::CompareOp::Eq,
+        value: VelesValue::Integer(7),
+    });
+    let point_id: Condition = velesql.into();
+    let payload = serde_json::json!({"id": 1});
+    assert!(
+        point_id.matches_point(7, Some(&payload)),
+        "the point id is 7"
+    );
+    assert!(
+        !point_id.matches_point(1, Some(&payload)),
+        "not the payload's `id`"
+    );
+    assert!(!point_id.matches(&payload), "no point id is known");
+
+    let json: Condition = serde_json::from_value(serde_json::json!(
+        {"type": "eq", "field": "id", "value": 1}
+    ))
+    .expect("test: JSON filter");
+    assert!(
+        json.matches_point(7, Some(&payload)),
+        "a JSON filter reads the payload"
+    );
 }

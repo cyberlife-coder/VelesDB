@@ -66,7 +66,9 @@ impl Collection {
             .iter()
             .map(|ob| match &ob.expr {
                 crate::velesql::OrderByExpr::Field(field_name)
-                    if per_result_let.is_empty() && !is_builtin_score_variable(field_name) =>
+                    if per_result_let.is_empty()
+                        && !is_builtin_score_variable(field_name)
+                        && field_name != "id" =>
                 {
                     Some(
                         results
@@ -231,13 +233,17 @@ impl Collection {
         Ordering::Equal
     }
 
-    /// Compares a payload field value between two results.
+    /// Compares a payload field value between two results; `id` is the point
+    /// id, as in every clause.
     fn compare_payload_field(
         field_name: &str,
         i: usize,
         j: usize,
         results: &[SearchResult],
     ) -> Ordering {
+        if field_name == "id" {
+            return results[i].point.id.cmp(&results[j].point.id);
+        }
         let val_i = results[i]
             .point
             .payload

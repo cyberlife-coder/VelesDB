@@ -192,8 +192,9 @@ impl Collection {
         let mut scored = Vec::new();
         for chunk in ids.chunks(ANCHOR_HYDRATION_CHUNK) {
             for point in self.get(chunk).into_iter().flatten() {
-                let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
-                if metadata_filter.is_some_and(|f| !f.matches(&payload)) {
+                if metadata_filter
+                    .is_some_and(|f| !f.matches_point(point.id, point.payload.as_ref()))
+                {
                     continue;
                 }
                 // A length-mismatched vector can't be scored against `query`;

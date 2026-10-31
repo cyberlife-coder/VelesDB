@@ -34,6 +34,17 @@ fn velesql_numeric_to_json(v: &crate::velesql::Value) -> Value {
     }
 }
 
+/// The filter field a `VelesQL` column reads:
+/// [`POINT_ID_FIELD`](super::POINT_ID_FIELD) for `id`, the point id in every
+/// clause of a query, else the payload path.
+fn field(column: String) -> String {
+    if column == "id" {
+        super::POINT_ID_FIELD.to_string()
+    } else {
+        column
+    }
+}
+
 /// Sentinel for conditions handled externally by the query engine (vector
 /// search, graph match, etc.). Uses an empty AND as the identity element.
 fn engine_handled_identity() -> Condition {
@@ -47,6 +58,7 @@ fn convert_comparison(
     value: crate::velesql::Value,
 ) -> Condition {
     let value = velesql_value_to_json(value);
+    let column = field(column);
     match operator {
         crate::velesql::CompareOp::Eq => Condition::eq(column, value),
         crate::velesql::CompareOp::NotEq => Condition::neq(column, value),
@@ -80,7 +92,7 @@ fn convert_in(inc: crate::velesql::InCondition) -> Condition {
     values.sort_by(json_value_cmp);
     values.dedup_by(|a, b| a == b);
     let in_cond = Condition::In {
-        field: inc.column,
+        field: field(inc.column),
         values,
     };
     if inc.negated {
@@ -97,11 +109,11 @@ fn convert_between(btw: crate::velesql::BetweenCondition) -> Condition {
     Condition::And {
         conditions: vec![
             Condition::Gte {
-                field: btw.column.clone(),
+                field: field(btw.column.clone()),
                 value: velesql_numeric_to_json(&btw.low),
             },
             Condition::Lte {
-                field: btw.column,
+                field: field(btw.column),
                 value: velesql_numeric_to_json(&btw.high),
             },
         ],
@@ -112,12 +124,12 @@ fn convert_between(btw: crate::velesql::BetweenCondition) -> Condition {
 fn convert_like(lk: crate::velesql::LikeCondition) -> Condition {
     if lk.case_insensitive {
         Condition::ILike {
-            field: lk.column,
+            field: field(lk.column),
             pattern: lk.pattern,
         }
     } else {
         Condition::Like {
-            field: lk.column,
+            field: field(lk.column),
             pattern: lk.pattern,
         }
     }
@@ -128,15 +140,15 @@ fn convert_contains(cc: crate::velesql::ContainsCondition) -> Condition {
     let json_values: Vec<Value> = cc.values.into_iter().map(velesql_value_to_json).collect();
     match cc.mode {
         crate::velesql::ContainsMode::Single => Condition::ArrayContains {
-            field: cc.column,
+            field: field(cc.column),
             value: json_values.into_iter().next().unwrap_or(Value::Null),
         },
         crate::velesql::ContainsMode::Any => Condition::ArrayContainsAny {
-            field: cc.column,
+            field: field(cc.column),
             values: json_values,
         },
         crate::velesql::ContainsMode::All => Condition::ArrayContainsAll {
-            field: cc.column,
+            field: field(cc.column),
             values: json_values,
         },
     }
@@ -151,9 +163,13 @@ impl From<crate::velesql::Condition> for Condition {
             crate::velesql::Condition::In(inc) => convert_in(inc),
             crate::velesql::Condition::IsNull(isn) => {
                 if isn.is_null {
-                    Self::IsNull { field: isn.column }
+                    Self::IsNull {
+                        field: field(isn.column),
+                    }
                 } else {
-                    Self::IsNotNull { field: isn.column }
+                    Self::IsNotNull {
+                        field: field(isn.column),
+                    }
                 }
             }
             crate::velesql::Condition::And(left, right) => Self::And {
@@ -172,25 +188,25 @@ impl From<crate::velesql::Condition> for Condition {
             | crate::velesql::Condition::Similarity(_)
             | crate::velesql::Condition::GraphMatch(_) => engine_handled_identity(),
             crate::velesql::Condition::Match(m) => Self::Contains {
-                field: m.column,
+                field: field(m.column),
                 value: m.query,
             },
             crate::velesql::Condition::ContainsText(ct) => Self::Contains {
-                field: ct.column,
+                field: field(ct.column),
                 value: ct.query,
             },
             crate::velesql::Condition::Between(btw) => convert_between(btw),
             crate::velesql::Condition::Like(lk) => convert_like(lk),
             crate::velesql::Condition::Contains(cc) => convert_contains(cc),
             crate::velesql::Condition::GeoDistance(gd) => Self::GeoDistance {
-                field: gd.column,
+                field: field(gd.column),
                 lat: gd.lat,
                 lng: gd.lng,
                 operator: gd.operator,
                 threshold: gd.threshold,
             },
             crate::velesql::Condition::GeoBbox(gb) => Self::GeoBbox {
-                field: gb.column,
+                field: field(gb.column),
                 lat_min: gb.lat_min,
                 lng_min: gb.lng_min,
                 lat_max: gb.lat_max,

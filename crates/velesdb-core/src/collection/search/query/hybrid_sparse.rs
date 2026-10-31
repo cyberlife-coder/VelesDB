@@ -231,8 +231,7 @@ impl Collection {
             match (metadata_filter, &payload_storage) {
                 (Some(filter), Some(storage)) => {
                     let payload = storage.retrieve(id).ok().flatten();
-                    let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
-                    filter.matches(p)
+                    filter.matches_point(id, payload.as_ref())
                 }
                 _ => true,
             }
@@ -388,8 +387,7 @@ impl Collection {
         };
         let filter_fn = |id: u64| {
             let payload = payload_storage.retrieve(id).ok().flatten();
-            let p = payload.as_ref().unwrap_or(&serde_json::Value::Null);
-            filter.matches(p)
+            filter.matches_point(id, payload.as_ref())
         };
         Ok(sparse_search_filtered(
             index,

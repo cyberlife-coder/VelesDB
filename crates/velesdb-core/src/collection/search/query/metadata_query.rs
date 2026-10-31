@@ -94,9 +94,9 @@ impl Collection {
         // work, never the dominant hydration cost.
         'chunks: for chunk in ids.chunks(SCAN_CHUNK) {
             for point in self.get(chunk).into_iter().flatten() {
-                // `matches` only borrows the payload; a missing payload is
-                // treated as `Null` (unchanged semantics).
-                if filter.matches(point.payload.as_ref().unwrap_or(&serde_json::Value::Null)) {
+                // `matches_point` only borrows the payload; a missing payload
+                // is treated as `Null` (unchanged semantics).
+                if filter.matches_point(point.id, point.payload.as_ref()) {
                     results.push(SearchResult::new(point, 1.0));
                     if results.len() >= execution_limit {
                         break 'chunks;
@@ -109,13 +109,14 @@ impl Collection {
 
     /// Extracts an `(field_name, value)` pair from an `Eq` comparison condition.
     ///
-    /// Returns `None` for non-Eq operators or when the value cannot be converted
-    /// to a `JsonValue` suitable for index lookup.
+    /// Returns `None` for non-Eq operators, for `id` (the point id, which no
+    /// payload index holds) or when the value cannot be converted to a
+    /// `JsonValue` suitable for index lookup.
     pub(super) fn extract_index_lookup_condition(
         cond: &crate::velesql::Condition,
     ) -> Option<(String, crate::index::JsonValue)> {
         if let crate::velesql::Condition::Comparison(cmp) = cond {
-            if cmp.operator == crate::velesql::CompareOp::Eq {
+            if cmp.operator == crate::velesql::CompareOp::Eq && cmp.column != "id" {
                 return crate::index::JsonValue::from_ast_value(&cmp.value)
                     .map(|v| (cmp.column.clone(), v));
             }

@@ -22,9 +22,14 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
-        let sort_columns = stmt
-            .grouped_sort_keys()
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
+        // The grouper returns its groups by GROUP BY key already: only an
+        // ORDER BY sorts them again.
+        let sort_columns = if stmt.order_by.is_some() {
+            stmt.grouped_sort_keys()
+                .map_err(|e| crate::error::Error::Query(e.to_string()))?
+        } else {
+            Vec::new()
+        };
 
         // Rows carry no search score here, so the metric direction is moot.
         let mut grouper = Grouper::new(stmt, having, true)?;
@@ -71,7 +76,10 @@ impl Collection {
             ),
             where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
         };
-        let ids = vector_storage.ids();
+        // Rows feed the grouper in id order, so a float SUM or AVG adds its
+        // values in the same order on every run, whatever the storage order.
+        let mut ids = vector_storage.ids();
+        ids.sort_unstable();
         let mut graph_cache = GraphMatchEvalCache::default();
 
         for id in ids {
@@ -87,7 +95,7 @@ impl Collection {
                 };
                 self.runtime_where_passes(id, payload.as_ref(), &mut rt_ctx)?
             } else if let Some(ref f) = filter {
-                Self::payload_passes_filter(f, payload.as_ref())
+                Self::point_passes_filter(f, id, payload.as_ref())
             } else {
                 true
             };

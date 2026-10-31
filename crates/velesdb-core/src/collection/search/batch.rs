@@ -98,10 +98,7 @@ impl Collection {
             .filter_map(|sr| {
                 let payload = payload_storage.retrieve(sr.id).ok().flatten();
                 if let Some(f) = filter {
-                    let matches = match payload.as_ref() {
-                        Some(p) => f.matches(p),
-                        None => f.matches(&serde_json::Value::Null),
-                    };
+                    let matches = f.matches_point(sr.id, payload.as_ref());
                     if !matches {
                         return None;
                     }
@@ -314,7 +311,7 @@ impl Collection {
                     .into_iter()
                     .filter(|(id, _score)| {
                         if let Ok(Some(payload)) = payload_storage.retrieve(*id) {
-                            f.matches(&payload)
+                            f.matches_point(*id, Some(&payload))
                         } else {
                             false
                         }

@@ -58,7 +58,19 @@ impl Filter {
     pub fn matches(&self, payload: &Value) -> bool {
         self.condition.matches(payload)
     }
+
+    /// Evaluates the filter against a point: its payload (`None` reads as
+    /// `null`) and its id, which a `VelesQL` `id` column reads.
+    #[must_use]
+    pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
+        self.condition.matches_point(id, payload)
+    }
 }
+
+/// The field a `VelesQL` `id` column becomes in a filter: the point id, as
+/// `id` reads in every clause of a query, never a payload field named `id`.
+/// A JSON filter's `"id"` field stays a payload field.
+pub(crate) const POINT_ID_FIELD: &str = "@velesql.point_id";
 
 /// A condition for filtering metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]

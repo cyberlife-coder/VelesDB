@@ -147,10 +147,7 @@ impl Collection {
         let filter = crate::filter::Filter::new(crate::filter::Condition::from(metadata_cond));
         filtered
             .into_iter()
-            .filter(|r| match r.point.payload.as_ref() {
-                Some(p) => filter.matches(p),
-                None => filter.matches(&serde_json::Value::Null),
-            })
+            .filter(|r| filter.matches_point(r.point.id, r.point.payload.as_ref()))
             .take(execution_limit)
             .collect()
     }

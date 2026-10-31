@@ -300,7 +300,7 @@ impl Collection {
             // instead of rebuilding it (and cloning the AST) on every row.
             other => {
                 let filter = graph_cache.metadata_filter(other);
-                Ok(Some(Self::payload_passes_filter(filter, ctx.payload)))
+                Ok(Some(Self::point_passes_filter(filter, ctx.id, ctx.payload)))
             }
         }
     }

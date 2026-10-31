@@ -254,9 +254,11 @@ fn apply_post_filter(
     };
     results
         .into_iter()
-        .filter(|r| match r.point.payload.as_ref() {
-            Some(p) => filter.matches(p),
-            None => false,
+        .filter(|r| {
+            r.point
+                .payload
+                .as_ref()
+                .is_some_and(|p| filter.matches_point(r.point.id, Some(p)))
         })
         .take(k)
         .collect()

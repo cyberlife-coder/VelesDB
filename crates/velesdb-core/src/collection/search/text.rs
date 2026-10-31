@@ -174,7 +174,7 @@ impl Collection {
 
                 // Apply filter - if no payload, filter fails
                 let payload_ref = payload.as_ref()?;
-                if !filter.matches(payload_ref) {
+                if !filter.matches_point(id, Some(payload_ref)) {
                     return None;
                 }
 
@@ -423,7 +423,7 @@ impl Collection {
                     .point
                     .payload
                     .as_ref()
-                    .is_some_and(|payload| filter.matches(payload))
+                    .is_some_and(|payload| filter.matches_point(result.point.id, Some(payload)))
             },
             k,
         ))

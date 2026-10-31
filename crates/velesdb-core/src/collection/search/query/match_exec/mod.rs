@@ -83,15 +83,16 @@ impl WhereFilterMemo {
     pub(in crate::collection::search::query) fn matches_with(
         &self,
         key: (usize, u8),
+        id: u64,
         payload: &serde_json::Value,
         build: impl FnOnce() -> crate::error::Result<crate::filter::Condition>,
     ) -> crate::error::Result<bool> {
         let mut cache = self.cache.borrow_mut();
         if let Some((_, cond)) = cache.iter().find(|(k, _)| *k == key) {
-            return Ok(cond.matches(payload));
+            return Ok(cond.matches_point(id, Some(payload)));
         }
         let cond = build()?;
-        let result = cond.matches(payload);
+        let result = cond.matches_point(id, Some(payload));
         cache.push((key, cond));
         Ok(result)
     }

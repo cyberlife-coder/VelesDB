@@ -45,14 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a vector `GROUP BY` query.
 - **BREAKING (behavior) — HAVING fails with `V018` where it cannot be
   evaluated**: without `GROUP BY` (it filtered the single implicit group),
-  or with a threshold that is not a number (it matched no group). `HAVING a
+  or with a threshold that is neither a number nor `NULL` (it matched no
+  group). A `NULL` threshold, a parameter bound to `null` included, matches
+  no group and is no error. `HAVING a
   OR b AND c` reads as `a OR (b AND c)`, as in SQL.
 - **BREAKING (behavior) — SQL `GROUP BY` results no longer depend on scan
   order**, as in core: without ORDER BY groups come by `GROUP BY` key
   ascending (was first-seen order), groups an ORDER BY ties come by key,
   `FIRST(col)` reads the row with the smallest point id (the most similar
-  row, smallest id on a tie, in a vector `GROUP BY`), and `1` and `1.0` are
-  one group.
+  row, smallest id on a tie, in a vector `GROUP BY`), `1` and `1.0` are
+  one group, and rows are aggregated in id order, so a float `SUM` matches
+  core's.
 - **BREAKING (behavior) — a SQL `GROUP BY` holds at most `WITH (max_groups =
   N)` groups, 10,000 by default**, as in core; past it the query fails with
   `Too many groups (limit: N)`.

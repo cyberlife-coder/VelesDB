@@ -127,10 +127,12 @@ impl AggregateColumns {
 /// HAVING verdict are computed one way, whatever order the rows arrive in.
 /// One rule each:
 ///
-/// - **Group key.** A GROUP BY column reads as a WHERE column does: `id` is
+/// - **Group key.** A GROUP BY column reads as every clause reads it: `id` is
 ///   the point id, any other name a payload path (`meta.lang`). A row without
-///   it belongs to the NULL group. Numbers are one key by value: `1` and
-///   `1.0`, `0.0` and `-0.0`, group together.
+///   it belongs to the NULL group. Numbers are one key by exact value, the
+///   equality of [`compare_json_values`]: `1` and `1.0`, `0.0` and `-0.0`,
+///   `2^53` as an integer and as a float, group together. Unlike a WHERE
+///   `=`, which allows for float rounding, no tolerance applies.
 /// - **Aggregates.** Every running aggregate accumulates through
 ///   [`Aggregator`]: `COUNT(col)` counts non-null values, `SUM`, `AVG`, `MIN`
 ///   and `MAX` read numeric ones. An aggregate reads `id` as the point id too.
@@ -146,7 +148,8 @@ impl AggregateColumns {
 ///   `MAX(score)` (vector GROUP BY only).
 /// - **Order.** A vector GROUP BY's groups come best score first, ties by id,
 ///   as a search ranks; other groups by GROUP BY key, ascending, in ORDER BY's
-///   value order ([`compare_json_values`]).
+///   value order ([`compare_json_values`]), then by id where keys compare
+///   equal (two arrays do).
 /// - **Budget.** A SQL GROUP BY holds at most `WITH (max_groups = N)` groups,
 ///   10 000 by default and 1 000 000 at most; a vector GROUP BY groups search
 ///   results, already bounded by its LIMIT.
@@ -165,8 +168,6 @@ pub struct Grouper<'s> {
     /// collision.
     index: HashMap<u64, Vec<usize>>,
     groups: Vec<Group>,
-    /// The key of the row being pushed, reused from row to row.
-    key: Vec<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -224,7 +225,6 @@ impl<'s> Grouper<'s> {
             },
             index: HashMap::new(),
             groups: Vec::new(),
-            key: Vec::new(),
         })
     }
 
@@ -236,17 +236,24 @@ impl<'s> Grouper<'s> {
     /// a group past the statement's group budget (`WITH (max_groups = N)`).
     pub fn push(&mut self, row: GroupInput<'_>) -> crate::error::Result<()> {
         let vector = self.columns.vector;
-        self.key.clear();
-        self.key.extend(self.group_columns.iter().map(|column| {
-            read(&row, column, vector).map_or(serde_json::Value::Null, |value| normalise(&value))
-        }));
-        let hash = hash_key(&self.key);
+        // The key is hashed and compared where the row holds it: a value is
+        // cloned only when the row opens a group.
+        let key_value = |column: &String| read(&row, column, vector);
+        let mut hasher = FxHasher::default();
+        for column in self.group_columns {
+            hash_key_value(key_value(column).as_deref(), &mut hasher);
+        }
+        let hash = hasher.finish();
         let groups = &self.groups;
-        let key = &self.key;
-        let found = self
-            .index
-            .get(&hash)
-            .and_then(|slots| slots.iter().copied().find(|&slot| groups[slot].key == *key));
+        let found = self.index.get(&hash).and_then(|slots| {
+            slots.iter().copied().find(|&slot| {
+                groups[slot]
+                    .key
+                    .iter()
+                    .zip(self.group_columns)
+                    .all(|(stored, column)| same_key(stored, key_value(column).as_deref()))
+            })
+        });
         let slot = if let Some(slot) = found {
             slot
         } else {
@@ -257,9 +264,13 @@ impl<'s> Grouper<'s> {
                 )));
             }
             let first_values = self.first_values(&row);
+            let key = self
+                .group_columns
+                .iter()
+                .map(|column| key_value(column).map_or(serde_json::Value::Null, normalise))
+                .collect();
             let slot = self.groups.len();
-            self.groups
-                .push(Group::new(self.key.clone(), &row, first_values));
+            self.groups.push(Group::new(key, &row, first_values));
             self.index.entry(hash).or_default().push(slot);
             slot
         };
@@ -274,32 +285,34 @@ impl<'s> Grouper<'s> {
         if self.groups.is_empty() && self.group_columns.is_empty() {
             self.groups.push(Group::empty(self.first_columns.len()));
         }
-        let mut groups = std::mem::take(&mut self.groups);
+        // HAVING first, so only the groups kept are sorted.
+        let mut kept: Vec<(Group, AggregateResult)> = std::mem::take(&mut self.groups)
+            .into_iter()
+            .filter_map(|mut group| {
+                let result = std::mem::take(&mut group.aggregator).finalize();
+                self.having
+                    .is_none_or(|having| having.accepts(&result))
+                    .then_some((group, result))
+            })
+            .collect();
         if self.columns.vector {
-            let higher_is_better = self.higher_is_better;
-            groups.sort_by(|a, b| {
-                rank_scores(
-                    a.score(self.average_score),
-                    b.score(self.average_score),
-                    higher_is_better,
-                )
-                .then(a.best_id.cmp(&b.best_id))
+            let (average, higher_is_better) = (self.average_score, self.higher_is_better);
+            kept.sort_by(|(a, _), (b, _)| {
+                rank_scores(a.score(average), b.score(average), higher_is_better)
+                    .then(a.best_id.cmp(&b.best_id))
             });
         } else {
-            groups.sort_by(|a, b| compare_keys(&a.key, &b.key));
+            kept.sort_by(|(a, _), (b, _)| {
+                compare_keys(&a.key, &b.key).then(a.best_id.cmp(&b.best_id))
+            });
         }
-        groups
-            .into_iter()
-            .filter_map(|group| self.output(group))
+        kept.into_iter()
+            .map(|(group, result)| self.output(group, &result))
             .collect()
     }
 
-    fn output(&self, group: Group) -> Option<GroupOutput> {
+    fn output(&self, group: Group, result: &AggregateResult) -> GroupOutput {
         let score = group.score(self.average_score);
-        let result = group.aggregator.finalize();
-        if self.having.is_some_and(|having| !having.accepts(&result)) {
-            return None;
-        }
         let mut row = serde_json::Map::new();
         for (column, value) in self.group_columns.iter().zip(group.key) {
             row.insert(column.clone(), value);
@@ -313,11 +326,11 @@ impl<'s> Grouper<'s> {
             };
             row.insert(agg.result_key(), value);
         }
-        Some(GroupOutput {
+        GroupOutput {
             id: group.best_id,
             score,
             row: serde_json::Value::Object(row),
-        })
+        }
     }
 
     fn accumulate(&mut self, slot: usize, row: &GroupInput<'_>) {
@@ -417,29 +430,69 @@ fn read<'r>(
     }
 }
 
-/// A group key value with one representation per number: an integral value
-/// that fits `i64` as an integer (`1.0` -> `1`, `-0.0` -> `0`), any other
-/// float as itself. Every other value is kept.
-fn normalise(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Number(n) if !n.is_i64() && !n.is_u64() => {
-            let f = n.as_f64().unwrap_or(0.0);
-            let integral = matches!(f.fract().classify(), std::num::FpCategory::Zero);
-            if integral && f.abs() < EXACT_F64_INTEGER_LIMIT {
-                // Reason: `f` is integral and below 2^53, so the cast is exact.
-                #[allow(clippy::cast_possible_truncation)]
-                let as_int = f as i64;
-                serde_json::json!(as_int)
-            } else {
-                value.clone()
-            }
+/// A number as a group key: an integer — an integral float that an `i64` or
+/// `u64` holds included (`1.0`, `-0.0`, `2^53`) — or any other float by its
+/// bits. Two numbers are one key exactly when [`compare_json_values`] finds
+/// them equal: no other float equals an integer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum NumberKey {
+    Integer(i128),
+    Float(u64),
+}
+
+/// 2^64: an integral float below it, and at least -2^63, is an `i64` or a
+/// `u64`.
+const U64_RANGE_END: f64 = 18_446_744_073_709_551_616.0;
+const I64_RANGE_START: f64 = -9_223_372_036_854_775_808.0;
+
+impl NumberKey {
+    fn of(n: &serde_json::Number) -> Self {
+        if let Some(integer) = super::json_order::integer(n) {
+            return Self::Integer(integer);
         }
-        _ => value.clone(),
+        let f = n.as_f64().unwrap_or(0.0);
+        let integral = matches!(f.fract().classify(), std::num::FpCategory::Zero);
+        if integral && (I64_RANGE_START..U64_RANGE_END).contains(&f) {
+            // Reason: `f` is integral and within the i64/u64 range: exact.
+            #[allow(clippy::cast_possible_truncation)]
+            Self::Integer(f as i128)
+        } else {
+            Self::Float(f.to_bits())
+        }
+    }
+
+    /// The number this key stands for, one representation per key.
+    fn to_json(self, original: &serde_json::Number) -> serde_json::Value {
+        match self {
+            Self::Integer(i) => i64::try_from(i)
+                .map(serde_json::Value::from)
+                .or_else(|_| u64::try_from(i).map(serde_json::Value::from))
+                .unwrap_or_else(|_| serde_json::Value::Number(original.clone())),
+            Self::Float(_) => serde_json::Value::Number(original.clone()),
+        }
     }
 }
 
-/// 2^53: every integral `f64` below it is exactly an `i64`.
-const EXACT_F64_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
+/// A group key value with one representation per number ([`NumberKey`]):
+/// `1.0` is stored as `1`, `-0.0` as `0`. Every other value is kept.
+fn normalise(value: Cow<'_, serde_json::Value>) -> serde_json::Value {
+    match value.as_ref() {
+        serde_json::Value::Number(n) => NumberKey::of(n).to_json(n),
+        _ => value.into_owned(),
+    }
+}
+
+/// Whether a row's key value is the stored (normalised) one.
+fn same_key(stored: &serde_json::Value, value: Option<&serde_json::Value>) -> bool {
+    match (stored, value) {
+        (serde_json::Value::Null, None) => true,
+        (serde_json::Value::Number(a), Some(serde_json::Value::Number(b))) => {
+            NumberKey::of(a) == NumberKey::of(b)
+        }
+        (stored, Some(value)) => stored == value,
+        (_, None) => false,
+    }
+}
 
 /// Orders group keys column by column in ORDER BY's value order.
 fn compare_keys(a: &[serde_json::Value], b: &[serde_json::Value]) -> std::cmp::Ordering {
@@ -475,26 +528,48 @@ impl HavingClause {
         any || all
     }
 
-    /// `V018` unless every threshold is a number. Before execution
-    /// (`bound == false`) a `$parameter` or a scalar subquery passes too:
-    /// both are replaced by their value before the query runs, and checked
-    /// again then, by [`Grouper::new`].
+    /// `V018` unless every threshold is a number or `NULL`, which, SQL's
+    /// UNKNOWN, matches no group. Before execution (`bound == false`) a
+    /// `$parameter` or a scalar subquery passes too: both are replaced by
+    /// their value before the query runs, and checked again then, by
+    /// [`Grouper::new`].
     pub(crate) fn check_thresholds(&self, bound: bool) -> Result<(), ValidationError> {
         let accepted = |value: &Value| match value {
-            Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_) => true,
+            Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_) | Value::Null => true,
             Value::Parameter(_) | Value::Subquery(_) => !bound,
             _ => false,
         };
         match self.conditions.iter().find(|c| !accepted(&c.value)) {
-            Some(condition) => Err(ValidationError::new(
-                ValidationErrorKind::InvalidHaving,
-                None,
-                format!("{:?}", condition.value),
-                "a HAVING threshold must be a number: an aggregate compared with \
-                 anything else matches no group",
-            )),
+            Some(condition) => {
+                let threshold = threshold_text(&condition.value);
+                Err(ValidationError::new(
+                    ValidationErrorKind::InvalidHaving,
+                    None,
+                    threshold.clone(),
+                    format!(
+                        "HAVING compares an aggregate with {threshold}: a threshold must be \
+                         a number (or NULL, which matches no group)"
+                    ),
+                ))
+            }
             None => Ok(()),
         }
+    }
+}
+
+/// A threshold as the query states it: a literal as JSON (`"many"`,
+/// `true`), anything else as VelesQL writes it.
+fn threshold_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => serde_json::Value::String(s.clone()).to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::UnsignedInteger(u) => u.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Null => "null".to_string(),
+        Value::Parameter(name) => format!("${name}"),
+        Value::Temporal(_) => "a date or time".to_string(),
+        Value::Subquery(_) => "a subquery".to_string(),
     }
 }
 
@@ -574,18 +649,10 @@ fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
     }
 }
 
-/// The hash of a group key. Numbers hash by value, which [`normalise`] made
-/// one representation per number.
-fn hash_key(key: &[serde_json::Value]) -> u64 {
-    let mut hasher = FxHasher::default();
-    for value in key {
-        hash_value(value, &mut hasher);
-    }
-    hasher.finish()
-}
-
-fn hash_value(value: &serde_json::Value, hasher: &mut FxHasher) {
-    match value {
+/// Hashes a row's key value, a missing one as `null`, numbers by
+/// [`NumberKey`], so values [`same_key`] finds equal hash alike.
+fn hash_key_value(value: Option<&serde_json::Value>, hasher: &mut FxHasher) {
+    match value.unwrap_or(&serde_json::Value::Null) {
         serde_json::Value::Null => 0u8.hash(hasher),
         serde_json::Value::Bool(b) => {
             1u8.hash(hasher);
@@ -593,17 +660,15 @@ fn hash_value(value: &serde_json::Value, hasher: &mut FxHasher) {
         }
         serde_json::Value::Number(n) => {
             2u8.hash(hasher);
-            if let Some(f) = n.as_f64() {
-                f.to_bits().hash(hasher);
-            }
+            NumberKey::of(n).hash(hasher);
         }
         serde_json::Value::String(s) => {
             3u8.hash(hasher);
             s.hash(hasher);
         }
-        _ => {
+        other => {
             4u8.hash(hasher);
-            value.to_string().hash(hasher);
+            other.to_string().hash(hasher);
         }
     }
 }

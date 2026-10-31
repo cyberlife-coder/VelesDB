@@ -197,7 +197,7 @@ mod tests {
         }
         // A sort over them never panics and comes out ordered.
         let mut sorted = values.clone();
-        sorted.sort_by(|a, b| cmp(a, b));
+        sorted.sort_by(cmp);
         assert!(sorted
             .windows(2)
             .all(|w| cmp(&w[0], &w[1]) != Ordering::Greater));

@@ -128,8 +128,8 @@ fn or_bitmap(state: &MirrorState, conditions: &[Condition]) -> Option<Eval> {
 /// Returns `None` when the field must fall back to the JSON filter
 /// (dotted path, capped-out field, or unexpected column kind).
 fn classify_field(state: &MirrorState, field: &str) -> Option<FieldCol> {
-    if field.contains('.') {
-        return None; // nested paths are not mirrored
+    if field.contains('.') || field == crate::filter::POINT_ID_FIELD {
+        return None; // nested paths and the point id are not mirrored
     }
     match state.store.get_column(field) {
         Some(TypedColumn::Float(_)) => Some(FieldCol::Float),

@@ -76,8 +76,9 @@ impl Collection {
     ///
     /// Returns an error when the query fails validation (`V018` for HAVING
     /// without GROUP BY among them), when SELECT does not contain
-    /// aggregations, or when underlying scan/filter/aggregation operations
-    /// fail.
+    /// aggregations, for a vector GROUP BY (`NEAR` + `GROUP BY`, a search
+    /// that `execute_query` runs), or when underlying scan/filter/aggregation
+    /// operations fail.
     pub fn execute_aggregate(
         &self,
         query: &Query,
@@ -104,6 +105,17 @@ impl Collection {
                 ))
             }
         };
+
+        // A vector GROUP BY groups the results of its search, which its
+        // LIMIT bounds; run here it would group every point, with no score
+        // and no group budget.
+        if stmt.is_vector_group_by() {
+            return Err(crate::error::Error::Query(
+                "a vector GROUP BY (NEAR + GROUP BY) groups search results: run it \
+                 with execute_query"
+                    .to_string(),
+            ));
+        }
 
         if stmt.group_by.is_some() {
             // HAVING thresholds are not part of the WHERE condition tree, so
@@ -156,7 +168,10 @@ impl Collection {
             ),
             where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
         };
-        let ids: Vec<u64> = vector_storage.ids();
+        // Id order, so a float SUM or AVG adds its values in the same order
+        // on every run, whatever the storage order.
+        let mut ids: Vec<u64> = vector_storage.ids();
+        ids.sort_unstable();
 
         if ids.len() >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
             Ok(Self::aggregate_parallel(
@@ -180,15 +195,14 @@ impl Collection {
         }
     }
 
-    /// Returns true if the payload passes the static filter.
-    pub(super) fn payload_passes_filter(
+    /// Returns true if the point — its id and payload — passes the static
+    /// filter; a `VelesQL` `id` column reads the point id.
+    pub(super) fn point_passes_filter(
         filter: &crate::filter::Filter,
+        id: u64,
         payload: Option<&serde_json::Value>,
     ) -> bool {
-        match payload {
-            Some(p) => filter.matches(p),
-            None => filter.matches(&serde_json::Value::Null),
-        }
+        filter.matches_point(id, payload)
     }
 
     /// Parallel aggregation that streams payloads per chunk (#901).
@@ -209,7 +223,7 @@ impl Collection {
                 for &id in chunk {
                     let payload = payload_storage.retrieve(id).ok().flatten();
                     if let Some(f) = filter {
-                        if !Self::payload_passes_filter(f, payload.as_ref()) {
+                        if !Self::point_passes_filter(f, id, payload.as_ref()) {
                             continue;
                         }
                     }
@@ -273,7 +287,7 @@ impl Collection {
             };
             self.runtime_where_passes(id, payload, &mut where_ctx)
         } else if let Some(f) = ctx.filter {
-            Ok(Self::payload_passes_filter(f, payload))
+            Ok(Self::point_passes_filter(f, id, payload))
         } else {
             Ok(true)
         }

@@ -466,10 +466,7 @@ impl Collection {
             if is_payload_expired(payload.as_ref(), now_secs) {
                 continue;
             }
-            let matches = match payload {
-                Some(ref p) => filter.matches(p),
-                None => filter.matches(&serde_json::Value::Null),
-            };
+            let matches = filter.matches_point(id, payload.as_ref());
             if matches {
                 let vector = vector_storage
                     .retrieve(id)

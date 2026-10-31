@@ -369,13 +369,16 @@ impl Collection {
             .and_then(column_alias)
             .is_some_and(|a| alias_in(ctx.bindings)(a));
         let key = (std::ptr::from_ref(condition) as usize, u8::from(stripped));
-        ctx.guards.where_filters.matches_with(key, &payload, || {
-            let rewritten = rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
-            // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
-            // filter conversion, which would otherwise turn them into NULL.
-            let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
-            Ok(resolved.into())
-        })
+        ctx.guards
+            .where_filters
+            .matches_with(key, target_id, &payload, || {
+                let rewritten =
+                    rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
+                // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
+                // filter conversion, which would otherwise turn them into NULL.
+                let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+                Ok(resolved.into())
+            })
     }
 
     /// ANY-element fold over a resolved edge-id list: true when at least one
@@ -422,21 +425,23 @@ impl Collection {
             std::ptr::from_ref(condition) as usize,
             2 | u8::from(stripped),
         );
-        ctx.guards.where_filters.matches_with(key, &payload, || {
-            // Strip the alias against the FULL edge-alias namespace (scalar
-            // AND variable-length). Using only the scalar map here left
-            // var-length columns like `r.w` unstripped, so the filter engine
-            // resolved them as nested paths and every IN/BETWEEN/LIKE/IS
-            // NULL on a var-length alias silently matched nothing (review
-            // 2026-06-11 finding 1).
-            let rewritten =
-                rewrite_condition_aliases(condition.clone(), &|alias| ctx.is_edge_alias(alias));
-            // Resolve parameter placeholders before the filter conversion,
-            // which would otherwise turn them into NULL (same hardening as
-            // the node path).
-            let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
-            Ok(resolved.into())
-        })
+        ctx.guards
+            .where_filters
+            .matches_with(key, edge_id, &payload, || {
+                // Strip the alias against the FULL edge-alias namespace (scalar
+                // AND variable-length). Using only the scalar map here left
+                // var-length columns like `r.w` unstripped, so the filter engine
+                // resolved them as nested paths and every IN/BETWEEN/LIKE/IS
+                // NULL on a var-length alias silently matched nothing (review
+                // 2026-06-11 finding 1).
+                let rewritten =
+                    rewrite_condition_aliases(condition.clone(), &|alias| ctx.is_edge_alias(alias));
+                // Resolve parameter placeholders before the filter conversion,
+                // which would otherwise turn them into NULL (same hardening as
+                // the node path).
+                let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+                Ok(resolved.into())
+            })
     }
 
     /// Evaluates a similarity condition against a node's vector (EPIC-052 US-007).

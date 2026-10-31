@@ -1,8 +1,18 @@
 //! Condition matching logic and helper functions.
 
-use super::Condition;
+use std::borrow::Cow;
+
+use super::{Condition, POINT_ID_FIELD};
 use crate::metrics::global_guardrails_metrics;
 use serde_json::Value;
+
+/// What a condition reads: a point's payload and, when the caller knows it,
+/// its id, which [`POINT_ID_FIELD`] names.
+#[derive(Clone, Copy)]
+struct Record<'a> {
+    id: Option<u64>,
+    payload: &'a Value,
+}
 
 const LIKE_MAX_PATTERN_BYTES: usize = 4096;
 const LIKE_MAX_DYN_OPS: usize = 2_000_000;
@@ -79,8 +89,13 @@ fn in_list_matches(field_val: &Value, values: &[Value]) -> bool {
 }
 
 /// Evaluates array-level conditions (single, any, all).
-fn match_array_condition(payload: &Value, field: &str, values: &[Value], mode: ArrayMode) -> bool {
-    get_field(payload, field).is_some_and(|v| match v {
+fn match_array_condition(
+    record: Record<'_>,
+    field: &str,
+    values: &[Value],
+    mode: ArrayMode,
+) -> bool {
+    get_field(record, field).is_some_and(|v| match v.as_ref() {
         Value::Array(arr) => match mode {
             ArrayMode::Single => values
                 .first()
@@ -106,15 +121,15 @@ enum ArrayMode {
 
 /// Evaluates geospatial conditions (distance, bounding box).
 fn match_geo_distance(
-    payload: &Value,
+    record: Record<'_>,
     field: &str,
     lat: f64,
     lng: f64,
     operator: crate::velesql::CompareOp,
     threshold: f64,
 ) -> bool {
-    get_field(payload, field).is_some_and(|v| {
-        extract_geo_point(v).is_some_and(|(plat, plng)| {
+    get_field(record, field).is_some_and(|v| {
+        extract_geo_point(&v).is_some_and(|(plat, plng)| {
             let dist = crate::geo_distance::great_circle_distance_m(plat, plng, lat, lng);
             crate::geo_distance::distance_satisfies(dist, operator.into(), threshold)
         })
@@ -123,15 +138,15 @@ fn match_geo_distance(
 
 /// Evaluates a geospatial bounding box check.
 fn match_geo_bbox(
-    payload: &Value,
+    record: Record<'_>,
     field: &str,
     lat_min: f64,
     lng_min: f64,
     lat_max: f64,
     lng_max: f64,
 ) -> bool {
-    get_field(payload, field).is_some_and(|v| {
-        extract_geo_point(v).is_some_and(|(plat, plng)| {
+    get_field(record, field).is_some_and(|v| {
+        extract_geo_point(&v).is_some_and(|(plat, plng)| {
             plat >= lat_min && plat <= lat_max && plng >= lng_min && plng <= lng_max
         })
     })
@@ -145,49 +160,64 @@ fn extract_geo_point(v: &Value) -> Option<(f64, f64)> {
 }
 
 impl Condition {
-    /// Evaluates the condition against a payload.
+    /// Evaluates the condition against a payload. A `VelesQL` `id` column
+    /// reads nothing here: no point id is known.
     #[must_use]
     pub fn matches(&self, payload: &Value) -> bool {
+        self.matches_record(Record { id: None, payload })
+    }
+
+    /// Evaluates the condition against a point: its payload (`None` reads
+    /// as `null`) and its id, which a `VelesQL` `id` column reads.
+    #[must_use]
+    pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
+        self.matches_record(Record {
+            id: Some(id),
+            payload: payload.unwrap_or(&Value::Null),
+        })
+    }
+
+    fn matches_record(&self, record: Record<'_>) -> bool {
         match self {
             Self::Eq { field, value } => {
-                get_field(payload, field).is_some_and(|v| values_equal(v, value))
+                get_field(record, field).is_some_and(|v| values_equal(&v, value))
             }
             Self::Neq { field, value } => {
-                get_field(payload, field).is_none_or(|v| !values_equal(v, value))
+                get_field(record, field).is_none_or(|v| !values_equal(&v, value))
             }
-            Self::Gt { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_gt)),
-            Self::Gte { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_ge)),
-            Self::Lt { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_lt)),
-            Self::Lte { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_le)),
+            Self::Gt { field, value } => get_field(record, field)
+                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_gt)),
+            Self::Gte { field, value } => get_field(record, field)
+                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_ge)),
+            Self::Lt { field, value } => get_field(record, field)
+                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_lt)),
+            Self::Lte { field, value } => get_field(record, field)
+                .is_some_and(|v| compare_values(&v, value).is_some_and(std::cmp::Ordering::is_le)),
             Self::In { field, values } => {
-                get_field(payload, field).is_some_and(|v| in_list_matches(v, values))
+                get_field(record, field).is_some_and(|v| in_list_matches(&v, values))
             }
-            Self::Contains { field, value } => get_field(payload, field)
+            Self::Contains { field, value } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| s.contains(value.as_str()))),
-            Self::IsNull { field } => get_field(payload, field).is_none_or(Value::is_null),
-            Self::IsNotNull { field } => get_field(payload, field).is_some_and(|v| !v.is_null()),
-            Self::And { conditions } => conditions.iter().all(|c| c.matches(payload)),
-            Self::Or { conditions } => conditions.iter().any(|c| c.matches(payload)),
-            Self::Not { condition } => !condition.matches(payload),
-            Self::Like { field, pattern } => get_field(payload, field)
+            Self::IsNull { field } => get_field(record, field).is_none_or(|v| v.is_null()),
+            Self::IsNotNull { field } => get_field(record, field).is_some_and(|v| !v.is_null()),
+            Self::And { conditions } => conditions.iter().all(|c| c.matches_record(record)),
+            Self::Or { conditions } => conditions.iter().any(|c| c.matches_record(record)),
+            Self::Not { condition } => !condition.matches_record(record),
+            Self::Like { field, pattern } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
-            Self::ILike { field, pattern } => get_field(payload, field)
+            Self::ILike { field, pattern } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
             Self::ArrayContains { field, value } => match_array_condition(
-                payload,
+                record,
                 field,
                 std::slice::from_ref(value),
                 ArrayMode::Single,
             ),
             Self::ArrayContainsAny { field, values } => {
-                match_array_condition(payload, field, values, ArrayMode::Any)
+                match_array_condition(record, field, values, ArrayMode::Any)
             }
             Self::ArrayContainsAll { field, values } => {
-                match_array_condition(payload, field, values, ArrayMode::All)
+                match_array_condition(record, field, values, ArrayMode::All)
             }
             Self::GeoDistance {
                 field,
@@ -195,25 +225,29 @@ impl Condition {
                 lng,
                 operator,
                 threshold,
-            } => match_geo_distance(payload, field, *lat, *lng, *operator, *threshold),
+            } => match_geo_distance(record, field, *lat, *lng, *operator, *threshold),
             Self::GeoBbox {
                 field,
                 lat_min,
                 lng_min,
                 lat_max,
                 lng_max,
-            } => match_geo_bbox(payload, field, *lat_min, *lng_min, *lat_max, *lng_max),
+            } => match_geo_bbox(record, field, *lat_min, *lng_min, *lat_max, *lng_max),
         }
     }
 }
 
-/// Gets a field from a JSON payload, supporting dot notation for nested fields.
-fn get_field<'a>(payload: &'a Value, field: &str) -> Option<&'a Value> {
-    let mut current = payload;
+/// Gets a field of a record: the point id for [`POINT_ID_FIELD`], else a
+/// payload field, supporting dot notation for nested fields.
+fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
+    if field == POINT_ID_FIELD {
+        return record.id.map(|id| Cow::Owned(Value::from(id)));
+    }
+    let mut current = record.payload;
     for part in field.split('.') {
         current = current.get(part)?;
     }
-    Some(current)
+    Some(Cow::Borrowed(current))
 }
 
 /// Compares two JSON values for equality.

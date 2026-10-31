@@ -3,8 +3,9 @@
 //! An aggregate query outputs one field per GROUP BY column and one per SELECT
 //! aggregate, the latter under [`AggregateFunction::result_key`] — its alias or
 //! default name — in every engine. Three rules hold over those fields and the
-//! HAVING that filters them, enforced at validation by [`validate_grouped_rows`] so core and the WASM executor
-//! refuse the same queries:
+//! HAVING that filters them, enforced at validation by
+//! [`validate_grouped_rows`] so core and the WASM executor refuse the same
+//! queries:
 //!
 //! - **Names are distinct (`V017`).** A field written twice keeps only the
 //!   later value: `GROUP BY category, count` beside `COUNT(*)` returned the

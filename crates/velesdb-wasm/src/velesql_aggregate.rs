@@ -67,7 +67,11 @@ pub(crate) fn apply(
         .transpose()?;
     let mut grouper =
         Grouper::new(stmt, having.as_ref(), higher_is_better).map_err(|e| e.to_string())?;
-    for &(id, score, payload) in rows {
+    // Id order, as core feeds its grouper: a float SUM or AVG then adds its
+    // values in the same order in both engines.
+    let mut ordered: Vec<&ScannedRow<'_>> = rows.iter().collect();
+    ordered.sort_unstable_by_key(|row| row.0);
+    for &&(id, score, payload) in &ordered {
         grouper
             .push(GroupInput::new(id, score, payload))
             .map_err(|e| e.to_string())?;
@@ -81,8 +85,9 @@ pub(crate) fn apply(
         .map(|group: GroupOutput| group.row)
         .collect();
     // Without GROUP BY the aggregates collapse into one row: there is nothing
-    // to order, and core ignores that ORDER BY too.
-    if stmt.group_by.is_some() {
+    // to order, and core ignores that ORDER BY too. Without ORDER BY the
+    // grouper's order (GROUP BY key ascending) stands.
+    if stmt.group_by.is_some() && stmt.order_by.is_some() {
         sort_aggregate_rows(&mut json_rows, stmt)?;
     }
     json_rows
@@ -137,8 +142,9 @@ fn threshold(value: &Value, params: &Params) -> Result<Value, String> {
 
 /// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved to row
 /// fields by core's `SelectStatement::grouped_sort_keys` — the resolution
-/// core's own aggregate executor sorts through, GROUP BY columns last, so no
-/// two groups tie.
+/// core's own aggregate executor sorts through, GROUP BY columns last. The
+/// sort is stable: groups tied on every key (two array keys) keep the
+/// grouper's order, by best row id, as in core.
 ///
 /// # Errors
 ///

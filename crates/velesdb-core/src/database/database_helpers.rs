@@ -163,16 +163,10 @@ impl Database {
         }
     }
 
-    /// Evaluates a filter against a point's payload with `id` injected.
+    /// Evaluates a filter against a point: a `VelesQL` `id` column reads its
+    /// id, as in every clause.
     fn point_matches_filter(point: &crate::Point, filter: &crate::Filter) -> bool {
-        let mut obj = point
-            .payload
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        obj.insert("id".to_string(), serde_json::json!(point.id));
-        filter.matches(&serde_json::Value::Object(obj))
+        filter.matches_point(point.id, point.payload.as_ref())
     }
 
     /// Combines multiple `velesql::Condition`s into a single AND tree.
