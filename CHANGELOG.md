@@ -372,9 +372,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VectorCollection::is_delta_active` (always `false`), Python's
   `Collection.is_delta_active()`, and the stream ingester's and the NDJSON
   stream route's copies into it. `DeltaBuffer` stays, as the deferred
-  indexer's write buffer.
+  indexer's write buffer, without the activation state machine it kept for
+  rebuilds: `activate`, `try_activate`, `deactivate_and_drain`,
+  `is_active`, `is_searchable`, `stats` and `ActivateError` are removed, and
+  it accepts every write.
   *Migration*: drop the calls; `is_delta_active()` returned `false` on every
-  collection.
+  collection. A `DeltaBuffer` you build yourself needs no activation; use
+  `len`/`is_empty` for its size.
 - **The edge property index (`EdgePropertyIndex`).** Every edge write fed it
   (and cloned the edge's properties to do so), every open rebuilt it from the
   edge snapshot and again from the edge WAL replay, and nothing ever read it

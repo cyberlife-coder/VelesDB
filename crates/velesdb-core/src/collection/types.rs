@@ -9,7 +9,6 @@ use crate::collection::graph::{
 };
 use crate::collection::order_by_advisor::OrderByIndexAdvisor;
 use crate::collection::stats::CollectionStats;
-#[cfg(feature = "persistence")]
 use crate::collection::streaming::AsyncIndexBuilder;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::{BackpressureError, DeferredIndexer, StreamIngester};

@@ -58,6 +58,4 @@ impl PendingReopen {
 #[cfg(test)]
 mod async_index_builder_tests;
 #[cfg(all(test, feature = "persistence"))]
-mod delta_tests;
-#[cfg(all(test, feature = "persistence"))]
 mod ingester_tests;

@@ -203,13 +203,12 @@ impl DeferredIndexer {
     /// The `enabled` check and `len() >= threshold` read are not atomic with
     /// the push. This is benign: a concurrent drain may reset the count
     /// between push and the threshold check, causing a missed merge signal.
-    /// The next push will re-trigger. A merge never deactivates the buffer,
-    /// so a push racing it is kept.
+    /// The next push will re-trigger. A push racing a merge is kept: a merge
+    /// retires only the entries it copied.
     pub fn push(&self, id: u64, vector: Vec<f32>) -> bool {
         if !self.config.enabled {
             return false;
         }
-        self.ensure_buffer_active();
         self.buffer.push(id, vector);
         self.note_push_time();
         self.buffer.len() >= self.config.merge_threshold || self.buffer_expired()
@@ -223,7 +222,6 @@ impl DeferredIndexer {
         if !self.config.enabled {
             return false;
         }
-        self.ensure_buffer_active();
         self.buffer.extend(entries);
         self.note_push_time();
         self.buffer.len() >= self.config.merge_threshold || self.buffer_expired()
@@ -271,18 +269,7 @@ impl DeferredIndexer {
     /// searchable data.
     #[must_use]
     pub fn is_searchable(&self) -> bool {
-        self.config.enabled && self.buffer.is_searchable()
-    }
-
-    /// Lazily activates the buffer if it is not already active.
-    ///
-    /// Uses the compare-and-swap [`try_activate`](super::delta::DeltaBuffer::try_activate)
-    /// instead of a `is_active()` + `activate()` pair: the atomic transition
-    /// closes the TOCTOU window between the check and the store. An
-    /// `AlreadyActive` result is the expected idempotent case on the hot push
-    /// path (the buffer stays active across many pushes) and is ignored here.
-    fn ensure_buffer_active(&self) {
-        let _ = self.buffer.try_activate();
+        self.config.enabled && !self.buffer.is_empty()
     }
 }
 

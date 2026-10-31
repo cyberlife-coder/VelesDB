@@ -252,6 +252,7 @@ fast sends no search instead.
 | `DeferredIndexer::{merge_with_hnsw, swap_and_drain, drain_all}` | `VectorCollection::flush` indexes what the deferred indexer holds |
 | `collection::streaming::{merge_with_delta, merge_with_delta_scored}` | search the collection |
 | `VectorCollection::{push_to_delta_if_active, is_delta_active}` | none: no rebuild ever activated the buffer they fed and reported on |
+| `DeltaBuffer::{activate, try_activate, deactivate_and_drain, is_active, is_searchable, stats}`, `streaming::delta::ActivateError` | none: a `DeltaBuffer` accepts every write; `len`/`is_empty` give its size |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a
   `usize`. The removed helper returned `usize::MAX` for `perfect`. Without the
