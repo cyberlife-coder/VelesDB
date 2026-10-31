@@ -52,7 +52,7 @@ use crate::logging::{LoggingConfig, LoggingSection};
 ///   explicitly. The file **must** exist and pass
 ///   `load_from_path_engine_only` validation — never a silent fallback to
 ///   defaults on a broken path.
-/// - `config_path: None` — mirrors [`load_toml_file`]'s default-file
+/// - `config_path: None` — mirrors the server loader's (`load_toml_file`) default-file
 ///   behaviour: falls back to `velesdb.toml` in the current directory if
 ///   present (still validated, so a malformed default file still fails
 ///   fast), otherwise core defaults apply.
