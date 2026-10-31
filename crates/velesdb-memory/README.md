@@ -277,6 +277,36 @@ end-to-end *extraction* comparison on the real
 Parameters, returns, and error codes for every one:
 **[MCP tool reference](../../docs/reference/MCP_TOOLS.md)**.
 
+### Learned confidence and stale lessons
+
+`feedback(id, success)` moves a fact's learned confidence, and `recall` blends
+it into the ranking (the reported `score` stays the raw similarity). Concurrent
+`feedback` on one fact is atomic: the read and the update of its confidence and
+tallies happen under that fact's write lock, so every call is counted once.
+
+A lesson about specific files can be **anchored** to them: `remember` with
+`anchors` (repository-relative paths, at most 8) and `anchor_root` (the
+absolute checkout they are relative to) makes the server read each file and
+record its SHA-256 in a reserved key that never appears in `metadata`. A later
+`recall` with the same `anchor_root` re-reads the anchored files and gives each
+anchored fact a `freshness`: `fresh`, `stale` (a file changed or was deleted;
+the paths are in `changed`, and the fact's ranking key is halved) or
+`unverified` (a file could not be checked, which says nothing either way).
+Staleness is recomputed on every such recall and never stored: it changes the
+order, not the learned confidence, and restoring the file makes the lesson
+fresh again. Remembering the fact again with `anchors` re-anchors it; without
+`anchors`, it keeps the ones it had.
+
+The server computes every digest itself — the agent never supplies one — and
+reads only below an `anchor_root` that lies inside `VELESDB_MEMORY_INGEST_ROOTS`:
+paths are refused unless they are plain relative names (no root, `.` or `..`),
+a symlink resolving out of the checkout is refused rather than followed, only
+regular files of at most 1 MiB are read, and one request reads at most 256
+files and 16 MiB. Without ingest roots, anchoring is refused. Plain `recall`,
+`recall_where` and `recall_fused` do not read anchors. In Rust, the same is
+`MemoryService::remember_anchored` and `MemoryService::recall_anchored` with an
+`anchor::AnchorRoot`; the language bindings do not expose it yet.
+
 By design the server exposes **memory semantics only** — never raw database
 capabilities (`query`, `create_collection`, `upsert`, `traverse`).
 
@@ -326,8 +356,11 @@ Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
 - **Bring-your-own-links by default.** The graph is built by `relate` and
   `links`; automatic extraction needs `--features extractor-http` plus a local
   model. The former `extract` feature remains a compatibility alias.
-- **`path` ingestion is off unless allowlisted** via
+- **`path` ingestion and file anchoring are off unless allowlisted** via
   `VELESDB_MEMORY_INGEST_ROOTS`.
+- **Anchors are judged by `recall` only**, and only when it is given an
+  `anchor_root`; `recall_where` and `recall_fused` return anchored facts
+  without a freshness verdict.
 - **Binding parity is incomplete.** `compile_transcript` is MCP-only; the Node
   binding has no `context_savings` / `explain_compilation`; the published PyPI
   wheel predates the compiler entirely — see the

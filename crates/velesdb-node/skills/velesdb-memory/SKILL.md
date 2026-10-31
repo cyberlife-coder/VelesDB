@@ -157,7 +157,20 @@ leave the terminal fields empty; only `committed` carries final ids.
    numeric `id` (see the `id_str` note above). Recall re-ranks by this learned
    confidence, so over time useful facts rise and noise sinks — the memory
    improves without any retraining. Give feedback on the memory you actually
-   used, not on everything.
+   used, not on everything, and only when an outcome you can point to — a
+   check that failed and then passed once you applied it, a change reverted —
+   shows its effect; never on impression. Concurrent feedback on one fact is
+   atomic.
+
+6. **Anchor lessons about code (`anchors`).** When a fact is about specific
+   files, `remember` it with `anchors` (repo-relative paths, at most 8) and
+   `anchor_root` (the absolute checkout, which must lie inside the server's
+   `VELESDB_MEMORY_INGEST_ROOTS`): the server records each file's SHA-256. A
+   later `recall` with the same `anchor_root` gives the fact a `freshness` —
+   `fresh`, `stale` (a file changed or was deleted, listed in `changed`; the
+   fact is ranked lower) or `unverified`. Re-verify a stale fact; then forget
+   and replace it, or remember it again with its anchors to re-anchor it.
+   Only `recall` judges anchors.
 
 ## Resuming a session: list → load → work → save
 

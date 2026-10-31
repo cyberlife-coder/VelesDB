@@ -9,13 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> Targets velesdb-memory 0.17.0.
+
 ### Added
+
+- **File anchors and stale lessons.** `remember` takes optional `anchors`
+  (repository-relative paths, at most 8) and `anchor_root` (an absolute
+  checkout inside `VELESDB_MEMORY_INGEST_ROOTS`): the server reads each file and
+  records its SHA-256 in the reserved `_veles_anchors` key, which never appears
+  in `metadata`. `recall` takes an optional `anchor_root`; each anchored fact
+  then carries `freshness` — `fresh`, `stale` with the `changed` paths, or
+  `unverified` — and a stale fact's ranking key is halved. Freshness is
+  recomputed on every such recall and never stored, so it does not change the
+  learned confidence and a restored file makes the lesson fresh again.
+  Remembering a fact again with `anchors` re-anchors it; without them it keeps
+  its anchors. The server computes every digest itself and reads only below a
+  root inside the ingest allowlist: paths with a root, `.` or `..` are refused,
+  a symlink resolving out of the checkout is refused rather than followed, only
+  regular files up to 1 MiB are read, and a request reads at most 256 files and
+  16 MiB (`limits::MAX_ANCHOR_FILE_BYTES`, `MAX_ANCHOR_FILES_PER_RECALL`,
+  `MAX_ANCHOR_BYTES_PER_RECALL`). Without ingest roots, anchoring is refused
+  with `invalid_params`. `recall_where` and `recall_fused` do not judge anchors.
+- **Rust API for anchors:** the `anchor` module (`RepoPath`, `ContentDigest`,
+  `FileAnchor`, `AnchorProbe`, `AnchorRoot`, `Freshness`, `assess_freshness`,
+  `AnchoredRecollection`, `AnchorError`), `MemoryService::remember_anchored`,
+  `MemoryService::recall_anchored`, and `MemoryError::Anchor`. The Node, Python
+  and WASM bindings do not expose anchors.
 
 - **`cli_flags::FlagError`**, the two refusals the hand-rolled subcommand parsers
   share: `MissingValue { flag }` (`<flag> requires a value`) and
   `Unknown { command, flag }` (`unknown <command> flag "<flag>"`), with
   `cli_flags::value_after` to read a flag's value. `migrate-embeddings` and
   `compile-stdin` both use it, so the same mistake is worded once.
+
+### Fixed
+
+- **Concurrent `feedback` on one fact no longer loses updates.** The read and
+  the write of a fact's confidence and success/failure tallies now happen under
+  that fact's write lock, which a re-store of the same fact also takes, so
+  concurrent calls are applied one after another and each is counted once.
+  Before, two calls could read the same tallies and the second write erased
+  the first.
 
 ### Changed
 

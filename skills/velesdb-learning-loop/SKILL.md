@@ -18,7 +18,8 @@ description: >
   generic recall / recall_fused / remember / relate / entity / why / feedback
   loop with a stricter, project-specific discipline: no design starts blind, no
   fix ships without a recurrence check, no verification closes on coverage
-  alone, and writing to memory is never automatic.
+  alone, no feedback without a verified outcome, and writing to memory is
+  never automatic.
 ---
 
 # velesdb-learning-loop — don't repeat a mistake twice
@@ -38,8 +39,8 @@ For an opted-in repository, the learning loop has four mandatory steps:
    a later session must preserve.
 3. **Causality**: link the decision to its evidence and an incident to its root
    cause with an outgoing relation.
-4. **Feedback**: reinforce or demote every recalled memory that affected the
-   work.
+4. **Feedback**: reinforce or demote a memory this session's recalls returned,
+   only when an observed outcome verifies its effect.
 
 The repository opts in with `enforce_learning_loop: true` in
 `.velesdb-hooks.json`. The `PreToolUse` guard refuses the first `Edit`/`Write`
@@ -68,6 +69,13 @@ The versioned implementation lives in `pre-tool-use.sh`, `post-tool-use.sh`,
 and `stop.sh` under each supported harness integration. Installing the skill
 alone teaches the policy; installing and trusting the hooks activates the
 mechanical guard.
+
+The `Stop` checklist carries the evidence for step 4: the ids the session's
+recalls returned (`post-tool-use.sh`), check outcomes (Claude Code's
+`post-tool-use-failure.sh` and `post-tool-use.sh`) and reverts read from git.
+They are kept in the private hook-state directory with the same hardening as
+the edit records, and the checkpoint that names them consumes them through the
+same pending/delivered manifest.
 
 Be exact about the enforcement boundary: only recall-before-edit is refused
 mechanically. Decision, causality, and feedback are policy plus a blocking
@@ -208,12 +216,39 @@ different names, two years apart, with nothing connecting them.
 
 ### 4. Feedback
 
-For every memory surfaced in Step 1 or the recurrence check that influenced
-the work, call `feedback(id_str, true)` when it helped and
-`feedback(id_str, false)` when it misled. Do this before closing, not only when
-repairing a false memory. A recalled item that was ignored because it was
-irrelevant still needs a negative outcome if it materially distracted the
-reasoning; otherwise ranking cannot learn from use.
+Feedback is a reward, and a reward must come from a verifiable outcome, never
+from your own impression that a memory helped. Two things make that concrete:
+
+- **Which memories.** The hooks record the ids every successful `recall`,
+  `recall_where`, `recall_fused` and `why` actually returned in this session,
+  and the `Stop` checklist names exactly those ids — not "every recalled
+  memory". Feedback goes to a listed id or to none.
+- **Which outcomes.** The hooks observe outcomes the host reports, not ones
+  the model describes: a test, build or lint command that failed and then
+  passed, or still fails (Claude Code only — the exit status comes from
+  `PostToolUse`/`PostToolUseFailure`); a commit reverting another in an
+  edited repository since the last checkpoint (both hosts, read from git at
+  `Stop`). The checklist lists them next to the ids.
+
+Call `feedback(id_str, true)` or `feedback(id_str, false)` only for a listed
+memory whose effect one of those outcomes demonstrates, and say which outcome.
+Leave every other listed memory without feedback. A green suite after a recall
+is not that evidence: it does not show that the memory caused it.
+
+**Nothing drives `feedback` automatically.** No observed outcome names the
+memory behind it, and a hook never opens the store, so every reward is a
+model call that cites its evidence. The one signal applied automatically is
+**staleness**, and it is applied to ranking, not to confidence: a lesson
+remembered with `anchors` (repo-relative paths, read by the server under an
+`anchor_root` inside its ingest roots) is marked `stale` by a `recall` with the
+same `anchor_root` once an anchored file changed or was deleted, and ranked
+lower. A stale memory is not a wrong one: re-verify it, then either forget and
+replace it, or remember it again with its anchors to re-anchor it.
+
+User corrections are not recorded as evidence: a correction cannot be told
+apart reliably from a question, a quotation or a change of plan in a prompt's
+text, so detecting one would be a guess. Treat a correction the user makes as
+input for step 3, not as a reward.
 
 Feedback is not a substitute for correction. If the fact itself is false,
 follow the forget-and-replace procedure below as well.
@@ -262,9 +297,10 @@ stored memory is contradicted by something you have just proven:
 4. Say which you did. "I corrected a memory" and "I recorded that a decision
    changed" mean different things to whoever reads the trail.
 
-Use `feedback(id, false)` on a memory that surfaced and misled you, and
-`feedback(id, true)` on one that actually helped. Ranking only improves if the
-outcome comes back; skipping it leaves confidence flat forever.
+Send `feedback(id, false)` on a memory that surfaced and misled you when an
+observed outcome shows it — a revert of the change it advised, a check that
+kept failing on its advice — and name that outcome. Ranking only improves if
+verified outcomes come back; a reward on impression teaches it noise.
 
 ## Metadata convention (so recall/recurrence-check actually work)
 
