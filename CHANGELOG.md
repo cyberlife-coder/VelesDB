@@ -378,17 +378,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (behavior) — `id` is the point id in every VelesQL clause, in
   core as in WASM.** Core 7.1.0 read a payload field named `id` in a
   SELECT's WHERE (plain or aggregate), ORDER BY (plain or arithmetic),
-  GROUP BY and aggregates, in a JOIN key read from the payload first, and in
-  a MATCH's WHERE (`=` and `IN`), ORDER BY and RETURN (`n.id`, `r.id`),
+  GROUP BY and aggregates, a window function's ORDER BY and PARTITION BY,
+  in a JOIN key read from the payload first, and in a MATCH's WHERE (`=` and `IN`), ORDER BY and RETURN (`n.id`, `r.id`),
   while its projection, its `UPDATE` / `DELETE` WHERE, and every WASM
   clause, read the point id. For a payload carrying its own `id`, all of
   these now read the point (node, relationship) id; `RETURN n` projects the
-  node id under `n.id`; a property index on `(Label, "id")` no longer
+  node id under `n.id`, a node without payload included; a property index on `(Label, "id")` no longer
   answers a MATCH `n.id` predicate. Without such a payload field, `GROUP BY
   id` grouped every row into one `NULL` group and `WHERE id < 100` matched
   nothing. `id = n` and `id IN (...)` now visit those points directly
-  (a SELECT, `NEAR … AND id IN (...)`, UPDATE), and EXPLAIN reports a
-  `PointIdLookup`.
+  (a SELECT, an aggregate, `NEAR … AND id IN (...)`, UPDATE), and EXPLAIN
+  reports a `PointIdLookup`.
   VelesQL cannot reach a payload field named `id`: `SELECT *` already
   returned the point id under that name. Migration: rename the payload field
   (`doc_id`) to filter or sort on it in VelesQL; a JSON filter (REST search
@@ -402,16 +402,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search, graph embedding search): with no payload `id`, `id != 2`, `NOT
   IN` or `IS NULL` matched every row, and the scope widened instead of
   narrowing. Every filter is now tested against the point, its id included.
-- **BREAKING (behavior) — a filter compares two integers exactly.** WHERE
+- **BREAKING (behavior) — a filter compares an integer exactly.** WHERE
   (and a JSON filter) compared numbers as `f64`, so `id = 9007199254740993`
-  matched the integer `9007199254740992`. Two integers now compare exactly;
-  an integer and a float, or two floats, still within `f64::EPSILON`.
+  matched the integer `9007199254740992`, and `n > 9007199254740992.0`
+  missed `n = 9007199254740993`. An integer now compares exactly against an
+  integer or a float, in `=` and `!=` as in `<` and `>`; two floats are
+  still equal within `f64::EPSILON`.
 - **BREAKING (behavior) — a point without payload is tested with a `null`
   payload on every filtered path.** REST search and scroll filters, text
   and hybrid search, batch search and MATCH dropped it outright, while a
   SELECT kept it when the filter matched a `null` payload (`IS NULL`,
   `!=`): `WHERE id = 5` and `{"type": "is_null", ...}` now match it
   everywhere.
+- **BREAKING (behavior) — UPDATE and JOIN reach a point without payload.**
+  An `UPDATE` whose WHERE was not `id = n` / `id IN (...)`, and a JOIN
+  scanning its left collection, visited only the points that carry a
+  payload: `UPDATE docs SET kind = 'x' WHERE kind IS NULL` skipped every
+  point without one. They now visit every point, as a SELECT does.
+- **BREAKING (behavior) — a payload index never answers past 2^53.** A
+  secondary index keys a number by its `f64`, which cannot tell `2^53` from
+  `2^53 + 1`. An ORDER BY over an indexed field, an indexed JOIN key and an
+  indexed range or equality now fall back to the exact path when a key or
+  literal reaches 2^53, so the index no longer ties, drops or adds such a
+  row. An index named `@velesql.point_id`, the name VelesQL reads `id`
+  through, is refused with `Error::Config`; it would have answered `id`
+  ranges from payloads.
+- **BREAKING (behavior) — `MIN` and `MAX` keep an integer exact.** They
+  returned an `f64`: `MAX(id)` was `33.0`, and `MAX(n)` over `2^53 + 1` was
+  `2^53`. A minimum or maximum of integers is now that integer (`33`), in
+  the result and in `HAVING`, which compares an integer aggregate exactly
+  against an integer threshold. A float column still returns a float.
 - **BREAKING (behavior) — `Collection::execute_aggregate` and
   `Database::execute_aggregate` refuse a vector `GROUP BY`** (`NEAR` +
   `GROUP BY`) with `Error::Query`. It grouped every point of the collection,
@@ -441,6 +461,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WITH (max_groups = N)` groups, 10,000 by default**, as core does; 7.1.0
   WASM grouped without bound. A query past the budget fails with `Too many
   groups (limit: N)`; raise `max_groups` (1,000,000 at most) to allow more.
+- **BREAKING (API) — `AggregateResult` gains `min_values` and
+  `max_values`** (`HashMap<String, serde_json::Number>`), the exact `MIN`
+  and `MAX` of each column; `mins` and `maxs` still hold their `f64`. A
+  struct literal must now set them (`..Default::default()`); a serialized
+  result without them reads them as empty.
 - **BREAKING (API) — `AggregateResult::counts` and `Aggregator::process_value`
   / `process_batch` count non-null values of any type** for `COUNT(column)`,
   where they counted numeric values only; `sums`, `avgs`, `mins` and `maxs`

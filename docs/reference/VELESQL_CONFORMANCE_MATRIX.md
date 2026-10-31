@@ -27,8 +27,8 @@ A feature can be **Parsed** (the grammar + AST accept it) without being
 | `RIGHT JOIN` | `ast/join.rs:JoinType::Right` | `search/query/join.rs` | EPIC-031 US-004 |
 | `FULL JOIN` | `ast/join.rs:JoinType::Full` | `search/query/join.rs` | EPIC-031 US-004 |
 | `GROUP BY` | `ast/aggregation.rs:GroupByClause` | `velesql/grouping.rs:Grouper` | One grouping for core SQL `GROUP BY`, vector `GROUP BY` and the WASM executor; ORDER BY over grouped rows resolves through `velesql/grouped_order.rs` |
-| `HAVING` | `ast/aggregation.rs:HavingClause` | `velesql/grouping.rs:HavingClause::accepts` | Any aggregate, listed in SELECT or not |
-| Aggregate functions | `ast/aggregation.rs` | `velesql/aggregator.rs` | COUNT, SUM, AVG, MIN, MAX, FIRST; output key `AggregateFunction::result_key` in every engine |
+| `HAVING` | `ast/aggregation.rs:HavingClause` | `velesql/having_eval.rs:HavingClause::accepts` | Any aggregate, listed in SELECT or not; `AND` binds tighter than `OR`; integers compare exactly |
+| Aggregate functions | `ast/aggregation.rs` | `velesql/aggregator.rs` | COUNT, SUM, AVG, MIN, MAX, FIRST; output key `AggregateFunction::result_key` in every engine; MIN and MAX keep an integer exact |
 | `USING FUSION(strategy=...)` | `ast/fusion.rs:FusionClause` | `search/query/sparse_dispatch.rs:resolve_fusion_strategy` + `hybrid_sparse.rs` | Honored: RRF, RSF, average, maximum, weighted (RSF/weighted use `dense_weight`/`sparse_weight`) |
 | `WHERE vector NEAR_FUSED [...]` | `grammar.pest:vector_fused_search` | `search/query/fused_dispatch.rs` | Executable multi-vector fusion via `multi_query_search`; honors `rrf`/`average`/`maximum` (others fall back to RRF). Must be the only vector predicate, `AND`-able with a metadata filter only |
 | `ALTER COLLECTION ... SET (auto_reindex=...)` | `ast/ddl.rs` | `database/ddl_executor.rs:execute_alter_collection` | Applies and persists the auto-reindex policy (restored on next open) |

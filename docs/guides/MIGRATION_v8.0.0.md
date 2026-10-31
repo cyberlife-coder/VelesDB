@@ -574,10 +574,11 @@ Rejections carry core's codes and a new `recoverable` field:
   | `WHERE id = 3`, `WHERE id IN (...)`, `WHERE id < 100` | payload `id` | point id |
   | `ORDER BY id` | payload `id` | point id |
   | `GROUP BY id`, `COUNT(id)`, `MAX(id)` | payload `id` | point id |
+  | `ROW_NUMBER() OVER (PARTITION BY id ORDER BY id)` | payload `id` | point id |
   | `ORDER BY 0 - id`, a `LET` reading `id` | payload `id` | point id |
   | `JOIN ... ON a.x = b.id` (the left key `id`) | payload `id`, else point id | point id |
   | MATCH `WHERE n.id = 3`, `n.id IN (...)`, `ORDER BY n.id`, `RETURN n.id` (`r.id` on a relationship) | node (relationship) property `id` | node (relationship) id |
-  | MATCH `RETURN n` | payload `id` under `n.id` | node id under `n.id` |
+  | MATCH `RETURN n` | payload `id` under `n.id`, none without one | node id under `n.id` |
 
   Without such a payload field, 7.1.0 `GROUP BY id` put every row in one
   `NULL` group and `WHERE id < 100` matched nothing. VelesQL cannot reach a
@@ -661,11 +662,26 @@ Rejections carry core's codes and a new `recoverable` field:
     measured cost and the benchmark that reproduces it.
   - An `f32` is parsed directly, so a vector component can differ from 7.1.0
     by one `f32` ULP, toward the exact value.
-- **Filters compare two integers exactly** (`id = 9007199254740993` no
-  longer matches `9007199254740992`), and **a point without payload is
-  tested with a `null` payload on every filtered path**: REST search and
-  scroll filters, text, hybrid and batch search, and MATCH used to drop it,
-  so `{"type": "is_null", ...}` or `neq` now match it there as in a SELECT.
+- **Filters compare an integer exactly**, against an integer or a float
+  (`id = 9007199254740993` no longer matches `9007199254740992`, and
+  `n > 9007199254740992.0` now matches `n = 9007199254740993`), and **a
+  point without payload is tested with a `null` payload on every filtered
+  path**: REST search and scroll filters, text, hybrid and batch search, and
+  MATCH used to drop it, so `{"type": "is_null", ...}` or `neq` now match it
+  there as in a SELECT. An `UPDATE` and a JOIN now visit it too (`UPDATE
+  ... WHERE kind IS NULL` skipped it).
+
+- **A payload index stays exact past 2^53.** It keys numbers by `f64`, so an
+  indexed ORDER BY tied `2^53` with `2^53 + 1` and an indexed JOIN on `id`
+  paired them. Such keys and literals now take the exact path. Creating an
+  index named `@velesql.point_id` fails with `Error::Config`: drop such an
+  index from a 7.1.0 store, since `id` never reads it.
+
+- **`MIN` and `MAX` of integers return integers** (`33`, not `33.0`), exact
+  past 2^53, and `HAVING MAX(id) = 9007199254740992` compares exactly. Read
+  the value as a number, not as a float literal; a Rust struct literal of
+  `AggregateResult` sets the new `min_values` and `max_values` (or
+  `..Default::default()`).
 
 - **Python: an observer scope on `id` narrows every read.** Post-filtered
   reads (`get`, batch, sparse, hybrid-sparse and graph embedding search)

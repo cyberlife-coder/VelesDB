@@ -210,8 +210,8 @@ SELECT SUM(quantity) AS total FROM orders;
 | `COUNT(col)` | Count non-null values in column, of any type | Column name |
 | `SUM(col)` | Sum of numeric values | Column name |
 | `AVG(col)` | Average of numeric values | Column name |
-| `MIN(col)` | Minimum numeric value (`null` when the group has none) | Column name |
-| `MAX(col)` | Maximum numeric value (`null` when the group has none) | Column name |
+| `MIN(col)` | Minimum numeric value, an integer exactly (`null` when the group has none) | Column name |
+| `MAX(col)` | Maximum numeric value, an integer exactly (`null` when the group has none) | Column name |
 | `MAX(score)` | Max similarity score across group (v3.7+) | `score` pseudo-column |
 | `AVG(score)` | Mean similarity score across group (v3.7+) | `score` pseudo-column |
 | `FIRST(col)` | Value from the group's best row (v3.7+) | Column name |
@@ -413,21 +413,28 @@ The WHERE clause filters rows using conditions. Multiple conditions are combined
 with `AND`, `OR`, and `NOT`.
 
 `id` is the point id in every clause of a SELECT — WHERE, the projection,
-ORDER BY (arithmetic and `LET` included), GROUP BY, aggregates and JOIN keys
-— in core and WASM alike. In a MATCH, `n.id` is the node id and `r.id` the
-relationship id, in WHERE, ORDER BY and RETURN (`RETURN n` projects it under
-`n.id`). `id = n` and `id IN (...)` visit the points they name directly
-(EXPLAIN: `PointIdLookup`); no payload or property index named `id` answers
-for them. A payload field named `id` is not reachable
+ORDER BY (arithmetic and `LET` included), GROUP BY, aggregates, a window
+function's PARTITION BY and ORDER BY, and JOIN keys — in core and WASM
+alike, and in an UPDATE or DELETE. In a MATCH, `n.id` is the node id and `r.id`
+the relationship id, in WHERE, ORDER BY and RETURN (`RETURN n` projects it
+under `n.id`, whatever the node's payload). `id = n` and `id IN (...)` visit
+the points they name directly, in a SELECT, an aggregate or an UPDATE
+(EXPLAIN: `PointIdLookup`); no payload or property index answers for `id`,
+and an index named `@velesql.point_id`, the name `id` is read through, is
+refused. A point without payload is a row like any other: a scan, an UPDATE
+and a JOIN visit it. A payload field named `id` is not reachable
 from VelesQL: `SELECT *` returns the point id under `id`, and `WHERE id = 3`
 compares the point id. A JSON filter on a REST search or scroll,
 `{"condition": {"type": "eq", "field": "id", "value": 3}}`, still reads the
 payload field.
 
-Numbers compare by value. WHERE compares two integers exactly, beyond 2^53
-included; its `=` (and `IN`) treats an integer and a float, or two floats,
-less than `f64::EPSILON` (about 2.2e-16) apart as equal. GROUP BY and ORDER
-BY compare every number exactly.
+Numbers compare by value. WHERE compares an integer exactly against an
+integer or a float, beyond 2^53 included (`2^53 + 1 > 2^53.0`); its `=` (and
+`IN`) treats two floats less than `f64::EPSILON` (about 2.2e-16) apart as
+equal. GROUP BY, ORDER BY and HAVING over an integer aggregate compare every
+number exactly. A payload index keys numbers by `f64`, so a range, ORDER BY
+or JOIN whose literal or keys reach 2^53 runs without it, with the same
+result.
 
 ### Comparison Operators
 
