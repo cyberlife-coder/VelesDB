@@ -743,7 +743,11 @@ containing the structured VELES-XXX error code (when applicable):
 The `code` field is omitted when no structured error code applies (e.g., generic
 validation errors). See [ERROR_CODES.md](ERROR_CODES.md) for the full list of codes.
 
-For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized:
+For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), payload is standardized. A statement that fails during execution answers `422` when the failure is the client's, and the engine's own status otherwise (`500` for a storage, I/O or internal fault, `503` for a timeout under the server's limit, the memory budget, an open circuit breaker or a locked database). A `WITH (timeout_ms = N)` tighter than the server's limit that runs out is the client's own budget: `422` with `VELESQL_EXECUTION_ERROR` (code `VELES-027` in the message), not `408`.
+
+The search endpoints (`/search`, `/search/ids`, `/search/text`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids`) answer a failed search, and a read the access gate denied, with the error's canonical status: `4xx` for the client's errors, `5xx` for the engine's. A search's `timeout_ms` can shorten the server's `timeout_ms`, never lengthen it, and `0` keeps the server's limit (the same resolution as VelesQL `WITH (timeout_ms = N)`); one strictly tighter than the server's limit that runs out answers `408`, the server's limit running out answers `503`.
+
+The graph endpoints answer a core error, and a read the access gate denied, the same way: the error's canonical status and its `VELES-NNN` code. A scope narrowing that batch search, multi-query search or a graph read cannot apply answers `400` `VELES-009`.
 
 ```json
 {
@@ -763,8 +767,11 @@ For VelesQL semantic/runtime errors (`/query`, `/aggregate`, `/query/explain`), 
 | 201 | Created |
 | 400 | Bad Request (invalid input) |
 | 404 | Not Found |
+| 408 | Request Timeout (the request's own `timeout_ms` ran out) |
+| 422 | Unprocessable Entity (a VelesQL statement the client got wrong) |
 | 429 | Too Many Requests (rate limit exceeded or streaming backpressure) |
 | 500 | Internal Server Error |
+| 503 | Service Unavailable (circuit breaker open, a timeout under the server's limit, the memory budget) |
 
 ---
 
@@ -1340,8 +1347,11 @@ The values above are the defaults a server starts with
 (`velesdb_core::QueryLimits::default()`): depth 10, 100 000 intermediate
 results, 100 MiB per query, 30 s, a rate limit of 100 000 queries per second
 per client, and a circuit breaker that opens after 5 consecutive failures for
-30 s. A
-`timeout_ms` of `0` disables the timeout.
+30 s. Only engine failures count — storage, I/O and internal errors, a
+timeout under this `timeout_ms`, the memory budget; an error answered with a
+`4xx` (the client's own, its request's own `timeout_ms` included) never
+does, nor does a read the access gate denied. A `timeout_ms` of `0` disables
+the timeout.
 
 ### PUT /guardrails
 

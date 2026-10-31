@@ -146,7 +146,7 @@ version incompatibility, or internal bugs:
 
 - **Variant**: `Query(String)`
 - **Message**: `Query error: {details}`
-- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, `HAVING` without `GROUP BY`, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`), a `WITH (mode = ...)` that is not a string, names no search mode, or gives a `custom:`/`adaptive:` ef outside `[16, 4096]` carries `V013` (`InvalidSearchMode`), and a `WITH (ef_search = ...)` that is not an integer or falls outside `[16, 4096]` carries `V014` (`InvalidEfSearch`).
+- **Cause**: A VelesQL query failed to parse, validate, or execute. This wraps parse errors with position and context information, and also covers **query-shape and bind-parameter rejections** at execution time: an unsupported query shape (e.g. multiple `similarity()` under `OR`, `NEAR_FUSED` mixed with another vector predicate, `HAVING` without `GROUP BY`, an empty MATCH pattern) and a missing or malformed bind parameter (e.g. `$v` not provided, a sparse-vector parameter that is not a valid index/value map). USING FUSION misconfigurations carry the embedded validation code `V012` (`FusionMisconfigured`), a `WITH (mode = ...)` that is not a string, names no search mode, or gives a `custom:`/`adaptive:` ef outside `[16, 4096]` carries `V013` (`InvalidSearchMode`), a `WITH (ef_search = ...)` that is not an integer or falls outside `[16, 4096]` carries `V014` (`InvalidEfSearch`), and a MATCH `ORDER BY` the MATCH executor cannot sort by — an aggregate, a bare pattern alias, a `RETURN` alias or an unqualified property — carries `V015` (`UnsupportedMatchOrderBy`).
 - **Resolution**: Check the VelesQL syntax. Refer to `docs/VELESQL_SPEC.md` for the grammar specification. The error message includes the position of the parsing failure.
 - **Recoverable**: Yes
 
@@ -280,10 +280,11 @@ version incompatibility, or internal bugs:
 
 ### VELES-027: GuardRail
 
-- **Variant**: `GuardRail(String)`
-- **Message**: `Guard-rail violation: {details}`
-- **Cause**: A query or operation exceeded a configured limit. Guard-rails include: query timeout, traversal depth limit, result cardinality cap, memory budget, rate limit, and circuit breaker thresholds.
-- **Resolution**: Reduce the scope of the query (e.g., lower LIMIT, add filters). If the limit is too restrictive for your workload, adjust the guard-rail configuration.
+- **Variant**: `GuardRail { kind: GuardRailKind, message: String }`
+- **Message**: `Guard-rail violation: {message}`
+- **Cause**: A request crossed a configured limit. `kind` names it: `Timeout(TimeoutBudget::Client)` (the request's own budget — VelesQL `WITH (timeout_ms = N)` or a REST search's `timeout_ms` — strictly tighter than the server's `timeout_ms`, or set with no server limit), `Timeout(TimeoutBudget::Configured)` (the server's `timeout_ms`, or a request budget at or above it; `QueryLimits::timeout_budget` decides, for both surfaces), `Depth`, `Cardinality`, `Memory`, `Capacity` (`max_collections`, `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`, `max_perfect_mode_vectors`), `RateLimit` and `CircuitOpen`.
+- **Whose failure**: the client's own timeout, a depth, cardinality or capacity ceiling and the rate limit are the caller's (`Error::is_caller_error()` is `true`; REST answers `408`, `400` or `429`, and `/query`, `/aggregate` and `/query/explain` answer `422`). A timeout under the server's limit and the memory budget are load the engine could not carry, and an open breaker is the breaker's own answer (`503`). The circuit breaker counts only failures that say the engine is unhealthy — storage, I/O, corruption, internal errors, a timeout under the server's limit, the memory budget — so a client repeating its own mistake (a `VELES-010` query error, a `VELES-004` dimension mismatch, its own timeout, …) never opens it, and neither does a read the access gate denied.
+- **Resolution**: Reduce the scope of the query (e.g., lower LIMIT, add filters), or give it a larger time budget. If the limit is too restrictive for your workload, adjust the guard-rail configuration.
 - **Recoverable**: Yes
 
 ### VELES-028: InvalidQuantizerConfig

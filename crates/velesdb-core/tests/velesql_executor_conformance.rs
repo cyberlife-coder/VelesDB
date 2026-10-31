@@ -89,6 +89,10 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
+    /// A substring the refusal must carry (e.g. a validation code), when the
+    /// case pins why the query is refused and not only that it is.
+    #[serde(default)]
+    expect_error: Option<String>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -252,12 +256,19 @@ fn test_velesql_executor_conformance_rejected_cases() {
                 db.execute_query(&q, &fixture.query_params)
                     .map_err(|e| e.to_string())
             });
-        assert!(
-            outcome.is_err(),
-            "rejected case {} was accepted: query={:?}",
-            case.id,
-            case.query
-        );
+        let Err(error) = outcome else {
+            panic!(
+                "rejected case {} was accepted: query={:?}",
+                case.id, case.query
+            );
+        };
+        if let Some(expected) = &case.expect_error {
+            assert!(
+                error.contains(expected.as_str()),
+                "rejected case {} must be refused with {expected}, got: {error}",
+                case.id
+            );
+        }
     }
 }
 

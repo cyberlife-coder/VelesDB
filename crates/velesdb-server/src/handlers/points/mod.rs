@@ -29,6 +29,7 @@ use velesdb_core::Point;
 
 use crate::handlers::helpers::{
     auto_core_error_response, error_response, get_vector_collection_or_404, run_blocking,
+    worker_failure,
 };
 
 use velesdb_core::index::sparse::SparseVector;
@@ -170,10 +171,7 @@ pub(super) fn upsert_result_to_response(
             .into_response()
         }
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task panicked: {e}"),
-        ),
+        Err(e) => auto_core_error_response(&worker_failure("blocking", &e)),
     }
 }
 
@@ -323,10 +321,7 @@ pub async fn scroll_points(
     match result {
         Ok(Ok(batch)) => build_scroll_response(batch),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task panicked: {e}"),
-        ),
+        Err(e) => auto_core_error_response(&worker_failure("blocking", &e)),
     }
 }
 
@@ -451,10 +446,7 @@ pub async fn bulk_delete_points(
         }))
         .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("bulk_delete task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("bulk_delete", &join_err)),
     }
 }
 

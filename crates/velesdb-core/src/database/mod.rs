@@ -47,6 +47,8 @@ mod vector_ops;
 mod database_helpers;
 
 #[cfg(all(test, feature = "persistence"))]
+mod circuit_breaker_contract_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod collection_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod database_helpers_tests;

@@ -89,6 +89,7 @@ impl Collection {
             .guard_rails
             .pre_check("default")
             .map_err(crate::error::Error::from)?;
+        validate_match_clause(match_clause)?;
         let ctx = self.runtime.guard_rails.create_context();
         self.dispatch_match_ordered(match_clause, params, &ctx)
     }
@@ -146,7 +147,11 @@ impl Collection {
         let strategy = crate::velesql::match_planner::MatchQueryPlanner::plan(match_clause, &stats);
         tracing::debug!(strategy = ?strategy, "MATCH execution strategy selected");
 
-        let result = self.run_match_strategy(match_clause, params, ctx, &strategy);
+        // A traversal failure never reaches the finalizing steps that record
+        // the breaker outcome, so it is recorded here.
+        let result = self
+            .run_match_strategy(match_clause, params, ctx, &strategy)
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e));
 
         // W6-A3: Record metrics.
         let max_depth = crate::velesql::match_planner::MatchQueryPlanner::count_hops(match_clause);
@@ -279,19 +284,19 @@ impl Collection {
     ) -> Result<Vec<SearchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut sorted = match_results;
         self.apply_match_order_by(&mut sorted, match_clause, params)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut results = self
             .match_results_to_search_results(sorted)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         // Final cardinality check for MATCH path (EPIC-048 US-003).
         ctx.check_cardinality(results.len())
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         if let Some(limit) = match_return_limit(match_clause) {
             results.truncate(limit);
         }
@@ -322,18 +327,18 @@ impl Collection {
     ) -> Result<Vec<super::match_exec::MatchResult>> {
         ctx.check_timeout()
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         let mut sorted = match_results;
         self.apply_match_order_by(&mut sorted, match_clause, params)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
 
         // Final cardinality check for MATCH path (EPIC-048 US-003), matching
         // `finalize_match_results` so the ordered surface rejects oversized
         // result sets identically to the SQL path.
         ctx.check_cardinality(sorted.len())
             .map_err(crate::error::Error::from)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         if let Some(limit) = match_return_limit(match_clause) {
             sorted.truncate(limit);
         }
@@ -364,6 +369,18 @@ impl Collection {
     }
 }
 
+/// Refuses a MATCH clause `QueryValidator` refuses, before any traversal,
+/// with the code `Database::execute_query` gives the same clause inside a
+/// statement (`VELES-010` carrying the validation code). The entry points
+/// that take a bare `MatchClause` call it, so a MATCH is validated by one rule
+/// set whichever surface it arrives through.
+pub(in crate::collection::search::query) fn validate_match_clause(
+    match_clause: &crate::velesql::MatchClause,
+) -> Result<()> {
+    crate::velesql::QueryValidator::validate_match_clause(match_clause)
+        .map_err(|e| crate::error::Error::Query(e.to_string()))
+}
+
 /// Counts a MATCH stopped by a guard rail during execution — depth,
 /// cardinality, memory or timeout, raised by the strategy or by the final
 /// checks — in `velesdb_match_guardrail_hits_total`, and passes the result on.
@@ -373,7 +390,7 @@ impl Collection {
 /// once. A rate-limit or circuit-breaker refusal happens before a MATCH
 /// starts and is not one of these (see `velesdb_rate_limit_requests_total`).
 fn count_guard_rail_stop<T>(result: Result<T>) -> Result<T> {
-    if matches!(result, Err(crate::error::Error::GuardRail(_))) {
+    if matches!(result, Err(crate::error::Error::GuardRail { .. })) {
         global_match_metrics().record_guard_rail_hit();
     }
     result

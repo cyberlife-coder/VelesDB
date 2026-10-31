@@ -371,7 +371,10 @@ pub struct SearchRequest {
         schema(example = 128, minimum = 16, maximum = 4096)
     )]
     pub ef_search: Option<usize>,
-    /// Query timeout in milliseconds.
+    /// Query timeout in milliseconds. It can shorten the server's
+    /// `timeout_ms` limit, never lengthen it; `0` keeps the server's limit.
+    /// Running out of a budget strictly tighter than the limit answers `408`;
+    /// running out of the limit itself answers `503`.
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(example = 30000))]
     pub timeout_ms: Option<u64>,

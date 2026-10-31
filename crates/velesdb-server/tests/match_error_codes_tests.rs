@@ -85,6 +85,57 @@ async fn test_match_missing_param_returns_veles_010() {
     assert_eq!(json["code"], "VELES-010");
 }
 
+/// An `ORDER BY` MATCH cannot sort by is refused with the same validation
+/// code (`V015`) on `/collections/{name}/match`, which receives a bare MATCH
+/// clause, as on `/query`, which validates the whole statement — one rule, one
+/// answer — and before any traversal, not as an execution failure.
+#[tokio::test]
+async fn test_match_unsupported_order_by_is_refused_with_v015_on_match_and_query() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let app = create_test_app(&temp_dir);
+    seed_vector_node(&app).await;
+    let query = "MATCH (a:Person) RETURN a.name ORDER BY a LIMIT 3";
+    let post = |uri: &str, body: Value| {
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("build request")
+    };
+
+    let response = app
+        .clone()
+        .oneshot(post("/collections/people/match", json!({ "query": query })))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert_eq!(json["code"], "VELES-010", "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("[V015]"),
+        "{json}"
+    );
+
+    let response = app
+        .oneshot(post(
+            "/query",
+            json!({ "query": query, "collection": "people" }),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let json = body_json(response).await;
+    assert!(json.to_string().contains("[V015]"), "{json}");
+    assert!(
+        json.to_string().contains("VELESQL_VALIDATION_ERROR"),
+        "{json}"
+    );
+}
+
 /// Creates a `people` vector collection with one labeled `Person` node so the
 /// `/match` similarity WHERE path has a candidate to evaluate.
 async fn seed_vector_node(app: &axum::Router) {

@@ -13,7 +13,7 @@ use axum::{
 use velesdb_core::collection::graph::TraversalConfig;
 use velesdb_core::observer::QueryOperationKind;
 
-use crate::handlers::helpers::{http_status_for_error, run_blocking_typed};
+use crate::handlers::helpers::{authorize_unscoped_read, core_error_body, run_blocking_typed};
 use crate::types::ErrorResponse;
 use crate::AppState;
 
@@ -73,6 +73,8 @@ pub async fn remove_edge(
     ),
     responses(
         (status = 200, description = "Edge count retrieved", body = EdgeCountResponse),
+        (status = 400, description = "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse)
     ),
     tag = "graph"
@@ -96,6 +98,8 @@ pub async fn get_edge_count(
     ),
     responses(
         (status = 200, description = "Node list retrieved", body = NodeListResponse),
+        (status = 400, description = "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse)
     ),
     tag = "graph"
@@ -122,6 +126,8 @@ pub async fn list_nodes(
     ),
     responses(
         (status = 200, description = "Node edges retrieved", body = EdgesResponse),
+        (status = 400, description = "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse)
     ),
     tag = "graph"
@@ -193,15 +199,7 @@ pub async fn upsert_node_payload(
     // Payload upsert takes write locks and persists — run it on the blocking pool.
     run_blocking_typed(move || coll.upsert_node_payload(node_id, &request.payload))
         .await?
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to store payload: {e}"),
-                    code: None,
-                }),
-            )
-        })?;
+        .map_err(|e| core_error_body(&e))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -215,8 +213,9 @@ pub async fn upsert_node_payload(
     ),
     responses(
         (status = 200, description = "Payload retrieved", body = NodePayloadResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 400, description = "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
+        (status = 404, description = "Collection not found", body = ErrorResponse)
     ),
     tag = "graph"
 )]
@@ -228,15 +227,7 @@ pub async fn get_node_payload(
     // Payload lookup takes storage locks — run it on the blocking pool.
     let payload = run_blocking_typed(move || coll.get_node_payload(node_id))
         .await?
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to get payload: {e}"),
-                    code: None,
-                }),
-            )
-        })?;
+        .map_err(|e| core_error_body(&e))?;
     Ok(Json(NodePayloadResponse { node_id, payload }))
 }
 
@@ -247,7 +238,8 @@ pub async fn get_node_payload(
     request_body = ParallelTraverseRequest,
     responses(
         (status = 200, description = "Parallel traversal completed", body = TraverseResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 400, description = "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     ),
@@ -312,9 +304,9 @@ pub async fn traverse_parallel(
     request_body = GraphSearchRequest,
     responses(
         (status = 200, description = "Graph search results", body = GraphSearchResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 400, description = "Invalid request (a query vector of the wrong dimension: VELES-004), a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
     ),
     tag = "graph"
@@ -340,41 +332,22 @@ pub async fn graph_search(
     }
 
     // Gate the read (CORE-2). Graph embedding search has no metadata-filter
-    // channel, so a denied or scope-narrowed decision refuses it (fail closed).
-    match state.db.authorize_read(
+    // channel, so a scope narrowing refuses it (fail closed), and a denial
+    // answers with the denial error's canonical status and code.
+    authorize_unscoped_read(
+        &state,
         &name,
-        velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
-    ) {
-        Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Read denied by governance policy".to_string(),
-                    code: None,
-                }),
-            ));
-        }
-    }
+        QueryOperationKind::VectorSearch,
+        "graph embedding search",
+    )
+    .map_err(|refusal| core_error_body(&refusal))?;
 
     // Embedding search is CPU-bound, lock-taking core code — run it on the
     // blocking pool so the async workers stay responsive.
     let search_results =
         run_blocking_typed(move || coll.search_by_embedding(&request.vector, request.top_k))
             .await?
-            .map_err(|e| {
-                (
-                    // A query of the wrong dimension is the caller's error
-                    // (400, as documented), not the server's.
-                    http_status_for_error(&e),
-                    Json(ErrorResponse {
-                        error: format!("Graph search failed: {e}"),
-                        code: None,
-                    }),
-                )
-            })?;
+            .map_err(|e| core_error_body(&e))?;
 
     let results: Vec<GraphSearchResultItem> = search_results
         .into_iter()

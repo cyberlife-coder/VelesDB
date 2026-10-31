@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Database::gated_search_outcome`: `gated_search` with the read gate's
+  refusal kept apart from the search's own outcome.
+- `QueryLimits::client_timeout_ms` (the budget a request's own
+  `timeout_ms` resolves to) and `QueryLimits::timeout_budget` (whose budget
+  ran out — the one classification `VelesQL` and the REST search share).
+
 - **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
   node relationships as edges.** The option was documented but never read, and
   the call always returned `"edges": 0`. Each `SOURCE`, `PREVIOUS`, `NEXT`,
@@ -99,6 +105,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/node-express-rag/docker-compose.yml` now sets
   `VELESDB_ALLOWED_HOSTS: velesdb`, and the root `docker-compose.yml`, the
   `Dockerfile` and the deployment guides show how.
+
+- **BREAKING (Rust API) — `Error::GuardRail` says which limit was crossed.**
+  The variant is `GuardRail { kind: GuardRailKind, message: String }`, where it
+  was `GuardRail(String)`; `GuardRailKind` (`Timeout(TimeoutBudget)`, `Depth`,
+  `Cardinality`, `Memory`, `Capacity`, `RateLimit`, `CircuitOpen`) and
+  `TimeoutBudget` (`Client`, `Configured`) are exported at the crate root,
+  `GuardRailViolation::Timeout` carries a `budget`, `GuardRailViolation::kind`
+  maps a violation to its kind, and `QueryContext::set_client_timeout_ms`
+  applies a request's own budget. The code stays `VELES-027` and the message
+  is unchanged. Match `Error::GuardRail { .. }`, or on `kind`, where you
+  matched `Error::GuardRail(_)`.
+- **REST statuses follow core's caller/engine classification.** Every REST
+  error built from a core error now takes its status from the one mapping
+  (`http_status_for_error`, which reads `Error::is_caller_error`): `4xx` for
+  the client's errors, `5xx` for the engine's, with its `VELES-NNN` code. A
+  request the server refuses while reading it, before core is called (a
+  missing parameter, a malformed filter, …), stays `400` with no code;
+  `/query`, `/aggregate` and `/query/explain` keep `422` for a client's
+  failure. Changes from 7.1.0:
+  - routes answering with the canonical mapping (`/collections/{name}/match`,
+    collection, point and graph routes): a depth, cardinality or capacity
+    ceiling (`max_collections`, `max_dimensions`,
+    `max_vectors_per_collection`, `max_payload_size`,
+    `max_perfect_mode_vectors`) `503` → `400`; the rate limit on `/match`
+    `503` → `429`. An open breaker, the memory budget, a timeout under the
+    server's limit and a locked database stay `503`;
+  - `/search`, `/search/ids`, `/search/hybrid`, `/search/batch`,
+    `/search/multi` and `/search/multi/ids` answered every failure during
+    the search `400`; `/search/text` answered it `500`. Each now answers the
+    error's canonical status (an engine fault `500`, a guard rail the engine
+    could not carry `503`, a collection deleted while the search ran `404`,
+    the client's errors `400`). A missing collection or an open breaker
+    found before the search starts was already `404` / `503`;
+  - a read the access gate denied answered `400` (`/search`, `/search/ids`,
+    `/search/hybrid`), `500` (`/search/text`) or `403` with no code
+    (`/search/batch`, `/search/multi`, `/search/multi/ids` and every graph
+    read, `/graph/search` included); it now answers the denial error's
+    canonical status and code on all of them. A scope narrowing an endpoint
+    cannot apply (batch, multi-query, graph reads) is `400` `VELES-009`
+    (was `403`);
+  - `/graph/search` and `GET`/`PUT /graph/nodes/{id}/payload` answered every
+    core error `500` with no code (a query vector of the wrong dimension
+    included, now `400` `VELES-004`); an invalid edge on `/graph/edges`,
+    `/graph/edges/batch` and `/relations` gains its code; a core error
+    setting a point's TTL is no longer always `500`;
+  - a blocking worker that panicked answered `500` with no code, or
+    `VELES-INTERNAL-WORKER-FAILURE` outside the `VELES-NNN` namespace on
+    search; it is now `500` `VELES-013`, and on a search it is counted by the
+    circuit breaker as the engine failure it is;
+  - a REST search's `timeout_ms` at or above the server's `timeout_ms`
+    limit answers `503` (was `408`): the search ran as long as the server's
+    own limit. A budget strictly tighter stays `408`;
+  - `/query`, `/aggregate` and `/query/explain` answered every execution
+    failure `422`: a storage, I/O or internal fault is now `500`; a timeout
+    under the server's limit, the memory budget, an open breaker and a
+    locked database are `503`. The client's own failures stay `422`, its
+    `WITH (timeout_ms)` running out included, keeping the `VELESQL_*` code.
+- **A request's own `timeout_ms` can shorten the server's time limit, never
+  lengthen it.** `VelesQL` `WITH (timeout_ms = N)` and a REST search's
+  `timeout_ms` resolve the same way, through `QueryLimits::client_timeout_ms`:
+  the budget is `min(N, QueryLimits::timeout_ms)` when the server sets a
+  limit, and `0` keeps that limit. 7.1.0 let `WITH (timeout_ms = N)` replace
+  the limit, longer or `0` (disabled) included, and let a REST search's
+  `timeout_ms` run past the limit, or time out at once (`408`) with `0`.
+  With no server limit, `N` applies as before.
+- **An unsupported MATCH `ORDER BY` is refused at validation, with `V015`
+  instead of `VELES-018`.** `ORDER BY COUNT(*)`, `ORDER BY MAX(year)`, a bare
+  pattern alias (`ORDER BY d`), a `RETURN` alias (`RETURN d.year AS y ORDER BY
+  y`) and an unqualified property (`ORDER BY year`) passed
+  `QueryValidator::validate` and failed after traversal with `VELES-018`
+  (`GraphNotSupported`; REST `/query` `422 VELESQL_EXECUTION_ERROR`,
+  `/collections/{name}/match` `400 VELES-018`). They are now refused before
+  traversal with `V015` (`UnsupportedMatchOrderBy`): `VELES-010` from the
+  Rust API and `/collections/{name}/match` (`400`), `422
+  VELESQL_VALIDATION_ERROR` from `/query`, and an error from the WASM
+  executor. `QueryValidator::validate_match_clause` holds the one rule set,
+  and `match_query_ordered`, `execute_match` and
+  `execute_match_with_similarity` run it on the clause they receive, so the
+  same MATCH gets the same answer on every surface. A test runs every form
+  through the validator and the executor and fails if their verdicts differ;
+  `rejected_cases` R005–R009 lock the refusal in both engines.
 
 - **BREAKING (behavior) — the TypeScript SDK refuses a filter that is not
   core-shaped.** `normalizeFilter`, now called on every filter before it
@@ -310,6 +397,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query of the wrong dimension now answers `400`, as documented, instead of
   `500`. The `CreateCollectionRequest` field docs (and so the OpenAPI
   descriptions) name the graph case.
+
+- **A client's error no longer opens a collection's circuit breaker.** Every
+  failed query counted toward the breaker, so five in a row of one client's
+  mistake — a MATCH `ORDER BY` the executor cannot run, a query vector of the
+  wrong dimension, a bad REST search body, a `timeout_ms` of `0` or a
+  `WITH (timeout_ms = 1)`, a query too broad for `max_cardinality`, a read the
+  access gate denied — opened it, and every query on the collection then
+  failed with `VELES-027` for the 30 s recovery window. The breaker now counts
+  only failures that say the engine is unhealthy: storage, I/O, corruption and
+  internal errors, a timeout under the server's own limit, the memory budget.
+  `Error::is_caller_error` is the one classification (exhaustive over the
+  variants and over `GuardRailKind`); a request's own time budget is the
+  client's when it is tighter than the server's limit. Every recording site
+  calls `CircuitBreaker::record_error`, which also never counts the breaker's
+  own refusal: 19 in core (3 in `early_return`, 8 in `match_dispatch` — the
+  MATCH traversal failure, which was not recorded at all, among them — 2 in
+  `query_pipeline`, 2 in `select_dispatch`, 4 in `sparse_dispatch`) and 2 in
+  the server (the REST search outcome, and the REST search timeout, which
+  called `record_failure` unconditionally and is now classified by the same
+  `QueryLimits::timeout_budget` as `WITH (timeout_ms)`). The REST search handlers no longer
+  record a `400` refusing the request body, nor a read the access gate denied
+  (`AccessDecision::Deny`, whatever error carries it). The server's
+  `4xx`/`5xx` choice reads the same classification.
 
 - **The TypeScript SDK's agent memory works over REST.**
   `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`,

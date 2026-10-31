@@ -78,6 +78,26 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "An engine fault during execution (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -553,7 +573,7 @@
             }
           },
           "400": {
-            "description": "Missing required 'label' query parameter",
+            "description": "Missing required 'label' query parameter, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -573,7 +593,7 @@
             }
           },
           "500": {
-            "description": "Internal server error",
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -753,8 +773,28 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -850,8 +890,28 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -902,6 +962,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
             "content": {
@@ -913,7 +983,7 @@
             }
           },
           "500": {
-            "description": "Internal server error",
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -987,8 +1057,28 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1039,6 +1129,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
             "content": {
@@ -1050,7 +1150,7 @@
             }
           },
           "500": {
-            "description": "Internal server error",
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1167,7 +1267,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request (a query vector of the wrong dimension: VELES-004), a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1190,7 +1290,7 @@
             "$ref": "#/components/responses/MalformedBody"
           },
           "500": {
-            "description": "Internal server error",
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1241,7 +1341,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1264,7 +1364,7 @@
             "$ref": "#/components/responses/MalformedBody"
           },
           "500": {
-            "description": "Internal server error",
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1315,7 +1415,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request, a scope narrowing graph reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1336,6 +1436,16 @@
           },
           "422": {
             "$ref": "#/components/responses/MalformedBody"
+          },
+          "500": {
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1700,7 +1810,7 @@
           "graph"
         ],
         "summary": "Execute a MATCH query on a collection.",
-        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nWhen the query fails with a core error, the JSON body carries its\n`VELES-XXX` code, and the status follows its variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, or an unbound query parameter\n- otherwise: `404 NOT_FOUND` for a missing point, edge or node;\n  `409 CONFLICT` for a collection or edge that already exists;\n  `400 BAD_REQUEST` for other invalid input; `503 SERVICE_UNAVAILABLE`\n  for a locked database or a guard rail; `500 INTERNAL_SERVER_ERROR` for\n  anything else",
+        "description": "# Endpoint\n\n`POST /collections/{name}/match`\n\n# Example Request\n\n```json\n{\n  \"query\": \"MATCH (a:Person)-[:KNOWS]->(b) WHERE similarity(a.vec, $v) > 0.8 RETURN a.name\",\n  \"params\": {\n    \"v\": [0.1, 0.2, 0.3]\n  }\n}\n```\n\n# Errors\n\nWhen the query fails with a core error, the JSON body carries its\n`VELES-XXX` code, and the status follows its variant:\n- `404 NOT_FOUND` (`VELES-002`) — collection not found\n- `400 BAD_REQUEST` (`VELES-010`) — parse error, not a MATCH query,\n  invalid threshold, an unbound query parameter, or an `ORDER BY` MATCH\n  cannot sort by (`V015`, refused before traversal as on `/query`)\n- otherwise: `404 NOT_FOUND` for a missing point, edge or node;\n  `409 CONFLICT` for a collection or edge that already exists;\n  `400 BAD_REQUEST` for other invalid input and for a depth, cardinality\n  or capacity ceiling the query crossed; `429 TOO_MANY_REQUESTS` for the\n  rate limit; `503 SERVICE_UNAVAILABLE` for a locked database, an open\n  circuit breaker, the memory budget or a timeout under the server's\n  limit; `500 INTERNAL_SERVER_ERROR` for anything else",
         "operationId": "match_query",
         "parameters": [
           {
@@ -1757,6 +1867,16 @@
           "422": {
             "$ref": "#/components/responses/MalformedBody"
           },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error",
             "content": {
@@ -1768,7 +1888,7 @@
             }
           },
           "503": {
-            "description": "A guard rail stopped the query",
+            "description": "The database is locked, the circuit breaker is open, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the query",
             "content": {
               "application/json": {
                 "schema": {
@@ -2600,12 +2720,52 @@
               }
             }
           },
+          "408": {
+            "description": "The request's own timeout_ms ran out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "A field of the wrong type, such as a negative or non-integer ef_search",
             "content": {
               "text/plain": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, or a guard rail the engine could not carry stopped the search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2681,6 +2841,36 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, or a guard rail the engine could not carry stopped the search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2746,6 +2936,36 @@
           },
           "422": {
             "$ref": "#/components/responses/MalformedBody"
+          },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, or a guard rail the engine could not carry stopped the search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2810,12 +3030,52 @@
               }
             }
           },
+          "408": {
+            "description": "The request's own timeout_ms ran out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "A field of the wrong type, such as a negative or non-integer ef_search",
             "content": {
               "text/plain": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, or a guard rail the engine could not carry stopped the search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2862,6 +3122,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
             "content": {
@@ -2875,8 +3145,28 @@
           "422": {
             "$ref": "#/components/responses/MalformedBody"
           },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, or a guard rail the engine could not carry stopped the search",
             "content": {
               "application/json": {
                 "schema": {
@@ -2950,6 +3240,36 @@
           },
           "422": {
             "$ref": "#/components/responses/MalformedBody"
+          },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, or a guard rail the engine could not carry stopped the search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2993,6 +3313,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
             "content": {
@@ -3005,6 +3335,36 @@
           },
           "422": {
             "$ref": "#/components/responses/MalformedBody"
+          },
+          "429": {
+            "description": "The client's rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, or a guard rail the engine could not carry stopped the search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3423,6 +3783,26 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "An engine fault during execution (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -3478,6 +3858,26 @@
           },
           "422": {
             "description": "Query validation/execution error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault during execution (storage, I/O, internal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VelesqlErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement",
             "content": {
               "application/json": {
                 "schema": {
@@ -5792,7 +6192,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Query timeout in milliseconds.",
+            "description": "Query timeout in milliseconds. It can shorten the server's\n`timeout_ms` limit, never lengthen it; `0` keeps the server's limit.\nRunning out of a budget strictly tighter than the limit answers `408`;\nrunning out of the limit itself answers `503`.",
             "example": 30000,
             "minimum": 0
           },

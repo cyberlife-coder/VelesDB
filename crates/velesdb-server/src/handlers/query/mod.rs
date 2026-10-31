@@ -18,7 +18,9 @@ use crate::AppState;
 
 use crate::handlers::helpers::run_blocking;
 use aggregation::execute_aggregation_query;
-use velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
+use velesql_helpers::{
+    parse_and_validate, velesql_collection_not_found, velesql_error, velesql_execution_error,
+};
 
 /// Returns `true` when the query should bypass collection resolution and go
 /// directly through `Database::execute_query` — DDL, introspection, admin,
@@ -65,6 +67,8 @@ fn is_ast_routed_dml(parsed: &Query) -> bool {
     request_body = QueryRequest,
     responses(
         (status = 200, description = "Query results", body = QueryResponse),
+        (status = 500, description = "An engine fault during execution (storage, I/O, internal)", body = crate::types::VelesqlErrorResponse),
+        (status = 503, description = "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement", body = crate::types::VelesqlErrorResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
         (status = 422, description = "Query validation/execution error", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
@@ -155,12 +159,10 @@ fn execute_mutation_query(
         Ok(results) => build_query_response(state, start, results, &parsed.select.columns),
         Err(e) => {
             state.operational_metrics.inc_errors();
-            velesql_error(
-                StatusCode::UNPROCESSABLE_ENTITY,
+            velesql_execution_error(
+                &e,
                 "VELESQL_MUTATION_ERROR",
-                &e.to_string(),
                 "Check collection name, statement syntax, and target existence",
-                None,
             )
         }
     }
@@ -215,12 +217,10 @@ fn execute_standard_query(
 
     execute_result.map_err(|e| match e {
         velesdb_core::Error::CollectionNotFound(name) => velesql_collection_not_found(&name),
-        other => velesql_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
+        other => velesql_execution_error(
+            &other,
             "VELESQL_EXECUTION_ERROR",
-            &other.to_string(),
             "Validate query semantics and parameter types against the target collection",
-            None,
         ),
     })
 }
