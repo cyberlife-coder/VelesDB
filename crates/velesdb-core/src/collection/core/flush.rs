@@ -122,6 +122,8 @@ impl Collection {
     fn flush_core_storage(&self, steps: &mut FlushSteps) {
         steps.run("config", self.save_config());
         let vectors = self.storage.vector_storage.write().flush();
+        #[cfg(test)]
+        let vectors = flush_hooks::vector_flush(vectors);
         steps.run("vector storage", vectors.map_err(Error::from));
         let payloads = self.storage.payload_storage.write().flush();
         steps.run("payload storage", payloads.map_err(Error::from));
@@ -524,3 +526,8 @@ impl Collection {
         Ok(reclaimed)
     }
 }
+
+/// A test's hook into a flush's vector storage step.
+#[cfg(test)]
+#[path = "flush_hooks.rs"]
+pub(crate) mod flush_hooks;
