@@ -315,11 +315,16 @@ fn a_batch_search_reads_no_storage_on_a_rayon_worker() {
     let filters = vec![None; queries.len()];
     let before = STORAGE_READS_ON_RAYON.load(Ordering::Relaxed);
 
-    coll.search_batch_parallel(&queries, K).expect("test: batch");
+    coll.search_batch_parallel(&queries, K)
+        .expect("test: batch");
     coll.search_batch_with_filters(&queries, K, &filters)
         .expect("test: filtered batch");
-    coll.multi_query_search_ids(&queries[..4], K, crate::fusion::FusionStrategy::RRF { k: 60 })
-        .expect("test: multi-query");
+    coll.multi_query_search_ids(
+        &queries[..4],
+        K,
+        crate::fusion::FusionStrategy::RRF { k: 60 },
+    )
+    .expect("test: multi-query");
 
     assert_eq!(
         STORAGE_READS_ON_RAYON.load(Ordering::Relaxed),
