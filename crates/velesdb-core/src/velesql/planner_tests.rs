@@ -71,7 +71,7 @@ fn test_graph_latency_independent_count() {
 
 #[test]
 fn test_custom_thresholds() {
-    let planner = QueryPlanner::with_thresholds(0.05, 0.30);
+    let planner = QueryPlanner::with_vector_first_threshold(0.30);
 
     assert_eq!(
         planner.choose_strategy(Some(0.03)),

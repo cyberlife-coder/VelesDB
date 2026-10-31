@@ -311,6 +311,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING — the `Parallel` execution strategy, on SELECT and on MATCH.**
+  It ran the GraphFirst pass and the VectorFirst search and merged them, but
+  GraphFirst is exact over every row its filter or pattern admits: the
+  VectorFirst rows the union added were rows it already returned, so the
+  plan only cost both legs (on 20 000 768-d points, a `Parallel` SELECT's
+  p50 was 40–48 ms against 25–31 ms for GraphFirst). The planners now pick
+  `GraphFirst` in the band where they picked `Parallel`, and EXPLAIN shows
+  no `Parallel` plan. `ExecutionStrategy::Parallel`,
+  `MatchExecutionStrategy::Parallel` and
+  `QueryPlanner::with_thresholds(graph_first, vector_first)` are removed.
+  *Migration*: drop the `Parallel` arm of a `match` on either enum; build a
+  planner with `QueryPlanner::with_vector_first_threshold(vector_first)`.
 - **BREAKING — `AsyncIndexBuilder`'s test-only calls.** `search_buffer`,
   `drain_buffer`, `buffer_len`, `is_building` and `trigger_build_async` had
   no caller in core, the server or any binding: only tests reached them.

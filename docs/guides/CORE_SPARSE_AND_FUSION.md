@@ -66,7 +66,7 @@ for result in &results {
 
 ## Hybrid dense + sparse with RRF fusion
 
-Both branches run in parallel (rayon), then the two rankings are fused.
+The dense branch runs, then the sparse branch, and the two rankings are fused.
 
 ```rust
 use velesdb_core::sparse_index::SparseVector;

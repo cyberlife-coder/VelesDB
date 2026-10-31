@@ -542,9 +542,8 @@ every submission in core goes through it:
   thread's pool — the global pool from any other thread — and each one first
   asserts that the thread holds no collection guard. Legs that each take
   collection locks therefore run one after the other on the calling thread:
-  the dense and sparse legs of a hybrid search, the GraphFirst and
-  VectorFirst legs of a `Parallel`-strategy SELECT and MATCH, and
-  `upsert_bulk`'s vector and payload stores.
+  the dense and sparse legs of a hybrid search, and `upsert_bulk`'s vector
+  and payload stores.
 - **Its dedicated pools** run parallel work their caller holds a guard
   across: `pools::on_guarded_pool` for a batch search's resolve and an
   aggregation's chunked scan under the storage guards and the lazy PQ

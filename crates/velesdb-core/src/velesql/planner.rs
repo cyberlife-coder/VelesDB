@@ -37,11 +37,10 @@ pub use crate::velesql::query_stats::QueryStats;
 /// Execution strategy for hybrid queries.
 ///
 /// On the NEAR + metadata-filter SELECT path (`execution_paths.rs`,
-/// `dispatch_vector_with_strategy`) all three variants are realized as
+/// `dispatch_vector_with_strategy`) the two variants are realized as
 /// **physically distinct** plans: `VectorFirst` runs the filtered HNSW search,
-/// `GraphFirst` runs a full metadata scan scored by vector similarity, and
-/// `Parallel` runs both, one after the other, and merges them by
-/// best-score-per-id. Other SELECT arms (similarity() threshold, pure NEAR,
+/// and `GraphFirst` runs a full metadata scan scored by vector similarity — an
+/// exact pass over every row the filter admits. Other SELECT arms (similarity() threshold, pure NEAR,
 /// metadata-only, SELECT *) each have a single sensible physical plan and
 /// deliberately ignore the strategy — see the `dispatch_vector_query` match
 /// arms for the per-arm rationale. Graph predicates in SELECT WHERE that are
@@ -50,11 +49,8 @@ pub use crate::velesql::query_stats::QueryStats;
 /// retrieval is exhaustive within them; only OR/NOT-wrapped predicates remain
 /// post-filters over the fetch window.
 ///
-/// On the top-level MATCH path (`match_dispatch.rs`), `Parallel` runs
-/// `GraphFirst` and then `VectorFirst` and merges the result sets by
-/// `node_id`. Neither path runs the two legs concurrently: both take
-/// collection locks, and no job on a rayon pool may take one
-/// (`docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon").
+/// There is no plan running both: GraphFirst's scan already finds every row
+/// the VectorFirst search can, so a union adds nothing and costs both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExecutionStrategy {
@@ -62,18 +58,14 @@ pub enum ExecutionStrategy {
     /// Best when the metadata/graph filter is not very selective (>50% of data).
     VectorFirst,
     /// Execute the filter first: a full metadata scan scored by vector
-    /// similarity (selective filters, <1% of data). Realized distinctly on the
-    /// SELECT NEAR+filter path via `scan_and_score_by_vector`. Not applied to
-    /// SELECT graph predicates, which use their own anchored pre-filter.
+    /// similarity (filters admitting up to 50% of the data). Realized
+    /// distinctly on the SELECT NEAR+filter path via
+    /// `scan_and_score_by_vector`. Not applied to SELECT graph predicates,
+    /// which use their own anchored pre-filter.
     GraphFirst,
-    /// Execute both sides and merge by best-score-per-id (medium
-    /// selectivity, 1-50%). Realized on BOTH the SELECT NEAR+filter path and
-    /// the top-level MATCH path, the two legs one after the other.
-    Parallel,
 }
 
 const VECTOR_FIRST_FILTER_PENALTY: f64 = 1.5;
-const PARALLEL_MERGE_OVERHEAD: f64 = 25.0;
 const GRAPH_TO_VECTOR_SCALING: f64 = 100.0;
 
 /// Query planner for hybrid MATCH + NEAR queries.
@@ -83,9 +75,7 @@ pub struct QueryPlanner {
     stats: QueryStats,
     /// CBO calibration feedback loop (issue #469).
     cbo_feedback: crate::collection::query_cost::CboFeedbackLoop,
-    /// Selectivity threshold for GraphFirst strategy.
-    graph_first_threshold: f64,
-    /// Selectivity threshold for VectorFirst strategy.
+    /// Selectivity above which VectorFirst is chosen; GraphFirst at or below.
     vector_first_threshold: f64,
 }
 
@@ -96,18 +86,17 @@ impl QueryPlanner {
         Self {
             stats: QueryStats::new(),
             cbo_feedback: crate::collection::query_cost::CboFeedbackLoop::new(),
-            graph_first_threshold: 0.01,  // <1% → GraphFirst
-            vector_first_threshold: 0.50, // >50% → VectorFirst
+            vector_first_threshold: 0.50, // >50% → VectorFirst, else GraphFirst
         }
     }
 
-    /// Creates a planner with custom selectivity thresholds.
+    /// Creates a planner choosing VectorFirst above `vector_first`
+    /// selectivity, and GraphFirst at or below it.
     #[must_use]
-    pub fn with_thresholds(graph_first: f64, vector_first: f64) -> Self {
+    pub fn with_vector_first_threshold(vector_first: f64) -> Self {
         Self {
             stats: QueryStats::new(),
             cbo_feedback: crate::collection::query_cost::CboFeedbackLoop::new(),
-            graph_first_threshold: graph_first,
             vector_first_threshold: vector_first,
         }
     }
@@ -117,12 +106,10 @@ impl QueryPlanner {
     pub fn choose_strategy(&self, estimated_selectivity: Option<f64>) -> ExecutionStrategy {
         let selectivity = estimated_selectivity.unwrap_or_else(|| self.stats.graph_selectivity());
 
-        if selectivity < self.graph_first_threshold {
-            ExecutionStrategy::GraphFirst
-        } else if selectivity > self.vector_first_threshold {
+        if selectivity > self.vector_first_threshold {
             ExecutionStrategy::VectorFirst
         } else {
-            ExecutionStrategy::Parallel
+            ExecutionStrategy::GraphFirst
         }
     }
 
@@ -170,18 +157,11 @@ impl QueryPlanner {
             vector_cost.total() + (candidate_filter_cost.total() * VECTOR_FIRST_FILTER_PENALTY);
         let graph_first = filter_cost.total()
             + (vector_cost.total() * filter_cost.io_cost.max(1.0) / GRAPH_TO_VECTOR_SCALING);
-        let parallel = vector_cost.total().max(filter_cost.total()) + PARALLEL_MERGE_OVERHEAD;
-
-        let candidates = [
-            (ExecutionStrategy::VectorFirst, vector_first),
-            (ExecutionStrategy::GraphFirst, graph_first),
-            (ExecutionStrategy::Parallel, parallel),
-        ];
-
-        candidates
-            .into_iter()
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map_or(ExecutionStrategy::Parallel, |(strategy, _)| strategy)
+        if vector_first < graph_first {
+            ExecutionStrategy::VectorFirst
+        } else {
+            ExecutionStrategy::GraphFirst
+        }
     }
 
     /// Like `choose_strategy_with_cbo` but also returns the CBO-computed over-fetch factor.
@@ -191,7 +171,6 @@ impl QueryPlanner {
     /// - `VectorFirst` with filter: `(1 / selectivity).clamp(1, 64)`
     /// - `VectorFirst` without filter: `1`
     /// - `GraphFirst`: `1` (graph pre-filters, no over-fetch needed)
-    /// - `Parallel`: `2` (merge overhead)
     #[must_use]
     pub fn choose_strategy_with_cbo_and_overfetch(
         &self,
@@ -207,7 +186,7 @@ impl QueryPlanner {
         let strategy = self.choose_strategy_with_cbo(stats, filter, k);
 
         // Derive over-fetch from the CBO selectivity estimate.
-        // GraphFirst/Parallel: fixed factors. VectorFirst: scale inversely with selectivity.
+        // GraphFirst: no over-fetch. VectorFirst: scale inversely with selectivity.
         let over_fetch = match strategy {
             ExecutionStrategy::VectorFirst => {
                 // (1 / selectivity) rounded up, clamped to [1, 64].
@@ -217,7 +196,6 @@ impl QueryPlanner {
                 over_fetch_f.ceil() as usize
             }
             ExecutionStrategy::GraphFirst => 1,
-            ExecutionStrategy::Parallel => 2,
         };
 
         (strategy, over_fetch)
@@ -376,10 +354,6 @@ impl QueryPlanner {
             ExecutionStrategy::GraphFirst => {
                 // Graph traversal + vector search on candidates
                 graph_cost + (candidate_count * vector_cost / 1000).max(1)
-            }
-            ExecutionStrategy::Parallel => {
-                // Max of both (parallel execution)
-                vector_cost.max(graph_cost) + 10 // 10µs merge overhead
             }
         }
     }

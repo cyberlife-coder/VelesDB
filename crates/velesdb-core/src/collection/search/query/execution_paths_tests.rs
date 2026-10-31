@@ -1,134 +1,20 @@
-//! Tests for the SELECT `ExecutionStrategy::Parallel` path:
-//! `dispatch_vector_with_strategy` union semantics and the
-//! `merge_select_parallel_results` best-score merge.
+//! Tests for the SELECT strategy dispatch (`dispatch_vector_with_strategy`)
+//! and the cost-model-driven metadata fallback.
 
 #![cfg(all(test, feature = "persistence"))]
 
-use super::merge_select_parallel_results;
 use crate::collection::search::query::QuerySearchOptions;
 use crate::point::{Point, SearchResult};
 use crate::test_fixtures::fixtures::{make_point_with_payload, setup_collection};
 use crate::velesql::ExecutionStrategy;
-
-fn make_result(id: u64, score: f32) -> SearchResult {
-    SearchResult::new(Point::without_payload(id, vec![0.0; 4]), score)
-}
 
 fn ids_of(results: &[SearchResult]) -> Vec<u64> {
     results.iter().map(|r| r.point.id).collect()
 }
 
 // ============================================================================
-// A. merge_select_parallel_results unit semantics
+// A. The two strategies are distinct plans
 // ============================================================================
-
-/// Union: ids present in only one branch survive; duplicated ids keep the
-/// BETTER score (higher wins when `higher_is_better`), sorted descending.
-#[test]
-fn test_merge_parallel_union_keeps_best_score_higher_is_better() {
-    let graph = vec![make_result(1, 0.4), make_result(2, 0.9)];
-    let vector = vec![make_result(2, 0.5), make_result(3, 0.7)];
-
-    let merged = merge_select_parallel_results(graph, vector, true, 10);
-
-    assert_eq!(
-        ids_of(&merged),
-        vec![2, 3, 1],
-        "descending best-score order"
-    );
-    let id2 = merged.iter().find(|r| r.point.id == 2).expect("id 2");
-    assert!(
-        (id2.score - 0.9).abs() < f32::EPSILON,
-        "best score must win"
-    );
-}
-
-/// Lower-is-better polarity: the LOWER score wins per id and the merged
-/// list sorts ascending.
-#[test]
-fn test_merge_parallel_union_keeps_best_score_lower_is_better() {
-    let graph = vec![make_result(1, 0.8), make_result(2, 0.2)];
-    let vector = vec![make_result(1, 0.3), make_result(3, 0.5)];
-
-    let merged = merge_select_parallel_results(graph, vector, false, 10);
-
-    assert_eq!(ids_of(&merged), vec![2, 1, 3], "ascending best-score order");
-    let id1 = merged.iter().find(|r| r.point.id == 1).expect("id 1");
-    assert!(
-        (id1.score - 0.3).abs() < f32::EPSILON,
-        "lower score must win"
-    );
-}
-
-/// The merged union is truncated to `limit` after sorting.
-#[test]
-fn test_merge_parallel_truncates_to_limit() {
-    let graph = vec![make_result(1, 0.9), make_result(2, 0.8)];
-    let vector = vec![make_result(3, 0.7), make_result(4, 0.6)];
-
-    let merged = merge_select_parallel_results(graph, vector, true, 2);
-
-    assert_eq!(ids_of(&merged), vec![1, 2], "top-2 of the union only");
-}
-
-// ============================================================================
-// B. Forcing ExecutionStrategy::Parallel through dispatch
-// ============================================================================
-
-/// GIVEN a filtered collection
-/// WHEN dispatching with a FORCED `ExecutionStrategy::Parallel`
-/// THEN the result is exactly the best-score union of the GraphFirst scan
-///      and the VectorFirst HNSW branch (same merge the planner promises).
-#[test]
-fn test_parallel_strategy_returns_best_score_union_of_both_branches() {
-    let (_dir, col) = setup_collection(4);
-    let points: Vec<Point> = (1..=20u64)
-        .map(|i| {
-            #[allow(clippy::cast_precision_loss)]
-            let v = vec![1.0, i as f32 * 0.05, 0.0, 0.0];
-            make_point_with_payload(i, v, serde_json::json!({"category": "tech"}))
-        })
-        .collect();
-    col.upsert(points).expect("test: upsert");
-
-    let filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
-        field: "category".into(),
-        value: serde_json::json!("tech"),
-    });
-    let query = [1.0, 0.0, 0.0, 0.0];
-    let opts = QuerySearchOptions::default();
-    let (k, limit) = (10, 5);
-
-    let parallel = col
-        .dispatch_vector_with_strategy(
-            &query,
-            &filter,
-            ExecutionStrategy::Parallel,
-            k,
-            limit,
-            &opts,
-        )
-        .expect("test: parallel dispatch");
-
-    // Reference union: run both branches exactly as the Parallel arm does.
-    let graph = col.scan_and_score_by_vector(&filter, &query, limit);
-    let vector = col
-        .search_with_filter_and_opts(&query, k, &filter, &opts)
-        .expect("test: vector branch");
-    let expected = merge_select_parallel_results(graph, vector, true, limit);
-
-    assert_eq!(parallel.len(), limit, "LIMIT must be respected");
-    assert_eq!(
-        ids_of(&parallel),
-        ids_of(&expected),
-        "Parallel must equal the best-score union of GraphFirst + VectorFirst"
-    );
-    // Cosine: most similar to [1,0,0,0] is the smallest second component.
-    assert_eq!(parallel[0].point.id, 1, "best-scored point first");
-    for w in parallel.windows(2) {
-        assert!(w[0].score >= w[1].score, "descending similarity order");
-    }
-}
 
 /// Shared fixture: 20 `category="tech"` points whose second vector component
 /// increases with the id, so cosine similarity to `[1,0,0,0]` is strictly
@@ -224,116 +110,39 @@ fn test_vector_first_strategy_matches_hnsw_filtered_reference() {
 }
 
 /// GIVEN the same data, filter, query, k, and limit
-/// WHEN dispatched under GraphFirst, VectorFirst, and Parallel
-/// THEN the three strategies are observably distinct physical plans: the
+/// WHEN dispatched under GraphFirst and VectorFirst
+/// THEN the two strategies are observably distinct physical plans: the
 ///      VectorFirst set (up to `k` HNSW candidates) differs from the
-///      GraphFirst set (top-`limit` exhaustive), and Parallel is the
-///      best-score-per-id merge of both.
+///      GraphFirst set (top-`limit` exhaustive), and every row VectorFirst
+///      returns is also one GraphFirst's exhaustive scan admits — which is
+///      why no plan runs both.
 #[test]
-fn test_three_strategies_yield_distinct_result_sets() {
+fn test_two_strategies_yield_distinct_result_sets() {
     let (_dir, col) = setup_parallel_fixture();
     let filter = tech_filter();
     let query = [1.0, 0.0, 0.0, 0.0];
     let opts = QuerySearchOptions::default();
     let (k, limit) = (10, 3);
 
-    let graph_first = col
-        .dispatch_vector_with_strategy(
-            &query,
-            &filter,
-            ExecutionStrategy::GraphFirst,
-            k,
-            limit,
-            &opts,
-        )
-        .expect("test: graph-first");
-    let vector_first = col
-        .dispatch_vector_with_strategy(
-            &query,
-            &filter,
-            ExecutionStrategy::VectorFirst,
-            k,
-            limit,
-            &opts,
-        )
-        .expect("test: vector-first");
-    let parallel = col
-        .dispatch_vector_with_strategy(
-            &query,
-            &filter,
-            ExecutionStrategy::Parallel,
-            k,
-            limit,
-            &opts,
-        )
-        .expect("test: parallel");
+    let dispatch = |strategy, limit| {
+        col.dispatch_vector_with_strategy(&query, &filter, strategy, k, limit, &opts)
+            .expect("test: dispatch")
+    };
+    let graph_first = dispatch(ExecutionStrategy::GraphFirst, limit);
+    let vector_first = dispatch(ExecutionStrategy::VectorFirst, limit);
 
-    // GraphFirst (top-3 exhaustive) is not the VectorFirst set (10 candidates):
-    // three physically distinct realizations, not one collapsed path.
     assert_ne!(
         ids_of(&graph_first),
         ids_of(&vector_first),
         "GraphFirst and VectorFirst must produce distinct result-sets"
     );
-
-    // Parallel equals the documented best-score-per-id merge of both legs.
-    let graph_ref = col.scan_and_score_by_vector(&filter, &query, limit);
-    let vector_ref = col
-        .search_with_filter_and_opts(&query, k, &filter, &opts)
-        .expect("test: vector ref");
-    let expected = merge_select_parallel_results(graph_ref, vector_ref, true, limit);
-    assert_eq!(
-        ids_of(&parallel),
-        ids_of(&expected),
-        "Parallel must equal the best-score-per-id union of both legs"
+    let everything = ids_of(&dispatch(ExecutionStrategy::GraphFirst, 100));
+    assert!(
+        ids_of(&vector_first)
+            .iter()
+            .all(|id| everything.contains(id)),
+        "GraphFirst's scan admits every row VectorFirst returns"
     );
-}
-
-/// The Parallel realization is DETERMINISTIC: the same forced dispatch,
-/// repeated, returns byte-identical ids AND scores (the merge is
-/// order-insensitive over immutable data).
-#[test]
-fn test_parallel_dispatch_is_deterministic() {
-    let (_dir, col) = setup_parallel_fixture();
-    let filter = tech_filter();
-    let query = [1.0, 0.0, 0.0, 0.0];
-    let opts = QuerySearchOptions::default();
-    let (k, limit) = (10, 5);
-
-    let first = col
-        .dispatch_vector_with_strategy(
-            &query,
-            &filter,
-            ExecutionStrategy::Parallel,
-            k,
-            limit,
-            &opts,
-        )
-        .expect("test: parallel run 1");
-
-    for run in 0..8 {
-        let again = col
-            .dispatch_vector_with_strategy(
-                &query,
-                &filter,
-                ExecutionStrategy::Parallel,
-                k,
-                limit,
-                &opts,
-            )
-            .expect("test: parallel repeat");
-        assert_eq!(
-            ids_of(&first),
-            ids_of(&again),
-            "Parallel ids must be identical across runs (run {run})"
-        );
-        let scores_first: Vec<f32> = first.iter().map(|r| r.score).collect();
-        let scores_again: Vec<f32> = again.iter().map(|r| r.score).collect();
-        assert_eq!(
-            scores_first, scores_again,
-            "Parallel scores must be identical across runs (run {run})"
-        );
-    }
 }
 
 // ============================================================================

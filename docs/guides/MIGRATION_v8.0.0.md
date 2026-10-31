@@ -248,6 +248,8 @@ fast sends no search instead.
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
 | `velesql::match_clause` (`parse_match_clause`, `parse_node_pattern`, `parse_relationship_pattern`) | `velesql::Parser::parse` on the whole `MATCH` statement, then `Query::match_clause` |
 | `AsyncIndexBuilder::{search_buffer, drain_buffer, buffer_len, is_building, trigger_build_async}` | search the collection; `VectorCollection::flush` indexes what the builder holds |
+| `velesql::ExecutionStrategy::Parallel`, `velesql::match_planner::MatchExecutionStrategy::Parallel` | none: the planners pick `GraphFirst` where they picked `Parallel`; a `match` on either enum drops that arm |
+| `velesql::QueryPlanner::with_thresholds(graph_first, vector_first)` | `QueryPlanner::with_vector_first_threshold(vector_first)`: at or below it the planner picks `GraphFirst` |
 | `DeltaBuffer::search`, `DeferredIndexer::search` | search the collection: it merges what the deferred indexer holds |
 | `DeferredIndexer::{merge_with_hnsw, swap_and_drain, drain_all}` | `VectorCollection::flush` indexes what the deferred indexer holds |
 | `collection::streaming::{merge_with_delta, merge_with_delta_scored}` | search the collection |

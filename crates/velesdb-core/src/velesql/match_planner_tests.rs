@@ -236,13 +236,13 @@ fn test_planner_forces_graph_first_when_return_references_edge_alias() {
 }
 
 #[test]
-fn test_planner_forces_graph_first_over_parallel_when_edge_alias_referenced() {
-    // similarity on a NON-start alias + large dense stats would pick Parallel;
-    // an edge-alias reference in RETURN must force pure GraphFirst instead.
+fn test_planner_forces_graph_first_when_edge_alias_referenced_on_large_graphs() {
+    // similarity on a NON-start alias over large, dense stats, plus an
+    // edge-alias reference in RETURN: GraphFirst, which binds edge aliases.
     let mut match_clause = with_rel_alias(make_match_clause(true, Some(10)));
     if let Some(Condition::Similarity(sim)) = match_clause.where_clause.as_mut() {
         sim.field = "b.embedding".to_string();
-        sim.threshold = 0.85; // > 0.8 so should_use_parallel() is reachable
+        sim.threshold = 0.85;
     }
     match_clause.return_clause.items = vec![crate::velesql::ReturnItem {
         expression: "r.since".to_string(),
@@ -259,8 +259,8 @@ fn test_planner_forces_graph_first_over_parallel_when_edge_alias_referenced() {
     let strategy = MatchQueryPlanner::plan(&match_clause, &stats);
     assert!(
         matches!(strategy, MatchExecutionStrategy::GraphFirst { .. }),
-        "edge-alias reference must force GraphFirst over Parallel \
-         (the VectorFirst leg cannot bind edge aliases), got {strategy:?}"
+        "edge-alias reference must force GraphFirst \
+         (VectorFirst cannot bind edge aliases), got {strategy:?}"
     );
 }
 

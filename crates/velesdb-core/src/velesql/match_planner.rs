@@ -1,7 +1,8 @@
 //! MATCH Query Planner for optimal execution strategy (EPIC-045 US-006).
 //!
 //! This module provides cost-based query planning for MATCH queries,
-//! choosing between Graph-First, Vector-First, or Parallel execution.
+//! choosing between Graph-First and Vector-First execution. No plan runs both:
+//! Graph-First enumerates every row the Vector-First search could return.
 
 // Reason: Numeric casts in query planning are intentional:
 // - u64->f64 for limit calculations: precision loss acceptable for estimates
@@ -36,15 +37,6 @@ pub enum MatchExecutionStrategy {
         top_k: usize,
         /// Similarity threshold.
         threshold: f32,
-    },
-
-    /// Execute both strategies in parallel, then merge.
-    /// Best when: both graph and vector are selective.
-    Parallel {
-        /// Graph-first hint.
-        graph_hint: Box<MatchExecutionStrategy>,
-        /// Vector-first hint.
-        vector_hint: Box<MatchExecutionStrategy>,
     },
 }
 
@@ -113,15 +105,6 @@ impl MatchQueryPlanner {
             let similarity_info = Self::extract_similarity_info(match_clause.where_clause.as_ref());
             if Self::is_similarity_on_start(match_clause, similarity_info.as_ref()) {
                 return Self::plan_vector_first(match_clause, stats, similarity_info);
-            }
-            if Self::should_use_parallel(stats, similarity_info.as_ref()) {
-                return Self::plan_parallel(
-                    match_clause,
-                    stats,
-                    similarity_info,
-                    start_labels,
-                    max_depth,
-                );
             }
         }
         MatchExecutionStrategy::GraphFirst {
@@ -219,28 +202,6 @@ impl MatchQueryPlanner {
         }
     }
 
-    /// Plans a parallel (graph + vector) strategy.
-    fn plan_parallel(
-        match_clause: &MatchClause,
-        stats: &MatchGraphStats,
-        similarity_info: Option<(String, f32, String)>,
-        start_labels: Vec<String>,
-        max_depth: u32,
-    ) -> MatchExecutionStrategy {
-        let (alias, threshold, _) = similarity_info.unwrap_or_default();
-        MatchExecutionStrategy::Parallel {
-            graph_hint: Box::new(MatchExecutionStrategy::GraphFirst {
-                start_labels,
-                max_depth,
-            }),
-            vector_hint: Box::new(MatchExecutionStrategy::VectorFirst {
-                similarity_alias: alias,
-                top_k: Self::estimate_top_k(match_clause, stats, threshold),
-                threshold,
-            }),
-        }
-    }
-
     /// Check if WHERE clause contains a similarity condition.
     pub(crate) fn has_similarity_condition(where_clause: Option<&Condition>) -> bool {
         where_clause.is_some_and(Self::condition_has_similarity)
@@ -335,22 +296,6 @@ impl MatchQueryPlanner {
         (1.0 - f64::from(threshold)).max(0.01)
     }
 
-    /// Decide if parallel execution is beneficial.
-    fn should_use_parallel(
-        stats: &MatchGraphStats,
-        similarity_info: Option<&(String, f32, String)>,
-    ) -> bool {
-        // Use parallel when:
-        // 1. Collection is large (>10k nodes)
-        // 2. Graph is dense (avg_degree > 5)
-        // 3. Similarity threshold is high (>0.8)
-        let large_collection = stats.total_nodes > 10_000;
-        let dense_graph = stats.avg_degree > 5.0;
-        let high_threshold = similarity_info.is_some_and(|(_, t, _)| *t > 0.8);
-
-        large_collection && dense_graph && high_threshold
-    }
-
     /// Generate a human-readable explanation of the chosen strategy.
     #[must_use]
     pub fn explain(strategy: &MatchExecutionStrategy) -> String {
@@ -375,16 +320,6 @@ impl MatchQueryPlanner {
             } => {
                 format!(
                     "VectorFirst: Search top-{top_k} candidates for '{similarity_alias}' with threshold {threshold:.2}, then validate graph",
-                )
-            }
-            MatchExecutionStrategy::Parallel {
-                graph_hint,
-                vector_hint,
-            } => {
-                format!(
-                    "Parallel:\n  - {}\n  - {}",
-                    Self::explain(graph_hint),
-                    Self::explain(vector_hint)
                 )
             }
         }

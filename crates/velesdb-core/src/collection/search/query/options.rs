@@ -24,8 +24,8 @@ pub(crate) struct QuerySearchOptions {
     /// strategy it actually ran into this cell (shared with the query's
     /// [`QueryContext`](crate::guardrails::QueryContext)). `None` outside
     /// the pipeline (raw search entry points) — recording is then a no-op.
-    /// A shared atomic cell, not a thread-local: the vector leg of the CBO
-    /// `Parallel` strategy runs on a rayon worker thread.
+    /// A shared atomic cell, not a thread-local, so the record does not
+    /// depend on which thread the dispatch runs on.
     pub executed_strategy_probe: Option<std::sync::Arc<crate::guardrails::ExecutedStrategyCell>>,
 }
 

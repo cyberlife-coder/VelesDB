@@ -35,19 +35,17 @@ The jump between the two estimates is **not** a regression; it reflects that the
 `compute_cbo_strategy` in `collection/search/query/select_dispatch.rs` now routes SELECT queries through two calibrated planner entry points:
 
 - `QueryPlanner::choose_hybrid_strategy` for queries carrying `ORDER BY similarity()` — forces `VectorFirst` to preserve HNSW natural ordering regardless of cost estimates.
-- `QueryPlanner::choose_strategy_with_cbo_and_overfetch` for all other SELECT queries — calibrated I/O / CPU cost comparison across `VectorFirst` / `GraphFirst` / `Parallel`.
+- `QueryPlanner::choose_strategy_with_cbo_and_overfetch` for all other SELECT queries — calibrated I/O / CPU cost comparison between `VectorFirst` and `GraphFirst`.
 
 Both branches feed into the same `dispatch_vector_query` executor through the `(ExecutionStrategy, over_fetch: usize)` tuple.
 
 **What remains open**: the deeper `PlanGenerator::CandidatePlan` enumeration (SeqScan, IndexScan, VectorSearch, GraphTraversal, hybrid combinations) is still not consumed by `execute_query`. The current two-path routing covers the operationally common cases — full multi-candidate enumeration would only change the decision when the cost landscape is non-trivially multimodal.
 
-**Strategy realization on SELECT (audit F-2.15 — RESOLVED, #1390)**: on the NEAR + metadata-filter SELECT path (`execution_paths.rs`, `dispatch_vector_with_strategy`), the `ExecutionStrategy` the planner selects is executed as three **physically distinct** plans:
+**Strategy realization on SELECT (audit F-2.15 — RESOLVED, #1390)**: on the NEAR + metadata-filter SELECT path (`execution_paths.rs`, `dispatch_vector_with_strategy`), the `ExecutionStrategy` the planner selects is executed as two **physically distinct** plans:
 
 - `VectorFirst` — filtered HNSW search (`search_with_filter_and_opts`).
 - `GraphFirst` — a full metadata scan scored by vector similarity (`scan_and_score_by_vector`), physically distinct from the HNSW path.
-- `Parallel` — the GraphFirst scan and then the VectorFirst HNSW branch, merged by best-score-per-id. On `MATCH` (`match_dispatch.rs`, `execute_match_parallel`), `Parallel` likewise runs its GraphFirst and VectorFirst legs and merges by `node_id`.
-
-The legs run one after the other: each takes collection locks, and no job on a rayon pool may take one (`docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon"). A `Parallel` plan therefore costs both legs' time, although the planner still costs it as the longer leg plus a merge. The merge is order-insensitive, and the shared EXPLAIN counters are the sum of both legs. The other SELECT arms (similarity() threshold, pure NEAR, metadata-only, SELECT *) each have a single sensible physical plan and deliberately ignore the strategy — see the `dispatch_vector_query` match arms for the per-arm rationale. SELECT graph predicates still use their own anchored pre-filter (`graph_prefilter.rs`) independently of `ExecutionStrategy`. Covered by `test_parallel_strategy_returns_best_score_union_of_both_branches`, the forced-`GraphFirst`/`VectorFirst` dispatch tests, and `parallel_counters_sum_both_legs`.
+There is no plan running both, on SELECT or on `MATCH`: GraphFirst's scan is exact over every row the filter admits, so the VectorFirst rows a union would add are rows it already returns, and such a plan would cost both. The other SELECT arms (similarity() threshold, pure NEAR, metadata-only, SELECT *) each have a single sensible physical plan and deliberately ignore the strategy — see the `dispatch_vector_query` match arms for the per-arm rationale. SELECT graph predicates still use their own anchored pre-filter (`graph_prefilter.rs`) independently of `ExecutionStrategy`. Covered by the forced-`GraphFirst`/`VectorFirst` dispatch tests and `test_two_strategies_yield_distinct_result_sets`.
 
 **User impact**: `MATCH` queries use the full CBO via `MatchQueryPlanner::plan`. SELECT queries (including ORDER BY similarity + filter) now use calibrated strategy and over-fetch selection. Covered by `test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter` + `test_cbo_calibrated_path_still_works_without_order_by_similarity` + `test_filter_strategy_switches_on_selectivity`.
 
