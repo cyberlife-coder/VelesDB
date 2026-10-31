@@ -2448,6 +2448,16 @@ check_kind_cases=(
   "-|echo cargo test"
   "-|git status"
   "-|"
+  "-|cargo te2>&1st"
+  "-|cargo t2>&1est"
+  "test|cargo test 2>&1 -p velesdb-memory"
+  "-|cargo test --no-run"
+  "-|cargo test -p velesdb-memory --no-run"
+  "-|cargo test -- --list"
+  "-|cargo test --help"
+  "-|pytest --collect-only -q"
+  "-|go test -list ."
+  "-|flock -n /tmp/build.lock cargo test"
 )
 check_kind_wrong=""
 for case_line in "${check_kind_cases[@]}"; do
@@ -2483,6 +2493,53 @@ if [ -z "$failure_wrong" ]; then
   pass "Evidence: a failure counts only with a documented non-zero 'Exit code N' first line"
 else
   fail "Evidence: a failure counts only with a documented non-zero 'Exit code N' first line:$failure_wrong"
+fi
+
+# An exit status that reports the launch, not the check: 126 (not
+# executable), 127 (not found), and for a `flock`-wrapped command the
+# sysexits range flock uses for its own failures (64-78).
+launch_cases=(
+  "yes|101|cargo test"
+  "yes|1|pytest -q"
+  "no|127|cargo test"
+  "no|126|cargo test"
+  "yes|101|flock /tmp/build.lock cargo test"
+  "yes|1|flock /tmp/build.lock pytest -q"
+  "no|66|flock /tmp/build.lock cargo test"
+  "no|69|flock /tmp/build.lock cargo test"
+  "no|78|flock /tmp/build.lock cargo test"
+  "yes|66|cargo test"
+)
+launch_wrong=""
+for case_line in "${launch_cases[@]}"; do
+  expected="${case_line%%|*}"
+  rest="${case_line#*|}"
+  code="${rest%%|*}"
+  command_text="${rest#*|}"
+  if with_hook_lib check_failure_counts "$command_text" "$code"; then got=yes; else got=no; fi
+  [ "$got" = "$expected" ] || launch_wrong="$launch_wrong [$command_text exit $code] -> $got (want $expected);"
+done
+if [ -z "$launch_wrong" ]; then
+  pass "Evidence: an exit status that reports the launch, not the check, is no failure"
+else
+  fail "Evidence: an exit status that reports the launch, not the check, is no failure:$launch_wrong"
+fi
+
+# Every git call in the hooks goes through safe_git, which neutralizes the
+# repository's own config: a cloned repository chooses its .git/config, and
+# signature verification, an fsmonitor hook or a pager named there would
+# otherwise run at Stop. Comments are skipped; `command -v git` only looks.
+direct_git=""
+for host_lib in "$ROOT"/*/hooks/lib/*.sh "$ROOT"/*/hooks/*.sh; do
+  hits="$(grep -nE '(^|[^A-Za-z0-9_-])git[[:space:]]' "$host_lib" \
+    | grep -vE '^[0-9]+:[[:space:]]*#' \
+    | grep -vE 'command -v git|safe_git\(\)|^[0-9]+:[[:space:]]+(env|-u|GIT_)|--no-optional-locks' || true)"
+  [ -z "$hits" ] || direct_git="$direct_git ${host_lib#"$ROOT"/}:$(head -n 1 <<<"$hits");"
+done
+if [ -z "$direct_git" ]; then
+  pass "Evidence: every hook git call goes through safe_git"
+else
+  fail "Evidence: every hook git call goes through safe_git:$direct_git"
 fi
 
 if [ "$FAILED" -ne 0 ]; then
