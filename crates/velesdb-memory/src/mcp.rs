@@ -11,6 +11,7 @@ use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{ErrorCode, Implementation, InitializeResult, ServerCapabilities};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 
+use crate::anchor::AnchorRoot;
 use crate::limits::MAX_RECALL_LIMIT;
 use crate::service::{LiveGenerationSlot, MemoryService};
 
@@ -288,13 +289,25 @@ impl McpServer {
         self
     }
 
+    /// The canonical roots anchored files may be read under: the ingest
+    /// roots, or none — anchoring is then refused.
+    fn anchor_allowlist(&self) -> Vec<std::path::PathBuf> {
+        #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
+        {
+            if let Some(roots) = &self.ingest_roots {
+                return roots.paths().to_vec();
+            }
+        }
+        Vec::new()
+    }
+
     #[tool(
         name = "remember",
         // Sans declaration explicite, rmcp derive un schema de sortie qui
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RememberResult>(),
-        description = "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
+        description = "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots) tie the fact to those files: the server records each file's SHA-256 so a later `recall` can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
         input_schema = id_wire_input_schema::<RememberParams>(&["target"])
     )]
     async fn remember(
@@ -311,10 +324,18 @@ impl McpServer {
             links,
             metadata,
             ttl_seconds,
+            anchors,
+            anchor_root,
         } = params;
         let ttl = ttl_seconds.or(self.default_ttl);
+        let allowlist = self.anchor_allowlist();
         let id = tokio::task::spawn_blocking(move || {
-            service.run(|current| current.remember_with_ttl(&fact, &links, metadata.as_ref(), ttl))
+            // Read before the fact is stored: a refused anchor stores nothing.
+            let anchors =
+                AnchorRoot::resolve_request(anchor_root.as_deref(), &anchors, &allowlist)?;
+            service.run(|current| {
+                current.remember_anchored(&fact, &links, metadata.as_ref(), ttl, &anchors)
+            })
         })
         .await
         .map_err(join_error)?
@@ -330,7 +351,7 @@ impl McpServer {
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
         output_schema = crate::schema::wire_safe_output_schema::<RecallResult>(),
-        description = "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — relay them as strings (`id_str`)."
+        description = "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. With `anchor_root` (an absolute checkout inside the server's ingest roots), each fact remembered with `anchors` carries `freshness` — `fresh`, `stale` (an anchored file changed or was deleted; listed in `changed`, and the fact is ranked lower) or `unverified`; staleness never changes the learned confidence. Ids exceed 2^53 — relay them as strings (`id_str`)."
     )]
     async fn recall(
         &self,
@@ -341,14 +362,29 @@ impl McpServer {
             .unwrap_or(DEFAULT_RECALL_LIMIT)
             .min(MAX_RECALL_LIMIT);
         let service = Arc::clone(&self.service);
-        let RecallParams { query, filter, .. } = params;
-        let memories = tokio::task::spawn_blocking(move || {
-            service.run(|current| current.recall(&query, limit, filter.as_ref()))
+        let RecallParams {
+            query,
+            filter,
+            anchor_root,
+            ..
+        } = params;
+        let allowlist = self.anchor_allowlist();
+        let result = tokio::task::spawn_blocking(move || {
+            let Some(root) = anchor_root else {
+                let memories =
+                    service.run(|current| current.recall(&query, limit, filter.as_ref()))?;
+                return Ok(RecallResult::new(memories));
+            };
+            let mut probe = AnchorRoot::open(&root, &allowlist)?;
+            let memories = service.run(|current| {
+                current.recall_anchored(&query, limit, filter.as_ref(), &mut probe)
+            })?;
+            Ok::<_, crate::error::MemoryError>(RecallResult::anchored(memories))
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
-        Ok(Json(RecallResult::new(memories)))
+        Ok(Json(result))
     }
 
     #[tool(
@@ -388,7 +424,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<FeedbackResult>(),
-        description = "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1].",
+        description = "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Concurrent feedback on one fact is applied atomically, each call counted once. Returns the fact's new confidence in [0,1].",
         input_schema = id_wire_input_schema::<FeedbackParams>(&["id"])
     )]
     async fn feedback(
@@ -724,6 +760,9 @@ fn to_error(err: crate::error::MemoryError) -> ErrorData {
     ErrorData::new(code, err.to_string(), None)
 }
 
+#[cfg(all(test, feature = "context"))]
+#[path = "mcp/anchor_tools_tests.rs"]
+mod anchor_tools_tests;
 #[cfg(all(test, feature = "persistence"))]
 #[path = "mcp/generation_tests.rs"]
 mod generation_tests;

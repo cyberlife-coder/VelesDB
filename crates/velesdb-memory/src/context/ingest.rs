@@ -127,6 +127,13 @@ impl IngestRoots {
         !self.roots.is_empty()
     }
 
+    /// The canonical roots — the allowlist file anchoring reads under too
+    /// ([`crate::anchor::AnchorRoot`]). Read by the MCP adapter only.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn paths(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
     /// Whether the already-canonical `candidate` sits under one of the
     /// roots, checked path-COMPONENT-wise via [`Path::starts_with`] — never
     /// a string prefix, which would wrongly accept a sibling directory that

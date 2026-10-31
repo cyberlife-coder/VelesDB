@@ -226,6 +226,20 @@ pub const MAX_INGEST_FILES: usize = 64;
 /// per-item constant must not silently loosen the aggregate ceiling.
 pub const MAX_TOTAL_INGEST_BYTES: usize = 64 * 1024 * 1024;
 
+/// Largest file a lesson may be anchored to, and the most of it the server
+/// reads to judge whether it changed — the ingest ceiling, for the same
+/// reason: bytes the server reads on a caller's behalf are bounded.
+pub const MAX_ANCHOR_FILE_BYTES: usize = MAX_INGEST_FILE_BYTES;
+
+/// Most bytes one anchored recall (or remember) may read across every
+/// anchored file. Past it, the remaining anchors are unverifiable rather
+/// than read: freshness is a ranking hint, not a reason to make a recall
+/// cost a full checkout scan.
+pub const MAX_ANCHOR_BYTES_PER_RECALL: usize = 16 * 1024 * 1024;
+
+/// Most distinct files one anchored recall (or remember) may read.
+pub const MAX_ANCHOR_FILES_PER_RECALL: usize = 256;
+
 /// Maximum accepted size of a `compile_transcript` transcript (V2b-2), inline
 /// or `path`-referenced — 8 MiB. The ONE caller-facing shape allowed to read
 /// past the ordinary [`MAX_INGEST_FILE_BYTES`]/[`MAX_FRAGMENT_BYTES`] 1 MiB

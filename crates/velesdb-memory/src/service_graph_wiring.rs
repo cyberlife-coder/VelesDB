@@ -129,7 +129,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         S: GraphStore,
     {
         let _generation = self.enter_generation();
-        self.remember_inner(fact, links, metadata, None, true)
+        self.remember_inner(fact, links, metadata, None, true, None)
     }
 
     /// Like [`Self::remember`], but the fact **expires after `ttl_seconds`**.
@@ -175,20 +175,22 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         S: GraphStore,
     {
         let _generation = self.enter_generation();
-        self.remember_inner(fact, links, metadata, ttl_seconds, true)
+        self.remember_inner(fact, links, metadata, ttl_seconds, true, None)
     }
 
     /// The shared write path. `run_autograph` is false for the one caller that
     /// has ALREADY extracted the passage — [`Self::remember_extracted`] — so a
     /// service with autograph on does not run a second generation per stored
-    /// fact, re-deriving what it just computed.
-    fn remember_inner(
+    /// fact, re-deriving what it just computed. `system` carries reserved
+    /// entries the service writes itself (file anchors), never the caller.
+    pub(super) fn remember_inner(
         &self,
         fact: &str,
         links: &[Link],
         metadata: Option<&Metadata>,
         ttl_seconds: Option<u64>,
         run_autograph: bool,
+        system: Option<&Metadata>,
     ) -> Result<u64, MemoryError>
     where
         S: GraphStore,
@@ -198,7 +200,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         let fact_id = id::stable_id(fact);
         reject_self_links(fact_id, links)?;
         let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
-        self.write_fact(fact_id, fact, metadata, ttl_seconds)?;
+        self.write_fact(fact_id, fact, metadata, ttl_seconds, system)?;
         self.link_or_rollback(fact_id, links, existed_before)?;
         self.autograph_if(run_autograph, fact_id, fact);
         Ok(fact_id)
@@ -647,7 +649,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             // Every OTHER error still aborts: they signal bad caller input
             // (reserved keys, oversized metadata) or a failing store, where
             // carrying on would compound the damage.
-            let fact_id = match self.remember_inner(content, &[], metadata, None, false) {
+            let fact_id = match self.remember_inner(content, &[], metadata, None, false, None) {
                 Ok(id) => id,
                 Err(MemoryError::FactTooLarge { .. }) => {
                     skipped_over_cap += 1;

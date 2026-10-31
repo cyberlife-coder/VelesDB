@@ -41,13 +41,10 @@ pub(crate) const RL_NEUTRAL_CONFIDENCE: f32 = 0.5;
 /// signal and feedback only tips genuinely close calls.
 const RL_RERANK_WEIGHT: f32 = 0.5;
 
-/// One recalled hit: `(id, similarity, content)`.
-type Hit = (u64, f32, String);
-/// A recalled hit paired with its raw payload and the blended re-rank key, as
-/// sorted by [`MemoryService::rl_rerank`].
-type RankedHit = (Hit, Option<Metadata>, f32);
-/// Reordered hits and their raw payloads, returned by [`MemoryService::rl_rerank`].
-type RerankedHits = (Vec<Hit>, Vec<Option<Metadata>>);
+use super::recall::{Candidates, Hit};
+
+/// A hit with its raw payload and the caller's tag, in re-rank order.
+type TaggedHit<T> = (Hit, Option<Metadata>, T);
 
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Record an outcome for a recalled fact and return its new confidence.
@@ -116,31 +113,38 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// blend factor of exactly `1.0`, so a result set with no feedback is
     /// returned untouched — the stable sort preserves the incoming similarity
     /// order exactly.
-    pub(crate) fn rl_rerank(hits: Vec<Hit>, payloads: Vec<Option<Metadata>>) -> RerankedHits {
-        if hits.len() < 2 {
-            return (hits, payloads);
-        }
-        let mut ranked: Vec<RankedHit> = hits
+    pub(crate) fn rl_rerank(hits: Vec<Hit>, payloads: Vec<Option<Metadata>>) -> Candidates {
+        let tags = vec![(); hits.len()];
+        Self::rl_rerank_tagged(hits, payloads, tags, |()| 1.0)
+            .into_iter()
+            .map(|(hit, payload, ())| (hit, payload))
+            .unzip()
+    }
+
+    /// [`Self::rl_rerank`] with one tag per hit, carried through the sort,
+    /// whose `factor` further scales that hit's blended key — how anchored
+    /// recall down-weights a stale lesson in the same single sort.
+    pub(crate) fn rl_rerank_tagged<T>(
+        hits: Vec<Hit>,
+        payloads: Vec<Option<Metadata>>,
+        tags: Vec<T>,
+        factor: impl Fn(&T) -> f32,
+    ) -> Vec<TaggedHit<T>> {
+        let mut ranked: Vec<(f32, TaggedHit<T>)> = hits
             .into_iter()
             .zip(payloads)
-            .map(|(hit, payload)| {
+            .zip(tags)
+            .map(|((hit, payload), tag)| {
                 let confidence = payload
                     .as_ref()
                     .map_or(RL_NEUTRAL_CONFIDENCE, read_confidence);
-                let blended = blended_score(hit.1, confidence);
-                (hit, payload, blended)
+                let key = blended_score(hit.1, confidence) * factor(&tag);
+                (key, (hit, payload, tag))
             })
             .collect();
-        // Stable sort: equal blended scores (e.g. all-neutral) keep input order.
-        ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
-
-        let mut out_hits = Vec::with_capacity(ranked.len());
-        let mut out_payloads = Vec::with_capacity(ranked.len());
-        for (hit, payload, _) in ranked {
-            out_hits.push(hit);
-            out_payloads.push(payload);
-        }
-        (out_hits, out_payloads)
+        // Stable sort: equal keys (e.g. all-neutral) keep input order.
+        ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+        ranked.into_iter().map(|(_, item)| item).collect()
     }
 }
 

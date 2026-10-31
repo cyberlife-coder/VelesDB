@@ -402,6 +402,13 @@ pub enum MemoryError {
     #[error("cannot ingest path: {0}")]
     IngestPath(String),
 
+    /// A file anchor was refused: a path that is not repository-relative,
+    /// too many anchors, anchoring disabled, a checkout root outside the
+    /// allowlist, or a file that cannot be read when the lesson is anchored.
+    #[cfg(feature = "persistence")]
+    #[error(transparent)]
+    Anchor(#[from] crate::anchor::AnchorError),
+
     /// A `remember` link failed after the fact was stored AND the
     /// compensating rollback delete also failed — unlike every other error
     /// from `remember`, the fact **remains stored**. Both errors are
@@ -462,6 +469,8 @@ impl MemoryError {
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             #[cfg(feature = "persistence")]
             Self::Provenance(cause) => cause.category(),
+            #[cfg(feature = "persistence")]
+            Self::Anchor(_) => ErrorCategory::InvalidInput,
             #[cfg(feature = "persistence")]
             Self::Memory(_) | Self::NotARegularFile { .. } => ErrorCategory::Internal,
             #[cfg(feature = "persistence")]

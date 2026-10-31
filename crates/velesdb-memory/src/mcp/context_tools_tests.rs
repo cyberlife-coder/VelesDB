@@ -115,6 +115,8 @@ async fn test_compile_context_tool_pulls_memory_scope() {
         links: Vec::new(),
         metadata: None,
         ttl_seconds: None,
+        anchors: Vec::new(),
+        anchor_root: None,
     }))
     .await
     .expect("remember");
