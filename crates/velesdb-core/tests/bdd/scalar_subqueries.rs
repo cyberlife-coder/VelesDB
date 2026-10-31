@@ -380,3 +380,22 @@ fn genuinely_correlated_subquery_is_still_rejected() {
         "rejection names the correlation: {err}"
     );
 }
+
+/// A HAVING scalar subquery that resolves to NULL (no row) is SQL's UNKNOWN:
+/// it matches no group, and is not an error.
+#[test]
+fn having_scalar_subquery_yielding_null_keeps_no_group() {
+    let (_dir, db) = create_test_db();
+    setup_orders(&db);
+
+    let query = Parser::parse(
+        "SELECT amount, COUNT(*) FROM orders GROUP BY amount \
+         HAVING COUNT(*) > (SELECT amount FROM orders WHERE amount = 9999)",
+    )
+    .expect("parses");
+    let json = db
+        .execute_aggregate(&query, &HashMap::new())
+        .expect("a NULL threshold is no error");
+
+    assert_eq!(json, serde_json::json!([]), "NULL matches no group");
+}

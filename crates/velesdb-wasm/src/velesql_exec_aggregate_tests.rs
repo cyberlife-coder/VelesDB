@@ -357,3 +357,30 @@ fn test_group_by_honours_with_max_groups_as_core_does() {
     .expect_err("test: too many groups");
     assert!(err.contains("Too many groups"), "got: {err}");
 }
+
+#[test]
+fn test_having_parameter_bound_to_null_keeps_no_group_as_core_does() {
+    let mut db = db_with_seed();
+    let r = execute(
+        &mut db,
+        "SELECT category, COUNT(*) AS n FROM products GROUP BY category HAVING COUNT(*) > $n",
+        Some(r#"{"n": null}"#),
+    )
+    .expect("test: a NULL threshold is SQL's UNKNOWN, not an error");
+    assert_eq!(r.row_count(), 0);
+}
+
+#[test]
+fn test_having_parameter_bound_to_a_string_is_refused_with_v018() {
+    let mut db = db_with_seed();
+    let err = execute(
+        &mut db,
+        "SELECT category, COUNT(*) AS n FROM products GROUP BY category HAVING COUNT(*) > $n",
+        Some(r#"{"n": "many"}"#),
+    )
+    .expect_err("test: a string threshold");
+    assert!(
+        err.contains("[V018]") && err.contains("\"many\""),
+        "got: {err}"
+    );
+}

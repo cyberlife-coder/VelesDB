@@ -488,3 +488,22 @@ fn scenario_having_correlated_subquery_rejected_by_validation() {
         "error should carry the V010 subquery code, got: {err}"
     );
 }
+
+#[test]
+fn scenario_having_parameter_bound_to_null_keeps_no_group() {
+    // GIVEN the products collection and `$n` bound to null
+    let (_dir, db) = create_test_db();
+    setup_products_collection(&db);
+    let params = HashMap::from([("n".to_string(), serde_json::Value::Null)]);
+
+    // WHEN HAVING compares against it
+    let result = execute_aggregate_sql_with_params(
+        &db,
+        "SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > $n",
+        &params,
+    )
+    .expect("a NULL threshold is SQL's UNKNOWN, not an error");
+
+    // THEN no group matches
+    assert_eq!(result, serde_json::json!([]));
+}

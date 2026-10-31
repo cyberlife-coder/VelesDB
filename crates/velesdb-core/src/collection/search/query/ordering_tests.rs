@@ -114,6 +114,96 @@ mod tests {
     }
 
     #[test]
+    fn test_compare_an_integer_and_a_float_exactly() {
+        // 2^53 + 1 and 2^53 are one f64: compared as f64 they would tie.
+        let int = json!(9_007_199_254_740_993_i64);
+        let float = json!(9_007_199_254_740_992.0_f64);
+        assert_eq!(
+            compare_json_values(Some(&int), Some(&float)),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_json_values(Some(&float), Some(&int)),
+            std::cmp::Ordering::Less
+        );
+        let (zero, minus_zero) = (json!(0), json!(-0.0_f64));
+        assert_eq!(
+            compare_json_values(Some(&zero), Some(&minus_zero)),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    /// Numbers near the edges of `f64` and integer precision, as integers
+    /// and as floats.
+    fn edge_numbers() -> Vec<serde_json::Value> {
+        let two_53 = 9_007_199_254_740_992_i64;
+        let mut values = vec![
+            json!(two_53 - 1),
+            json!(two_53),
+            json!(two_53 + 1),
+            json!(two_53 + 2),
+            json!(-two_53 - 1),
+            json!(i64::MAX),
+            json!(i64::MIN),
+            json!(u64::MAX),
+            json!(u64::MAX - 1),
+            json!(1_u64 << 63),
+            json!(0),
+            json!(1),
+            json!(-1),
+        ];
+        // Reason: these floats are the integers above, rounded on purpose.
+        #[allow(clippy::cast_precision_loss)]
+        values.extend(
+            [
+                two_53 as f64,
+                (two_53 + 2) as f64,
+                -(two_53 as f64),
+                i64::MAX as f64,
+                i64::MIN as f64,
+                u64::MAX as f64,
+                0.0,
+                -0.0,
+                1.0,
+                1.5,
+                -1.5,
+                f64::MAX,
+                f64::MIN,
+            ]
+            .map(|f| json!(f)),
+        );
+        values
+    }
+
+    #[test]
+    fn test_compare_json_values_is_a_total_order_over_mixed_numbers() {
+        use std::cmp::Ordering;
+        let values = edge_numbers();
+        let cmp =
+            |a: &serde_json::Value, b: &serde_json::Value| compare_json_values(Some(a), Some(b));
+        for a in &values {
+            assert_eq!(cmp(a, a), Ordering::Equal, "{a} vs itself");
+            for b in &values {
+                assert_eq!(cmp(a, b), cmp(b, a).reverse(), "{a} vs {b}");
+                for c in &values {
+                    if cmp(a, b) != Ordering::Greater && cmp(b, c) != Ordering::Greater {
+                        assert_ne!(cmp(a, c), Ordering::Greater, "{a} <= {b} <= {c}");
+                    }
+                    if cmp(a, b) == Ordering::Equal && cmp(b, c) == Ordering::Equal {
+                        assert_eq!(cmp(a, c), Ordering::Equal, "{a} = {b} = {c}");
+                    }
+                }
+            }
+        }
+        // A sort over them never panics and comes out ordered.
+        let mut sorted = values.clone();
+        sorted.sort_by(|a, b| cmp(a, b));
+        assert!(sorted
+            .windows(2)
+            .all(|w| cmp(&w[0], &w[1]) != Ordering::Greater));
+    }
+
+    #[test]
     fn test_compare_null_sorts_after_a_number() {
         let a = json!(null);
         let b = json!(42);

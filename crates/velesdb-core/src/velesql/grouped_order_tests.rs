@@ -214,8 +214,14 @@ fn test_validator_refuses_having_without_group_by() {
 fn test_validator_refuses_a_having_threshold_that_is_not_a_number() {
     assert_v018("SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) > 'many'");
     assert_v018(
-        "SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) > 1 AND SUM(x) = NULL",
+        "SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) > 1 AND SUM(x) = TRUE",
     );
+}
+
+#[test]
+fn test_validator_accepts_a_null_having_threshold_which_matches_no_group() {
+    validate("SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) = NULL")
+        .expect("test: NULL is SQL's UNKNOWN, not an error");
 }
 
 #[test]

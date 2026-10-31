@@ -65,6 +65,8 @@ mod helpers;
 mod hybrid_compositions;
 #[path = "bdd/hybrid_vector_first_exact.rs"]
 mod hybrid_vector_first_exact;
+#[path = "bdd/id_semantics.rs"]
+mod id_semantics;
 #[path = "bdd/index_management.rs"]
 mod index_management;
 #[path = "bdd/introspection.rs"]

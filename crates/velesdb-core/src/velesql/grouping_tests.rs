@@ -89,6 +89,57 @@ fn test_numbers_equal_by_value_are_one_group_key() {
 }
 
 #[test]
+fn test_an_integer_and_a_float_of_one_value_are_one_group_beyond_f64_precision() {
+    let sql = "SELECT k, COUNT(*) AS n FROM docs GROUP BY k";
+    let rows = [
+        (1, 0.0, json!({"k": 9_007_199_254_740_992_i64})),
+        (2, 0.0, json!({"k": 9_007_199_254_740_992.0_f64})),
+        (3, 0.0, json!({"k": 9_007_199_254_740_993_i64})),
+        (4, 0.0, json!({"k": 9_223_372_036_854_775_808.0_f64})),
+        (5, 0.0, json!({"k": 9_223_372_036_854_775_808_u64})),
+    ];
+    assert_eq!(
+        rows_of(&group(sql, &rows, true)),
+        vec![
+            json!({"k": 9_007_199_254_740_992_i64, "n": 2}),
+            json!({"k": 9_007_199_254_740_993_i64, "n": 1}),
+            json!({"k": 9_223_372_036_854_775_808_u64, "n": 2}),
+        ]
+    );
+}
+
+#[test]
+fn test_groups_whose_keys_compare_equal_come_by_best_id_whatever_the_feed_order() {
+    // Two arrays compare equal in ORDER BY's value order: only the best row's
+    // id can order their groups.
+    let sql = "SELECT k, COUNT(*) AS n FROM docs GROUP BY k";
+    let rows = [
+        (4, 0.0, json!({"k": [2]})),
+        (1, 0.0, json!({"k": [1]})),
+        (3, 0.0, json!({"k": [3]})),
+    ];
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    for feed in [&rows[..], &reversed[..]] {
+        let ids: Vec<u64> = group(sql, feed, true).iter().map(|g| g.id).collect();
+        assert_eq!(ids, vec![1, 3, 4]);
+    }
+}
+
+#[test]
+fn test_a_null_having_threshold_matches_no_group_as_sql_unknown() {
+    let stmt = select("SELECT k, COUNT(*) AS n FROM docs GROUP BY k HAVING COUNT(*) > $n");
+    let mut having = stmt.having.clone().expect("test: having");
+    having.conditions[0].value = super::Value::Null;
+    let mut grouper = Grouper::new(&stmt, Some(&having), true).expect("test: NULL is no error");
+    let payload = json!({"k": "a"});
+    grouper
+        .push(GroupInput::new(1, 0.0, Some(&payload)))
+        .expect("test: push");
+    assert!(grouper.finish().is_empty());
+}
+
+#[test]
 fn test_sql_groups_come_by_key_ascending_with_null_last() {
     let sql = "SELECT k, COUNT(*) AS n FROM docs GROUP BY k";
     let rows = [
@@ -129,6 +180,10 @@ fn test_a_non_numeric_bound_having_threshold_is_refused_with_v018() {
     having.conditions[0].value = super::Value::String("many".to_string());
     let err = Grouper::new(&stmt, Some(&having), true).expect_err("test: refused");
     assert!(err.to_string().contains("[V018]"), "got: {err}");
+    assert!(
+        err.to_string().contains("\"many\""),
+        "the JSON value: {err}"
+    );
 }
 
 #[test]
