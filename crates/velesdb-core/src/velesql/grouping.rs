@@ -12,24 +12,36 @@ use rustc_hash::FxHasher;
 
 use super::aggregator::{AggregateResult, Aggregator};
 use super::ast::{
-    AggregateArg, AggregateFunction, AggregateType, CompareOp, HavingClause, LogicalOp,
-    SelectColumns, SelectStatement, Value,
+    AggregateFunction, AggregateType, CompareOp, HavingClause, LogicalOp, SelectColumns,
+    SelectStatement, Value, WithClause, WithValue,
 };
 use super::grouped_order::vector_group_score_is_average;
+use super::json_order::compare_json_values;
+use super::validation::{ValidationError, ValidationErrorKind};
 
 /// A row offered to a [`Grouper`].
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct GroupInput<'a> {
     /// The point id.
     pub id: u64,
-    /// The row's search score (any value outside a vector search).
+    /// The row's search score; read only in a vector GROUP BY.
     pub score: f32,
     /// The point payload.
     pub payload: Option<&'a serde_json::Value>,
 }
 
+impl<'a> GroupInput<'a> {
+    /// A row with this point id, search score and payload.
+    #[must_use]
+    pub const fn new(id: u64, score: f32, payload: Option<&'a serde_json::Value>) -> Self {
+        Self { id, score, payload }
+    }
+}
+
 /// One finished group.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GroupOutput {
     /// The id of the group's best row.
     pub id: u64,
@@ -39,50 +51,125 @@ pub struct GroupOutput {
     pub row: serde_json::Value,
 }
 
+/// Default maximum number of groups when the query names none (memory
+/// protection).
+pub(crate) const DEFAULT_MAX_GROUPS: usize = 10_000;
+
+/// Server-side hard ceiling on the number of GROUP BY groups (#903): a query's
+/// `WITH (max_groups = N)` can lower its budget, never raise it past this.
+pub(crate) const SERVER_MAX_GROUPS_CEILING: usize = 1_000_000;
+
+/// The group budget of a SQL GROUP BY: `WITH (max_groups = N)` (or
+/// `group_limit`), at least 1 and clamped to [`SERVER_MAX_GROUPS_CEILING`],
+/// else [`DEFAULT_MAX_GROUPS`].
+pub(crate) fn max_groups(with: Option<&WithClause>) -> usize {
+    with.into_iter()
+        .flat_map(|with| &with.options)
+        .find(|opt| opt.key == "max_groups" || opt.key == "group_limit")
+        .and_then(|opt| match opt.value {
+            WithValue::Integer(n) => Some(usize::try_from(n.max(1)).unwrap_or(usize::MAX)),
+            _ => None,
+        })
+        .map_or(DEFAULT_MAX_GROUPS, |limit| {
+            limit.min(SERVER_MAX_GROUPS_CEILING)
+        })
+}
+
+/// The columns a statement's aggregates read, and how a row is read for
+/// them: one definition for the [`Grouper`] and for core's ungrouped
+/// aggregation, which accumulates a single group in parallel chunks.
+#[derive(Debug, Clone)]
+pub(crate) struct AggregateColumns {
+    /// Columns the running aggregates read, SELECT and HAVING alike. Rows are
+    /// always counted, for `COUNT(*)`.
+    columns: Vec<String>,
+    vector: bool,
+}
+
+impl AggregateColumns {
+    pub(crate) fn new(stmt: &SelectStatement, having: Option<&HavingClause>) -> Self {
+        let accumulated = select_aggregations(&stmt.columns).iter().chain(
+            having
+                .iter()
+                .flat_map(|h| h.conditions.iter().map(|c| &c.aggregate)),
+        );
+        let mut columns: Vec<String> = Vec::new();
+        for column in accumulated.filter_map(aggregate_column) {
+            if !columns.iter().any(|c| c == column) {
+                columns.push(column.to_string());
+            }
+        }
+        Self {
+            columns,
+            vector: stmt.is_vector_group_by(),
+        }
+    }
+
+    /// Feeds `row` to `aggregator`.
+    pub(crate) fn accumulate(&self, aggregator: &mut Aggregator, row: &GroupInput<'_>) {
+        aggregator.process_count();
+        for column in &self.columns {
+            if let Some(value) = read(row, column, self.vector) {
+                aggregator.process_value(column, &value);
+            }
+        }
+    }
+}
+
 /// Groups rows for one statement.
 ///
 /// Takes the rows a query kept — each with its id, score and payload — and
 /// returns one row per group: its GROUP BY values and its SELECT aggregates,
-/// each under [`AggregateFunction::result_key`], filtered by HAVING. Core's
+/// each under its alias or default name (`count`, `sum_price`), filtered by
+/// HAVING. Core's
 /// aggregate executor, core's vector GROUP BY and the WASM executor all group
 /// through it, so the group set, a group's row, its id and score, and the
-/// HAVING verdict are computed one way. One rule each:
+/// HAVING verdict are computed one way, whatever order the rows arrive in.
+/// One rule each:
 ///
 /// - **Group key.** A GROUP BY column reads as a WHERE column does: `id` is
 ///   the point id, any other name a payload path (`meta.lang`). A row without
-///   it belongs to the NULL group.
+///   it belongs to the NULL group. Numbers are one key by value: `1` and
+///   `1.0`, `0.0` and `-0.0`, group together.
 /// - **Aggregates.** Every running aggregate accumulates through
 ///   [`Aggregator`]: `COUNT(col)` counts non-null values, `SUM`, `AVG`, `MIN`
-///   and `MAX` read numeric ones. `FIRST(col)` is the value in the group's
-///   best row.
-/// - **Best row.** The most similar row — the highest score, or the lowest
-///   for a distance metric — the first seen on a tie or when no row has a
-///   score. Outside a vector search every row scores alike, so it is the
-///   first row of the group.
+///   and `MAX` read numeric ones. An aggregate reads `id` as the point id too.
+///   `FIRST(col)` is the value in the group's best row.
+/// - **Best row.** In a vector GROUP BY, the most similar row — the highest
+///   score, or the lowest for a distance metric — and, among equally similar
+///   rows, the smallest point id. Elsewhere rows carry no score, and the best
+///   row is the one with the smallest point id.
 /// - **`score`.** In a vector GROUP BY the `score` column is each row's search
 ///   score; elsewhere it is a payload field of that name.
 /// - **Group id and score.** A group is its best row's id; its score is that
 ///   row's, or the rows' mean when the SELECT asks for `AVG(score)` and not
-///   `MAX(score)` ([`vector_group_score_is_average`]).
-/// - **Order.** Groups come out in the order their first row arrived; a vector
-///   GROUP BY's come out best score first, ties by id, as a search ranks.
+///   `MAX(score)` (vector GROUP BY only).
+/// - **Order.** A vector GROUP BY's groups come best score first, ties by id,
+///   as a search ranks; other groups by GROUP BY key, ascending, in ORDER BY's
+///   value order ([`compare_json_values`]).
+/// - **Budget.** A SQL GROUP BY holds at most `WITH (max_groups = N)` groups,
+///   10 000 by default and 1 000 000 at most; a vector GROUP BY groups search
+///   results, already bounded by its LIMIT.
+#[derive(Debug)]
 pub struct Grouper<'s> {
     group_columns: &'s [String],
     selected: &'s [AggregateFunction],
     having: Option<&'s HavingClause>,
-    /// Columns the running aggregates read, SELECT and HAVING alike. Rows
-    /// are always counted, for `COUNT(*)`.
-    columns: Vec<String>,
+    columns: AggregateColumns,
     /// Columns the SELECT's `FIRST` aggregates read, in SELECT order.
     first_columns: Vec<String>,
-    vector: bool,
     higher_is_better: bool,
     average_score: bool,
     max_groups: usize,
-    index: HashMap<GroupKey, usize>,
+    /// Groups by key hash; a hash names more than one group only on a
+    /// collision.
+    index: HashMap<u64, Vec<usize>>,
     groups: Vec<Group>,
+    /// The key of the row being pushed, reused from row to row.
+    key: Vec<serde_json::Value>,
 }
 
+#[derive(Debug)]
 struct Group {
     key: Vec<serde_json::Value>,
     aggregator: Aggregator,
@@ -95,77 +182,86 @@ struct Group {
 
 impl<'s> Grouper<'s> {
     /// A grouper for `stmt`, whose HAVING is `having` with its parameters
-    /// already bound. `higher_is_better` is the collection metric's direction;
-    /// more than `max_groups` groups is an error.
-    #[must_use]
+    /// bound. `higher_is_better` is the collection metric's direction.
+    ///
+    /// # Errors
+    ///
+    /// `V018` for a HAVING threshold that is not a number, which a bound
+    /// parameter can be although validation passed.
     pub fn new(
         stmt: &'s SelectStatement,
         having: Option<&'s HavingClause>,
         higher_is_better: bool,
-        max_groups: usize,
-    ) -> Self {
-        let selected = select_aggregations(&stmt.columns);
-        let accumulated = selected.iter().chain(
+    ) -> crate::error::Result<Self> {
+        if let Some(having) = having {
             having
-                .iter()
-                .flat_map(|h| h.conditions.iter().map(|c| &c.aggregate)),
-        );
-        let mut columns: Vec<String> = Vec::new();
-        for column in accumulated.filter_map(aggregate_column) {
-            if !columns.iter().any(|c| c == column) {
-                columns.push(column.to_string());
-            }
+                .check_thresholds(true)
+                .map_err(|e| crate::error::Error::Query(e.to_string()))?;
         }
+        let selected = select_aggregations(&stmt.columns);
         let first_columns = selected
             .iter()
             .filter(|agg| agg.function_type == AggregateType::First)
             .filter_map(aggregate_column)
             .map(str::to_string)
             .collect();
-        Self {
+        let vector = stmt.is_vector_group_by();
+        Ok(Self {
             group_columns: stmt
                 .group_by
                 .as_ref()
                 .map_or(&[][..], |group_by| group_by.columns.as_slice()),
             selected,
             having,
-            columns,
+            columns: AggregateColumns::new(stmt, having),
             first_columns,
-            vector: stmt.is_vector_group_by(),
             higher_is_better,
-            average_score: vector_group_score_is_average(selected),
-            max_groups,
+            average_score: vector && vector_group_score_is_average(selected),
+            max_groups: if vector {
+                usize::MAX
+            } else {
+                max_groups(stmt.with_clause.as_ref())
+            },
             index: HashMap::new(),
             groups: Vec::new(),
-        }
+            key: Vec::new(),
+        })
     }
 
     /// Adds a row to its group.
     ///
     /// # Errors
     ///
-    /// Returns a message when the row would open a group past `max_groups`.
-    pub fn push(&mut self, row: GroupInput<'_>) -> Result<(), String> {
-        let key = GroupKey::new(
-            self.group_columns
-                .iter()
-                .map(|column| {
-                    self.read(&row, column)
-                        .map_or(serde_json::Value::Null, Cow::into_owned)
-                })
-                .collect(),
-        );
-        let slot = if let Some(&slot) = self.index.get(&key) {
+    /// [`Error::Config`](crate::error::Error::Config) when the row would open
+    /// a group past the statement's group budget (`WITH (max_groups = N)`).
+    pub fn push(&mut self, row: GroupInput<'_>) -> crate::error::Result<()> {
+        let vector = self.columns.vector;
+        self.key.clear();
+        self.key.extend(self.group_columns.iter().map(|column| {
+            read(&row, column, vector).map_or(serde_json::Value::Null, |value| normalise(&value))
+        }));
+        let hash = hash_key(&self.key);
+        let groups = &self.groups;
+        let key = &self.key;
+        let found = self
+            .index
+            .get(&hash)
+            .and_then(|slots| slots.iter().copied().find(|&slot| groups[slot].key == *key));
+        let slot = if let Some(slot) = found {
             slot
         } else {
             if self.groups.len() >= self.max_groups {
-                return Err(format!("Too many groups (limit: {})", self.max_groups));
+                return Err(crate::error::Error::Config(format!(
+                    "Too many groups (limit: {})",
+                    self.max_groups
+                )));
             }
             let first_values = self.first_values(&row);
+            let slot = self.groups.len();
             self.groups
-                .push(Group::new(key.values.clone(), &row, first_values));
-            self.index.insert(key, self.groups.len() - 1);
-            self.groups.len() - 1
+                .push(Group::new(self.key.clone(), &row, first_values));
+            self.index.entry(hash).or_default().push(slot);
+            slot
         };
         self.accumulate(slot, &row);
         Ok(())
@@ -178,22 +274,28 @@ impl<'s> Grouper<'s> {
         if self.groups.is_empty() && self.group_columns.is_empty() {
             self.groups.push(Group::empty(self.first_columns.len()));
         }
-        let mut out: Vec<GroupOutput> = Vec::with_capacity(self.groups.len());
-        for group in std::mem::take(&mut self.groups) {
-            if let Some(output) = self.output(group) {
-                out.push(output);
-            }
-        }
-        if self.vector {
+        let mut groups = std::mem::take(&mut self.groups);
+        if self.columns.vector {
             let higher_is_better = self.higher_is_better;
-            out.sort_by(|a, b| {
-                rank_scores(a.score, b.score, higher_is_better).then(a.id.cmp(&b.id))
+            groups.sort_by(|a, b| {
+                rank_scores(
+                    a.score(self.average_score),
+                    b.score(self.average_score),
+                    higher_is_better,
+                )
+                .then(a.best_id.cmp(&b.best_id))
             });
+        } else {
+            groups.sort_by(|a, b| compare_keys(&a.key, &b.key));
         }
-        out
+        groups
+            .into_iter()
+            .filter_map(|group| self.output(group))
+            .collect()
     }
 
     fn output(&self, group: Group) -> Option<GroupOutput> {
+        let score = group.score(self.average_score);
         let result = group.aggregator.finalize();
         if self.having.is_some_and(|having| !having.accepts(&result)) {
             return None;
@@ -211,11 +313,6 @@ impl<'s> Grouper<'s> {
             };
             row.insert(agg.result_key(), value);
         }
-        let score = if self.average_score && group.rows > 0 {
-            mean(group.score_sum, group.rows)
-        } else {
-            group.best_score
-        };
         Some(GroupOutput {
             id: group.best_id,
             score,
@@ -226,17 +323,11 @@ impl<'s> Grouper<'s> {
     fn accumulate(&mut self, slot: usize, row: &GroupInput<'_>) {
         let better = {
             let group = &self.groups[slot];
-            group.rows > 0 && is_better(row.score, group.best_score, self.higher_is_better)
+            group.rows > 0 && self.beats(row, group)
         };
         let first_values = better.then(|| self.first_values(row));
-        let values: Vec<_> = self.columns.iter().map(|c| self.read(row, c)).collect();
         let group = &mut self.groups[slot];
-        group.aggregator.process_count();
-        for (column, value) in self.columns.iter().zip(values) {
-            if let Some(value) = value {
-                group.aggregator.process_value(column, &value);
-            }
-        }
+        self.columns.accumulate(&mut group.aggregator, row);
         group.rows += 1;
         group.score_sum += f64::from(row.score);
         if let Some(first_values) = first_values {
@@ -246,27 +337,27 @@ impl<'s> Grouper<'s> {
         }
     }
 
+    /// Whether `row` is a better row for `group` than its best so far: in a
+    /// vector GROUP BY a more similar score (a NaN never is) or, equally
+    /// similar, a smaller id; elsewhere a smaller id. The best row of a group
+    /// thus never depends on the order rows arrive in.
+    fn beats(&self, row: &GroupInput<'_>, group: &Group) -> bool {
+        let by_score = if self.columns.vector {
+            rank_scores(row.score, group.best_score, self.higher_is_better)
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        by_score.then(row.id.cmp(&group.best_id)).is_lt()
+    }
+
     fn first_values(&self, row: &GroupInput<'_>) -> Vec<serde_json::Value> {
         self.first_columns
             .iter()
             .map(|column| {
-                self.read(row, column)
+                read(row, column, self.columns.vector)
                     .map_or(serde_json::Value::Null, Cow::into_owned)
             })
             .collect()
-    }
-
-    /// The value of `column` in `row`: the point id, the search score in a
-    /// vector GROUP BY, else the payload path.
-    fn read<'r>(&self, row: &GroupInput<'r>, column: &str) -> Option<Cow<'r, serde_json::Value>> {
-        match column {
-            "id" => Some(Cow::Owned(serde_json::json!(row.id))),
-            "score" if self.vector => Some(Cow::Owned(serde_json::json!(row.score))),
-            _ => row
-                .payload
-                .and_then(|p| payload_path(p, column))
-                .map(Cow::Borrowed),
-        }
     }
 }
 
@@ -298,13 +389,72 @@ impl Group {
             first_values: vec![serde_json::Value::Null; firsts],
         }
     }
+
+    /// The group's score: its best row's, or the rows' mean when `average`.
+    fn score(&self, average: bool) -> f32 {
+        if average && self.rows > 0 {
+            mean(self.score_sum, self.rows)
+        } else {
+            self.best_score
+        }
+    }
+}
+
+/// The value of `column` in `row`: the point id, the search score in a vector
+/// GROUP BY, else the payload path.
+fn read<'r>(
+    row: &GroupInput<'r>,
+    column: &str,
+    vector: bool,
+) -> Option<Cow<'r, serde_json::Value>> {
+    match column {
+        "id" => Some(Cow::Owned(serde_json::json!(row.id))),
+        "score" if vector => Some(Cow::Owned(serde_json::json!(row.score))),
+        _ => row
+            .payload
+            .and_then(|p| payload_path(p, column))
+            .map(Cow::Borrowed),
+    }
+}
+
+/// A group key value with one representation per number: an integral value
+/// that fits `i64` as an integer (`1.0` -> `1`, `-0.0` -> `0`), any other
+/// float as itself. Every other value is kept.
+fn normalise(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Number(n) if !n.is_i64() && !n.is_u64() => {
+            let f = n.as_f64().unwrap_or(0.0);
+            let integral = matches!(f.fract().classify(), std::num::FpCategory::Zero);
+            if integral && f.abs() < EXACT_F64_INTEGER_LIMIT {
+                // Reason: `f` is integral and below 2^53, so the cast is exact.
+                #[allow(clippy::cast_possible_truncation)]
+                let as_int = f as i64;
+                serde_json::json!(as_int)
+            } else {
+                value.clone()
+            }
+        }
+        _ => value.clone(),
+    }
+}
+
+/// 2^53: every integral `f64` below it is exactly an `i64`.
+const EXACT_F64_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// Orders group keys column by column in ORDER BY's value order.
+fn compare_keys(a: &[serde_json::Value], b: &[serde_json::Value]) -> std::cmp::Ordering {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| compare_json_values(Some(x), Some(y)))
+        .find(|ordering| ordering.is_ne())
+        .unwrap_or(std::cmp::Ordering::Equal)
 }
 
 impl HavingClause {
-    /// Whether a group whose aggregates are `result` passes this HAVING, its
-    /// conditions combined left to right by their AND / OR operators.
-    #[must_use]
-    pub fn accepts(&self, result: &AggregateResult) -> bool {
+    /// Whether a group whose aggregates are `result` passes this HAVING, with
+    /// SQL's precedence: `AND` binds tighter than `OR`, so `a OR b AND c` is
+    /// `a OR (b AND c)`.
+    pub(crate) fn accepts(&self, result: &AggregateResult) -> bool {
         let mut verdicts = self
             .conditions
             .iter()
@@ -312,12 +462,39 @@ impl HavingClause {
         let Some(first) = verdicts.next() else {
             return true;
         };
-        verdicts.enumerate().fold(first, |acc, (i, verdict)| {
+        let (mut any, mut all) = (false, first);
+        for (i, verdict) in verdicts.enumerate() {
             match self.operators.get(i).copied().unwrap_or(LogicalOp::And) {
-                LogicalOp::Or => acc || verdict,
-                LogicalOp::And => acc && verdict,
+                LogicalOp::And => all = all && verdict,
+                LogicalOp::Or => {
+                    any = any || all;
+                    all = verdict;
+                }
             }
-        })
+        }
+        any || all
+    }
+
+    /// `V018` unless every threshold is a number. Before execution
+    /// (`bound == false`) a `$parameter` or a scalar subquery passes too:
+    /// both are replaced by their value before the query runs, and checked
+    /// again then, by [`Grouper::new`].
+    pub(crate) fn check_thresholds(&self, bound: bool) -> Result<(), ValidationError> {
+        let accepted = |value: &Value| match value {
+            Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_) => true,
+            Value::Parameter(_) | Value::Subquery(_) => !bound,
+            _ => false,
+        };
+        match self.conditions.iter().find(|c| !accepted(&c.value)) {
+            Some(condition) => Err(ValidationError::new(
+                ValidationErrorKind::InvalidHaving,
+                None,
+                format!("{:?}", condition.value),
+                "a HAVING threshold must be a number: an aggregate compared with \
+                 anything else matches no group",
+            )),
+            None => Ok(()),
+        }
     }
 }
 
@@ -374,11 +551,7 @@ pub fn row_field<'a>(row: &'a serde_json::Value, name: &str) -> Option<&'a serde
 
 /// The column an aggregate reads; `None` for `COUNT(*)`.
 fn aggregate_column(agg: &AggregateFunction) -> Option<&str> {
-    match &agg.argument {
-        AggregateArg::Column(column) => Some(column),
-        AggregateArg::Score => Some("score"),
-        AggregateArg::Wildcard => None,
-    }
+    agg.argument.column()
 }
 
 fn select_aggregations(columns: &SelectColumns) -> &[AggregateFunction] {
@@ -388,18 +561,6 @@ fn select_aggregations(columns: &SelectColumns) -> &[AggregateFunction] {
         }
         _ => &[],
     }
-}
-
-/// Whether `candidate` is a more similar score than `best`. A NaN is never
-/// better, and anything is better than a NaN.
-fn is_better(candidate: f32, best: f32, higher_is_better: bool) -> bool {
-    !candidate.is_nan()
-        && (best.is_nan()
-            || if higher_is_better {
-                candidate > best
-            } else {
-                candidate < best
-            })
 }
 
 /// Orders scores most similar first, NaN last.
@@ -413,22 +574,14 @@ fn rank_scores(a: f32, b: f32, higher_is_better: bool) -> std::cmp::Ordering {
     }
 }
 
-/// A group key with its hash computed once.
-#[derive(Clone)]
-struct GroupKey {
-    values: Vec<serde_json::Value>,
-    hash: u64,
-}
-
-impl GroupKey {
-    fn new(values: Vec<serde_json::Value>) -> Self {
-        let mut hasher = FxHasher::default();
-        for value in &values {
-            hash_value(value, &mut hasher);
-        }
-        let hash = hasher.finish();
-        Self { values, hash }
+/// The hash of a group key. Numbers hash by value, which [`normalise`] made
+/// one representation per number.
+fn hash_key(key: &[serde_json::Value]) -> u64 {
+    let mut hasher = FxHasher::default();
+    for value in key {
+        hash_value(value, &mut hasher);
     }
+    hasher.finish()
 }
 
 fn hash_value(value: &serde_json::Value, hasher: &mut FxHasher) {
@@ -454,17 +607,3 @@ fn hash_value(value: &serde_json::Value, hasher: &mut FxHasher) {
         }
     }
 }
-
-impl Hash for GroupKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.hash.hash(state);
-    }
-}
-
-impl PartialEq for GroupKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash && self.values == other.values
-    }
-}
-
-impl Eq for GroupKey {}

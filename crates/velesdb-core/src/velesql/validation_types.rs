@@ -150,6 +150,10 @@ pub enum ValidationErrorKind {
     /// selected column and an aggregate's alias or default name, or two
     /// aggregates. One would overwrite the other in the result row.
     DuplicateOutputColumn,
+    /// HAVING the query cannot evaluate: HAVING without GROUP BY, or a
+    /// threshold that is not a number (`HAVING COUNT(*) > 'many'`), which no
+    /// aggregate can compare with.
+    InvalidHaving,
 }
 
 impl ValidationErrorKind {
@@ -174,6 +178,7 @@ impl ValidationErrorKind {
             Self::UnsupportedMatchOrderBy => "V015",
             Self::OrderByNotInResult => "V016",
             Self::DuplicateOutputColumn => "V017",
+            Self::InvalidHaving => "V018",
         }
     }
 
@@ -205,6 +210,7 @@ impl ValidationErrorKind {
             Self::UnsupportedMatchOrderBy => "Unsupported MATCH ORDER BY expression",
             Self::OrderByNotInResult => "ORDER BY names no column of the grouped rows",
             Self::DuplicateOutputColumn => "Two output columns share a name",
+            Self::InvalidHaving => "Invalid HAVING clause",
         }
     }
 }

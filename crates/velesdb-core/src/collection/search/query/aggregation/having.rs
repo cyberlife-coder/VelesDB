@@ -1,38 +1,20 @@
-//! HAVING parameter binding and aggregation result sorting.
+//! Grouped-row ordering and HAVING parameter binding.
 //!
 //! Extracted from `grouped.rs` for single-responsibility:
-//! - Sorting grouped results by ORDER BY clause
-//! - JSON value comparison utilities for aggregation ordering
-//! - Parameter resolution for condition placeholders
-
-// Reason: Numeric casts in aggregation are intentional:
-// - All casts are for computing aggregate statistics (sum, avg, count)
-// - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
-// - Values bounded by result set size and field cardinality
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
+//! - Sorting grouped rows by the keys their ORDER BY resolved to
+//! - Parameter resolution for HAVING and WHERE placeholders
+//!
+//! HAVING itself — its verdict and its group budget — is evaluated by the
+//! engine-shared [`crate::velesql::Grouper`].
 
 use crate::collection::types::Collection;
 use crate::velesql::{HavingClause, Value};
 use std::collections::HashMap;
 
-/// Default maximum number of groups allowed when the query does not specify one
-/// (memory protection).
-pub(super) const DEFAULT_MAX_GROUPS: usize = 10_000;
-
-/// Server-side hard ceiling on the number of GROUP BY groups (#903).
-///
-/// This is a SERVER-controlled constant. A query may use `WITH (max_groups=N)`
-/// to *lower* its group budget, but `N` is always clamped down to this ceiling
-/// so an untrusted query cannot inflate the per-query memory bound. Bounding
-/// distinct groups is the DoS guard for GROUP BY aggregation.
-pub(super) const SERVER_MAX_GROUPS_CEILING: usize = 1_000_000;
-
 impl Collection {
     /// Sorts grouped rows by `(field, descending)` keys, in order — the row
     /// fields [`crate::velesql::SelectStatement::grouped_sort_keys`] resolved
-    /// the ORDER BY to.
+    /// the ORDER BY to, GROUP BY columns last, so no two groups tie.
     pub(crate) fn sort_aggregation_results(
         results: &mut [serde_json::Value],
         sort_columns: &[(String, bool)],
@@ -40,7 +22,7 @@ impl Collection {
         if sort_columns.is_empty() {
             return;
         }
-        results.sort_unstable_by(|a, b| {
+        results.sort_by(|a, b| {
             for (column, descending) in sort_columns {
                 let val_a = a.get(column);
                 let val_b = b.get(column);
@@ -60,35 +42,6 @@ impl Collection {
             }
             std::cmp::Ordering::Equal
         });
-    }
-
-    /// Extract max_groups limit from WITH clause (EPIC-040 US-004).
-    /// Supports both `max_groups` and `group_limit` option names.
-    /// Returns `DEFAULT_MAX_GROUPS` if not specified.
-    ///
-    /// #903 (DoS hardening): the value supplied by the (untrusted) query is
-    /// **clamped down** to [`SERVER_MAX_GROUPS_CEILING`]. The query can lower
-    /// the limit but can never raise the server-side memory ceiling above it.
-    pub(super) fn extract_max_groups_limit(
-        with_clause: Option<&crate::velesql::WithClause>,
-    ) -> usize {
-        let Some(with) = with_clause else {
-            return DEFAULT_MAX_GROUPS;
-        };
-
-        for opt in &with.options {
-            if opt.key == "max_groups" || opt.key == "group_limit" {
-                // Try to parse value as integer
-                if let crate::velesql::WithValue::Integer(n) = &opt.value {
-                    // Ensure positive, then clamp to the server-side ceiling.
-                    // The query CANNOT raise the limit above SERVER_MAX_GROUPS_CEILING.
-                    let limit = (*n).max(1) as usize;
-                    return limit.min(SERVER_MAX_GROUPS_CEILING);
-                }
-            }
-        }
-
-        DEFAULT_MAX_GROUPS
     }
 
     /// Resolves parameter placeholders in HAVING threshold values.

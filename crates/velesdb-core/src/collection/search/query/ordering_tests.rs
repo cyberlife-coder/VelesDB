@@ -103,6 +103,17 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    fn test_compare_integers_exactly_beyond_f64_precision() {
+        // 2^53 + 1 and 2^53 are equal as f64.
+        let a = json!(9_007_199_254_740_993_i64);
+        let b = json!(9_007_199_254_740_992_i64);
+        assert_eq!(
+            compare_json_values(Some(&a), Some(&b)),
+            std::cmp::Ordering::Greater
+        );
+    }
+
+    #[test]
     fn test_compare_null_sorts_after_a_number() {
         let a = json!(null);
         let b = json!(42);

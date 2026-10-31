@@ -535,7 +535,7 @@ impl QueryValidator {
         }
         // MAX(score)/AVG(score) without NEAR is only an error when GROUP BY is present,
         // because without GROUP BY, "score" is treated as a regular payload field.
-        if has_group_by && Self::is_score_column(&agg.argument) && !has_vector_near {
+        if has_group_by && agg.argument.is_score() && !has_vector_near {
             let fn_name = format!("{:?}(score)", agg.function_type);
             let msg = format!(
                 "{}(score) requires a vector NEAR search in the WHERE clause",
@@ -549,12 +549,6 @@ impl QueryValidator {
             ));
         }
         Ok(())
-    }
-
-    /// Returns `true` if the argument references the score pseudo-column,
-    /// which the parser reads `score` as in any letter case.
-    fn is_score_column(arg: &super::ast::AggregateArg) -> bool {
-        matches!(arg, super::ast::AggregateArg::Score)
     }
 
     /// Collects aggregate functions from `SelectColumns`.

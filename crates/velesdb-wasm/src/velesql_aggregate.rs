@@ -51,8 +51,9 @@ pub(crate) fn has_aggregate_columns(cols: &SelectColumns) -> bool {
 ///
 /// # Errors
 ///
-/// Returns an error for an unbound HAVING parameter, or an ORDER BY the
-/// grouped rows cannot be sorted by.
+/// Returns an error for an unbound HAVING parameter, a HAVING threshold that
+/// is not a number (`V018`), more groups than `WITH (max_groups = N)` allows,
+/// or an ORDER BY the grouped rows cannot be sorted by.
 pub(crate) fn apply(
     stmt: &SelectStatement,
     rows: &[ScannedRow<'_>],
@@ -64,9 +65,12 @@ pub(crate) fn apply(
         .as_ref()
         .map(|having| bind_having(having, params))
         .transpose()?;
-    let mut grouper = Grouper::new(stmt, having.as_ref(), higher_is_better, usize::MAX);
+    let mut grouper =
+        Grouper::new(stmt, having.as_ref(), higher_is_better).map_err(|e| e.to_string())?;
     for &(id, score, payload) in rows {
-        grouper.push(GroupInput { id, score, payload })?;
+        grouper
+            .push(GroupInput::new(id, score, payload))
+            .map_err(|e| e.to_string())?;
     }
     let groups = grouper.finish();
     if stmt.is_vector_group_by() {
@@ -96,7 +100,7 @@ fn bind_having(having: &HavingClause, params: &Params) -> Result<HavingClause, S
             Ok(HavingCondition {
                 aggregate: condition.aggregate.clone(),
                 operator: condition.operator,
-                value: threshold(&resolve_value(&condition.value, params)?)?,
+                value: threshold(&condition.value, params)?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -106,23 +110,35 @@ fn bind_having(having: &HavingClause, params: &Params) -> Result<HavingClause, S
     })
 }
 
-/// A HAVING threshold as the numeric literal core compares against.
-fn threshold(value: &serde_json::Value) -> Result<Value, String> {
-    if let Some(i) = value.as_i64() {
-        Ok(Value::Integer(i))
-    } else if let Some(u) = value.as_u64() {
-        Ok(Value::UnsignedInteger(u))
-    } else if let Some(f) = value.as_f64() {
-        Ok(Value::Float(f))
-    } else {
-        Err(format!("HAVING threshold must be a number, got {value}"))
+/// A HAVING threshold with a parameter bound to the literal its JSON value
+/// is, as core binds it: the [`Grouper`] then refuses (`V018`) one that is
+/// not a number, in both engines. A literal threshold is kept: validation
+/// already refused a non-numeric one.
+fn threshold(value: &Value, params: &Params) -> Result<Value, String> {
+    if !matches!(value, Value::Parameter(_)) {
+        return Ok(value.clone());
     }
+    Ok(match resolve_value(value, params)? {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Integer(i)
+            } else if let Some(u) = n.as_u64() {
+                Value::UnsignedInteger(u)
+            } else {
+                Value::Float(n.as_f64().unwrap_or(f64::NAN))
+            }
+        }
+        serde_json::Value::String(s) => Value::String(s),
+        serde_json::Value::Bool(b) => Value::Boolean(b),
+        serde_json::Value::Null => Value::Null,
+        other => return Err(format!("Unsupported parameter type for HAVING: {other}")),
+    })
 }
 
 /// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved to row
 /// fields by core's `SelectStatement::grouped_sort_keys` — the resolution
-/// core's own aggregate executor sorts through. The sort is stable, so rows
-/// with equal keys keep their first-seen order.
+/// core's own aggregate executor sorts through, GROUP BY columns last, so no
+/// two groups tie.
 ///
 /// # Errors
 ///

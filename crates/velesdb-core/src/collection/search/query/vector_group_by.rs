@@ -17,22 +17,21 @@ use std::collections::HashMap;
 ///
 /// # Errors
 ///
-/// None in practice: the group count is uncapped (`usize::MAX`), the only
-/// error `Grouper::push` reports.
+/// `V018` for a bound HAVING threshold that is not a number. A vector GROUP
+/// BY's group count is not capped: it groups at most its search results.
 pub(crate) fn group_search_results(
     stmt: &SelectStatement,
     results: &[SearchResult],
     having: Option<&HavingClause>,
     higher_is_better: bool,
 ) -> crate::error::Result<Vec<SearchResult>> {
-    let mut grouper = Grouper::new(stmt, having, higher_is_better, usize::MAX);
+    let mut grouper = Grouper::new(stmt, having, higher_is_better)?;
     for result in results {
-        let row = GroupInput {
-            id: result.point.id,
-            score: result.score,
-            payload: result.point.payload.as_ref(),
-        };
-        grouper.push(row).map_err(crate::error::Error::Config)?;
+        grouper.push(GroupInput::new(
+            result.point.id,
+            result.score,
+            result.point.payload.as_ref(),
+        ))?;
     }
     let by_id: HashMap<u64, &SearchResult> = results.iter().map(|r| (r.point.id, r)).collect();
     Ok(grouper

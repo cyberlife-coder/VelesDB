@@ -1,6 +1,6 @@
 {
-  "version": "2.3.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.3.0 adds `null_order_cases` (plain SELECT over the extra collections, ids in order) and runs `aggregate_cases` over the extra collections too, pinning where a NULL sort key lands. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
+  "version": "2.4.0",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.4.0 adds G016-G020 (FIRST and tie order independent of scan order, `score` as a SQL GROUP BY alias, HAVING precedence) and R014-R015 (V018). v2.3.0 adds `null_order_cases` (plain SELECT over the extra collections, ids in order) and runs `aggregate_cases` over the extra collections too, pinning where a NULL sort key lands. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -372,6 +372,54 @@
         { "grp": "x", "n": 2 }
       ],
       "note": "and first in DESC (core sorted it last)"
+    },
+    {
+      "id": "G016",
+      "query": "SELECT category, FIRST(year) AS y FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "y": 2021 },
+        { "category": "tech", "y": 2020 }
+      ],
+      "note": "outside a vector GROUP BY, FIRST reads the group's row with the smallest point id (other: id 3, tech: id 1), whatever order the engine scans in"
+    },
+    {
+      "id": "G017",
+      "query": "SELECT category, AVG(year) AS score FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "score": 2020.0 },
+        { "category": "tech", "score": 2021.6666666666667 }
+      ],
+      "note": "a SQL GROUP BY may name an aggregate `score` or `id`; only a vector GROUP BY, whose groups carry their own, refuses it (V017)"
+    },
+    {
+      "id": "G018",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 GROUP BY grp ORDER BY n DESC",
+      "expect_groups": [
+        { "grp": "x", "n": 2 },
+        { "grp": "y", "n": 1 },
+        { "grp": null, "n": 1 }
+      ],
+      "note": "groups equal on every ORDER BY key fall back to their GROUP BY key, ascending (y before NULL)"
+    },
+    {
+      "id": "G019",
+      "query": "SELECT year, COUNT(*) AS n FROM docs GROUP BY year",
+      "expect_groups": [
+        { "year": 2019, "n": 1 },
+        { "year": 2020, "n": 1 },
+        { "year": 2021, "n": 1 },
+        { "year": 2022, "n": 1 },
+        { "year": 2023, "n": 1 }
+      ],
+      "note": "without ORDER BY, SQL GROUP BY groups come by GROUP BY key ascending (core returned hash order, WASM scan order)"
+    },
+    {
+      "id": "G020",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category HAVING COUNT(*) = 2 OR COUNT(*) > 0 AND COUNT(*) > 5",
+      "expect_groups": [
+        { "category": "other", "n": 2 }
+      ],
+      "note": "HAVING AND binds tighter than OR, as in SQL: n = 2 OR (n > 0 AND n > 5). Read left to right, the condition kept no group"
     }
   ],
   "setops_cases": [
@@ -627,8 +675,20 @@
     {
       "id": "R013",
       "expected_code": "V017",
-      "query": "SELECT category, COUNT(*) AS score FROM docs GROUP BY category",
-      "note": "an aggregate named `score` (or `id`) would shadow the group's own score (id) when sorting"
+      "query": "SELECT category, COUNT(*) AS score FROM docs WHERE vector NEAR $a GROUP BY category",
+      "note": "in a vector GROUP BY an aggregate named `score` (or `id`) would shadow the group's own score (id) when sorting"
+    },
+    {
+      "id": "R014",
+      "expected_code": "V018",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category HAVING COUNT(*) > 'many'",
+      "note": "a HAVING threshold must be a number: every group used to fail the comparison silently"
+    },
+    {
+      "id": "R015",
+      "expected_code": "V018",
+      "query": "SELECT COUNT(*) AS n FROM docs HAVING COUNT(*) > 1",
+      "note": "HAVING requires GROUP BY in both engines (WASM filtered the single implicit group)"
     }
   ],
   "dml_cases": [

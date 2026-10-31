@@ -4,20 +4,12 @@
 //! Rows are grouped by the engine-shared [`crate::velesql::Grouper`]; sorting
 //! and parameter resolution are in `having.rs`.
 
-// Reason: Numeric casts in aggregation are intentional:
-// - All casts are for computing aggregate statistics (sum, avg, count)
-// - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
-// - Values bounded by result set size and field cardinality
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
-
 use super::super::match_exec::MatchStorageGuards;
 use super::super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
-use crate::velesql::{AggregateArg, AggregateFunction, GroupInput, Grouper, HavingClause, Query};
+use crate::velesql::{GroupInput, Grouper, HavingClause, Query};
 use std::collections::HashMap;
 
 impl Collection {
@@ -30,13 +22,12 @@ impl Collection {
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
-        let max_groups = Self::extract_max_groups_limit(stmt.with_clause.as_ref());
         let sort_columns = stmt
             .grouped_sort_keys()
             .map_err(|e| crate::error::Error::Query(e.to_string()))?;
 
         // Rows carry no search score here, so the metric direction is moot.
-        let mut grouper = Grouper::new(stmt, having, true, max_groups);
+        let mut grouper = Grouper::new(stmt, having, true)?;
         self.scan_and_group(stmt, &mut grouper, params)?;
 
         let rows = grouper
@@ -103,13 +94,7 @@ impl Collection {
             if !passes {
                 continue;
             }
-            grouper
-                .push(GroupInput {
-                    id,
-                    score: 0.0,
-                    payload: payload.as_ref(),
-                })
-                .map_err(crate::error::Error::Config)?;
+            grouper.push(GroupInput::new(id, 0.0, payload.as_ref()))?;
         }
 
         Ok(())
@@ -144,29 +129,6 @@ impl Collection {
                 )))
             })
             .transpose()
-    }
-
-    /// Extracts the list of columns to aggregate and whether COUNT(*) is present.
-    ///
-    /// `AggregateArg::Score` is treated as `Column("score")` in the non-vector
-    /// aggregation path so that payload fields named "score" are aggregated normally.
-    pub(super) fn prepare_agg_columns(aggregations: &[AggregateFunction]) -> (Vec<String>, bool) {
-        let mut seen = std::collections::HashSet::new();
-        let columns: Vec<String> = aggregations
-            .iter()
-            .filter_map(|agg| {
-                let col_name = match &agg.argument {
-                    AggregateArg::Column(col) => Some(col.clone()),
-                    AggregateArg::Score => Some("score".to_string()),
-                    AggregateArg::Wildcard => None,
-                };
-                col_name.filter(|c| seen.insert(c.clone()))
-            })
-            .collect();
-        let has_count_star = aggregations
-            .iter()
-            .any(|agg| matches!(agg.argument, AggregateArg::Wildcard));
-        (columns, has_count_star)
     }
 
     /// Orders the group rows by ORDER BY, then applies OFFSET/LIMIT (issue

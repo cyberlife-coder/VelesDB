@@ -344,3 +344,16 @@ fn test_vector_group_by_without_limit_returns_the_default_ten_groups() {
         "a vector GROUP BY is a search: LIMIT defaults to 10"
     );
 }
+
+#[test]
+fn test_group_by_honours_with_max_groups_as_core_does() {
+    let mut db = db_with_seed();
+    // products has three categories: a budget of two groups is exceeded.
+    let err = execute(
+        &mut db,
+        "SELECT category, COUNT(*) AS n FROM products GROUP BY category WITH (max_groups = 2)",
+        None,
+    )
+    .expect_err("test: too many groups");
+    assert!(err.contains("Too many groups"), "got: {err}");
+}

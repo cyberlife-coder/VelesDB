@@ -38,6 +38,32 @@ pub enum AggregateArg {
     Score,
 }
 
+impl AggregateArg {
+    /// Whether this argument is the `score` pseudo-column. The parser reads
+    /// `score` in any letter case as [`Self::Score`]; a deserialized AST may
+    /// still carry it as a column, which reads the same.
+    #[must_use]
+    pub(crate) fn is_score(&self) -> bool {
+        match self {
+            Self::Score => true,
+            Self::Column(column) => column.eq_ignore_ascii_case("score"),
+            Self::Wildcard => false,
+        }
+    }
+
+    /// The column this argument reads: `score` for the score pseudo-column
+    /// however it is spelled, `None` for `*`. Every engine names an
+    /// aggregate's running values by it.
+    #[must_use]
+    pub(crate) fn column(&self) -> Option<&str> {
+        match self {
+            arg if arg.is_score() => Some("score"),
+            Self::Column(column) => Some(column),
+            Self::Score | Self::Wildcard => None,
+        }
+    }
+}
+
 /// An aggregate function call in a SELECT statement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AggregateFunction {
@@ -55,7 +81,7 @@ impl AggregateFunction {
     /// alias, else a default name, `count` for `COUNT(*)` and
     /// `<function>_<column>` otherwise (`sum_price`, `avg_score`).
     #[must_use]
-    pub fn result_key(&self) -> String {
+    pub(crate) fn result_key(&self) -> String {
         if let Some(alias) = &self.alias {
             return alias.clone();
         }

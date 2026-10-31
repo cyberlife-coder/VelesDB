@@ -2,8 +2,8 @@
 //!
 //! An aggregate query outputs one field per GROUP BY column and one per SELECT
 //! aggregate, the latter under [`AggregateFunction::result_key`] — its alias or
-//! default name — in every engine. Two rules hold over those fields, enforced
-//! at validation by [`validate_grouped_rows`] so core and the WASM executor
+//! default name — in every engine. Three rules hold over those fields and the
+//! HAVING that filters them, enforced at validation by [`validate_grouped_rows`] so core and the WASM executor
 //! refuse the same queries:
 //!
 //! - **Names are distinct (`V017`).** A field written twice keeps only the
@@ -17,6 +17,8 @@
 //!   [`SelectStatement::grouped_sort_keys`] and, for a vector GROUP BY,
 //!   [`SelectStatement::order_by_aggregates_as_fields`] are the one place an
 //!   item is matched to its field.
+//! - **HAVING can be evaluated (`V018`).** It needs a GROUP BY, and numeric
+//!   thresholds: `HAVING COUNT(*) > 'many'` matched no group, silently.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -29,13 +31,15 @@ use super::validation::{ValidationError, ValidationErrorKind};
 impl SelectStatement {
     /// Resolves the ORDER BY of a GROUP BY aggregation to the fields of its
     /// grouped rows it sorts on, in order, each with its direction (`true` is
-    /// descending).
+    /// descending), followed by every GROUP BY column it does not name,
+    /// ascending: groups the ORDER BY ties come in GROUP BY key order, in
+    /// every engine.
     ///
     /// An item that repeats a SELECT aggregate (`ORDER BY COUNT(*)`, whatever
     /// its alias) resolves to that aggregate's field; a name resolves to the
     /// field it is, an aggregate's or a GROUP BY column's — the two never
     /// share a name in a validated query (`V017`). A statement without ORDER
-    /// BY resolves to no keys.
+    /// BY resolves to its GROUP BY columns.
     ///
     /// # Errors
     ///
@@ -44,11 +48,18 @@ impl SelectStatement {
     /// list, a name that is neither, `similarity()` or an arithmetic
     /// expression.
     pub fn grouped_sort_keys(&self) -> Result<Vec<(String, bool)>, ValidationError> {
-        self.order_by
+        let mut keys = self
+            .order_by
             .iter()
             .flatten()
             .map(|item| Ok((self.grouped_sort_field(&item.expr)?, item.descending)))
-            .collect()
+            .collect::<Result<Vec<_>, ValidationError>>()?;
+        for column in group_columns(self) {
+            if !keys.iter().any(|(field, _)| field == column) {
+                keys.push((column.clone(), false));
+            }
+        }
+        Ok(keys)
     }
 
     /// For a vector GROUP BY, whose groups come back as search results: this
@@ -137,11 +148,11 @@ impl SelectStatement {
 /// `AVG(score)` and not `MAX(score)`. `ORDER BY similarity()` sorts groups on
 /// that score.
 #[must_use]
-pub fn vector_group_score_is_average(aggregations: &[AggregateFunction]) -> bool {
+pub(crate) fn vector_group_score_is_average(aggregations: &[AggregateFunction]) -> bool {
     let over_score = |function_type: AggregateType| {
         aggregations
             .iter()
-            .any(|agg| agg.function_type == function_type && agg.argument == AggregateArg::Score)
+            .any(|agg| agg.function_type == function_type && agg.argument.is_score())
     };
     over_score(AggregateType::Avg) && !over_score(AggregateType::Max)
 }
@@ -152,6 +163,7 @@ pub fn vector_group_score_is_average(aggregations: &[AggregateFunction]) -> bool
 /// arithmetic and payload fields; only its ORDER BY aggregates are checked
 /// against the SELECT list.
 pub(super) fn validate_grouped_rows(stmt: &SelectStatement) -> Result<(), ValidationError> {
+    validate_having(stmt)?;
     validate_output_names(stmt)?;
     if stmt.is_vector_group_by() {
         stmt.order_by_aggregates_as_fields()?;
@@ -161,12 +173,32 @@ pub(super) fn validate_grouped_rows(stmt: &SelectStatement) -> Result<(), Valida
     Ok(())
 }
 
+/// Refuses (`V018`) a HAVING the query cannot evaluate: one without GROUP BY,
+/// or a threshold that is not a number. A `$parameter` or scalar subquery
+/// threshold is checked once replaced by its value, by the
+/// [`Grouper`](super::grouping::Grouper).
+fn validate_having(stmt: &SelectStatement) -> Result<(), ValidationError> {
+    let Some(having) = &stmt.having else {
+        return Ok(());
+    };
+    if stmt.group_by.is_none() {
+        return Err(ValidationError::new(
+            ValidationErrorKind::InvalidHaving,
+            None,
+            "HAVING",
+            "HAVING filters groups: add a GROUP BY clause, or filter rows with WHERE",
+        ));
+    }
+    having.check_thresholds(false)
+}
+
 /// Refuses (`V017`) an aggregate whose output field repeats another output
 /// column's name: a GROUP BY column, a selected column, or another aggregate.
 /// A selected column outside GROUP BY counts although no grouped row carries
-/// it, so a name means one thing in the SELECT list. In a GROUP BY query an
-/// aggregate may not be named `id` or `score` either: each group carries its
-/// own, which ORDER BY `id` / `score` reads.
+/// it, so a name means one thing in the SELECT list. In a vector GROUP BY an
+/// aggregate may not be named `id` or `score` either: its groups come back as
+/// search results carrying their own, which ORDER BY `id` / `score` reads. A
+/// SQL GROUP BY row has neither, so `AVG(rating) AS score` is a plain name.
 fn validate_output_names(stmt: &SelectStatement) -> Result<(), ValidationError> {
     let aggregate_fields: Vec<String> = aggregations(stmt)
         .iter()
@@ -178,7 +210,7 @@ fn validate_output_names(stmt: &SelectStatement) -> Result<(), ValidationError> 
         }
         _ => &[],
     };
-    let reserved: &[&str] = if stmt.group_by.is_some() {
+    let reserved: &[&str] = if stmt.is_vector_group_by() {
         &["id", "score"]
     } else {
         &[]
@@ -197,8 +229,8 @@ fn validate_output_names(stmt: &SelectStatement) -> Result<(), ValidationError> 
             field.clone(),
             format!(
                 "an aggregate is output as '{field}', which another column of the result \
-                 already is (each group carries its own id and score): give it a distinct \
-                 alias (AS ...)"
+                 already is (a vector GROUP BY group carries its own id and score): give \
+                 it a distinct alias (AS ...)"
             ),
         )),
         None => Ok(()),

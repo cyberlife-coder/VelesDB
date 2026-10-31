@@ -42,7 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aggregate query whose output columns share a name fails with `V017`**,
   where one column overwrote the other: a `GROUP BY` or selected column and
   an aggregate's name, two aggregates, or an aggregate named `id` or `score`
-  in a `GROUP BY` query.
+  in a vector `GROUP BY` query.
+- **BREAKING (behavior) — HAVING fails with `V018` where it cannot be
+  evaluated**: without `GROUP BY` (it filtered the single implicit group),
+  or with a threshold that is not a number (it matched no group). `HAVING a
+  OR b AND c` reads as `a OR (b AND c)`, as in SQL.
+- **BREAKING (behavior) — SQL `GROUP BY` results no longer depend on scan
+  order**, as in core: without ORDER BY groups come by `GROUP BY` key
+  ascending (was first-seen order), groups an ORDER BY ties come by key,
+  `FIRST(col)` reads the row with the smallest point id (the most similar
+  row, smallest id on a tie, in a vector `GROUP BY`), and `1` and `1.0` are
+  one group.
+- **BREAKING (behavior) — a SQL `GROUP BY` holds at most `WITH (max_groups =
+  N)` groups, 10,000 by default**, as in core; past it the query fails with
+  `Too many groups (limit: N)`.
 - **`ORDER BY similarity()` follows the metric's direction**: under a
   distance metric `DESC` puts the nearest row first, as in core.
 - **ORDER BY compares values as core does** (`velesql::compare_json_values`):

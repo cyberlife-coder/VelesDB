@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::ast::{AggregateArg, AggregateFunction, AggregateType};
+use super::ast::{AggregateFunction, AggregateType};
 
 /// Result of aggregation operations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -38,12 +38,8 @@ impl AggregateResult {
     /// (`velesql::grouping`). `score` names the column of that name, which a
     /// vector GROUP BY fills with each row's search score.
     #[must_use]
-    pub fn value_of(&self, agg: &AggregateFunction) -> serde_json::Value {
-        let column = match &agg.argument {
-            AggregateArg::Column(column) => Some(column.as_str()),
-            AggregateArg::Score => Some("score"),
-            AggregateArg::Wildcard => None,
-        };
+    pub(crate) fn value_of(&self, agg: &AggregateFunction) -> serde_json::Value {
+        let column = agg.argument.column();
         let float = |values: &HashMap<String, f64>, column: &str| {
             values
                 .get(column)

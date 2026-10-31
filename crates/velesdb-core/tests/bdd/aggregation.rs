@@ -721,3 +721,20 @@ fn test_having_on_count_missing_from_select_filters_by_its_value() {
 
     assert_eq!(group_categories(&result), vec!["clothing"]);
 }
+
+// =========================================================================
+// Scenario 20: `id` in an aggregate is the point id, with or without GROUP BY
+// =========================================================================
+
+#[test]
+fn test_count_and_max_of_id_read_the_point_id_without_group_by() {
+    let (_dir, db) = create_test_db();
+    setup_orders_collection(&db);
+
+    let result = execute_aggregate_sql(&db, "SELECT COUNT(id) AS n, MAX(id) AS top FROM orders")
+        .expect("test: COUNT(id)");
+
+    // As in WHERE and in GROUP BY, `id` is the point id: orders 1..=10.
+    assert_eq!(result.get("n"), Some(&serde_json::json!(10)));
+    assert_eq!(result.get("top"), Some(&serde_json::json!(10.0)));
+}

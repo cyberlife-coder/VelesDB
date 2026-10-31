@@ -68,6 +68,8 @@ mod grouped_order;
 mod grouped_order_tests;
 pub(crate) mod grouping;
 #[cfg(test)]
+mod grouping_tests;
+#[cfg(test)]
 mod having_tests;
 #[cfg(test)]
 mod join_extended_tests;
@@ -295,7 +297,6 @@ pub use explain::{
     DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD, EXACT_FULL_SCAN_MAX_SELECTIVITY,
     EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
-pub use grouped_order::vector_group_score_is_average;
 pub use grouping::{row_field, GroupInput, GroupOutput, Grouper};
 pub use json_order::compare_json_values;
 pub use parser::match_clause;

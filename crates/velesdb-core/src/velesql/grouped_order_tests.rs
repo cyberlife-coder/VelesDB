@@ -3,8 +3,9 @@
 //! of one that names none.
 
 use super::ast::{OrderByExpr, SelectColumns, SelectStatement};
+use super::grouped_order::vector_group_score_is_average;
 use super::validation::{QueryValidator, ValidationError, ValidationErrorKind};
-use super::{vector_group_score_is_average, Parser};
+use super::Parser;
 
 fn validate(sql: &str) -> Result<(), ValidationError> {
     QueryValidator::validate(&Parser::parse(sql).expect("test: parse"))
@@ -101,13 +102,21 @@ fn test_validator_refuses_duplicate_names_without_group_by_and_in_a_vector_group
 }
 
 #[test]
-fn test_validator_refuses_an_aggregate_named_id_or_score_in_a_grouped_query() {
-    // Grouped results carry their own id and score: an aggregate output under
-    // either name would shadow it when sorting.
-    assert_v017("SELECT category, COUNT(*) AS score FROM docs GROUP BY category");
+fn test_validator_refuses_an_aggregate_named_id_or_score_in_a_vector_group_by() {
+    // A vector GROUP BY returns search results carrying their own id and
+    // score: an aggregate output under either name would shadow it.
+    assert_v017(
+        "SELECT category, COUNT(*) AS score FROM docs WHERE vector NEAR $v GROUP BY category",
+    );
     assert_v017(
         "SELECT category, MAX(year) AS id FROM docs WHERE vector NEAR $v GROUP BY category",
     );
+}
+
+#[test]
+fn test_validator_accepts_an_aggregate_named_score_in_a_sql_group_by() {
+    validate("SELECT category, AVG(rating) AS score FROM docs GROUP BY category ORDER BY score")
+        .expect("test: SQL GROUP BY rows carry no score of their own");
 }
 
 #[test]
@@ -162,8 +171,59 @@ fn test_a_repeated_aggregate_resolves_to_its_select_items_field_whatever_the_ali
             "SELECT category, AVG(year) AS mean, SUM(year) FROM docs GROUP BY category \
              ORDER BY AVG(year) DESC, SUM(year)"
         ),
-        vec![("mean".to_string(), true), ("sum_year".to_string(), false)]
+        vec![
+            ("mean".to_string(), true),
+            ("sum_year".to_string(), false),
+            ("category".to_string(), false),
+        ]
     );
+}
+
+#[test]
+fn test_group_columns_the_order_by_does_not_name_break_its_ties_ascending() {
+    assert_eq!(
+        sort_keys("SELECT a, b, COUNT(*) AS n FROM docs GROUP BY a, b ORDER BY b DESC, n"),
+        vec![
+            ("b".to_string(), true),
+            ("n".to_string(), false),
+            ("a".to_string(), false),
+        ]
+    );
+    assert_eq!(
+        sort_keys("SELECT a, COUNT(*) AS n FROM docs GROUP BY a"),
+        vec![("a".to_string(), false)]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// HAVING the query can evaluate (V018)
+// ---------------------------------------------------------------------------
+
+fn assert_v018(sql: &str) {
+    let err = validate(sql).expect_err("test: HAVING must be refused");
+    assert_eq!(err.kind, ValidationErrorKind::InvalidHaving, "{err}");
+    assert_eq!(err.kind.code(), "V018");
+}
+
+#[test]
+fn test_validator_refuses_having_without_group_by() {
+    assert_v018("SELECT COUNT(*) AS n FROM docs HAVING COUNT(*) > 1");
+}
+
+#[test]
+fn test_validator_refuses_a_having_threshold_that_is_not_a_number() {
+    assert_v018("SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) > 'many'");
+    assert_v018(
+        "SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) > 1 AND SUM(x) = NULL",
+    );
+}
+
+#[test]
+fn test_validator_accepts_numeric_and_parameter_having_thresholds() {
+    validate("SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) > 1 OR AVG(x) < 2.5")
+        .expect("test: numeric thresholds");
+    validate("SELECT c, COUNT(*) AS n FROM docs GROUP BY c HAVING COUNT(*) > $n")
+        .expect("test: a parameter is checked once bound");
 }
 
 // ---------------------------------------------------------------------------
@@ -211,4 +271,24 @@ fn test_a_vector_group_scores_by_average_only_when_avg_score_is_selected_without
     assert!(!vector_group_score_is_average(&aggregations(&format!(
         "SELECT c, COUNT(*) {base}"
     ))));
+}
+
+#[test]
+fn test_validator_reads_a_deserialized_score_column_as_the_score_pseudo_column() {
+    // The AST is `Deserialize`: a client may send `score` as a plain column,
+    // which the parser never produces. It is still the search score, and a
+    // GROUP BY reading it still needs a vector search.
+    let mut query = Parser::parse("SELECT c, MAX(x) FROM docs GROUP BY c").expect("test: parse");
+    match &mut query.select.columns {
+        SelectColumns::Mixed { aggregations, .. } => {
+            aggregations[0].argument = super::ast::AggregateArg::Column("Score".to_string());
+        }
+        other => panic!("test: expected mixed columns, got {other:?}"),
+    }
+    let err = QueryValidator::validate(&query).expect_err("test: refused");
+    assert_eq!(
+        err.kind,
+        ValidationErrorKind::SimilarityWithoutContext,
+        "{err}"
+    );
 }
