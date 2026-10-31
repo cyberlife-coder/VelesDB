@@ -458,19 +458,20 @@ impl Collection {
         let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();
 
-        // Sized by the hits resolved, never by the caller's `limit`.
+        // Sized by the hits resolved, never by the caller's `limit`; an
+        // expired hit is skipped before the `limit` is counted, so the next
+        // live one takes its place.
         let out: Vec<SearchResult> = pairs
-            .take(limit)
             .filter_map(|(id, score)| {
+                let payload = payload_storage.retrieve(id).ok().flatten();
+                if is_payload_expired(payload.as_ref(), now_secs) {
+                    return None;
+                }
                 let vector = vector_storage
                     .retrieve(id)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
-                let payload = payload_storage.retrieve(id).ok().flatten();
-                if is_payload_expired(payload.as_ref(), now_secs) {
-                    return None;
-                }
                 let point = Point {
                     id,
                     vector,
@@ -479,6 +480,7 @@ impl Collection {
                 };
                 Some(SearchResult::new(point, score))
             })
+            .take(limit)
             .collect();
         // The collect is both guards' last use; nothing below reads storage.
         drop(payload_storage);

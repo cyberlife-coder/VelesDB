@@ -197,6 +197,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep the rest queued, and the flags that serialize their merges are now
   cleared by a guard, so a merge that panics no longer leaves every later
   flush skipping.
+- **Sparse and fused hybrid searches returned fewer than `k` results when a
+  TTL-expired point ranked among the first `k`.** Their resolution took the
+  first `k` hits, then dropped the expired ones, so each expired hit cost a
+  place: sparse search, the dense + sparse fused hybrid, and a VelesQL
+  `NEAR` + `MATCH` under a score-level `USING FUSION` (anchored, or with no
+  filter). An expired hit is now skipped before `k` is counted, and its
+  vector is not read. Present in 7.1.0.
 - **Filtered hybrid and batch searches copied the vector of every
   candidate.** `hybrid_search_with_filter`, a filtered VelesQL `NEAR` +
   `MATCH` under a score-level `USING FUSION` (`maximum`, `average`, `rsf`)
