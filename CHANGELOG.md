@@ -147,8 +147,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each source's own top `k`. Every unindexed point is now scored on what
   vector storage holds for it, and the index's result for an unindexed id
   is dropped before ranking, so only the current vector competes; when such
-  ids crowd the index's `k`, it is asked for more, so the next point it
-  ranks keeps its place.
+  ids crowd the index's `k`, it is asked for more — at least twice as many
+  each time, never more than `k` plus the pending count, so at most
+  `log2((k + pending) / k)` more index searches, run in parallel across a
+  batch's queries — so the next point it ranks keeps its place.
 - **A point deleted and then written again while the deferred indexer
   buffered it stayed out of search** until the next merge: the delete
   recorded the id in a set that filtered the buffer's results, and the

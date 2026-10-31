@@ -266,3 +266,35 @@ fn a_merge_retires_a_deferred_write_storage_has_moved_past() {
     assert!(deferred.ids().is_empty(), "the entry left the buffer");
     assert_eq!(first_id(&coll, &new), Some(X), "indexed on its new vector");
 }
+
+/// Pending ids crowding the index's results take a number of refetches that
+/// grows with the logarithm of the snapshot, not linearly: 100 pending ids
+/// ranked first, `k = 10`, are passed in at most four refetches (10, 20, 40,
+/// 80, then the cap of 110), and the last one holds `k` others.
+#[test]
+fn crowding_pending_ids_take_logarithmically_many_refetches() {
+    use crate::collection::search::pending::PendingSnapshot;
+    use crate::scored_result::ScoredResult;
+
+    let k = 10;
+    let pending = PendingSnapshot::for_test((0..100).collect());
+    let calls = std::cell::Cell::new(0_usize);
+    let search = |n: usize| -> crate::error::Result<Vec<ScoredResult>> {
+        calls.set(calls.get() + 1);
+        Ok((0..u64::try_from(n).expect("test: fits"))
+            .map(|id| ScoredResult::new(id, 0.0))
+            .collect())
+    };
+
+    let first = search(k).expect("test: search");
+    let results =
+        Collection::index_results_past_pending(&pending, k, first, search).expect("test: refetch");
+
+    let unmasked = results.iter().filter(|r| r.id >= 100).count();
+    assert!(unmasked >= k, "{unmasked} results past the pending ids");
+    assert!(
+        calls.get() - 1 <= 4,
+        "{} refetches for 100 pending ids",
+        calls.get() - 1
+    );
+}

@@ -424,8 +424,10 @@ its new vector or skipped, never on the copy its source took. An index
 result whose id is pending is dropped before the merge: the index may still
 hold an older vector for it, and storage is the one place a search reads a
 pending point's vector from. When the dropped results leave fewer than the
-search's `k`, the index is searched again for that many more, so the next
-point it ranks is not left out. The search's restriction (a filter's bitmap, a
+search's `k`, the index is searched again for more, at least twice as many
+each time and never more than `k` plus the pending count, so the next point
+it ranks is not left out; that is at most `log2((k + pending) / k)` more
+index searches, none when no pending id is among the results. The search's restriction (a filter's bitmap, a
 graph anchor set) applies to the pending ids before they compete for its
 `k`, and a search that post-filters keeps every admitted one. A batch
 search scores them before it takes the storage guards it resolves results

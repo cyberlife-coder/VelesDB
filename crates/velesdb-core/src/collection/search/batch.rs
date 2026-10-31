@@ -276,9 +276,10 @@ impl Collection {
     }
 
     /// The batch form of [`search_merging_pending`](Self::search_merging_pending):
-    /// one pending snapshot before the parallel index search, then, per query,
-    /// a refetch while unindexed ids crowd its `k` and the merge under that
-    /// query's restriction (one per query, in order).
+    /// one pending snapshot before the parallel index search, then, per query
+    /// and in parallel, a refetch while unindexed ids crowd its `k` and the
+    /// merge under that query's restriction (the first `queries.len()` of
+    /// `restrictions`, one per query, in order).
     ///
     /// # Errors
     ///
@@ -296,10 +297,14 @@ impl Collection {
             .storage
             .index
             .search_batch_parallel(queries, k, quality)?;
+        let restrictions: Vec<PendingRestriction<'r>> = restrictions.take(queries.len()).collect();
+        // Per query in parallel: a refetch is a whole index search, and the
+        // merge scores the pending points; neither holds a lock the others
+        // wait on.
         index_results
-            .into_iter()
-            .zip(queries)
-            .zip(restrictions)
+            .into_par_iter()
+            .zip(queries.par_iter())
+            .zip(restrictions.into_par_iter())
             .map(|((first, query), restriction)| {
                 let results = Self::index_results_past_pending(&pending, k, first, |n| {
                     self.storage.index.search_with_quality(query, n, quality)

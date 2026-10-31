@@ -119,6 +119,14 @@ impl<'a> PendingRestriction<'a> {
 pub(crate) struct PendingSnapshot(Vec<u64>);
 
 impl PendingSnapshot {
+    /// A snapshot naming `ids` (sorted, each once), for a test.
+    #[cfg(test)]
+    pub(crate) fn for_test(mut ids: Vec<u64>) -> Self {
+        ids.sort_unstable();
+        ids.dedup();
+        Self(ids)
+    }
+
     /// Whether `id` is unindexed.
     fn holds(&self, id: u64) -> bool {
         self.0.binary_search(&id).is_ok()
@@ -167,13 +175,18 @@ impl Collection {
     }
 
     /// `results`, an index search for `k`, or — while the unindexed ids among
-    /// them leave fewer than `k` others — `index_search` run again for `k`
-    /// plus that many. The merge drops the index's result for an unindexed
-    /// id, so without the refetch an id the index still holds, overwritten
-    /// since, would take the place of the next point the index ranks rather
-    /// than leave it to that point. Each refetch asks for more than the last,
-    /// at most `k` plus the snapshot's size, so it stops; none runs unless an
-    /// unindexed id is among the results.
+    /// them leave fewer than `k` others — `index_search` run again for more.
+    /// The merge drops the index's result for an unindexed id, so without the
+    /// refetch an id the index still holds, overwritten since, would take the
+    /// place of the next point the index ranks rather than leave it to that
+    /// point.
+    ///
+    /// Each refetch asks for at least twice as many as the last (and for `k`
+    /// plus the unindexed ids just seen, if more), never more than `k` plus
+    /// the snapshot's size, which no unindexed ids can crowd out. So it runs
+    /// none unless an unindexed id is among the results, and at most
+    /// `ceil(log2((k + |snapshot|) / k))` times: 4 for 100 crowding ids at
+    /// `k = 10`.
     ///
     /// # Errors
     ///
@@ -184,12 +197,19 @@ impl Collection {
         mut results: Vec<ScoredResult>,
         index_search: impl Fn(usize) -> Result<Vec<ScoredResult>>,
     ) -> Result<Vec<ScoredResult>> {
+        let cap = k.saturating_add(pending.0.len());
         let mut fetched = k;
         loop {
             let masked = results.iter().filter(|r| pending.holds(r.id)).count();
-            let wanted = k.saturating_add(masked);
             // Fewer than asked for: the index has no more to give.
-            if masked == 0 || results.len() < fetched || wanted <= fetched {
+            if masked == 0 || results.len() < fetched || results.len() - masked >= k {
+                return Ok(results);
+            }
+            let wanted = fetched
+                .saturating_mul(2)
+                .max(k.saturating_add(masked))
+                .min(cap);
+            if wanted <= fetched {
                 return Ok(results);
             }
             fetched = wanted;
