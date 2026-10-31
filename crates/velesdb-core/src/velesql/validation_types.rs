@@ -138,6 +138,10 @@ pub enum ValidationErrorKind {
     /// `WITH (ef_search = ...)` is not an integer, or is outside the
     /// documented `[16, 4096]` range (#2274).
     InvalidEfSearch,
+    /// MATCH `RETURN ... ORDER BY` names an expression the MATCH executor
+    /// cannot sort by: an aggregate, or a bare name (a pattern alias, a
+    /// `RETURN` alias, an unqualified property) other than `depth`.
+    UnsupportedMatchOrderBy,
 }
 
 impl ValidationErrorKind {
@@ -159,6 +163,7 @@ impl ValidationErrorKind {
             Self::FusionMisconfigured => "V012",
             Self::InvalidSearchMode => "V013",
             Self::InvalidEfSearch => "V014",
+            Self::UnsupportedMatchOrderBy => "V015",
         }
     }
 
@@ -187,6 +192,7 @@ impl ValidationErrorKind {
             Self::FusionMisconfigured => "USING FUSION clause is misconfigured",
             Self::InvalidSearchMode => "Invalid search mode",
             Self::InvalidEfSearch => "Invalid ef_search value",
+            Self::UnsupportedMatchOrderBy => "Unsupported MATCH ORDER BY expression",
         }
     }
 }

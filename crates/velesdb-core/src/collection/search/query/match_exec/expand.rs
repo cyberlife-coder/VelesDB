@@ -256,9 +256,7 @@ impl Collection {
         ctx: &mut TraversalCtx<'_>,
     ) -> Result<()> {
         if let Some(guardrail) = ctx.guardrail {
-            guardrail
-                .check_depth(depth)
-                .map_err(|e| Error::GuardRail(e.to_string()))?;
+            guardrail.check_depth(depth).map_err(Error::from)?;
         }
         self.check_periodic_guardrails(
             ctx.guardrail,

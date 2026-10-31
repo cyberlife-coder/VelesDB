@@ -227,6 +227,33 @@ impl Database {
         tenant_hint: Option<&str>,
         read: GatedRead<'_>,
     ) -> Result<Vec<SearchResult>> {
+        self.gated_search_outcome(collection, principal, tenant_hint, read)?
+    }
+
+    /// [`gated_search`](Self::gated_search), keeping the read gate's refusal
+    /// apart from the search's own outcome.
+    ///
+    /// * `Err(_)` — the read gate refused: the observer's
+    ///   [`AccessDecision::Deny`](crate::observer::AccessDecision::Deny)
+    ///   error, or its own failure. The search never ran.
+    /// * `Ok(outcome)` — the gate admitted the read, and `outcome` is what
+    ///   the search returned.
+    ///
+    /// A caller that records search outcomes — the server's circuit breaker —
+    /// records only `outcome`: a denial is the policy's answer, never a sign
+    /// the collection is unhealthy.
+    ///
+    /// # Errors
+    ///
+    /// The outer error is the gate's refusal; see [`gated_search`](Self::gated_search)
+    /// for the outcome's.
+    pub fn gated_search_outcome(
+        &self,
+        collection: &str,
+        principal: Option<&str>,
+        tenant_hint: Option<&str>,
+        read: GatedRead<'_>,
+    ) -> Result<Result<Vec<SearchResult>>> {
         let scope_filter =
             match self.read_gate_raw(collection, read.operation_kind(), principal, tenant_hint)? {
                 RawGateOutcome::Allow => None,
@@ -234,10 +261,9 @@ impl Database {
                 RawGateOutcome::Scope(scope) => scope.filter.map(scope_to_core_filter),
             };
 
-        let coll = self
+        Ok(self
             .get_vector_collection(collection)
-            .ok_or_else(|| Error::CollectionNotFound(collection.to_string()))?;
-
-        dispatch_gated_read(&coll, read, scope_filter)
+            .ok_or_else(|| Error::CollectionNotFound(collection.to_string()))
+            .and_then(|coll| dispatch_gated_read(&coll, read, scope_filter)))
     }
 }

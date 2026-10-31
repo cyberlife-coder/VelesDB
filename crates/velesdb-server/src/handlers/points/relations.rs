@@ -178,12 +178,7 @@ fn insert_edge_with_retry(
         }
         let edge = match GraphEdge::new(next_id, req.source, req.target, &req.rel_type) {
             Ok(e) => e.with_properties(properties.clone()),
-            Err(e) => {
-                return Err(error_response(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid edge: {e}"),
-                ))
-            }
+            Err(e) => return Err(auto_core_error_response(&e)),
         };
         match coll.add_edge(edge) {
             Ok(()) => return Ok(next_id),
@@ -361,10 +356,7 @@ fn set_point_ttl_sync(
 
     match coll.upsert(vec![updated]) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to set TTL: {e}"),
-        ),
+        Err(e) => auto_core_error_response(&e),
     }
 }
 

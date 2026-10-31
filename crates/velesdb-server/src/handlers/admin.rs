@@ -17,6 +17,7 @@ use crate::AppState;
 
 use super::helpers::{
     auto_core_error_response, error_response, get_collection_or_404, get_vector_collection_or_404,
+    worker_failure,
 };
 
 /// Get detailed collection configuration (HNSW params, storage mode, schema, etc.).
@@ -125,10 +126,7 @@ pub async fn rebuild_index(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("rebuild_index task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("rebuild_index", &join_err)),
     }
 }
 
@@ -174,10 +172,7 @@ pub async fn vacuum_collection(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("vacuum task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("vacuum", &join_err)),
     }
 }
 
@@ -220,10 +215,7 @@ pub async fn compact_collection(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("compact task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("compact", &join_err)),
     }
 }
 
@@ -267,10 +259,7 @@ pub async fn reorder_for_locality(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("reorder task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("reorder", &join_err)),
     }
 }
 
@@ -302,10 +291,7 @@ pub async fn analyze_collection(
             (StatusCode::OK, Json(response)).into_response()
         }
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("analyze_collection task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("analyze_collection", &join_err)),
     }
 }
 

@@ -99,6 +99,10 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
+    /// A substring the refusal must carry (e.g. a validation code), when the
+    /// case pins why the query is refused and not only that it is.
+    #[serde(default)]
+    expect_error: Option<String>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -446,12 +450,19 @@ fn test_wasm_velesql_executor_rejected_cases() {
     let mut db = build_dataset(&fixture.dataset);
     let params = params_json(&fixture);
     for case in &fixture.rejected_cases {
-        assert!(
-            execute(&mut db, &case.query, Some(&params)).is_err(),
-            "WASM accepted rejected case {}: query={:?}",
-            case.id,
-            case.query
-        );
+        let Err(error) = execute(&mut db, &case.query, Some(&params)) else {
+            panic!(
+                "WASM accepted rejected case {}: query={:?}",
+                case.id, case.query
+            );
+        };
+        if let Some(expected) = &case.expect_error {
+            assert!(
+                error.contains(expected.as_str()),
+                "WASM must refuse rejected case {} with {expected}, got: {error}",
+                case.id
+            );
+        }
     }
 }
 

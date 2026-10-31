@@ -164,6 +164,14 @@ pub fn create_test_app_with_core_config(temp_dir: &TempDir, config_path: &Path) 
     base_routes().with_state(app_state_from_db(db))
 }
 
+/// The production router (`velesdb_server::routes::api_routes`, every route
+/// the binary serves) over `db`, with its shared state.
+pub fn create_full_app(db: Database) -> (Router, Arc<AppState>) {
+    let state = app_state_from_db(db);
+    let router = velesdb_server::routes::api_routes().with_state(Arc::clone(&state));
+    (router, state)
+}
+
 /// Helper to create test app and return the shared state for direct manipulation.
 pub fn create_test_app_with_state(temp_dir: &TempDir) -> (Router, Arc<AppState>) {
     let state = create_app_state(temp_dir);

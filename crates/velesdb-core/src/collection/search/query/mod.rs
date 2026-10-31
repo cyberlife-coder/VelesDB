@@ -57,6 +57,8 @@ mod match_exec_tests;
 pub mod match_metrics;
 #[cfg(test)]
 mod match_metrics_tests;
+#[cfg(test)]
+mod match_order_by_validation_parity_tests;
 mod metadata_query;
 mod multi_vector;
 #[cfg(test)]

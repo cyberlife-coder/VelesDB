@@ -10,8 +10,9 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
-use axum::http::StatusCode;
+use super::velesql_helpers::{
+    parse_and_validate, velesql_collection_not_found, velesql_execution_error,
+};
 use velesdb_core::Error as CoreError;
 
 /// Explain a VelesQL query, optionally executing it with instrumentation.
@@ -25,6 +26,8 @@ use velesdb_core::Error as CoreError;
     request_body = ExplainRequest,
     responses(
         (status = 200, description = "Query plan", body = ExplainResponse),
+        (status = 500, description = "An engine fault during execution (storage, I/O, internal)", body = crate::types::VelesqlErrorResponse),
+        (status = 503, description = "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement", body = crate::types::VelesqlErrorResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
         (status = 422, description = "Query validation/execution error", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
@@ -166,12 +169,10 @@ fn run_analyze_query(
         Err(CoreError::CollectionNotFound(name)) => {
             Err(Box::new(velesql_collection_not_found(&name)))
         }
-        Err(e) => Err(Box::new(velesql_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
+        Err(e) => Err(Box::new(velesql_execution_error(
+            &e,
             "VELESQL_EXPLAIN_ANALYZE_ERROR",
-            &e.to_string(),
             "Validate query semantics and parameter types against the target collection",
-            None,
         ))),
     }
 }
