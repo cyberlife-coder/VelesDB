@@ -4608,3 +4608,47 @@ fn reorder_waits_for_the_maintenance_lock() {
         );
     });
 }
+
+// =========================================================================
+// insert_batch_unless_indexed: an id the graph holds as it is stays put
+// =========================================================================
+
+/// For every metric, an id already mapped to a linked node holding the
+/// vector storage gives is not inserted again — whatever form the graph
+/// keeps it in (Cosine stores it normalized). Inserting it again would only
+/// leave its node behind, unmapped.
+#[test]
+fn an_id_the_graph_holds_as_it_is_is_not_inserted_again() {
+    for metric in [
+        DistanceMetric::Cosine,
+        DistanceMetric::Euclidean,
+        DistanceMetric::DotProduct,
+    ] {
+        let index = HnswIndex::new_fast_insert(8, metric).expect("test: index");
+        let points: Vec<(u64, Vec<f32>)> = (0..20_u64)
+            .map(|id| {
+                (
+                    id,
+                    (0..8).map(|d| 1.0 + (id * 8 + d) as f32 * 0.37).collect(),
+                )
+            })
+            .collect();
+        for (id, v) in &points {
+            VectorIndex::insert(&index, *id, v);
+        }
+        let before = index.tombstone_count();
+
+        let (held, inserted) = index.insert_batch_unless_indexed(&points);
+
+        assert_eq!(
+            (held, inserted),
+            (20, 0),
+            "{metric:?}: every id held already"
+        );
+        assert_eq!(
+            index.tombstone_count(),
+            before,
+            "{metric:?}: no node left behind"
+        );
+    }
+}

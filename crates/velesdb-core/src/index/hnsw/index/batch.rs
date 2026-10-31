@@ -237,12 +237,24 @@ impl HnswIndex {
     /// between the lookups.
     fn slots_holding(&self, pairs: &[(u64, Vec<f32>)]) -> Vec<bool> {
         let inner = self.inner.read();
+        // The graph keeps a Cosine vector normalized (its distance engine is
+        // built pre-normalized), so a stored vector is compared in that form,
+        // as crash recovery's stale-vector pass compares it.
+        let normalize = self.metric == crate::DistanceMetric::Cosine;
         let same_vector: Vec<Option<usize>> = inner.with_contiguous_vectors(|arena| {
             pairs
                 .iter()
                 .map(|(id, vector)| {
                     let slot = self.mappings.get_idx(*id)?;
-                    (arena.get(slot) == Some(vector.as_slice())).then_some(slot)
+                    let held = arena.get(slot)?;
+                    let same = if normalize {
+                        let mut normalized = vector.clone();
+                        crate::simd_native::normalize_inplace_native(&mut normalized);
+                        held == normalized.as_slice()
+                    } else {
+                        held == vector.as_slice()
+                    };
+                    same.then_some(slot)
                 })
                 .collect()
         });
