@@ -76,3 +76,29 @@ fn invalid_filter_wire_cases_are_refused() {
         );
     }
 }
+
+/// A VelesQL `id` column becomes an internal point-id field. A JSON filter
+/// cannot name it — its `"id"` is the payload field — whether it is parsed
+/// with `Filter::from_json_value` or deserialized directly, as
+/// `velesdb-server` does.
+#[test]
+fn the_internal_point_id_field_is_refused_in_a_json_filter() {
+    let leaf = serde_json::json!({"type": "eq", "field": "@velesql.point_id", "value": 1});
+    for condition in [
+        leaf.clone(),
+        serde_json::json!({"type": "and", "conditions": [leaf.clone()]}),
+        serde_json::json!({"type": "not", "condition": leaf}),
+    ] {
+        let filter = serde_json::json!({ "condition": condition });
+        assert!(Filter::from_json_value(filter.clone()).is_err(), "{filter}");
+        assert!(
+            serde_json::from_value::<Filter>(filter.clone()).is_err(),
+            "{filter}"
+        );
+    }
+    let payload_id = Filter::from_json_value(serde_json::json!(
+        {"condition": {"type": "eq", "field": "id", "value": 1}}
+    ))
+    .expect("test: `id` is a payload field in a JSON filter");
+    assert!(payload_id.matches(&serde_json::json!({"id": 1})));
+}

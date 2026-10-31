@@ -476,3 +476,28 @@ def test_query_request_fields_carry_search_operation():
         collection.hybrid_search(QUERY, "learning", top_k=2)
 
     assert READ_OPS.issubset(set(seen))
+
+
+# ---------------------------------------------------------------------------
+# A scope on `id` reads the point id, so it never widens a read.
+# ---------------------------------------------------------------------------
+
+
+def _scope_excluding_point_2(event, **fields):
+    """Allow reads but exclude point 2 by its id."""
+    if event == "query_request":
+        return {"filter": "id != 2"}
+    return None
+
+
+def test_a_scope_on_id_never_widens_post_filtered_reads():
+    """In a scope, `id` is the point id. Post-filtered reads (batch search,
+    ``get``) used to test it against the payload, which has no `id`: `id != 2`
+    then matched every row and point 2 leaked."""
+    with _Db(observer=_scope_excluding_point_2) as db:
+        collection = _seed(db)
+        batch = collection.batch_search([{"vector": QUERY, "top_k": 10}])
+        got = collection.get([1, 2])
+    assert _ids(batch[0]) == {1}
+    assert got[0] is not None and got[0]["id"] == 1
+    assert got[1] is None

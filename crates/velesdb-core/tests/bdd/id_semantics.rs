@@ -132,3 +132,122 @@ fn test_execute_aggregate_refuses_a_vector_group_by() {
         .expect_err("test: a vector GROUP BY is a search");
     assert!(err.to_string().contains("execute_query"), "got: {err}");
 }
+
+#[test]
+fn test_near_and_id_in_returns_those_points_however_far_they_are() {
+    // 200 points: 1..=3 point away from the query, 4..=200 toward it. A
+    // post-filter over the nearest candidates finds none of 1..=3; `id IN`
+    // names its candidates exactly.
+    let (_dir, db) = create_test_db();
+    execute_sql(
+        &db,
+        "CREATE COLLECTION many (dimension = 2, metric = 'cosine')",
+    )
+    .expect("test: create many");
+    let vc = db.get_vector_collection("many").expect("test: get many");
+    let points: Vec<Point> = (1..=200_u64)
+        .map(|id| {
+            let vector = if id <= 3 {
+                vec![1.0, 0.0]
+            } else {
+                vec![0.0, 1.0]
+            };
+            Point::new(id, vector, Some(serde_json::json!({"id": 1000 + id})))
+        })
+        .collect();
+    vc.upsert(points).expect("test: seed many");
+
+    let query =
+        Parser::parse("SELECT * FROM many WHERE vector NEAR $v AND id IN (1, 2, 3) LIMIT 3")
+            .expect("test: parse");
+    let params = HashMap::from([("v".to_string(), serde_json::json!([0.0, 1.0]))]);
+    let mut ids: Vec<u64> = db
+        .execute_query(&query, &params)
+        .expect("test: NEAR AND id IN")
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![1, 2, 3]);
+}
+
+#[test]
+fn test_where_id_matches_a_point_without_payload_on_every_path() {
+    let (_dir, db) = create_test_db();
+    setup_tickets(&db);
+    db.get_vector_collection("tickets")
+        .expect("test: get tickets")
+        .upsert(vec![Point::new(34, vec![0.5, 0.5], None)])
+        .expect("test: payload-less point");
+
+    assert_eq!(ids("SELECT * FROM tickets WHERE id = 34", &db), vec![34]);
+    let query = Parser::parse("SELECT * FROM tickets WHERE vector NEAR $v AND id = 34 LIMIT 5")
+        .expect("test: parse");
+    let params = HashMap::from([("v".to_string(), serde_json::json!([0.5, 0.5]))]);
+    let near: Vec<u64> = db
+        .execute_query(&query, &params)
+        .expect("test: NEAR AND id")
+        .iter()
+        .map(|r| r.point.id)
+        .collect();
+    assert_eq!(near, vec![34]);
+}
+
+#[test]
+fn test_arithmetic_order_by_reads_id_as_the_point_id() {
+    let (_dir, db) = create_test_db();
+    setup_tickets(&db);
+
+    assert_eq!(
+        ids("SELECT * FROM tickets ORDER BY 0 - id ASC", &db),
+        vec![33, 32, 31],
+        "the payload ids (3, 1, 2) would give 31, 33, 32"
+    );
+}
+
+#[test]
+fn test_update_where_id_updates_that_point() {
+    let (_dir, db) = create_test_db();
+    setup_tickets(&db);
+
+    execute_sql(&db, "UPDATE tickets SET kind = 'done' WHERE id IN (31, 3)").expect("test: update");
+
+    let done = ids("SELECT * FROM tickets WHERE kind = 'done' ORDER BY id", &db);
+    assert_eq!(done, vec![31], "3 is a payload id, not a point");
+}
+
+#[test]
+fn test_join_on_id_reads_the_point_id_of_each_side() {
+    // Each customer's payload carries the other's id: only the point id
+    // pairs ticket 31's `owner` (10) with customer 10.
+    let (_dir, db) = create_test_db();
+    setup_tickets(&db);
+    db.get_vector_collection("tickets")
+        .expect("test: get tickets")
+        .upsert(vec![Point::new(
+            31,
+            vec![1.0, 0.0],
+            Some(serde_json::json!({"id": 3, "kind": "bug", "owner": 10})),
+        )])
+        .expect("test: owner");
+    execute_sql(&db, "CREATE METADATA COLLECTION owners").expect("test: create owners");
+    db.get_metadata_collection("owners")
+        .expect("test: get owners")
+        .upsert(vec![
+            Point::metadata_only(10, serde_json::json!({"id": 20, "name": "Ten"})),
+            Point::metadata_only(20, serde_json::json!({"id": 10, "name": "Twenty"})),
+        ])
+        .expect("test: seed owners");
+
+    let rows = execute_sql(
+        &db,
+        "SELECT * FROM tickets JOIN owners ON tickets.owner = owners.id LIMIT 10",
+    )
+    .expect("test: join");
+
+    let names: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.point.payload.as_ref()?.get("name")?.as_str())
+        .collect();
+    assert_eq!(names, vec!["Ten"]);
+}

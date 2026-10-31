@@ -75,6 +75,8 @@ mod introspection;
 mod join_exact_conformance;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
+#[path = "bdd/match_id_semantics.rs"]
+mod match_id_semantics;
 #[path = "bdd/match_order_by_core.rs"]
 mod match_order_by_core;
 #[path = "bdd/match_order_by_exact.rs"]

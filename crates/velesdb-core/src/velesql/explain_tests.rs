@@ -1515,3 +1515,22 @@ fn test_compound_query_plan_has_no_implicit_limit() {
         "compound queries without LIMIT have no implicit limit: {tree}"
     );
 }
+
+#[test]
+fn test_explain_reports_a_point_id_lookup_for_id_equality_and_in() {
+    // `id` is the point id, which needs no payload index: a payload index
+    // named `id` must not be reported (it never answers for `id`).
+    let mut indexed_fields = HashSet::new();
+    indexed_fields.insert("id".to_string());
+    for sql in [
+        "SELECT * FROM docs WHERE id = 5",
+        "SELECT * FROM docs WHERE id IN (1, 2)",
+    ] {
+        let stmt = super::Parser::parse(sql).expect("test: parse").select;
+        for fields in [HashSet::new(), indexed_fields.clone()] {
+            let tree = QueryPlan::from_select_with_indexed_fields(&stmt, &fields).to_tree();
+            assert!(tree.contains("IndexLookup(docs.id)"), "{sql}: {tree}");
+            assert!(tree.contains("Index used: PointIdLookup"), "{sql}: {tree}");
+        }
+    }
+}

@@ -343,3 +343,18 @@ fn string_ordering_same_type() {
     }
     .matches(&p));
 }
+
+#[test]
+fn test_two_integers_compare_exactly_beyond_f64_precision() {
+    // 2^53 and 2^53 + 1 are one f64: compared as floats they are equal.
+    let payload = json!({"n": 9_007_199_254_740_992_u64});
+    let eq = Condition::eq("n", json!(9_007_199_254_740_993_u64));
+    let lt = Condition::Lt {
+        field: "n".to_string(),
+        value: json!(9_007_199_254_740_993_u64),
+    };
+    assert!(!eq.matches(&payload));
+    assert!(lt.matches(&payload));
+    let floats = Condition::eq("n", json!(9_007_199_254_740_992.0_f64));
+    assert!(floats.matches(&payload), "an integer equals its float");
+}
