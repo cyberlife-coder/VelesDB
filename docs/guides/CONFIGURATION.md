@@ -289,7 +289,7 @@ workers = 0
 # Taille maximale d'un body de requête (octets) ; au-delà : 413
 # Les routes d'upload de points (POST .../points, .../points/raw) acceptent
 # jusqu'à cette valeur ; toutes les autres jusqu'à min(cette valeur, 2 MiB).
-# POST .../points/stream (NDJSON, lu au fil de l'eau) n'a pas de limite.
+# POST .../points/stream (NDJSON, lu au fil de l'eau) n'est pas plafonnée.
 # Range: 1 - 1073741824 (1 GiB)
 # Default: 104857600 (100 MiB)
 max_body_size = 104857600
@@ -302,7 +302,7 @@ cors_enabled = true
 # Origines CORS autorisées, comparées exactement à l'en-tête Origin
 # ("scheme://host[:port]", sans chemin ni "/" final). ["*"] = toutes, à
 # écrire explicitement. Vide (défaut) = aucun en-tête CORS : seules les pages
-# servies par le serveur lui-même (même origine) peuvent lire ses réponses.
+# fournies par le serveur lui-même (même origine) peuvent lire ses réponses.
 # Même liste que [cors] allowed_origins : n'en définir qu'une des deux.
 # Default: []
 cors_origins = ["https://app.example.com"]
