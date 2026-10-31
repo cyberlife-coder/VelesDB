@@ -95,6 +95,8 @@ mod near_exact_ranking;
 mod near_fused_parse_only;
 #[path = "bdd/not_filters_exact.rs"]
 mod not_filters_exact;
+#[path = "bdd/numeric_index_exactness.rs"]
+mod numeric_index_exactness;
 #[path = "bdd/operators.rs"]
 mod operators;
 #[path = "bdd/recall_contract.rs"]

@@ -27,3 +27,30 @@ fn test_sort_results_lower() {
     sort_results(&mut results, false);
     assert_eq!(results[0].0, 3);
 }
+
+#[test]
+fn test_filtered_scores_test_a_point_without_payload_like_core() {
+    // Core and REST test a payload-less point with a `null` payload, so
+    // `is_null` keeps it; the browser used to drop it before the filter ran.
+    let filter = velesdb_core::Filter::from_json_value(serde_json::json!(
+        {"condition": {"type": "is_null", "field": "tag"}}
+    ))
+    .expect("test: filter");
+    let query = [1.0, 0.0];
+    let ids = vec![1, 2];
+    let payloads = vec![Some(serde_json::json!({"tag": "x"})), None];
+    let data = vec![1.0, 0.0, 0.0, 1.0];
+
+    let kept = compute_filtered_scores(
+        &query,
+        &ids,
+        &payloads,
+        &data,
+        2,
+        DistanceMetric::Cosine,
+        |id, payload| filter.matches_point(id, Some(payload)),
+    );
+
+    let kept_ids: Vec<u64> = kept.iter().map(|(id, _, _)| *id).collect();
+    assert_eq!(kept_ids, vec![2]);
+}

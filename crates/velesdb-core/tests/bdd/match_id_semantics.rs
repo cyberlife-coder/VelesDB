@@ -144,3 +144,25 @@ fn test_match_alias_id_ignores_a_property_index_on_id() {
     );
     assert!(run(&db, "MATCH (d:Doc) WHERE d.id = 9 RETURN d").is_empty());
 }
+
+#[test]
+fn test_match_return_alias_projects_the_node_id_whatever_its_payload() {
+    let (_dir, db) = create_test_db();
+    setup_docs(&db);
+    db.get_vector_collection("mdocs")
+        .expect("test: get mdocs")
+        .upsert(vec![Point::new(
+            5,
+            vec![1.0, 0.0],
+            Some(json!({"_labels": ["Doc"], "name": "no id"})),
+        )])
+        .expect("test: node 5");
+
+    let results = run(&db, "MATCH (d:Doc) WHERE d.id = 5 RETURN d");
+
+    let projected = results
+        .first()
+        .and_then(|r| r.point.payload.as_ref())
+        .and_then(|p| p.get("d.id").cloned());
+    assert_eq!(projected, Some(json!(5)), "got {results:?}");
+}
