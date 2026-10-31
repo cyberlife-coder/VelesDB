@@ -71,6 +71,7 @@ pub(crate) mod grouping;
 mod having_tests;
 #[cfg(test)]
 mod join_extended_tests;
+mod json_order;
 pub mod json_path;
 #[cfg(test)]
 mod json_path_tests;
@@ -293,6 +294,7 @@ pub use explain::{
 };
 pub use grouped_order::vector_group_score_is_average;
 pub use grouping::{row_field, GroupInput, GroupOutput, Grouper};
+pub use json_order::compare_json_values;
 pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{

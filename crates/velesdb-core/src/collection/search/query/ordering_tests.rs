@@ -18,20 +18,21 @@ mod tests {
     }
 
     #[test]
-    fn test_compare_none_vs_some_is_less() {
+    fn test_compare_missing_sorts_after_a_value() {
+        // NULLS LAST in ascending order, as every engine sorts.
         let v = json!(42);
         assert_eq!(
             compare_json_values(None, Some(&v)),
-            std::cmp::Ordering::Less
+            std::cmp::Ordering::Greater
         );
     }
 
     #[test]
-    fn test_compare_some_vs_none_is_greater() {
+    fn test_compare_a_value_sorts_before_missing() {
         let v = json!("hello");
         assert_eq!(
             compare_json_values(Some(&v), None),
-            std::cmp::Ordering::Greater
+            std::cmp::Ordering::Less
         );
     }
 
@@ -102,13 +103,13 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_compare_null_less_than_number() {
+    fn test_compare_null_sorts_after_a_number() {
         let a = json!(null);
         let b = json!(42);
         assert_eq!(
             compare_json_values(Some(&a), Some(&b)),
-            std::cmp::Ordering::Less,
-            "null (rank 0) < number (rank 2)"
+            std::cmp::Ordering::Greater,
+            "null sorts last"
         );
     }
 
@@ -119,7 +120,7 @@ mod tests {
         assert_eq!(
             compare_json_values(Some(&a), Some(&b)),
             std::cmp::Ordering::Less,
-            "number (rank 2) < string (rank 3)"
+            "numbers sort before strings"
         );
     }
 

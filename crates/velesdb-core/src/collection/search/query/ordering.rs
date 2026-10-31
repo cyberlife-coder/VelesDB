@@ -12,57 +12,9 @@ use crate::point::SearchResult;
 use crate::velesql::{ArithmeticExpr, ArithmeticOp};
 use std::cmp::Ordering;
 
-/// Compare two JSON values for sorting with total ordering.
-///
-/// Ordering priority (ascending): Null < Bool < Number < String < Array < Object
-/// This ensures deterministic sorting even with mixed types.
-#[must_use]
-pub fn compare_json_values(
-    a: Option<&serde_json::Value>,
-    b: Option<&serde_json::Value>,
-) -> Ordering {
-    match (a, b) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(va), Some(vb)) => {
-            // BUG FIX: Define total ordering for mixed JSON types
-            // Type priority: Null(0) < Bool(1) < Number(2) < String(3) < Array(4) < Object(5)
-            let type_rank = |v: &serde_json::Value| -> u8 {
-                match v {
-                    serde_json::Value::Null => 0,
-                    serde_json::Value::Bool(_) => 1,
-                    serde_json::Value::Number(_) => 2,
-                    serde_json::Value::String(_) => 3,
-                    serde_json::Value::Array(_) => 4,
-                    serde_json::Value::Object(_) => 5,
-                }
-            };
-
-            let rank_a = type_rank(va);
-            let rank_b = type_rank(vb);
-
-            // First compare by type rank
-            if rank_a != rank_b {
-                return rank_a.cmp(&rank_b);
-            }
-
-            // Same type: compare values
-            match (va, vb) {
-                (serde_json::Value::Number(na), serde_json::Value::Number(nb)) => {
-                    let fa = na.as_f64().unwrap_or(0.0);
-                    let fb = nb.as_f64().unwrap_or(0.0);
-                    fa.total_cmp(&fb) // Use total_cmp for NaN safety
-                }
-                (serde_json::Value::String(sa), serde_json::Value::String(sb)) => sa.cmp(sb),
-                (serde_json::Value::Bool(ba), serde_json::Value::Bool(bb)) => ba.cmp(bb),
-                // Null vs Null, Array vs Array, Object vs Object: treat as equal
-                // (comparing array/object contents would be complex and rarely needed)
-                _ => Ordering::Equal,
-            }
-        }
-    }
-}
+/// The engine-shared ORDER BY value order (`NULLS LAST` ascending), kept at
+/// this path for callers that import it from here.
+pub use crate::velesql::compare_json_values;
 
 impl Collection {
     /// Apply ORDER BY clause to results.

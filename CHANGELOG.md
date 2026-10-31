@@ -61,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GROUP BY`, and keep `MIN`/`MAX` for numeric columns (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 7).
 
+- **BREAKING (behavior) — ORDER BY sorts `null` last under `ASC` and first
+  under `DESC`, in every engine and ORDER BY path.** In 7.1.0 core sorted a
+  `null` or missing key before every value under `ASC` (and after under
+  `DESC`) while WASM sorted it last, so `SELECT * FROM docs ORDER BY tag`
+  returned rows without a `tag` first in core and last in WASM, and a `NULL`
+  group moved the same way. WASM also compared a number with a string, or two
+  booleans, as equal. 8.0.0 uses one comparator,
+  `velesql::compare_json_values`, for rows, `GROUP BY` groups, vector `GROUP
+  BY` results, `MATCH` and window functions: `null` last ascending
+  (PostgreSQL's default), then booleans, numbers, strings, arrays, objects.
+  Migration: none for WASM row order; in core, a query that relied on
+  `null` keys coming first under `ASC` reads them last (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
+
 ### Fixed
 
 - **The Python quickstart and examples run on 8.0.0.** The root README's

@@ -1363,6 +1363,16 @@ SELECT * FROM docs ORDER BY created_at DESC
 SELECT * FROM docs ORDER BY category ASC, price DESC
 ```
 
+### Value order and NULLs
+
+Every ORDER BY — on rows, `GROUP BY` groups, vector `GROUP BY` results,
+`MATCH` results and window functions, in every engine — sorts values the
+same way. A `null` or missing value sorts after every other value: **last
+under `ASC`, first under `DESC`** (PostgreSQL's default). Other values sort
+by type first — booleans, numbers, strings, arrays, objects — then by value
+within a type (`false` before `true`, numbers numerically, strings by code
+point).
+
 ### Order by Similarity
 
 ```sql

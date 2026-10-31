@@ -140,15 +140,15 @@ fn sort_aggregate_rows(
 }
 
 /// Total order over two aggregate rows for the resolved `(field, descending)`
-/// keys, using the same NULL-aware JSON comparator as the plain SELECT and
-/// MATCH ORDER BY paths (`compare_json_with_nulls`) for consistent ordering.
+/// keys, in core's ORDER BY value order (`velesql::compare_json_values`), the
+/// one every ORDER BY path uses in both engines.
 fn compare_aggregate_rows(
     a: &serde_json::Value,
     b: &serde_json::Value,
     keys: &[(String, bool)],
 ) -> std::cmp::Ordering {
     for (field, descending) in keys {
-        let ord = crate::velesql_orderby::compare_json_with_nulls(a.get(field), b.get(field));
+        let ord = velesdb_core::velesql::compare_json_values(a.get(field), b.get(field));
         let ord = if *descending { ord.reverse() } else { ord };
         if ord != std::cmp::Ordering::Equal {
             return ord;

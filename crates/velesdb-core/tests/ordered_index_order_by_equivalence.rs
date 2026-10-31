@@ -142,7 +142,7 @@ fn k_zero_matches_exhaustive() {
 #[test]
 fn not_fully_covered_falls_back_and_stays_correct() {
     // id 9 lacks the `year` field, so the secondary index omits it but a full
-    // ORDER BY places it FIRST for ASC (None < any value). The index path must
+    // ORDER BY places it LAST for ASC (NULLS LAST). The index path must
     // detect incomplete coverage and fall back to the exhaustive sort.
     let rows: &[(u64, i64)] = &[(1, 2020), (2, 2022), (3, 2021)];
     let (no_index, _d1) = build(rows);
@@ -173,8 +173,8 @@ fn not_fully_covered_falls_back_and_stays_correct() {
         .expect("index"));
 
     assert_eq!(exhaustive, indexed);
-    // Row 9 (no year → sorts first ASC), then 2020→1, 2021→3, 2022→2.
-    assert_eq!(indexed, vec![9, 1, 3, 2]);
+    // 2020→1, 2021→3, 2022→2, then row 9 (no year → sorts last ASC).
+    assert_eq!(indexed, vec![1, 3, 2, 9]);
 }
 
 #[test]
@@ -209,8 +209,8 @@ fn covered_after_backfill_then_uncovered_after_insert() {
             &HashMap::new(),
         )
         .expect("after"));
-    // Row 3 has no year → sorts first ASC; the new row is NOT dropped.
-    assert_eq!(after, vec![3, 1, 2]);
+    // Row 3 has no year → sorts last ASC; the new row is NOT dropped.
+    assert_eq!(after, vec![1, 2, 3]);
 }
 
 #[test]

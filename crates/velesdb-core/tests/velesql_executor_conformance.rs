@@ -59,6 +59,8 @@ struct Fixture {
     projection_cases: Vec<ProjectionCase>,
     #[serde(default)]
     vector_group_cases: Vec<VectorGroupCase>,
+    #[serde(default)]
+    null_order_cases: Vec<Case>,
 }
 
 #[derive(Deserialize)]
@@ -289,6 +291,15 @@ fn test_velesql_executor_conformance_rejected_cases() {
     }
 }
 
+/// Where a NULL or missing ORDER BY key lands: after every value in ASC,
+/// before every value in DESC, in both engines.
+#[test]
+fn test_velesql_executor_conformance_null_order_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
+    assert_cases_with(&db, &fixture.null_order_cases, &fixture.query_params);
+}
+
 /// Vector GROUP BY: ORDER BY sorts the groups (by score, by a SELECT
 /// aggregate), and both engines agree on the order.
 #[test]
@@ -428,7 +439,7 @@ fn test_velesql_executor_conformance_join_cases() {
 #[test]
 fn test_velesql_executor_conformance_aggregate_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     let params = HashMap::new();
     for case in &fixture.aggregate_cases {
         let query = Parser::parse(&case.query)

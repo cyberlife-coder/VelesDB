@@ -1,8 +1,8 @@
 //! ORDER BY execution for the WASM VelesQL executor (S4-13, #8).
 //!
 //! Supports ordering on any payload column (not just `id` / `score`),
-//! multi-key sort, ASC/DESC per key, explicit null handling (nulls sort last
-//! in ASC and first in DESC, matching Postgres default), and arithmetic
+//! multi-key sort, ASC/DESC per key, core's value order
+//! (`velesql::compare_json_values`: nulls last in ASC, first in DESC), and arithmetic
 //! expressions over the per-row score + payload.
 //!
 //! Sorting operates on core [`SearchResult`] values so the same rows can be
@@ -23,8 +23,6 @@ use velesdb_core::point::SearchResult;
 use velesdb_core::velesql::{
     ArithmeticExpr, ArithmeticOp, OrderByExpr, SelectOrderBy, SelectStatement,
 };
-
-use crate::velesql_value::json_values_cmp;
 
 /// Maximum recursion depth for arithmetic evaluation (mirrors core's
 /// `MAX_ARITHMETIC_DEPTH`).
@@ -125,7 +123,7 @@ fn compare_field(a: &SearchResult, b: &SearchResult, name: &str) -> Ordering {
     }
     let va = extract_payload_field(a, name);
     let vb = extract_payload_field(b, name);
-    compare_json_with_nulls(va.as_ref(), vb.as_ref())
+    velesdb_core::velesql::compare_json_values(va.as_ref(), vb.as_ref())
 }
 
 /// Compares two rows by search score (NaN-safe, NaN sorts last in ASC).
@@ -219,30 +217,6 @@ fn resolve_variable(name: &str, result: &SearchResult) -> f32 {
                     v as f32
                 }
             }),
-    }
-}
-
-/// Postgres-style NULL ordering: null sorts AFTER non-null in ASC. Since we
-/// always compute ASC first and reverse for DESC via `compare_with_spec`,
-/// producing "null > non-null" here gives "NULLS LAST in ASC" / "NULLS FIRST
-/// in DESC".
-///
-/// Shared with the MATCH `ORDER BY` path (`velesql_match_orderby`) so node and
-/// row ordering apply identical NULL semantics.
-pub(crate) fn compare_json_with_nulls(
-    left: Option<&serde_json::Value>,
-    right: Option<&serde_json::Value>,
-) -> Ordering {
-    let left_null = left.is_none_or(serde_json::Value::is_null);
-    let right_null = right.is_none_or(serde_json::Value::is_null);
-    match (left_null, right_null) {
-        (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        (false, false) => match (left, right) {
-            (Some(l), Some(r)) => json_values_cmp(l, r).unwrap_or(Ordering::Equal),
-            _ => Ordering::Equal,
-        },
     }
 }
 

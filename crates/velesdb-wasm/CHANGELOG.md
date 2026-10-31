@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a `GROUP BY` query.
 - **`ORDER BY similarity()` follows the metric's direction**: under a
   distance metric `DESC` puts the nearest row first, as in core.
+- **ORDER BY compares values as core does** (`velesql::compare_json_values`):
+  `null` stays last under `ASC`, and values of different types sort by type
+  (booleans, numbers, strings, arrays, objects) where a number and a string,
+  or two booleans, compared equal.
 - **BREAKING (behavior) — VelesQL queries go through `velesdb-core`'s
   `QueryValidator`.** A query core refuses is refused here too. `USING FUSION`
   over a single `NEAR` now fails with V012 for every strategy (`rrf`, `maximum`

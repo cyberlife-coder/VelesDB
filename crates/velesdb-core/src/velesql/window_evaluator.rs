@@ -367,20 +367,10 @@ fn extract_payload_value(result: &SearchResult, column: &str) -> String {
     extract_nested_value(result, column).to_string()
 }
 
-/// Compares two JSON values for sorting.
-///
-/// Numeric values are compared numerically; everything else is compared
-/// as strings. `Null` sorts last (after all non-null values).
+/// Compares two window ORDER BY values in the order every ORDER BY uses
+/// ([`super::compare_json_values`]): `null` last in ascending order.
 fn compare_json_values(a: &serde_json::Value, b: &serde_json::Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (serde_json::Value::Null, serde_json::Value::Null) => std::cmp::Ordering::Equal,
-        (serde_json::Value::Null, _) => std::cmp::Ordering::Greater, // NULLs sort last
-        (_, serde_json::Value::Null) => std::cmp::Ordering::Less,
-        _ => match (a.as_f64(), b.as_f64()) {
-            (Some(fa), Some(fb)) => fa.total_cmp(&fb),
-            _ => a.to_string().cmp(&b.to_string()),
-        },
-    }
+    super::compare_json_values(Some(a), Some(b))
 }
 
 /// Injects a ranking value into the result's payload as a new JSON field.

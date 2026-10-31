@@ -69,6 +69,8 @@ struct Fixture {
     projection_cases: Vec<ProjectionCase>,
     #[serde(default)]
     vector_group_cases: Vec<VectorGroupCase>,
+    #[serde(default)]
+    null_order_cases: Vec<Case>,
 }
 
 #[derive(Deserialize)]
@@ -373,6 +375,9 @@ fn test_wasm_velesql_executor_join_cases() {
 fn test_wasm_velesql_executor_aggregate_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     for case in &fixture.aggregate_cases {
         let result = execute(&mut db, &case.query, None)
             .unwrap_or_else(|e| panic!("aggregate case {} failed to execute: {e}", case.id));
@@ -480,6 +485,19 @@ fn test_wasm_velesql_executor_rejected_cases() {
             case.expected_code
         );
     }
+}
+
+/// Where a NULL or missing ORDER BY key lands: after every value in ASC,
+/// before every value in DESC, as in core.
+#[test]
+fn test_wasm_velesql_executor_null_order_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.null_order_cases, Some(&params));
 }
 
 /// Vector GROUP BY: WASM orders the groups as core does (by score, by a

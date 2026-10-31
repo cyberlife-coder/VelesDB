@@ -316,6 +316,14 @@ Rejections carry core's codes and a new `recoverable` field:
 
 ## 9. Results that change (not breaking)
 
+- **ORDER BY puts `null` last under `ASC`, first under `DESC`.** 7.1.0 core
+  sorted a `null` or missing key first under `ASC` (WASM already sorted it
+  last), on rows, groups and `MATCH` results alike. Every engine now uses
+  one order (`velesql::compare_json_values`): `null` last ascending, then
+  booleans, numbers, strings, arrays, objects. A query that read the rows
+  without a value first under `ASC` reads them last; sort `DESC`, or filter
+  `IS NULL`, to get them first.
+
 - **Vector `GROUP BY` (`NEAR` + `GROUP BY`) computes every aggregate, on the
   server, in Python, Node and every binding.** 7.1.0 core computed only
   `MAX(score)`, `AVG(score)` and `FIRST(col)` there; every other aggregate
