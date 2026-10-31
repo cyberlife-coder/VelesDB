@@ -300,30 +300,26 @@ fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
     Some(Cow::Borrowed(current))
 }
 
-/// An integer number widened to `i128`, which holds every `i64` and `u64`.
-fn integer(n: &serde_json::Number) -> Option<i128> {
-    n.as_i64()
-        .map(i128::from)
-        .or_else(|| n.as_u64().map(i128::from))
-}
-
-/// Compares two JSON values for equality: two integers exactly (beyond
-/// 2^53, as point ids can be), any other two numbers within `f64::EPSILON`.
+/// Compares two JSON values for equality; numbers as [`numbers_equal`].
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Number(a), Value::Number(b)) => match (integer(a), integer(b)) {
-            (Some(a), Some(b)) => a == b,
-            _ => a
-                .as_f64()
-                .zip(b.as_f64())
-                .is_some_and(|(a, b)| (a - b).abs() < f64::EPSILON),
-        },
+        (Value::Number(a), Value::Number(b)) => numbers_equal(a, b),
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Array(a), Value::Array(b)) => a == b,
         (Value::Object(a), Value::Object(b)) => a == b,
         _ => false,
+    }
+}
+
+/// Two floats are equal within `f64::EPSILON`; any other two numbers
+/// exactly, as [`compare_values`] orders them (an integer beyond 2^53, as
+/// point ids can be, is not the float it rounds to).
+fn numbers_equal(a: &serde_json::Number, b: &serde_json::Number) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) if a.is_f64() && b.is_f64() => (x - y).abs() < f64::EPSILON,
+        _ => crate::velesql::compare_numbers(a, b).is_eq(),
     }
 }
 
@@ -335,13 +331,8 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 /// matches SQL three-valued logic where `NULL op X` yields `UNKNOWN` (false).
 fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => match (integer(a), integer(b)) {
-            (Some(a), Some(b)) => Some(a.cmp(&b)),
-            _ => a
-                .as_f64()
-                .zip(b.as_f64())
-                .and_then(|(fa, fb)| fa.partial_cmp(&fb)),
-        },
+        // Exactly, an integer and a float included (`2^53 + 1 > 2^53.0`).
+        (Value::Number(a), Value::Number(b)) => Some(crate::velesql::compare_numbers(a, b)),
         (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
         _ => None,
     }

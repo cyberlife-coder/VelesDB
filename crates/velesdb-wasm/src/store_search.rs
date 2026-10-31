@@ -270,7 +270,7 @@ pub fn search_with_filter_impl<F>(
     filter_fn: F,
 ) -> Result<JsValue, JsValue>
 where
-    F: Fn(u64, &serde_json::Value) -> bool,
+    F: Fn(u64, Option<&serde_json::Value>) -> bool,
 {
     let mut results = crate::vector_ops::compute_filtered_scores(
         query, ids, payloads, data, dimension, metric, filter_fn,

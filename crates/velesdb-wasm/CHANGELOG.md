@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (behavior) — a SQL `GROUP BY` holds at most `WITH (max_groups =
   N)` groups, 10,000 by default**, as in core; past it the query fails with
   `Too many groups (limit: N)`.
+- **BREAKING (behavior) — `MIN` and `MAX` of integers return integers**, as
+  in core: `MAX(id)` is `33`, not `33.0`, exact past 2^53, and `HAVING
+  MAX(n) = 9007199254740992` compares exactly.
+- **A window function's `PARTITION BY id` and `ORDER BY id` read the point
+  id**, as every other clause does, not a payload field named `id`.
+- **`search_with_filter` tests a point without payload**, with a `null`
+  payload, as core does: `{"type": "is_null", ...}` or `neq` now match it,
+  where it was dropped before the filter ran.
 - **`ORDER BY similarity()` follows the metric's direction**: under a
   distance metric `DESC` puts the nearest row first, as in core.
 - **ORDER BY compares values as core does** (`velesql::compare_json_values`):

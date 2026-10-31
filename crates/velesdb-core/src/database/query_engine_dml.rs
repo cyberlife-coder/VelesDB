@@ -119,7 +119,7 @@ impl Database {
         let ids = filter
             .as_ref()
             .and_then(|f| f.condition.point_ids())
-            .unwrap_or_else(|| collection.all_ids());
+            .unwrap_or_else(|| collection.all_point_ids());
         let rows = collection.get(&ids);
         let updated_points =
             Self::apply_update_assignments(&collection, rows, filter.as_ref(), &assignments)?;

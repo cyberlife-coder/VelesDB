@@ -45,17 +45,18 @@ pub fn compute_filtered_scores<'a, F>(
     predicate: F,
 ) -> Vec<(u64, f32, Option<&'a serde_json::Value>)>
 where
-    F: Fn(u64, &serde_json::Value) -> bool,
+    F: Fn(u64, Option<&serde_json::Value>) -> bool,
 {
+    // A point without payload is tested with a `null` payload, as in core.
     ids.iter()
         .enumerate()
         .filter_map(|(idx, &id)| {
-            let payload = payloads[idx].as_ref()?;
+            let payload = payloads[idx].as_ref();
             if !predicate(id, payload) {
                 return None;
             }
             let score = metric.calculate(query, vector_at(data, idx, dimension));
-            Some((id, score, Some(payload)))
+            Some((id, score, payload))
         })
         .collect()
 }

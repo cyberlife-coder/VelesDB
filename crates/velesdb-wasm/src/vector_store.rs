@@ -184,7 +184,7 @@ impl VectorStore {
             self.dimension,
             self.metric,
             k,
-            |id: u64, payload: &serde_json::Value| filter.matches_point(id, Some(payload)),
+            |id: u64, payload: Option<&serde_json::Value>| filter.matches_point(id, payload),
         )
     }
 

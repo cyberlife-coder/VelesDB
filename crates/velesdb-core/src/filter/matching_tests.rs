@@ -380,7 +380,13 @@ fn test_an_integer_equals_a_float_only_at_its_exact_value() {
         }
         .matches(&json!({ "n": n }))
     };
-    assert!(!eq(json!(9_007_199_254_740_993_u64), json!(9_007_199_254_740_992.0_f64)));
-    assert!(eq(json!(9_007_199_254_740_992_u64), json!(9_007_199_254_740_992.0_f64)));
+    assert!(!eq(
+        json!(9_007_199_254_740_993_u64),
+        json!(9_007_199_254_740_992.0_f64)
+    ));
+    assert!(eq(
+        json!(9_007_199_254_740_992_u64),
+        json!(9_007_199_254_740_992.0_f64)
+    ));
     assert!(eq(json!(3), json!(3.0)));
 }

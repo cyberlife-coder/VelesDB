@@ -96,7 +96,7 @@ fn test_count_of_id_filtered_by_id_reads_the_point_id_in_both_clauses() {
 
     // The payload ids (3, 1, 2) all pass `< 33`: reading them counts 3.
     assert_eq!(result.get("n"), Some(&serde_json::json!(2)));
-    assert_eq!(result.get("top"), Some(&serde_json::json!(32.0)));
+    assert_eq!(result.get("top"), Some(&serde_json::json!(32)));
 }
 
 #[test]

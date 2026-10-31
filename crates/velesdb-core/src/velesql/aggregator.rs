@@ -11,7 +11,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use serde_json::Number;
+
 use super::ast::{AggregateFunction, AggregateType};
+use super::json_order::compare_numbers;
 
 /// Result of aggregation operations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -28,12 +31,20 @@ pub struct AggregateResult {
     pub mins: HashMap<String, f64>,
     /// MAX results by column name.
     pub maxs: HashMap<String, f64>,
+    /// MIN results by column name, exactly: an integer stays an integer,
+    /// beyond 2^53 included, where `mins` holds its `f64`.
+    #[serde(default)]
+    pub min_values: HashMap<String, Number>,
+    /// MAX results by column name, exactly (see `min_values`).
+    #[serde(default)]
+    pub max_values: HashMap<String, Number>,
 }
 
 impl AggregateResult {
     /// The value `agg` computed, as an output row holds it: a count as an
-    /// integer, a sum, mean, minimum or maximum as a float, `null` where the
-    /// group had no numeric value to aggregate. `FIRST` is not a running
+    /// integer, a sum or mean as a float, a minimum or maximum as the value
+    /// it is (an integer exactly), `null` where the group had no numeric
+    /// value to aggregate. `FIRST` is not a running
     /// aggregate and reads `null` here; its value is the group's best row's
     /// (`velesql::grouping`). `score` names the column of that name, which a
     /// vector GROUP BY fills with each row's search score.
@@ -52,10 +63,25 @@ impl AggregateResult {
             }
             (AggregateType::Sum, Some(column)) => float(&self.sums, column),
             (AggregateType::Avg, Some(column)) => float(&self.avgs, column),
-            (AggregateType::Min, Some(column)) => float(&self.mins, column),
-            (AggregateType::Max, Some(column)) => float(&self.maxs, column),
+            (AggregateType::Min, Some(column)) => extreme(&self.min_values, &self.mins, column),
+            (AggregateType::Max, Some(column)) => extreme(&self.max_values, &self.maxs, column),
             _ => serde_json::Value::Null,
         }
+    }
+}
+
+/// A minimum or maximum as the value it is, from `exact`, else as the `f64`
+/// `floats` holds (a result deserialized from before `exact` existed).
+fn extreme(
+    exact: &HashMap<String, Number>,
+    floats: &HashMap<String, f64>,
+    column: &str,
+) -> serde_json::Value {
+    match exact.get(column) {
+        Some(n) => serde_json::Value::Number(n.clone()),
+        None => floats
+            .get(column)
+            .map_or(serde_json::Value::Null, |v| serde_json::json!(v)),
     }
 }
 
@@ -65,21 +91,25 @@ impl AggregateResult {
 /// can maintain them with a single `HashMap` lookup per value instead of four
 /// separate lookups across four maps. This also eliminates the cross-map
 /// synchronisation invariant that previously required `debug_assert` guards.
+///
+/// The extremes are kept as the numbers they are, compared exactly
+/// ([`compare_numbers`]): an integer past 2^53 stays itself, where an `f64`
+/// would round it onto its neighbour.
 #[derive(Debug, Clone)]
 struct ColumnAgg {
     sum: f64,
     count: u64,
-    min: f64,
-    max: f64,
+    min: Number,
+    max: Number,
 }
 
 impl ColumnAgg {
-    fn new(value: f64) -> Self {
+    fn new(value: &Number) -> Self {
         Self {
-            sum: value,
+            sum: value.as_f64().unwrap_or(0.0),
             count: 1,
-            min: value,
-            max: value,
+            min: value.clone(),
+            max: value.clone(),
         }
     }
 
@@ -87,46 +117,48 @@ impl ColumnAgg {
         Self {
             sum,
             count,
-            min,
-            max,
+            min: float_number(min),
+            max: float_number(max),
         }
     }
 
     #[inline]
-    fn update(&mut self, value: f64) {
-        self.sum += value;
+    fn update(&mut self, value: &Number) {
+        self.sum += value.as_f64().unwrap_or(0.0);
         self.count += 1;
-        if value < self.min {
-            self.min = value;
-        }
-        if value > self.max {
-            self.max = value;
-        }
+        self.widen(value, value);
     }
 
     #[inline]
     fn update_batch(&mut self, batch_sum: f64, batch_count: u64, batch_min: f64, batch_max: f64) {
         self.sum += batch_sum;
         self.count += batch_count;
-        if batch_min < self.min {
-            self.min = batch_min;
-        }
-        if batch_max > self.max {
-            self.max = batch_max;
-        }
+        self.widen(&float_number(batch_min), &float_number(batch_max));
     }
 
     #[inline]
     fn merge_from(&mut self, other: &Self) {
         self.sum += other.sum;
         self.count += other.count;
-        if other.min < self.min {
-            self.min = other.min;
+        self.widen(&other.min, &other.max);
+    }
+
+    /// Takes `min` and `max` as the extremes where they extend them.
+    #[inline]
+    fn widen(&mut self, min: &Number, max: &Number) {
+        if compare_numbers(min, &self.min).is_lt() {
+            self.min = min.clone();
         }
-        if other.max > self.max {
-            self.max = other.max;
+        if compare_numbers(max, &self.max).is_gt() {
+            self.max = max.clone();
         }
     }
+}
+
+/// An `f64` extreme of a batch as a JSON number (`0` for a non-finite one,
+/// which no JSON value holds).
+fn float_number(value: f64) -> Number {
+    Number::from_f64(value).unwrap_or_else(|| Number::from(0))
 }
 
 /// Streaming aggregator - O(1) memory, single-pass.
@@ -165,7 +197,7 @@ impl Aggregator {
         if !value.is_null() {
             Self::count_present(&mut self.present, column, 1);
         }
-        if let Some(num) = Self::extract_number(value) {
+        if let serde_json::Value::Number(num) = value {
             match self.columns.get_mut(column) {
                 Some(agg) => agg.update(num),
                 None => {
@@ -182,14 +214,6 @@ impl Aggregator {
             None => {
                 present.insert(column.to_string(), n);
             }
-        }
-    }
-
-    /// Extract a numeric value from JSON.
-    fn extract_number(value: &serde_json::Value) -> Option<f64> {
-        match value {
-            serde_json::Value::Number(n) => n.as_f64(),
-            _ => None,
         }
     }
 
@@ -251,14 +275,18 @@ impl Aggregator {
         let mut avgs = HashMap::with_capacity(cap);
         let mut mins = HashMap::with_capacity(cap);
         let mut maxs = HashMap::with_capacity(cap);
+        let mut min_values = HashMap::with_capacity(cap);
+        let mut max_values = HashMap::with_capacity(cap);
 
         for (col, agg) in self.columns {
             if agg.count > 0 {
                 avgs.insert(col.clone(), agg.sum / agg.count as f64);
             }
             sums.insert(col.clone(), agg.sum);
-            mins.insert(col.clone(), agg.min);
-            maxs.insert(col, agg.max);
+            mins.insert(col.clone(), agg.min.as_f64().unwrap_or(0.0));
+            maxs.insert(col.clone(), agg.max.as_f64().unwrap_or(0.0));
+            min_values.insert(col.clone(), agg.min);
+            max_values.insert(col, agg.max);
         }
 
         AggregateResult {
@@ -268,6 +296,8 @@ impl Aggregator {
             avgs,
             mins,
             maxs,
+            min_values,
+            max_values,
         }
     }
 }

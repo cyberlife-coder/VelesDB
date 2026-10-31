@@ -210,27 +210,21 @@ impl Collection {
     }
 
     /// Inserts all payload properties of a single node into `projected`,
-    /// prefixed with `alias.` (shared by `project_wildcard` and `project_bare_alias`).
+    /// prefixed with `alias.` (shared by `project_wildcard` and `project_bare_alias`),
+    /// and the node id under `alias.id`, as everywhere in a MATCH, whatever
+    /// the payload holds.
     fn project_all_node_properties(
         alias: &str,
         node_id: u64,
         memo: &super::PayloadMemo<'_>,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
-        let Some(payload) = memo.get(node_id) else {
-            return;
-        };
-        if let Some(map) = payload.as_object() {
-            for (key, value) in map {
-                // `alias.id` is the node id, as everywhere in a MATCH.
-                let value = if key == "id" {
-                    serde_json::Value::from(node_id)
-                } else {
-                    value.clone()
-                };
-                projected.insert(format!("{alias}.{key}"), value);
+        if let Some(map) = memo.get(node_id).as_deref().and_then(|p| p.as_object()) {
+            for (key, value) in map.iter().filter(|(key, _)| key.as_str() != "id") {
+                projected.insert(format!("{alias}.{key}"), value.clone());
             }
         }
+        projected.insert(format!("{alias}.id"), serde_json::Value::from(node_id));
     }
 
     /// Projects a single dotted property (e.g., `n.name`) from a bound node.

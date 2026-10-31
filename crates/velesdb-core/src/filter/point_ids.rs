@@ -10,19 +10,18 @@ use serde_json::Value;
 use super::{Condition, POINT_ID_FIELD};
 
 /// 2^53: an integer at or past it may share its `f64` with a neighbour.
-const F64_EXACT_INTEGER_LIMIT: u64 = 1 << 53;
+const F64_EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
 
 /// Whether a payload index or mirror keyed on `f64` answers for `value`
-/// exactly: anything but an integer of magnitude 2^53 or more, which shares
-/// its `f64` with a neighbour while the filter compares two integers
-/// exactly. Such a literal must fall back to the filter itself.
+/// exactly: anything but a number of magnitude 2^53 or more, integer or
+/// float. Past 2^53 an `f64` key stands for several integers the filter
+/// tells apart (`2^53 + 1 > 2^53.0`), so such a literal must fall back to
+/// the filter itself. This is the one test every `f64`-keyed path asks.
 pub(crate) fn exact_as_f64(value: &Value) -> bool {
     match value {
-        Value::Number(n) => match (n.as_i64(), n.as_u64()) {
-            (Some(i), _) => i.unsigned_abs() < F64_EXACT_INTEGER_LIMIT,
-            (None, Some(u)) => u < F64_EXACT_INTEGER_LIMIT,
-            (None, None) => true,
-        },
+        Value::Number(n) => n
+            .as_f64()
+            .is_some_and(|f| f.abs() < F64_EXACT_INTEGER_LIMIT),
         _ => true,
     }
 }

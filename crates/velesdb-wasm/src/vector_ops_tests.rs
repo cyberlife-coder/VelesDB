@@ -48,7 +48,7 @@ fn test_filtered_scores_test_a_point_without_payload_like_core() {
         &data,
         2,
         DistanceMetric::Cosine,
-        |id, payload| filter.matches_point(id, Some(payload)),
+        |id, payload| filter.matches_point(id, payload),
     );
 
     let kept_ids: Vec<u64> = kept.iter().map(|(id, _, _)| *id).collect();

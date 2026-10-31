@@ -736,5 +736,5 @@ fn test_count_and_max_of_id_read_the_point_id_without_group_by() {
 
     // As in WHERE and in GROUP BY, `id` is the point id: orders 1..=10.
     assert_eq!(result.get("n"), Some(&serde_json::json!(10)));
-    assert_eq!(result.get("top"), Some(&serde_json::json!(10.0)));
+    assert_eq!(result.get("top"), Some(&serde_json::json!(10)));
 }

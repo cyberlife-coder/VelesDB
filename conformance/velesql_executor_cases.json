@@ -435,8 +435,8 @@
       "id": "G021",
       "query": "SELECT kind, COUNT(id) AS n, MAX(id) AS top FROM tickets WHERE id >= 32 GROUP BY kind",
       "expect_groups": [
-        { "kind": "bug", "n": 1, "top": 32.0 },
-        { "kind": "task", "n": 1, "top": 33.0 }
+        { "kind": "bug", "n": 1, "top": 32 },
+        { "kind": "task", "n": 1, "top": 33 }
       ],
       "note": "the WHERE of an aggregate reads `id` as the point id, as its aggregates do, although every payload carries an `id` of its own"
     }
@@ -830,8 +830,8 @@
       "group_column": "category",
       "expect_order": ["other", "tech"],
       "expect_rows": [
-        { "category": "other", "n": 2, "total": 4040.0, "mean": 2020.0, "lo": 2019.0, "hi": 2021.0, "top": 2021 },
-        { "category": "tech", "n": 3, "total": 6065.0, "mean": 2021.6666666666667, "lo": 2020.0, "hi": 2023.0, "top": 2023 }
+        { "category": "other", "n": 2, "total": 4040.0, "mean": 2020.0, "lo": 2019, "hi": 2021, "top": 2021 },
+        { "category": "tech", "n": 3, "total": 6065.0, "mean": 2021.6666666666667, "lo": 2020, "hi": 2023, "top": 2023 }
       ],
       "expect_ids": [3, 4],
       "expect_scores": [0.547723, 0.730297],

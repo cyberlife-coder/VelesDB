@@ -50,8 +50,17 @@ impl Collection {
     ///
     /// Returns an error if persisting the updated `config.json` fails — a
     /// `CREATE INDEX` whose authority cannot be persisted is surfaced rather
-    /// than silently lost on restart.
+    /// than silently lost on restart — and [`Error::Config`] for the field
+    /// name `@velesql.point_id`, reserved for `VelesQL`'s point id: an index
+    /// under it would answer `id` predicates from payloads.
+    ///
+    /// [`Error::Config`]: crate::error::Error::Config
     pub fn create_index(&self, field_name: &str) -> Result<()> {
+        if field_name == crate::filter::POINT_ID_FIELD {
+            return Err(crate::error::Error::Config(format!(
+                "index field `{field_name}` is reserved for VelesQL's point id"
+            )));
+        }
         self.build_and_backfill_secondary_index(field_name);
         // Record the field in the persisted authority. `BTreeSet::insert`
         // returns `false` when the field is already tracked, so a no-op CREATE
@@ -482,6 +491,14 @@ impl Collection {
         None
     }
 
+    /// Whether a payload index may answer a range on `field` bounded by
+    /// `value`. The index keys numbers by `f64`: past 2^53 a bound can share
+    /// its key with a neighbour the filter orders exactly, and a range would
+    /// drop it. And `id` is the point id, which no payload index holds.
+    fn range_indexable(field: &str, value: &serde_json::Value) -> bool {
+        field != crate::filter::POINT_ID_FIELD && crate::filter::exact_as_f64(value)
+    }
+
     /// Builds a range bitmap for Gt/Gte/Lt/Lte using `SecondaryIndex::range_bitmap`.
     fn bitmap_for_range_field(
         indexes: &SecondaryIndexMap,
@@ -490,10 +507,7 @@ impl Collection {
         cond: &crate::filter::Condition,
     ) -> Option<roaring::RoaringBitmap> {
         use std::ops::Bound;
-        // The index keys numbers by `f64`: past 2^53 a bound can share its
-        // key with a neighbour the filter orders exactly, and a range would
-        // drop it.
-        if !crate::filter::exact_as_f64(value) {
+        if !Self::range_indexable(field, value) {
             return None;
         }
 

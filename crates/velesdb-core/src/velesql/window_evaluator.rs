@@ -322,8 +322,12 @@ fn extract_sort_value(result: &SearchResult, column: &str) -> serde_json::Value 
     extract_nested_value(result, column)
 }
 
-/// Extracts a potentially nested payload value (e.g., `"metadata.source"`).
+/// Extracts a potentially nested payload value (e.g., `"metadata.source"`);
+/// `id` is the point id, as in every clause, for ORDER BY and PARTITION BY.
 fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Value {
+    if column == "id" {
+        return serde_json::Value::from(result.point.id);
+    }
     let Some(payload) = result.point.payload.as_ref() else {
         return serde_json::Value::Null;
     };

@@ -270,18 +270,13 @@ impl Database {
 
         // Phase 1: one key per left row (same payload->key conversion as
         // index maintenance); `id` is the point id, as in every clause.
-        let keys: Vec<Option<crate::index::JsonValue>> = results
+        let values: Vec<Option<serde_json::Value>> = results
             .iter()
-            .map(|left| {
-                if source_column == "id" {
-                    return crate::index::JsonValue::from_json(&serde_json::json!(left.point.id));
-                }
-                left.point
-                    .payload
-                    .as_ref()
-                    .and_then(|p| p.get(source_column))
-                    .and_then(crate::index::JsonValue::from_json)
-            })
+            .map(|left| Self::left_join_value(left, source_column))
+            .collect();
+        let keys: Vec<Option<crate::index::JsonValue>> = values
+            .iter()
+            .map(|value| value.as_ref().and_then(crate::index::JsonValue::from_json))
             .collect();
 
         // Phase 2: build side — one lookup per distinct key, one batched get.
@@ -290,23 +285,60 @@ impl Database {
 
         // Phase 3: emit — one merged row per (left row, match), budget-bounded.
         let mut output = Vec::new();
-        for (left, key) in results.into_iter().zip(keys) {
+        for ((left, key), value) in results.into_iter().zip(keys).zip(&values) {
             if output.len() >= row_budget {
                 break;
             }
-            let matches = key
-                .as_ref()
-                .and_then(|k| key_matches.get(k))
-                .filter(|ids| !ids.is_empty());
-            let Some(match_ids) = matches else {
+            let candidates = key.as_ref().and_then(|k| key_matches.get(k));
+            let match_ids =
+                Self::exact_matches(candidates, &point_map, index_column, value.as_ref());
+            if match_ids.is_empty() {
                 if matches!(join.join_type, crate::velesql::JoinType::Left) {
                     output.push(left);
                 }
                 continue;
-            };
-            Self::emit_indexed_rows(left, match_ids, &point_map, row_budget, &mut output);
+            }
+            Self::emit_indexed_rows(left, &match_ids, &point_map, row_budget, &mut output);
         }
         output
+    }
+
+    /// A left row's join value: its point id for `id`, as in every clause,
+    /// else its payload field.
+    fn left_join_value(left: &SearchResult, column: &str) -> Option<serde_json::Value> {
+        if column == "id" {
+            return Some(serde_json::Value::from(left.point.id));
+        }
+        left.point.payload.as_ref()?.get(column).cloned()
+    }
+
+    /// The index's candidates for a left `value`, kept only where the join
+    /// side holds exactly that value. The index keys numbers by `f64`, so for
+    /// an integer at or past 2^53 its bucket also holds a neighbour's rows,
+    /// which the join must not pair; any other value's bucket is exact.
+    fn exact_matches<'a>(
+        candidates: Option<&'a Vec<u64>>,
+        point_map: &std::collections::HashMap<u64, crate::Point>,
+        index_column: &str,
+        value: Option<&serde_json::Value>,
+    ) -> std::borrow::Cow<'a, [u64]> {
+        let (Some(candidates), Some(value)) = (candidates, value) else {
+            return std::borrow::Cow::Borrowed(&[]);
+        };
+        if crate::filter::exact_as_f64(value) {
+            return std::borrow::Cow::Borrowed(candidates);
+        }
+        candidates
+            .iter()
+            .copied()
+            .filter(|id| {
+                point_map
+                    .get(id)
+                    .and_then(|right| right.payload.as_ref()?.get(index_column))
+                    .is_some_and(|held| same_number(held, value))
+            })
+            .collect::<Vec<u64>>()
+            .into()
     }
 
     /// Emits the merged rows of one left row's match list, budget-bounded.
@@ -395,5 +427,15 @@ impl Database {
                 .and_then(serde_json::Value::as_object)
                 .is_some_and(|map| map.contains_key(crate::collection::expiry::EXPIRES_AT_KEY))
         })
+    }
+}
+
+/// Whether two JSON values are the same, numbers by exact value.
+fn same_number(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    match (a, b) {
+        (serde_json::Value::Number(x), serde_json::Value::Number(y)) => {
+            crate::velesql::compare_numbers(x, y).is_eq()
+        }
+        _ => a == b,
     }
 }

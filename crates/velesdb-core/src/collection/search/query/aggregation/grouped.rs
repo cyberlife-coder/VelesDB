@@ -8,7 +8,7 @@ use super::super::match_exec::MatchStorageGuards;
 use super::super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
-use crate::storage::{PayloadStorage, VectorStorage};
+use crate::storage::PayloadStorage;
 use crate::velesql::{GroupInput, Grouper, HavingClause, Query};
 use std::collections::HashMap;
 
@@ -78,8 +78,7 @@ impl Collection {
         };
         // Rows feed the grouper in id order, so a float SUM or AVG adds its
         // values in the same order on every run, whatever the storage order.
-        let mut ids = vector_storage.ids();
-        ids.sort_unstable();
+        let ids = Self::aggregate_scan_ids(&*vector_storage, filter.as_ref());
         let mut graph_cache = GraphMatchEvalCache::default();
 
         for id in ids {

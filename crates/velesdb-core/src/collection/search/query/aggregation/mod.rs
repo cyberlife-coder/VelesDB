@@ -171,8 +171,7 @@ impl Collection {
         // Id order, so a float SUM or AVG is the same on every run, whatever
         // the storage order: the parallel path sums fixed chunks of this
         // order and merges them in order.
-        let mut ids: Vec<u64> = vector_storage.ids();
-        ids.sort_unstable();
+        let ids = Self::aggregate_scan_ids(&*vector_storage, filter.as_ref());
 
         if ids.len() >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
             Ok(Self::aggregate_parallel(
@@ -194,6 +193,25 @@ impl Collection {
             };
             self.aggregate_sequential(&ids, &ctx)
         }
+    }
+
+    /// The points an aggregate scans, in id order (so a float SUM or AVG is
+    /// the same on every run): the existing points `id = n` / `id IN (...)`
+    /// names when the static WHERE does — the lookup EXPLAIN reports — else
+    /// every point.
+    pub(super) fn aggregate_scan_ids(
+        vector_storage: &dyn VectorStorage,
+        filter: Option<&crate::filter::Filter>,
+    ) -> Vec<u64> {
+        let Some(named) = filter.and_then(|f| f.condition.point_ids()) else {
+            let mut ids = vector_storage.ids();
+            ids.sort_unstable();
+            return ids;
+        };
+        named
+            .into_iter()
+            .filter(|&id| vector_storage.retrieve(id).ok().flatten().is_some())
+            .collect()
     }
 
     /// Parallel aggregation that streams payloads per chunk (#901).
