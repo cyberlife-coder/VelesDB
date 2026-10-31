@@ -1565,6 +1565,235 @@ class LearningLoopPolicy(unittest.TestCase):
                 self.assertIn('"session":"campaign-batch"', batch.get("reason", ""))
                 self.assertNotIn('"session":"rolling"', batch.get("reason", ""))
 
+    # --- Verifiable evidence for feedback -------------------------------------
+
+    def recall_result(self, host: str, memories: list[dict]) -> dict | list | str:
+        """A successful recall result in the shape each host sends."""
+        body = json.dumps({"memories": memories})
+        if host == "claude":
+            return body
+        return {
+            "content": [{"type": "text", "text": body}],
+            "structuredContent": {"memories": memories},
+            "isError": False,
+        }
+
+    def recall_returning(self, host: str, session_id: str, memories: list[dict]) -> None:
+        result = self.run_hook(
+            host,
+            "post-tool-use.sh",
+            hook_payload(
+                "PostToolUse",
+                cwd=self.nested,
+                session_id=session_id,
+                tool_name="mcp__velesdb-memory__recall_fused",
+                tool_input={"query": "evidence", "filter": {"project": "velesdb"}},
+                tool_response=self.recall_result(host, memories),
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @staticmethod
+    def memory(id_str: str, *, stale: bool = False) -> dict:
+        memory = {"id": int(id_str), "id_str": id_str, "score": 0.9, "content": "lesson"}
+        if stale:
+            memory["freshness"] = {"state": "stale", "changed": ["src/lib.rs"]}
+        return memory
+
+    def stop_reason(self, host: str, session_id: str, cwd: Path | None = None) -> str:
+        stop = self.run_hook(
+            host, "stop.sh", hook_payload("Stop", cwd=cwd or self.nested, session_id=session_id)
+        )
+        self.assertEqual(stop.returncode, 0, stop.stderr)
+        output = json.loads(stop.stdout or "{}")
+        self.assertEqual(output.get("decision"), "block", output)
+        return output.get("reason", "")
+
+    def bash(self, session_id: str, command: str, *, exit_code: int) -> None:
+        """A Claude Code Bash call: PostToolUse on exit 0, PostToolUseFailure otherwise."""
+        if exit_code == 0:
+            script = "post-tool-use.sh"
+            payload = hook_payload(
+                "PostToolUse",
+                cwd=self.nested,
+                session_id=session_id,
+                tool_name="Bash",
+                tool_input={"command": command},
+                tool_response={
+                    "stdout": "ok",
+                    "stderr": "",
+                    "interrupted": False,
+                    "isImage": False,
+                },
+            )
+        else:
+            script = "post-tool-use-failure.sh"
+            payload = hook_payload("PostToolUseFailure", cwd=self.nested, session_id=session_id)
+            payload.update(
+                {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": command},
+                    "tool_use_id": f"call-{session_id}",
+                    "error": f"Exit code {exit_code}\nerror: test failed",
+                    "is_interrupt": False,
+                }
+            )
+        result = self.run_hook("claude", script, payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_stop_names_the_exact_memories_recall_returned(self) -> None:
+        for host in HOSTS:
+            with self.subTest(host=host):
+                session_id = f"{host}-credit-ids"
+                self.recall_returning(
+                    host,
+                    session_id,
+                    [self.memory("101"), self.memory("18446744073709551557", stale=True)],
+                )
+                reason = self.stop_reason(host, session_id)
+                self.assertIn("101", reason)
+                self.assertIn("18446744073709551557", reason)
+                self.assertIn("stale", reason.lower())
+                self.assertNotIn("every recalled memory", reason)
+                self.assertIn("never", reason.lower(), "self-assessment must be ruled out")
+
+    def test_named_memories_are_consumed_by_the_checkpoint_that_names_them(self) -> None:
+        for host in HOSTS:
+            with self.subTest(host=host):
+                session_id = f"{host}-credit-consumed"
+                self.recall_returning(host, session_id, [self.memory("201")])
+                self.assertIn("201", self.stop_reason(host, session_id))
+                self.recall_returning(host, session_id, [self.memory("202")])
+                self.assert_passed(
+                    self.edit(host, session_id, HOSTS[host]["edit_tools"][0]), host=host
+                )
+                reason = self.stop_reason(host, session_id)
+                self.assertIn("202", reason)
+                self.assertNotIn("201", reason)
+
+    def test_without_a_recall_result_no_memory_earns_feedback(self) -> None:
+        for host in HOSTS:
+            with self.subTest(host=host):
+                reason = self.stop_reason(host, f"{host}-credit-none")
+                self.assertIn("no memory", reason.lower())
+
+    def test_recalled_memory_state_refuses_links_and_malformed_records(self) -> None:
+        for host in HOSTS:
+            with self.subTest(host=host):
+                session_id = f"{host}-credit-hardened"
+                self.recall_returning(host, session_id, [self.memory("301")])
+                records = [
+                    directory
+                    for directory in self.marker_root.glob("*recalled-memories*.records")
+                    if directory.is_dir()
+                ]
+                self.assertEqual(len(records), 1, list(self.marker_root.iterdir()))
+                directory = records[0]
+                self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+                for record in directory.glob("*.json"):
+                    self.assertEqual(record.stat().st_mode & 0o777, 0o600)
+                outside = self.private / f"{host}-planted.json"
+                outside.write_text('{"id":"999","tool":"recall","stale":false}\n')
+                (directory / "999.json").symlink_to(outside)
+                stop = self.run_hook(
+                    host, "stop.sh", hook_payload("Stop", cwd=self.nested, session_id=session_id)
+                )
+                reason = json.loads(stop.stdout).get("reason", "")
+                self.assertIn("malformed or linked", reason)
+                self.assertNotIn("999", reason.replace(str(directory), ""))
+                (directory / "999.json").unlink()
+                (directory / "998.json").write_text("not json\n")
+                stop = self.run_hook(
+                    host, "stop.sh", hook_payload("Stop", cwd=self.nested, session_id=session_id)
+                )
+                self.assertIn("malformed or linked", json.loads(stop.stdout).get("reason", ""))
+                shutil.rmtree(self.marker_root)
+
+    def test_a_check_that_failed_then_passed_is_evidence_not_an_automatic_reward(
+        self,
+    ) -> None:
+        session_id = "claude-check-recovered"
+        self.recall_returning("claude", session_id, [self.memory("401")])
+        self.bash(session_id, "cargo test -p velesdb-memory", exit_code=101)
+        self.bash(session_id, "cargo clippy -p velesdb-memory -- -D warnings", exit_code=1)
+        self.bash(session_id, "cargo test -p velesdb-memory", exit_code=0)
+        reason = self.stop_reason("claude", session_id)
+        self.assertIn("cargo test -p velesdb-memory", reason)
+        self.assertIn("failed, then passed", reason)
+        self.assertIn("cargo clippy -p velesdb-memory -- -D warnings", reason)
+        self.assertIn("still failing", reason)
+        self.assertNotIn("feedback(401, true)", reason.replace('"', ""))
+        self.assertNotIn('feedback("401", true)', reason)
+
+    def test_a_check_that_only_passed_is_not_evidence(self) -> None:
+        session_id = "claude-check-green-only"
+        self.recall_returning("claude", session_id, [self.memory("402")])
+        self.bash(session_id, "cargo test -p velesdb-memory", exit_code=0)
+        reason = self.stop_reason("claude", session_id)
+        self.assertNotIn("cargo test -p velesdb-memory", reason)
+
+    def test_a_piped_or_compound_command_is_never_evidence(self) -> None:
+        session_id = "claude-check-piped"
+        for command in (
+            "cargo test 2>&1 | tail -n 5",
+            "cd crates && cargo test",
+            "cargo test; true",
+            "echo cargo test",
+        ):
+            self.bash(session_id, command, exit_code=1)
+            self.bash(session_id, command, exit_code=0)
+        reason = self.stop_reason("claude", session_id)
+        self.assertNotIn("failed, then passed", reason)
+        self.assertNotIn("still failing", reason)
+
+    def test_a_git_revert_in_the_session_is_evidence_on_both_hosts(self) -> None:
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("git is not installed")
+        env = dict(
+            os.environ,
+            HOME=str(self.home),
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_AUTHOR_NAME="t",
+            GIT_AUTHOR_EMAIL="t@example.invalid",
+            GIT_COMMITTER_NAME="t",
+            GIT_COMMITTER_EMAIL="t@example.invalid",
+        )
+
+        def run_git(*args: str) -> str:
+            done = subprocess.run(
+                [git, "-C", str(self.project), *args],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=True,
+            )
+            return done.stdout.strip()
+
+        run_git("init", "-q")
+        (self.project / "a.txt").write_text("one\n")
+        run_git("add", "-A")
+        run_git("commit", "-q", "-m", "first")
+        for host in HOSTS:
+            with self.subTest(host=host):
+                session_id = f"{host}-revert-evidence"
+                started = self.run_hook(
+                    host,
+                    "session-start.sh",
+                    hook_payload("SessionStart", cwd=self.nested, session_id=session_id)
+                    | {"source": "startup"},
+                )
+                self.assertEqual(started.returncode, 0, started.stderr)
+                (self.project / "a.txt").write_text(f"{host}\n")
+                run_git("commit", "-q", "-am", f"risky change {host}")
+                bad = run_git("rev-parse", "HEAD")
+                run_git("revert", "--no-edit", "HEAD")
+                revert = run_git("rev-parse", "HEAD")
+                reason = self.stop_reason(host, session_id)
+                self.assertIn(bad, reason)
+                self.assertIn(revert, reason)
+                self.assertIn("revert", reason.lower())
+
     def test_skill_states_that_the_four_stage_policy_is_binding(self) -> None:
         body = SKILL.read_text(encoding="utf-8")
         for heading in (

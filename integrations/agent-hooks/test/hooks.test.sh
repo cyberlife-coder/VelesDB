@@ -2416,6 +2416,75 @@ else
   fail "Harness: no hook call is fed by a pipe: $(head -n 3 <<<"$piped_hooks")"
 fi
 
+# ---------------------------------------------------------------------------
+# Verifiable evidence: which shell commands count as a check, and which exit
+# status a failure reports. A command whose exit status is not the check's own
+# (a pipe, a chain, a subshell) is never evidence.
+# ---------------------------------------------------------------------------
+check_kind_cases=(
+  "test|cargo test -p velesdb-memory -- --test-threads=1"
+  "test|flock /tmp/build.lock cargo test -p velesdb-memory"
+  "test|CARGO_TARGET_DIR=/tmp/t CARGO_INCREMENTAL=0 cargo nextest run"
+  "test|cargo test 2>&1"
+  "build|cargo build --release"
+  "build|cargo check -p velesdb-memory --no-default-features"
+  "lint|cargo clippy --all-targets -- -D warnings"
+  "lint|cargo fmt --all -- --check"
+  "test|pytest -q scripts/tests"
+  "test|python3 -m unittest discover -s scripts/tests"
+  "test|npm test"
+  "lint|npm run lint"
+  "build|pnpm run build"
+  "test|go test ./..."
+  "lint|ruff check ."
+  "lint|shellcheck hooks/*.sh"
+  "-|cargo fmt --all"
+  "-|cargo test | tail -n 5"
+  "-|cargo test 2>&1 | tail -n 5"
+  "-|cd crates && cargo test"
+  "-|cargo test; echo done"
+  "-|(cargo test)"
+  "-|cargo test \$(cat args)"
+  "-|echo cargo test"
+  "-|git status"
+  "-|"
+)
+check_kind_wrong=""
+for case_line in "${check_kind_cases[@]}"; do
+  expected="${case_line%%|*}"
+  command_text="${case_line#*|}"
+  if got="$(with_hook_lib check_kind "$command_text")"; then :; else got="-"; fi
+  [ "$got" = "$expected" ] || check_kind_wrong="$check_kind_wrong [$command_text] -> $got (want $expected);"
+done
+if [ -z "$check_kind_wrong" ]; then
+  pass "Evidence: only a single check command, with its own exit status, is classified"
+else
+  fail "Evidence: only a single check command, with its own exit status, is classified:$check_kind_wrong"
+fi
+
+failure_cases=(
+  "101|Exit code 101
+error: test failed, to rerun pass --lib"
+  "1|Exit code 1"
+  "-|Command timed out after 2m 0s"
+  "-|Exit code 0"
+  "-|Exit code 01"
+  "-|exit code 1"
+  "-|"
+)
+failure_wrong=""
+for case_line in "${failure_cases[@]}"; do
+  expected="${case_line%%|*}"
+  error_text="${case_line#*|}"
+  if got="$(with_hook_lib failure_exit_code "$error_text")"; then :; else got="-"; fi
+  [ "$got" = "$expected" ] || failure_wrong="$failure_wrong [$error_text] -> $got (want $expected);"
+done
+if [ -z "$failure_wrong" ]; then
+  pass "Evidence: a failure counts only with a documented non-zero 'Exit code N' first line"
+else
+  fail "Evidence: a failure counts only with a documented non-zero 'Exit code N' first line:$failure_wrong"
+fi
+
 if [ "$FAILED" -ne 0 ]; then
   echo "FAILURES DETECTED"
   exit 1
