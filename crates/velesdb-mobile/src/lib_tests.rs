@@ -654,7 +654,7 @@ fn test_collection_with_json_payload() {
     col.upsert(point).unwrap();
     assert_eq!(col.count(), 1);
 
-    let fetched = col.get_by_id(1).expect("point 1 should exist");
+    let fetched = col.get_by_id(1).unwrap().expect("point 1 should exist");
     let payload_str = fetched.payload.expect("payload should persist");
     let got: serde_json::Value =
         serde_json::from_str(&payload_str).expect("stored payload must be valid JSON");
@@ -1277,7 +1277,7 @@ fn test_get_by_id_existing() {
     })
     .unwrap();
 
-    let result = col.get_by_id(42);
+    let result = col.get_by_id(42).unwrap();
     assert!(result.is_some());
     let point = result.unwrap();
     assert_eq!(point.id, 42);
@@ -1298,7 +1298,7 @@ fn test_get_by_id_missing() {
         .unwrap()
         .unwrap();
 
-    let result = col.get_by_id(999);
+    let result = col.get_by_id(999).unwrap();
     assert!(result.is_none());
 }
 
@@ -1332,7 +1332,7 @@ fn test_get_multiple_ids() {
     ])
     .unwrap();
 
-    let results = col.get(vec![1, 2, 999]); // 999 doesn't exist
+    let results = col.get(vec![1, 2, 999]).unwrap(); // 999 doesn't exist
     assert_eq!(results.len(), 2); // Only 2 found
 }
 

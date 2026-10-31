@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The read gate decides every read a `VelesQL` statement makes, aggregates
+  included.** In 7.1.0 a `DatabaseObserver`'s `on_query_request` was never
+  asked about an aggregate: `Database::execute_aggregate`, the server's
+  `/aggregate` and the aggregates `/query` routes there, the CLI and the Tauri
+  `query` command ran `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `GROUP BY` and
+  `HAVING` over every stored row, ignoring an `AllowWithScope` filter and a
+  `Deny` alike. A scalar subquery reduced by an aggregate (`WHERE amount >
+  (SELECT MAX(score) FROM other)`) read `other` the same way, in a `SELECT`,
+  an `UPDATE`, a `DELETE` or an `INSERT`. Other reads the gate missed or
+  decided wrongly:
+  - every operand of a `UNION`, `INTERSECT` or `EXCEPT` after the first read
+    its collection unscoped, and undecided when it named another collection;
+  - a JOIN read its secondary collection undecided;
+  - a `MATCH` addressed through the `_collection` parameter (how `/query`,
+    the REPL and the SDKs send one) was decided on an empty collection name,
+    and a scope was dropped, since a traversal never reads the `WHERE` it was
+    folded into; the collections its `@collection` nodes enrich from were not
+    decided at all;
+  - `SELECT EDGES` was not decided;
+  - REST `GET /collections/{name}/points/{id}`,
+    `POST /collections/{name}/points/scroll` and
+    `GET /collections/{name}/points/{id}/relations` were not decided;
+  - `velesdb-mobile` `get` / `getById` were not decided, and now throw a
+    `MobileObserver`'s denial;
+  - `velesdb-wasm` decided a JOIN on its first collection only, so a
+    `WasmObserver` never saw the secondary one.
+
+  In 8.0.0 each of these reads asks the observer about the collection it
+  reads. A `Deny` aborts the statement or request with the observer's error.
+  A scope is AND-composed into the `WHERE` of the statement's target and of
+  every set-operation operand, so it can only narrow. Where a read cannot
+  apply one — a traversal, a JOIN's secondary side, `@collection`
+  enrichment, `SELECT EDGES` — the statement is refused with `VELES-009`
+  rather than run unscoped, as the server's graph and `/match` endpoints
+  already answered (a point's relations now answer the same way). Over REST
+  a point outside the scope reads as not found, and a scroll returns only the
+  scoped points. Inside `velesdb-core` the
+  executors that read for a statement take an `AuthorizedQuery` that only
+  the gate builds, so a statement path that skips the gate does not compile.
+  What an integrator sees change is in
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md) §2.
+
 ### Added
 
 - `Database::gated_search_outcome`: `gated_search` with the read gate's

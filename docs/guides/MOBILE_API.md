@@ -147,8 +147,8 @@ An empty `vectors` list on any multi-query method is an error
 
 | Method | Description |
 |--------|-------------|
-| `get(ids)` | Points by ID (missing IDs are skipped silently) |
-| `getById(id)` | One point, or nil/null |
+| `get(ids)` | Points by ID (missing IDs are skipped silently); throws when the read gate denies the read |
+| `getById(id)` | One point, or nil/null; throws when the read gate denies the read |
 | `allIds()` | Every point ID in the collection |
 | `count()` | Number of points |
 | `dimension()` | Configured vector dimension |
@@ -298,8 +298,8 @@ endpoint is in neither the file nor the store; add that node, then import again.
 ## Read gate: MobileObserver
 
 `openWithObserver` attaches a Swift/Kotlin callback consulted before **every** governed
-read (dense / text / hybrid / sparse / multi-query search, VelesQL `SELECT` and
-`MATCH`, and every `MobileGraphStore` read).
+read (dense / text / hybrid / sparse / multi-query search, point lookup by ID,
+VelesQL `SELECT` and `MATCH`, and every `MobileGraphStore` read).
 
 - `onQueryRequest(context) -> MobileAccessDecision` — return `Allow`, or
   `Deny { reason }` to abort the read with zero results.

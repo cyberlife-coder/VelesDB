@@ -338,7 +338,8 @@ fn test_read_gate_no_observer_is_borrowed_single_pointer_check() {
         .unwrap();
 
     let query = Parser::parse("SELECT * FROM docs WHERE title = 'alpha'").unwrap();
-    let gated = db.read_gate_cow_for_test(&query).unwrap();
+    let params = std::collections::HashMap::new();
+    let gated = db.read_gate_cow_for_test(&query, &params).unwrap();
 
     // No observer ⇒ the gate must borrow, never clone.
     assert!(
@@ -363,7 +364,8 @@ fn test_read_gate_allow_observer_is_borrowed_no_clone() {
         .unwrap();
 
     let query = Parser::parse("SELECT * FROM docs").unwrap();
-    let gated = db.read_gate_cow_for_test(&query).unwrap();
+    let params = std::collections::HashMap::new();
+    let gated = db.read_gate_cow_for_test(&query, &params).unwrap();
 
     // Allow decision ⇒ borrowed, unmodified query (Requirement 1.6): the only
     // arm that clones is AllowWithScope, so the common allow path stays

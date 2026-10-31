@@ -192,6 +192,10 @@ impl VelesCollection {
 
     /// Gets points by their IDs.
     ///
+    /// The lookup passes the database's read gate, as every other read does:
+    /// a denial fails it, and a point outside a scope the gate returns is
+    /// skipped like a missing one.
+    ///
     /// # Arguments
     ///
     /// * `ids` - List of point IDs to retrieve
@@ -199,20 +203,33 @@ impl VelesCollection {
     /// # Returns
     ///
     /// Vector of points found. Missing IDs are silently skipped.
-    pub fn get(&self, ids: Vec<u64>) -> Vec<VelesPoint> {
-        self.inner
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's denial.
+    pub fn get(&self, ids: Vec<u64>) -> Result<Vec<VelesPoint>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        Ok(self
+            .inner
             .get(&ids)
             .into_iter()
             .flatten()
+            .filter(|p| {
+                scope
+                    .as_ref()
+                    .is_none_or(|f| p.payload.as_ref().is_some_and(|pl| f.matches(pl)))
+            })
             .map(|p| VelesPoint {
                 id: p.id,
                 vector: p.vector,
                 payload: p.payload.map(|v| v.to_string()),
             })
-            .collect()
+            .collect())
     }
 
-    /// Gets a single point by ID.
+    /// Gets a single point by ID, through the read gate like [`Self::get`].
     ///
     /// # Arguments
     ///
@@ -221,17 +238,12 @@ impl VelesCollection {
     /// # Returns
     ///
     /// The point if found, None otherwise.
-    pub fn get_by_id(&self, id: u64) -> Option<VelesPoint> {
-        self.inner
-            .get(&[id])
-            .into_iter()
-            .flatten()
-            .next()
-            .map(|p| VelesPoint {
-                id: p.id,
-                vector: p.vector,
-                payload: p.payload.map(|v| v.to_string()),
-            })
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's denial.
+    pub fn get_by_id(&self, id: u64) -> Result<Option<VelesPoint>, VelesError> {
+        Ok(self.get(vec![id])?.into_iter().next())
     }
 
     /// Checks if this is a metadata-only collection.

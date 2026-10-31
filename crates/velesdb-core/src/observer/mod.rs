@@ -106,7 +106,16 @@ pub trait DatabaseObserver: Send + Sync {
 
     /// Called in the core use-case layer immediately before a query/read
     /// executes, for every read path (vector search, text/BM25, hybrid,
-    /// graph traversal, `VelesQL` SELECT).
+    /// graph traversal, `VelesQL` SELECT, aggregate and `SELECT EDGES`).
+    ///
+    /// A `VelesQL` statement asks once per collection it reads: its target,
+    /// each set-operation operand, each JOIN's secondary collection, each
+    /// `MATCH` `@collection`, and each scalar subquery's collection. A scope
+    /// is AND-composed into the `WHERE` of the target and of each operand; on
+    /// a read with no row filter to compose it into (a traversal, a JOIN's
+    /// secondary side, `@collection` enrichment, `SELECT EDGES`) a scope
+    /// filter refuses the statement with [`Error::Config`](crate::Error::Config)
+    /// instead of running it unscoped.
     ///
     /// Premium extensions can implement this to enforce RBAC, tenant scoping,
     /// and row/collection filtering on the read path so that every consumer of

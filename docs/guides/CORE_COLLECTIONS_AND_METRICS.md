@@ -81,7 +81,8 @@ forms), and `into_vector` / `into_graph` / `into_metadata` consume, handing the
 `AnyCollection` back in `Err` on a mismatch. The enum is `#[non_exhaustive]`,
 so a `match` on it needs a wildcard arm. `execute_query_str` and
 `execute_aggregate` run on the collection itself: a database observer's read
-gate is consulted by `Database::execute_query`, not here (see
+gate is consulted by `Database::execute_query` and
+`Database::execute_aggregate`, not here (see
 [Core: operations API](./CORE_OPERATIONS_API.md#control-plane-observer)).
 
 ## Distance metrics

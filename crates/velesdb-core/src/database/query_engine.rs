@@ -3,10 +3,11 @@
 use crate::observer::{AccessDecision, AccessScope, QueryAccessContext, QueryOperationKind};
 use crate::velesql::{
     ActualStats, AdminStatement, Condition, DdlStatement, DmlStatement, ExplainOutput,
-    IntrospectionStatement, Query, TrainStatement,
+    IntrospectionStatement, Query, SelectStatement, TrainStatement,
 };
 use crate::{Error, Result, SearchResult};
 
+use super::read_authorization::{narrow_where, AuthorizedQuery};
 use super::Database;
 
 /// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
@@ -25,6 +26,11 @@ pub(crate) enum RawGateOutcome {
     /// Execute the read with this scope narrowing applied (Requirement 1.5).
     Scope(AccessScope),
 }
+
+/// The refusal of a MATCH that names no collection to traverse.
+const MATCH_TARGET_MISSING: &str = "MATCH query requires a target collection. Either use \
+     SELECT ... FROM <collection> WHERE MATCH ..., or pass \
+     {\"_collection\": \"name\"} in params.";
 
 /// Statement type classification for dispatch routing.
 enum StatementType<'a> {
@@ -79,14 +85,20 @@ fn condition_has_text_search(cond: &Condition) -> bool {
 
 /// Derives the [`QueryOperationKind`] for a resolved query.
 ///
-/// MATCH queries are graph traversals. Otherwise the WHERE clause is inspected:
-/// vector + text ⇒ hybrid, vector only ⇒ vector, text only ⇒ text, neither ⇒
-/// a plain relational SELECT.
-fn derive_operation_kind(query: &Query) -> QueryOperationKind {
+/// MATCH queries are graph traversals; any other statement is classified by
+/// its SELECT ([`derive_select_operation_kind`]).
+pub(super) fn derive_operation_kind(query: &Query) -> QueryOperationKind {
     if query.is_match_query() {
         return QueryOperationKind::GraphTraversal;
     }
-    let where_clause = query.select.where_clause.as_ref();
+    derive_select_operation_kind(&query.select)
+}
+
+/// Derives the [`QueryOperationKind`] of one SELECT from its WHERE clause:
+/// vector + text ⇒ hybrid, vector only ⇒ vector, text only ⇒ text, neither ⇒
+/// a plain relational SELECT.
+pub(super) fn derive_select_operation_kind(select: &SelectStatement) -> QueryOperationKind {
+    let where_clause = select.where_clause.as_ref();
     let has_vector = where_clause.is_some_and(Condition::has_vector_search);
     let has_text = where_clause.is_some_and(condition_has_text_search);
     match (has_vector, has_text) {
@@ -134,11 +146,7 @@ impl Database {
     pub fn apply_scope(query: &Query, scope: &AccessScope) -> Query {
         let mut narrowed = query.clone();
         if let Some(filter) = scope.filter.clone() {
-            let scoped_where = match narrowed.select.where_clause.take() {
-                Some(existing) => Condition::And(Box::new(existing), Box::new(filter)),
-                None => filter,
-            };
-            narrowed.select.where_clause = Some(scoped_where);
+            narrow_where(&mut narrowed.select.where_clause, filter);
         }
         narrowed
     }
@@ -352,12 +360,15 @@ impl Database {
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        // Requirement 1: read-path control-plane gate. Fires exactly once here
-        // at the `Database` facade for read paths (SELECT + MATCH). Compound /
-        // JOIN sub-executions re-enter `execute_single_select`, not
+        // Requirement 1: read-path control-plane gate. `authorize_statement`
+        // asks the observer once per collection the statement reads — its
+        // target, each set-operation operand, each JOIN's secondary side, each
+        // MATCH `@collection` — before anything is read. Compound / JOIN
+        // sub-executions re-enter `execute_single_select`, not
         // `execute_query`, so the gate never double-fires. Non-read statements
         // (DDL/DML/admin/train/introspection) keep their own gates and are not
-        // gated here (Requirement 3.5).
+        // gated here (Requirement 3.5); `SELECT EDGES`, a read routed as DML,
+        // is.
         //
         // Requirement 2: `execute_query_timed` wraps the single top-level
         // `execute_query_inner` call so `on_query` telemetry fires exactly once
@@ -382,8 +393,8 @@ impl Database {
             return self.execute_query_gated(&rewritten, params, probe);
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
-        let gated = self.read_gate(query)?;
-        self.execute_query_timed(&gated, params, probe)
+        let authorized = self.authorize_statement(query, params)?;
+        self.execute_query_timed(&authorized, params, probe)
     }
 
     /// Executes the resolved (post-gate) query and fires the `on_query`
@@ -402,65 +413,23 @@ impl Database {
     /// `u64::MAX` rather than panicking (no `unwrap`/`expect`).
     fn execute_query_timed(
         &self,
-        query: &crate::velesql::Query,
+        authorized: &AuthorizedQuery<'_>,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
         let Some(observer) = self.observer.as_ref() else {
-            return self.execute_query_inner(query, params, probe); // zero-overhead fast path
+            return self.execute_query_inner(authorized, params, probe); // zero-overhead fast path
         };
         let started = std::time::Instant::now();
-        let results = self.execute_query_inner(query, params, probe)?;
+        let results = self.execute_query_inner(authorized, params, probe)?;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        observer.on_query(query.select.from.as_str(), duration_us);
+        observer.on_query(authorized.query().select.from.as_str(), duration_us);
         Ok(results)
     }
 
-    /// Applies the read-path control-plane gate (Requirement 1).
-    ///
-    /// Fast path: a single `Option` presence check when no observer is
-    /// registered returns [`Cow::Borrowed`](std::borrow::Cow::Borrowed) with
-    /// zero allocation and zero query clone (Requirement 1.8). When an observer
-    /// is present it is consulted only for read paths (SELECT + MATCH); other
-    /// statement types pass through borrowed because they carry their own
-    /// DDL/DML gates.
-    ///
-    /// * [`AccessDecision::Allow`] ⇒ borrowed, unmodified query (Requirement 1.6).
-    /// * [`AccessDecision::Deny`] ⇒ the supplied error, no results (Requirement 1.4).
-    /// * [`AccessDecision::AllowWithScope`] ⇒ an owned, scope-narrowed clone
-    ///   (Requirement 1.5).
-    ///
-    /// # Errors
-    ///
-    /// Returns the observer's `Err` for an internal failure, or the
-    /// `Deny`-supplied error when access is refused.
-    fn read_gate<'q>(
-        &self,
-        query: &'q crate::velesql::Query,
-    ) -> Result<std::borrow::Cow<'q, crate::velesql::Query>> {
-        // Non-read statements (DDL/DML/admin/train/introspection) carry their
-        // own control-plane gates and must never be double-gated here. The
-        // no-observer fast path is handled inside `read_gate_raw` (single
-        // `Option` check, Requirement 1.8).
-        if self.observer.is_none() || !Self::is_read_path(query) {
-            return Ok(std::borrow::Cow::Borrowed(query));
-        }
-        match self.read_gate_raw(
-            query.select.from.as_str(),
-            derive_operation_kind(query),
-            None,
-            None,
-        )? {
-            RawGateOutcome::Allow => Ok(std::borrow::Cow::Borrowed(query)),
-            RawGateOutcome::Deny(err) => Err(err),
-            RawGateOutcome::Scope(scope) => {
-                Ok(std::borrow::Cow::Owned(Self::apply_scope(query, &scope)))
-            }
-        }
-    }
-
-    /// Non-VelesQL read-path gate, shared by [`read_gate`](Self::read_gate) and
-    /// the raw `gated_search` read path (vector / text / hybrid / graph search
+    /// Non-VelesQL read-path gate, shared by
+    /// [`authorize_statement`](Self::authorize_statement) and the raw
+    /// `gated_search` read path (vector / text / hybrid / graph search
     /// and memory recall that never build a `VelesQL` [`Query`]).
     ///
     /// Fast path: a single `Option` presence check when no observer is
@@ -470,9 +439,9 @@ impl Database {
     /// caller-supplied collection / operation / principal / tenant and consults
     /// [`on_query_request`](crate::observer::DatabaseObserver::on_query_request).
     ///
-    /// Unlike [`read_gate`](Self::read_gate), the caller is responsible for
-    /// having already established that this is a read path — the raw callers are
-    /// search primitives that are reads by construction.
+    /// Unlike [`authorize_statement`](Self::authorize_statement), the caller is
+    /// responsible for having already established that this is a read path —
+    /// the raw callers are search primitives that are reads by construction.
     ///
     /// # Errors
     ///
@@ -501,8 +470,9 @@ impl Database {
         }
     }
 
-    /// Test-only accessor exposing [`read_gate`](Self::read_gate)'s [`Cow`]
-    /// result so tests can assert the no-observer read path is a single pointer
+    /// Test-only accessor exposing the [`Cow`] statement
+    /// [`authorize_statement`](Self::authorize_statement) admits, so tests can
+    /// assert the no-observer read path is a single pointer
     /// check that returns [`Cow::Borrowed`](std::borrow::Cow::Borrowed) with no
     /// query clone (Requirement 8.2 — Quality Bar Gate 2, p50 latency).
     ///
@@ -515,8 +485,10 @@ impl Database {
     pub(crate) fn read_gate_cow_for_test<'q>(
         &self,
         query: &'q crate::velesql::Query,
+        params: &'q std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<std::borrow::Cow<'q, crate::velesql::Query>> {
-        self.read_gate(query)
+        self.authorize_statement(query, params)
+            .map(AuthorizedQuery::into_query)
     }
 
     /// Returns `true` when the statement is a gated read path (SELECT or MATCH).
@@ -524,7 +496,7 @@ impl Database {
     /// Admin, introspection, DDL, TRAIN, and DML statements are excluded: they
     /// route through their own control-plane gates and must not be double-gated
     /// by the read-path hook.
-    fn is_read_path(query: &crate::velesql::Query) -> bool {
+    pub(super) fn is_read_path(query: &crate::velesql::Query) -> bool {
         matches!(
             classify_statement(query),
             StatementType::Match | StatementType::Select
@@ -539,11 +511,12 @@ impl Database {
     /// double-counting.
     fn execute_query_inner(
         &self,
-        query: &crate::velesql::Query,
+        authorized: &AuthorizedQuery<'_>,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
     ) -> Result<Vec<SearchResult>> {
-        if let Some(results) = self.dispatch_non_select(query, params)? {
+        let query = authorized.query();
+        if let Some(results) = self.dispatch_non_select(authorized, params)? {
             return Ok(results);
         }
 
@@ -579,56 +552,36 @@ impl Database {
     /// Returns `Ok(Some(results))` if handled, `Ok(None)` for SELECT queries.
     fn dispatch_non_select(
         &self,
-        query: &crate::velesql::Query,
+        authorized: &AuthorizedQuery<'_>,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Option<Vec<SearchResult>>> {
         // Classify the statement type (at most one is Some).
-        let stmt_type = classify_statement(query);
+        let stmt_type = classify_statement(authorized.query());
         match stmt_type {
             StatementType::Admin(admin) => Ok(Some(self.execute_admin(admin)?)),
             StatementType::Introspection(intro) => Ok(Some(self.execute_introspection(intro)?)),
             StatementType::Ddl(ddl) => Ok(Some(self.execute_ddl(ddl)?)),
             StatementType::Train(train) => Ok(Some(self.execute_train(train)?)),
             StatementType::Dml(dml) => Ok(Some(self.execute_dml(dml, params)?)),
-            StatementType::Match => Ok(Some(self.execute_match_routed(query, params)?.0)),
+            StatementType::Match => Ok(Some(self.execute_match_routed(authorized, params)?.0)),
             StatementType::Select => Ok(None),
         }
-    }
-
-    /// Resolves the target collection for a MATCH query.
-    ///
-    /// Resolution order: `SELECT ... FROM <collection> WHERE MATCH ...`, then a
-    /// `"_collection"` key in `params` (programmatic API), else a guidance error.
-    fn resolve_match_collection(
-        &self,
-        query: &crate::velesql::Query,
-        params: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<crate::collection::Collection> {
-        let collection_name = if !query.select.from.is_empty() {
-            query.select.from.clone()
-        } else if let Some(serde_json::Value::String(name)) = params.get("_collection") {
-            name.clone()
-        } else {
-            return Err(Error::Query(
-                "MATCH query requires a target collection. Either use \
-                 SELECT ... FROM <collection> WHERE MATCH ..., or pass \
-                 {\"_collection\": \"name\"} in params."
-                    .to_string(),
-            ));
-        };
-        self.resolve_collection(&collection_name)
     }
 
     /// Routes a MATCH query to its target collection and applies cross-collection
     /// enrichment, returning results plus the graph-traversal counters
     /// `(nodes_visited, edges_traversed)` measured during execution (for
     /// EXPLAIN ANALYZE; the plain execution path discards them).
+    ///
+    /// The target is the collection the read gate decided on: the query's
+    /// `FROM`, else a `"_collection"` key in `params` (programmatic API).
     fn execute_match_routed(
         &self,
-        query: &crate::velesql::Query,
+        authorized: &AuthorizedQuery<'_>,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<(Vec<SearchResult>, u64, u64)> {
-        let coll = self.resolve_match_collection(query, params)?;
+        let query = authorized.query();
+        let coll = self.resolve_read_target(authorized, MATCH_TARGET_MISSING)?;
         let counted = coll.execute_query_counted(query, params)?;
         let (mut results, nodes_visited, edges_traversed) = (
             counted.results,
@@ -659,12 +612,11 @@ impl Database {
         Option<crate::velesql::FilterStrategy>,
     )> {
         if query.is_match_query() {
-            // Apply the read-path gate before the MATCH executor. The non-EXPLAIN
-            // MATCH path is gated inside `execute_query`; this counted path (used
-            // by EXPLAIN ANALYZE) routes straight to `execute_match_routed`, so
-            // without this it would let EXPLAIN ANALYZE MATCH bypass governance.
-            let gated = self.read_gate(query)?;
-            let (results, nodes, edges) = self.execute_match_routed(&gated, params)?;
+            // The MATCH executor takes only an admitted statement, so this
+            // counted path (EXPLAIN ANALYZE) passes the same gate as
+            // `execute_query`.
+            let authorized = self.authorize_statement(query, params)?;
+            let (results, nodes, edges) = self.execute_match_routed(&authorized, params)?;
             return Ok((results, nodes, edges, None));
         }
         // The exact pre-steps of execute_query (shared execute_query_gated

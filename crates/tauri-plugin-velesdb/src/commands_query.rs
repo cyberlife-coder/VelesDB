@@ -4,7 +4,6 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::error::{CommandError, Error};
-use crate::helpers::require_collection;
 use crate::state::VelesDbState;
 use crate::types::{HybridResult, QueryRequest, QueryResponse};
 use tauri::{command, AppHandle, Runtime, State};
@@ -86,7 +85,9 @@ async fn dispatch_tauri_query(
         .map_err(CommandError::from)
 }
 
-/// Executes an aggregation query through the collection API.
+/// Executes an aggregation query through `Database::execute_aggregate`, never a
+/// collection handle: the database is where the observer's read gate runs, so
+/// a denial refuses the aggregate and a scope narrows the rows it counts.
 async fn execute_tauri_aggregation(
     state: &VelesDbState,
     parsed: velesdb_core::velesql::Query,
@@ -94,8 +95,7 @@ async fn execute_tauri_aggregation(
 ) -> std::result::Result<Vec<HybridResult>, CommandError> {
     let agg_json = state
         .run_db(move |db| {
-            let coll = require_collection(&db, &parsed.select.from)?;
-            coll.execute_aggregate(&parsed, &request.params)
+            db.execute_aggregate(&parsed, &request.params)
                 .map_err(Error::from)
         })
         .await

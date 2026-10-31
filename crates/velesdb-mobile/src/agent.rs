@@ -51,23 +51,23 @@ impl VelesSemanticMemory {
     }
 
     /// Joins each search hit with the content text of its stored point.
-    fn with_content(&self, results: Vec<SearchResult>) -> Vec<SemanticResult> {
+    fn with_content(&self, results: Vec<SearchResult>) -> Result<Vec<SemanticResult>, VelesError> {
         let ids: Vec<u64> = results.iter().map(|r| r.id).collect();
         let contents: std::collections::HashMap<u64, String> = self
             .collection
-            .get(ids)
+            .get(ids)?
             .into_iter()
             .map(|p| (p.id, Self::content_from_payload(p.payload.as_ref())))
             .collect();
 
-        results
+        Ok(results
             .into_iter()
             .map(|r| SemanticResult {
                 id: r.id,
                 score: r.score,
                 content: contents.get(&r.id).cloned().unwrap_or_default(),
             })
-            .collect()
+            .collect())
     }
 }
 
@@ -122,7 +122,7 @@ impl VelesSemanticMemory {
         top_k: u32,
     ) -> Result<Vec<SemanticResult>, VelesError> {
         let results = self.collection.search(embedding, top_k)?;
-        Ok(self.with_content(results))
+        self.with_content(results)
     }
 
     /// [`Self::query`] at an explicit search quality instead of the
@@ -149,7 +149,7 @@ impl VelesSemanticMemory {
         let results = self
             .collection
             .search_with_quality(embedding, top_k, quality)?;
-        Ok(self.with_content(results))
+        self.with_content(results)
     }
 
     /// Returns the number of stored knowledge facts.
