@@ -202,13 +202,13 @@ impl Default for RuntimeLimits {
 // index while holding the storage write guard, and a merge into the index
 // (`Collection::index_current`) inserts each chunk while holding the storage
 // read guard. No path takes `vector_storage` while holding an index lock.
-// That merge holds the read guard for one chunk's read and insert, so a
-// writer can wait that long: 234 ms (95% CI 229–239 ms) for 256 768-d
-// vectors into a 10K-vector Cosine collection, timed inside `index_current`
-// from taking the guard to releasing it (`merge_chunk_hold_benchmark`, needs
-// `internal-bench`; measured 2026-10-31 on a shared 4-vCPU cloud sandbox,
-// not the reference machine, 10 samples). It grows with the dimension and
-// with the graph.
+// That merge holds the read guard for one chunk's read and insert, and a
+// writer waits that long: on average 529 ms (95% CI 511-548 ms) for 256
+// distinct 768-d vectors into a 10K-point Cosine collection, timed inside
+// `index_current` from taking the guard to releasing it
+// (`merge_chunk_hold_benchmark`, needs `internal-bench`; 2026-10-31, 10
+// samples on a shared 4-vCPU cloud sandbox, not the reference machine). A
+// mean, not a bound: it grows with the dimension and with the graph.
 //
 // Rayon: no job on a rayon pool takes any of these locks, and no thread
 // holding one waits on the global pool; parallel work over guarded data runs

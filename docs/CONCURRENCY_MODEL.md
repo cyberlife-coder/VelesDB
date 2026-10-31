@@ -469,14 +469,16 @@ its index removal — so it lands wholly before a chunk is read, and the
 merge indexes what it left, or after the chunk is inserted, and its own
 index write comes last. A merge therefore never puts a deleted point back
 in the graph nor overwrites a newer write with the vector it read; a writer
-waits at most one chunk's read and insert: 234 ms (95% CI 229–239 ms) for
-256 768-d vectors into a 10 000-vector Cosine collection
-(`merge_chunk_hold_benchmark`'s `chunk_guard_hold_256_into_10k_768d`, timed
-inside `Collection::index_current` from taking the guard to releasing it;
-measured 2026-10-31 on the shared 4-vCPU cloud sandbox, 10 samples; it
-grows with the dimension and with the graph). An earlier figure, 69 ms,
-timed the graph insert alone on a bare index with default parameters, not
-what the guard covers. The index's own locks
+waits for one chunk's read and insert, measured at 529 ms on average (Criterion mean, 95% CI 511–548 ms)
+for 256 distinct 768-d vectors merged back into a 10 000-point Cosine
+collection, timed inside
+`Collection::index_current` from taking the guard to releasing it
+(`merge_chunk_hold_benchmark`'s `chunk_guard_hold_256_of_10k_768d`,
+2026-10-31, 10 samples on a shared 4-vCPU cloud sandbox other jobs were
+using, not the reference machine). It is a mean on that machine, not a
+bound: the hold grows with the dimension and the graph, and that graph also
+carried the unmapped nodes each of the run's merges left behind (256 per
+merge, about 4 000 by the last). The index's own locks
 (`HnswIndex::publishing`, `inner`, the graph's) rank after `vector_storage`
 (2): a delete removes from the index under the storage write guard, a
 merge inserts under the read guard, and no path takes `vector_storage`
