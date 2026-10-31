@@ -200,20 +200,19 @@ impl Collection {
 
     /// Executes the Parallel MATCH strategy (Wave 6 Phase D).
     ///
-    /// Runs the GraphFirst and VectorFirst legs CONCURRENTLY via `rayon::join`
-    /// (R2, #1390), then merges the result sets by `node_id` (union semantics --
-    /// best score wins for duplicates).
+    /// Runs the GraphFirst leg, then the VectorFirst leg, on this thread, and
+    /// merges the result sets by `node_id` (union semantics -- best score wins
+    /// for duplicates). Both legs take collection locks, and no job on a
+    /// rayon pool may take one (`docs/CONCURRENCY_MODEL.md`, "Collection locks
+    /// and rayon"), so they are not run on one.
     ///
     /// # Determinism & counter invariant
     ///
-    /// Both legs are read-only over immutable collection data, so the merged
-    /// result set is identical to the former sequential execution — only
-    /// wall-clock latency changes. Both legs share the same [`QueryContext`],
-    /// whose EXPLAIN counters (`traversal_nodes_visited` /
-    /// `traversal_edges_traversed`) are `AtomicU64` updated with `fetch_add`;
-    /// concurrent `fetch_add` is commutative, so the "Parallel = sum of both
-    /// legs" contract asserted by `parallel_counters_sum_both_legs` is
-    /// preserved regardless of interleaving.
+    /// The merge is order-insensitive. Both legs share the same
+    /// [`QueryContext`], whose EXPLAIN counters (`traversal_nodes_visited` /
+    /// `traversal_edges_traversed`) both legs add to, so the "Parallel = sum
+    /// of both legs" contract asserted by `parallel_counters_sum_both_legs`
+    /// holds.
     ///
     /// [`QueryContext`]: crate::guardrails::QueryContext
     fn execute_match_parallel(
@@ -240,24 +239,15 @@ impl Collection {
                 None
             };
 
-        // GraphFirst leg + VectorFirst leg run concurrently. The shared `ctx`
-        // is `Sync` (all counters are atomics), so both closures may accumulate
-        // traversal metrics into it in parallel.
-        let graph_leg = || self.execute_match_with_context(match_clause, params, Some(ctx));
-        let vector_leg = || match vector_first {
+        // GraphFirst leg, then VectorFirst leg, both accumulating traversal
+        // metrics into the shared `ctx`.
+        let graph_results = self.execute_match_with_context(match_clause, params, Some(ctx))?;
+        let vector_results = match vector_first {
             Some((alias, top_k, threshold)) => {
-                self.execute_match_vector_first(match_clause, params, ctx, alias, top_k, threshold)
+                self.execute_match_vector_first(match_clause, params, ctx, alias, top_k, threshold)?
             }
-            None => Ok(Vec::new()),
+            None => Vec::new(),
         };
-
-        #[cfg(feature = "persistence")]
-        let (graph_results, vector_results) = rayon::join(graph_leg, vector_leg);
-        #[cfg(not(feature = "persistence"))]
-        let (graph_results, vector_results) = (graph_leg(), vector_leg());
-
-        let graph_results = graph_results?;
-        let vector_results = vector_results?;
 
         // Merge by node_id (union, best score wins per metric polarity).
         let config = self.storage.config.read();

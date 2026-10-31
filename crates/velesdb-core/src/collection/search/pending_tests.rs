@@ -300,20 +300,18 @@ fn crowding_pending_ids_take_logarithmically_many_refetches() {
 }
 
 /// A batch search scores its pending points on the calling thread, never on
-/// a rayon worker: the batch then joins the global pool while holding the
-/// `vector_storage` read guard, and a worker taking that guard again parks
-/// behind any queued writer, which would stop the whole process.
+/// a rayon worker, and resolves its results under the storage guards on the
+/// dedicated pool, never the global one. Under `cfg(test)` a collection lock
+/// taken on a rayon worker panics (`crate::lock_audit`), and so does a
+/// submission to the global pool by a thread holding one: running the
+/// searches is the check.
 #[test]
-fn a_batch_search_reads_no_storage_on_a_rayon_worker() {
-    use crate::collection::search::pending::merge_hooks::STORAGE_READS_ON_RAYON;
-    use std::sync::atomic::Ordering;
-
+fn a_batch_search_takes_no_collection_lock_on_a_rayon_worker() {
     let dir = tempfile::tempdir().expect("test: temp dir");
     let coll = with_deferred_points(&dir);
     let queries: Vec<Vec<f32>> = (0..16).map(|i| near_query(i * 7)).collect();
     let queries: Vec<&[f32]> = queries.iter().map(Vec::as_slice).collect();
     let filters = vec![None; queries.len()];
-    let before = STORAGE_READS_ON_RAYON.load(Ordering::Relaxed);
 
     coll.search_batch_parallel(&queries, K)
         .expect("test: batch");
@@ -325,10 +323,9 @@ fn a_batch_search_reads_no_storage_on_a_rayon_worker() {
         crate::fusion::FusionStrategy::RRF { k: 60 },
     )
     .expect("test: multi-query");
-
     assert_eq!(
-        STORAGE_READS_ON_RAYON.load(Ordering::Relaxed),
-        before,
-        "a batch search read storage on a rayon worker"
+        crate::lock_audit::guards_held(),
+        0,
+        "a guard outlived its search"
     );
 }

@@ -28,7 +28,7 @@
 //! `placed`) may be held while acquiring any lock at position ≤ 10.
 
 use crate::index::hnsw::HnswIndex;
-use parking_lot::Mutex;
+use crate::lock_audit::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 

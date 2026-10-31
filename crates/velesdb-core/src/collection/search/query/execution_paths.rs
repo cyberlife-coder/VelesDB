@@ -244,25 +244,15 @@ impl Collection {
                 Ok(self.scan_and_score_by_vector(filter, vector, execution_limit))
             }
             crate::velesql::ExecutionStrategy::Parallel => {
-                // R2 (#1390): run the GraphFirst scan and the VectorFirst HNSW
-                // branch CONCURRENTLY via `rayon::join`. Both legs are read-only
-                // over immutable collection data and the merge below is a
-                // best-score-by-id union (order-insensitive), so the concurrent
-                // result set is byte-for-byte identical to the former sequential
-                // execution — only wall-clock latency changes. The two closures
-                // each take read locks only (no writer during a query), so there
-                // is no lock-ordering hazard, mirroring the concurrent hybrid
-                // dense/sparse path in `hybrid_sparse::execute_both_branches`.
-                #[cfg(feature = "persistence")]
-                let (graph_results, vector_results) = rayon::join(
-                    || self.scan_and_score_by_vector(filter, vector, execution_limit),
-                    || self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
-                );
-                #[cfg(not(feature = "persistence"))]
-                let (graph_results, vector_results) = (
-                    self.scan_and_score_by_vector(filter, vector, execution_limit),
-                    self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
-                );
+                // Both the GraphFirst scan and the VectorFirst HNSW branch run,
+                // one after the other on this thread: each takes collection
+                // locks, and no job on a rayon pool may take one
+                // (`docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon").
+                // The merge below is a best-score-by-id union, so the order
+                // the legs run in does not change the result.
+                let graph_results = self.scan_and_score_by_vector(filter, vector, execution_limit);
+                let vector_results =
+                    self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts);
                 let vector_results = vector_results?;
                 let higher = self.storage.config.read().metric.higher_is_better();
                 Ok(merge_select_parallel_results(

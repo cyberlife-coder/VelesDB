@@ -146,11 +146,40 @@ impl ProductQuantizer {
         num_subspaces: usize,
         num_centroids: usize,
     ) -> Result<Self, Error> {
+        Self::train_with(vectors, num_subspaces, num_centroids, true)
+    }
+
+    /// [`train`](Self::train), on this thread only: no subspace is trained on
+    /// a rayon pool. For a caller that holds a collection lock and is itself
+    /// a rayon worker, which may wait on no pool (`collection::guarded_pool`).
+    ///
+    /// # Errors
+    ///
+    /// As [`train`](Self::train).
+    pub(crate) fn train_sequential(
+        vectors: &[Vec<f32>],
+        num_subspaces: usize,
+        num_centroids: usize,
+    ) -> Result<Self, Error> {
+        Self::train_with(vectors, num_subspaces, num_centroids, false)
+    }
+
+    fn train_with(
+        vectors: &[Vec<f32>],
+        num_subspaces: usize,
+        num_centroids: usize,
+        parallel: bool,
+    ) -> Result<Self, Error> {
         let (dimension, subspace_dim) =
             validate_train_params(vectors, num_subspaces, num_centroids)?;
 
-        let centroids =
-            train_subspace_centroids(vectors, num_subspaces, subspace_dim, num_centroids);
+        let centroids = train_subspace_centroids(
+            vectors,
+            num_subspaces,
+            subspace_dim,
+            num_centroids,
+            parallel,
+        );
 
         // Post-training: degenerate centroid detection.
         // This O(k^2) check is only run in debug builds.
@@ -268,48 +297,37 @@ fn train_single_subspace(
     )
 }
 
-/// Train centroids for all subspaces, using rayon when persistence is enabled.
+/// Train centroids for all subspaces, on rayon when `parallel` and
+/// persistence (which brings rayon) are both on.
 fn train_subspace_centroids(
     vectors: &[Vec<f32>],
     num_subspaces: usize,
     subspace_dim: usize,
     num_centroids: usize,
+    parallel: bool,
 ) -> Vec<Vec<Vec<f32>>> {
     #[cfg(feature = "gpu")]
     let gpu_ctx = crate::gpu::PqGpuContext::new();
+    let train = |s| {
+        train_single_subspace(
+            vectors,
+            s,
+            subspace_dim,
+            num_centroids,
+            #[cfg(feature = "gpu")]
+            gpu_ctx.as_ref(),
+        )
+    };
 
     #[cfg(feature = "persistence")]
-    {
+    if parallel {
         use rayon::prelude::*;
-        (0..num_subspaces)
-            .into_par_iter()
-            .map(|s| {
-                train_single_subspace(
-                    vectors,
-                    s,
-                    subspace_dim,
-                    num_centroids,
-                    #[cfg(feature = "gpu")]
-                    gpu_ctx.as_ref(),
-                )
-            })
-            .collect()
+        crate::lock_audit::assert_no_guard_held();
+        return (0..num_subspaces).into_par_iter().map(train).collect();
     }
     #[cfg(not(feature = "persistence"))]
-    {
-        (0..num_subspaces)
-            .map(|s| {
-                train_single_subspace(
-                    vectors,
-                    s,
-                    subspace_dim,
-                    num_centroids,
-                    #[cfg(feature = "gpu")]
-                    gpu_ctx.as_ref(),
-                )
-            })
-            .collect()
-    }
+    let _ = parallel;
+    (0..num_subspaces).map(train).collect()
 }
 
 /// Debug-only check for degenerate (nearly duplicate) centroids after training.

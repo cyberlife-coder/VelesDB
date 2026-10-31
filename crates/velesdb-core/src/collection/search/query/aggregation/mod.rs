@@ -22,6 +22,7 @@ mod having_tests;
 
 use super::match_exec::MatchStorageGuards;
 use super::where_eval::GraphMatchEvalCache;
+use crate::collection::guarded_pool;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
@@ -231,8 +232,8 @@ impl Collection {
         // LOCK ORDER: metric snapshot (config, rank 1) first, then
         // vector_storage(2) before payload_storage(3) — the pair was
         // reversed here. See .investigation/http-deadlock-2026-07-22/. This
-        // site also feeds `run_parallel_path` (rayon `par_chunks`), so the
-        // wrong order compounded the ABBA risk with rayon-pool exhaustion.
+        // site also feeds `run_parallel_path`, which scans under these guards
+        // on `collection::guarded_pool`, never the global rayon pool.
         let metric = self.storage.config.read().metric;
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
@@ -321,7 +322,9 @@ impl Collection {
     /// Parallel aggregation that streams payloads per chunk (#901).
     ///
     /// Each chunk of IDs retrieves its own payloads inside the rayon closure,
-    /// so the full payload set is never materialized at once.
+    /// so the full payload set is never materialized at once. The chunks run
+    /// on `collection::guarded_pool`: the caller holds the storage guards
+    /// `payload_storage` borrows from.
     fn aggregate_parallel(
         ids: &[u64],
         payload_storage: &dyn PayloadStorage,
@@ -329,27 +332,30 @@ impl Collection {
         columns_to_aggregate: &[String],
         has_count_star: bool,
     ) -> crate::velesql::AggregateResult {
-        let partial_aggregators: Vec<Aggregator> = ids
-            .par_chunks(CHUNK_SIZE)
-            .map(|chunk| {
-                let mut chunk_agg = Aggregator::new();
-                for &id in chunk {
-                    let payload = payload_storage.retrieve(id).ok().flatten();
-                    if let Some(f) = filter {
-                        if !Self::payload_passes_filter(f, payload.as_ref()) {
-                            continue;
-                        }
+        let aggregate_chunk = |chunk: &[u64]| {
+            let mut chunk_agg = Aggregator::new();
+            for &id in chunk {
+                let payload = payload_storage.retrieve(id).ok().flatten();
+                if let Some(f) = filter {
+                    if !Self::payload_passes_filter(f, payload.as_ref()) {
+                        continue;
                     }
-                    Self::accumulate_record(
-                        &mut chunk_agg,
-                        payload.as_ref(),
-                        columns_to_aggregate,
-                        has_count_star,
-                    );
                 }
-                chunk_agg
-            })
-            .collect();
+                Self::accumulate_record(
+                    &mut chunk_agg,
+                    payload.as_ref(),
+                    columns_to_aggregate,
+                    has_count_star,
+                );
+            }
+            chunk_agg
+        };
+        // The caller holds the storage guards across this scan, so its chunks
+        // run on the pool for work over guarded data, never the global one.
+        let partial_aggregators: Vec<Aggregator> = guarded_pool::run(
+            || ids.par_chunks(CHUNK_SIZE).map(aggregate_chunk).collect(),
+            || ids.chunks(CHUNK_SIZE).map(aggregate_chunk).collect(),
+        );
 
         let mut final_agg = Aggregator::new();
         for partial in partial_aggregators {

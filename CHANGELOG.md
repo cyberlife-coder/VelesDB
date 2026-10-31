@@ -415,6 +415,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A collection lock and the global rayon pool could deadlock the
+  process.** The dense and sparse legs of a hybrid search, both legs of a
+  `Parallel`-strategy NEAR + filter query and of a `Parallel` MATCH, and the
+  vector and payload stores of `upsert_bulk` ran as the two halves of a
+  `rayon::join` on the global pool, each taking collection locks there; a
+  batch search's resolve, an aggregation's scan and the lazy PQ training held
+  storage or quantizer guards across a join on that pool. Once a writer
+  queued behind such a guard, `parking_lot` parked every new reader — the
+  global workers among them — and the thread holding the guard waited for
+  workers that never freed. The legs and the stores now run one after the
+  other; the resolve, the scan and the training run on a dedicated pool whose
+  jobs take no lock (on the caller itself when it is a rayon worker). Under
+  `cfg(test)` every collection lock panics when taken on a rayon worker, and
+  every global-pool submission in core panics when its thread holds one; 81
+  unit tests failed that way before the fix. The `Parallel` strategies now
+  cost both legs' time, not the longer one's.
+
 - **`upsert_bulk` with an async index builder returned before its points
   could be found.** Its V2 path places each vector in the graph's arena and
   leaves linking it to the builder until `merge_threshold` points wait or a

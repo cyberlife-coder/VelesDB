@@ -12,7 +12,7 @@ use super::graph_property_index_wiring::{index_payload_ranges, GraphRangeIndexes
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use parking_lot::{Mutex, RwLock};
+use crate::lock_audit::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -795,21 +795,21 @@ impl Collection {
     /// Returns a write guard on the collection config for mutation.
     pub(crate) fn config_write(
         &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, crate::collection::types::CollectionConfig> {
+    ) -> crate::lock_audit::WriteGuard<'_, crate::collection::types::CollectionConfig> {
         self.storage.config.write()
     }
 
     /// Returns a write guard on the PQ quantizer slot.
     pub(crate) fn pq_quantizer_write(
         &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+    ) -> crate::lock_audit::WriteGuard<'_, Option<crate::quantization::ProductQuantizer>> {
         self.storage.pq_quantizer.write()
     }
 
     /// Returns a read guard on the PQ quantizer slot.
     pub(crate) fn pq_quantizer_read(
         &self,
-    ) -> parking_lot::RwLockReadGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+    ) -> crate::lock_audit::ReadGuard<'_, Option<crate::quantization::ProductQuantizer>> {
         self.storage.pq_quantizer.read()
     }
 }

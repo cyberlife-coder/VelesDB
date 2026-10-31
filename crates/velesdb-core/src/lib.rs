@@ -152,6 +152,7 @@ pub mod index;
 pub mod internal_bench;
 #[cfg(all(test, feature = "internal-bench"))]
 mod internal_bench_tests;
+pub(crate) mod lock_audit;
 pub mod lock_rank;
 pub mod metrics;
 #[cfg(test)]

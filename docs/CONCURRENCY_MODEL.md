@@ -433,18 +433,8 @@ graph anchor set) applies to the pending ids before they compete for its
 search scores them before it takes the storage guards it resolves results
 under, and on its own thread: only its index refetches run in parallel.
 
-**No collection lock on a rayon worker.** A batch search resolves its
-results with the `vector_storage` (2) and `payload_storage` (3) read guards
-held across a join on the global rayon pool. A global worker that took one
-of those guards itself would park behind any queued writer (parking_lot
-blocks new readers then), and the batch holding the guard would wait for a
-worker that never frees: the whole process stops, the shape of #2343 one
-lock lower. So no closure a search runs on the global pool takes a
-collection lock: the pending points are scored on the calling thread, and
-the parallel phases only read through guards their caller already holds,
-or search the index, which takes no collection lock.
-`a_batch_search_reads_no_storage_on_a_rayon_worker` counts the storage
-reads a pending-point scan makes on a rayon worker and requires none.
+A batch search scores them before it takes the storage guards it resolves
+results under, on its own thread (see "Collection locks and rayon" below).
 
 The ids are copied **before** the index search, and each source drops an id
 only after indexing it — insert, then remove:
@@ -501,6 +491,61 @@ holds B. That takes two rewrites of one id inside one merge, the last back
 to the copied vector; until the id's next write, a search reaches it at B
 while storage holds A. A per-entry write sequence would close it; it is
 not kept.
+
+### Collection locks and rayon
+
+The collection's own locks — every `RwLock` and `Mutex` field of
+`Collection` (positions 1–12 above) and the async index builder's and
+deferred indexer's queues (11) — follow one rule with respect to rayon:
+
+> **No job on a rayon pool takes a collection lock, and no thread holding
+> one waits on the global pool.**
+
+Breaking either half closes the cycle of #2343 one lock lower. A thread
+holds, say, the `vector_storage` (2) read guard and waits for its jobs on
+the global pool; a writer queues behind the guard; `parking_lot` then parks
+every new reader, so a global worker whose job takes that guard parks too,
+and the thread holding it waits for workers that never free. The global
+pool is also where an application's own rayon jobs run, and those may call
+into a collection: the second half is what keeps them from completing the
+cycle.
+
+How the code holds it:
+
+- **Legs that each take collection locks run one after the other**, on the
+  calling thread: the dense and sparse legs of a hybrid search, the
+  GraphFirst and VectorFirst legs of a `Parallel`-strategy SELECT and MATCH,
+  and `upsert_bulk`'s vector and payload stores. (The planner still costs
+  `Parallel` as the longer leg plus a merge; it now pays both.)
+- **Parallel work over data a guard protects runs on a dedicated pool**,
+  `collection::guarded_pool`: a batch search's resolve under the storage
+  guards, an aggregation's chunked scan under them, and the lazy PQ training
+  under the quantizer guards. Its jobs read through the guards their caller
+  holds and take none, so they never wait on a lock, and a caller holding a
+  guard across one always gets its workers back. A caller that is itself a
+  rayon worker runs the work on its own thread instead: a worker waiting on
+  another pool runs its own pool's jobs meanwhile (`rayon-core`'s
+  `in_worker_cross`), and one of them could take the lock it holds.
+- **Everything else submitted to the global pool runs with no collection
+  guard held**: a batch search's index searches and refetches (pending points
+  are scored on the caller), parallel graph traversal (its jobs read the edge
+  store's shards, which are the edge store's own locks, not the
+  collection's), and the HNSW index's own parallel searches. The index's
+  locks are governed by the rule in "The HNSW Index Guard and rayon" above.
+
+`crate::lock_audit` checks the rule in every unit test. The collection's
+locks are its `RwLock` and `Mutex` wrappers, so every accessor goes through
+them: under `cfg(test)` an acquisition on any rayon worker panics, and each
+guard counts itself in a thread-local while it lives.
+`lock_audit::assert_no_guard_held()` sits before every global-pool
+submission in core and panics when its thread holds one;
+`every_rayon_submission_in_the_crate_is_checked` refuses a submission whose
+function has neither that assert nor `guarded_pool::run` before it. Outside
+`cfg(test)` the wrappers are the `parking_lot` types with nothing added, so
+an application calling a collection from its own rayon jobs is never
+refused. What the audit cannot see: a path no unit test reaches, and
+integration tests, which link the library built without `cfg(test)`. Before
+the fix, 81 unit tests failed under it.
 
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 

@@ -21,21 +21,3 @@ pub(crate) fn after_read() {
         hook();
     }
 }
-
-/// Storage reads a search made for its pending points on a rayon worker.
-///
-/// A batch search holds the `vector_storage` read guard across a join on the
-/// global rayon pool while it resolves results. A global worker that takes
-/// that guard again parks behind any queued writer, and the batch holding
-/// the guard then waits for a worker that never frees: the whole process
-/// stops (#2343's shape, one lock lower). No search may read storage from a
-/// rayon worker; tests read this count to hold it.
-pub(crate) static STORAGE_READS_ON_RAYON: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-/// Counts a pending-point storage read made on a rayon worker.
-pub(crate) fn note_storage_read() {
-    if rayon::current_thread_index().is_some() {
-        STORAGE_READS_ON_RAYON.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-}

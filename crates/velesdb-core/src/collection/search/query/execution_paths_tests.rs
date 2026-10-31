@@ -289,12 +289,11 @@ fn test_three_strategies_yield_distinct_result_sets() {
     );
 }
 
-/// The concurrent (`rayon::join`) Parallel realization is DETERMINISTIC: the
-/// same forced dispatch, repeated, returns byte-identical ids AND scores,
-/// proving the switch from sequential to concurrent execution changed nothing
-/// observable (the merge is order-insensitive over immutable data).
+/// The Parallel realization is DETERMINISTIC: the same forced dispatch,
+/// repeated, returns byte-identical ids AND scores (the merge is
+/// order-insensitive over immutable data).
 #[test]
-fn test_parallel_concurrent_dispatch_is_deterministic() {
+fn test_parallel_dispatch_is_deterministic() {
     let (_dir, col) = setup_parallel_fixture();
     let filter = tech_filter();
     let query = [1.0, 0.0, 0.0, 0.0];

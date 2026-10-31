@@ -378,6 +378,7 @@ impl HnswIndex {
         k: usize,
         quality: SearchQuality,
     ) -> crate::error::Result<Vec<Vec<ScoredResult>>> {
+        crate::lock_audit::assert_no_guard_held();
         self.validate_batch_dimensions(queries)?;
 
         // Perfect, Adaptive, AutoTune, or very small collections: delegate to
@@ -448,6 +449,7 @@ impl HnswIndex {
         rerank_k: usize,
         ef_search: usize,
     ) -> Vec<Vec<ScoredResult>> {
+        crate::lock_audit::assert_no_guard_held();
         let all_candidates: Vec<Vec<ScoredResult>> = queries
             .par_iter()
             .map(|query| self.search_hnsw_only_needing(query, rerank_k, k, ef_search))
@@ -561,6 +563,7 @@ impl HnswIndex {
             return Vec::new();
         }
 
+        crate::lock_audit::assert_no_guard_held();
         let mut results: Vec<ScoredResult> = flat
             .par_chunks(dimension)
             .enumerate()

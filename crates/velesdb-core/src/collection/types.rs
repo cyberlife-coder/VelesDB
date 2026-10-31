@@ -16,13 +16,13 @@ use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
 use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
+use crate::lock_audit::{Mutex, RwLock};
 #[cfg(feature = "persistence")]
 use crate::point::Point;
 use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 use arc_swap::ArcSwapOption;
-use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;

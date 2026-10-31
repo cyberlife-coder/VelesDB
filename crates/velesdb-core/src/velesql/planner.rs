@@ -40,7 +40,7 @@ pub use crate::velesql::query_stats::QueryStats;
 /// `dispatch_vector_with_strategy`) all three variants are realized as
 /// **physically distinct** plans: `VectorFirst` runs the filtered HNSW search,
 /// `GraphFirst` runs a full metadata scan scored by vector similarity, and
-/// `Parallel` runs both concurrently (`rayon::join`) and merges them by
+/// `Parallel` runs both, one after the other, and merges them by
 /// best-score-per-id. Other SELECT arms (similarity() threshold, pure NEAR,
 /// metadata-only, SELECT *) each have a single sensible physical plan and
 /// deliberately ignore the strategy — see the `dispatch_vector_query` match
@@ -51,8 +51,10 @@ pub use crate::velesql::query_stats::QueryStats;
 /// post-filters over the fetch window.
 ///
 /// On the top-level MATCH path (`match_dispatch.rs`), `Parallel` runs
-/// `GraphFirst` and `VectorFirst` **concurrently** (`rayon::join`) and merges
-/// the result sets by `node_id`.
+/// `GraphFirst` and then `VectorFirst` and merges the result sets by
+/// `node_id`. Neither path runs the two legs concurrently: both take
+/// collection locks, and no job on a rayon pool may take one
+/// (`docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExecutionStrategy {
@@ -64,9 +66,9 @@ pub enum ExecutionStrategy {
     /// SELECT NEAR+filter path via `scan_and_score_by_vector`. Not applied to
     /// SELECT graph predicates, which use their own anchored pre-filter.
     GraphFirst,
-    /// Execute both sides concurrently and merge by best-score-per-id (medium
-    /// selectivity, 1-50%). Realized via `rayon::join` on BOTH the SELECT
-    /// NEAR+filter path and the top-level MATCH path.
+    /// Execute both sides and merge by best-score-per-id (medium
+    /// selectivity, 1-50%). Realized on BOTH the SELECT NEAR+filter path and
+    /// the top-level MATCH path, the two legs one after the other.
     Parallel,
 }
 

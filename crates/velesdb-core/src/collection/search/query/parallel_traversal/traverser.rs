@@ -113,6 +113,7 @@ impl ParallelTraverser {
     {
         let stats = TraversalStats::new();
 
+        crate::lock_audit::assert_no_guard_held();
         let results: Vec<Vec<TraversalResult>> =
             if self.config.should_parallelize(start_nodes.len()) {
                 start_nodes

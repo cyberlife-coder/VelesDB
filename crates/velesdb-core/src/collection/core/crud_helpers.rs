@@ -3,9 +3,9 @@
 
 use crate::collection::types::Collection;
 use crate::index::{JsonValue, SecondaryIndex};
+use crate::lock_audit::WriteGuard as RwLockWriteGuard;
 use crate::point::Point;
 use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
-use parking_lot::RwLockWriteGuard;
 use std::collections::HashMap;
 
 const PQ_TRAINING_SAMPLES: usize = 128;
@@ -40,6 +40,31 @@ fn auto_num_subspaces(dimension: usize) -> usize {
     num_subspaces.max(1)
 }
 
+/// Trains a PQ quantizer on `training`, `None` (logged) when training fails.
+///
+/// Its caller holds the quantizer and training-buffer guards, so the
+/// training's parallel work runs on the pool for work over guarded data,
+/// never the global one.
+fn train_pq(training: &[Vec<f32>], dimension: usize) -> Option<ProductQuantizer> {
+    let num_centroids = 256usize.min(training.len().max(2));
+    let num_subspaces = auto_num_subspaces(dimension);
+    let trained = crate::collection::guarded_pool::run(
+        || ProductQuantizer::train(training, num_subspaces, num_centroids),
+        || ProductQuantizer::train_sequential(training, num_subspaces, num_centroids),
+    );
+    match trained {
+        Ok(pq) => Some(pq),
+        Err(error) => {
+            // The training buffer is drained regardless of outcome, so a
+            // failure here silently disables PQ for this batch (and every
+            // point already buffered) with no other signal — log it so it is
+            // observable.
+            tracing::warn!(%error, "PQ training failed; buffer discarded, quantizer stays unset");
+            None
+        }
+    }
+}
+
 impl Collection {
     /// Caches the PQ code for `point` (ProductQuantization mode only).
     ///
@@ -59,22 +84,7 @@ impl Collection {
             if buffer.len() >= PQ_TRAINING_SAMPLES {
                 let training: Vec<Vec<f32>> =
                     buffer.iter().map(|(_, vector)| vector.clone()).collect();
-                let num_centroids = 256usize.min(training.len().max(2));
-                let trained = match ProductQuantizer::train(
-                    &training,
-                    auto_num_subspaces(point.vector.len()),
-                    num_centroids,
-                ) {
-                    Ok(pq) => Some(pq),
-                    Err(error) => {
-                        // The training buffer is drained below regardless of
-                        // outcome, so a failure here silently disables PQ for
-                        // this batch (and every point already buffered) with
-                        // no other signal — log it so it is observable.
-                        tracing::warn!(%error, "PQ training failed; buffer discarded, quantizer stays unset");
-                        None
-                    }
-                };
+                let trained = train_pq(&training, point.vector.len());
                 #[cfg(feature = "persistence")]
                 if let Some(ref pq) = trained {
                     if let Err(error) = pq.save_codebook(&self.storage.path) {

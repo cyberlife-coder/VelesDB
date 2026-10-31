@@ -167,6 +167,7 @@ impl ShardedTraverser {
     where
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
     {
+        crate::lock_audit::assert_no_guard_held();
         shard_frontiers
             .par_iter()
             .map(|frontier| {

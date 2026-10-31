@@ -31,7 +31,7 @@ fn resolve_rrf_params(vector_weight: Option<f32>, rrf_k: Option<u32>) -> (f32, f
 ///
 /// Returns `(metric, weight, text_weight, rrf_constant)`.
 fn validated_hybrid_params(
-    config: &parking_lot::RwLockReadGuard<'_, crate::collection::types::CollectionConfig>,
+    config: &crate::lock_audit::ReadGuard<'_, crate::collection::types::CollectionConfig>,
     vector_query: &[f32],
     vector_weight: Option<f32>,
     rrf_k: Option<u32>,

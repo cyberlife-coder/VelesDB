@@ -294,7 +294,7 @@ impl Collection {
         self.fuse_dense_sparse(dense_results, &sparse_results, limit, strategy)
     }
 
-    /// Execute dense and sparse branches, optionally in parallel.
+    /// Execute the dense branch, then the sparse branch.
     ///
     /// Either branch's failure fails the hybrid search — a dense query of the
     /// wrong dimension, an unknown sparse index — instead of leaving that
@@ -308,9 +308,12 @@ impl Collection {
     /// before `sparse_indexes(9)` (see `sparse_branch` and
     /// `docs/CONCURRENCY_MODEL.md`).
     ///
-    /// In the `persistence` path, the two branches run via `rayon::join`; the
-    /// dense closure never touches `sparse_indexes`, so there is no ordering
-    /// conflict between the two parallel closures.
+    /// The branches run one after the other, on this thread. Both take
+    /// collection locks — the dense one `vector_storage` (2) for the points
+    /// not yet indexed, the sparse one `payload_storage` (3) and
+    /// `sparse_indexes` (9) — and no job on a rayon pool may take a
+    /// collection lock (`docs/CONCURRENCY_MODEL.md`, "Collection locks and
+    /// rayon").
     ///
     /// # Errors
     ///
@@ -324,12 +327,8 @@ impl Collection {
         candidate_k: usize,
         metadata_filter: Option<&crate::filter::Filter>,
     ) -> Result<HybridBranches> {
-        let dense = || self.dense_branch(dense_vector, candidate_k, metadata_filter);
-        let sparse = || self.sparse_branch(sparse_query, index_name, candidate_k, metadata_filter);
-        #[cfg(feature = "persistence")]
-        let (dense, sparse) = rayon::join(dense, sparse);
-        #[cfg(not(feature = "persistence"))]
-        let (dense, sparse) = (dense(), sparse());
+        let dense = self.dense_branch(dense_vector, candidate_k, metadata_filter);
+        let sparse = self.sparse_branch(sparse_query, index_name, candidate_k, metadata_filter);
         Ok((dense?, sparse?))
     }
 

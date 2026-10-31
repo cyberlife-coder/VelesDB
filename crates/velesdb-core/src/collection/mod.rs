@@ -41,6 +41,8 @@ mod graph_collection;
 #[cfg(feature = "persistence")]
 mod graph_collection_query;
 #[cfg(feature = "persistence")]
+pub(crate) mod guarded_pool;
+#[cfg(feature = "persistence")]
 mod metadata_collection;
 #[cfg(feature = "persistence")]
 pub(crate) mod order_by_advisor;

@@ -366,6 +366,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             // Each node is anchored as soon as one of its neighbours is; batch
             // mates still connecting are anchored by the pass after the chunk
             // (#2259).
+            crate::lock_audit::assert_no_guard_held();
             let pending: Vec<NodeId> = chunk
                 .par_iter()
                 .enumerate()

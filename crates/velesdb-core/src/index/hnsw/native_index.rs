@@ -297,6 +297,7 @@ impl NativeHnswIndex {
     ) -> Vec<Vec<ScoredResult>> {
         use rayon::prelude::*;
 
+        crate::lock_audit::assert_no_guard_held();
         queries
             .par_iter()
             .map(|q| self.search_with_quality(q, k, quality))
@@ -355,6 +356,7 @@ impl NativeHnswIndex {
             return Vec::new();
         }
 
+        crate::lock_audit::assert_no_guard_held();
         let mut results: Vec<ScoredResult> = flat
             .par_chunks(dimension)
             .enumerate()

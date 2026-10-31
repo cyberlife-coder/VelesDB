@@ -13,7 +13,7 @@
 //! position **11**. Code must never hold it while acquiring a lower-numbered
 //! lock.
 
-use parking_lot::RwLock;
+use crate::lock_audit::RwLock;
 use std::collections::HashSet;
 
 /// Vectors written but not yet in the HNSW index, one entry per id.

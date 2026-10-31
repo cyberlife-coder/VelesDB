@@ -421,9 +421,9 @@ results = coll.search_request(velesdb.SearchOptions(
 ))
 ```
 
-### Parallel execution
+### Branch execution
 
-With the `persistence` feature flag enabled (default), the dense and sparse branches are executed in parallel via `rayon::join`. Without `persistence`, they are executed sequentially.
+The dense branch runs first, then the sparse branch, on the calling thread. Both take collection locks, and no job on a rayon pool may take one (see `docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon"), so they are not run in parallel.
 
 ---
 

@@ -1,7 +1,7 @@
 //! Bulk CRUD operations for Collection (`upsert_bulk`).
 //!
 //! Extracted from `crud.rs` (Issue #425) to keep each file under 500 NLOC.
-//! These methods are optimized for high-throughput import with parallel I/O.
+//! These methods are optimized for high-throughput import: one durability barrier per store per batch.
 //! Raw import path (`upsert_bulk_from_raw`) is in `bulk_import.rs`.
 //!
 //! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
@@ -26,7 +26,7 @@ impl Collection {
     ///
     /// This method is optimized for bulk loading:
     /// - Uses parallel HNSW insertion (rayon)
-    /// - Parallel payload + vector I/O via `rayon::join` (Issue #424)
+    /// - Vector then payload I/O, each with one durability barrier per batch
     /// - Single flush at the end (not per-point)
     /// - No HNSW index save (deferred for performance)
     /// - Faster than the previous sequential approach on large batches (5000+)
@@ -171,12 +171,17 @@ impl Collection {
     /// for the whole batch, then brings every index derived from the payloads
     /// in line with them. Shared by `upsert_bulk` and `upsert_bulk_from_raw`.
     ///
-    /// The two stores run in parallel and both complete even when one fails.
+    /// The two stores run one after the other, on this thread, and both
+    /// complete even when one fails. Each holds its storage's write guard
+    /// while it writes, and no job on a rayon pool may take a collection lock
+    /// (`docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon"): they ran
+    /// as the two halves of a global-pool `rayon::join` once, the shape
+    /// `upsert` reverted for deadlocking.
     /// Stored payloads are readable whatever happened to the vectors, so the
     /// secondary indexes, the histograms and BM25 follow them before a vector
     /// error is returned; returning it first left stored payloads unindexed.
     ///
-    /// LOCK ORDER: vector_storage(2) ‖ payload_storage(3) → label_index(7),
+    /// LOCK ORDER: vector_storage(2), released; then payload_storage(3) → label_index(7),
     /// released → graph_range_indexes(7); then, with both storage locks
     /// released, secondary_indexes(6), stats_io_mutex(12), the BM25 WAL.
     pub(super) fn store_vectors_and_payloads(
@@ -184,16 +189,8 @@ impl Collection {
         vector_refs: &[(u64, &[f32])],
         entries: &[(u64, &serde_json::Value)],
     ) -> Result<()> {
-        #[cfg(feature = "persistence")]
-        let (vectors_stored, old_payloads) = rayon::join(
-            || self.bulk_store_vectors(vector_refs),
-            || self.store_payload_entries(entries),
-        );
-        #[cfg(not(feature = "persistence"))]
-        let (vectors_stored, old_payloads) = (
-            self.bulk_store_vectors(vector_refs),
-            self.store_payload_entries(entries),
-        );
+        let vectors_stored = self.bulk_store_vectors(vector_refs);
+        let old_payloads = self.store_payload_entries(entries);
 
         let old_payloads = old_payloads?;
         // The raw bulk path always maintained the secondary indexes; this one

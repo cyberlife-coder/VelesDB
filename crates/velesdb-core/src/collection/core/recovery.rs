@@ -25,8 +25,8 @@
 //! resurrected vector is preferable to a silently lost one.
 
 use crate::index::HnswIndex;
+use crate::lock_audit::RwLock;
 use crate::storage::{MmapStorage, PayloadStorage, VectorStorage};
-use parking_lot::RwLock;
 use std::sync::Arc;
 
 /// Detects vectors in storage that are missing from the HNSW index and

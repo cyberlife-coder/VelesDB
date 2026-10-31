@@ -258,8 +258,6 @@ impl Collection {
         let index = &self.storage.index;
         let mut scored = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(SCORE_CHUNK) {
-            #[cfg(test)]
-            merge_hooks::note_storage_read();
             let storage = self.storage.vector_storage.read();
             for &id in chunk {
                 let Ok(Some(vector)) = storage.retrieve_ref(id) else {
