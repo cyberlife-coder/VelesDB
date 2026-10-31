@@ -425,7 +425,11 @@ scalar-expression ones below, which use the same single-collection dataset):
   G010 the default names of unaliased aggregates, the same in both engines;
   G011 `COUNT(column)` over a string column, G012 a selected column outside
   `GROUP BY` (not output), G013 `GROUP BY id` (the point id), G014–G015 the
-  `NULL` group last under `ASC` and first under `DESC`.
+  `NULL` group last under `ASC` and first under `DESC`, G016 `FIRST(col)` in
+  a SQL `GROUP BY` (the row with the smallest point id), G017 an aggregate
+  named `score` in a SQL `GROUP BY`, G018 groups an ORDER BY ties ordered by
+  `GROUP BY` key, G019 the default order (`GROUP BY` key ascending) and G020
+  HAVING's `AND` binding tighter than `OR`.
 - `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
@@ -449,12 +453,14 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R013: queries both engines must refuse, each with the
+- `rejected_cases` R001–R015: queries both engines must refuse, each with the
   `expected_code` both must report — `NEAR_FUSED` with `weighted`/`rsf` and
   `USING FUSION` over a single `NEAR` (V012), a MATCH `ORDER BY` of an
   aggregate or a bare name (R005–R009, V015), a `GROUP BY` ordered by an
-  aggregate the SELECT does not list (R010, V016), and output columns sharing
-  a name, an aggregate named `score` included (R011–R013, V017).
+  aggregate the SELECT does not list (R010, V016), output columns sharing
+  a name, an aggregate named `score` in a vector `GROUP BY` included
+  (R011–R013, V017), and a HAVING with a non-numeric threshold or without
+  `GROUP BY` (R014–R015, V018).
 - `null_order_cases` O001–O002: a plain SELECT whose ORDER BY key is missing
   on a row, which sorts last under `ASC` and first under `DESC`.
 - `vector_group_cases` V001–V010: a vector `GROUP BY` (`NEAR` + `GROUP BY`)

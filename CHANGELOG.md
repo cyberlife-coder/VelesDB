@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `QueryLimits::client_timeout_ms` (the budget a request's own
   `timeout_ms` resolves to) and `QueryLimits::timeout_budget` (whose budget
   ran out — the one classification `VelesQL` and the REST search share).
+- `velesql::Grouper`, `GroupInput` and `GroupOutput` (both
+  `#[non_exhaustive]`, `GroupInput::new` builds one): the grouping core's
+  SQL and vector `GROUP BY` and the WASM executor share. `Grouper::push`
+  fails with `Error::Config` past the group budget, `Grouper::new` with
+  `Error::Query` (`V018`) for a non-numeric HAVING threshold.
+- `velesql::compare_json_values` (ORDER BY's value order, also still at
+  `collection::search::query::ordering`), `velesql::row_field`,
+  `SelectOrderBy::directed`, and `SelectStatement::grouped_sort_keys`,
+  `order_by_aggregates_as_fields` and `is_vector_group_by`.
+- `ValidationErrorKind::OrderByNotInResult` (`V016`),
+  `DuplicateOutputColumn` (`V017`) and `InvalidHaving` (`V018`).
 
 - **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
   node relationships as edges.** The option was documented but never read, and
@@ -323,9 +334,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AS n` returned one of the two. 8.0.0 refuses it at validation in every
   engine, naming the column. A selected column counts even outside `GROUP
   BY` (`SELECT title, COUNT(*) AS title ... GROUP BY category`), and in a
-  `GROUP BY` query an aggregate may not be named `id` or `score`, which
-  would shadow the group's own id and score under `ORDER BY`. Migration:
-  alias the aggregate whose name repeats another column.
+  vector `GROUP BY` an aggregate may not be named `id` or `score`, which
+  would shadow the group's own id and score under `ORDER BY`; in a SQL
+  `GROUP BY` `AVG(rating) AS score` keeps working. Migration: alias the
+  aggregate whose name repeats another column.
+- **BREAKING (behavior) — a HAVING the query cannot evaluate is refused with
+  `V018` (`InvalidHaving`), in every engine.** A threshold that is not a
+  number (`HAVING COUNT(*) > 'many'`, `= NULL`, or a parameter bound to a
+  string) matched no group in 7.1.0, silently; it is refused at validation,
+  or, for a bound parameter, when the query runs. `HAVING` without `GROUP
+  BY` was refused by core with an unnumbered error and filtered the single
+  implicit group in WASM; both now refuse it with `V018`. Migration: compare
+  aggregates with numbers, and add `GROUP BY` (or move the test to WHERE).
+- **BREAKING (behavior) — SQL `GROUP BY` results no longer depend on scan
+  order.** In 7.1.0 core grouped in hash order and WASM in scan order, so the
+  same query could return different rows:
+  - without ORDER BY, groups come by `GROUP BY` key, ascending, `NULL` last
+    (core returned hash order, WASM first-seen order);
+  - groups an ORDER BY ties come by `GROUP BY` key too, so `ORDER BY n DESC
+    LIMIT 3` keeps the same three groups everywhere (core used an unstable
+    sort with no tie-break);
+  - `FIRST(col)` reads the group's row with the smallest point id (core
+    returned `null`, WASM the first row scanned); in a vector `GROUP BY` it
+    reads the most similar row, the smallest id among equally similar ones
+    (the first one scanned in 7.1.0);
+  - numbers equal by value are one group: `1` and `1.0`, `0.0` and `-0.0`
+    (separate groups in 7.1.0).
+  Migration: add an ORDER BY to pin another order (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
+- **BREAKING (behavior) — an aggregate reads its column as WHERE does, with
+  or without `GROUP BY`.**
+  - `id` is the point id: `GROUP BY id` grouped every row into one `NULL`
+    group in core 7.1.0 (it read a payload field named `id`), and `COUNT(id)`
+    and `MAX(id)` without `GROUP BY` read that payload field too. WASM
+    already read the point id.
+  - `COUNT(col)` counts non-null values of any type: core 7.1.0 counted
+    numeric values only, so `COUNT(category)` over a string column returned
+    `0`. `SUM`, `AVG`, `MIN` and `MAX` still read numeric values only.
+  - `HAVING COUNT(col)` over a column no row of a group holds compares `0`;
+    7.1.0 compared nothing and dropped the group.
+  - `HAVING AVG(score)` in a SQL `GROUP BY` averages the payload field
+    `score`, as the same aggregate in the SELECT does; 7.1.0 dropped every
+    group.
+  - `HAVING a OR b AND c` reads as `a OR (b AND c)`, SQL's precedence, in
+    every engine; 7.1.0 read it left to right, `(a OR b) AND c` (write that
+    as `a AND c OR b AND c`).
+  Migration: none for a query that did not depend on the old reading (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
+- **BREAKING (behavior) — `velesdb-wasm` caps a SQL `GROUP BY` at
+  `WITH (max_groups = N)` groups, 10,000 by default**, as core does; 7.1.0
+  WASM grouped without bound. A query past the budget fails with `Too many
+  groups (limit: N)`; raise `max_groups` (1,000,000 at most) to allow more.
+- **BREAKING (API) — `AggregateResult::counts` and `Aggregator::process_value`
+  / `process_batch` count non-null values of any type** for `COUNT(column)`,
+  where they counted numeric values only; `sums`, `avgs`, `mins` and `maxs`
+  still hold numeric values only.
 - **BREAKING (behavior) — `velesdb-wasm` names an unaliased aggregate as
   core does.** 7.1.0 WASM returned `COUNT(*)` as `count(*)` and `SUM(price)`
   as `sum(price)`; 8.0.0 returns `count` and `sum_price`, the names core and
@@ -367,6 +430,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING — `AggregateResult::to_json`.** It named columns its own way
+  (`count` only when non-zero, no `COUNT(column)` key), which no engine
+  returned. Read the `count`, `counts`, `sums`, `avgs`, `mins` and `maxs`
+  fields, or run the query through `Database::execute_aggregate`.
 - **BREAKING — `CollectionConfig.description` (TypeScript SDK).** Core has no
   collection description: `CreateCollectionRequest` has no such field, so the
   REST server dropped it silently, and the WASM backend stored it where
@@ -645,13 +712,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distance metric `similarity() DESC` sorted the farthest rows first in
   WASM; it puts the nearest first, as core does (`SelectOrderBy::directed`,
   shared).
-- **`COUNT(column)` counts non-null values of any type in core.** 7.1.0
-  counted numeric values only: `COUNT(category)` over a string column
-  returned `0`.
-- **A `GROUP BY` column reads as in WHERE in core.** `GROUP BY id` grouped
-  by a payload field named `id`, so every row fell in one `NULL` group; it
-  groups by the point id, as WASM did. `FIRST(col)` in a SQL `GROUP BY`
-  returned `null` in core; it returns the group's first row's value.
 - **`@wiscale/tauri-plugin-velesdb` ships a README.** Its package listed
   `README.md` in `files`, but none existed, so the npm page was empty.
 - The committed Playwright report of the e-commerce example is removed.

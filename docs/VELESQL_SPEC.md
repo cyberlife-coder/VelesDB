@@ -2,7 +2,7 @@
 
 > SQL-like query language for vector + graph + column-store search in VelesDB.
 
-**Version**: 3.10.0 | Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
+**Version**: 3.10.0 | Last updated: 2026-10-31 · Applies to: velesdb-core 8.0.0
 
 ---
 
@@ -218,15 +218,26 @@ SELECT SUM(quantity) AS total FROM orders;
 
 Every engine groups the same way:
 
-- A `GROUP BY` column reads as in WHERE: `id` is the point id, any other name
-  a payload path (`meta.lang`). A row without it belongs to the `NULL` group.
+- A `GROUP BY` column, and an aggregate's column, reads as in WHERE: `id` is
+  the point id, any other name a payload path (`meta.lang`). A row without
+  it belongs to the `NULL` group. Numbers equal by value are one group:
+  `1` and `1.0`, `0.0` and `-0.0`.
 - A grouped row carries its `GROUP BY` columns and its aggregates, nothing
   else: a selected column outside `GROUP BY` is not output.
-- `FIRST(col)` reads the group's best row: the most similar one in a vector
-  search (the highest score, the lowest distance), the first on a tie.
-  Outside a vector search every row ties, so it is the group's first row.
+- `FIRST(col)` reads the group's best row. In a vector search that is the
+  most similar row (the highest score, the lowest distance) and, among
+  equally similar rows, the one with the smallest point id; elsewhere rows
+  carry no score, and it is the row with the smallest point id. The best
+  row never depends on the order the engine scans rows in.
 - `score` as an aggregate argument is the search score in a vector
   `GROUP BY`, and a payload field named `score` everywhere else.
+- Without ORDER BY, the groups of a SQL `GROUP BY` come by `GROUP BY` key,
+  ascending, `NULL` last. Groups an ORDER BY ties also fall back to that
+  order.
+- A SQL `GROUP BY` holds at most `WITH (max_groups = N)` groups, 10,000 by
+  default and 1,000,000 at most, in every engine; one more group fails the
+  query (`Too many groups`). A vector `GROUP BY` groups its search results,
+  which its LIMIT already bounds.
 
 ### Similarity Score in SELECT
 
@@ -1208,7 +1219,7 @@ Behavior:
 - Every aggregate (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `FIRST`) is computed
   per group, and `HAVING` filters the groups
 - Each group is returned as a search result: its best (most similar) chunk's
-  id, the group score — that chunk's score, or the mean when the SELECT asks
+  id — the smallest id among equally similar chunks — the group score — that chunk's score, or the mean when the SELECT asks
   for `AVG(score)` and not `MAX(score)` — and the group row as payload
 - Without ORDER BY, groups come best score first, ties by id; without LIMIT,
   the SELECT default of 10 applies, as for any search
@@ -1224,7 +1235,14 @@ Behavior:
 ## HAVING Clause (v2.0+)
 
 Filter groups after aggregation. HAVING conditions compare aggregate functions
-against values using `AND`/`OR`.
+against numbers, combined with `AND`/`OR`. As in SQL, `AND` binds tighter
+than `OR`: `HAVING COUNT(*) = 2 OR COUNT(*) > 0 AND SUM(x) > 5` keeps a group
+of two whatever its sum. HAVING requires `GROUP BY`, and each threshold must
+be a number (a literal, a parameter bound to one, or a scalar subquery
+returning one): validation refuses anything else with `V018`, and a
+parameter or subquery whose value is not a number fails the query with
+`V018` too. HAVING may test any aggregate, listed in SELECT or
+not; `COUNT(col)` over a column no row of the group holds is `0`.
 
 ```sql
 -- Single condition
@@ -1434,9 +1452,11 @@ a query in which two would share one (`GROUP BY category, count` beside
 `COUNT(*)`, `COUNT(*) AS n, SUM(year) AS n`, or `SELECT title, ...,
 COUNT(*) AS title` — a selected column counts even outside `GROUP BY`, where
 no grouped row carries it) fails validation with `V017` rather than
-returning one of them. In a `GROUP BY` query an aggregate may not be named
-`id` or `score` either: each group carries its own, which `ORDER BY id` /
-`ORDER BY score` reads. Alias an aggregate to rename it.
+returning one of them. In a vector `GROUP BY` an aggregate may not be named
+`id` or `score` either: each group is a search result carrying its own,
+which `ORDER BY id` / `ORDER BY score` reads. A SQL `GROUP BY` row has
+neither, so `AVG(rating) AS score` is a plain name there. Alias an aggregate
+to rename it.
 
 An ORDER BY item of a `GROUP BY` query names a column of the grouped rows: a
 SELECT aggregate repeated as an expression (`COUNT(*)` above, which sorts on
@@ -1444,8 +1464,10 @@ SELECT aggregate repeated as an expression (`COUNT(*)` above, which sorts on
 alias, or its default name: `ORDER BY count` beside an unaliased
 `COUNT(*)`). An item that names none — an aggregate the SELECT does not list,
 a column outside `GROUP BY`, `similarity()` or an arithmetic expression —
-fails validation with `V016` instead of leaving the groups unsorted. `HAVING`
-may test any aggregate, listed in SELECT or not.
+fails validation with `V016` instead of leaving the groups unsorted. Groups
+equal on every ORDER BY item come by `GROUP BY` key, ascending, so the order
+— and what LIMIT keeps — is the same in every engine. `HAVING` may test any
+aggregate, listed in SELECT or not.
 
 A vector `GROUP BY` (`NEAR` in WHERE, see
 [Vector-Search GROUP BY](#vector-search-group-by-parent-document-retrieval-v37))

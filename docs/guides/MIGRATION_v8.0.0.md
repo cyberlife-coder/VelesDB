@@ -88,6 +88,11 @@ a v3 blob with `Unsupported version: 3`.
 | `GROUP BY` ordered by an aggregate the SELECT does not list (a vector `GROUP BY` too), or by `similarity()` or arithmetic outside a vector `GROUP BY` (`NEAR` in WHERE) | groups left unsorted | `V016` |
 | WASM: `GROUP BY` ordered by a selected column outside `GROUP BY` (`SELECT category, title, COUNT(*) ... GROUP BY category ORDER BY title`) | sorted on each group's first `title` | `V016` |
 | A grouped or aggregate query whose output columns share a name: a `GROUP BY` column and an aggregate's alias or default name (`GROUP BY category, count` beside `COUNT(*)`), or two aggregates (`COUNT(*) AS n, SUM(year) AS n`) | one column silently overwritten | `V017` |
+| A vector `GROUP BY` (`NEAR` + `GROUP BY`) naming an aggregate `id` or `score` (`COUNT(*) AS score`); a SQL `GROUP BY` keeps accepting it | the group's own score or id shadowed under `ORDER BY` | `V017` |
+| A HAVING threshold that is not a number (`HAVING COUNT(*) > 'many'`, `= NULL`) | no group matched | `V018` |
+| A HAVING parameter bound to a non-number | no group matched | `V018` when the query runs |
+| `HAVING` without `GROUP BY` | core: unnumbered error; WASM: filtered the one implicit group | `V018` |
+| WASM: a SQL `GROUP BY` past `WITH (max_groups = N)` groups (10,000 by default) | grouped without bound | `Too many groups (limit: N)`, as in core |
 
 **Fix:**
 - Run one query per sparse vector and fuse the results.
@@ -105,6 +110,10 @@ a v3 blob with `Unsupported version: 3`.
   there the refused key was never applied.
 - Give each output column of an aggregate query its own name: alias the
   aggregate whose default name or alias repeats another column.
+- Compare HAVING aggregates with numbers, and filter rows without `GROUP BY`
+  in WHERE.
+- Raise `WITH (max_groups = N)` (1,000,000 at most) for a WASM query that
+  needs more groups.
 
 The guard-rail limits are also applied now, where 7.1.0 returned them without
 applying them: `rate_limit_qps`, `circuit_failure_threshold` and
@@ -257,6 +266,7 @@ fast sends no search instead.
 | `TraversalMetrics` (crate root and `metrics::`) | `GraphCollection::metrics()`, `Database::graph_metrics_prometheus()` |
 | `velesdb-migrate` `PineconeConfig::environment` | drop the field |
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
+| `velesql::AggregateResult::to_json` | the `count`, `counts`, `sums`, `avgs`, `mins`, `maxs` fields, or `Database::execute_aggregate` |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a
   `usize`. The removed helper returned `usize::MAX` for `perfect`. Without the
@@ -287,6 +297,10 @@ fast sends no search instead.
   return `Result<()>`.** They refuse a config the pipeline cannot run with
   (section 2) with `Error::Config`, and leave the current ingester running.
   Handle the result or `?` it.
+- **`AggregateResult::counts`, `Aggregator::process_value` and
+  `Aggregator::process_batch` count non-null values of any type** for
+  `COUNT(column)`, where they counted numeric values only. `sums`, `avgs`,
+  `mins` and `maxs` still hold numeric values only.
 
 ### Added
 
@@ -294,7 +308,13 @@ fast sends no search instead.
 under `validation`. `GuardRailKind`, `TimeoutBudget`, `Error::is_caller_error`,
 `CircuitBreaker::record_error`, `QueryValidator::validate_match_clause`,
 `Database::gated_search_outcome`, `QueryLimits::client_timeout_ms` and
-`QueryLimits::timeout_budget`.
+`QueryLimits::timeout_budget`. For VelesQL grouping: `velesql::Grouper`,
+`GroupInput` (built with `GroupInput::new`) and `GroupOutput`, both
+`#[non_exhaustive]`; `velesql::compare_json_values` and `velesql::row_field`;
+`SelectOrderBy::directed`; `SelectStatement::grouped_sort_keys`,
+`order_by_aggregates_as_fields` and `is_vector_group_by`; and
+`ValidationErrorKind::{OrderByNotInResult, DuplicateOutputColumn,
+InvalidHaving}` (`V016`–`V018`).
 
 ## 4. Python and the integrations
 
@@ -493,7 +513,10 @@ Rejections carry core's codes and a new `recoverable` field:
     named `score`;
   - a vector `GROUP BY` without `LIMIT` returns 10 groups, the SELECT
     default, where it returned every group; each group row carries its best
-    row's id and the group score instead of `0` and `0.0`.
+    row's id and the group score instead of `0` and `0.0`;
+  - a SQL `GROUP BY` holds at most `WITH (max_groups = N)` groups, 10,000
+    by default, and `HAVING` without `GROUP BY` fails with `V018` (section
+    2).
 
 ## 8. Observability
 
@@ -516,6 +539,30 @@ Rejections carry core's codes and a new `recoverable` field:
   booleans, numbers, strings, arrays, objects. A query that read the rows
   without a value first under `ASC` reads them last; sort `DESC`, or filter
   `IS NULL`, to get them first.
+
+- **SQL `GROUP BY` results no longer depend on scan order, in every
+  engine.** 7.1.0 core grouped in hash order, WASM in scan order:
+  - without ORDER BY, groups come by `GROUP BY` key, ascending, `NULL` last;
+  - groups an ORDER BY ties come by `GROUP BY` key, so a LIMIT keeps the
+    same groups everywhere;
+  - `FIRST(col)` reads the group's row with the smallest point id (core
+    returned `null`); in a vector `GROUP BY`, the most similar row, the
+    smallest id among equally similar ones;
+  - numbers equal by value are one group (`1` and `1.0`, `0.0` and `-0.0`).
+
+  Add an ORDER BY to pin another order.
+
+- **An aggregate reads its column as WHERE does, in core.** `id` is the point
+  id: `GROUP BY id` groups by it (7.1.0 put every row in one `NULL` group),
+  and `COUNT(id)` / `MAX(id)` read it without `GROUP BY` too. `COUNT(col)`
+  counts non-null values of any type (7.1.0 counted numbers only, so
+  `COUNT(category)` was `0`). `HAVING COUNT(col)` over a column a group never
+  holds compares `0`, and `HAVING AVG(score)` in a SQL `GROUP BY` averages
+  the payload field `score`; 7.1.0 dropped those groups.
+
+- **`HAVING a OR b AND c` reads as `a OR (b AND c)`**, SQL's precedence, in
+  every engine; 7.1.0 read it left to right. HAVING takes no parentheses:
+  write the old reading `(a OR b) AND c` as `a AND c OR b AND c`.
 
 - **Vector `GROUP BY` (`NEAR` + `GROUP BY`) computes every aggregate, on the
   server, in Python, Node and every binding.** 7.1.0 core computed only
