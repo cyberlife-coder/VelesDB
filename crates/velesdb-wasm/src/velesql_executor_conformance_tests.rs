@@ -358,10 +358,8 @@ fn test_wasm_velesql_executor_join_cases() {
 /// GROUP BY / HAVING conformance against the WASM executor (issue #1544).
 ///
 /// Compared as JSON values (a group has no natural point id), mirroring the
-/// core aggregate test. Every case uses an explicit `AS` alias so the output
-/// field names agree with core's `execute_aggregate` naming — see
-/// `documented_divergences` D001 for the (deliberately unexercised) unaliased
-/// naming gap.
+/// core aggregate test. Both engines name an unaliased aggregate through
+/// `AggregateFunction::result_key`, so the rows match field for field (G010).
 #[test]
 fn test_wasm_velesql_executor_aggregate_cases() {
     let fixture = load_fixture();

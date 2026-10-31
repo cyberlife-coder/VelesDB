@@ -390,18 +390,3 @@ fn test_vector_group_by_order_by_similarity_uses_the_average_when_only_avg_score
     let out = apply(&s, &scanned(&raw), &Params::new()).expect("test: vector group by avg");
     assert_eq!(column_values(&out, "cat"), ["\"c\"", "\"a\"", "\"b\""]);
 }
-
-#[test]
-fn test_group_by_order_by_a_name_the_group_column_and_core_default_share_sorts_by_the_column() {
-    // WASM stores COUNT(*) under `count(*)`, so `ORDER BY count` names the
-    // GROUP BY column `count`, not core's default name for COUNT(*).
-    let raw = vec![
-        row(1, 0.0, &serde_json::json!({"count": "z"})),
-        row(2, 0.0, &serde_json::json!({"count": "a"})),
-        row(3, 0.0, &serde_json::json!({"count": "a"})),
-        row(4, 0.0, &serde_json::json!({"count": "a"})),
-    ];
-    let s = select("SELECT count, COUNT(*) FROM t GROUP BY count ORDER BY count ASC");
-    let out = apply(&s, &scanned(&raw), &Params::new()).expect("test: name collision");
-    assert_eq!(column_values(&out, "count"), ["\"a\"", "\"z\""]);
-}

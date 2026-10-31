@@ -1387,16 +1387,22 @@ ORDER BY COUNT(*) DESC
 LIMIT 10
 ```
 
-An ORDER BY item of a `GROUP BY` query names a column of the grouped rows:
-a SELECT aggregate repeated as an expression (`COUNT(*)` above, which sorts
-on `cnt`), or a name, resolved first to a SELECT alias (`ORDER BY cnt`), then
-to a `GROUP BY` column, then to the executor's default name for an unaliased
-aggregate (`ORDER BY count` beside `COUNT(*)` in core; WASM names it
-`count(*)`, which no ORDER BY name can match). An item that names none — an
-aggregate the SELECT does not list, a column outside `GROUP BY`,
-`similarity()` or an arithmetic expression — fails validation with `V016`
-instead of leaving the groups unsorted. `HAVING` may test any aggregate,
-listed in SELECT or not.
+An aggregate's output field is its alias, else a default name: `count` for
+`COUNT(*)`, `<function>_<column>` otherwise (`sum_price`, `avg_score`), in
+every engine. The output columns of an aggregate query — its `GROUP BY`
+columns and its aggregates — must carry distinct names: a query in which two
+would share one (`GROUP BY category, count` beside `COUNT(*)`, or
+`COUNT(*) AS n, SUM(year) AS n`) fails validation with `V017` rather than
+returning one of them. Alias an aggregate to rename it.
+
+An ORDER BY item of a `GROUP BY` query names a column of the grouped rows: a
+SELECT aggregate repeated as an expression (`COUNT(*)` above, which sorts on
+`cnt`), or the name of a `GROUP BY` column or of a SELECT aggregate (its
+alias, or its default name: `ORDER BY count` beside an unaliased
+`COUNT(*)`). An item that names none — an aggregate the SELECT does not list,
+a column outside `GROUP BY`, `similarity()` or an arithmetic expression —
+fails validation with `V016` instead of leaving the groups unsorted. `HAVING`
+may test any aggregate, listed in SELECT or not.
 
 A vector `GROUP BY` (`NEAR` in WHERE, see
 [Vector-Search GROUP BY](#vector-search-group-by-parent-document-retrieval-v37))

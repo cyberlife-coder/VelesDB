@@ -420,8 +420,9 @@ scalar-expression ones below, which use the same single-collection dataset):
   locks `LIMIT` truncation on grouped results — formerly D006 below, now
   resolved on both engines. G006–G007 lock `ORDER BY COUNT(*)` /
   `ORDER BY AVG(col)` when the SELECT stores that aggregate under an `AS`
-  alias, G008 a `HAVING` on an aggregate the SELECT does not list, and G009
-  an ORDER BY name resolving to a SELECT alias before a payload field.
+  alias, G008 a `HAVING` on an aggregate the SELECT does not list, G009
+  an ORDER BY name resolving to a SELECT alias before a payload field, and
+  G010 the default names of unaliased aggregates, the same in both engines.
 - `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
@@ -445,10 +446,11 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R004 and R010: queries both engines must refuse,
+- `rejected_cases` R001–R004 and R010–R012: queries both engines must refuse,
   each with the `expected_code` both must report — `NEAR_FUSED` with
-  `weighted`/`rsf` and `USING FUSION` over a single `NEAR` (V012), and a
-  `GROUP BY` ordered by an aggregate the SELECT does not list (V016).
+  `weighted`/`rsf` and `USING FUSION` over a single `NEAR` (V012), a
+  `GROUP BY` ordered by an aggregate the SELECT does not list (V016), and
+  output columns sharing a name (R011–R012, V017).
 - `vector_group_cases` V001–V003: a vector `GROUP BY` (`NEAR` + `GROUP BY`)
   ordered by `similarity()` (each group's best score) and by a SELECT
   aggregate, compared on the order of the groups.
@@ -463,9 +465,9 @@ pass/fail cases) record real, currently-existing core↔WASM behavioural gaps
 discovered while building this coverage, so they're visible instead of
 silently relied upon:
 
-- **D001** — unaliased aggregate output field names differ (`"count"` /
-  `"sum_year"` on core vs `"count(*)"` / `"sum(year)"` on WASM); sidestepped
-  in the fixture by always using an explicit `AS` alias.
+- ~~D001~~ — **fixed in 8.0.0**: WASM names an unaliased aggregate as core
+  does (`"count"`, `"sum_year"`, through `AggregateFunction::result_key`)
+  instead of `"count(*)"` / `"sum(year)"`. Locked by `aggregate_cases` G010.
 - ~~D002~~ — **fixed 2026-07-24** (issue #1555): WASM's `equality_keys` now
   orients the `ON` condition by which side names the joined table (alias or
   raw table name), mirroring core's `normalize_join_condition` — both

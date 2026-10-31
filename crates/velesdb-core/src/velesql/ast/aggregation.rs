@@ -50,10 +50,12 @@ pub struct AggregateFunction {
 }
 
 impl AggregateFunction {
-    /// The field core's aggregation rows store this aggregate under: its
-    /// alias, else a default name — `count` for `COUNT(*)`, `sum_price` for
-    /// `SUM(price)`, `avg_score` for `AVG(score)`.
-    pub(crate) fn result_key(&self) -> String {
+    /// The output field of this aggregate in every engine and result shape —
+    /// SQL aggregation rows, vector `GROUP BY` results, the WASM executor: its
+    /// alias, else a default name, `count` for `COUNT(*)` and
+    /// `<function>_<column>` otherwise (`sum_price`, `avg_score`).
+    #[must_use]
+    pub fn result_key(&self) -> String {
         if let Some(alias) = &self.alias {
             return alias.clone();
         }

@@ -31,7 +31,7 @@ fn test_count_star_returns_total_rows() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT COUNT(*) FROM products", None).expect("test: count");
     assert_eq!(r.row_count(), 1);
-    assert!(r.rows_json().contains("\"count(*)\":5"));
+    assert!(r.rows_json().contains("\"count\":5"));
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn test_sum_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT SUM(price) FROM products", None).expect("test: sum");
     // 100 + 50 + 10 + 30 + 200 = 390
-    assert!(r.rows_json().contains("\"sum(price)\":390"));
+    assert!(r.rows_json().contains("\"sum_price\":390"));
 }
 
 #[test]
@@ -47,21 +47,21 @@ fn test_avg_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT AVG(price) FROM products", None).expect("test: avg");
     // 390 / 5 = 78
-    assert!(r.rows_json().contains("\"avg(price)\":78"));
+    assert!(r.rows_json().contains("\"avg_price\":78"));
 }
 
 #[test]
 fn test_min_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT MIN(price) FROM products", None).expect("test: min");
-    assert!(r.rows_json().contains("\"min(price)\":10"));
+    assert!(r.rows_json().contains("\"min_price\":10"));
 }
 
 #[test]
 fn test_max_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT MAX(price) FROM products", None).expect("test: max");
-    assert!(r.rows_json().contains("\"max(price)\":200"));
+    assert!(r.rows_json().contains("\"max_price\":200"));
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn test_count_on_empty_collection_returns_zero() {
         .expect("test: create");
     let r = execute(&mut db, "SELECT COUNT(*) FROM empty", None).expect("test: count");
     assert_eq!(r.row_count(), 1);
-    assert!(r.rows_json().contains("\"count(*)\":0"));
+    assert!(r.rows_json().contains("\"count\":0"));
 }
 
 #[test]

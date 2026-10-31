@@ -1,9 +1,9 @@
 //! Tests for [`super::grouped_order`]: which column of a grouped row an
 //! ORDER BY item sorts on, and the `V016` refusal of one that names none.
 
-use super::ast::{AggregateArg, AggregateFunction, OrderByExpr, SelectColumns, SelectStatement};
+use super::ast::{OrderByExpr, SelectColumns, SelectStatement};
 use super::validation::{QueryValidator, ValidationError, ValidationErrorKind};
-use super::{vector_group_score_is_average, GroupedSortKey, Parser};
+use super::{vector_group_score_is_average, Parser};
 
 fn validate(sql: &str) -> Result<(), ValidationError> {
     QueryValidator::validate(&Parser::parse(sql).expect("test: parse"))
@@ -66,83 +66,93 @@ fn test_validator_leaves_similarity_and_arithmetic_to_a_vector_group_by() {
     .expect("test: vector GROUP BY sorts on score");
 }
 
+fn assert_v017(sql: &str) {
+    let err = validate(sql).expect_err("test: duplicate output column must be refused");
+    assert_eq!(
+        err.kind,
+        ValidationErrorKind::DuplicateOutputColumn,
+        "{err}"
+    );
+    assert_eq!(err.kind.code(), "V017");
+}
+
+#[test]
+fn test_validator_refuses_a_group_column_sharing_an_aggregates_default_name() {
+    assert_v017("SELECT category, COUNT(*) FROM docs GROUP BY category, count");
+}
+
+#[test]
+fn test_validator_refuses_two_aggregates_sharing_an_alias() {
+    assert_v017("SELECT category, COUNT(*) AS n, SUM(year) AS n FROM docs GROUP BY category");
+}
+
+#[test]
+fn test_validator_refuses_an_alias_shadowing_a_group_column() {
+    assert_v017("SELECT category, COUNT(*) AS category FROM docs GROUP BY category");
+}
+
+#[test]
+fn test_validator_refuses_duplicate_names_without_group_by_and_in_a_vector_group_by() {
+    assert_v017("SELECT COUNT(*), COUNT(*) FROM docs");
+    assert_v017(
+        "SELECT category, MAX(score) AS category FROM docs WHERE vector NEAR $v GROUP BY category",
+    );
+}
+
+#[test]
+fn test_validator_accepts_a_selected_group_column_and_distinct_aggregate_names() {
+    validate("SELECT category, category, COUNT(*), SUM(year) AS year FROM docs GROUP BY category")
+        .expect("test: a group column listed twice is one column; `year` is not output");
+}
+
 // ---------------------------------------------------------------------------
-// grouped_sort_keys: name precedence and the executor's default names
+// grouped_sort_keys: the field each ORDER BY item sorts on
 // ---------------------------------------------------------------------------
 
 fn select(sql: &str) -> SelectStatement {
     Parser::parse(sql).expect("test: parse").select
 }
 
-/// WASM-style default names: `count(*)`, `sum(year)`.
-fn call_shaped(agg: &AggregateFunction) -> String {
-    let function = format!("{:?}", agg.function_type).to_lowercase();
-    match &agg.argument {
-        AggregateArg::Column(column) => format!("{function}({column})"),
-        _ => format!("{function}(*)"),
-    }
+fn sort_keys(sql: &str) -> Vec<(String, bool)> {
+    select(sql).grouped_sort_keys().expect("test: resolve")
 }
 
 #[test]
-fn test_an_explicit_alias_outranks_a_group_column_of_the_same_name() {
-    let stmt = select(
-        "SELECT category, COUNT(*) AS category FROM docs GROUP BY category ORDER BY category",
+fn test_a_name_resolves_to_an_alias_a_default_name_or_a_group_column() {
+    assert_eq!(
+        sort_keys(
+            "SELECT category, COUNT(*), SUM(year) AS total FROM docs GROUP BY category \
+             ORDER BY total DESC, count, category"
+        ),
+        vec![
+            ("total".to_string(), true),
+            ("count".to_string(), false),
+            ("category".to_string(), false),
+        ]
     );
-    let keys = stmt
-        .grouped_sort_keys(AggregateFunction::result_key)
-        .expect("test: resolve");
-    assert!(
-        matches!(keys[0].0, GroupedSortKey::Aggregate(_)),
-        "{keys:?}"
-    );
-}
-
-#[test]
-fn test_a_group_column_outranks_a_default_aggregate_name() {
-    let stmt = select("SELECT count, COUNT(*) FROM docs GROUP BY count ORDER BY count DESC");
-    let keys = stmt
-        .grouped_sort_keys(AggregateFunction::result_key)
-        .expect("test: resolve");
-    assert_eq!(keys, vec![(GroupedSortKey::GroupColumn("count"), true)]);
-}
-
-#[test]
-fn test_a_default_name_resolves_with_the_executors_own_naming() {
-    let stmt = select("SELECT category, COUNT(*) FROM docs GROUP BY category ORDER BY count");
-    // Core outputs COUNT(*) as `count`...
-    let keys = stmt
-        .grouped_sort_keys(AggregateFunction::result_key)
-        .expect("test: core");
-    assert!(
-        matches!(keys[0].0, GroupedSortKey::Aggregate(_)),
-        "{keys:?}"
-    );
-    // ...WASM as `count(*)`, so `count` names no column of its rows.
-    let err = stmt.grouped_sort_keys(call_shaped).expect_err("test: wasm");
-    assert_eq!(err.kind.code(), "V016");
 }
 
 #[test]
 fn test_a_default_name_never_matches_an_aliased_aggregate() {
     let stmt = select("SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY count");
-    assert!(stmt
-        .grouped_sort_keys(AggregateFunction::result_key)
-        .is_err());
+    assert_eq!(
+        stmt.grouped_sort_keys()
+            .expect_err("test: refused")
+            .kind
+            .code(),
+        "V016"
+    );
 }
 
 #[test]
-fn test_a_repeated_aggregate_resolves_to_its_select_item_whatever_the_alias() {
-    let stmt = select(
-        "SELECT category, AVG(year) AS mean FROM docs GROUP BY category ORDER BY AVG(year) DESC",
+fn test_a_repeated_aggregate_resolves_to_its_select_items_field_whatever_the_alias() {
+    assert_eq!(
+        sort_keys(
+            "SELECT category, AVG(year) AS mean, SUM(year) FROM docs GROUP BY category \
+             ORDER BY AVG(year) DESC, SUM(year)"
+        ),
+        vec![("mean".to_string(), true), ("sum_year".to_string(), false)]
     );
-    let keys = stmt
-        .grouped_sort_keys(AggregateFunction::result_key)
-        .expect("test: resolve");
-    let GroupedSortKey::Aggregate(agg) = keys[0].0 else {
-        panic!("expected an aggregate key, got {keys:?}");
-    };
-    assert_eq!(agg.alias.as_deref(), Some("mean"));
-    assert!(keys[0].1, "DESC is kept");
 }
 
 // ---------------------------------------------------------------------------
@@ -150,19 +160,14 @@ fn test_a_repeated_aggregate_resolves_to_its_select_item_whatever_the_alias() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_order_by_aggregates_become_the_executors_field_and_the_rest_is_kept() {
+fn test_order_by_aggregates_become_their_output_field_and_the_rest_is_kept() {
     let stmt = select(
         "SELECT category, MAX(score) AS best FROM docs WHERE vector NEAR $v \
          GROUP BY category ORDER BY MAX(score) DESC, similarity() ASC",
     );
-    let rewritten = stmt
-        .order_by_aggregates_as_fields(|agg| format!("field-of-{}", agg.result_key()))
-        .expect("test: rewrite");
+    let rewritten = stmt.order_by_aggregates_as_fields().expect("test: rewrite");
     let order_by = rewritten.order_by.as_deref().expect("test: order by");
-    assert_eq!(
-        order_by[0].expr,
-        OrderByExpr::Field("field-of-best".to_string())
-    );
+    assert_eq!(order_by[0].expr, OrderByExpr::Field("best".to_string()));
     assert!(order_by[0].descending);
     assert_eq!(order_by[1].expr, OrderByExpr::SimilarityBare);
 }
@@ -174,7 +179,7 @@ fn test_order_by_without_aggregates_is_borrowed_unchanged() {
          GROUP BY category ORDER BY similarity() DESC",
     );
     let same = stmt
-        .order_by_aggregates_as_fields(AggregateFunction::result_key)
+        .order_by_aggregates_as_fields()
         .expect("test: no rewrite");
     assert!(matches!(same, std::borrow::Cow::Borrowed(_)));
 }

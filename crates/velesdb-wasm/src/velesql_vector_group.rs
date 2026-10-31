@@ -12,7 +12,7 @@
 use velesdb_core::point::{Point, SearchResult};
 use velesdb_core::velesql::{vector_group_score_is_average, AggregateFunction, SelectStatement};
 
-use crate::velesql_aggregate::{output_name, ScannedRow};
+use crate::velesql_aggregate::ScannedRow;
 
 /// Orders finished vector GROUP BY rows, each beside the scanned rows of its
 /// group, by the statement's ORDER BY.
@@ -29,7 +29,7 @@ pub(crate) fn order_groups(
 ) -> Result<Vec<serde_json::Value>, String> {
     let average = vector_group_score_is_average(aggregates);
     let stmt = stmt
-        .order_by_aggregates_as_fields(output_name)
+        .order_by_aggregates_as_fields()
         .map_err(|e| e.to_string())?;
     let mut results: Vec<SearchResult> = groups
         .into_iter()

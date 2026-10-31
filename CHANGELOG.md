@@ -20,13 +20,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `title`, a column core's rows never carried. 8.0.0 refuses all of these at
   validation, in both engines; a vector `GROUP BY` (`NEAR` in WHERE) is
   refused only an ORDER BY aggregate it does not select, and still orders by
-  `similarity()`, arithmetic and its payload fields. WASM also refuses
-  `ORDER BY count` beside an unaliased `COUNT(*)`, which it outputs as
-  `count(*)` (core outputs `count` and sorts on it). Migration: order by a
+  `similarity()`, arithmetic and its payload fields. Migration: order by a
   `GROUP BY` column or a SELECT aggregate — add the column to `GROUP BY` or
-  the aggregate to the SELECT list, and alias the aggregate to name it the
-  same way in both engines (see
+  the aggregate to the SELECT list (see
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 2).
+- **BREAKING (behavior) — an aggregate query whose output columns share a
+  name is refused with `V017` (`DuplicateOutputColumn`).** In 7.1.0 the
+  later column silently overwrote the earlier one: `SELECT category,
+  COUNT(*) FROM docs GROUP BY category, count` returned the count under
+  `count` and lost the `count` group column, and `COUNT(*) AS n, SUM(year)
+  AS n` returned one of the two. 8.0.0 refuses it at validation in every
+  engine, naming the column. Migration: alias the aggregate whose name
+  repeats another column.
+- **BREAKING (behavior) — `velesdb-wasm` names an unaliased aggregate as
+  core does.** 7.1.0 WASM returned `COUNT(*)` as `count(*)` and `SUM(price)`
+  as `sum(price)`; 8.0.0 returns `count` and `sum_price`, the names core and
+  every other binding return (`<function>_<column>`, `<function>_score`),
+  through one derivation, `AggregateFunction::result_key`. A core vector
+  `GROUP BY` uses it too, so an unaliased `COUNT(*)` there is `count`, not
+  `Count_*`, and `MIN(score)` is `min_score`, not `agg_score`. Migration:
+  read the new key, or alias the aggregate (`COUNT(*) AS n`), the key in
+  every version (see
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 7).
 
 ### Fixed
 
@@ -75,10 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MAX(score) AS relevance`). In 8.0.0 an ORDER BY aggregate sorts on the
   SELECT item computing it, whatever its alias, through one resolution
   (`SelectStatement::grouped_sort_keys`) shared by core and WASM.
-  - An ORDER BY name resolves to an explicit SELECT alias first, then a
-    `GROUP BY` column, then the executor's own default aggregate name, so
-    WASM no longer sorts `SELECT count, COUNT(*) ... GROUP BY count ORDER BY
-    count` by the aggregate.
+  - `ORDER BY count` beside an unaliased `COUNT(*)` sorts in WASM as in
+    core; 7.1.0 WASM looked for `count` in rows holding `count(*)` and
+    ignored it.
   - A vector `GROUP BY` (`NEAR` + `GROUP BY`) in WASM orders its groups by
     score for `ORDER BY similarity()`, as core does: the best row's score, or
     the average when the SELECT asks for `AVG(score)` and not `MAX(score)`.

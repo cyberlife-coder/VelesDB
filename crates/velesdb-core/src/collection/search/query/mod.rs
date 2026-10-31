@@ -333,7 +333,7 @@ impl Collection {
         // groups on the payload fields their aggregates landed in.
         let stmt = if args.is_vgb {
             results = self.apply_vector_group_by(stmt, &results);
-            stmt.order_by_aggregates_as_fields(vector_group_by::aggregation_result_key)
+            stmt.order_by_aggregates_as_fields()
                 .map_err(|e| crate::error::Error::Query(e.to_string()))?
         } else {
             std::borrow::Cow::Borrowed(stmt)

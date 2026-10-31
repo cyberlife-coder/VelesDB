@@ -290,7 +290,7 @@ pub use explain::{
     DEFAULT_FALLBACK_SELECTIVITY_THRESHOLD, EXACT_FULL_SCAN_MAX_SELECTIVITY,
     EXACT_POST_FILTER_MIN_SELECTIVITY,
 };
-pub use grouped_order::{vector_group_score_is_average, GroupedSortKey};
+pub use grouped_order::vector_group_score_is_average;
 pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{

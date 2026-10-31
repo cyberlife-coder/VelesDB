@@ -178,47 +178,9 @@ fn insert_aggregation_values(
     best_payload: Option<&serde_json::Value>,
 ) {
     for agg in aggregations {
-        let key = aggregation_result_key(agg);
+        let key = agg.result_key();
         let value = compute_agg_value(agg, acc, best_payload);
         payload.insert(key, value);
-    }
-}
-
-/// The payload field a vector GROUP BY stores an aggregate under: its alias,
-/// else this path's own default name (`max_score`, `first_text`; `Count_*`
-/// for `COUNT(*)`, unlike the SQL aggregation path's `count`).
-pub(crate) fn aggregation_result_key(agg: &AggregateFunction) -> String {
-    if let Some(ref alias) = agg.alias {
-        return alias.clone();
-    }
-    if is_score_aggregate(agg) {
-        let prefix = match agg.function_type {
-            AggregateType::Max => "max",
-            AggregateType::Avg => "avg",
-            _ => "agg",
-        };
-        return format!("{prefix}_score");
-    }
-    if let AggregateArg::Column(col) = &agg.argument {
-        let prefix = match agg.function_type {
-            AggregateType::First => "first",
-            AggregateType::Count => "count",
-            AggregateType::Sum => "sum",
-            AggregateType::Avg => "avg",
-            AggregateType::Min => "min",
-            AggregateType::Max => "max",
-        };
-        return format!("{prefix}_{col}");
-    }
-    format!("{:?}_{}", agg.function_type, arg_name(&agg.argument))
-}
-
-/// Returns a display name for an aggregate argument.
-fn arg_name(arg: &AggregateArg) -> &str {
-    match arg {
-        AggregateArg::Wildcard => "*",
-        AggregateArg::Column(col) => col.as_str(),
-        AggregateArg::Score => "score",
     }
 }
 

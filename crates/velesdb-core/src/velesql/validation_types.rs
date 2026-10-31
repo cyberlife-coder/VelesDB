@@ -142,6 +142,10 @@ pub enum ValidationErrorKind {
     /// rows: an aggregate the SELECT does not list, a column outside GROUP BY,
     /// `similarity()` or an arithmetic expression.
     OrderByNotInResult,
+    /// Two output columns of an aggregate query share a name: a GROUP BY or
+    /// selected column and an aggregate's alias or default name, or two
+    /// aggregates. One would overwrite the other in the result row.
+    DuplicateOutputColumn,
 }
 
 impl ValidationErrorKind {
@@ -164,6 +168,7 @@ impl ValidationErrorKind {
             Self::InvalidSearchMode => "V013",
             Self::InvalidEfSearch => "V014",
             Self::OrderByNotInResult => "V016",
+            Self::DuplicateOutputColumn => "V017",
         }
     }
 
@@ -193,6 +198,7 @@ impl ValidationErrorKind {
             Self::InvalidSearchMode => "Invalid search mode",
             Self::InvalidEfSearch => "Invalid ef_search value",
             Self::OrderByNotInResult => "ORDER BY names no column of the grouped rows",
+            Self::DuplicateOutputColumn => "Two output columns share a name",
         }
     }
 }

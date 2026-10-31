@@ -236,7 +236,7 @@
         { "category": "other", "n": 2 },
         { "category": "tech", "n": 3 }
       ],
-      "note": "issue #1544: GROUP BY with COUNT(*), executed via Database::execute_aggregate (core) / the default WASM SELECT pipeline. Uses an explicit AS alias so both engines agree on the output field name — see documented_divergences D001 for the unaliased-name gap"
+      "note": "issue #1544: GROUP BY with COUNT(*), executed via Database::execute_aggregate (core) / the default WASM SELECT pipeline. Uses an explicit AS alias; G010 covers the default names"
     },
     {
       "id": "G002",
@@ -305,6 +305,15 @@
         { "category": "other", "year": 2 }
       ],
       "note": "an ORDER BY name resolves to an explicit SELECT alias first, then a GROUP BY column, then the executor's own default aggregate name: `year` here is the count, not the payload field"
+    },
+    {
+      "id": "G010",
+      "query": "SELECT category, COUNT(*), SUM(year), AVG(year) FROM docs GROUP BY category ORDER BY count DESC",
+      "expect_groups": [
+        { "category": "tech", "count": 3, "sum_year": 6065.0, "avg_year": 2021.6666666666667 },
+        { "category": "other", "count": 2, "sum_year": 4040.0, "avg_year": 2020.0 }
+      ],
+      "note": "unaliased aggregates carry the same default names in both engines (AggregateFunction::result_key), and ORDER BY can name them. WASM used to output count(*), sum(year) and avg(year) (formerly documented_divergences D001)"
     }
   ],
   "setops_cases": [
@@ -513,6 +522,18 @@
       "expected_code": "V016",
       "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY SUM(year) DESC",
       "note": "ORDER BY an aggregate the SELECT does not list names no column of the grouped rows (V016); both engines used to accept it and return the groups unsorted"
+    },
+    {
+      "id": "R011",
+      "expected_code": "V017",
+      "query": "SELECT category, COUNT(*) FROM docs GROUP BY category, count",
+      "note": "the GROUP BY column `count` and COUNT(*)'s default name share an output field; core used to keep the count and drop the column without a word"
+    },
+    {
+      "id": "R012",
+      "expected_code": "V017",
+      "query": "SELECT category, COUNT(*) AS n, SUM(year) AS n FROM docs GROUP BY category",
+      "note": "two aggregates aliased alike share an output field; one used to overwrite the other"
     }
   ],
   "dml_cases": [
@@ -631,14 +652,6 @@
     }
   ],
   "documented_divergences": [
-    {
-      "id": "D001",
-      "area": "aggregate default field naming",
-      "core_behavior": "unaliased aggregates use short names: COUNT(*) -> \"count\", SUM(year) -> \"sum_year\" (AggregateFunction::result_key)",
-      "wasm_behavior": "unaliased aggregates use function-call-shaped names: COUNT(*) -> \"count(*)\", SUM(year) -> \"sum(year)\" (aggregate_default_name in velesql_aggregate.rs)",
-      "status": "accepted — not a bug; both are internally consistent, but a client selecting an unaliased aggregate across both executors sees a different JSON key. Fixture G001-G004 sidestep this by always using an explicit AS alias, which both engines honor identically. An ORDER BY name follows the same split: after a SELECT alias and a GROUP BY column, it resolves against the executor's own default names, so ORDER BY count sorts an unaliased COUNT(*) in core and is refused (V016) in WASM",
-      "evidence": "SELECT category, COUNT(*) FROM docs GROUP BY category ORDER BY category ASC -> core: [{\"category\":\"other\",\"count\":2},...]; wasm: [{\"category\":\"other\",\"count(*)\":2},...]"
-    },
     {
       "id": "D002",
       "area": "JOIN condition side order (WASM only)",

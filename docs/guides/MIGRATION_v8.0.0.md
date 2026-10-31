@@ -86,7 +86,7 @@ a v3 blob with `Unsupported version: 3`.
 | `GROUP BY` ordered by a column outside `GROUP BY` (`... GROUP BY category ORDER BY category, year`) | that key ignored | `V016` |
 | `GROUP BY` ordered by an aggregate the SELECT does not list (a vector `GROUP BY` too), or by `similarity()` or arithmetic outside a vector `GROUP BY` (`NEAR` in WHERE) | groups left unsorted | `V016` |
 | WASM: `GROUP BY` ordered by a selected column outside `GROUP BY` (`SELECT category, title, COUNT(*) ... GROUP BY category ORDER BY title`) | sorted on each group's first `title` | `V016` |
-| WASM: `ORDER BY count` beside an unaliased `COUNT(*)`, which WASM outputs as `count(*)` | ignored | `V016` |
+| A grouped or aggregate query whose output columns share a name: a `GROUP BY` column and an aggregate's alias or default name (`GROUP BY category, count` beside `COUNT(*)`), or two aggregates (`COUNT(*) AS n, SUM(year) AS n`) | one column silently overwritten | `V017` |
 
 **Fix:**
 - Run one query per sparse vector and fuse the results.
@@ -102,6 +102,8 @@ a v3 blob with `Unsupported version: 3`.
   SELECT list, and alias it (`COUNT(*) AS n ... ORDER BY n`) to name it the
   same way in core and WASM. Core's grouped rows carry no other field, so
   there the refused key was never applied.
+- Give each output column of an aggregate query its own name: alias the
+  aggregate whose default name or alias repeats another column.
 
 The guard-rail limits are also applied now, where 7.1.0 returned them without
 applying them: `rate_limit_qps`, `circuit_failure_threshold` and
@@ -253,7 +255,9 @@ Rejections carry core's codes and a new `recoverable` field:
 - **`updateGuardrails` throws `VelesError`** for limits core refuses.
 - **`SearchQuality.Adaptive` with `min_ef > max_ef`** is refused.
 
-## 7. `velesdb-wasm` storage modes
+## 7. `velesdb-wasm`
+
+### Storage modes
 
 - **Every mode keeps f32 vectors** and returns core's top-k and scores for that
   mode.
@@ -263,6 +267,27 @@ Rejections carry core's codes and a new `recoverable` field:
 - **Trained PQ collections differ from core:** once a PQ collection has
   trained, core's default `search()` returns ADC-approximated scores. The
   browser returns exact ones.
+
+### Aggregate field names
+
+- **BREAKING (behavior) — an unaliased aggregate comes back under core's
+  name.** WASM used to name it after the call; it now uses core's name, the
+  one the server and every other binding return:
+
+  | Aggregate | 7.1.0 (WASM) | 8.0.0 |
+  |---|---|---|
+  | `COUNT(*)` | `count(*)` | `count` |
+  | `COUNT(col)` | `count(col)` | `count_col` |
+  | `SUM(col)` | `sum(col)` | `sum_col` |
+  | `AVG(col)` | `avg(col)` | `avg_col` |
+  | `MIN(col)` | `min(col)` | `min_col` |
+  | `MAX(col)` | `max(col)` | `max_col` |
+  | `FIRST(col)` | `first(col)` | `first_col` |
+  | `MAX(score)`, `AVG(score)` | `max(score)`, `avg(score)` | `max_score`, `avg_score` |
+
+  A dotted column keeps its dots (`SUM(a.b)` → `sum_a.b`). **Fix:** read the
+  new key, or alias the aggregate (`COUNT(*) AS n`): an alias is the key in
+  every version and engine.
 
 ## 8. Observability
 

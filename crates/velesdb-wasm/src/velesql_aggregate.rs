@@ -24,8 +24,8 @@
 use std::collections::BTreeMap;
 
 use velesdb_core::velesql::{
-    AggregateArg, AggregateFunction, AggregateType, CompareOp, GroupedSortKey, HavingClause,
-    HavingCondition, LogicalOp, SelectColumns, SelectStatement, Value,
+    AggregateArg, AggregateFunction, AggregateType, CompareOp, HavingClause, HavingCondition,
+    LogicalOp, SelectColumns, SelectStatement, Value,
 };
 
 use crate::velesql_result::QueryResultRow;
@@ -121,11 +121,10 @@ fn order_groups(
     Ok(rows)
 }
 
-/// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved by core's
-/// `SelectStatement::grouped_sort_keys` — the resolution core's own aggregate
-/// executor sorts through — to the row fields it names: a group-key column,
-/// or an aggregate under the name [`output_name`] stored it with. The sort is
-/// stable, so rows with equal keys keep their first-seen order.
+/// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved to row
+/// fields by core's `SelectStatement::grouped_sort_keys` — the resolution
+/// core's own aggregate executor sorts through. The sort is stable, so rows
+/// with equal keys keep their first-seen order.
 ///
 /// # Errors
 ///
@@ -135,18 +134,7 @@ fn sort_aggregate_rows(
     rows: &mut [serde_json::Value],
     stmt: &SelectStatement,
 ) -> Result<(), String> {
-    let keys: Vec<(String, bool)> = stmt
-        .grouped_sort_keys(output_name)
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|(key, descending)| {
-            let field = match key {
-                GroupedSortKey::GroupColumn(column) => column.to_string(),
-                GroupedSortKey::Aggregate(agg) => output_name(agg),
-            };
-            (field, descending)
-        })
-        .collect();
+    let keys = stmt.grouped_sort_keys().map_err(|e| e.to_string())?;
     if !keys.is_empty() {
         rows.sort_by(|a, b| compare_aggregate_rows(a, b, &keys));
     }
@@ -317,36 +305,9 @@ fn write_aggregates(
 ) -> Result<(), String> {
     for agg in aggregates {
         let value = compute_aggregate(agg, rows)?;
-        out.insert(output_name(agg), value);
+        out.insert(agg.result_key(), value);
     }
     Ok(())
-}
-
-/// The field a group row stores an aggregate under: its alias, else its
-/// function-call-shaped default name.
-pub(crate) fn output_name(agg: &AggregateFunction) -> String {
-    agg.alias
-        .clone()
-        .unwrap_or_else(|| aggregate_default_name(agg))
-}
-
-fn aggregate_default_name(agg: &AggregateFunction) -> String {
-    let fn_name = match agg.function_type {
-        AggregateType::Count => "count",
-        AggregateType::Sum => "sum",
-        AggregateType::Avg => "avg",
-        AggregateType::Min => "min",
-        AggregateType::Max => "max",
-        AggregateType::First => "first",
-        _ => "agg", // forward-compat for #[non_exhaustive]
-    };
-    let arg_name = match &agg.argument {
-        AggregateArg::Wildcard => "*".to_string(),
-        AggregateArg::Column(c) => c.clone(),
-        AggregateArg::Score => "score".to_string(),
-        _ => "value".to_string(),
-    };
-    format!("{fn_name}({arg_name})")
 }
 
 pub(crate) fn compute_aggregate(

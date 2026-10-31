@@ -73,7 +73,7 @@ impl QueryValidator {
         Self::validate_similarity_context(stmt)?;
         Self::validate_qualified_wildcards(stmt)?;
         Self::validate_vector_group_by(stmt)?;
-        super::grouped_order::validate_grouped_order_by(stmt)?;
+        super::grouped_order::validate_grouped_rows(stmt)?;
         super::validation_fusion::validate_fusion(stmt)?;
         #[cfg(feature = "persistence")]
         Self::validate_with_options(stmt)?;

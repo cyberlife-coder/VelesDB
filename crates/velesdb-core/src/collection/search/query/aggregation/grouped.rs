@@ -18,8 +18,8 @@ use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::{
-    AggregateArg, AggregateFunction, AggregateResult, AggregateType, Aggregator, GroupedSortKey,
-    HavingClause, Query,
+    AggregateArg, AggregateFunction, AggregateResult, AggregateType, Aggregator, HavingClause,
+    Query,
 };
 use std::collections::HashMap;
 
@@ -35,7 +35,9 @@ impl Collection {
     ) -> Result<serde_json::Value> {
         let stmt = &query.select;
         let max_groups = Self::extract_max_groups_limit(stmt.with_clause.as_ref());
-        let sort_columns = Self::grouped_sort_columns(stmt)?;
+        let sort_columns = stmt
+            .grouped_sort_keys()
+            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
 
         let accumulated = Self::select_and_having_aggregates(aggregations, having);
         let groups =
@@ -52,28 +54,6 @@ impl Collection {
         );
 
         Ok(serde_json::Value::Array(results))
-    }
-
-    /// The row field each ORDER BY item sorts on, with its direction, resolved
-    /// once per query through [`crate::velesql::SelectStatement::grouped_sort_keys`].
-    ///
-    /// # Errors
-    ///
-    /// Returns `V016` for an item that names no field of the grouped rows.
-    fn grouped_sort_columns(stmt: &crate::velesql::SelectStatement) -> Result<Vec<(String, bool)>> {
-        let keys = stmt
-            .grouped_sort_keys(AggregateFunction::result_key)
-            .map_err(|e| crate::error::Error::Query(e.to_string()))?;
-        Ok(keys
-            .into_iter()
-            .map(|(key, descending)| {
-                let field = match key {
-                    GroupedSortKey::GroupColumn(column) => column.to_string(),
-                    GroupedSortKey::Aggregate(agg) => agg.result_key(),
-                };
-                (field, descending)
-            })
-            .collect())
     }
 
     /// The aggregates the scan must accumulate: the SELECT's, plus any HAVING
