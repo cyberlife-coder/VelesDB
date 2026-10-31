@@ -22,6 +22,11 @@ impl GenerationGate {
     pub(super) fn write(&self) -> parking_lot::RwLockWriteGuard<'_, ()> {
         self.0.write()
     }
+    /// Whether a generation writer could take the gate right now.
+    #[cfg(test)]
+    pub(super) fn is_free(&self) -> bool {
+        self.0.try_write().is_some()
+    }
 }
 #[cfg(not(feature = "persistence"))]
 pub(super) struct GenerationGate;

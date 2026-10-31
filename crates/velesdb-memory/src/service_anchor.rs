@@ -87,3 +87,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "service_anchor_tests.rs"]
+mod tests;
