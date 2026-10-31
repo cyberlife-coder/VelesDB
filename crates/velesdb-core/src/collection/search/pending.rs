@@ -313,7 +313,7 @@ impl Collection {
     }
 
     /// Removes `ids` from the HNSW index only (`internal_bench::unindex`).
-    #[cfg(feature = "internal-bench")]
+    #[cfg(any(test, feature = "internal-bench"))]
     pub(crate) fn remove_from_index_for_bench(&self, ids: &[u64]) {
         for &id in ids {
             self.storage.index.remove(id);

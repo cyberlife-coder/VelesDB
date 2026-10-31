@@ -44,8 +44,11 @@ struct Held(());
 impl Held {
     #[track_caller]
     fn acquire() -> Self {
-        #[cfg(all(test, feature = "persistence"))]
-        if let Some(worker) = rayon::current_thread_index() {
+        #[cfg(test)]
+        if let Some(worker) = rayon::current_thread_index().filter(|_| {
+            // An application's own jobs may call into a collection.
+            !crate::pools::on_application_thread()
+        }) {
             panic!(
                 "a collection lock was acquired on rayon worker {worker}: no job on a \
                  rayon pool may take a collection lock (docs/CONCURRENCY_MODEL.md, \

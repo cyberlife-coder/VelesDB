@@ -164,6 +164,8 @@ mod perf_optimizations_tests;
 pub mod point;
 #[cfg(test)]
 mod point_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod pools;
 pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;

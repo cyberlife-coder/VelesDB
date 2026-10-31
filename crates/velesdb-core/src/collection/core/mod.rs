@@ -45,6 +45,8 @@ mod open_reload_tests;
 mod quantizer_restore;
 #[cfg(all(test, feature = "persistence"))]
 mod quantizer_restore_tests;
+#[cfg(all(test, feature = "persistence"))]
+mod rayon_caller_tests;
 mod recovery;
 #[cfg(all(test, feature = "persistence"))]
 mod recovery_tests;
