@@ -484,8 +484,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   When such nodes cut a search short, `HnswIndex` and `NativeHnswIndex` now
   walk again for the walk's whole `ef` pool and keep its first `k` mapped
   nodes; if that pool was all used and still falls short, once more at
-  twice the `ef` (at most 10 000). A search near no such node runs one
-  walk, exactly as before. A neighbourhood so dense with deleted points
+  twice the `ef` (at most 10 000). A search that fetches more candidates
+  than it keeps (reranked, PQ-rescored) walks again only when such nodes
+  leave fewer than it keeps, and a walk already run is not repeated. A
+  search near no such node runs one walk, exactly as before. A neighbourhood so dense with deleted points
   that this still falls short needs `vacuum`.
 - **A search racing a deferred-indexer merge could miss its points.** The
   merge emptied its buffer before inserting what it held. It now inserts

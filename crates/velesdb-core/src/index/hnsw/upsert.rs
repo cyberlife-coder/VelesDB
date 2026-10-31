@@ -47,61 +47,77 @@ pub(crate) fn soft_delete(mappings: &ShardedMappings, id: u64, _graph: &NativeHn
 /// the bitmap search's retry uses too.
 const WIDEST_EF: usize = 10_000;
 
-/// A graph search's first `k` results whose node an id still maps to.
+/// A graph search's first `fetch` results whose node an id still maps to.
 ///
 /// A delete or an upsert leaves the point's old node in the graph, mapped
 /// to no id, until `vacuum`. A walk ranks those nodes with the rest, so
-/// mapping its `k` nodes and dropping the unmapped ones can leave fewer than
-/// `k` — none at all for `k = 1` at a deleted or moved point's old vector.
+/// mapping its nodes and dropping the unmapped ones can leave too few — none
+/// at all for `k = 1` at a deleted or moved point's old vector.
 ///
-/// `walk(k, ef)` is the graph search, nearest first; `live(nodes, k)` maps
-/// up to `k` of `nodes`, skipping unmapped ones. The walk runs as asked
-/// first: its `k` steers the walk itself (multi-entry probing, a quantized
-/// backend's oversampling), so it is never widened up front. Only when that
-/// leaves fewer than `k` results *and* the walk returned a node no id maps
-/// does it run again, at most twice:
+/// `walk(k, ef)` is the graph search, nearest first; `live(nodes, fetch)`
+/// maps up to `fetch` of `nodes`, skipping unmapped ones. `fetch` is how many
+/// results the caller asks the walk for (a reranked search asks for more
+/// candidates than it keeps); `needed` is how many it cannot do without.
+/// The walk runs as asked first: its `k` steers the walk itself (multi-entry
+/// probing, a quantized backend's oversampling), so it is never widened up
+/// front. Only when that leaves fewer than `needed` results *and* the walk
+/// returned a node no id maps does it run again, at most twice:
 ///
-/// 1. asked for its whole `ef` pool (when that is more than `k`), from which
-///    the first `k` mapped nodes are kept;
+/// 1. asked for its whole `ef` pool (when that is more than `fetch`), from
+///    which the first `fetch` mapped nodes are kept;
 /// 2. if every node of that pool was used and still too few are mapped — a
 ///    neighbourhood dense with deleted points — once more at twice the `ef`
 ///    (at most [`WIDEST_EF`]). Past that, `vacuum` is the remedy.
 ///
 /// A search near no deleted or moved point runs one walk, as before.
 pub(crate) fn search_past_unmapped(
-    k: usize,
+    fetch: usize,
+    needed: usize,
     ef: usize,
     walk: impl Fn(usize, usize) -> Vec<(usize, f32)>,
     live: impl Fn(&[(usize, f32)], usize) -> Vec<ScoredResult>,
 ) -> Vec<ScoredResult> {
-    let walked = walk(k, ef);
-    let results = live(&walked, k);
-    if !cut_short(&walked, &results, k) {
+    let walked = walk(fetch, ef);
+    search_past_unmapped_from(walked, fetch, needed, ef, walk, live)
+}
+
+/// [`search_past_unmapped`] from a first walk (at `fetch` and `ef`) the
+/// caller has already run: it is mapped, not run again.
+pub(crate) fn search_past_unmapped_from(
+    walked: Vec<(usize, f32)>,
+    fetch: usize,
+    needed: usize,
+    ef: usize,
+    walk: impl Fn(usize, usize) -> Vec<(usize, f32)>,
+    live: impl Fn(&[(usize, f32)], usize) -> Vec<ScoredResult>,
+) -> Vec<ScoredResult> {
+    let needed = needed.min(fetch);
+    let results = live(&walked, fetch);
+    if !cut_short(&walked, &results, needed) {
         return results;
     }
-    let (results, pool_used) = if ef > k {
+    let (results, pool_used) = if ef > fetch {
         let walked = walk(ef, ef);
-        let results = live(&walked, k);
-        let pool_used = walked.len() >= ef;
-        if !cut_short(&walked, &results, k) {
+        let results = live(&walked, fetch);
+        if !cut_short(&walked, &results, needed) {
             return results;
         }
-        (results, pool_used)
+        (results, walked.len() >= ef)
     } else {
-        (results, walked.len() >= k)
+        (results, walked.len() >= fetch)
     };
     let wide = ef.saturating_mul(2).min(WIDEST_EF);
     if !pool_used || wide <= ef {
         return results;
     }
-    let walked = walk(k.max(wide), wide);
-    live(&walked, k)
+    let walked = walk(fetch.max(wide), wide);
+    live(&walked, fetch)
 }
 
-/// Whether mapping `walked` left fewer than `k` results because some of its
-/// nodes map to no id.
-fn cut_short(walked: &[(usize, f32)], results: &[ScoredResult], k: usize) -> bool {
-    results.len() < k && walked.len() > results.len()
+/// Whether mapping `walked` left fewer than `needed` results because some of
+/// its nodes map to no id.
+fn cut_short(walked: &[(usize, f32)], results: &[ScoredResult], needed: usize) -> bool {
+    results.len() < needed && walked.len() > results.len()
 }
 
 #[cfg(test)]

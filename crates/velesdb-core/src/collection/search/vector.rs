@@ -68,10 +68,13 @@ impl Collection {
 
         self.search_merging_pending(query, k, metric, restriction, |n| {
             let candidates_k = n.saturating_mul(oversampling).max(n + 32);
+            // The rescore keeps `n` of the `candidates_k`: nodes a delete or
+            // an upsert left behind make the walk run again only when they
+            // leave fewer than `n`.
             let index_results =
                 self.storage
                     .index
-                    .search_with_quality(query, candidates_k, quality)?;
+                    .search_with_quality_needing(query, candidates_k, n, quality)?;
             Ok(self.rescore_pq_candidates(query, n, metric, higher_is_better, index_results))
         })
     }

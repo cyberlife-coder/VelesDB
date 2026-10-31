@@ -176,6 +176,7 @@ impl NativeHnswIndex {
         // past rather than left to take a result's place.
         let results = super::upsert::search_past_unmapped(
             k,
+            k,
             ef_search,
             |k, ef| inner.search_auto(query, k, ef),
             |nodes, k| {

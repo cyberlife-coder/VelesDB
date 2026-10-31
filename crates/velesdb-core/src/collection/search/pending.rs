@@ -188,6 +188,11 @@ impl Collection {
     /// `ceil(log2((k + |snapshot|) / k))` times: 4 for 100 crowding ids at
     /// `k = 10`.
     ///
+    /// A refetch for `n` results needs all `n` from the index, not `k`: up to
+    /// `n - k` of them may be unindexed ids the merge drops. So the index
+    /// search a refetch runs is asked for `n` live results, and walks past
+    /// nodes a delete or an upsert left behind until it has them.
+    ///
     /// # Errors
     ///
     /// Returns what `index_search` returns.

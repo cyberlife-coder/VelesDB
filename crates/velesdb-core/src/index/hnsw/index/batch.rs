@@ -433,7 +433,7 @@ impl HnswIndex {
     ) -> Vec<Vec<ScoredResult>> {
         let all_candidates: Vec<Vec<ScoredResult>> = queries
             .par_iter()
-            .map(|query| self.search_hnsw_only(query, rerank_k, ef_search))
+            .map(|query| self.search_hnsw_only_needing(query, rerank_k, k, ef_search))
             .collect();
 
         // Rerank in parallel, collecting per-query latencies for aggregated EMA update.
