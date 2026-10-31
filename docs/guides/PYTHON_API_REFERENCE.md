@@ -224,6 +224,9 @@ results = collection.search_with_filter(
     top_k=10,
     filter={"condition": {"type": "eq", "field": "category", "value": "tech"}}
 )
+# Numbers in a filter compare by exact value (3 == 3.0, -0.0 == 0), with no
+# tolerance: 0.1 + 0.2 is not 0.3. Match a computed float with a range,
+# {"type": "and", "conditions": [gte, lte]}.
 
 # Streaming insert (high-throughput, eventual consistency).
 # Requires collection.enable_streaming(...) first — see below.
