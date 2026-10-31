@@ -231,16 +231,20 @@ fn a_strict_bound_on_an_integer_is_looked_up_inclusive() {
 }
 
 #[test]
-fn a_float_equality_is_looked_up_as_twice_the_where_tolerance() {
-    let kind = predicate_kind(CompareOp::Eq, &Value::Float(0.5));
-    let Some(PredicateKind::Range(low, high)) = kind else {
-        panic!("a float equality maps to {kind:?}");
-    };
-    let width = 2.0 * FLOAT_EQ_TOLERANCE;
-    assert_eq!(low.as_f64(), Some(0.5 - width));
-    assert_eq!(high.as_f64(), Some(0.5 + width));
-    assert!(matches!(
-        predicate_kind(CompareOp::Eq, &Value::Integer(5)),
-        Some(PredicateKind::Exact(_))
-    ));
+fn an_equality_is_looked_up_exactly_whatever_the_literal() {
+    // WHERE has no tolerance: the index lookup needs none either.
+    for literal in [Value::Float(0.5), Value::Integer(5)] {
+        assert!(
+            matches!(predicate_kind(CompareOp::Eq, &literal), Some(PredicateKind::Exact(_))),
+            "{literal:?}"
+        );
+    }
+}
+
+#[test]
+fn a_strict_bound_on_a_float_past_2_pow_53_is_looked_up_inclusive() {
+    // The index keys `2^53 + 1` as the float `2^53`, which WHERE orders
+    // below it: a strict bound there must keep the key itself.
+    let kind = predicate_kind(CompareOp::Gt, &Value::Float(9_007_199_254_740_992.0));
+    assert!(matches!(kind, Some(PredicateKind::Gte(_))), "{kind:?}");
 }

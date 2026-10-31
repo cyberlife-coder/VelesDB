@@ -71,6 +71,8 @@ struct Fixture {
     vector_group_cases: Vec<VectorGroupCase>,
     #[serde(default)]
     null_order_cases: Vec<Case>,
+    #[serde(default)]
+    number_cases: Vec<Case>,
 }
 
 #[derive(Deserialize)]
@@ -500,6 +502,18 @@ fn test_wasm_velesql_executor_null_order_cases() {
     assert_cases_with(&mut db, &fixture.null_order_cases, Some(&params));
 }
 
+/// Numbers compare by exact value in WHERE and ORDER BY, as in core.
+#[test]
+fn test_wasm_velesql_executor_number_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.number_cases, Some(&params));
+}
+
 /// Vector GROUP BY: WASM orders the groups as core does (by score, by a
 /// SELECT aggregate).
 #[test]
@@ -566,6 +580,9 @@ fn test_wasm_velesql_executor_dml_cases() {
 fn test_wasm_velesql_executor_projection_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     let params = params_json(&fixture);
     for case in &fixture.projection_cases {
         let result = execute(&mut db, &case.query, Some(&params))
