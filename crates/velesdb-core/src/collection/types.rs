@@ -197,6 +197,15 @@ impl Default for RuntimeLimits {
 //  11. deferred_indexer / async_index_builder (internal locks)
 //  12. stats_io_mutex                         (disk I/O only, no other lock held)
 //
+// The HNSW index's own locks (`HnswIndex::publishing`, then `inner`, then
+// the graph's) come after `vector_storage` (2): a delete removes from the
+// index while holding the storage write guard, and a merge into the index
+// (`Collection::index_current`) inserts each chunk while holding the storage
+// read guard. No path takes `vector_storage` while holding an index lock.
+// That merge holds the read guard for one chunk's insert, so a writer can
+// wait that long: 256 768-d vectors into a 10K-vector graph take ~69 ms
+// (`bulk_insert_v2_benchmark`'s `merge_chunk_256_into_10k_768d`).
+//
 // `edge_wal_lock` (3b) has two call patterns, both consistent with 3 → 3b:
 //   - `add_edge`/`add_edges_batch` (collection/core/graph_api.rs) acquire it
 //     WHILE STILL HOLDING `payload_storage`'s read guard (see those

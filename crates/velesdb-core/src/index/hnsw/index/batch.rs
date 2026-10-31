@@ -229,27 +229,27 @@ impl HnswIndex {
                 fresh.push((*id, vector.as_slice()));
             }
         }
-        if fresh.is_empty() {
-            return settled;
-        }
-        let fresh_ids: Vec<u64> = fresh.iter().map(|&(id, _)| id).collect();
-        if fresh.len() == 1 {
-            if self.insert_batch_parallel(fresh) > 0 {
-                settled.extend(fresh_ids);
-            }
-            return settled;
-        }
-        if self.insert_batch_parallel(fresh.iter().copied()) > 0 {
-            settled.extend(fresh_ids);
-            return settled;
-        }
-        // The batch is all-or-nothing: find the pairs the graph takes.
-        for (id, vector) in fresh {
-            if self.insert_batch_parallel([(id, vector)]) > 0 {
-                settled.push(id);
-            }
-        }
+        settled.extend(self.insert_each_taken(&fresh));
         settled
+    }
+
+    /// Inserts `pairs` as one batch, or — the batch being all-or-nothing,
+    /// and refused — one pair at a time; returns the ids the graph took.
+    fn insert_each_taken(&self, pairs: &[(u64, &[f32])]) -> Vec<u64> {
+        if pairs.is_empty() {
+            return Vec::new();
+        }
+        if self.insert_batch_parallel(pairs.iter().copied()) > 0 {
+            return pairs.iter().map(|&(id, _)| id).collect();
+        }
+        if pairs.len() == 1 {
+            return Vec::new();
+        }
+        pairs
+            .iter()
+            .filter(|&&pair| self.insert_batch_parallel([pair]) > 0)
+            .map(|&(id, _)| id)
+            .collect()
     }
 
     /// For each pair, whether its id maps to a linked node holding exactly

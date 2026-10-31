@@ -473,7 +473,15 @@ its index removal — so it lands wholly before a chunk is read, and the
 merge indexes what it left, or after the chunk is inserted, and its own
 index write comes last. A merge therefore never puts a deleted point back
 in the graph nor overwrites a newer write with the vector it read; a writer
-waits at most one chunk's insert. An id the graph already holds as storage
+waits at most one chunk's insert: 69 ms (95% CI 64–71 ms) for 256 768-d
+vectors into a 10 000-vector Cosine graph
+(`bulk_insert_v2_benchmark`'s `merge_chunk_256_into_10k_768d`, measured
+2026-10-31 on the shared 4-vCPU cloud sandbox, 10 samples; it grows with
+the dimension and, slowly, with the graph). The index's own locks
+(`HnswIndex::publishing`, `inner`, the graph's) rank after `vector_storage`
+(2): a delete removes from the index under the storage write guard, a
+merge inserts under the read guard, and no path takes `vector_storage`
+while holding an index lock. An id the graph already holds as storage
 does (compared normalized for Cosine, as the graph keeps it) is not
 inserted again. The merge settles an id it inserted, found held already,
 found deleted, or found holding a vector of the wrong dimension (logged and

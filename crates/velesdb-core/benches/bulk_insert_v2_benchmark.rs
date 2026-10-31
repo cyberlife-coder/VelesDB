@@ -5,6 +5,9 @@
 //! - `upsert_bulk` V2 path (WAL + `DirectVectorWriter` + builder queue)
 //! - search while the builder holds 10K 768-d points (the exact scan every
 //!   search merges until a flush links them)
+//! - one merge chunk (256 768-d vectors) inserted into a 10K-vector graph:
+//!   how long a merge holds the `vector_storage` read guard per chunk, which
+//!   is how long a writer can wait on it
 
 #![allow(
     clippy::cast_precision_loss,
@@ -106,6 +109,50 @@ fn bench_search_with_pending(c: &mut Criterion) {
     group.finish();
 }
 
+/// How many ids a merge reads and inserts under one `vector_storage` read
+/// guard (`collection/search/pending.rs`'s `MERGE_CHUNK`).
+const MERGE_CHUNK: usize = 256;
+
+/// Benchmark: one merge chunk inserted into a graph of 10K 768-d vectors —
+/// what a writer waits for at most while a merge holds the storage guard.
+/// Each iteration inserts a fresh chunk, so the graph grows a little as the
+/// benchmark runs.
+fn bench_merge_chunk_insert(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bulk_insert_v2");
+    group.sample_size(10);
+
+    let index = velesdb_core::HnswIndex::new(PENDING_DIMENSION, DistanceMetric::Cosine).unwrap();
+    let base = generate_points(VECTOR_COUNT, PENDING_DIMENSION);
+    index.insert_batch_parallel(base.iter().map(|p| (p.id, p.vector.as_slice())));
+    let mut next_id = VECTOR_COUNT as u64;
+
+    group.bench_function("merge_chunk_256_into_10k_768d", |b| {
+        b.iter_custom(|iters| {
+            let mut total = std::time::Duration::ZERO;
+            for _ in 0..iters {
+                let chunk: Vec<(u64, Vec<f32>)> = (0..MERGE_CHUNK as u64)
+                    .map(|i| {
+                        let id = next_id + i;
+                        let v = (0..PENDING_DIMENSION)
+                            .map(|j| ((id as usize * 31 + j * 7) % 1000) as f32 / 1000.0)
+                            .collect();
+                        (id, v)
+                    })
+                    .collect();
+                next_id += MERGE_CHUNK as u64;
+                let start = std::time::Instant::now();
+                black_box(
+                    index.insert_batch_parallel(chunk.iter().map(|(id, v)| (*id, v.as_slice()))),
+                );
+                total += start.elapsed();
+            }
+            total
+        });
+    });
+
+    group.finish();
+}
+
 /// Benchmark: V2 wired path — `upsert_bulk` with `AsyncIndexBuilder` configured.
 ///
 /// Creates a collection WITH `async_index_builder` config and measures the
@@ -153,5 +200,6 @@ criterion_group!(
     bench_upsert_bulk_standard,
     bench_upsert_bulk_v2_wired,
     bench_search_with_pending,
+    bench_merge_chunk_insert,
 );
 criterion_main!(benches);
