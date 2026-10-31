@@ -138,3 +138,55 @@ async fn recall_against_the_checkout_reports_freshness_then_staleness() {
         "src/sched.rs"
     );
 }
+
+/// N7: `anchor_root` without `anchors` is validated anyway — refused when
+/// anchoring is disabled or the root is outside the allowlist — and stores
+/// nothing, instead of being silently ignored.
+#[tokio::test]
+async fn a_root_without_anchors_is_validated_not_ignored() {
+    let (dir, repo) = checkout();
+    let outside = TempDir::new().expect("outside");
+    let (_store, disabled) = anchored_server(None);
+    let (_store2, allowlisted) = anchored_server(Some(dir.path()));
+    for (server, root) in [(&disabled, repo.as_path()), (&allowlisted, outside.path())] {
+        let refused = server
+            .remember(Parameters(remember(Some(root), &[])))
+            .await
+            .err()
+            .expect("an invalid anchor_root is refused even without anchors");
+        assert_eq!(
+            refused.code,
+            ErrorCode::INVALID_PARAMS,
+            "{}",
+            refused.message
+        );
+        assert_eq!(
+            recall_json(server, None).await["memories"],
+            Value::Array(vec![])
+        );
+    }
+    allowlisted
+        .remember(Parameters(remember(Some(&repo), &[])))
+        .await
+        .expect("a valid root without anchors is a plain remember");
+}
+
+/// S3 over the wire: a recall naming another checkout reports `unverified`
+/// for a fact anchored elsewhere, never `stale`.
+#[tokio::test]
+async fn recall_against_another_checkout_reports_unverified() {
+    let (dir, repo) = checkout();
+    let other = dir.path().join("other-clone");
+    fs::create_dir_all(other.join("src")).expect("other tree");
+    fs::write(other.join("src/sched.rs"), "fn tick() { different() }").expect("other file");
+    let (_store, server) = anchored_server(Some(dir.path()));
+    server
+        .remember(Parameters(remember(Some(&repo), &["src/sched.rs"])))
+        .await
+        .expect("anchored remember");
+    let elsewhere = recall_json(&server, Some(&other)).await;
+    assert_eq!(
+        elsewhere["memories"][0]["freshness"]["state"], "unverified",
+        "{elsewhere}"
+    );
+}

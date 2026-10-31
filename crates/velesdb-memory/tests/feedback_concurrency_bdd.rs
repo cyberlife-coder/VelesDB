@@ -59,3 +59,48 @@ fn simultaneous_successes_each_move_confidence_once() {
         );
     }
 }
+
+/// Times the racing agent remembers the same fact again in one round.
+const RESTORES: usize = 40;
+
+/// Given a memory driven to the floor, when `AGENTS` agents each report one
+/// success while another agent remembers the very same fact again and again
+/// — a re-store that reads the fact's learned confidence and writes it back
+/// with the new content — then no success is lost: the re-store and the
+/// feedback are serialized per fact, so the re-store never writes back a
+/// confidence a success has already moved.
+#[test]
+fn a_re_store_racing_feedback_loses_no_outcome() {
+    let (_dir, svc) = service();
+    for round in 0..ROUNDS {
+        let fact = format!("re-stored lesson number {round}");
+        let id = svc.remember(&fact, &[], None).expect("remember");
+        for _ in 0..20 {
+            svc.feedback(id, false).expect("negative feedback");
+        }
+
+        let start = Barrier::new(AGENTS + 1);
+        std::thread::scope(|scope| {
+            for _ in 0..AGENTS {
+                scope.spawn(|| {
+                    start.wait();
+                    svc.feedback(id, true).expect("positive feedback");
+                });
+            }
+            scope.spawn(|| {
+                start.wait();
+                for _ in 0..RESTORES {
+                    let again = svc.remember(&fact, &[], None).expect("re-remember");
+                    assert_eq!(again, id, "the same fact keeps its id");
+                }
+            });
+        });
+
+        let after = svc.feedback(id, false).expect("probe feedback") + 0.05;
+        assert!(
+            (after - EXPECTED).abs() < 1e-3,
+            "round {round}: a re-store racing {AGENTS} successes must keep all of them \
+             ({EXPECTED}), got {after}"
+        );
+    }
+}

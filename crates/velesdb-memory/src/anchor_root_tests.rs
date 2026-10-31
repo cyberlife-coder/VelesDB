@@ -175,3 +175,131 @@ fn a_file_is_read_once_per_request() {
         "one request judges one snapshot of each file"
     );
 }
+
+/// Given an anchored file that is swapped, again and again, between a
+/// regular file and a FIFO, when the probe observes it meanwhile, then no
+/// observation ever blocks. A FIFO opened for reading waits for a writer
+/// forever; checking the path's type and then opening the path leaves room
+/// for that swap, and the recall — with the daemon queued behind it — would
+/// hang. Reproduced at iteration 737 before the probe checked the opened
+/// handle instead.
+#[cfg(unix)]
+#[test]
+fn a_fifo_swapped_in_under_an_anchor_never_blocks_the_probe() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, Instant};
+
+    const RACE: Duration = Duration::from_secs(3);
+    const WATCHDOG: Duration = Duration::from_secs(10);
+
+    let (_dir, allowlist, repo) = checkout();
+    let anchor = FileAnchor {
+        path: path("src/lib.rs"),
+        digest: ContentDigest::of(b"fn main() {}\n"),
+    };
+    let stop = Arc::new(AtomicBool::new(false));
+    let swapper = {
+        let stop = Arc::clone(&stop);
+        let src = repo.join("src");
+        std::thread::spawn(move || {
+            let target = src.join("lib.rs");
+            let (regular, fifo) = (src.join("regular.tmp"), src.join("fifo.tmp"));
+            while !stop.load(Ordering::Relaxed) {
+                fs::write(&regular, "fn main() {}\n").unwrap();
+                fs::rename(&regular, &target).unwrap();
+                let made = std::process::Command::new("mkfifo")
+                    .arg(&fifo)
+                    .status()
+                    .expect("run mkfifo");
+                assert!(made.success(), "mkfifo failed: {made}");
+                fs::rename(&fifo, &target).unwrap();
+            }
+        })
+    };
+    let (done, finished) = mpsc::channel();
+    let observer = std::thread::spawn(move || {
+        let started = Instant::now();
+        let mut looks = 0_u64;
+        while started.elapsed() < RACE {
+            root(&repo, &allowlist).observe(&anchor);
+            looks += 1;
+        }
+        let _ = done.send(looks);
+    });
+    let outcome = finished.recv_timeout(WATCHDOG);
+    stop.store(true, Ordering::Relaxed);
+    swapper.join().expect("swapper thread");
+    match outcome {
+        Ok(looks) => {
+            observer.join().expect("observer thread");
+            assert!(looks > 0, "the race ran no observation at all");
+        }
+        // The blocked observer is left behind: nothing will ever open the
+        // FIFO it waits on, and the test process exits without it.
+        Err(waited) => {
+            panic!("an observation blocked on a FIFO swapped in under the anchor ({waited})")
+        }
+    }
+}
+
+/// Anchors record the CANONICAL root, and a probe opened through another
+/// spelling of the same checkout reports that same identity.
+#[cfg(unix)]
+#[test]
+fn anchors_record_the_canonical_root_the_probe_reports() {
+    let (dir, allowlist, repo) = checkout();
+    let alias = dir.path().join("alias");
+    std::os::unix::fs::symlink(&repo, &alias).unwrap();
+    let set = root(&alias, &allowlist).anchors(&["src/lib.rs"]).unwrap();
+    assert_eq!(set.root, repo.to_str().unwrap());
+    assert_eq!(set.files.len(), 1);
+    assert_eq!(root(&repo, &allowlist).root(), set.root);
+}
+
+/// N7: a root sent without any anchor is still validated, so a mistyped or
+/// refused root is reported instead of silently ignored.
+#[test]
+fn a_root_without_anchors_is_still_validated() {
+    let (_dir, allowlist, repo) = checkout();
+    let outside = TempDir::new().unwrap();
+    let outside = outside.path().to_str().unwrap();
+    assert!(matches!(
+        AnchorRoot::resolve_request(Some(outside), &[], &allowlist),
+        Err(AnchorError::RootRefused { .. })
+    ));
+    assert_eq!(
+        AnchorRoot::resolve_request(Some(repo.to_str().unwrap()), &[], &[]).unwrap_err(),
+        AnchorError::Disabled
+    );
+    assert_eq!(
+        AnchorRoot::resolve_request(Some(repo.to_str().unwrap()), &[], &allowlist).unwrap(),
+        None
+    );
+    assert_eq!(
+        AnchorRoot::resolve_request(None, &[], &[]).unwrap(),
+        None,
+        "neither a root nor an anchor is a plain remember"
+    );
+}
+
+/// A FIFO left at an anchored path is unverifiable, and looking at it
+/// returns at once.
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_an_anchored_path_is_unverifiable() {
+    let (_dir, allowlist, repo) = checkout();
+    let made = std::process::Command::new("mkfifo")
+        .arg(repo.join("src/pipe"))
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo failed: {made}");
+    let anchor = FileAnchor {
+        path: path("src/pipe"),
+        digest: ContentDigest::of(b""),
+    };
+    assert_eq!(
+        root(&repo, &allowlist).observe(&anchor),
+        AnchorObservation::Unverifiable
+    );
+}

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use common::service;
 use tempfile::TempDir;
-use velesdb_memory::anchor::{AnchorRoot, FileAnchor, Freshness, RepoPath, MAX_ANCHORS_PER_FACT};
+use velesdb_memory::anchor::{AnchorRoot, AnchorSet, Freshness, RepoPath, MAX_ANCHORS_PER_FACT};
 use velesdb_memory::{HashEmbedder, MemoryError, MemoryService};
 
 const LESSON: &str = "the parser module reports errors through ParseError, never by panicking";
@@ -30,9 +30,14 @@ struct Checkout {
 
 impl Checkout {
     fn new() -> Self {
+        Self::named("repo")
+    }
+
+    /// A checkout in a directory called `name`, under its own allowlist.
+    fn named(name: &str) -> Self {
         let dir = TempDir::new().expect("tempdir");
         let allowed = fs::canonicalize(dir.path()).expect("canonical tempdir");
-        let repo = allowed.join("repo");
+        let repo = allowed.join(name);
         fs::create_dir_all(repo.join("src")).expect("checkout");
         fs::write(
             repo.join("src/parser.rs"),
@@ -51,8 +56,8 @@ impl Checkout {
             .expect("root inside the allowlist")
     }
 
-    fn anchor(&self, path: &str) -> FileAnchor {
-        self.root().anchor(path).expect("anchorable file")
+    fn anchors(&self, paths: &[&str]) -> AnchorSet {
+        self.root().anchors(paths).expect("anchorable files")
     }
 
     fn edit(&self, content: &str) {
@@ -60,9 +65,9 @@ impl Checkout {
     }
 }
 
-fn remember_both(svc: &MemoryService<HashEmbedder>, anchors: &[FileAnchor]) -> (u64, u64) {
+fn remember_both(svc: &MemoryService<HashEmbedder>, anchors: &AnchorSet) -> (u64, u64) {
     let lesson = svc
-        .remember_anchored(LESSON, &[], None, None, anchors)
+        .remember_anchored(LESSON, &[], None, None, Some(anchors))
         .expect("anchored remember");
     let rival = svc.remember(RIVAL, &[], None).expect("rival");
     (lesson, rival)
@@ -85,7 +90,7 @@ fn recall_ids(svc: &MemoryService<HashEmbedder>, checkout: &Checkout) -> Vec<(u6
 fn an_edited_anchor_marks_the_lesson_stale_and_down_weights_it() {
     let (_store, svc) = service();
     let checkout = Checkout::new();
-    let (lesson, rival) = remember_both(&svc, &[checkout.anchor("src/parser.rs")]);
+    let (lesson, rival) = remember_both(&svc, &checkout.anchors(&["src/parser.rs"]));
 
     let fresh = recall_ids(&svc, &checkout);
     assert_eq!(
@@ -117,7 +122,7 @@ fn an_edited_anchor_marks_the_lesson_stale_and_down_weights_it() {
 fn a_deleted_anchor_marks_the_lesson_stale() {
     let (_store, svc) = service();
     let checkout = Checkout::new();
-    let (lesson, _) = remember_both(&svc, &[checkout.anchor("src/parser.rs")]);
+    let (lesson, _) = remember_both(&svc, &checkout.anchors(&["src/parser.rs"]));
     fs::remove_file(checkout.repo.join("src/parser.rs")).expect("delete");
     let hits = recall_ids(&svc, &checkout);
     let verdict = hits
@@ -136,7 +141,7 @@ fn a_deleted_anchor_marks_the_lesson_stale() {
 fn anchors_stay_out_of_metadata_and_out_of_plain_recall() {
     let (_store, svc) = service();
     let checkout = Checkout::new();
-    let (lesson, _) = remember_both(&svc, &[checkout.anchor("src/parser.rs")]);
+    let (lesson, _) = remember_both(&svc, &checkout.anchors(&["src/parser.rs"]));
     checkout.edit("rewritten");
     let plain = svc.recall(LESSON, 2, None).expect("plain recall");
     assert_eq!(plain[0].id, lesson, "plain recall does not probe anchors");
@@ -153,10 +158,16 @@ fn anchors_stay_out_of_metadata_and_out_of_plain_recall() {
 fn remembering_again_with_anchors_re_anchors_the_lesson() {
     let (_store, svc) = service();
     let checkout = Checkout::new();
-    let (lesson, _) = remember_both(&svc, &[checkout.anchor("src/parser.rs")]);
+    let (lesson, _) = remember_both(&svc, &checkout.anchors(&["src/parser.rs"]));
     checkout.edit("fn parse() -> Result<Ast, ParseError>");
-    svc.remember_anchored(LESSON, &[], None, None, &[checkout.anchor("src/parser.rs")])
-        .expect("re-anchor");
+    svc.remember_anchored(
+        LESSON,
+        &[],
+        None,
+        None,
+        Some(&checkout.anchors(&["src/parser.rs"])),
+    )
+    .expect("re-anchor");
     assert_eq!(recall_ids(&svc, &checkout)[0], (lesson, Freshness::Fresh));
 }
 
@@ -166,7 +177,7 @@ fn remembering_again_with_anchors_re_anchors_the_lesson() {
 fn remembering_again_without_anchors_keeps_them() {
     let (_store, svc) = service();
     let checkout = Checkout::new();
-    let (lesson, _) = remember_both(&svc, &[checkout.anchor("src/parser.rs")]);
+    let (lesson, _) = remember_both(&svc, &checkout.anchors(&["src/parser.rs"]));
     svc.remember(LESSON, &[], None).expect("re-remember");
     checkout.edit("rewritten");
     let verdict = recall_ids(&svc, &checkout)
@@ -184,11 +195,36 @@ fn remembering_again_without_anchors_keeps_them() {
 fn too_many_anchors_are_refused_and_nothing_is_stored() {
     let (_store, svc) = service();
     let checkout = Checkout::new();
-    let anchors = vec![checkout.anchor("src/parser.rs"); MAX_ANCHORS_PER_FACT + 1];
-    let refused = svc.remember_anchored(LESSON, &[], None, None, &anchors);
+    let mut anchors = checkout.anchors(&["src/parser.rs"]);
+    anchors.files = vec![anchors.files[0].clone(); MAX_ANCHORS_PER_FACT + 1];
+    let refused = svc.remember_anchored(LESSON, &[], None, None, Some(&anchors));
     assert!(
         matches!(refused, Err(MemoryError::Anchor(_))),
         "{refused:?}"
     );
     assert!(svc.recall(LESSON, 5, None).expect("recall").is_empty());
+}
+
+/// Given a lesson anchored to `src/parser.rs` in one checkout, when another
+/// checkout — whose `src/parser.rs` holds different bytes — is the one
+/// probed, then the lesson is unverified there, never stale, and keeps its
+/// rank: the other checkout says nothing about the code it was written
+/// against. Back in its own checkout, it is judged again.
+#[test]
+fn another_checkout_leaves_a_lesson_unverified_never_stale() {
+    let (_store, svc) = service();
+    let own = Checkout::new();
+    let other = Checkout::named("other-clone");
+    other.edit("fn parse() { panic!(\"a different repository\") }");
+    let (lesson, rival) = remember_both(&svc, &own.anchors(&["src/parser.rs"]));
+
+    let elsewhere = recall_ids(&svc, &other);
+    assert_eq!(elsewhere[0], (lesson, Freshness::Unverified), "no demotion");
+    assert_eq!(elsewhere[1], (rival, Freshness::Unanchored));
+
+    own.edit("rewritten");
+    assert!(matches!(
+        recall_ids(&svc, &own)[1],
+        (id, Freshness::Stale { .. }) if id == lesson
+    ));
 }
