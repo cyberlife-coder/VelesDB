@@ -2145,7 +2145,7 @@
         },
         "responses": {
           "200": {
-            "description": "Scroll batch",
+            "description": "Scroll batch, narrowed to the access gate's scope when it returns one",
             "content": {
               "application/json": {
                 "schema": {
@@ -2155,7 +2155,7 @@
             }
           },
           "400": {
-            "description": "Invalid request",
+            "description": "Invalid request, or a read the access gate denied with a client error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2176,6 +2176,16 @@
           },
           "422": {
             "$ref": "#/components/responses/MalformedBody"
+          },
+          "500": {
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -2283,8 +2293,28 @@
               }
             }
           },
+          "400": {
+            "description": "A read the access gate denied with a client error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "Point or collection not found",
+            "description": "Point or collection not found, or the point is outside the access gate's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2385,6 +2415,16 @@
               }
             }
           },
+          "400": {
+            "description": "A scope narrowing relation reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Collection not found",
             "content": {
@@ -2396,7 +2436,7 @@
             }
           },
           "500": {
-            "description": "Internal server error",
+            "description": "An engine fault, or a read the access gate denied with an engine error (its own code)",
             "content": {
               "application/json": {
                 "schema": {
