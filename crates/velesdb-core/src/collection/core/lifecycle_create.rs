@@ -141,9 +141,9 @@ impl Collection {
     /// This is the most expressive vector constructor: callers pass a fully
     /// populated [`HnswParams`] (including `alpha`, `max_elements`, and any
     /// future fields) together with an explicit `pq_rescore_oversampling`
-    /// override. It is the single underlying factory called by
-    /// [`Collection::create_with_hnsw_params`] (which pins the PQ factor to
-    /// its engine default of `Some(4)`).
+    /// override. It is the single underlying factory: `VectorCollection`'s
+    /// constructors and the test-only `create_with_hnsw_params` (which pins
+    /// the PQ factor to its engine default of `Some(4)`) call it.
     ///
     /// Passing `pq_rescore_oversampling = None` keeps the on-disk config
     /// in "no explicit override" mode, which allows later migrations to
