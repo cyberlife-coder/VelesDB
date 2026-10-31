@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (behavior) — `MIN` and `MAX` of integers return integers**, as
   in core: `MAX(id)` is `33`, not `33.0`, exact past 2^53, and `HAVING
   MAX(n) = 9007199254740992` compares exactly.
+- **BREAKING (behavior) — numbers compare by exact value, with no
+  tolerance**, as in core: WHERE's `=`, `!=`, `IN` and a JOIN key took two
+  numbers less than `f64::EPSILON` apart for equal and compared an integer
+  as an `f64`, so `x = 0.3` matched `0.30000000000000004` and `n >
+  9007199254740992.0` missed `9007199254740993`. An integer and a float now
+  compare exactly, `-0.0` equals `0`, and `0.30000000000000004` is not `0.3`;
+  compare a computed float with a range (`x BETWEEN 0.29999 AND 0.30001`).
+- **`SELECT DISTINCT id` reads the point id**, not a payload field named
+  `id`, and `DISTINCT x` and `PARTITION BY x` key `1` and `1.0`, or `0` and
+  `-0.0`, as one value, as `GROUP BY` does.
 - **A window function's `PARTITION BY id` and `ORDER BY id` read the point
   id**, as every other clause does, not a payload field named `id`.
 - **`search_with_filter` tests a point without payload**, with a `null`
