@@ -26,8 +26,19 @@ use crate::{
     AppState,
 };
 
+/// Default for `[server] max_body_size`: 100 MiB, the limit the point-upload
+/// routes have always had (1000 vectors x 768D x 4 bytes is ~3 MB; 100 MiB
+/// covers extreme batches).
+pub const DEFAULT_MAX_BODY_SIZE: usize = 100 * 1024 * 1024;
+
+/// Body limit of every route other than point upload: 2 MiB, axum's own
+/// default, which those routes have always had. `[server] max_body_size` can
+/// lower it, never raise it — a search or a query has no reason to carry a
+/// body the size of a bulk upload.
+pub const JSON_BODY_LIMIT: usize = 2 * 1024 * 1024;
+
 /// Core CRUD and admin routes.
-fn core_routes() -> Router<Arc<AppState>> {
+fn core_routes(max_body_size: usize) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
@@ -51,18 +62,7 @@ fn core_routes() -> Router<Arc<AppState>> {
             get(collection_diagnostics),
         )
         .route("/guardrails", get(get_guardrails).put(update_guardrails))
-        // 100 MB limit scoped to batch vector upload routes only
-        // (1000 vectors x 768D x 4 bytes = ~3 MB typical; 100 MB covers extreme cases)
-        .merge(
-            Router::new()
-                .route("/collections/{name}/points", post(upsert_points))
-                .route("/collections/{name}/points/raw", post(upsert_points_raw))
-                .route(
-                    "/collections/{name}/points/stream",
-                    post(stream_upsert_points),
-                )
-                .layer(DefaultBodyLimit::max(100 * 1024 * 1024)),
-        )
+        .merge(upload_routes(max_body_size))
         .route("/collections/{name}/stream/insert", post(stream_insert))
         .route("/collections/{name}/stream/enable", post(enable_streaming))
         .route(
@@ -82,6 +82,20 @@ fn core_routes() -> Router<Arc<AppState>> {
             "/collections/{name}/locality/reorder",
             post(reorder_for_locality),
         )
+}
+
+/// Point-upload routes. `[server] max_body_size` in full applies to the
+/// batch upload routes only. The NDJSON stream route reads its body
+/// incrementally and never buffers it whole, so no body limit applies to it.
+fn upload_routes(max_body_size: usize) -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/collections/{name}/points", post(upsert_points))
+        .route("/collections/{name}/points/raw", post(upsert_points_raw))
+        .route(
+            "/collections/{name}/points/stream",
+            post(stream_upsert_points),
+        )
+        .layer(DefaultBodyLimit::max(max_body_size))
 }
 
 /// Relation (graph edge) and durable TTL routes (any collection type).
@@ -167,16 +181,30 @@ fn graph_routes() -> Router<Arc<AppState>> {
         .route("/collections/{name}/graph/search", post(graph_search))
 }
 
-/// All API routes merged into a single [`Router`].
+/// All API routes merged into a single [`Router`], with the default body
+/// limits: [`DEFAULT_MAX_BODY_SIZE`] on point upload, [`JSON_BODY_LIMIT`]
+/// everywhere else.
 ///
 /// This is the single source of truth for route registration. Both
 /// the production binary and the OpenAPI conformance test consume it.
 pub fn api_routes() -> Router<Arc<AppState>> {
-    let routes = core_routes()
+    api_routes_with_body_limit(DEFAULT_MAX_BODY_SIZE)
+}
+
+/// [`api_routes`] with `max_body_size` (`[server] max_body_size`) as the
+/// largest request body any route accepts. The point-upload routes
+/// (`POST .../points`, `POST .../points/raw`) accept up to `max_body_size`;
+/// every other route accepts up to the smaller of `max_body_size` and
+/// [`JSON_BODY_LIMIT`]. A larger body is refused with `413 Payload Too
+/// Large`. `POST .../points/stream` is not buffered and has no body limit.
+pub fn api_routes_with_body_limit(max_body_size: usize) -> Router<Arc<AppState>> {
+    let routes = core_routes(max_body_size)
         .merge(search_routes())
         .merge(graph_routes())
         .merge(relation_routes());
     #[cfg(feature = "prometheus")]
     let routes = routes.route("/metrics", get(crate::prometheus_metrics));
-    routes
+    // Outermost, so the upload routes' own `DefaultBodyLimit`, which runs
+    // after it, overrides it for those routes alone.
+    routes.layer(DefaultBodyLimit::max(max_body_size.min(JSON_BODY_LIMIT)))
 }

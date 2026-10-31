@@ -59,8 +59,8 @@ pub fn open_database(path: &Path) -> Result<Database> {
 /// quantization/WAL batching) from `config_path` first.
 ///
 /// - `config_path: None` — reads `./velesdb.toml` when it exists (as
-///   `velesdb-server` does), otherwise behaves exactly like
-///   [`Database::open`] (core defaults). A present-but-invalid
+///   `velesdb-server` does), otherwise opens with the core defaults plus the
+///   `VELESDB_*` engine variables. A present-but-invalid
 ///   `./velesdb.toml` is an error that says the file was read implicitly
 ///   and how to override it, not a silent fallback. Only the engine
 ///   sections are read from it, as with `Some(file)` below.
@@ -105,7 +105,8 @@ enum ConfigSource<'a> {
     /// nothing was passed. The user never named it, so an error about it
     /// must say where it came from.
     Implicit(&'a Path),
-    /// No file anywhere: core defaults.
+    /// No file anywhere: core defaults, with the `VELESDB_*` engine
+    /// variables on top.
     CoreDefaults,
 }
 
@@ -122,8 +123,9 @@ impl<'a> ConfigSource<'a> {
     }
 
     /// Loads the engine sections of the file, or the core defaults when
-    /// there is none.
-    fn load(&self) -> Result<Option<velesdb_core::config::VelesConfig>> {
+    /// there is none — in both cases with the `VELESDB_*` engine variables
+    /// applied, through the same core loaders `velesdb-server` uses.
+    fn load(&self) -> Result<velesdb_core::config::VelesConfig> {
         let (file, origin) = match *self {
             Self::Explicit(file) => (file, String::new()),
             Self::Implicit(file) => (
@@ -132,16 +134,17 @@ impl<'a> ConfigSource<'a> {
                  VELESDB_CONFIG was given; pass `--config <file>` to use another file)"
                     .to_owned(),
             ),
-            Self::CoreDefaults => return Ok(None),
+            Self::CoreDefaults => {
+                return velesdb_core::config::VelesConfig::load_engine_only_from_env()
+                    .map_err(|e| anyhow::anyhow!("failed to load VelesDB config: {e}"));
+            }
         };
-        velesdb_core::config::VelesConfig::load_from_path_engine_only(file)
-            .map(Some)
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to load VelesDB config from {}{origin}: {e}",
-                    file.display()
-                )
-            })
+        velesdb_core::config::VelesConfig::load_from_path_engine_only(file).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to load VelesDB config from {}{origin}: {e}",
+                file.display()
+            )
+        })
     }
 }
 
@@ -153,10 +156,7 @@ fn open_database_with_default_file(
     default_file: &Path,
 ) -> Result<Database> {
     let source = ConfigSource::resolve(config_path, default_file)?;
-    Ok(match source.load()? {
-        Some(config) => Database::open_with_config(path, config)?,
-        None => Database::open(path)?,
-    })
+    Ok(Database::open_with_config(path, source.load()?)?)
 }
 
 // ---------------------------------------------------------------------------

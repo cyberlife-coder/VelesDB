@@ -27,6 +27,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behaviour): `velesdb-server` sends no CORS header unless origins
+  are configured.** 7.1.0 answered every origin with
+  `Access-Control-Allow-Origin: *` by default, so any web page open in a
+  browser that could reach the server — every site a local-first user visits,
+  for a server on `127.0.0.1` — could read and, without API keys, write
+  through it. The default is now same-origin only. A browser front end on
+  another origin needs its exact origin in `[server] cors_origins` (or
+  `[cors] allowed_origins`); `cors_origins = ["*"]`, written explicitly,
+  restores allow-all, with the startup warning it always had. Non-browser
+  clients are unaffected. What the closed default protects is spelt out in
+  `docs/guides/SERVER_SECURITY.md` §6: no cross-origin read, and no
+  cross-origin request with a body — which needed the next entry to be true.
+  Migration: `docs/guides/MIGRATION_v8.0.0.md`, section 2.
+
+- **BREAKING (behaviour): `POST /collections/{name}/points/stream` and
+  `.../points/raw` refuse a `Content-Type` other than the one they document**
+  (`application/x-ndjson`, `application/octet-stream`) with `415`. In 7.1.0
+  they read any body, so a page on another site could write points with a
+  `text/plain` request a browser sends without a CORS preflight, whatever the
+  CORS policy. One shared extractor (`handlers::content_type`) guards both;
+  every other route that takes a body is a JSON route, which axum already
+  restricts to `application/json`. The TypeScript SDK sends both types.
+
+- **BREAKING (behaviour): a request that changes state from a browser origin
+  the CORS policy does not allow is refused with `403`.** CORS only hides
+  answers; in 7.1.0 a page on any site could still fire the body-less
+  `POST`s (flush, analyze, index rebuild, vacuum, compact, locality reorder)
+  without a preflight. An origin guard now covers every route at once: a
+  method other than `GET`/`HEAD`/`OPTIONS` with an `Origin` header passes only
+  if that origin is the server's own (`Origin`'s authority equals `Host`) or
+  allowed by `cors_origins` (`["*"]`: any). Requests without `Origin` — curl,
+  the SDKs, backends — are not affected.
+
+- **`VelesConfig::load_from_path_engine_only` reads only the environment
+  variables of engine sections** (and of removed sections, so their warning
+  still fires). In 7.1.0 a `VELESDB_SERVER_*` or `VELESDB_LOGGING_*` variable
+  reached `VelesConfig`'s own `server` / `logging` fields and was validated
+  there, so an unrelated variable could fail every caller of this loader —
+  `velesdb-server` and the `velesdb` CLI, and any Rust caller that loads a
+  shared config file this way: `VELESDB_SERVER_PORT=80` stopped
+  `velesdb-server` (whose port is `VELESDB_PORT`) with `server.port must be
+  >= 1024`. A caller that relied on such a variable reaching those fields
+  through this loader no longer gets it; `load_from_path` is unchanged. The
+  new `VelesConfig::load_engine_only_from_env` is the same layer with no
+  file, and both binaries use it when they have no config file: in 7.1.0
+  `velesdb-server` and the `velesdb` CLI then opened on bare defaults and
+  ignored `VELESDB_LIMITS_MAX_COLLECTIONS` and every other engine variable.
+  `velesdb_core::config::WORKERS_CAP` and `LOG_LEVELS` are now public, so a
+  hosting shell validates `[server] workers` and log levels by the engine's
+  own rules instead of a copy, and so is `VelesConfig::is_engine_table`, which
+  tells such a shell which top-level tables of a shared file the engine reads.
+
+- **BREAKING (behaviour): `velesdb-server` answers only the `Host` names it
+  is configured for, with `421 Misdirected Request` otherwise.** A
+  DNS-rebinding page (a name that resolves to `127.0.0.1` after the page
+  loads) is same-origin for the browser, so neither CORS nor the origin guard
+  stopped it reading and writing a loopback server — 7.1.0's default
+  deployment. Answered with no configuration: `localhost`, `127.0.0.0/8`,
+  `[::1]` and the bind host unless it is `0.0.0.0`/`::`; new
+  `[server] allowed_hosts` (`--allowed-hosts`, `VELESDB_ALLOWED_HOSTS`) adds
+  names, `["*"]` turns the check off. All methods are checked; `/health` and
+  `/ready` are exempt for orchestrator probes; `X-Forwarded-Host` is never
+  read. The origin guard's same-origin comparison now normalises default
+  ports and is trusted only after the `Host` check. One function,
+  `config::apply_browser_policy`, installs the `Host` check, the origin guard
+  and the CORS layer — the only public way to install the origin guard, whose
+  same-origin rule relies on the `Host` check. An `allowed_hosts` entry must
+  be a bare name or address (a port, scheme, path, `*.` pattern or trailing
+  dot is refused at startup) and IP entries are compared as addresses;
+  `--allowed-hosts` / `VELESDB_ALLOWED_HOSTS` trim items, drop empty ones and
+  treat an empty value as unset; a malformed or unreadable `Host` is refused;
+  `allowed_hosts = ["*"]` is warned about at startup. The `421` body names the refused host and the three
+  ways to allow it, and a server bound to `0.0.0.0`/`::` with no
+  `allowed_hosts` says at startup that it answers only loopback names. A
+  container reached by its service name needs that name listed:
+  `examples/node-express-rag/docker-compose.yml` now sets
+  `VELESDB_ALLOWED_HOSTS: velesdb`, and the root `docker-compose.yml`, the
+  `Dockerfile` and the deployment guides show how.
+
 - **BREAKING (Rust API) — `Error::GuardRail` says which limit was crossed.**
   The variant is `GuardRail { kind: GuardRailKind, message: String }`, where it
   was `GuardRail(String)`; `GuardRailKind` (`Timeout(TimeoutBudget)`, `Depth`,
@@ -252,6 +331,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hasMore` says the traversal stopped at `limit`.
 
 ### Fixed
+
+- **`velesdb-server` applies the `[server]` and `[logging]` settings
+  `docs/guides/CONFIGURATION.md` documents.** In 7.1.0 `workers`,
+  `max_body_size`, `cors_enabled`, `cors_origins` and the whole `[logging]`
+  table were documented and dropped without a word: no field read them, and the body
+  limit, the worker count and the log filter were hard-wired. Each now does
+  what the guide says, and the guide says what each does:
+  - `[server] workers` sizes the Tokio runtime, which `main` now builds after
+    reading the configuration instead of through `#[tokio::main]`. `0`, the
+    default, keeps one worker per CPU; above 4096 is refused.
+  - `[server] max_body_size` (bytes, default 100 MiB, range 1 B–1 GiB) is the
+    largest body any route accepts: in full on `POST .../points` and
+    `.../points/raw`, capped at 2 MiB on every other route as before. A larger
+    body gets `413`. `velesdb_server::routes::api_routes_with_body_limit` is
+    the router with that limit; `api_routes()` keeps the defaults.
+  - `[server] cors_enabled` (default `true`) is a master switch that removes
+    the CORS layer when `false`; `[server] cors_origins` is the same
+    exact-match list as `[cors] allowed_origins`, and setting both is refused
+    (its default changed too, see Changed above).
+  - `[logging] level`, `format` (`text` or `json`, one object per line) and
+    `file` (appended to; empty = stdout) configure the subscriber, as does
+    `VELESDB_LOGGING_LEVEL`. Precedence: `RUST_LOG` > `VELESDB_LOGGING_LEVEL` >
+    `[logging] level` > `info,tower_http=debug`, the filter an unconfigured
+    server has always used; an empty variable counts as unset, and a
+    `RUST_LOG` that overrides a configured level is named in a startup
+    warning. `json` enables `tracing-subscriber`'s `json` feature, which adds
+    one crate, `tracing-serde`.
+  - A key in `[server]`, `[auth]`, `[tls]`, `[cors]` or `[logging]` that the
+    server does not read is named in a startup warning instead of being
+    ignored.
+  - **Refused at startup where it used to be dropped:** a CORS origin that can
+    never equal a browser's `Origin` header (a path, a trailing `/`, no
+    scheme), `"*"` mixed into an origin list (which silently allowed every
+    origin), and a CORS method or header name that does not parse. A file with
+    one of these stopped matching what it said long ago; it now stops the
+    server with the offending value named.
+  - The guide's environment examples used `VELESDB_SERVER_PORT` /
+    `VELESDB_SERVER_HOST`, which the server never read; they now use
+    `VELESDB_PORT` / `VELESDB_HOST`.
+  - Engine variables (`VELESDB_LIMITS_MAX_COLLECTIONS`, ...) apply when
+    `velesdb-server` starts with no config file at all, as CONFIGURATION.md
+    says (see the `load_from_path_engine_only` entry above; the CLI is fixed
+    the same way).
+  - An unknown top-level table (`[sever]`) is named in the same startup
+    warning as an unread key ("not read by this velesdb-server build"). Tables
+    the engine reads, removed tables the engine already warns about, and
+    `[update_check]` in a build with that feature are not; `[premium]`, read
+    only by premium distributions, is.
+  - `cors_origins = ["*"]` next to a `[cors]` setting the permissive policy
+    ignores (`allow_credentials = true`, methods, headers, `max_age_secs`) is
+    refused at startup instead of being ignored.
+  - The Docker image and `docker-compose.yml` no longer set `RUST_LOG=info`
+    (7.1.0 did),
+    which outranked `[logging] level` and `VELESDB_LOGGING_LEVEL` in every
+    container. Unset, the image logs at the server default: `info`, plus
+    `tower_http`'s per-request debug lines.
+
+- **`POST /collections` with `collection_type: "graph"` honours `dimension`
+  and `metric`.** In 7.1.0 the handler created every graph collection without
+  embeddings and with cosine, whatever the body said; `dimension` now gives the
+  nodes embeddings of that dimension (core's
+  `create_graph_collection_with_embeddings`), searched with `metric`. Without
+  `dimension` a graph still has no embeddings. `POST .../graph/search` with a
+  query of the wrong dimension now answers `400`, as documented, instead of
+  `500`. The `CreateCollectionRequest` field docs (and so the OpenAPI
+  descriptions) name the graph case.
 
 - **A client's error no longer opens a collection's circuit breaker.** Every
   failed query counted toward the breaker, so five in a row of one client's

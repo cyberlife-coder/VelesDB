@@ -43,10 +43,10 @@ pub struct CreateCollectionRequest {
     /// Collection name.
     #[cfg_attr(feature = "openapi", schema(example = "documents"))]
     pub name: String,
-    /// Vector dimension (required for vector collections, ignored for `metadata_only`).
+    /// Vector dimension. Required for vector collections, optional for graph collections (where it gives the nodes embeddings of this dimension), ignored for `metadata_only`.
     #[cfg_attr(feature = "openapi", schema(example = 768))]
     pub dimension: Option<usize>,
-    /// Distance metric (cosine, euclidean, dot, hamming, jaccard).
+    /// Distance metric (cosine, euclidean, dot, hamming, jaccard) of a vector collection, or of a graph collection's node embeddings when `dimension` is set.
     #[serde(default = "default_metric")]
     #[cfg_attr(feature = "openapi", schema(example = "cosine"))]
     pub metric: String,
@@ -54,7 +54,7 @@ pub struct CreateCollectionRequest {
     #[serde(default = "default_storage_mode")]
     #[cfg_attr(feature = "openapi", schema(example = "full"))]
     pub storage_mode: String,
-    /// Collection type: "vector" (default) or "`metadata_only`".
+    /// Collection type: "vector" (default), "`metadata_only`" or "graph".
     #[serde(default = "default_collection_type")]
     #[cfg_attr(feature = "openapi", schema(example = "vector"))]
     pub collection_type: String,

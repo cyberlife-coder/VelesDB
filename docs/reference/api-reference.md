@@ -46,6 +46,24 @@ Per-IP rate limiting is enabled by default (100 requests/second per IP). When a 
 
 **Configuration**: See [CONFIGURATION.md](../guides/CONFIGURATION.md#rate-limiting) for CLI, environment variable, and TOML options.
 
+### Browser origins and hosts (CORS, the origin guard, the Host check)
+
+Every request whose `Host` is not `localhost`, a `127.0.0.0/8` address,
+`[::1]`, the bind host (unless `0.0.0.0`/`::`) or an entry of
+`[server] allowed_hosts` is refused with `421 Misdirected Request`, whatever
+its method; `/health` and `/ready` are exempt, and `X-Forwarded-Host` is never
+read. The `421` carries no CORS header.
+
+On every route, a request whose method is not `GET`, `HEAD` or `OPTIONS` and
+that carries an `Origin` header is refused with `403` unless that origin is
+the server's own (its host and port equal the request's `Host`, the scheme's
+default port — 80 for `http`, 443 for `https` — filled in where either side
+leaves it out) or allowed by
+`[server] cors_origins` (`["*"]`: any). Requests without `Origin` — curl, the
+SDKs, other servers — are not affected. No CORS header is sent unless
+`cors_origins` is configured. This `403` is not repeated in each operation of
+`openapi.yaml`, nor is the `421`. See [SERVER_SECURITY.md](../guides/SERVER_SECURITY.md#6-cors-origins-and-hosts).
+
 ---
 
 ## Health Check
@@ -91,14 +109,20 @@ Create a new collection.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | name | string | Yes | Unique collection name |
-| dimension | integer | Yes (vector/graph) | Vector dimension (e.g., 768). Omit for `metadata_only` |
-| metric | string | No | Distance metric (see table below) |
+| dimension | integer | Yes (vector) | Vector dimension (e.g., 768). For `graph`, optional: gives the nodes embeddings of this dimension (searchable through `POST /collections/{name}/graph/search` and VelesQL `NEAR`); omit it for a graph without embeddings. Omit for `metadata_only` |
+| metric | string | No | Distance metric (see table below) — of the vectors, or of a graph's node embeddings when `dimension` is set |
 | storage_mode | string | No | `full` (default), `sq8`, or `binary` quantization |
 | collection_type | string | No | `vector` (default), `metadata_only`, or `graph` (see [CollectionType](#collectiontype-descriptor)) |
 | hnsw_m | integer | No | Tuned HNSW: bi-directional links per node |
 | hnsw_ef_construction | integer | No | Tuned HNSW: candidate list size during build |
 | hnsw_alpha | float | No | VAMANA neighbor-diversification factor (≥ 1.0) |
 | hnsw_max_elements | integer | No | Initial HNSW capacity (pre-size for bulk import) |
+
+`storage_mode`, the `hnsw_*` fields and the advanced overrides apply to
+`vector` collections. A `graph` collection with `dimension` takes its node
+index parameters from the `[hnsw]` config section and the dimension-based
+defaults; besides `name`, `collection_type` and `graph_schema`, `metric` is
+the only field it reads.
 
 **Distance Metrics:**
 
@@ -361,8 +385,8 @@ queryable via VelesQL over its payload, but is not added to any HNSW index.
 
 ### POST /collections/:name/points/raw
 
-Bulk-upsert points via a compact binary wire format (`application/octet-stream`)
-for zero-copy, high-throughput ingestion. This avoids the per-point JSON
+Bulk-upsert points via a compact binary wire format (`application/octet-stream`;
+any other `Content-Type` is refused with `415`) for zero-copy, high-throughput ingestion. This avoids the per-point JSON
 overhead of `POST /collections/:name/points`. **Payloads are not carried on this
 path** — use the JSON endpoint when you need them.
 
@@ -463,6 +487,7 @@ cursor) are serialized as strings (see the Point ID encoding note in
 ### POST /collections/:name/points/stream
 
 Stream-upsert points as NDJSON (`application/x-ndjson`, one JSON point per line).
+Any other `Content-Type` is refused with `415`.
 Points are accumulated into micro-batches and flushed via bulk upsert. The
 response includes a `network_errors` count: a non-zero value means the HTTP body
 stream was truncated and fewer points than sent may have been received.

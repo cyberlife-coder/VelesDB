@@ -1,7 +1,7 @@
 # VelesDB Server — Deployment
 
 How to run `velesdb-server` outside a developer laptop: containers,
-orchestrators, probes, rate limiting, and CORS.
+orchestrators, probes, rate limiting, CORS, and runtime sizing.
 
 > **See also:** [SERVER_SECURITY.md](SERVER_SECURITY.md) for API keys, TLS and
 > graceful shutdown; [CONFIGURATION.md](CONFIGURATION.md) for the exhaustive
@@ -29,7 +29,13 @@ The image sets these defaults (see the `Dockerfile`):
 | `VELESDB_DATA_DIR` | `/data` |
 | `VELESDB_HOST` | `0.0.0.0` |
 | `VELESDB_PORT` | `8080` |
-| `RUST_LOG` | `info` |
+
+The image sets no `RUST_LOG`, so the log level comes from
+`VELESDB_LOGGING_LEVEL` or a mounted `velesdb.toml`'s `[logging] level`, and
+defaults to `info` plus `tower_http`'s per-request debug lines. Setting
+`RUST_LOG` (e.g. `-e RUST_LOG=info,velesdb_core=debug`) overrides both. Log
+format and destination are `[logging] format` / `file` — see
+[CONFIGURATION.md](CONFIGURATION.md#section-logging).
 
 It runs as the non-root `velesdb` user, exposes port 8080, and declares a
 `HEALTHCHECK` that curls `/health` every 30 s.
@@ -39,6 +45,31 @@ It runs as the non-root `velesdb` user, exposes port 8080, and declares a
 > including `/metrics` and all data — is reachable by anyone who can reach the
 > container. Set `VELESDB_API_KEYS` before exposing it; see
 > [SERVER_SECURITY.md](SERVER_SECURITY.md).
+
+> **Bound to `0.0.0.0`, list the names clients use.** The server answers only
+> requests whose `Host` is `localhost`, a `127.0.0.0/8` address, `[::1]` or an
+> entry of `allowed_hosts`; anything else gets `421` (DNS-rebinding
+> protection). `curl localhost:8080` from the Docker host and the image's
+> `HEALTHCHECK` work as they are; a client using a DNS name or a LAN address
+> needs it listed: `-e VELESDB_ALLOWED_HOSTS=velesdb.example.com,192.168.1.20`.
+> `/health` and `/ready` answer any `Host`, so Kubernetes probes need nothing.
+> **In Docker Compose**, another service calling the server by its service name
+> (`http://velesdb:8080`) needs that name listed:
+> `environment: { VELESDB_ALLOWED_HOSTS: velesdb }` — see
+> `examples/node-express-rag/docker-compose.yml`.
+
+### Behind a reverse proxy
+
+Two settings follow from where the browser and the proxy stand:
+
+- **`Host`:** forward the client's original `Host` (nginx:
+  `proxy_set_header Host $host;`, which Traefik and Caddy do by default) and
+  list the public name in `allowed_hosts`. `X-Forwarded-Host` is never read,
+  so a proxy that rewrites `Host` to its upstream name must have *that* name
+  listed instead.
+- **`Origin`:** a browser front end served from another origin needs that
+  public origin (`https://app.example.com`) in `cors_origins`, both for its
+  reads and for the origin guard to let its writes through.
 
 `docker compose up` uses the same image with the `velesdb_data` volume and the
 health check pre-wired.
@@ -66,6 +97,31 @@ readinessProbe:
   initialDelaySeconds: 2
   periodSeconds: 5
 ```
+
+Clients inside the cluster address the server by its Service name, in any of
+its forms (`velesdb`, `velesdb.<namespace>`, `velesdb.<namespace>.svc`,
+`velesdb.<namespace>.svc.cluster.local`), and a StatefulSet pod also by its
+own DNS name (`velesdb-0.velesdb.<namespace>.svc.cluster.local`). Each name
+clients use must be in `allowed_hosts`. Prometheus scrapes `/metrics` by pod
+IP, which is dynamic. The downward API supplies the namespace, the pod name
+and the IP:
+
+```yaml
+env:
+  - name: POD_IP
+    valueFrom: { fieldRef: { fieldPath: status.podIP } }
+  - name: POD_NAME
+    valueFrom: { fieldRef: { fieldPath: metadata.name } }
+  - name: POD_NAMESPACE
+    valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+  - name: VELESDB_ALLOWED_HOSTS
+    value: >-
+      velesdb,velesdb.$(POD_NAMESPACE),velesdb.$(POD_NAMESPACE).svc,
+      velesdb.$(POD_NAMESPACE).svc.cluster.local,
+      $(POD_NAME).velesdb.$(POD_NAMESPACE).svc.cluster.local,$(POD_IP)
+```
+
+(Spaces and line breaks after the commas are ignored.)
 
 Because the engine takes an exclusive OS-level lock on its data directory
 (`<data_dir>/velesdb.lock`), **one process owns one data directory**. Deploy as
@@ -129,8 +185,10 @@ Equivalent settings: `VELESDB_RATE_LIMIT`, or `[server] rate_limit` in
 
 ## 4. CORS
 
-CORS defaults to **permissive** (`allowed_origins = ["*"]`), which is why the
-server logs a warning at startup. Restrict it in `velesdb.toml`:
+CORS is **off by default**: with no origin configured the server sends no CORS
+header, so only pages served from its own origin can read its responses (7.1.0
+allowed every origin). A browser front end on another origin needs its origin
+listed in `velesdb.toml`:
 
 ```toml
 [cors]
@@ -142,8 +200,23 @@ max_age_secs = 3600
 ```
 
 Keys are read from the `[cors]` table by
-`crates/velesdb-server/src/config.rs`. `allowed_origins = ["*"]` selects the
-fully permissive policy; any other list restricts to those origins exactly.
+`crates/velesdb-server/src/cors.rs`. `allowed_origins = ["*"]`, written
+explicitly, selects the fully permissive policy (with a startup warning); an
+empty list, the default, installs no CORS layer; any other list allows those
+origins exactly,
+each one `scheme://host[:port]` compared byte for byte with the browser's
+`Origin` header. An origin with a path or a trailing `/`, `"*"` inside a list,
+or a method or header name that does not parse stops the server at startup.
+
+`[server]` carries two shorter keys for the same policy:
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `cors_origins` | `[]` | The same list as `[cors] allowed_origins`; setting both is refused at startup |
+| `cors_enabled` | `true` | Master switch: `false` installs no CORS layer whatever the list says |
+
+Why the default is closed, and what allow-all exposes, is in
+[SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors-origins-and-hosts).
 
 ---
 
@@ -170,6 +243,35 @@ enabled = false
 
 ---
 
+## 6. Runtime sizing, request size, logs
+
+```toml
+[server]
+workers = 8                 # Tokio worker threads; 0 (default) = one per CPU
+max_body_size = 268435456   # 256 MiB point-upload bodies (default 100 MiB)
+
+[logging]
+level = "info"              # VELESDB_LOGGING_LEVEL and RUST_LOG override it
+format = "json"             # one JSON object per line
+file = "/var/log/velesdb/velesdb.log"   # appended to; directory must exist
+```
+
+- `workers` fixes the number of threads serving requests. Unset or `0`, Tokio
+  starts one per CPU the process may use (`std::thread::available_parallelism`,
+  or `TOKIO_WORKER_THREADS` when that is set). The startup log prints the count
+  actually running.
+- `max_body_size` bounds the memory one upload request can take — the body is
+  buffered whole before it is parsed. Routes other than point upload stay at
+  2 MiB (lower `max_body_size` lowers them too); the NDJSON stream route is
+  not buffered and has no body limit. An oversized request gets `413`.
+- A key the server does not read in `[server]`, `[auth]`, `[tls]`, `[cors]` or
+  `[logging]`, and a top-level table nobody reads, is named in a startup
+  warning instead of being ignored silently.
+
+Every key, its range and its precedence: [CONFIGURATION.md](CONFIGURATION.md#section-server).
+
+---
+
 ## See also
 
 - [velesdb-server README](../../crates/velesdb-server/README.md)
@@ -178,4 +280,4 @@ enabled = false
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
