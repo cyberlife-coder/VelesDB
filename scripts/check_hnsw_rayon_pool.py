@@ -7,7 +7,10 @@ writer blocked every new reader, and the global workers that take `inner.read()`
 (`rerank_candidates_simd`, the per-query search) parked. The holder's jobs never
 got a worker, so the guard the writer waited on was never released.
 
-The fix routes every guard holder's rayon work onto the dedicated `graph_pool`.
+The fix routes every guard holder's rayon work onto the dedicated graph pool
+(`crate::pools::on_graph_pool`; `crate::pools` is the only module of the crate
+that names rayon, and a submission looks like a call to one of its parallel
+helpers, `pools::map` and the others, as much as like a `.par_iter(`).
 This guard keeps it that way. Reading the code cannot answer whether a given
 submission runs under a guard — the one that deadlocked reached `par_iter` three
 calls down, in another file — so this guard does not try to decide it. It
@@ -53,7 +56,11 @@ SUBMIT_RE = re.compile(
     r"\.(?:par_iter(?:_mut)?|par_chunks(?:_mut|_exact(?:_mut)?)?|par_bridge|"
     r"into_par_iter|par_drain|par_extend|par_split(?:_mut)?|par_windows|"
     r"par_sort\w*)\s*\(|"
-    r"\brayon::(?:join|scope|spawn|in_place_scope|scope_fifo|spawn_fifo)\s*\("
+    r"\brayon::(?:join|scope|spawn|in_place_scope|scope_fifo|spawn_fifo)\s*\(|"
+    # `crate::pools`' parallel helpers: since every submission in the crate
+    # goes through that module, they are what a submission looks like here.
+    r"\bpools::(?:map|map_enumerated|map_owned|map_range|filter_map_enumerated|"
+    r"map_chunks|filter_map_chunks_enumerated|flat_map)\s*\("
 )
 
 #: `fn name(` at any indentation, capturing the name.
@@ -214,7 +221,7 @@ def installed_at(lines: list[str], index: int) -> bool:
             elif ch in "({[":
                 if depth > 0:
                     depth -= 1
-                elif segment[:position].rstrip().endswith(".install"):
+                elif segment[:position].rstrip().endswith((".install", "pools::on_graph_pool")):
                     return True
     return False
 
@@ -247,8 +254,8 @@ def scan_file(path: Path, root: Path) -> list[str]:
         violations.append(
             f"{relative}:{index + 1}: `{name}` submits to the global rayon "
             f"pool.\n"
-            f"    Put it on the dedicated pool — `graph_pool()?.install(|| ...)` "
-            f"in index/hnsw/index/batch.rs — or add the key `{key}` to ALLOWED "
+            f"    Put it on the dedicated pool — `pools::on_graph_pool(...)` "
+            f"in crates/velesdb-core/src/pools.rs — or add the key `{key}` to ALLOWED "
             f"in {Path(__file__).name} with the reason it cannot close #2343's "
             f"cycle. The key carries the path on purpose: two types under "
             f"index/hnsw/ define functions of the same name."

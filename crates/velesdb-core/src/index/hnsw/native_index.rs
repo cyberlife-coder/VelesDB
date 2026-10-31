@@ -295,13 +295,7 @@ impl NativeHnswIndex {
         k: usize,
         quality: SearchQuality,
     ) -> Vec<Vec<ScoredResult>> {
-        use rayon::prelude::*;
-
-        crate::lock_audit::assert_no_guard_held();
-        queries
-            .par_iter()
-            .map(|q| self.search_with_quality(q, k, quality))
-            .collect()
+        crate::pools::map(queries, |q| self.search_with_quality(q, k, quality))
     }
 
     /// Brute-force exact nearest neighbor search with parallel execution.
@@ -331,8 +325,6 @@ impl NativeHnswIndex {
     #[expect(clippy::significant_drop_tightening)]
     #[must_use]
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        use rayon::prelude::*;
-
         // Preserve fast-insert semantics: exact-distance features are gated
         // on `enable_vector_storage` even though the graph stores vectors.
         if !self.enable_vector_storage {
@@ -356,11 +348,8 @@ impl NativeHnswIndex {
             return Vec::new();
         }
 
-        crate::lock_audit::assert_no_guard_held();
-        let mut results: Vec<ScoredResult> = flat
-            .par_chunks(dimension)
-            .enumerate()
-            .filter_map(|(idx, vec)| {
+        let mut results: Vec<ScoredResult> =
+            crate::pools::filter_map_chunks_enumerated(&flat, dimension, |idx, vec| {
                 let id = self.mappings.get_id(idx)?;
                 let raw_distance = inner.compute_distance(query, vec);
                 // Reason: compute_distance returns squared L2 for Euclidean
@@ -368,8 +357,7 @@ impl NativeHnswIndex {
                 // restore actual Euclidean distance for user-visible scores.
                 let score = inner.transform_score(raw_distance);
                 Some(ScoredResult::new(id, score))
-            })
-            .collect();
+            });
 
         self.metric.sort_scored_results(&mut results);
 

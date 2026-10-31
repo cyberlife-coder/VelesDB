@@ -22,12 +22,10 @@ mod having_tests;
 
 use super::match_exec::MatchStorageGuards;
 use super::where_eval::GraphMatchEvalCache;
-use crate::collection::guarded_pool;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::velesql::{AggregateFunction, Aggregator, Query, SelectColumns};
-use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -233,7 +231,7 @@ impl Collection {
         // vector_storage(2) before payload_storage(3) — the pair was
         // reversed here. See .investigation/http-deadlock-2026-07-22/. This
         // site also feeds `run_parallel_path`, which scans under these guards
-        // on `collection::guarded_pool`, never the global rayon pool.
+        // on `pools::on_guarded_pool`, never the global rayon pool.
         let metric = self.storage.config.read().metric;
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
@@ -323,7 +321,7 @@ impl Collection {
     ///
     /// Each chunk of IDs retrieves its own payloads inside the rayon closure,
     /// so the full payload set is never materialized at once. The chunks run
-    /// on `collection::guarded_pool`: the caller holds the storage guards
+    /// on `pools::on_guarded_pool`: the caller holds the storage guards
     /// `payload_storage` borrows from.
     fn aggregate_parallel(
         ids: &[u64],
@@ -352,8 +350,8 @@ impl Collection {
         };
         // The caller holds the storage guards across this scan, so its chunks
         // run on the pool for work over guarded data, never the global one.
-        let partial_aggregators: Vec<Aggregator> = guarded_pool::run(
-            || ids.par_chunks(CHUNK_SIZE).map(aggregate_chunk).collect(),
+        let partial_aggregators: Vec<Aggregator> = crate::pools::on_guarded_pool(
+            || crate::pools::map_chunks(ids, CHUNK_SIZE, aggregate_chunk),
             || ids.chunks(CHUNK_SIZE).map(aggregate_chunk).collect(),
         );
 

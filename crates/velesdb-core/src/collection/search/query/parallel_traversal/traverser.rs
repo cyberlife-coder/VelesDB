@@ -3,7 +3,6 @@
 //! Uses rayon to parallelize traversal from independent start nodes.
 
 use super::{ParallelConfig, TraversalResult, TraversalStats};
-use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
 
@@ -113,13 +112,11 @@ impl ParallelTraverser {
     {
         let stats = TraversalStats::new();
 
-        crate::lock_audit::assert_no_guard_held();
         let results: Vec<Vec<TraversalResult>> =
             if self.config.should_parallelize(start_nodes.len()) {
-                start_nodes
-                    .par_iter()
-                    .map(|&start| self.traverse_single(start, adjacency, &stats, order))
-                    .collect()
+                crate::pools::map(start_nodes, |&start| {
+                    self.traverse_single(start, adjacency, &stats, order)
+                })
             } else {
                 start_nodes
                     .iter()

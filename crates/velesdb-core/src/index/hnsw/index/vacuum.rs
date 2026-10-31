@@ -395,11 +395,20 @@ impl HnswIndex {
         let vectors = copy_vectors(&old, &written)?;
         drop(old);
         let refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
-        let pool =
-            super::batch::graph_pool().map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
-        let slots = pool
-            .install(|| new.parallel_insert(&refs))
-            .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
+        // A rayon worker waits on no pool (`pools::on_graph_pool`): it settles
+        // the writes in sub-threshold slices, node by node, on its own thread.
+        let slots = crate::pools::on_graph_pool(
+            || new.parallel_insert(&refs),
+            || {
+                let mut slots = Vec::with_capacity(refs.len());
+                for slice in refs.chunks(crate::index::hnsw::native::PARALLEL_BATCH_MIN - 1) {
+                    slots.extend(new.parallel_insert(slice)?);
+                }
+                Ok(slots)
+            },
+        )
+        .and_then(|slots| slots)
+        .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
         let slots = one_slot_each(slots, refs.len())?;
         carried.extend(
             written

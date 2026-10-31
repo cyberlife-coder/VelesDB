@@ -3,15 +3,14 @@
 use super::pending::PendingRestriction;
 use super::resolve;
 use crate::collection::expiry::now_unix_secs;
-use crate::collection::guarded_pool;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use crate::point::SearchResult;
+use crate::pools;
 use crate::scored_result::ScoredResult;
 use crate::storage::{PayloadStorage, VectorStorage};
 use crate::validation::validate_dimension_match;
-use rayon::prelude::*;
 
 impl Collection {
     /// Performs batch search for multiple query vectors in parallel with metadata filtering.
@@ -55,21 +54,22 @@ impl Collection {
         let vs: &dyn VectorStorage = &*vector_storage;
         let ps: &dyn PayloadStorage = &*payload_storage;
         let now_secs = now_unix_secs();
-        let resolve = |(candidates, filter): (&Vec<ScoredResult>, &Option<Filter>)| {
-            Self::filter_and_resolve_batch(candidates, filter.as_ref(), k, now_secs, vs, ps)
+        let resolve = |i: usize, candidates: &Vec<ScoredResult>| {
+            let filter = filters[i].as_ref();
+            Self::filter_and_resolve_batch(candidates, filter, k, now_secs, vs, ps)
         };
 
         // Resolved in parallel across queries under the guards, so on the
         // pool for work over guarded data, never the global one.
-        let all_results = guarded_pool::run(
+        let all_results = pools::on_guarded_pool(
+            || pools::map_enumerated(&merged, resolve),
             || {
                 merged
-                    .par_iter()
-                    .zip(filters.par_iter())
-                    .map(resolve)
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| resolve(i, c))
                     .collect()
             },
-            || merged.iter().zip(filters).map(resolve).collect(),
         );
         drop(payload_storage);
         drop(vector_storage);
@@ -164,8 +164,8 @@ impl Collection {
             resolve::resolve_scored_results(query_results, vs, ps)
         };
 
-        let results: Vec<Vec<SearchResult>> = guarded_pool::run(
-            || merged.par_iter().map(resolve).collect(),
+        let results: Vec<Vec<SearchResult>> = pools::on_guarded_pool(
+            || pools::map(&merged, resolve),
             || merged.iter().map(resolve).collect(),
         );
         drop(payload_storage);
@@ -306,8 +306,6 @@ impl Collection {
     ) -> Result<Vec<Vec<ScoredResult>>> {
         let quality = self.runtime_search_quality();
         let pending = self.snapshot_pending();
-        // The index search and the refetches below run on the global pool.
-        crate::lock_audit::assert_no_guard_held();
         let index_results = self
             .storage
             .index
@@ -316,15 +314,16 @@ impl Collection {
         // takes no collection lock. The merge scores pending points under the
         // `vector_storage` read guard, so it runs here, on the caller: no job
         // on a rayon pool takes a collection lock.
-        let refetched: Vec<Vec<ScoredResult>> = index_results
-            .into_par_iter()
-            .zip(queries.par_iter())
-            .map(|(first, query)| {
+        let refetched: Vec<Vec<ScoredResult>> = pools::map_owned(
+            index_results.into_iter().zip(queries).collect(),
+            |(first, query)| {
                 Self::index_results_past_pending(&pending, k, first, |n| {
                     self.storage.index.search_with_quality(query, n, quality)
                 })
-            })
-            .collect::<Result<_>>()?;
+            },
+        )
+        .into_iter()
+        .collect::<Result<_>>()?;
         Ok(refetched
             .into_iter()
             .zip(queries)

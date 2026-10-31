@@ -212,7 +212,7 @@ impl Default for RuntimeLimits {
 //
 // Rayon: no job on a rayon pool takes any of these locks, and no thread
 // holding one waits on the global pool; parallel work over guarded data runs
-// on `collection::guarded_pool`. `crate::lock_audit` (these fields' lock
+// on `pools::on_guarded_pool`. `crate::lock_audit` (these fields' lock
 // types) checks both in every unit test. See `docs/CONCURRENCY_MODEL.md`,
 // "Collection locks and rayon".
 //

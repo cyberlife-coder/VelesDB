@@ -4,7 +4,6 @@
 //! expansion of each BFS level's frontier using rayon.
 
 use super::{ParallelConfig, TraversalResult, TraversalStats};
-use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 
 /// Frontier-parallel BFS: parallelizes each level expansion.
@@ -130,11 +129,8 @@ impl FrontierParallelBFS {
         let mut keep = |neighbor: u64| !visited.contains(&neighbor) && level_seen.insert(neighbor);
 
         if self.config.should_parallelize_frontier(frontier.len()) {
-            crate::lock_audit::assert_no_guard_held();
-            let candidates: Vec<(u64, Vec<u64>, u64)> = frontier
-                .par_iter()
-                .flat_map(|(node, path)| expand_node(node, path))
-                .collect();
+            let candidates: Vec<(u64, Vec<u64>, u64)> =
+                crate::pools::flat_map(frontier, |(node, path)| expand_node(node, path));
             candidates
                 .into_iter()
                 .filter(|(neighbor, _, _)| keep(*neighbor))

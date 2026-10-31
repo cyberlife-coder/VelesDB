@@ -1,5 +1,6 @@
-//! Tests for the collection lock audit: each half of the rule it checks
-//! panics when broken, and every rayon submission in the crate is checked.
+//! Tests for the collection lock audit and for `crate::pools`, the one module
+//! that submits work to a rayon pool: each half of the rule panics when
+//! broken, and no other module can reach a pool.
 
 use super::{assert_no_guard_held, guards_held, Mutex, RwLock};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -27,26 +28,34 @@ fn a_collection_lock_taken_on_a_rayon_worker_panics() {
     assert_eq!(*lock.read(), 0, "off the pool the lock is usable");
 }
 
+/// An application's own rayon jobs may call into a collection.
 #[test]
-fn a_guard_held_across_a_global_pool_submission_panics() {
-    let lock = RwLock::new(0_u32);
+fn an_application_job_may_take_a_collection_lock() {
+    let lock = RwLock::new(7_u32);
+    let read = crate::pools::application_pool(1).install(|| *lock.read());
+    assert_eq!(read, 7);
+}
+
+#[test]
+fn a_guard_held_across_a_parallel_submission_panics() {
+    let lock = RwLock::new(vec![1_u32, 2, 3]);
     let mutex = Mutex::new(0_u32);
 
     let read = lock.read();
     assert_eq!(guards_held(), 1);
     assert!(
-        catch_unwind(assert_no_guard_held).is_err(),
-        "a submission was let through with a read guard held"
+        catch_unwind(AssertUnwindSafe(|| crate::pools::map(&read, |x| x + 1))).is_err(),
+        "a parallel submission was let through with a read guard held"
     );
     drop(read);
     let locked = mutex.lock();
     assert!(
         catch_unwind(assert_no_guard_held).is_err(),
-        "a submission was let through with a mutex guard held"
+        "the assert let a mutex guard through"
     );
     drop(locked);
     assert_eq!(guards_held(), 0, "a dropped guard is no longer counted");
-    assert_no_guard_held();
+    assert_eq!(crate::pools::map(&[1_u32, 2], |x| x + 1), vec![2, 3]);
 }
 
 #[test]
@@ -63,66 +72,259 @@ fn the_count_is_per_thread() {
     assert_eq!(guards_held(), 1);
 }
 
+/// Both dedicated pools run their parallel half off the caller, and their
+/// sequential half on any caller that is a rayon worker — whatever pool it
+/// belongs to.
 #[test]
-fn the_guarded_pool_runs_parallel_work_off_the_caller_and_sequential_work_on_a_worker() {
-    use crate::collection::guarded_pool::run;
+fn a_dedicated_pool_runs_sequential_work_on_any_rayon_worker() {
+    use crate::pools::{on_graph_pool, on_guarded_pool};
 
-    let (on_pool, ran_parallel) = run(
-        || (rayon::current_thread_index().is_some(), true),
-        || (false, false),
-    );
-    assert!(
-        ran_parallel && on_pool,
-        "the parallel half runs on the pool"
-    );
+    let worker_ran = || crate::pools::on_a_rayon_worker();
+    assert!(on_guarded_pool(worker_ran, || false));
+    assert!(on_graph_pool(worker_ran, || false).expect("test: graph pool"));
 
-    let ran_parallel = one_thread_pool().install(|| run(|| true, || false));
-    assert!(
-        !ran_parallel,
-        "a rayon worker runs the sequential half itself"
-    );
+    for pool in [one_thread_pool(), crate::pools::application_pool(1)] {
+        let parallel = pool.install(|| on_guarded_pool(|| true, || false));
+        assert!(!parallel, "a rayon worker waited on the guarded pool");
+        let parallel = pool
+            .install(|| on_graph_pool(|| true, || false))
+            .expect("test");
+        assert!(!parallel, "a rayon worker waited on the graph pool");
+    }
 }
 
 #[test]
 fn the_guarded_pool_lets_its_caller_hold_a_guard() {
-    use rayon::prelude::*;
-
     let lock = RwLock::new((0..1000_u64).collect::<Vec<_>>());
     let values = lock.read();
-    let sum: u64 =
-        crate::collection::guarded_pool::run(|| values.par_iter().sum(), || values.iter().sum());
+    let sums = crate::pools::on_guarded_pool(
+        || crate::pools::map_chunks(&values, 100, |c| c.iter().sum::<u64>()),
+        || values.chunks(100).map(|c| c.iter().sum::<u64>()).collect(),
+    );
     drop(values);
-    assert_eq!(sum, 499_500);
+    assert_eq!(sums.iter().sum::<u64>(), 499_500);
 }
 
-/// A rayon submission: work handed to a pool, which the caller waits on.
-/// The same alternation as `scripts/check_hnsw_rayon_pool.py`.
-const SUBMISSIONS: &[&str] = &[
-    ".par_iter(",
-    ".par_iter_mut(",
-    ".par_chunks(",
-    ".par_chunks_mut(",
-    ".par_chunks_exact(",
-    ".par_chunks_exact_mut(",
-    ".par_bridge(",
-    ".into_par_iter(",
-    ".par_drain(",
-    ".par_extend(",
-    ".par_split(",
-    ".par_split_mut(",
-    ".par_windows(",
-    ".par_sort",
-    "rayon::join(",
-    "rayon::scope(",
-    "rayon::spawn(",
-    "rayon::in_place_scope(",
-    "rayon::scope_fifo(",
-    "rayon::spawn_fifo(",
+// ---------------------------------------------------------------------------
+// No module but `pools` reaches a rayon pool
+// ---------------------------------------------------------------------------
+
+/// `source` with its comments taken out and its string and character
+/// literals emptied, so only code is left to read. Line breaks are kept.
+fn code_only(source: &str) -> String {
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        i = if c == '/' && next == Some('/') {
+            skip_while(&chars, i, |c| c != '\n')
+        } else if c == '/' && next == Some('*') {
+            skip_block_comment(&chars, i, &mut out)
+        } else if c == 'r' && matches!(next, Some('"' | '#')) && !prev_is_ident(&chars, i) {
+            skip_raw_string(&chars, i, &mut out)
+        } else if c == '"' {
+            skip_quoted(&chars, i, '"', &mut out)
+        } else if c == '\'' && is_char_literal(&chars, i) {
+            skip_quoted(&chars, i, '\'', &mut out)
+        } else {
+            out.push(c);
+            i + 1
+        };
+    }
+    out
+}
+
+fn skip_while(chars: &[char], mut i: usize, keep: impl Fn(char) -> bool) -> usize {
+    while i < chars.len() && keep(chars[i]) {
+        i += 1;
+    }
+    i
+}
+
+/// Past the (possibly nested) block comment opening at `i`.
+fn skip_block_comment(chars: &[char], mut i: usize, out: &mut String) -> usize {
+    let mut depth = 0;
+    while i < chars.len() {
+        if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+            depth += 1;
+            i += 2;
+        } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                break;
+            }
+        } else {
+            if chars[i] == '\n' {
+                out.push('\n');
+            }
+            i += 1;
+        }
+    }
+    i
+}
+
+/// Past the raw string opening at `i` (an `r` not starting one is kept).
+fn skip_raw_string(chars: &[char], i: usize, out: &mut String) -> usize {
+    let mut j = skip_while(chars, i + 1, |c| c == '#');
+    let hashes = j - i - 1;
+    if chars.get(j) != Some(&'"') {
+        out.push('r');
+        return i + 1;
+    }
+    j += 1;
+    out.push_str("\"\"");
+    while j < chars.len() {
+        if chars[j] == '"' && (0..hashes).all(|h| chars.get(j + 1 + h) == Some(&'#')) {
+            return j + 1 + hashes;
+        }
+        if chars[j] == '\n' {
+            out.push('\n');
+        }
+        j += 1;
+    }
+    j
+}
+
+/// Past the string or character literal `quote` opens at `i`.
+fn skip_quoted(chars: &[char], mut i: usize, quote: char, out: &mut String) -> usize {
+    out.push(quote);
+    out.push(quote);
+    i += 1;
+    while i < chars.len() && chars[i] != quote {
+        if chars[i] == '\\' {
+            i += 1;
+        } else if chars[i] == '\n' {
+            out.push('\n');
+        }
+        i += 1;
+    }
+    i + 1
+}
+
+fn prev_is_ident(chars: &[char], i: usize) -> bool {
+    i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_')
+}
+
+/// Whether the `'` at `i` opens a character literal rather than a lifetime.
+fn is_char_literal(chars: &[char], i: usize) -> bool {
+    match chars.get(i + 1) {
+        Some('\\') => true,
+        Some(_) => chars.get(i + 2) == Some(&'\''),
+        None => false,
+    }
+}
+
+/// rayon's parallel-iterator traits, named for a UFCS call or an import.
+const RAYON_TRAITS: &[&str] = &[
+    "ParallelIterator",
+    "IndexedParallelIterator",
+    "IntoParallelIterator",
+    "IntoParallelRefIterator",
+    "IntoParallelRefMutIterator",
+    "FromParallelIterator",
+    "ParallelSlice",
+    "ParallelSliceMut",
+    "ParallelExtend",
+    "ParallelBridge",
+    "ParallelString",
+    "ParallelDrainRange",
+    "ParallelDrainFull",
 ];
 
-/// What makes a submission checked: the held-guard assert, or the pool for
-/// work over guarded data, earlier in the same function.
-const CHECKS: &[&str] = &["lock_audit::assert_no_guard_held()", "guarded_pool::run("];
+/// The ways a module can reach a rayon pool, each refused outside `pools`.
+fn pool_violations(source: &str) -> Vec<String> {
+    let code = code_only(source);
+    let mut found = Vec::new();
+    for (line_no, line) in code.lines().enumerate() {
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if !(chars[i].is_alphabetic() || chars[i] == '_') || prev_is_ident(&chars, i) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            let rest = chars[i..].iter().collect::<String>();
+            let called = rest.trim_start().starts_with('(');
+            let method =
+                start > 0 && chars[..start].iter().rev().find(|c| !c.is_whitespace()) == Some(&'.');
+            let why = if ident == "rayon" {
+                Some("names rayon")
+            } else if ident.starts_with("ThreadPool") {
+                Some("names a rayon thread pool")
+            } else if RAYON_TRAITS.contains(&ident.as_str()) {
+                Some("names a rayon parallel trait")
+            } else if (ident.starts_with("par_") || ident.starts_with("into_par_")) && called {
+                Some("calls a parallel iterator")
+            } else if method
+                && called
+                && matches!(ident.as_str(), "install" | "broadcast" | "spawn_broadcast")
+            {
+                Some("submits to a thread pool")
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                found.push(format!("line {}: `{ident}` {why}", line_no + 1));
+            }
+        }
+    }
+    found
+}
+
+/// Every way around `pools` the review found, refused.
+#[test]
+fn the_pool_scan_refuses_each_way_around_pools() {
+    let bypasses = [
+        ("a bare join imported from rayon", "use rayon::join;\nfn f() { join(|| 1, || 2); }"),
+        ("join_context", "fn f() { rayon::join_context(|_| 1, |_| 2); }"),
+        ("broadcast", "fn f(p: &P) { p.broadcast(|_| 1); }"),
+        ("par_rchunks", "fn f(v: &[u8]) { v.par_rchunks(2).count(); }"),
+        ("UFCS par_iter", "fn f(v: &[u8]) { IntoParallelRefIterator::par_iter(v); }"),
+        ("install", "fn f(p: &P) { p.install(|| 1); }"),
+        (
+            "an assert before the guard",
+            "fn f(l: &L) { crate::lock_audit::assert_no_guard_held(); let g = l.read(); g.par_iter(); }",
+        ),
+        (
+            "a par_iter after an unrelated guarded run",
+            "fn f(v: &[u8]) { pools::on_guarded_pool(|| 1, || 1); v.par_iter().count(); }",
+        ),
+        ("a thread pool", "fn f() -> Option<ThreadPool> { None }"),
+        ("a glob import", "use rayon::prelude::*;"),
+        ("an alias", "extern crate rayon as r;"),
+    ];
+    for (name, source) in bypasses {
+        assert!(
+            !pool_violations(source).is_empty(),
+            "the scan missed {name}"
+        );
+    }
+}
+
+/// What is not a submission stays allowed: helpers of `pools`, the word in
+/// comments and strings, identifiers that only contain it.
+#[test]
+fn the_pool_scan_reads_code_only() {
+    let allowed = r##"
+        // rayon::join in a comment, ThreadPool too, and v.par_iter()
+        /* block: p.install(|| 1) */
+        /// doc: rayon
+        fn brute_force_search_rayon() -> &'static str { "rayon::join, .install(" }
+        fn f(v: &[u8]) -> Vec<u8> { crate::pools::map(v, |x| *x) }
+        fn g() -> &'static str { r#"ThreadPool "par_iter("#; 'x'; "a\"rayon" }
+        fn parse(x: u8) -> u8 { x }
+        struct ParallelConfig; enum S { Parallel }
+    "##;
+    assert_eq!(pool_violations(allowed), Vec::<String>::new());
+}
 
 fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("test: read src") {
@@ -135,58 +337,31 @@ fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-fn is_fn_start(line: &str) -> bool {
-    let code = line.trim_start();
-    !code.starts_with("//")
-        && (code.starts_with("fn ")
-            || code.contains(" fn ")
-            || code.starts_with("pub fn ")
-            || code.starts_with("pub(crate) fn ")
-            || code.starts_with("pub(super) fn "))
-}
-
-/// Every rayon submission outside the tests is checked by the audit, so a
-/// unit test reaching it with a collection guard held fails.
-///
-/// "Checked" is lexical: the assert, or `guarded_pool::run(`, appears between
-/// the submission and the start of the function holding it. That is what a
-/// new submission's author has to write; the unit tests then hold it.
+/// No module of the crate but `pools` names rayon, a thread pool or a
+/// parallel iterator, so every submission goes through a helper of `pools`,
+/// which holds the rule for it. Test files are exempt: they stage pools.
 #[test]
-fn every_rayon_submission_in_the_crate_is_checked() {
+fn no_module_but_pools_names_rayon() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     rust_sources(&src, &mut files);
-    let mut unchecked = Vec::new();
-    let mut submissions = 0;
+    let mut violations = Vec::new();
+    let mut scanned = 0;
     for path in files {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.ends_with("_tests.rs") || name == "lock_audit.rs" {
+        if name.ends_with("_tests.rs") || name == "tests.rs" || name == "pools.rs" {
             continue;
         }
+        scanned += 1;
         let text = std::fs::read_to_string(&path).expect("test: read source");
-        let lines: Vec<&str> = text.lines().collect();
-        for (index, line) in lines.iter().enumerate() {
-            let code = line.split("//").next().unwrap_or("");
-            if !SUBMISSIONS.iter().any(|s| code.contains(s)) {
-                continue;
-            }
-            submissions += 1;
-            let checked = lines[..=index]
-                .iter()
-                .rev()
-                .take_while(|l| !is_fn_start(l))
-                .chain(lines[..=index].iter().rev().find(|l| is_fn_start(l)))
-                .any(|l| CHECKS.iter().any(|c| l.contains(c)));
-            if !checked {
-                unchecked.push(format!("{}:{}", path.display(), index + 1));
-            }
+        for violation in pool_violations(&text) {
+            violations.push(format!("{}: {violation}", path.display()));
         }
     }
-    assert!(submissions > 0, "the scan found no submission at all");
+    assert!(scanned > 100, "the scan read {scanned} files");
     assert!(
-        unchecked.is_empty(),
-        "rayon submissions without `crate::lock_audit::assert_no_guard_held()` or \
-         `collection::guarded_pool::run` before them in their function:\n{}",
-        unchecked.join("\n")
+        violations.is_empty(),
+        "reach rayon through crate::pools only:\n{}",
+        violations.join("\n")
     );
 }

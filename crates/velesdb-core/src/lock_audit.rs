@@ -3,28 +3,34 @@
 //!
 //! The rule (`docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon"):
 //!
-//! 1. no job on a rayon pool takes a collection lock, and
-//! 2. no thread holds a collection lock while it waits on the global pool.
+//! 1. no job on one of core's rayon pools takes a collection lock, and
+//! 2. no thread holding a collection lock waits on a pool, except a thread
+//!    that is no rayon worker waiting on one of core's dedicated pools, whose
+//!    jobs take none.
 //!
-//! Either half alone closes the cycle of \#2343 one lock lower: a thread
-//! holding `vector_storage`'s read guard waits for its global-pool jobs, a
+//! Breaking either closes the cycle of \#2343 one lock lower: a thread
+//! holding `vector_storage`'s read guard waits for jobs that cannot run, a
 //! writer queues behind that guard, and `parking_lot` then parks every new
-//! reader, including the global workers whose jobs take the guard. A thread
-//! that must hold a guard across parallel work submits that work to the
-//! dedicated pool (`collection::guarded_pool`), whose jobs read through the
-//! guards their caller holds and take none themselves.
+//! reader, including whatever job the holder waits for. `crate::pools` is
+//! the only place core submits work to a pool, and it holds rule 2 for every
+//! submission: its parallel helpers assert this module's
+//! [`assert_no_guard_held`], and its dedicated pools run their sequential
+//! form on any caller that is a rayon worker.
 //!
 //! [`RwLock`] and [`Mutex`] wrap `parking_lot`'s for every lock a
 //! `Collection` owns, so every accessor goes through [`RwLock::read`],
 //! [`RwLock::write`] or [`Mutex::lock`]. Under `cfg(test)` each of them
-//! panics when called on a rayon worker (half 1), and each guard counts
-//! itself, in a thread-local, while it lives; [`assert_no_guard_held`],
-//! called where a global-pool submission begins, panics when this thread
-//! holds one (half 2). Outside `cfg(test)` the wrappers are the
-//! `parking_lot` locks and guards with nothing added: the check costs
-//! release builds nothing, and code that is not a unit test — an
-//! application calling a collection from its own rayon jobs — is never
-//! refused.
+//! panics when called on a rayon worker of any pool but a test's stand-in
+//! for an application's (rule 1; an application's own jobs may call into a
+//! collection), and each guard counts itself, in a thread-local, while it
+//! lives, which is what [`assert_no_guard_held`] reads. Outside `cfg(test)`
+//! the wrappers are the `parking_lot` locks and guards with nothing added:
+//! the check costs release builds nothing, and an application calling a
+//! collection from its own rayon jobs is served, not refused.
+//!
+//! Locks nested inside a field's value — `Bm25Index`'s, `PayloadMirror`'s,
+//! `SecondaryIndex::BTree`'s, `QueryCache`'s, the edge store's shards — are
+//! their types' own and outside this audit.
 
 use std::ops::{Deref, DerefMut};
 
@@ -44,17 +50,14 @@ struct Held(());
 impl Held {
     #[track_caller]
     fn acquire() -> Self {
+        // An application's own jobs may call into a collection.
         #[cfg(test)]
-        if let Some(worker) = rayon::current_thread_index().filter(|_| {
-            // An application's own jobs may call into a collection.
-            !crate::pools::on_application_thread()
-        }) {
-            panic!(
-                "a collection lock was acquired on rayon worker {worker}: no job on a \
-                 rayon pool may take a collection lock (docs/CONCURRENCY_MODEL.md, \
-                 \"Collection locks and rayon\")"
-            );
-        }
+        assert!(
+            !crate::pools::on_a_rayon_worker() || crate::pools::on_application_thread(),
+            "a collection lock was acquired on a rayon worker: no job on a core pool may \
+             take a collection lock (docs/CONCURRENCY_MODEL.md, \"Collection locks and \
+             rayon\")"
+        );
         #[cfg(test)]
         HELD.with(|held| held.set(held.get() + 1));
         Self(())
@@ -70,9 +73,9 @@ impl Drop for Held {
 
 /// Panics, under `cfg(test)`, when this thread holds a collection lock guard.
 ///
-/// Called where work is submitted to the global rayon pool: a thread that
-/// waits on that pool must hold no collection lock. Compiles to nothing
-/// outside unit tests.
+/// Called by every parallel helper of `crate::pools`: a thread that waits on
+/// its own pool must hold no collection lock. Compiles to nothing outside
+/// unit tests.
 #[inline]
 #[track_caller]
 pub(crate) fn assert_no_guard_held() {
@@ -80,10 +83,9 @@ pub(crate) fn assert_no_guard_held() {
     HELD.with(|held| {
         assert!(
             held.get() == 0,
-            "{} collection lock guard(s) held across a submission to the global rayon \
-             pool: copy what the jobs need out first, or run them on \
-             collection::guarded_pool (docs/CONCURRENCY_MODEL.md, \"Collection locks \
-             and rayon\")",
+            "{} collection lock guard(s) held across a parallel submission: copy what \
+             the jobs need out first, or run them through pools::on_guarded_pool \
+             (docs/CONCURRENCY_MODEL.md, \"Collection locks and rayon\")",
             held.get()
         );
     });

@@ -151,7 +151,7 @@ impl ProductQuantizer {
 
     /// [`train`](Self::train), on this thread only: no subspace is trained on
     /// a rayon pool. For a caller that holds a collection lock and is itself
-    /// a rayon worker, which may wait on no pool (`collection::guarded_pool`).
+    /// a rayon worker, which may wait on no pool (`pools::on_guarded_pool`).
     ///
     /// # Errors
     ///
@@ -322,9 +322,7 @@ fn train_subspace_centroids(
 
     #[cfg(feature = "persistence")]
     if parallel {
-        use rayon::prelude::*;
-        crate::lock_audit::assert_no_guard_held();
-        return (0..num_subspaces).into_par_iter().map(train).collect();
+        return crate::pools::map_range(num_subspaces, train);
     }
     #[cfg(not(feature = "persistence"))]
     let _ = parallel;

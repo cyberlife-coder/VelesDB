@@ -9,7 +9,6 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use super::{bfs_core, ParallelConfig, TraversalResult, TraversalStats};
-use rayon::prelude::*;
 use rustc_hash::FxHashSet;
 
 /// Shard-parallel traversal for partitioned graphs.
@@ -167,37 +166,33 @@ impl ShardedTraverser {
     where
         F: Fn(u64) -> Vec<(u64, u64)> + Send + Sync,
     {
-        crate::lock_audit::assert_no_guard_held();
-        shard_frontiers
-            .par_iter()
-            .map(|frontier| {
-                let mut results = Vec::new();
-                let mut next_frontier = Vec::new();
-                let mut shard_seen = FxHashSet::default();
-                'frontier: for (start_node, current_node, path) in frontier {
-                    let neighbors = adjacency(*current_node);
-                    stats.add_edges_traversed(neighbors.len());
-                    for (neighbor, edge_id) in neighbors {
-                        if global_visited.contains(&neighbor) || !shard_seen.insert(neighbor) {
-                            continue;
-                        }
-                        if results.len() >= remaining {
-                            break 'frontier;
-                        }
-                        let mut new_path = path.clone();
-                        new_path.push(edge_id);
-                        results.push(TraversalResult::new(
-                            *start_node,
-                            neighbor,
-                            new_path.clone(),
-                            depth,
-                        ));
-                        next_frontier.push((*start_node, neighbor, new_path));
+        crate::pools::map(shard_frontiers, |frontier| {
+            let mut results = Vec::new();
+            let mut next_frontier = Vec::new();
+            let mut shard_seen = FxHashSet::default();
+            'frontier: for (start_node, current_node, path) in frontier {
+                let neighbors = adjacency(*current_node);
+                stats.add_edges_traversed(neighbors.len());
+                for (neighbor, edge_id) in neighbors {
+                    if global_visited.contains(&neighbor) || !shard_seen.insert(neighbor) {
+                        continue;
                     }
+                    if results.len() >= remaining {
+                        break 'frontier;
+                    }
+                    let mut new_path = path.clone();
+                    new_path.push(edge_id);
+                    results.push(TraversalResult::new(
+                        *start_node,
+                        neighbor,
+                        new_path.clone(),
+                        depth,
+                    ));
+                    next_frontier.push((*start_node, neighbor, new_path));
                 }
-                (results, next_frontier)
-            })
-            .collect()
+            }
+            (results, next_frontier)
+        })
     }
 
     /// Merges shard results, deduplicates, and builds next frontiers.

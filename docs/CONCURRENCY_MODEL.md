@@ -244,13 +244,22 @@ readers cannot starve a writer. That fairness is what closes the cycle of
 Nobody advances, and no ordering discipline would have prevented it: only one
 lock is involved.
 
-Both operations that hold the guard and join on rayon therefore submit to a
-dedicated pool, `graph_pool` in `index/hnsw/index/batch.rs`:
-`HnswIndex::insert_batch_parallel`'s place phase and `HnswIndex::link_placed`'s
-connect phase. Their jobs reach the graph's arena, layers and entry point and
-never `HnswIndex` itself, so no job on that pool can take `inner`; rayon does
-not steal work across pools, so the isolation is structural rather than a
-timing assumption.
+Every operation that holds the guard and joins on rayon therefore submits to
+a dedicated pool, the graph pool in `crates/velesdb-core/src/pools.rs`
+(`pools::on_graph_pool`): `HnswIndex::insert_batch_parallel`'s place phase,
+`HnswIndex::link_placed`'s connect phase and a vacuum's settle. Their jobs
+reach the graph's arena, layers and entry point and never `HnswIndex` itself,
+so no job on that pool can take `inner`; rayon does not steal work across
+pools, so the isolation is structural rather than a timing assumption.
+
+That holds only for a caller that is not itself a rayon worker: a worker
+waiting on another pool keeps running its own pool's jobs meanwhile
+(`rayon-core`'s `Registry::in_worker_cross`), and one of them taking `inner`
+behind the pending writer closes the cycle again, by stealing instead of by
+starvation. `pools::on_graph_pool` therefore gives a rayon worker the
+sequential form of the work, every time: the batch is placed, or linked, in
+slices under `PARALLEL_BATCH_MIN`, node by node, on the worker's own thread.
+It is slower there, and never refused.
 
 Two checks hold the rule, because neither is sufficient alone:
 
@@ -261,7 +270,7 @@ Two checks hold the rule, because neither is sufficient alone:
   both holders finish in 0.05 s.
 - `scripts/check_hnsw_rayon_pool.py` (CI job `lint`) refuses a *new* rayon
   submission in any non-test file under `index/hnsw/` that is neither inside an
-  `.install(` closure — on any dedicated pool, not only `graph_pool` — nor
+  `.install(` or `pools::on_graph_pool(` closure — on any dedicated pool — nor
   listed with the reason it cannot close the cycle. It cannot decide by
   itself whether a submission runs under a held guard — the one that deadlocked
   reached `par_iter` three calls down, in another file — so it requires the
@@ -430,11 +439,8 @@ it ranks is not left out; that is at most `log2((k + pending) / k)` more
 index searches, none when no pending id is among the results. The search's restriction (a filter's bitmap, a
 graph anchor set) applies to the pending ids before they compete for its
 `k`, and a search that post-filters keeps every admitted one. A batch
-search scores them before it takes the storage guards it resolves results
-under, and on its own thread: only its index refetches run in parallel.
-
-A batch search scores them before it takes the storage guards it resolves
-results under, on its own thread (see "Collection locks and rayon" below).
+search scores them on its own thread, before it takes the storage guards it
+resolves results under (see "Collection locks and rayon" below).
 
 The ids are copied **before** the index search, and each source drops an id
 only after indexing it — insert, then remove:
@@ -509,54 +515,68 @@ The collection's own locks — every `RwLock` and `Mutex` field of
 `Collection` (positions 1–12 above) and the async index builder's and
 deferred indexer's queues (11) — follow one rule with respect to rayon:
 
-> **No job on a rayon pool takes a collection lock, and no thread holding
-> one waits on the global pool.**
+> **No job on one of core's rayon pools takes a collection lock, and no
+> thread holding one waits on a pool — except a thread that is no rayon
+> worker, waiting on one of core's dedicated pools.**
 
-Breaking either half closes the cycle of #2343 one lock lower. A thread
-holds, say, the `vector_storage` (2) read guard and waits for its jobs on
-the global pool; a writer queues behind the guard; `parking_lot` then parks
-every new reader, so a global worker whose job takes that guard parks too,
-and the thread holding it waits for workers that never free. The global
-pool is also where an application's own rayon jobs run, and those may call
-into a collection: the second half is what keeps them from completing the
-cycle.
+Breaking it closes the cycle of #2343 one lock lower. A thread holds, say,
+the `vector_storage` (2) read guard and waits for jobs on a pool; a writer
+queues behind the guard; `parking_lot` then parks every new reader, so a job
+that takes the guard parks too, and the holder waits for it forever. Two
+shapes reach that wait:
 
-How the code holds it:
+- **Joining the pool one belongs to.** A thread waiting on a join executes
+  that pool's other jobs meanwhile — the global pool's, or an application's,
+  whose own jobs may call into a collection.
+- **A rayon worker waiting on another pool.** `install` from a worker keeps
+  running the worker's own pool's jobs while it waits (`rayon-core`'s
+  `Registry::in_worker_cross`), so even a dedicated pool whose jobs take no
+  lock does not protect a caller that is itself a worker: an application
+  that merges, flushes or bulk-loads from its own rayon job would park its
+  worker under the merge's guard.
 
-- **Legs that each take collection locks run one after the other**, on the
-  calling thread: the dense and sparse legs of a hybrid search, the
-  GraphFirst and VectorFirst legs of a `Parallel`-strategy SELECT and MATCH,
-  and `upsert_bulk`'s vector and payload stores. (The planner still costs
-  `Parallel` as the longer leg plus a merge; it now pays both.)
-- **Parallel work over data a guard protects runs on a dedicated pool**,
-  `collection::guarded_pool`: a batch search's resolve under the storage
-  guards, an aggregation's chunked scan under them, and the lazy PQ training
-  under the quantizer guards. Its jobs read through the guards their caller
-  holds and take none, so they never wait on a lock, and a caller holding a
-  guard across one always gets its workers back. A caller that is itself a
-  rayon worker runs the work on its own thread instead: a worker waiting on
-  another pool runs its own pool's jobs meanwhile (`rayon-core`'s
-  `in_worker_cross`), and one of them could take the lock it holds.
-- **Everything else submitted to the global pool runs with no collection
-  guard held**: a batch search's index searches and refetches (pending points
-  are scored on the caller), parallel graph traversal (its jobs read the edge
-  store's shards, which are the edge store's own locks, not the
-  collection's), and the HNSW index's own parallel searches. The index's
-  locks are governed by the rule in "The HNSW Index Guard and rayon" above.
+`crates/velesdb-core/src/pools.rs` is the only module that names rayon, and
+every submission in core goes through it:
+
+- **Its parallel helpers** (`pools::map` and the others) run on the calling
+  thread's pool — the global pool from any other thread — and each one first
+  asserts that the thread holds no collection guard. Legs that each take
+  collection locks therefore run one after the other on the calling thread:
+  the dense and sparse legs of a hybrid search, the GraphFirst and
+  VectorFirst legs of a `Parallel`-strategy SELECT and MATCH, and
+  `upsert_bulk`'s vector and payload stores.
+- **Its dedicated pools** run parallel work their caller holds a guard
+  across: `pools::on_guarded_pool` for a batch search's resolve and an
+  aggregation's chunked scan under the storage guards and the lazy PQ
+  training under the quantizer guards, and `pools::on_graph_pool` for the
+  HNSW place, link and settle phases a merge into the index reaches under
+  `vector_storage`'s read guard. Their jobs read through the guards their
+  caller holds and take none, so a caller holding a guard always gets its
+  workers back. A caller that is a rayon worker gets the sequential form of
+  the work on its own thread instead — the graph pool places in slices under
+  `PARALLEL_BATCH_MIN`, node by node — every time: no caller chooses.
 
 `crate::lock_audit` checks the rule in every unit test. The collection's
 locks are its `RwLock` and `Mutex` wrappers, so every accessor goes through
-them: under `cfg(test)` an acquisition on any rayon worker panics, and each
-guard counts itself in a thread-local while it lives.
-`lock_audit::assert_no_guard_held()` sits before every global-pool
-submission in core and panics when its thread holds one;
-`every_rayon_submission_in_the_crate_is_checked` refuses a submission whose
-function has neither that assert nor `guarded_pool::run` before it. Outside
-`cfg(test)` the wrappers are the `parking_lot` types with nothing added, so
-an application calling a collection from its own rayon jobs is never
-refused. What the audit cannot see: a path no unit test reaches, and
-integration tests, which link the library built without `cfg(test)`. Before
-the fix, 81 unit tests failed under it.
+them: under `cfg(test)` an acquisition on a rayon worker panics — except on
+a test's stand-in for an application's pool, whose jobs may call into a
+collection — and each guard counts itself in a thread-local while it lives,
+which the helpers' assert reads. `no_module_but_pools_names_rayon` refuses
+any other module that names rayon, a thread pool, a parallel iterator or a
+pool's `install`; its fixtures pin each way around it found so far.
+`rayon_caller_tests` merges 256 ids from a one-worker application pool while
+that pool's other job reads the collection behind a queued writer, and
+requires the merge to finish.
+
+Outside `cfg(test)` the wrappers are the `parking_lot` types with nothing
+added, and an application calling a collection from its own rayon jobs is
+served: from a worker, the merge, the flush and the bulk load run without
+waiting on a pool. What the audit cannot see: a path no unit test reaches,
+and integration tests, which link the library built without `cfg(test)`.
+Locks nested inside a field's value — `Bm25Index`'s, `PayloadMirror`'s,
+`SecondaryIndex::BTree`'s, `QueryCache`'s and the edge store's shards — are
+their types' own and outside the audit; no path holds one across a wait on
+a pool.
 
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 

@@ -3,58 +3,9 @@
 use super::HnswIndex;
 use crate::index::hnsw::native::PARALLEL_BATCH_MIN;
 use crate::index::hnsw::params::SearchQuality;
+use crate::pools;
 use crate::scored_result::ScoredResult;
 use crate::validation::validate_dimension_match;
-use rayon::prelude::*;
-
-/// The rayon pool every operation that holds `HnswIndex::inner` runs its graph
-/// work on — never the global pool.
-///
-/// This is the locking contract's one liveness rule, and \#2343 is what breaks
-/// without it. A holder of `inner.read()` that joins on the **global** pool
-/// closes a cycle: a pending `vacuum` writer blocks every new reader, so a
-/// global worker that takes `inner.read()` — `rerank_candidates_simd`, the
-/// per-query search — parks; the holder's own jobs never get a worker, and the
-/// guard the writer waits on is never released. Nobody advances.
-///
-/// A pool of its own breaks that cycle at its only edge. The jobs submitted
-/// here reach the graph's arena, layers and entry point and never `HnswIndex`
-/// itself, so no job on this pool can take `inner`.
-///
-/// That isolation holds **only for a caller that is not already a rayon
-/// worker**, and the precondition is asserted rather than assumed. A thread
-/// that belongs to another pool does not merely block in `install`:
-/// `rayon-core`'s `Registry::in_worker_cross` (1.13.0, `registry.rs`) says so
-/// — "This thread is a member of a different pool, so let it process other
-/// work while waiting for this `op` to complete" — and then calls
-/// `current_thread.wait_until(&job.latch)`. A global worker installing here
-/// while holding `inner.read()` would keep running *global* jobs, one of
-/// which takes `inner.read()`, parks behind the pending writer, and closes
-/// \#2343's cycle again by stealing instead of by starvation.
-///
-/// Both holders that join on rayon use it: [`HnswIndex::link_placed`]'s
-/// connect phase (\#2290) and [`HnswIndex::insert_batch_parallel`]'s place
-/// phase, which reaches `par_iter` through
-/// `native::backend_adapter::connect_batch_chunked`.
-///
-/// `index/hnsw/index/global_pool_tests.rs` holds the rule: it parks every
-/// global worker and requires each of those operations to finish anyway.
-pub(super) fn graph_pool() -> crate::error::Result<&'static rayon::ThreadPool> {
-    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .thread_name(|i| format!("veles-hnsw-graph-{i}"))
-            .build()
-            .inspect_err(|e| tracing::error!("hnsw: dedicated rayon pool: {e}"))
-            .ok()
-    })
-    .as_ref()
-    .ok_or_else(|| {
-        crate::error::Error::Internal(
-            "the dedicated rayon pool HNSW graph work runs on is unavailable".to_string(),
-        )
-    })
-}
 
 /// What [`HnswIndex::insert_batch_unless_indexed`] did with a batch.
 #[derive(Debug)]
@@ -95,14 +46,15 @@ impl HnswIndex {
     /// maps nothing and returns 0, with the cause logged; nodes the graph had
     /// already placed stay unmapped, as tombstones.
     ///
-    /// # Panics
+    /// # Called from a rayon worker
     ///
-    /// In debug builds, if called from a rayon worker with a batch large
-    /// enough to reach the dedicated pool. Such a caller would keep executing
-    /// its own pool's jobs while waiting on this one (`rayon-core`'s
-    /// `Registry::in_worker_cross`), and a stolen job that takes the index
-    /// read guard would re-close \#2343's deadlock cycle. Release builds carry
-    /// no check. A smaller batch installs no pool and is never refused.
+    /// A batch large enough for the graph pool is placed in sub-threshold
+    /// slices on the calling thread instead (`pools::on_graph_pool`): a worker
+    /// waiting on another pool keeps executing its own pool's jobs
+    /// (`rayon-core`'s `Registry::in_worker_cross`), and one of them taking
+    /// the index read guard, or a collection lock its caller holds, behind a
+    /// queued writer would stop the process (\#2343). It is slower there, and
+    /// never refused.
     ///
     /// # Performance (v0.8.5+)
     ///
@@ -159,10 +111,12 @@ impl HnswIndex {
         }
 
         // A batch large enough for `place_batch` to connect in parallel joins
-        // on rayon while the guard below is held, so it runs on `graph_pool`
+        // on rayon while the guard below is held, so it runs on the graph pool
         // and never on the global pool: a global worker can take
         // `inner.read()`, and under a pending `vacuum` writer that closes the
-        // deadlock cycle of #2343.
+        // deadlock cycle of #2343. A caller that is itself a rayon worker
+        // waits on no pool at all (`pools::on_graph_pool`): it places the
+        // batch in sub-threshold slices, node by node, on its own thread.
         //
         // A smaller batch places node by node and never enters rayon, so it
         // needs no pool and must not pay for one. `install` costs a flat
@@ -185,21 +139,6 @@ impl HnswIndex {
         // the hand-off above and nothing else. Left as is rather than adding a
         // backend test here: `place_batch` owns that decision, and duplicating
         // it is how the two drift apart.
-        let pool = if items.len() >= PARALLEL_BATCH_MIN {
-            // Only this branch joins on rayon under the guard, so only this
-            // branch has the precondition. A sub-threshold batch enters no
-            // pool and must not be refused for being called from a worker.
-            debug_assert!(
-                rayon::current_thread_index().is_none(),
-                "insert_batch_parallel holds the index guard across a rayon join: \
-                 calling it from a rayon worker lets that worker steal a job which \
-                 takes inner.read(), re-closing #2343's cycle"
-            );
-            Some(graph_pool()?)
-        } else {
-            None
-        };
-
         let vectors: Vec<&[f32]> = items.iter().map(|(_, vector)| *vector).collect();
         // Held across the placement and the mappings: a sealed `vacuum` is
         // settling a frozen remainder, and this batch must land either wholly
@@ -210,9 +149,21 @@ impl HnswIndex {
         // renumber slots under the write lock, so each slot placed here is still
         // its vector's when the mapping names it.
         let inner = self.inner.read();
-        let placed = match pool {
-            Some(pool) => pool.install(|| inner.place_parallel(&vectors)),
-            None => inner.place_parallel(&vectors),
+        let placed = if vectors.len() >= PARALLEL_BATCH_MIN {
+            let graph = &*inner;
+            pools::on_graph_pool(
+                || graph.place_parallel(&vectors),
+                || {
+                    let mut slots = Vec::with_capacity(vectors.len());
+                    for slice in vectors.chunks(PARALLEL_BATCH_MIN - 1) {
+                        slots.extend(graph.place_parallel(slice)?);
+                    }
+                    Ok(slots)
+                },
+            )
+            .and_then(|placed| placed)
+        } else {
+            inner.place_parallel(&vectors)
         };
         let outcome = placed.map(|placements| {
             for ((id, _), placed) in items.iter().zip(placements) {
@@ -319,32 +270,24 @@ impl HnswIndex {
     /// `vacuum` rebuilt the graph with it. An id queued twice is linked once,
     /// at the slot of its last write.
     ///
-    /// The guard is held across the connect phase, so that phase runs on
-    /// [`graph_pool`] and never on the global rayon pool: a global worker can
-    /// take `inner.read()`, and under a pending `vacuum` writer that closes
-    /// the deadlock cycle of \#2343.
+    /// The guard is held across the connect phase, so that phase runs on the
+    /// graph pool (`pools::on_graph_pool`) and never on the global rayon pool:
+    /// a global worker can take `inner.read()`, and under a pending `vacuum`
+    /// writer that closes the deadlock cycle of \#2343. Called from a rayon
+    /// worker, it links in sub-threshold slices on the calling thread, as
+    /// [`Self::insert_batch_parallel`] places.
     ///
     /// # Errors
     ///
-    /// Returns an error, and links nothing, if the arena does not hold a slot
-    /// a mapping names, or if the dedicated pool cannot be built.
-    ///
-    /// # Panics
-    ///
-    /// In debug builds, if called from a rayon worker — see
-    /// [`HnswIndex::insert_batch_parallel`] for why. Release builds carry no
-    /// check.
+    /// Returns an error if the arena does not hold a slot a mapping names, or
+    /// if the dedicated pool cannot be built. It links nothing then, except
+    /// from a rayon worker, where the slices before the failing one stay
+    /// linked; a later call skips them.
     #[cfg(feature = "persistence")]
     pub(crate) fn link_placed(&self, ids: &[u64]) -> crate::error::Result<usize> {
         if ids.is_empty() {
             return Ok(0);
         }
-        debug_assert!(
-            rayon::current_thread_index().is_none(),
-            "link_placed holds the index guard across a rayon join: see \
-             insert_batch_parallel for why a rayon worker must not call it"
-        );
-        let pool = graph_pool()?;
         let inner = self.inner.read();
         let mut slots: Vec<usize> = ids
             .iter()
@@ -354,7 +297,16 @@ impl HnswIndex {
         slots.dedup();
         let unlinked = inner.unlinked_nodes(slots);
         let graph: &crate::index::hnsw::native_inner::NativeHnswInner = &inner;
-        pool.install(|| graph.link_placed(&unlinked))?;
+        // A rayon worker waits on no pool (`pools::on_graph_pool`): it links
+        // the nodes in sub-threshold slices, one by one, on its own thread.
+        pools::on_graph_pool(
+            || graph.link_placed(&unlinked),
+            || {
+                unlinked
+                    .chunks(PARALLEL_BATCH_MIN - 1)
+                    .try_for_each(|slice| graph.link_placed(slice))
+            },
+        )??;
         drop(inner);
         Ok(unlinked.len())
     }
@@ -393,7 +345,6 @@ impl HnswIndex {
         k: usize,
         quality: SearchQuality,
     ) -> crate::error::Result<Vec<Vec<ScoredResult>>> {
-        crate::lock_audit::assert_no_guard_held();
         self.validate_batch_dimensions(queries)?;
 
         // Perfect, Adaptive, AutoTune, or very small collections: delegate to
@@ -413,11 +364,9 @@ impl HnswIndex {
             SearchQuality::Perfect | SearchQuality::Adaptive { .. } | SearchQuality::AutoTune
         ) || (self.len() <= 100 && self.enable_vector_storage && self.graph_vector_count() > 0)
         {
-            let results: crate::error::Result<Vec<Vec<ScoredResult>>> = queries
-                .par_iter()
-                .map(|query| self.search_with_quality(query, k, quality))
+            return pools::map(queries, |query| self.search_with_quality(query, k, quality))
+                .into_iter()
                 .collect();
-            return results;
         }
 
         // Aligned with single-query path (search.rs:339): use ef_search_for_scale
@@ -434,10 +383,9 @@ impl HnswIndex {
         }
 
         // Fast path: HNSW-only search for each query (rayon parallel)
-        Ok(queries
-            .par_iter()
-            .map(|query| self.search_hnsw_only(query, k, ef_search))
-            .collect())
+        Ok(pools::map(queries, |query| {
+            self.search_hnsw_only(query, k, ef_search)
+        }))
     }
 
     /// Validates that all query vectors have the correct dimension.
@@ -464,18 +412,15 @@ impl HnswIndex {
         rerank_k: usize,
         ef_search: usize,
     ) -> Vec<Vec<ScoredResult>> {
-        crate::lock_audit::assert_no_guard_held();
-        let all_candidates: Vec<Vec<ScoredResult>> = queries
-            .par_iter()
-            .map(|query| self.search_hnsw_only_needing(query, rerank_k, k, ef_search))
-            .collect();
+        let all_candidates: Vec<Vec<ScoredResult>> = pools::map(queries, |query| {
+            self.search_hnsw_only_needing(query, rerank_k, k, ef_search)
+        });
 
         // Rerank in parallel, collecting per-query latencies for aggregated EMA update.
-        let timed_results: Vec<(Vec<ScoredResult>, u64)> = queries
-            .par_iter()
-            .zip(all_candidates.par_iter())
-            .map(|(query, candidates)| self.rerank_sort_and_truncate_timed(query, candidates, k))
-            .collect();
+        let timed_results: Vec<(Vec<ScoredResult>, u64)> =
+            pools::map_enumerated(queries, |i, query| {
+                self.rerank_sort_and_truncate_timed(query, &all_candidates[i], k)
+            });
 
         let total_us: u64 = timed_results.iter().map(|(_, e)| e).sum();
         if let Some(mean_us) = total_us.checked_div(timed_results.len() as u64) {
@@ -578,16 +523,12 @@ impl HnswIndex {
             return Vec::new();
         }
 
-        crate::lock_audit::assert_no_guard_held();
-        let mut results: Vec<ScoredResult> = flat
-            .par_chunks(dimension)
-            .enumerate()
-            .filter_map(|(idx, vec)| {
+        let mut results: Vec<ScoredResult> =
+            pools::filter_map_chunks_enumerated(&flat, dimension, |idx, vec| {
                 let id = self.mappings.get_id(idx)?;
                 let score = self.compute_distance(query, vec);
                 Some(ScoredResult::new(id, score))
-            })
-            .collect();
+            });
 
         self.metric.sort_scored_results(&mut results);
 

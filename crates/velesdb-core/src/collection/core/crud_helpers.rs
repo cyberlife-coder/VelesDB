@@ -48,7 +48,7 @@ fn auto_num_subspaces(dimension: usize) -> usize {
 fn train_pq(training: &[Vec<f32>], dimension: usize) -> Option<ProductQuantizer> {
     let num_centroids = 256usize.min(training.len().max(2));
     let num_subspaces = auto_num_subspaces(dimension);
-    let trained = crate::collection::guarded_pool::run(
+    let trained = crate::pools::on_guarded_pool(
         || ProductQuantizer::train(training, num_subspaces, num_centroids),
         || ProductQuantizer::train_sequential(training, num_subspaces, num_centroids),
     );

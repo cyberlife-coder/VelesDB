@@ -14,7 +14,6 @@ use super::distance::DistanceEngine;
 use super::graph::{NativeHnsw, NO_ENTRY_POINT};
 use super::layer::NodeId;
 use crate::distance::DistanceMetric;
-use rayon::prelude::*;
 use std::path::Path;
 
 // ============================================================================
@@ -366,11 +365,8 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             // Each node is anchored as soon as one of its neighbours is; batch
             // mates still connecting are anchored by the pass after the chunk
             // (#2259).
-            crate::lock_audit::assert_no_guard_held();
-            let pending: Vec<NodeId> = chunk
-                .par_iter()
-                .enumerate()
-                .filter_map(|(i, (node_id, layer))| {
+            let pending: Vec<NodeId> =
+                crate::pools::filter_map_enumerated(chunk, |i, (node_id, layer)| {
                     let position = connect_start + chunk_offset + i;
                     let anchored = self.with_batch_query(queries, position, |query| {
                         let current_ep = self.greedy_descent_upper_layers(query, *layer, ep_id);
@@ -384,8 +380,7 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
                         })
                     });
                     (!anchored).then_some(*node_id)
-                })
-                .collect();
+                });
             self.anchor_pending(pending);
 
             if let Some(best) = chunk.iter().max_by_key(|(_, layer)| *layer) {
