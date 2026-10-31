@@ -153,7 +153,8 @@ fn setup_social(db: &Database) {
 /// * `Select` — plain relational scan over `items`.
 /// * `VectorSearch` — `NEAR` similarity search over `items`.
 /// * `GraphTraversal` — bare `MATCH` routed via the `_collection` param; a bare
-///   MATCH has an empty AST `from`, so the context collection is `""`.
+///   MATCH has an empty AST `from`, so the context names the collection the
+///   param routes it to, the one the traversal reads.
 fn build_case(
     shape: u8,
     threshold: i64,
@@ -183,7 +184,7 @@ fn build_case(
             (
                 format!("MATCH (a:Start)-[:KNOWS*1..1]->(c) RETURN c LIMIT {limit}"),
                 params,
-                "",
+                "social",
                 QueryOperationKind::GraphTraversal,
             )
         }
