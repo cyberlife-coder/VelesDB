@@ -431,7 +431,20 @@ index searches, none when no pending id is among the results. The search's restr
 graph anchor set) applies to the pending ids before they compete for its
 `k`, and a search that post-filters keeps every admitted one. A batch
 search scores them before it takes the storage guards it resolves results
-under.
+under, and on its own thread: only its index refetches run in parallel.
+
+**No collection lock on a rayon worker.** A batch search resolves its
+results with the `vector_storage` (2) and `payload_storage` (3) read guards
+held across a join on the global rayon pool. A global worker that took one
+of those guards itself would park behind any queued writer (parking_lot
+blocks new readers then), and the batch holding the guard would wait for a
+worker that never frees: the whole process stops, the shape of #2343 one
+lock lower. So no closure a search runs on the global pool takes a
+collection lock: the pending points are scored on the calling thread, and
+the parallel phases only read through guards their caller already holds,
+or search the index, which takes no collection lock.
+`a_batch_search_reads_no_storage_on_a_rayon_worker` counts the storage
+reads a pending-point scan makes on a rayon worker and requires none.
 
 The ids are copied **before** the index search, and each source drops an id
 only after indexing it — insert, then remove:

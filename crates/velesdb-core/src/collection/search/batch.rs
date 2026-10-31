@@ -40,8 +40,9 @@ impl Collection {
         let restrictions = filters
             .iter()
             .map(|filter| PendingRestriction::NONE.post_filtered_if(filter.is_some()));
-        // Merged per query before the storage guards are taken: scoring the
-        // pending points holds no lock a writer waits on.
+        // Merged on this thread before the storage guards below are taken:
+        // the merge reads storage itself, chunk by chunk, and must do so
+        // neither under a guard this thread holds nor on a rayon worker.
         let mut merged =
             self.batch_search_merging_pending(queries, candidates_k, metric, restrictions)?;
         for candidates in &mut merged {
@@ -276,10 +277,10 @@ impl Collection {
     }
 
     /// The batch form of [`search_merging_pending`](Self::search_merging_pending):
-    /// one pending snapshot before the parallel index search, then, per query
-    /// and in parallel, a refetch while unindexed ids crowd its `k` and the
-    /// merge under that query's restriction (the first `queries.len()` of
-    /// `restrictions`, one per query, in order).
+    /// one pending snapshot before the parallel index search, then, per query,
+    /// a refetch while unindexed ids crowd its `k` (in parallel) and the merge
+    /// under that query's restriction (on the caller; one restriction per
+    /// query, in order).
     ///
     /// # Errors
     ///
@@ -297,21 +298,29 @@ impl Collection {
             .storage
             .index
             .search_batch_parallel(queries, k, quality)?;
-        let restrictions: Vec<PendingRestriction<'r>> = restrictions.take(queries.len()).collect();
-        // Per query in parallel: a refetch is a whole index search, and the
-        // merge scores the pending points; neither holds a lock the others
-        // wait on.
-        index_results
+        // Only the refetches run in parallel: each is an index search, which
+        // takes no collection lock. The merge scores pending points under the
+        // `vector_storage` read guard, so it runs here, on the caller: a
+        // global rayon worker taking that guard parks behind any queued
+        // writer, while the batch's own resolve phase joins the global pool
+        // holding it — no worker ever frees, and the process stops.
+        let refetched: Vec<Vec<ScoredResult>> = index_results
             .into_par_iter()
             .zip(queries.par_iter())
-            .zip(restrictions.into_par_iter())
-            .map(|((first, query), restriction)| {
-                let results = Self::index_results_past_pending(&pending, k, first, |n| {
+            .map(|(first, query)| {
+                Self::index_results_past_pending(&pending, k, first, |n| {
                     self.storage.index.search_with_quality(query, n, quality)
-                })?;
-                Ok(self.merge_pending(results, &pending, query, k, metric, restriction))
+                })
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        Ok(refetched
+            .into_iter()
+            .zip(queries)
+            .zip(restrictions)
+            .map(|((results, query), restriction)| {
+                self.merge_pending(results, &pending, query, k, metric, restriction)
+            })
+            .collect())
     }
 
     /// Applies metadata filter to batch results before fusion.
