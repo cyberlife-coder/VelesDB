@@ -67,6 +67,8 @@ mod recall;
 #[cfg(feature = "persistence")]
 #[path = "service_anchor.rs"]
 mod anchored;
+#[cfg(feature = "persistence")]
+pub use anchored::AnchoredCandidates;
 
 /// The graph facet — `relate`/`forget`/hubs/`why`/`traverse` — same split,
 /// same reason; see `service_graph.rs`'s module doc.
@@ -816,12 +818,6 @@ fn reject_self_links(fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
     Ok(())
 }
 
-/// [`MemoryService::remember_with_ttl`]'s auto-date stamp: `metadata` with
-/// today's date added under [`AUTO_DATE_FIELD`], unless `metadata` already
-/// names that key (an explicit, possibly retroactive, caller value is never
-/// overwritten) or no clock is available ([`clock::today_ymd`] returns `None`
-/// on `wasm32-unknown-unknown`). Returns an owned map either way, `None` only
-/// when there is nothing to store at all (no caller metadata AND no clock).
 /// `metadata` with the service's own reserved `system` entries added.
 fn with_system_entries(metadata: Option<Metadata>, system: Option<&Metadata>) -> Option<Metadata> {
     let Some(system) = system else {
@@ -836,6 +832,12 @@ fn with_system_entries(metadata: Option<Metadata>, system: Option<&Metadata>) ->
     Some(merged)
 }
 
+/// [`MemoryService::remember_with_ttl`]'s auto-date stamp: `metadata` with
+/// today's date added under [`AUTO_DATE_FIELD`], unless `metadata` already
+/// names that key (an explicit, possibly retroactive, caller value is never
+/// overwritten) or no clock is available ([`clock::today_ymd`] returns `None`
+/// on `wasm32-unknown-unknown`). Returns an owned map either way, `None` only
+/// when there is nothing to store at all (no caller metadata AND no clock).
 fn stamp_with_today(metadata: Option<&Metadata>) -> Option<Metadata> {
     if metadata.is_some_and(|meta| meta.contains_key(AUTO_DATE_FIELD)) {
         return metadata.cloned();

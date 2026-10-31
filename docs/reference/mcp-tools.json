@@ -3299,12 +3299,12 @@
       }
     },
     {
-      "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. With `anchor_root` (an absolute checkout inside the server's ingest roots), each fact remembered with `anchors` carries `freshness` — `fresh`, `stale` (an anchored file changed or was deleted; listed in `changed`, and the fact is ranked lower) or `unverified`; staleness never changes the learned confidence. Ids exceed 2^53 — relay them as strings (`id_str`).",
+      "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. With `anchor_root` (an absolute checkout inside the server's ingest roots), each fact remembered with `anchors` carries `freshness` — `fresh`, `stale` (an anchored file changed or was deleted; listed in `changed`, and the fact is ranked lower) or `unverified` (a file could not be checked, or the fact was anchored in another checkout; its rank is unchanged); staleness never changes the learned confidence. Only `recall` judges anchors. Ids exceed 2^53 — relay them as strings (`id_str`).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "anchor_root": {
-            "description": "Optional absolute path of the checkout to check anchored facts\nagainst (inside the ingest roots). Each fact remembered with `anchors`\nthen carries `freshness`; a stale one is ranked lower.",
+            "description": "Optional absolute path of the checkout to check anchored facts\nagainst (inside the ingest roots). Each fact remembered with `anchors`\nthen carries `freshness`; a stale one is ranked lower, and one anchored\nin another checkout is `unverified`.",
             "type": "string"
           },
           "filter": {
@@ -3785,12 +3785,12 @@
       }
     },
     {
-      "description": "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots) tie the fact to those files: the server records each file's SHA-256 so a later `recall` can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
+      "description": "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots, validated even without `anchors`) tie the fact to those files in that checkout: the server records each file's SHA-256 so a later `recall` with the same checkout can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "anchor_root": {
-            "description": "Absolute path of the checkout `anchors` are relative to. It must lie\ninside the server's ingest roots (`VELESDB_MEMORY_INGEST_ROOTS`);\nwithout them anchoring is refused.",
+            "description": "Absolute path of the checkout `anchors` are relative to, stored with\nthem. It must lie inside the server's ingest roots\n(`VELESDB_MEMORY_INGEST_ROOTS`); without them anchoring is refused.\nSent without `anchors`, it is still validated.",
             "type": "string"
           },
           "anchors": {

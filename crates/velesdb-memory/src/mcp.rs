@@ -307,7 +307,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RememberResult>(),
-        description = "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots) tie the fact to those files: the server records each file's SHA-256 so a later `recall` can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
+        description = "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots, validated even without `anchors`) tie the fact to those files in that checkout: the server records each file's SHA-256 so a later `recall` with the same checkout can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
         input_schema = id_wire_input_schema::<RememberParams>(&["target"])
     )]
     async fn remember(
@@ -334,7 +334,7 @@ impl McpServer {
             let anchors =
                 AnchorRoot::resolve_request(anchor_root.as_deref(), &anchors, &allowlist)?;
             service.run(|current| {
-                current.remember_anchored(&fact, &links, metadata.as_ref(), ttl, &anchors)
+                current.remember_anchored(&fact, &links, metadata.as_ref(), ttl, anchors.as_ref())
             })
         })
         .await
@@ -351,7 +351,7 @@ impl McpServer {
         // rmcp derives an output schema when none is given, and that
         // derived form keeps `$ref`s a `$defs`-blind client cannot resolve.
         output_schema = crate::schema::wire_safe_output_schema::<RecallResult>(),
-        description = "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. With `anchor_root` (an absolute checkout inside the server's ingest roots), each fact remembered with `anchors` carries `freshness` — `fresh`, `stale` (an anchored file changed or was deleted; listed in `changed`, and the fact is ranked lower) or `unverified`; staleness never changes the learned confidence. Ids exceed 2^53 — relay them as strings (`id_str`)."
+        description = "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. With `anchor_root` (an absolute checkout inside the server's ingest roots), each fact remembered with `anchors` carries `freshness` — `fresh`, `stale` (an anchored file changed or was deleted; listed in `changed`, and the fact is ranked lower) or `unverified` (a file could not be checked, or the fact was anchored in another checkout; its rank is unchanged); staleness never changes the learned confidence. Only `recall` judges anchors. Ids exceed 2^53 — relay them as strings (`id_str`)."
     )]
     async fn recall(
         &self,
@@ -376,10 +376,11 @@ impl McpServer {
                 return Ok(RecallResult::new(memories));
             };
             let mut probe = AnchorRoot::open(&root, &allowlist)?;
-            let memories = service.run(|current| {
-                current.recall_anchored(&query, limit, filter.as_ref(), &mut probe)
-            })?;
-            Ok::<_, crate::error::MemoryError>(RecallResult::anchored(memories))
+            // The search holds the live-generation slot and the generation
+            // gate; the anchored files are read after both are released.
+            let candidates = service
+                .run(|current| current.anchored_candidates(&query, limit, filter.as_ref()))?;
+            Ok::<_, crate::error::MemoryError>(RecallResult::anchored(candidates.judge(&mut probe)))
         })
         .await
         .map_err(join_error)?

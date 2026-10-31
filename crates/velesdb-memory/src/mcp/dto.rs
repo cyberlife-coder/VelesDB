@@ -51,9 +51,10 @@ pub(super) struct RememberParams {
     /// `anchor_root`.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) anchors: Vec<String>,
-    /// Absolute path of the checkout `anchors` are relative to. It must lie
-    /// inside the server's ingest roots (`VELESDB_MEMORY_INGEST_ROOTS`);
-    /// without them anchoring is refused.
+    /// Absolute path of the checkout `anchors` are relative to, stored with
+    /// them. It must lie inside the server's ingest roots
+    /// (`VELESDB_MEMORY_INGEST_ROOTS`); without them anchoring is refused.
+    /// Sent without `anchors`, it is still validated.
     #[serde(default)]
     pub(super) anchor_root: Option<String>,
 }
@@ -91,7 +92,8 @@ pub(super) struct RecallParams {
     pub(super) filter: Option<Metadata>,
     /// Optional absolute path of the checkout to check anchored facts
     /// against (inside the ingest roots). Each fact remembered with `anchors`
-    /// then carries `freshness`; a stale one is ranked lower.
+    /// then carries `freshness`; a stale one is ranked lower, and one anchored
+    /// in another checkout is `unverified`.
     #[serde(default)]
     pub(super) anchor_root: Option<String>,
 }

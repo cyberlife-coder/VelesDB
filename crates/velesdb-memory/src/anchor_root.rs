@@ -16,10 +16,14 @@
 //! 4. the joined path, canonicalized again, still lies below the canonical
 //!    checkout root: a symlink inside the checkout that points out of it is
 //!    refused, not followed;
-//! 5. the target is a regular file of at most
-//!    [`crate::limits::MAX_ANCHOR_FILE_BYTES`], and the read itself is
-//!    bounded to that size plus one byte, so a file growing between the
-//!    `stat` and the read is refused rather than read whole.
+//! 5. the canonical path is opened without following a final-component
+//!    symlink and without blocking (`O_NOFOLLOW | O_NONBLOCK` on unix), and
+//!    the type and size are checked on the OPENED handle: a regular file of
+//!    at most [`crate::limits::MAX_ANCHOR_FILE_BYTES`]. A FIFO swapped in
+//!    after the path was resolved opens without waiting for a writer and is
+//!    refused, instead of blocking the recall. The read itself is bounded to
+//!    the cap plus one byte, so a file growing while it is read is refused
+//!    rather than read whole.
 //!
 //! Errors and refusals cite the path as requested, never a resolved target.
 //! A refusal at recall time makes the anchor [`AnchorObservation::Unverifiable`],
@@ -32,22 +36,34 @@
 //! files and [`crate::limits::MAX_ANCHOR_BYTES_PER_RECALL`] bytes in total;
 //! past either budget the remaining anchors are unverifiable.
 //!
-//! TOCTOU between the check and the read is an accepted non-goal, as for the
-//! ingest pipeline: a local single-user server, and a verdict about the bytes
-//! actually read.
+//! # What is still raceable
+//!
+//! A directory ABOVE the file swapped for a symlink between step 4 and the
+//! open could point the read outside the checkout. That is accepted, as for
+//! the ingest pipeline: a local single-user server, and the read yields only
+//! a digest compared with the anchored one, never the bytes. Nothing a swap
+//! can do blocks the read or makes it unbounded.
+//!
+//! # One root, one identity
+//!
+//! The canonical root, as text, is the identity anchors are recorded under
+//! and the one [`AnchorProbe::root`] reports: a recall probing another root
+//! leaves those anchors unverified (see [`crate::anchor`]). A root whose
+//! canonical path is not UTF-8 is refused, since it has no such identity.
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use super::{
-    check_anchor_count, AnchorError, AnchorObservation, AnchorProbe, ContentDigest, FileAnchor,
-    RepoPath,
+    check_anchor_count, AnchorError, AnchorObservation, AnchorProbe, AnchorSet, ContentDigest,
+    FileAnchor, RepoPath,
 };
 use crate::limits::{
     MAX_ANCHOR_BYTES_PER_RECALL, MAX_ANCHOR_FILES_PER_RECALL, MAX_ANCHOR_FILE_BYTES,
 };
+use crate::mutation::atomic_file::open_regular_file_allow_hard_links;
 
 /// What one look at an anchored path found.
 #[derive(Debug, Clone)]
@@ -64,6 +80,7 @@ enum Look {
 #[derive(Debug)]
 pub struct AnchorRoot {
     root: PathBuf,
+    identity: String,
     bytes_left: usize,
     files_left: usize,
     seen: HashMap<RepoPath, Look>,
@@ -76,7 +93,7 @@ impl AnchorRoot {
     /// # Errors
     /// [`AnchorError::Disabled`] when `allowlist` is empty, and
     /// [`AnchorError::RootRefused`] for a relative, unresolvable,
-    /// non-directory or out-of-allowlist root.
+    /// non-directory, non-UTF-8 or out-of-allowlist root.
     pub fn open(requested: &str, allowlist: &[PathBuf]) -> Result<Self, AnchorError> {
         if allowlist.is_empty() {
             return Err(AnchorError::Disabled);
@@ -96,8 +113,13 @@ impl AnchorRoot {
         if !allowlist.iter().any(|allowed| root.starts_with(allowed)) {
             return Err(refuse("it is outside the configured ingest roots"));
         }
+        let identity = root
+            .to_str()
+            .ok_or_else(|| refuse("its canonical path is not valid UTF-8"))?
+            .to_owned();
         Ok(Self {
             root,
+            identity,
             bytes_left: MAX_ANCHOR_BYTES_PER_RECALL,
             files_left: MAX_ANCHOR_FILES_PER_RECALL,
             seen: HashMap::new(),
@@ -116,10 +138,28 @@ impl AnchorRoot {
         Ok(FileAnchor { path, digest })
     }
 
+    /// Anchor a lesson to every one of `paths` as they are now, under this
+    /// root. The count is checked before any file is read.
+    ///
+    /// # Errors
+    /// [`AnchorError::TooMany`], and the errors of [`Self::anchor`].
+    pub fn anchors<P: AsRef<str>>(&mut self, paths: &[P]) -> Result<AnchorSet, AnchorError> {
+        check_anchor_count(paths.len())?;
+        let files = paths
+            .iter()
+            .map(|path| self.anchor(path.as_ref()))
+            .collect::<Result<_, _>>()?;
+        Ok(AnchorSet {
+            root: self.identity.clone(),
+            files,
+        })
+    }
+
     /// Resolve an adapter's anchor request — a checkout root and the
     /// repository-relative paths below it — into anchors, reading each file
-    /// once. No path means no anchor, whatever the root. The count is checked
-    /// before any file is read.
+    /// once. No path means no anchor; a root given anyway is still validated,
+    /// so a mistyped or refused root is never silently ignored. The count is
+    /// checked before any file is read.
     ///
     /// # Errors
     /// [`AnchorError::MissingRoot`] for paths without a root,
@@ -129,14 +169,16 @@ impl AnchorRoot {
         requested_root: Option<&str>,
         paths: &[String],
         allowlist: &[PathBuf],
-    ) -> Result<Vec<FileAnchor>, AnchorError> {
-        if paths.is_empty() {
-            return Ok(Vec::new());
-        }
+    ) -> Result<Option<AnchorSet>, AnchorError> {
         check_anchor_count(paths.len())?;
-        let requested_root = requested_root.ok_or(AnchorError::MissingRoot)?;
-        let mut root = Self::open(requested_root, allowlist)?;
-        paths.iter().map(|path| root.anchor(path)).collect()
+        let root = requested_root
+            .map(|requested| Self::open(requested, allowlist))
+            .transpose()?;
+        if paths.is_empty() {
+            return Ok(None);
+        }
+        let mut root = root.ok_or(AnchorError::MissingRoot)?;
+        root.anchors(paths).map(Some)
     }
 
     /// The current digest of `path`, for anchoring a lesson to it now.
@@ -194,6 +236,10 @@ impl AnchorRoot {
 }
 
 impl AnchorProbe for AnchorRoot {
+    fn root(&self) -> &str {
+        &self.identity
+    }
+
     fn observe(&mut self, anchor: &FileAnchor) -> AnchorObservation {
         match self.look(&anchor.path) {
             Look::Digest(digest) if digest == anchor.digest => AnchorObservation::Unchanged,
@@ -204,17 +250,20 @@ impl AnchorProbe for AnchorRoot {
     }
 }
 
-/// Read a regular file of at most `cap` bytes, refusing anything else.
+/// Read a regular file of at most `cap` bytes, refusing anything else. The
+/// type and size are those of the opened handle, never of a separate lookup
+/// of the path (step 5 of the module's security model).
 fn read_bounded(path: &Path, cap: usize) -> Result<Vec<u8>, &'static str> {
-    let metadata = fs::metadata(path).map_err(|_| "it cannot be inspected")?;
-    if !metadata.is_file() {
-        return Err("it is not a regular file");
-    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    // Hard links are accepted: a checkout is someone else's tree, read only,
+    // where a hard link is an ordinary file.
+    let (file, metadata) = open_regular_file_allow_hard_links(path, "anchored", options)
+        .map_err(|_| "it is not a regular file, or cannot be opened")?;
     let too_large = "it is larger than the anchor size budget (1 MiB per file)";
     if !matches!(usize::try_from(metadata.len()), Ok(len) if len <= cap) {
         return Err(too_large);
     }
-    let file = fs::File::open(path).map_err(|_| "it cannot be opened")?;
     let limit = u64::try_from(cap).map_or(u64::MAX, |cap| cap.saturating_add(1));
     let mut bytes = Vec::new();
     file.take(limit)
