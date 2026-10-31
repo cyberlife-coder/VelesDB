@@ -430,43 +430,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A collection lock and the global rayon pool could deadlock the
-  process.** The dense and sparse legs of a hybrid search, both legs of a
-  `Parallel`-strategy NEAR + filter query and of a `Parallel` MATCH, and the
-  vector and payload stores of `upsert_bulk` ran as the two halves of a
-  `rayon::join` on the global pool, each taking collection locks there; a
-  batch search's resolve, an aggregation's scan and the lazy PQ training held
-  storage or quantizer guards across a join on that pool. Once a writer
-  queued behind such a guard, `parking_lot` parked every new reader — the
-  global workers among them — and the thread holding the guard waited for
-  workers that never freed. The legs and the stores now run one after the
-  other; the resolve, the scan and the training run on a dedicated pool whose
-  jobs take no lock (on the caller itself when it is a rayon worker). Under
-  `cfg(test)` every collection lock panics when taken on a rayon worker, and
-  every global-pool submission in core panics when its thread holds one; 81
-  unit tests failed that way before the fix. The `Parallel` strategies now
-  cost both legs' time, not the longer one's.
-- **Ids a flush could not index failed the calls that flushed.**
-  `upsert_bulk` returned the error before refreshing the point count,
-  applying the batch's sparse vectors and moving the write generation, for
-  points it had stored; `flush` and `flush_full` stopped before the HNSW
-  save, the quantizers, the sparse, BM25 and secondary indexes and
-  `vectors.idx`, and so did the bindings' `flush`. Kept ids stay queued, and
-  searchable, for the next flush and are logged; every flush step now runs
-  whatever an earlier one did, the first error being returned at the end,
-  and the HNSW save waits only on a drain whose link failed.
-- **Adaptive and AutoTune searches walked the graph again for candidates
-  they did not need.** A PQ rescore or a forced rerank over-fetches
-  candidates and keeps `k`; under those qualities, nodes a delete left
-  behind among the fetched candidates made the walk run again although the
-  live ones were enough for `k`, as other qualities already knew.
-- **A merge chunk the graph refused held the storage guard through every
-  retry.** Its ids were retried one by one under the read guard the chunk
-  had taken, each refusal logged on its own. Each retry now reads and
-  inserts its id under a guard of its own, and a merge logs one warning
-  counting what it kept. A deferred merge that empties its buffer also no
-  longer erases the age of an entry pushed while it ended, which left that
-  entry without an age-triggered merge until the next push.
+- **A collection lock and a rayon pool could deadlock the process.** The
+  dense and sparse legs of a hybrid search, both legs of a `Parallel`
+  SELECT and MATCH, and the vector and payload stores of `upsert_bulk` ran as
+  the two halves of a `rayon::join` on the global pool, each taking
+  collection locks there; a batch search's resolve, an aggregation's scan
+  and the lazy PQ training held storage or quantizer guards across a join on
+  that pool; and a merge into the HNSW index held the storage guard across
+  the graph pool's `install`, which, called from an application's own rayon
+  job, let that worker run the application's other jobs meanwhile. Once a
+  writer queued behind such a guard, `parking_lot` parked every new reader,
+  among them the jobs the guard holder was waiting for. The legs and the
+  stores now run one after the other (the `Parallel` strategies are removed,
+  see Removed); the resolve, the scan and the training run on a dedicated
+  pool whose jobs take no lock; and a caller that is itself a rayon worker
+  waits on no pool at all — it runs that work, and the HNSW place, link and
+  vacuum-settle phases, on its own thread.
+- **A failed flush step stopped every step after it.** `flush` and
+  `flush_full` returned at the first failing step, so a failure of the
+  config, the vector or payload storage or the async builder's drain left
+  the HNSW save, the quantizers and the sparse, BM25 and secondary indexes
+  unwritten; and `upsert_bulk` returned a failed builder flush before
+  refreshing the point count, applying the batch's sparse vectors and moving
+  the write generation, for points it had stored. Every step now runs and
+  the first error is returned at the end, with two exceptions that keep a
+  file from describing what is not on disk: the HNSW save waits on a drain
+  whose link succeeded, and `vectors.idx` on a vector storage flush that
+  succeeded. `upsert_bulk` always finishes its bookkeeping. Ids the builder
+  could not index stay queued, and searchable, for the next flush, and are
+  logged rather than failing it.
 
 - **`upsert_bulk` with an async index builder returned before its points
   could be found.** Its V2 path places each vector in the graph's arena and
