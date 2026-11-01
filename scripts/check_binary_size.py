@@ -57,7 +57,11 @@ MIB = 1024 * 1024
 # the family propagates the figure across ten documentation surfaces, and this
 # file is not one of them, so nothing here fails when it moves.
 BINARIES = [
-    ("velesdb-server", 14.25 * MIB),  # measured 13.68 MiB at 6.0.0 and at 5.2.0
+    # Measured 13.68 MiB at 6.0.0 and 5.2.0; 14.38 MiB on the Linux x86_64
+    # release build once the 8.0.0 VelesQL work this branch carries (aliased
+    # aggregates in ORDER BY, range index v2, the point-id bitmap prefilter)
+    # landed in the binary — no dependency changed. Ceiling = measured + ~2.5 %.
+    ("velesdb-server", 14.75 * MIB),
     ("velesdb", 11.5 * MIB),  # measured 11.04 MiB at 6.0.0, 10.99 at 5.2.0
     # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
     # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.
