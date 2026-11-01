@@ -139,8 +139,9 @@ fn join_qualified_column<'c>(
             .map(|_| c);
     }
     match filter {
-        Condition::And(l, r) | Condition::Or(l, r) => join_qualified_column(l, join_tables)
-            .or_else(|| join_qualified_column(r, join_tables)),
+        Condition::And(l, r) | Condition::Or(l, r) => {
+            join_qualified_column(l, join_tables).or_else(|| join_qualified_column(r, join_tables))
+        }
         Condition::Not(inner) | Condition::Group(inner) => {
             join_qualified_column(inner, join_tables)
         }
@@ -232,6 +233,10 @@ impl Database {
     /// refuses them, and a scope, with no row to narrow, refuses them too
     /// rather than leak the unscoped count. `SHOW COLLECTIONS` names the
     /// collections only — no per-collection data — so it is not consulted.
+    /// Threat model: it does leak name *existence* (a caller learns a
+    /// collection exists even when its reads are denied) — the accepted leak
+    /// every `list`/`SHOW` surface shares; a policy that must hide existence
+    /// denies at the transport, not at this gate.
     fn authorize_introspection(
         &self,
         stmt: &IntrospectionStatement,

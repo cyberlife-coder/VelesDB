@@ -541,7 +541,10 @@ fn test_update_guardrails_refuses_a_zero_rate_limit_and_changes_nothing() {
     });
 
     assert!(refused.is_err());
-    assert_eq!(col.guard_rails().expect("test: guard_rails").timeout_ms, before.timeout_ms);
+    assert_eq!(
+        col.guard_rails().expect("test: guard_rails").timeout_ms,
+        before.timeout_ms
+    );
 }
 
 #[test]
@@ -617,7 +620,10 @@ fn test_collection_apply_advanced_config() {
     .unwrap();
 
     // Both streaming components were installed live (none ran before).
-    assert!(col.pending_reopen().expect("test: pending_reopen").is_empty());
+    assert!(col
+        .pending_reopen()
+        .expect("test: pending_reopen")
+        .is_empty());
 
     let cfg2 = col.inner.config();
     assert_eq!(cfg2.pq_rescore_oversampling, Some(8));
@@ -1393,9 +1399,13 @@ fn test_collection_secondary_index_lifecycle() {
         .unwrap()
         .unwrap();
 
-    assert!(!col.has_secondary_index("category".to_string()).expect("test"));
+    assert!(!col
+        .has_secondary_index("category".to_string())
+        .expect("test"));
     col.create_index("category".to_string()).unwrap();
-    assert!(col.has_secondary_index("category".to_string()).expect("test"));
+    assert!(col
+        .has_secondary_index("category".to_string())
+        .expect("test"));
 }
 
 #[test]
@@ -1417,8 +1427,12 @@ fn test_collection_property_and_range_index_lifecycle() {
     col.create_range_index("Doc".to_string(), "year".to_string())
         .unwrap();
 
-    assert!(col.has_property_index("Doc".to_string(), "title".to_string()).expect("test"));
-    assert!(col.has_range_index("Doc".to_string(), "year".to_string()).expect("test"));
+    assert!(col
+        .has_property_index("Doc".to_string(), "title".to_string())
+        .expect("test"));
+    assert!(col
+        .has_range_index("Doc".to_string(), "year".to_string())
+        .expect("test"));
 
     let indexes = col.list_indexes().expect("test: list_indexes");
     assert!(indexes
@@ -1428,13 +1442,17 @@ fn test_collection_property_and_range_index_lifecycle() {
         .iter()
         .any(|idx| idx.label == "Doc" && idx.property == "year" && idx.index_type == "range"));
 
-    let usage = col.indexes_memory_usage().expect("test: indexes_memory_usage");
+    let usage = col
+        .indexes_memory_usage()
+        .expect("test: indexes_memory_usage");
     assert!(usage > 0);
 
     assert!(col
         .drop_index("Doc".to_string(), "title".to_string())
         .unwrap());
-    assert!(!col.has_property_index("Doc".to_string(), "title".to_string()).expect("test"));
+    assert!(!col
+        .has_property_index("Doc".to_string(), "title".to_string())
+        .expect("test"));
 }
 
 #[test]

@@ -50,12 +50,11 @@ struct SimilarityScope;
 impl DatabaseObserver for SimilarityScope {
     fn on_query_request(&self, ctx: &QueryAccessContext) -> velesdb_core::Result<AccessDecision> {
         let _ = ctx;
-        let filter = Parser::parse(
-            "SELECT * FROM c WHERE similarity(vector, [1.0, 0.0, 0.0, 0.0]) > 0.5",
-        )
-        .expect("test: scope predicate parses")
-        .select
-        .where_clause;
+        let filter =
+            Parser::parse("SELECT * FROM c WHERE similarity(vector, [1.0, 0.0, 0.0, 0.0]) > 0.5")
+                .expect("test: scope predicate parses")
+                .select
+                .where_clause;
         #[allow(clippy::field_reassign_with_default)] // `AccessScope` is non_exhaustive
         let mut scope = AccessScope::default();
         scope.filter = filter;
@@ -69,8 +68,7 @@ impl DatabaseObserver for SimilarityScope {
 #[test]
 fn semantic_memory_edge_count_is_gated() {
     let dir = TempDir::new().expect("test: tempdir");
-    let db = Database::open_with_observer(dir.path(), Arc::new(DenyAll))
-        .expect("test: open db");
+    let db = Database::open_with_observer(dir.path(), Arc::new(DenyAll)).expect("test: open db");
     let semantic = SemanticMemory::new_from_db(Arc::new(db), 4).expect("test: memory");
 
     let result = semantic.edge_count();
@@ -87,8 +85,7 @@ fn semantic_memory_edge_count_is_gated() {
 #[test]
 fn episodic_memory_get_with_embedding_is_gated() {
     let dir = TempDir::new().expect("test: tempdir");
-    let db = Database::open_with_observer(dir.path(), Arc::new(DenyAll))
-        .expect("test: open db");
+    let db = Database::open_with_observer(dir.path(), Arc::new(DenyAll)).expect("test: open db");
     let episodic = EpisodicMemory::new_from_db(Arc::new(db), 4).expect("test: memory");
     episodic
         .record(1, "an event", 1_700_000_000, Some(&[1.0, 0.0, 0.0, 0.0]))
@@ -115,8 +112,8 @@ fn episodic_memory_get_with_embedding_is_gated() {
 #[test]
 fn raw_gate_refuses_a_scope_it_cannot_express() {
     let dir = TempDir::new().expect("test: tempdir");
-    let db = Database::open_with_observer(dir.path(), Arc::new(SimilarityScope))
-        .expect("test: open db");
+    let db =
+        Database::open_with_observer(dir.path(), Arc::new(SimilarityScope)).expect("test: open db");
 
     let outcome = db.authorize_read(
         "c",

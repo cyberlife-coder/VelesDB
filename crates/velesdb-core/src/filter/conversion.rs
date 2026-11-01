@@ -66,8 +66,11 @@ pub(crate) fn inexpressible_scope_construct(
     const VALUE: &str = "a parameter placeholder or subquery value";
     let unbound = |v: &V| matches!(v, V::Parameter(_) | V::Subquery(_));
     match condition {
-        C::VectorSearch(_) | C::VectorFusedSearch(_) | C::SparseVectorSearch(_)
-        | C::Similarity(_) | C::GraphMatch(_) => Some(ENGINE),
+        C::VectorSearch(_)
+        | C::VectorFusedSearch(_)
+        | C::SparseVectorSearch(_)
+        | C::Similarity(_)
+        | C::GraphMatch(_) => Some(ENGINE),
         C::Match(_) => Some("a full-text MATCH"),
         C::Comparison(c) => unbound(&c.value).then_some(VALUE),
         C::In(c) => c.values.iter().any(&unbound).then_some(VALUE),
@@ -77,11 +80,7 @@ pub(crate) fn inexpressible_scope_construct(
             inexpressible_scope_construct(l).or_else(|| inexpressible_scope_construct(r))
         }
         C::Not(inner) | C::Group(inner) => inexpressible_scope_construct(inner),
-        C::IsNull(_)
-        | C::Like(_)
-        | C::ContainsText(_)
-        | C::GeoDistance(_)
-        | C::GeoBbox(_) => None,
+        C::IsNull(_) | C::Like(_) | C::ContainsText(_) | C::GeoDistance(_) | C::GeoBbox(_) => None,
     }
 }
 

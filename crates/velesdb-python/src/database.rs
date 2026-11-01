@@ -846,12 +846,7 @@ impl Database {
         // gated in-core.)
         let scope = self
             .inner
-            .authorize_read(
-                name,
-                velesdb_core::QueryOperationKind::Select,
-                None,
-                None,
-            )
+            .authorize_read(name, velesdb_core::QueryOperationKind::Select, None, None)
             .map_err(core_err)?;
         crate::collection::deny_if_scoped(scope, "get_collection_stats")?;
         let name_owned = name.to_string();

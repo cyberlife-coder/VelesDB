@@ -433,12 +433,7 @@ impl Collection {
         if !parsed.select.from.is_empty() && parsed.select.from != self.name {
             let scope = self
                 .db
-                .authorize_read(
-                    &parsed.select.from,
-                    QueryOperationKind::Select,
-                    None,
-                    None,
-                )
+                .authorize_read(&parsed.select.from, QueryOperationKind::Select, None, None)
                 .map_err(core_err)?;
             deny_if_scoped(scope, "explain")?;
         }
