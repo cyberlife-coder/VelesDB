@@ -312,12 +312,32 @@ fast sends no search instead.
   keeps an infinite extreme in `mins` / `maxs` (7.1.0 reported `0`), with
   no entry in `min_values` / `max_values`, and skips a NaN: it is no value,
   counted nowhere.
+- **`Condition::In`'s `values` is an `InValues`, not a
+  `Vec<serde_json::Value>`**: the member list sorts and de-duplicates at
+  construction, so the >16-element binary search in `matches_point` can
+  never see an unsorted or duplicated list — `Condition::is_in`,
+  `Deserialize` and `Condition::In` literals included. The serialized
+  shape is unchanged (`"values": [...]`). Build it with
+  `values: vec.into()`; read it through the `[Value]` deref (`.iter()`,
+  `.len()`, indexing unchanged).
 - **`all_ids()` lists every point, ascending**: `Collection`,
   `VectorCollection` and `MetadataCollection::all_ids`,
   `GraphCollection::all_node_ids`, and the Python and mobile `all_ids()`.
   7.1.0 listed only the points with a payload, in storage order, so a point
   upserted without a payload was missing. Code that wanted the payload
-  holders filters on `get()`'s payload.
+  holders filters on `get()`'s payload. Note the set is the storage set:
+  in a vector collection it is a superset of what a `SELECT`, an aggregate
+  or `get()` sees — a payload-only id (a graph node) is listed yet is not
+  a `SELECT` row.
+- **A MATCH `WHERE x.prop != v` keeps a node whose property is missing or
+  of another type**, agreeing with SELECT's `!=` (and the WASM demo scope
+  documents the opposite convention — unchanged). Before, such a node was
+  dropped: `MATCH (n) WHERE n.x != 5` over a node with no `x` returned
+  nothing; it now returns the node.
+- **`range_index.bin` files written before `OrderedValue` took the exact
+  number order are discarded on open** (`RANGE_INDEX_VERSION` 2): the stale
+  key order is not adopted — the index rebuilds empty, as it always did
+  for an absent file.
 
 ### Added
 

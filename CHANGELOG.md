@@ -430,6 +430,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   x` and `DISTINCT x` keyed numbers by their JSON text, so `1` and `1.0`, or
   `0` and `-0.0`, fell in different partitions or rows; they are one, as in
   `GROUP BY`. In core and WASM.
+- **BREAKING (Rust API): `Condition::In`'s `values` is an `InValues`, not
+  a `Vec<serde_json::Value>`.** The newtype sorts and de-duplicates at
+  construction — every `Condition::In`, however built (`Condition::is_in`,
+  `VelesQL` conversion, `Deserialize`, a literal), carries a sorted list,
+  so the >16-element binary search can never see an unsorted one. The wire
+  format is unchanged. A struct literal builds it with `values: vec.into()`;
+  reads go through the `[Value]` deref. `id = 5.0` and `id IN (5.0)` now
+  take the point-id lookup, like `id = 5`.
 - **Aggregates see every point of a metadata collection.** `COUNT(*)`,
   every other aggregate and `GROUP BY` over a metadata-only collection
   scanned vector storage only and found no row; they scan the points a
@@ -586,6 +594,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hasMore` says the traversal stopped at `limit`.
 
 ### Fixed
+
+- **An `IN` list longer than 16 no longer misses members.** The binary
+  search ranked every array (every object) `Equal`, so a member past the
+  first array position was reported absent; and a `Condition::In` built
+  outside the `VelesQL` conversion — `Condition::is_in`, `Deserialize`, a
+  literal — reached it unsorted. `InValues` sorts at construction, and an
+  array or object probe scans the list linearly.
+- **A MATCH `WHERE n.prop != x` agrees with SELECT's `!=`.** A missing or
+  cross-typed property was `false` under MATCH while the SELECT filter
+  (and `values_equal`) calls it "not equal": the row is now kept, on node
+  and relationship properties alike.
+- **A candidate scan can no longer return a point outside the scan
+  universe.** `id IN (...)` literals and bitmap supersets reaching
+  `collect_filtered_scan` could hydrate an id that owns no vector in a
+  mixed collection — a payload-only graph node, a torn-delete residue or
+  a nonexistent id — while the sequential scan excluded it. The row
+  universe is one rule now: vector-backed, or payload-backed when the
+  collection stores no vector at all, which `all_ids`' doc finally
+  describes (it lists a superset — the storage set — not the scan's).
+- **`range_index.bin` files are version-checked on load.** `OrderedValue`'s
+  `Ord` changed with the exact-number epic, so a v1 B-tree could lose
+  folded keys on deserialize; `RANGE_INDEX_VERSION` is 2 and
+  `RangeIndex::from_bytes` refuses a stale version instead of adopting it.
 
 - **`velesdb-server` applies the `[server]` and `[logging]` settings
   `docs/guides/CONFIGURATION.md` documents.** In 7.1.0 `workers`,

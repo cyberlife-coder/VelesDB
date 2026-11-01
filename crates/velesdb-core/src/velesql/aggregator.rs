@@ -28,9 +28,13 @@ pub struct AggregateResult {
     pub sums: HashMap<String, f64>,
     /// AVG results by column name (computed from sum/count).
     pub avgs: HashMap<String, f64>,
-    /// MIN results by column name.
+    /// MIN results by column name, as `f64`. Kept beside `min_values` for
+    /// wire compatibility — a result serialized before `min_values` existed
+    /// reads its extremes here — and because an infinite extreme has no
+    /// JSON `Number` (its `value_of` reads `null`, there being no ±∞ in
+    /// JSON).
     pub mins: HashMap<String, f64>,
-    /// MAX results by column name.
+    /// MAX results by column name, as `f64` (see `mins`).
     pub maxs: HashMap<String, f64>,
     /// MIN results by column name, exactly: an integer stays an integer,
     /// beyond 2^53 included, where `mins` holds its `f64`.
@@ -72,7 +76,9 @@ impl AggregateResult {
 }
 
 /// A minimum or maximum as the value it is, from `exact`, else as the `f64`
-/// `floats` holds (a result deserialized from before `exact` existed).
+/// `floats` holds — a result deserialized from before `exact` existed, or
+/// an infinite extreme, which has no JSON `Number`; `serde_json` turns the
+/// `f64` ±∞ into `null`, JSON having no infinity literal.
 fn extreme(
     exact: &HashMap<String, Number>,
     floats: &HashMap<String, f64>,
@@ -174,8 +180,11 @@ enum Extreme {
 impl Extreme {
     /// An `f64` batch extreme as an `Extreme`: the finite ones are JSON
     /// numbers, an infinity has no JSON form. A NaN is no value —
-    /// `process_batch` filters it before this is ever called.
+    /// `process_batch` filters it before this is ever called; a caller that
+    /// let one through would read it as `+inf` (the `else` arm), which the
+    /// debug_assert below forbids rather than silently accepts.
     fn of_f64(value: f64) -> Self {
+        debug_assert!(!value.is_nan(), "Extreme::of_f64 called with NaN");
         if let Some(n) = Number::from_f64(value) {
             Self::Finite(n)
         } else if value.is_sign_negative() {
