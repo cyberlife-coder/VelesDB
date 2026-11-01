@@ -325,7 +325,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   VectorFirst leg's similarity score (and `RETURN similarity()` its
   projection); a `GraphFirst` row carries none — its `score` is the
   depth-derived value every graph-reached row gets. `VectorFirst` rows
-  still carry theirs.
+  still carry theirs. The union also ran `sort_match_results_by_score`
+  over its merged rows, and that ordering leaves with it: a `Parallel`
+  MATCH without `ORDER BY` returned its first N best-scored, and the same
+  MATCH now returns GraphFirst's first N in traversal order. `ORDER BY`
+  sorts as before.
   *Migration*: drop the `Parallel` arm of a `match` on either enum; build a
   planner with `QueryPlanner::with_vector_first_threshold(vector_first)`.
 - **BREAKING — `AsyncIndexBuilder`'s test-only calls.** `search_buffer`,
