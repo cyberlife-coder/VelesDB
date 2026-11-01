@@ -446,7 +446,7 @@ impl RangeIndex {
     ///
     /// # Errors
     /// Returns an error if deserialization fails (corrupted data), or when
-    /// the stored `version` predates [`RANGE_INDEX_VERSION`]: a stale
+    /// the stored `version` predates `RANGE_INDEX_VERSION`: a stale
     /// file's key order is not today's, so it is discarded — callers fall
     /// back to an empty index — never adopted.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, postcard::Error> {

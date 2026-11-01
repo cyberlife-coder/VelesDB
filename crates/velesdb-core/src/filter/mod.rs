@@ -271,7 +271,7 @@ pub enum Condition {
 
 /// The member list of [`Condition::In`].
 ///
-/// Values are sorted by [`json_value_cmp`](matching::json_value_cmp) and
+/// Values are sorted by `json_value_cmp` and
 /// de-duplicated at construction so `matching::in_list_matches` can
 /// binary-search a long list. The invariant lives in the type rather than
 /// in each caller's discipline: [`Condition::is_in`], the `VelesQL`
