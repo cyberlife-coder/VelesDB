@@ -426,8 +426,6 @@ pub async fn search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     #[cfg(feature = "persistence")]
     let parsed_quality = parse_search_quality(&request.quality).map_err(CommandError::from)?;
-    #[cfg(not(feature = "persistence"))]
-    let _parsed_quality: Option<()> = None;
 
     let results = state
         .run_db(move |db| {
