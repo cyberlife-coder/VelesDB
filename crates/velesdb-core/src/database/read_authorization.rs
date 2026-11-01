@@ -254,7 +254,16 @@ impl Database {
     /// plan-only `EXPLAIN`'s calibrated statistics cannot be row-narrowed, so
     /// a scope refuses the statement rather than leak them. Subqueries the
     /// statement carries are irrelevant here: the plan never executes them.
-    fn authorize_unscoped_statement(&self, query: &Query, params: &Params) -> Result<()> {
+    ///
+    /// `pub(super)` so the sibling `query_engine` module can route the public
+    /// [`Database::explain_query`] facade through the same decision —
+    /// gating here means every surface (REST, CLI, Python, the introspection
+    /// executor) inherits it instead of each remembering its own.
+    pub(super) fn authorize_unscoped_statement(
+        &self,
+        query: &Query,
+        params: &Params,
+    ) -> Result<()> {
         if let Some(DmlStatement::SelectEdges(stmt)) = &query.dml {
             let graph = QueryOperationKind::GraphTraversal;
             self.require_unscoped(&stmt.collection, graph, "SELECT EDGES")?;
@@ -370,7 +379,11 @@ impl Database {
 
     /// The observer's answer for a read that cannot apply a scope filter: a
     /// filter refuses the statement instead of letting it run unscoped.
-    fn require_unscoped(
+    ///
+    /// `pub(super)` so sibling `database` modules gate their public metadata
+    /// reads (`analyze_collection`, `collection_diagnostics`) with the same
+    /// fail-closed answer the statement gate gives.
+    pub(super) fn require_unscoped(
         &self,
         collection: &str,
         operation: QueryOperationKind,

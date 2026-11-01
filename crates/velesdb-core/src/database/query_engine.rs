@@ -249,6 +249,12 @@ impl Database {
     /// `plan_reuse_count` set. Otherwise generates a fresh plan with
     /// `cache_hit: Some(false)`.
     ///
+    /// A plan-only EXPLAIN reads the collection's calibrated statistics, so
+    /// the read gate decides it here — in-core, so the REST `/query/explain`
+    /// plan path, the `EXPLAIN` statement executor, and the CLI/Python
+    /// facades all inherit it rather than each remembering to gate. A denial
+    /// refuses; a scope, which a plan cannot row-narrow, refuses too.
+    ///
     /// # Design decision: `explain_query` does not populate the cache
     ///
     /// `explain_query` intentionally does **not** insert a new plan into the
@@ -260,12 +266,13 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query is invalid.
+    /// Returns an error if the query is invalid or the read gate refuses it.
     pub fn explain_query(
         &self,
         query: &crate::velesql::Query,
     ) -> Result<crate::velesql::QueryPlan> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
+        self.authorize_unscoped_statement(query, &std::collections::HashMap::new())?;
 
         let plan_key = self.build_plan_key(query);
 
@@ -423,7 +430,10 @@ impl Database {
         let started = std::time::Instant::now();
         let results = self.execute_query_inner(authorized, params, probe)?;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        observer.on_query(authorized.query().select.from.as_str(), duration_us);
+        // Report the collection the gate decided on — `select.from` is ""
+        // for a MATCH addressed through `_collection`, which is exactly the
+        // case a telemetry hook must not lose.
+        observer.on_query(authorized.target().unwrap_or(""), duration_us);
         Ok(results)
     }
 
