@@ -132,6 +132,11 @@ In 8.0.0 each one asks the observer about the collection it reads.
 | `GET /collections/{name}/graph/traverse/stream` (SSE) | never asked | the denial's status and code | refused, `400` `VELES-009` |
 | Every `AgentMemory` read — `query_semantic`/`query_episodic`/`query_procedural` and the native `query`/`recent`/`recall`/`list_all`/`serialize`/relation accessors — and the Tauri memory commands over them | undecided | the denial | refused, `VELES-009` |
 | Tauri `search`, `search_ids`, `batch_search`, `text_search`, `hybrid_search`, `multi_query_search`, `sparse_search`, `hybrid_sparse_search`, `get_points`, `scroll_collection`, `get_edges`, `traverse_graph`, `traverse_graph_parallel`, `get_node_degree`, `get_collection`, `list_collections`, `is_empty`, `list_indexes` | never asked | the command fails with the denial | the scope narrows the filterable reads; the others refuse |
+| `SemanticMemory::edge_count`/`count`/`is_empty`, `EpisodicMemory::get_with_embedding` | undecided | the denial | refused, `VELES-009` |
+| Every `PyGraphCollection` direct read (`get_edges`, `get_outgoing*`/`get_incoming*`, `has_edge`, `node_degree`, `get_node_payload`, `all_node_ids`, `traverse_*`, `edge_count`, `__len__`/`count`/`is_empty`, `get`, `__contains__`) | undecided | raises `PermissionError` | refused (`PermissionError`, no filterable leaf) |
+| Index and collection-config metadata — Python `has_*_index`/`list_indexes`/`indexes_memory_usage`/`dimension`/`metric`/`storage_mode`/`is_metadata_only`/`pending_reopen`/`guard_rails`/`is_delta_active`/`check_auto_reindex_divergence`, mobile `has_*_index`/`list_indexes`/`indexes_memory_usage`/`dimension`/`is_metadata_only`/`guard_rails`/`pending_reopen` | undecided | raises / throws the denial | refused |
+| `analyze()` on Python `Collection` and mobile `VelesCollection`, `Database.analyze_collection`/`get_collection_stats`/`collection_diagnostics` (Python), REST `POST /collections/{name}/analyze` | undecided | the denial | refused, `VELES-009` |
+| `Database::explain_query` and Python `Collection.explain()` (now also on the query's `FROM`, not only the bound collection) | undecided | the denial | refused, `VELES-009` |
 
 A read refused with `VELES-009` has no row filter to compose the scope into,
 so it is refused rather than run unscoped, as the server's graph and `/match`
@@ -141,6 +146,18 @@ filterable form — a `SELECT` with the scope's predicate on that collection.
 `QueryAccessContext::collection` now names the collection actually read: a
 `MATCH` sent with `_collection` reports that collection, where 7.1.0 reported
 an empty name.
+
+A scope filter must be a **self-contained row predicate** on the scoped
+collection's own payloads: no `similarity()`/vector/graph directives, no
+full-text `MATCH`, no `$param` placeholders or subquery values (they have no
+resolution context at the gate — they would bind to the *caller's* params),
+and no column qualified with a JOIN table (`other.col` would push down to the
+join side, where a `LEFT JOIN` leaks the base rows anyway). An inexpressible
+scope refuses the read with `VELES-009` on every surface — 7.1.0's
+`AllowWithScope` contract did not exist, and the first 8.0.0 builds lowered
+such a scope to a match-all tautology or a different predicate and ran
+unscoped. `CONTAINS_TEXT` stays legal (it already is a strict substring
+predicate).
 
 ### REST statuses
 

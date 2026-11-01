@@ -281,8 +281,9 @@ pub async fn reorder_for_locality(
     ),
     responses(
         (status = 200, description = "Collection analyzed", body = CollectionStatsResponse),
+        (status = 400, description = "A read the access gate denied with a client error, or a scope narrowing this read cannot apply (VELES-009)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Analysis failed", body = ErrorResponse)
+        (status = 500, description = "Analysis failed, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse)
     )
 )]
 pub async fn analyze_collection(

@@ -76,6 +76,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   What an integrator sees change is in
   [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md) §2.
 
+  The follow-up adversarial pass closed what it still missed:
+  - a scope filter the row-filter lowering cannot express — a
+    `similarity()`/vector/graph conjunct (lowered to a match-all tautology,
+    running *unscoped*), a full-text `MATCH` (lowered to substring
+    `CONTAINS`, narrowing by the wrong predicate), a `$param` or subquery
+    value (no policy value of its own) — is refused with `VELES-009` at the
+    gate itself, on every surface. `CONTAINS_TEXT` stays legal: it already
+    is a strict substring predicate, so its lowering is faithful;
+  - a scope column qualified with a JOIN table (`other.col`) is refused for
+    the same reason — pushdown would apply it to the join side, where a
+    `LEFT JOIN` keeps every base row anyway;
+  - `SemanticMemory::edge_count`/`count`/`is_empty` and
+    `EpisodicMemory::get_with_embedding`, decided like their siblings —
+    the `edge_count` gate had been written inside `clear()` (a mutation)
+    instead;
+  - every `PyGraphCollection` direct read (`get_edges`, `get_outgoing*`/
+    `get_incoming*`, `has_edge`, `node_degree`, `get_node_payload`,
+    `all_node_ids`, `traverse_*`, `edge_count`, `__len__`/`count`/`is_empty`,
+    `get`, `__contains__`), gated as `GraphTraversal`;
+  - the remaining metadata reads: Python `analyze()`/`get_collection_stats`/
+    `analyze_collection`/`collection_diagnostics`, mobile `analyze()`; the
+    index-metadata getters on both (Tauri already gates `list_indexes`), and
+    the collection-config getters (`dimension`, `metric`, `storage_mode`,
+    `is_metadata_only`, `pending_reopen`, `guard_rails`, `is_delta_active`,
+    `check_auto_reindex_divergence`) that duplicate what `info()` already
+    gates;
+  - `Database::explain_query`/`analyze_collection`/`collection_diagnostics`
+    now gate in-core, so a surface can no longer forget to decide them —
+    REST `POST /analyze` was never decided. `get_collection_stats` stays
+    surface-gated by design: core consults it on every uncached plan build;
+  - Python `explain()` now also authorizes the query's `FROM` — a plan for
+    `SELECT * FROM denied` no longer ships to a caller who cannot read it;
+  - `on_query` telemetry for a `MATCH` addressed through `_collection`
+    reported an empty collection name; it now reports the gate's target.
+
 ### Added
 
 - `Database::gated_search_outcome`: `gated_search` with the read gate's
