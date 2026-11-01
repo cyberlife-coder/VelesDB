@@ -309,9 +309,9 @@ fast sends no search instead.
   of `AggregateResult` must set them, or end with `..Default::default()`; a
   result serialized by 7.1.0 deserializes with both empty, and its `MIN` /
   `MAX` read from `mins` / `maxs` as before. `Aggregator::process_batch`
-  keeps an infinite extreme in `mins` / `maxs` (7.1.0 too), with no entry
-  in `min_values` / `max_values`, and skips a NaN: it is no value, counted
-  nowhere.
+  keeps an infinite extreme in `mins` / `maxs` (7.1.0 reported `0`), with
+  no entry in `min_values` / `max_values`, and skips a NaN: it is no value,
+  counted nowhere.
 - **`all_ids()` lists every point, ascending**: `Collection`,
   `VectorCollection` and `MetadataCollection::all_ids`,
   `GraphCollection::all_node_ids`, and the Python and mobile `all_ids()`.

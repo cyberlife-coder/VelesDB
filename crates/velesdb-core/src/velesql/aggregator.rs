@@ -9,6 +9,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use serde_json::Number;
@@ -99,8 +100,8 @@ fn extreme(
 struct ColumnAgg {
     sum: f64,
     count: u64,
-    min: Number,
-    max: Number,
+    min: Extreme,
+    max: Extreme,
 }
 
 impl ColumnAgg {
@@ -108,8 +109,8 @@ impl ColumnAgg {
         Self {
             sum: value.as_f64().unwrap_or(0.0),
             count: 1,
-            min: value.clone(),
-            max: value.clone(),
+            min: Extreme::Finite(value.clone()),
+            max: Extreme::Finite(value.clone()),
         }
     }
 
@@ -117,8 +118,8 @@ impl ColumnAgg {
         Self {
             sum,
             count,
-            min: float_number(min),
-            max: float_number(max),
+            min: Extreme::of_f64(min),
+            max: Extreme::of_f64(max),
         }
     }
 
@@ -126,14 +127,15 @@ impl ColumnAgg {
     fn update(&mut self, value: &Number) {
         self.sum += value.as_f64().unwrap_or(0.0);
         self.count += 1;
-        self.widen(value, value);
+        let extreme = Extreme::Finite(value.clone());
+        self.widen(&extreme, &extreme);
     }
 
     #[inline]
     fn update_batch(&mut self, batch_sum: f64, batch_count: u64, batch_min: f64, batch_max: f64) {
         self.sum += batch_sum;
         self.count += batch_count;
-        self.widen(&float_number(batch_min), &float_number(batch_max));
+        self.widen(&Extreme::of_f64(batch_min), &Extreme::of_f64(batch_max));
     }
 
     #[inline]
@@ -143,22 +145,104 @@ impl ColumnAgg {
         self.widen(&other.min, &other.max);
     }
 
-    /// Takes `min` and `max` as the extremes where they extend them.
+    /// Takes `min` and `max` as the extremes where they extend them, or
+    /// where they carry the better representation of an equal value.
     #[inline]
-    fn widen(&mut self, min: &Number, max: &Number) {
-        if compare_numbers(min, &self.min).is_lt() {
+    fn widen(&mut self, min: &Extreme, max: &Extreme) {
+        if replaces(min, &self.min, Ordering::is_lt) {
             self.min = min.clone();
         }
-        if compare_numbers(max, &self.max).is_gt() {
+        if replaces(max, &self.max, Ordering::is_gt) {
             self.max = max.clone();
         }
     }
 }
 
-/// An `f64` extreme of a batch as a JSON number (`0` for a non-finite one,
-/// which no JSON value holds).
-fn float_number(value: f64) -> Number {
-    Number::from_f64(value).unwrap_or_else(|| Number::from(0))
+/// A column extreme: an exact JSON number, or an infinity a
+/// [`Aggregator::process_batch`] batch carried — a value `mins` / `maxs`
+/// report but no JSON `Number` (and so `min_values` / `max_values`) holds.
+#[derive(Debug, Clone)]
+enum Extreme {
+    /// `-inf`: no finite value is below it.
+    NegInf,
+    /// An exact JSON number.
+    Finite(Number),
+    /// `+inf`: no finite value is above it.
+    PosInf,
+}
+
+impl Extreme {
+    /// An `f64` batch extreme as an `Extreme`: the finite ones are JSON
+    /// numbers, an infinity has no JSON form. A NaN is no value —
+    /// `process_batch` filters it before this is ever called.
+    fn of_f64(value: f64) -> Self {
+        if let Some(n) = Number::from_f64(value) {
+            Self::Finite(n)
+        } else if value.is_sign_negative() {
+            Self::NegInf
+        } else {
+            Self::PosInf
+        }
+    }
+
+    /// The extreme as `f64`, what `mins` / `maxs` hold.
+    fn as_f64(&self) -> f64 {
+        match self {
+            Self::NegInf => f64::NEG_INFINITY,
+            Self::Finite(n) => n.as_f64().unwrap_or(0.0),
+            Self::PosInf => f64::INFINITY,
+        }
+    }
+
+    /// The extreme as the JSON number it is, where it has one.
+    fn number(&self) -> Option<&Number> {
+        match self {
+            Self::Finite(n) => Some(n),
+            Self::NegInf | Self::PosInf => None,
+        }
+    }
+}
+
+/// Two extremes in value order: `-inf` below every number, `+inf` above.
+fn compare_extremes(a: &Extreme, b: &Extreme) -> Ordering {
+    match (a, b) {
+        (Extreme::NegInf, Extreme::NegInf) | (Extreme::PosInf, Extreme::PosInf) => Ordering::Equal,
+        (Extreme::NegInf, _) | (_, Extreme::PosInf) => Ordering::Less,
+        (Extreme::PosInf, _) | (_, Extreme::NegInf) => Ordering::Greater,
+        (Extreme::Finite(x), Extreme::Finite(y)) => compare_numbers(x, y),
+    }
+}
+
+/// Whether `candidate` takes `current`'s place: strictly further in the
+/// `strict` direction, or equal by value and the better representation —
+/// an integer over a float (`3` over `3.0`, `0` over `-0.0`), `0.0` over
+/// `-0.0`, else the incumbent stays.
+fn replaces(candidate: &Extreme, current: &Extreme, strict: fn(Ordering) -> bool) -> bool {
+    let ordering = compare_extremes(candidate, current);
+    strict(ordering) || (ordering.is_eq() && preferred(candidate, current))
+}
+
+/// Of two equal extremes, whether `candidate`'s representation wins.
+fn preferred(candidate: &Extreme, current: &Extreme) -> bool {
+    match (candidate, current) {
+        (Extreme::Finite(a), Extreme::Finite(b)) => representation_rank(a) < representation_rank(b),
+        _ => false,
+    }
+}
+
+/// A number's preference as a reported extreme among equal values: an
+/// integer first, `0.0` before `-0.0`, any other float keeps the incumbent.
+fn representation_rank(n: &Number) -> u8 {
+    if n.is_i64() || n.is_u64() {
+        0
+    } else if n
+        .as_f64()
+        .is_some_and(|v| v.to_bits() == (-0.0f64).to_bits())
+    {
+        2
+    } else {
+        1
+    }
 }
 
 /// Streaming aggregator - O(1) memory, single-pass.
@@ -221,21 +305,32 @@ impl Aggregator {
     ///
     /// This method processes values in batches, allowing the compiler to
     /// auto-vectorize the loops using SIMD instructions for better performance.
+    /// A NaN is no value: it is skipped, counted nowhere, and a batch of
+    /// NaNs alone leaves the column untouched. An infinity is a value: it
+    /// sums, counts, and stays an infinite extreme in `mins` / `maxs`.
     ///
     /// # Arguments
     /// * `column` - Column name for the aggregation
     /// * `values` - Slice of f64 values to aggregate
     pub fn process_batch(&mut self, column: &str, values: &[f64]) {
-        if values.is_empty() {
+        let mut batch_sum = 0.0f64;
+        let mut batch_count = 0u64;
+        let mut batch_min = f64::INFINITY;
+        let mut batch_max = f64::NEG_INFINITY;
+        for &value in values {
+            if value.is_nan() {
+                continue;
+            }
+            batch_sum += value;
+            batch_count += 1;
+            batch_min = batch_min.min(value);
+            batch_max = batch_max.max(value);
+        }
+        if batch_count == 0 {
             return;
         }
 
-        // SIMD-friendly: compiler auto-vectorizes these loops
-        let batch_sum: f64 = values.iter().sum();
-        let batch_count = values.len() as u64;
         Self::count_present(&mut self.present, column, batch_count);
-        let batch_min = values.iter().copied().fold(f64::INFINITY, f64::min);
-        let batch_max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
         match self.columns.get_mut(column) {
             Some(agg) => agg.update_batch(batch_sum, batch_count, batch_min, batch_max),
@@ -283,10 +378,14 @@ impl Aggregator {
                 avgs.insert(col.clone(), agg.sum / agg.count as f64);
             }
             sums.insert(col.clone(), agg.sum);
-            mins.insert(col.clone(), agg.min.as_f64().unwrap_or(0.0));
-            maxs.insert(col.clone(), agg.max.as_f64().unwrap_or(0.0));
-            min_values.insert(col.clone(), agg.min);
-            max_values.insert(col, agg.max);
+            mins.insert(col.clone(), agg.min.as_f64());
+            maxs.insert(col.clone(), agg.max.as_f64());
+            if let Some(n) = agg.min.number() {
+                min_values.insert(col.clone(), n.clone());
+            }
+            if let Some(n) = agg.max.number() {
+                max_values.insert(col, n.clone());
+            }
         }
 
         AggregateResult {
