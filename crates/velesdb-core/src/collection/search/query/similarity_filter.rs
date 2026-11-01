@@ -448,7 +448,11 @@ impl Collection {
     /// vector storage, or — a metadata collection stores no vectors — every
     /// point of the payload storage. This is also the universe an
     /// `execute_aggregate` scans (`aggregate_scan_ids`): a point no SELECT
-    /// can reach counts in no aggregate either.
+    /// can reach counts in no aggregate either. It is a subset of the
+    /// storage-level set `all_point_ids` lists: a payload-only id in a
+    /// mixed collection is stored (and scrollable) yet is not a row here —
+    /// `collect_filtered_scan` drops candidate ids that violate the same
+    /// rule, so an `id IN` list or a bitmap superset cannot smuggle one in.
     pub(super) fn scan_universe_ids(
         vector_storage: &dyn VectorStorage,
         payload_storage: &dyn PayloadStorage,
@@ -486,6 +490,10 @@ impl Collection {
         limit: usize,
     ) -> Vec<SearchResult> {
         let now_secs = now_unix_secs();
+        // One discriminator for the whole scan, shared with
+        // `scan_universe_ids`/`in_scan_universe`: the collection is
+        // payload-backed when it stores no vector at all.
+        let payload_backed = vector_storage.is_empty();
         let mut results = Vec::new();
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
@@ -494,15 +502,21 @@ impl Collection {
             }
             let matches = filter.matches_point(id, payload.as_ref());
             if matches {
-                let vector = vector_storage
-                    .retrieve(id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
+                let vector = vector_storage.retrieve(id).ok().flatten();
+                // Candidate lists can name ids outside the scan universe
+                // (`id IN (...)` literals, bitmap supersets): an id with no
+                // stored vector is a SELECT row only in a payload-backed
+                // collection — a payload-only id in a mixed collection (a
+                // graph node, the residue of a torn delete) is not, and an
+                // id naming nothing at all is not either.
+                let in_universe = vector.is_some() || (payload_backed && payload.is_some());
+                if !in_universe {
+                    continue;
+                }
                 results.push(SearchResult::new(
                     Point {
                         id,
-                        vector,
+                        vector: vector.unwrap_or_default(),
                         payload,
                         sparse_vectors: None,
                     },

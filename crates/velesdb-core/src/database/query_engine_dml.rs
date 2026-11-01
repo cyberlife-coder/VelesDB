@@ -115,7 +115,11 @@ impl Database {
         let filter = Self::build_update_filter(stmt.where_clause.as_ref(), params)?;
 
         // `WHERE id = n` / `id IN (...)` name their points, as DELETE's
-        // WHERE does: read those, not the whole collection.
+        // WHERE does: read those, not the whole collection. `get` reads the
+        // scan universe — in a vector collection a point must carry its
+        // vector — so an UPDATE mutates exactly the rows a SELECT over the
+        // same ids sees; a payload-only id `all_point_ids` lists comes
+        // back `None` and is skipped by `apply_update_assignments`.
         let ids = filter
             .as_ref()
             .and_then(|f| f.condition.point_ids())

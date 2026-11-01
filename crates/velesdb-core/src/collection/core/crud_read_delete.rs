@@ -403,9 +403,14 @@ impl Collection {
 
     /// Returns all point IDs in the collection, ascending.
     ///
-    /// Every point is listed, with or without a payload: this is
-    /// [`all_point_ids`](Self::all_point_ids), the same authoritative set a
-    /// scan or an export visits.
+    /// Every stored point is listed, with or without a payload: this is
+    /// [`all_point_ids`](Self::all_point_ids), the storage-level set
+    /// `scroll_batch` and an export enumerate. In a vector collection it is
+    /// a **superset** of the universe a `SELECT`, an aggregate or an
+    /// `UPDATE` sees — a payload-only id (a graph node written through
+    /// `store_node_payload`, or the residue of a torn delete) is listed
+    /// here and by scroll yet is not a `SELECT` row, exactly as `get()`
+    /// returns `None` for it.
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
         self.all_point_ids()
@@ -413,13 +418,17 @@ impl Collection {
 
     /// Returns all point IDs from both vector and payload storage.
     ///
-    /// This is the authoritative set of IDs in the collection: it unions
-    /// IDs from `vector_storage` (points with vectors) and
-    /// `payload_storage` (points with payloads). Points inserted with
-    /// `None` payload are included via the vector storage path.
-    /// Returns IDs in ascending sorted order.
+    /// This is the authoritative *storage* set of IDs in the collection:
+    /// it unions IDs from `vector_storage` (points with vectors) and
+    /// `payload_storage` (points with payloads, graph nodes included).
+    /// Points inserted with `None` payload are included via the vector
+    /// storage path. Returns IDs in ascending sorted order.
     /// Uses `BTreeSet` for deduplication and sorted iteration in one pass,
     /// so callers (e.g. `scroll_batch`) need not sort separately.
+    ///
+    /// It is deliberately not the scan universe: see
+    /// [`all_ids`](Self::all_ids) for how the two sets differ in a mixed
+    /// collection.
     #[must_use]
     pub fn all_point_ids(&self) -> Vec<u64> {
         let mut ids: std::collections::BTreeSet<u64> = self

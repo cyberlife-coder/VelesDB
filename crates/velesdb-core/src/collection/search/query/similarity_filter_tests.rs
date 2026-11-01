@@ -430,4 +430,56 @@ mod scan_score_semantics {
              on either side of NOT similarity(); got {results:?}"
         );
     }
+
+    /// The documented universes, in one mixed collection: `all_ids` is the
+    /// storage set (vector ∪ payload ids); SELECT, COUNT(*) and `get` —
+    /// which UPDATE's target list goes through — see only the
+    /// vector-backed rows. A payload-only graph node is stored and
+    /// scrollable, and is a row on none of the read paths.
+    #[test]
+    fn payload_only_ids_are_stored_but_outside_the_select_universe() {
+        let (_dir, col) = setup(
+            DistanceMetric::Cosine,
+            vec![
+                tagged_point(1, vec![1.0, 0.0]),
+                tagged_point(2, vec![0.0, 1.0]),
+            ],
+        );
+        // A graph node: payload only, no vector — as `store_node_payload`
+        // writes one on a vector collection.
+        col.store_node_payload(9, &serde_json::json!({"_labels": ["Doc"], "cat": "a"}))
+            .expect("test: store node payload");
+
+        // Storage set: all three ids.
+        assert_eq!(col.all_ids(), vec![1, 2, 9]);
+
+        // Scan universe: the vector-backed points only.
+        let empty = Filter::new(Condition::And { conditions: vec![] });
+        let scan = col.execute_scan_query(&empty, 100, None);
+        let mut scan_ids: Vec<u64> = scan.iter().map(|r| r.point.id).collect();
+        scan_ids.sort_unstable();
+        assert_eq!(scan_ids, vec![1, 2]);
+
+        // A candidate scan naming the payload-only id returns no row —
+        // `collect_filtered_scan` applies the same universe rule.
+        let id_filter = Filter::new(Condition::is_in(
+            crate::filter::POINT_ID_FIELD,
+            vec![serde_json::json!(9)],
+        ));
+        let named = col.execute_scan_query(&id_filter, 100, None);
+        assert!(named.is_empty(), "id 9 has no vector: not a SELECT row");
+
+        // COUNT(*) scans the same universe.
+        let query = crate::velesql::Parser::parse("SELECT COUNT(*) FROM items")
+            .expect("test: parse aggregate");
+        let result = col
+            .execute_aggregate(&query, &std::collections::HashMap::new())
+            .expect("test: aggregate");
+        assert_eq!(result["count"], serde_json::json!(2));
+
+        // `get` — the read UPDATE's target list goes through — hydrates
+        // the same two rows: UPDATE can mutate nothing SELECT cannot see.
+        let rows = col.get(&col.all_ids());
+        assert_eq!(rows.iter().flatten().count(), 2);
+    }
 }
