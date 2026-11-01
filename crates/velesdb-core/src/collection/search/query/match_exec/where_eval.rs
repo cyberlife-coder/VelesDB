@@ -568,7 +568,6 @@ impl Collection {
             (serde_json::Value::Null, Value::Null) => {
                 matches!(operator, crate::velesql::CompareOp::Eq)
             }
-            (_, Value::Null) => matches!(operator, crate::velesql::CompareOp::NotEq),
             // Any pair the typed arms above does not cover — a cross-type
             // comparison or a JSON `null` against a non-null literal — is
             // never equal, so `!=` holds for it, exactly as the SELECT

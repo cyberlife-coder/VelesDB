@@ -29,10 +29,10 @@ pub(crate) fn value_as_point_id(value: &Value) -> Option<u64> {
 /// 2^53, where the cast is exact by construction — past it one `f64`
 /// stands for several integers.
 fn float_as_point_id(f: f64) -> Option<u64> {
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     // Reason: `f` is checked non-negative, integral and below 2^53, so the
-    // float->u64 conversion cannot truncate.
-    (f >= 0.0 && f < F64_EXACT_INTEGER_LIMIT && f.fract() == 0.0).then(|| f as u64)
+    // float->u64 conversion cannot truncate or flip a sign.
+    ((0.0..F64_EXACT_INTEGER_LIMIT).contains(&f) && f.fract() == 0.0).then_some(f as u64)
 }
 
 /// Whether a payload index or mirror keyed on `f64` answers for `value`

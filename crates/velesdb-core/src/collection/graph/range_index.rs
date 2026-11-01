@@ -145,13 +145,24 @@ pub const RANGE_INDEX_VERSION: u32 = 2;
 /// // Range query: timestamp > 1704067200
 /// let nodes = index.range_greater_than("Event", "timestamp", &json!(1704067200));
 /// ```
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RangeIndex {
     /// Schema version for forward compatibility.
     #[serde(default = "default_range_version")]
     version: u32,
     /// (label, property_name) -> (ordered_value -> node_ids)
     indexes: HashMap<(String, String), BTreeMap<OrderedValue, RoaringBitmap>>,
+}
+
+/// A derived `Default` would leave `version` at 0 — a version the same
+/// build's [`RangeIndex::from_bytes`] then refuses.
+impl Default for RangeIndex {
+    fn default() -> Self {
+        Self {
+            version: RANGE_INDEX_VERSION,
+            indexes: HashMap::default(),
+        }
+    }
 }
 
 fn default_range_version() -> u32 {
