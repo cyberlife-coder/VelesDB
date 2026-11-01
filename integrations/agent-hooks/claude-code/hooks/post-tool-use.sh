@@ -87,6 +87,15 @@ read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 # not candidates for context compression.
 resolve_config "$cwd"
 if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
+  # Credit assignment: the ids this recall returned, for the Stop checklist
+  # to name instead of "every recalled memory". Records are kept only where
+  # the learning loop is opted in — gated exactly like the unlock below, so a
+  # repository that did not opt in keeps no records at all.
+  if learning_loop_enabled && recall_targets_current_project "$payload" \
+    && read_exact recalled_dir record_dir_path "recalled-memories" "$session_id"; then
+    # shellcheck disable=SC2154 # read_exact sets recalled_dir (printf -v)
+    record_recalled_memories "$recalled_dir" "$tool_name" "$payload" || true
+  fi
   pending_status=2
   if read_exact pending_dir record_dir_path "pending-recall" "$session_id"; then
     # shellcheck disable=SC2154 # read_exact sets pending_dir (printf -v)
@@ -110,6 +119,19 @@ if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
       touch_private_marker "$marker_path" || true
     fi
   fi
+fi
+# A verifiable outcome (lib/common.sh): the exit status of a check command,
+# evidence for the Stop checklist, never a reward on its own. PostToolUse
+# also fires at LAUNCH for a call sent to the background — and for an
+# interrupted one or a result in another shape — none of which carries an
+# exit status, so those never record a pass.
+if [ -n "$session_id" ] && [ "$tool_name" = "Bash" ] && learning_loop_enabled \
+  && bash_result_has_exit_status "$payload" \
+  && read_exact checks_dir record_dir_path "check-outcomes" "$session_id" \
+  && read_exact check_command jq -j '.tool_input.command // empty' <<<"$payload"; then
+  # PostToolUse fires only once a Bash call succeeded: its exit status was 0.
+  # shellcheck disable=SC2154 # read_exact sets checks_dir and check_command (printf -v)
+  record_check_outcome "$checks_dir" "$CONFIG_ROOT" "$check_command" pass || true
 fi
 # A session this conversation saves becomes the one the SessionStart,
 # PreCompact and Stop reminders name; one it only loads, the one SessionStart

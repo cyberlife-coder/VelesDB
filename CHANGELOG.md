@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The learning-loop `Stop` checklist names the memories and the outcomes
+  behind feedback.** The agent hooks record the ids of every memory a
+  successful `recall`, `recall_where`, `recall_fused` or `why` returned (with
+  the server's `stale` verdict), and the checklist names exactly those, instead
+  of asking for feedback on "every recalled memory". Beside them it lists
+  verified outcomes: on Claude Code, a single test, build or lint command that
+  failed and then passed or still fails (a new `post-tool-use-failure.sh` hook
+  reads the documented `Exit code N`; a pipe or a chain is never counted), and
+  on both hosts a commit reverting another in an edited repository since the
+  last checkpoint. No outcome drives `feedback` by itself: the checklist asks
+  for feedback only on a listed memory whose effect an outcome demonstrates,
+  citing it. The records follow the edit records' rules (private directory,
+  atomic files, links and malformed records refused) and travel in the
+  pending/delivered manifest, so an interrupted `Stop` re-emits them. Codex
+  does not record check outcomes: how its shell results report an exit status
+  has not been measured. `scripts/sync-agent-hooks.py` installs the new hook.
+
 - `Database::gated_search_outcome`: `gated_search` with the read gate's
   refusal kept apart from the search's own outcome.
 - `QueryLimits::client_timeout_ms` (the budget a request's own
