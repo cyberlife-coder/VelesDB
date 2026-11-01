@@ -138,7 +138,7 @@ impl HnswIndex {
         neighbours: &[(usize, f32)],
         k: usize,
     ) -> Vec<ScoredResult> {
-        let mut results: Vec<ScoredResult> = Vec::with_capacity(k.min(neighbours.len()));
+        let mut results: Vec<ScoredResult> = Vec::new();
         for &(node_id, raw_dist) in neighbours {
             if results.len() == k {
                 break;
@@ -203,7 +203,7 @@ impl HnswIndex {
         // or GPU errors). See `search_hnsw_only` for rationale.
         let neighbours = inner.search_auto(query, candidates_k, ef_search);
 
-        let mut results: Vec<ScoredResult> = Vec::with_capacity(neighbours.len());
+        let mut results: Vec<ScoredResult> = Vec::new();
         for &(node_id, raw_dist) in &neighbours {
             if let Some(id) = self.mappings.get_id(node_id) {
                 // Bitmap uses u32 keys. IDs in the bitmap must match.
