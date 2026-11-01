@@ -303,6 +303,21 @@ fast sends no search instead.
   `Aggregator::process_batch` count non-null values of any type** for
   `COUNT(column)`, where they counted numeric values only. `sums`, `avgs`,
   `mins` and `maxs` still hold numeric values only.
+- **`AggregateResult` gains `min_values` and `max_values`**
+  (`HashMap<String, serde_json::Number>`), each column's exact `MIN` and
+  `MAX`: an integer stays an integer, past 2^53 included. A struct literal
+  of `AggregateResult` must set them, or end with `..Default::default()`; a
+  result serialized by 7.1.0 deserializes with both empty, and its `MIN` /
+  `MAX` read from `mins` / `maxs` as before. `Aggregator::process_batch`
+  keeps an infinite extreme in `mins` / `maxs` (7.1.0 too), with no entry
+  in `min_values` / `max_values`, and skips a NaN: it is no value, counted
+  nowhere.
+- **`all_ids()` lists every point, ascending**: `Collection`,
+  `VectorCollection` and `MetadataCollection::all_ids`,
+  `GraphCollection::all_node_ids`, and the Python and mobile `all_ids()`.
+  7.1.0 listed only the points with a payload, in storage order, so a point
+  upserted without a payload was missing. Code that wanted the payload
+  holders filters on `get()`'s payload.
 
 ### Added
 
@@ -662,10 +677,7 @@ Rejections carry core's codes and a new `recoverable` field:
     measured cost and the benchmark that reproduces it.
   - An `f32` is parsed directly, so a vector component can differ from 7.1.0
     by one `f32` ULP, toward the exact value.
-- **Filters compare an integer exactly**, against an integer or a float
-  (`id = 9007199254740993` no longer matches `9007199254740992`, and
-  `n > 9007199254740992.0` now matches `n = 9007199254740993`), and **a
-  point without payload is tested with a `null` payload on every filtered
+- **A point without payload is tested with a `null` payload on every filtered
   path**: REST search and scroll filters, text, hybrid and batch search, and
   MATCH used to drop it, so `{"type": "is_null", ...}` or `neq` now match it
   there as in a SELECT. An `UPDATE` and a JOIN now visit it too (`UPDATE
@@ -678,10 +690,32 @@ Rejections carry core's codes and a new `recoverable` field:
   index from a 7.1.0 store, since `id` never reads it.
 
 - **`MIN` and `MAX` of integers return integers** (`33`, not `33.0`), exact
-  past 2^53, and `HAVING MAX(id) = 9007199254740992` compares exactly. Read
-  the value as a number, not as a float literal; a Rust struct literal of
-  `AggregateResult` sets the new `min_values` and `max_values` (or
-  `..Default::default()`).
+  past 2^53. Read the value as a number, not as a float literal. Among
+  values equal by value the integer wins (`3` over `3.0`, `0` over `-0.0`),
+  whichever row comes first. Rust callers: see section 3 for the new
+  `AggregateResult` fields.
+
+- **BREAKING (behavior) — numbers compare by exact value, with no
+  tolerance**, in every clause (WHERE, a MATCH WHERE, HAVING, ORDER BY,
+  GROUP BY, DISTINCT, PARTITION BY, `MIN` / `MAX`, JOIN keys), on every path
+  (scan, secondary index, payload mirror, `IN` of any length), in core, WASM
+  and every binding's filters:
+
+  | Comparison | 7.1.0 | 8.0.0 |
+  |---|---|---|
+  | `x = 0.3` over `0.30000000000000004` (`0.1 + 0.2`) | true (WHERE, JSON filter, WASM: within `f64::EPSILON`) | false |
+  | MATCH `d.x = 3.0005` over `3.0` | true (within `0.001`) | false |
+  | MATCH `d.x > 3` over `3.5` | false (an integer literal read only integer properties) | true |
+  | `n > 9007199254740992.0` over `9007199254740993` | false (compared as `f64`) | true |
+  | `id = 9007199254740993` over `9007199254740992` | true | false |
+  | `x = 0` over `-0.0` | true | true |
+  | `x != 1` once an index or the payload mirror serves it | could differ from a scan | the scan's rows |
+  | `SELECT DISTINCT x` / `PARTITION BY x` over `1` and `1.0` | two values | one, as `GROUP BY` |
+
+  Migration: where you relied on the tolerance to match a computed float,
+  compare with a range, `x BETWEEN 0.29999 AND 0.30001`, or round the value
+  before you store it. A JSON filter takes the same range as a `gte` and an
+  `lte` condition under `and`.
 
 - **Python: an observer scope on `id` narrows every read.** Post-filtered
   reads (`get`, batch, sparse, hybrid-sparse and graph embedding search)

@@ -402,12 +402,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   search, graph embedding search): with no payload `id`, `id != 2`, `NOT
   IN` or `IS NULL` matched every row, and the scope widened instead of
   narrowing. Every filter is now tested against the point, its id included.
-- **BREAKING (behavior) — a filter compares an integer exactly.** WHERE
-  (and a JSON filter) compared numbers as `f64`, so `id = 9007199254740993`
-  matched the integer `9007199254740992`, and `n > 9007199254740992.0`
-  missed `n = 9007199254740993`. An integer now compares exactly against an
-  integer or a float, in `=` and `!=` as in `<` and `>`; two floats are
-  still equal within `f64::EPSILON`.
+- **BREAKING (behavior) — numbers compare by exact value, with no
+  tolerance.** 7.1.0 compared numbers several ways:
+  - WHERE `=` / `!=` / `IN`, a JSON filter (REST search and scroll,
+    Python, every binding) and the WASM executor took two numbers less than
+    `f64::EPSILON` apart for equal, and compared an integer as an `f64`, so
+    `id = 9007199254740993` matched `9007199254740992` and `n >
+    9007199254740992.0` missed `n = 9007199254740993`;
+  - a MATCH WHERE took two floats less than `0.001` apart for equal, and
+    compared an integer literal with a float property not at all (`d.x > 3`
+    missed `3.5`);
+  - HAVING allowed a relative `f64::EPSILON`;
+  - a secondary index and the payload mirror compared exactly, so a query
+    could return different rows once an index or the mirror served it, and
+    an `IN` list past 16 values another result than a shorter one.
+
+  Every clause, path and engine now compares numbers by their mathematical
+  value: an integer and a float exactly, beyond 2^53 included; `-0.0`
+  equal to `0`; no tolerance, so `0.30000000000000004` (`0.1 + 0.2`) is not
+  `0.3`. `=`, `<` and `>` are a trichotomy and `=` is transitive, so a scan,
+  an index, the mirror and any `IN` list return the same rows. Migration:
+  compare a computed float with a range, `x BETWEEN 0.29999 AND 0.30001`
+  (see [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md), section 9).
+- **`SELECT DISTINCT id`, a window's `PARTITION BY` and `DISTINCT` key
+  numbers as `GROUP BY` does.** `DISTINCT id` keyed on a payload field named
+  `id` and collapsed different points; it reads the point id. `PARTITION BY
+  x` and `DISTINCT x` keyed numbers by their JSON text, so `1` and `1.0`, or
+  `0` and `-0.0`, fell in different partitions or rows; they are one, as in
+  `GROUP BY`. In core and WASM.
+- **Aggregates see every point of a metadata collection.** `COUNT(*)`,
+  every other aggregate and `GROUP BY` over a metadata-only collection
+  scanned vector storage only and found no row; they scan the points a
+  SELECT does.
 - **BREAKING (behavior) — a point without payload is tested with a `null`
   payload on every filtered path.** REST search and scroll filters, text
   and hybrid search, batch search and MATCH dropped it outright, while a
@@ -430,8 +456,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (behavior) — `MIN` and `MAX` keep an integer exact.** They
   returned an `f64`: `MAX(id)` was `33.0`, and `MAX(n)` over `2^53 + 1` was
   `2^53`. A minimum or maximum of integers is now that integer (`33`), in
-  the result and in `HAVING`, which compares an integer aggregate exactly
-  against an integer threshold. A float column still returns a float.
+  the result and in `HAVING`. A float column still returns a float. Among
+  values equal by value the integer wins (`3` over `3.0`, `0` over `-0.0`),
+  then `0.0` over `-0.0`, whichever row comes first.
 - **BREAKING (behavior) — `Collection::execute_aggregate` and
   `Database::execute_aggregate` refuse a vector `GROUP BY`** (`NEAR` +
   `GROUP BY`) with `Error::Query`. It grouped every point of the collection,
@@ -465,7 +492,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_values`** (`HashMap<String, serde_json::Number>`), the exact `MIN`
   and `MAX` of each column; `mins` and `maxs` still hold their `f64`. A
   struct literal must now set them (`..Default::default()`); a serialized
-  result without them reads them as empty.
+  result without them reads them as empty. `Aggregator::process_batch`
+  keeps an infinite extreme in `mins` / `maxs` (no JSON number holds it, so
+  `min_values` / `max_values` have no entry) and skips a NaN as no value.
+- **BREAKING (API) — `all_ids()` lists every point.** `Collection`,
+  `VectorCollection` and `MetadataCollection::all_ids`,
+  `GraphCollection::all_node_ids`, Python's `Collection.all_ids()` and the
+  mobile binding's `all_ids()` listed only the points carrying a payload,
+  in storage order; they list every point, ascending, as `all_point_ids`
+  does. The CLI REPL's `.export`, `.sample` and `.browse` read it, so
+  `.export` no longer writes a file without the points that have no
+  payload.
 - **BREAKING (API) — `AggregateResult::counts` and `Aggregator::process_value`
   / `process_batch` count non-null values of any type** for `COUNT(column)`,
   where they counted numeric values only; `sums`, `avgs`, `mins` and `maxs`

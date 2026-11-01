@@ -222,8 +222,11 @@ Every engine groups the same way:
   reads it: `id` is the point id, any other name a payload path
   (`meta.lang`). A row without it belongs to the `NULL` group. Numbers equal
   by exact value are one group: `1` and `1.0`, `0.0` and `-0.0`, `2^53` as
-  an integer and as a float. Unlike WHERE's `=`, no rounding tolerance
-  applies.
+  an integer and as a float, as WHERE's `=` finds them equal. Window
+  `PARTITION BY` and `DISTINCT` key numbers the same way.
+- `MIN` and `MAX` return the extreme value as it is stored, an integer
+  exactly. Among values equal by value, the integer wins (`3` over `3.0`,
+  `0` over `-0.0`), then `0.0` over `-0.0`, whichever row comes first.
 - A grouped row carries its `GROUP BY` columns and its aggregates, nothing
   else: a selected column outside `GROUP BY` is not output.
 - `FIRST(col)` reads the group's best row. In a vector search that is the
@@ -428,13 +431,20 @@ compares the point id. A JSON filter on a REST search or scroll,
 `{"condition": {"type": "eq", "field": "id", "value": 3}}`, still reads the
 payload field.
 
-Numbers compare by value. WHERE compares an integer exactly against an
-integer or a float, beyond 2^53 included (`2^53 + 1 > 2^53.0`); its `=` (and
-`IN`) treats two floats less than `f64::EPSILON` (about 2.2e-16) apart as
-equal. GROUP BY, ORDER BY and HAVING over an integer aggregate compare every
-number exactly. A payload index keys numbers by `f64`, so a range, ORDER BY
-or JOIN whose literal or keys reach 2^53 runs without it, with the same
-result.
+Numbers compare by their exact mathematical value, in every clause and
+every engine: WHERE (`=`, `!=`, `<`, `>`, `IN`, `BETWEEN`), a MATCH WHERE,
+HAVING, ORDER BY, GROUP BY, DISTINCT, PARTITION BY, `MIN` / `MAX` and JOIN
+keys. An integer and a float compare by the values they stand for, beyond
+2^53 included (`2^53 + 1 > 2^53.0`); `-0.0` equals `0`; no tolerance makes
+two different numbers equal, so `0.30000000000000004` (`0.1 + 0.2` in
+binary floating point) is not `0.3`. Compare a computed float with a range
+instead: `x BETWEEN 0.29999 AND 0.30001`. A NaN or an infinity is no JSON
+number and never reaches a comparison. `=`, `<` and `>` are a trichotomy and
+`=` is transitive, so a payload index, the columnar payload mirror and an
+`IN` list of any length return the rows a scan returns. A payload index keys
+numbers by `f64`, so a range, ORDER BY or JOIN whose literal or keys reach
+2^53 runs without it, with the same result. A `similarity()` threshold
+compares a search score, not a stored number, and is outside this rule.
 
 ### Comparison Operators
 
