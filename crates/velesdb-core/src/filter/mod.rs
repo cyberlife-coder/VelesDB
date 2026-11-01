@@ -30,6 +30,7 @@ use serde_json::Value;
 
 #[cfg(feature = "persistence")]
 pub(crate) use point_ids::exact_as_f64;
+pub(crate) use point_ids::value_as_point_id;
 
 /// A filter for metadata-based search refinement.
 ///
@@ -158,8 +159,11 @@ pub enum Condition {
     In {
         /// Field name
         field: String,
-        /// List of values to check against
-        values: Vec<Value>,
+        /// List of values to check against, sorted by `json_value_cmp` at
+        /// construction — [`InValues`] makes the sortedness a property of
+        /// the type, so the binary search in `matching.rs` needs no
+        /// caller-side guarantee.
+        values: InValues,
     },
     /// Check if field contains a substring (for strings)
     Contains {
@@ -263,6 +267,53 @@ pub enum Condition {
         /// Maximum longitude
         lng_max: f64,
     },
+}
+
+/// The member list of [`Condition::In`].
+///
+/// Values are sorted by [`json_value_cmp`](matching::json_value_cmp) and
+/// de-duplicated at construction so `matching::in_list_matches` can
+/// binary-search a long list. The invariant lives in the type rather than
+/// in each caller's discipline: [`Condition::is_in`], the `VelesQL`
+/// conversion, `Deserialize`, and a `Condition::In { .. }` literal all
+/// funnel through `From<Vec<Value>>`, which sorts and de-duplicates.
+#[derive(Debug, Clone, Default)]
+pub struct InValues(Vec<Value>);
+
+impl InValues {
+    /// The members as a slice, in `json_value_cmp` order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Value] {
+        &self.0
+    }
+}
+
+impl From<Vec<Value>> for InValues {
+    fn from(mut values: Vec<Value>) -> Self {
+        values.sort_by(matching::json_value_cmp);
+        values.dedup_by(|a, b| a == b);
+        Self(values)
+    }
+}
+
+impl std::ops::Deref for InValues {
+    type Target = [Value];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Serialize for InValues {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InValues {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<Value>::deserialize(deserializer).map(Self::from)
+    }
 }
 
 #[cfg(test)]

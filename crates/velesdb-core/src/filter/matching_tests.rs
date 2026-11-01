@@ -402,7 +402,7 @@ fn test_in_binary_search_finds_an_array_member() {
     let values: Vec<serde_json::Value> = (0..17).map(|i| json!([i])).collect();
     let cond = Condition::In {
         field: "arr".to_string(),
-        values,
+        values: values.into(),
     };
     for i in 0..17 {
         assert!(
@@ -427,3 +427,4 @@ fn test_in_binary_search_over_a_public_unsorted_list() {
         "member 0 of the IN list must match"
     );
 }
+

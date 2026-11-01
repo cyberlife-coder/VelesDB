@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use super::{Condition, POINT_ID_FIELD};
+use super::{Condition, InValues, POINT_ID_FIELD};
 use crate::metrics::global_guardrails_metrics;
 use serde_json::Value;
 
@@ -18,8 +18,9 @@ const LIKE_MAX_PATTERN_BYTES: usize = 4096;
 const LIKE_MAX_DYN_OPS: usize = 2_000_000;
 
 /// List length above which IN matching switches from O(n) linear scan to
-/// O(log n) binary search. Values must be pre-sorted by [`json_value_cmp`]
-/// at `Condition::In` construction time (done in `conversion.rs::convert_in`).
+/// O(log n) binary search. [`InValues`] sorts by [`json_value_cmp`] at
+/// `Condition::In` construction time, so the sortedness the search needs is
+/// a property of the type, not of the caller.
 const IN_BINARY_SEARCH_THRESHOLD: usize = 16;
 
 /// Assigns a numeric rank to a JSON value type for consistent total ordering.
@@ -42,8 +43,9 @@ fn json_type_rank(v: &Value) -> u8 {
 /// Within each type: Null = Null, Bool by value, Number by exact value
 /// ([`compare_numbers`](crate::velesql::compare_numbers), which a JSON
 /// number's finiteness makes total), String
-/// lexicographic, Arrays and Objects by type rank only (equal among themselves,
-/// which is acceptable since they are not used in IN conditions in practice).
+/// lexicographic, Arrays and Objects by type rank only (equal among
+/// themselves — [`in_list_matches`] scans them linearly, as no lower bound
+/// could pick a member out of the equal run).
 pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let rank = json_type_rank(a).cmp(&json_type_rank(b));
@@ -62,22 +64,21 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
 
 /// Returns whether `field_val` appears in `values`.
 ///
-/// Switches strategy based on list length:
+/// Switches strategy on list length and probe type:
 /// - `values.len() <= IN_BINARY_SEARCH_THRESHOLD`: O(n) linear scan via
 ///   `values_equal` (exact value equality).
-/// - `values.len() > IN_BINARY_SEARCH_THRESHOLD`: O(log n) lower-bound via
-///   `json_value_cmp` to narrow position, then `values_equal` for the final
-///   check — `json_value_cmp` levels exactly the values `values_equal`
-///   calls equal, so a hit can only sit at the lower bound. Requires
-///   `values` pre-sorted (`conversion.rs::convert_in` guarantees this).
-fn in_list_matches(field_val: &Value, values: &[Value]) -> bool {
-    if values.len() > IN_BINARY_SEARCH_THRESHOLD {
-        debug_assert!(
-            values
-                .windows(2)
-                .all(|w| json_value_cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater),
-            "Condition::In values must be pre-sorted by json_value_cmp"
-        );
+/// - Longer list, scalar probe (null, bool, number, string): O(log n)
+///   lower-bound via `json_value_cmp` to narrow position, then
+///   `values_equal` for the final check — within a scalar rank
+///   `json_value_cmp` levels exactly the values `values_equal` calls equal,
+///   so a hit can only sit at the lower bound. Requires `values` sorted,
+///   which [`InValues`] guarantees at construction.
+/// - Array or object probe: `json_value_cmp` levels all arrays (all
+///   objects) to Equal, so no lower bound picks the member — a linear
+///   `values_equal` scan instead.
+fn in_list_matches(field_val: &Value, values: &InValues) -> bool {
+    let scalar_probe = !matches!(field_val, Value::Array(_) | Value::Object(_));
+    if values.len() > IN_BINARY_SEARCH_THRESHOLD && scalar_probe {
         // Lower-bound: first position where probe is NOT less than field_val.
         let pos = values
             .partition_point(|probe| json_value_cmp(probe, field_val) == std::cmp::Ordering::Less);
