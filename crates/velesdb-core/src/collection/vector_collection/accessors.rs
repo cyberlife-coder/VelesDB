@@ -49,7 +49,8 @@ impl VectorCollection {
         self.inner.is_empty()
     }
 
-    /// Returns all point IDs.
+    /// Returns all point IDs — every point, with or without a payload, in
+    /// ascending order.
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
         self.inner.all_ids()
@@ -57,9 +58,8 @@ impl VectorCollection {
 
     /// Returns every point ID (vector- or payload-backed) in ascending order.
     ///
-    /// Unlike [`all_ids`](Self::all_ids), this includes points inserted with a
-    /// `None` payload, so it is the complete, deterministic set to iterate for
-    /// export/sampling.
+    /// The same set [`all_ids`](Self::all_ids) returns: the complete,
+    /// deterministic set to iterate for export/sampling.
     #[must_use]
     pub fn all_point_ids(&self) -> Vec<u64> {
         self.inner.all_point_ids()

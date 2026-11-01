@@ -401,14 +401,14 @@ impl Collection {
         self.storage.config.read().point_count == 0
     }
 
-    /// Returns all point IDs in the collection.
+    /// Returns all point IDs in the collection, ascending.
     ///
-    /// Note: Only returns IDs that have payload entries stored. Points
-    /// inserted with `None` payload may not appear. For a complete set
-    /// of IDs, use [`all_point_ids`](Self::all_point_ids).
+    /// Every point is listed, with or without a payload: this is
+    /// [`all_point_ids`](Self::all_point_ids), the same authoritative set a
+    /// scan or an export visits.
     #[must_use]
     pub fn all_ids(&self) -> Vec<u64> {
-        self.storage.payload_storage.read().ids()
+        self.all_point_ids()
     }
 
     /// Returns all point IDs from both vector and payload storage.

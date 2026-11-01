@@ -276,7 +276,7 @@ impl GraphCollection {
         self.inner.get_node_degree(node_id)
     }
 
-    /// Returns the IDs of all nodes that have a stored payload.
+    /// Returns the IDs of all nodes that have a stored payload, ascending.
     ///
     /// Nodes that appear only as edge endpoints without a stored payload
     /// are not included. Use [`GraphCollection::get_edges`] to discover
