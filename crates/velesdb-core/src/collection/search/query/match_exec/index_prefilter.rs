@@ -5,7 +5,6 @@
 //! the result set is used as a pre-filter to avoid per-node brute-force
 //! evaluation. Falls back gracefully when no index exists.
 
-use super::where_eval::FLOAT_EQ_TOLERANCE;
 use crate::collection::types::Collection;
 use crate::velesql::{CompareOp, Condition, GraphPattern, Value};
 use std::collections::{HashMap, HashSet};
@@ -272,51 +271,26 @@ fn comparison_to_predicate(
 
 /// Maps a WHERE comparison to the index lookup that keeps every node WHERE
 /// accepts — the prefilter only rejects, so the lookup may return more nodes
-/// than WHERE keeps, never fewer. Two comparisons need a wider lookup than
-/// their operator suggests:
+/// than WHERE keeps, never fewer. One comparison needs a wider lookup than
+/// its operator suggests:
 ///
-/// - **Float equality.** WHERE accepts any value within
-///   [`FLOAT_EQ_TOLERANCE`] of a float literal, where the index matches one
-///   value exactly. The lookup is the inclusive range of twice the tolerance
-///   around it: a WHERE match is less than the tolerance away even after the
-///   rounding of WHERE's subtraction, and rounding the range bounds cannot
-///   move them past a value that close.
-/// - **Strict bounds on an integer.** WHERE compares integers exactly, the
-///   index orders every number as an `f64`, and above 2^53 a larger integer
-///   can round onto the bound itself (`2^53 + 1` becomes `2^53`). The lookup
-///   includes the bound.
+/// - **A strict bound an `f64` cannot single out.** The index keys every
+///   number by its `f64` value; at or past 2^53 a bound can share its key
+///   with a neighbour WHERE orders apart (`2^53 + 1` becomes `2^53`). A
+///   strict bound there is looked up inclusive, keeping the shared key.
 ///
 /// `!=` cannot be answered by an index lookup and maps to `None`.
 fn predicate_kind(operator: CompareOp, literal: &Value) -> Option<PredicateKind> {
     let json = literal.to_json();
-    let inclusive = is_integer(literal);
+    let inclusive = !crate::filter::exact_as_f64(&json);
     Some(match operator {
-        CompareOp::Eq => equality_kind(literal, json),
+        CompareOp::Eq => PredicateKind::Exact(json),
         CompareOp::Gt if !inclusive => PredicateKind::Gt(json),
         CompareOp::Lt if !inclusive => PredicateKind::Lt(json),
         CompareOp::Gt | CompareOp::Gte => PredicateKind::Gte(json),
         CompareOp::Lt | CompareOp::Lte => PredicateKind::Lte(json),
         CompareOp::NotEq => return None,
     })
-}
-
-/// Whether WHERE compares this literal as an exact integer.
-const fn is_integer(literal: &Value) -> bool {
-    matches!(literal, Value::Integer(_) | Value::UnsignedInteger(_))
-}
-
-/// The lookup for `= literal`: exact, except for a float, which is looked up
-/// as the inclusive range of twice [`FLOAT_EQ_TOLERANCE`] around it; see
-/// [`predicate_kind`].
-fn equality_kind(literal: &Value, json: serde_json::Value) -> PredicateKind {
-    let Value::Float(center) = *literal else {
-        return PredicateKind::Exact(json);
-    };
-    let half_width = 2.0 * FLOAT_EQ_TOLERANCE;
-    PredicateKind::Range(
-        serde_json::json!(center - half_width),
-        serde_json::json!(center + half_width),
-    )
 }
 
 /// Converts a `BetweenCondition` to a range predicate.

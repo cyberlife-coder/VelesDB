@@ -25,6 +25,29 @@ pub fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
     }
 }
 
+/// The exact order of a JSON number against a `VelesQL` literal, as
+/// [`compare_numbers`] orders two JSON numbers: an integer literal and a
+/// float one are told apart even past 2^53, and `-0.0` equals `0`. `None`
+/// when the literal is not numeric, or is a NaN, which orders against
+/// nothing. `±∞` is no JSON number but still orders a finite `actual`.
+pub(crate) fn compare_number_literal(
+    actual: &serde_json::Number,
+    literal: &super::Value,
+) -> Option<Ordering> {
+    use super::Value;
+    let number = match literal {
+        Value::Integer(i) => serde_json::Number::from(*i),
+        Value::UnsignedInteger(u) => serde_json::Number::from(*u),
+        Value::Float(f) if f.is_finite() => serde_json::Number::from_f64(*f)?,
+        // ±∞ and NaN — no JSON number. A finite `actual` still orders below
+        // +∞ and above -∞; a NaN orders against nothing (`partial_cmp`
+        // answers `None`, which the caller treats as "no comparison").
+        Value::Float(f) => return actual.as_f64().and_then(|a| a.partial_cmp(f)),
+        _ => return None,
+    };
+    Some(compare_numbers(actual, &number))
+}
+
 /// Numbers by exact value: two integers as integers, an integer and a float
 /// exactly, two floats as `f64`. Comparing an integer with a float as `f64`
 /// would round the integer and break transitivity: `2^53 + 1` would equal

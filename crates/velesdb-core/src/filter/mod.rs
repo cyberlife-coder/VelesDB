@@ -28,6 +28,7 @@ mod point_ids;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(feature = "persistence")]
 pub(crate) use point_ids::exact_as_f64;
 
 /// A filter for metadata-based search refinement.

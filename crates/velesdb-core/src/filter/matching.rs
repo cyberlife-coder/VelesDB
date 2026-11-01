@@ -39,8 +39,9 @@ fn json_type_rank(v: &Value) -> u8 {
 /// Total ordering over `serde_json::Value` used for sorting IN-list values
 /// and binary-searching them at match time (issue #512).
 ///
-/// Within each type: Null = Null, Bool by value, Number by `f64::total_cmp`
-/// (NaN sorts after +∞, giving a deterministic total order), String
+/// Within each type: Null = Null, Bool by value, Number by exact value
+/// ([`compare_numbers`](crate::velesql::compare_numbers), which a JSON
+/// number's finiteness makes total), String
 /// lexicographic, Arrays and Objects by type rank only (equal among themselves,
 /// which is acceptable since they are not used in IN conditions in practice).
 pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
@@ -51,8 +52,8 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
     match (a, b) {
         (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-        // Exactly, as `values_equal` compares two integers: the binary
-        // search below must not tie 2^53 with 2^53 + 1.
+        // The same order `values_equal` calls equal: the binary search below
+        // must not tie 2^53 with 2^53 + 1, nor split `-0.0` from `0`.
         (Value::Number(a), Value::Number(b)) => crate::velesql::compare_numbers(a, b),
         (Value::String(a), Value::String(b)) => a.cmp(b),
         _ => Ordering::Equal,
@@ -63,11 +64,12 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
 ///
 /// Switches strategy based on list length:
 /// - `values.len() <= IN_BINARY_SEARCH_THRESHOLD`: O(n) linear scan via
-///   `values_equal` (epsilon-tolerant float equality).
+///   `values_equal` (exact value equality).
 /// - `values.len() > IN_BINARY_SEARCH_THRESHOLD`: O(log n) lower-bound via
 ///   `json_value_cmp` to narrow position, then `values_equal` for the final
-///   check — preserving epsilon semantics on both paths and requiring
-///   `values` to be pre-sorted (`conversion.rs::convert_in` guarantees this).
+///   check — `json_value_cmp` levels exactly the values `values_equal`
+///   calls equal, so a hit can only sit at the lower bound. Requires
+///   `values` pre-sorted (`conversion.rs::convert_in` guarantees this).
 fn in_list_matches(field_val: &Value, values: &[Value]) -> bool {
     if values.len() > IN_BINARY_SEARCH_THRESHOLD {
         debug_assert!(
@@ -79,9 +81,7 @@ fn in_list_matches(field_val: &Value, values: &[Value]) -> bool {
         // Lower-bound: first position where probe is NOT less than field_val.
         let pos = values
             .partition_point(|probe| json_value_cmp(probe, field_val) == std::cmp::Ordering::Less);
-        // Check the candidate at pos and its predecessor for epsilon-equal floats.
-        let check = |i: usize| values.get(i).is_some_and(|v| values_equal(v, field_val));
-        check(pos) || pos > 0 && check(pos - 1)
+        values.get(pos).is_some_and(|v| values_equal(v, field_val))
     } else {
         values.iter().any(|val| values_equal(field_val, val))
     }
@@ -300,26 +300,19 @@ fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
     Some(Cow::Borrowed(current))
 }
 
-/// Compares two JSON values for equality; numbers as [`numbers_equal`].
+/// Compares two JSON values for equality; numbers by exact value, as
+/// [`crate::velesql::compare_numbers`] orders them (`-0.0` is `0`, an
+/// integer beyond 2^53 is not the float it rounds to, and no tolerance
+/// makes two different values equal).
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Number(a), Value::Number(b)) => numbers_equal(a, b),
+        (Value::Number(a), Value::Number(b)) => crate::velesql::compare_numbers(a, b).is_eq(),
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Array(a), Value::Array(b)) => a == b,
         (Value::Object(a), Value::Object(b)) => a == b,
         _ => false,
-    }
-}
-
-/// Two floats are equal within `f64::EPSILON`; any other two numbers
-/// exactly, as [`compare_values`] orders them (an integer beyond 2^53, as
-/// point ids can be, is not the float it rounds to).
-fn numbers_equal(a: &serde_json::Number, b: &serde_json::Number) -> bool {
-    match (a.as_f64(), b.as_f64()) {
-        (Some(x), Some(y)) if a.is_f64() && b.is_f64() => (x - y).abs() < f64::EPSILON,
-        _ => crate::velesql::compare_numbers(a, b).is_eq(),
     }
 }
 

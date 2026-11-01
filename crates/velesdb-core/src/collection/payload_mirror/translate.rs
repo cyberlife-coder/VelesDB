@@ -6,7 +6,7 @@
 //! positives are harmless but false negatives are not**. Every bitmap
 //! returned here must therefore contain *at least* every live row the JSON
 //! filter would match. Leaves achieve this by being *exact* replicas of the
-//! `filter::matching` semantics (same `f64` epsilon equality, same
+//! `filter::matching` semantics (same exact-by-value number equality, same
 //! cross-type-never-matches rules), enforced through strict eligibility:
 //!
 //! - A leaf is only translated when the literal's JSON type matches the
@@ -158,8 +158,9 @@ fn classify_literals(
 }
 
 /// Equality leaf. Eligible only for type-matched scalar literals; replicates
-/// `values_equal` exactly (epsilon equality for numbers, interned equality
-/// for strings). An integer literal an `f64` cannot single out (2^53 or
+/// `values_equal` exactly (exact equality for numbers — `f64` equality,
+/// which IEEE already makes `-0.0`-inclusive — interned equality for
+/// strings). An integer literal an `f64` cannot single out (2^53 or
 /// more), which the filter compares exactly, falls back to the filter.
 fn leaf_eq(state: &MirrorState, field: &str, value: &serde_json::Value) -> Option<Eval> {
     let col = classify_literals(state, field, std::slice::from_ref(value))?;
@@ -167,9 +168,10 @@ fn leaf_eq(state: &MirrorState, field: &str, value: &serde_json::Value) -> Optio
         (FieldCol::Absent, v) if is_scalar(v) => RoaringBitmap::new(),
         (FieldCol::Float, serde_json::Value::Number(n)) => {
             let lit = n.as_f64()?;
-            state
-                .store
-                .filter_float_bitmap(field, move |v| (v - lit).abs() < f64::EPSILON)
+            // Reason: exact equality is the semantics — `values_equal`
+            // compares numbers by exact value, no tolerance.
+            #[allow(clippy::float_cmp)]
+            state.store.filter_float_bitmap(field, move |v| v == lit)
         }
         (FieldCol::Str, serde_json::Value::String(s)) => {
             state.store.filter_eq_string_bitmap(field, s)
@@ -222,9 +224,12 @@ fn leaf_in(state: &MirrorState, field: &str, values: &[serde_json::Value]) -> Op
                 .iter()
                 .map(serde_json::Value::as_f64)
                 .collect::<Option<Vec<f64>>>()?;
-            state.store.filter_float_bitmap(field, move |v| {
-                lits.iter().any(|lit| (v - lit).abs() < f64::EPSILON)
-            })
+            // Reason: exact equality is the semantics — `values_equal`
+            // compares numbers by exact value, no tolerance.
+            #[allow(clippy::float_cmp)]
+            state
+                .store
+                .filter_float_bitmap(field, move |v| lits.contains(&v))
         }
         FieldCol::Str => {
             let strs: Vec<&str> = values

@@ -24,19 +24,17 @@ fn apply_ord_op<T: PartialOrd>(op: crate::velesql::CompareOp, a: &T, b: &T) -> b
     }
 }
 
-/// How far apart two floats may be and still compare equal in a MATCH WHERE.
-///
-/// The index prefilter (`index_prefilter.rs`) widens a float equality by this
-/// same constant, so the candidates it keeps always cover what WHERE accepts.
-pub(super) const FLOAT_EQ_TOLERANCE: f64 = 0.001;
-
-/// Compares two floats with [`FLOAT_EQ_TOLERANCE`] for equality.
-fn compare_floats(op: crate::velesql::CompareOp, actual: f64, expected: f64) -> bool {
+/// Whether an `Ordering` of an actual value against a literal satisfies
+/// `op` — the numeric and comparison leaf of a MATCH WHERE.
+fn ordering_holds(op: crate::velesql::CompareOp, ordering: std::cmp::Ordering) -> bool {
     use crate::velesql::CompareOp;
     match op {
-        CompareOp::Eq => (actual - expected).abs() < FLOAT_EQ_TOLERANCE,
-        CompareOp::NotEq => (actual - expected).abs() >= FLOAT_EQ_TOLERANCE,
-        _ => apply_ord_op(op, &actual, &expected),
+        CompareOp::Eq => ordering.is_eq(),
+        CompareOp::NotEq => ordering.is_ne(),
+        CompareOp::Lt => ordering.is_lt(),
+        CompareOp::Gt => ordering.is_gt(),
+        CompareOp::Lte => ordering.is_le(),
+        CompareOp::Gte => ordering.is_ge(),
     }
 }
 
@@ -542,15 +540,14 @@ impl Collection {
         use crate::velesql::Value;
 
         Ok(match (actual, expected) {
-            (serde_json::Value::Number(n), Value::Integer(i)) => n
-                .as_i64()
-                .is_some_and(|actual_i| apply_ord_op(operator, &actual_i, i)),
-            (serde_json::Value::Number(n), Value::UnsignedInteger(u)) => n
-                .as_u64()
-                .is_some_and(|actual_u| apply_ord_op(operator, &actual_u, u)),
-            (serde_json::Value::Number(n), Value::Float(f)) => n
-                .as_f64()
-                .is_some_and(|actual_f| compare_floats(operator, actual_f, *f)),
+            // Numbers compare by exact value on every path — a float
+            // property and an integer literal included (`3.5 > 3`,
+            // `2^53 + 1 > 9007199254740992.0`), with no tolerance.
+            (
+                serde_json::Value::Number(n),
+                literal @ (Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_)),
+            ) => crate::velesql::compare_number_literal(n, literal)
+                .is_some_and(|ordering| ordering_holds(operator, ordering)),
             (serde_json::Value::String(s), Value::String(expected_s)) => {
                 apply_ord_op(operator, &s.as_str(), &expected_s.as_str())
             }

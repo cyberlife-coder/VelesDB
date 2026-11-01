@@ -72,40 +72,16 @@ fn threshold_text(value: &Value) -> String {
     }
 }
 
-/// Compares an aggregate against a HAVING threshold. A missing aggregate or a
-/// non-numeric threshold fails; two integers compare exactly; otherwise
-/// equality allows for float rounding in sums.
+/// Compares an aggregate against a HAVING threshold, by exact value, as a
+/// WHERE `=` decides (`compare_number_literal`): an integer aggregate and a
+/// float threshold are told apart even past 2^53, no tolerance applies. A
+/// missing aggregate or a non-numeric threshold fails every operator.
 fn compare(aggregate: &serde_json::Value, op: CompareOp, threshold: &Value) -> bool {
-    if let Some(ordering) = exact_integer_order(aggregate, threshold) {
-        return holds(ordering, op);
-    }
-    let (Some(value), Some(threshold)) = (aggregate.as_f64(), threshold_f64(threshold)) else {
+    let serde_json::Value::Number(aggregate) = aggregate else {
         return false;
     };
-    let epsilon = f64::EPSILON * value.abs().max(threshold.abs()).max(1.0);
-    match op {
-        CompareOp::Eq => (value - threshold).abs() < epsilon,
-        CompareOp::NotEq => (value - threshold).abs() >= epsilon,
-        CompareOp::Gt => value > threshold,
-        CompareOp::Gte => value >= threshold,
-        CompareOp::Lt => value < threshold,
-        CompareOp::Lte => value <= threshold,
-    }
-}
-
-/// The exact order of an integer aggregate (a count, a `MIN` or `MAX` of
-/// integers) against an integer threshold, beyond 2^53 included; `None`
-/// when either is not an integer, which compares as `f64`.
-fn exact_integer_order(aggregate: &serde_json::Value, threshold: &Value) -> Option<Ordering> {
-    let serde_json::Value::Number(aggregate) = aggregate else {
-        return None;
-    };
-    let threshold = match threshold {
-        Value::Integer(i) => i128::from(*i),
-        Value::UnsignedInteger(u) => i128::from(*u),
-        _ => return None,
-    };
-    Some(super::json_order::integer(aggregate)?.cmp(&threshold))
+    super::json_order::compare_number_literal(aggregate, threshold)
+        .is_some_and(|ordering| holds(ordering, op))
 }
 
 /// Whether `ordering` (aggregate against threshold) satisfies `op`.
@@ -117,18 +93,5 @@ fn holds(ordering: Ordering, op: CompareOp) -> bool {
         CompareOp::Gte => ordering.is_ge(),
         CompareOp::Lt => ordering.is_lt(),
         CompareOp::Lte => ordering.is_le(),
-    }
-}
-
-/// A numeric threshold as the `f64` aggregates compare as; `None` otherwise
-/// (`NULL`, SQL's UNKNOWN, among them).
-// Reason: thresholds compare as f64, like the aggregates they test.
-#[allow(clippy::cast_precision_loss)]
-fn threshold_f64(threshold: &Value) -> Option<f64> {
-    match threshold {
-        Value::Integer(i) => Some(*i as f64),
-        Value::UnsignedInteger(u) => Some(*u as f64),
-        Value::Float(f) => Some(*f),
-        _ => None,
     }
 }

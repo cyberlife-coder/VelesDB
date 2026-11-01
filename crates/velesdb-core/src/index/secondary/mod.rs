@@ -23,11 +23,19 @@ pub(crate) enum JsonValue {
 }
 
 /// Wrapper type that provides total ordering for f64 values.
+///
+/// `-0.0` is `0` in the engine's numeric order, so the key normalises it to
+/// `0.0`'s bits: an equality lookup for either zero finds the other's
+/// bucket (the bitmap is a pre-filter — it must cover the filter's matches,
+/// and `x = -0.0` matches a stored `0`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct F64Key(u64);
 
 impl From<f64> for F64Key {
     fn from(value: f64) -> Self {
+        if value == 0.0 {
+            return Self(0.0f64.to_bits());
+        }
         Self(value.to_bits())
     }
 }

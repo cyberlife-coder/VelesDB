@@ -2,11 +2,6 @@
 //!
 //! Provides O(log n) range queries (>, <, >=, <=, BETWEEN) instead of O(n) scans.
 
-// Reason: Numeric casts in range index are intentional:
-// - i64->f64 for mixed-type comparisons: precision loss acceptable for ordering
-// - Values represent property values, exact precision not required for comparisons
-#![allow(clippy::cast_precision_loss)]
-
 use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
@@ -65,10 +60,42 @@ impl Ord for OrderedValue {
                 std::cmp::Ordering::Greater
             }
             (Self::Integer(a), Self::Integer(b)) => a.cmp(b),
-            (Self::Float(a), Self::Float(b)) => a.cmp(b),
-            (Self::Integer(a), Self::Float(b)) => OrderedFloat(*a as f64).cmp(b),
-            (Self::Float(a), Self::Integer(b)) => a.cmp(&OrderedFloat(*b as f64)),
+            (Self::Float(a), Self::Float(b)) => float_order(a.0, b.0),
+            (Self::Integer(a), Self::Float(b)) => int_float_order(*a, b.0),
+            (Self::Float(a), Self::Integer(b)) => int_float_order(*b, a.0).reverse(),
             (Self::String(a), Self::String(b)) => a.cmp(b),
+        }
+    }
+}
+
+/// Two float keys in the engine's number order: `-0.0` is `0` (one key),
+/// where `total_cmp` would split them, and no tolerance applies.
+fn float_order(a: f64, b: f64) -> std::cmp::Ordering {
+    match (
+        serde_json::Number::from_f64(a),
+        serde_json::Number::from_f64(b),
+    ) {
+        (Some(a), Some(b)) => crate::velesql::compare_numbers(&a, &b),
+        // NaN / ±∞, unreachable from a JSON value; a total order regardless.
+        _ => a.total_cmp(&b),
+    }
+}
+
+/// The exact order of an integer key against a float key, as
+/// [`crate::velesql::compare_numbers`] orders a JSON integer against a JSON
+/// float: `2^53 + 1` is above `2^53.0`, where an `f64` cast would level
+/// them — and a range bound would then drop it.
+fn int_float_order(integer: i64, float: f64) -> std::cmp::Ordering {
+    match serde_json::Number::from_f64(float) {
+        Some(float) => crate::velesql::compare_numbers(&serde_json::Number::from(integer), &float),
+        // A float key is only ever a JSON number (never NaN, never ±∞), so
+        // this arm is defensive: an integer sits below +∞ and NaN, above -∞.
+        None => {
+            if float.is_nan() || float.is_sign_positive() {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
         }
     }
 }
