@@ -1,7 +1,7 @@
 //! Aggregation execution for the WASM VelesQL executor (S4-13).
 //!
 //! Groups a scanned row set with core's engine-shared
-//! [`Grouper`](velesdb_core::velesql::Grouper) — the same group set, group
+//! [`Grouper`] — the same group set, group
 //! rows, aggregates and HAVING verdicts as core — then orders the groups.
 //! When GROUP BY is absent, all matching rows collapse into a single group
 //! (implicit global group).
