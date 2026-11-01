@@ -469,8 +469,10 @@ impl Collection {
         let rust_params = convert_params(py, params)?;
         // EXPLAIN ANALYZE *executes* the query, so it must pass the same
         // control-plane read gate as `query()`. The `Database` facade twin is
-        // gated internally (deny fails closed, a scope narrows the measured
-        // execution), unlike the detached leaf method used before (#1392).
+        // gated internally — deny fails closed, and a scope is refused rather
+        // than narrowed: the plan step's calibrated statistics cannot be
+        // row-narrowed (VELES-009), unlike the detached leaf method used
+        // before (#1392).
         let output = py.detach(move || {
             self.db
                 .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)
