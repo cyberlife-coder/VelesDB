@@ -16,13 +16,15 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use velesdb_core::api_types::serde_id;
 use velesdb_core::collection::graph::GraphEdge;
+use velesdb_core::observer::QueryOperationKind;
 use velesdb_core::point::Point;
 
 use crate::types::ErrorResponse;
 use crate::AppState;
 
 use super::super::helpers::{
-    auto_core_error_response, error_response, get_collection_or_404, run_blocking,
+    authorize_unscoped_read, auto_core_error_response, error_response, get_collection_or_404,
+    run_blocking,
 };
 
 use velesdb_core::EXPIRES_AT_KEY;
@@ -251,8 +253,9 @@ pub async fn unrelate_points(
     ),
     responses(
         (status = 200, description = "Outgoing relations", body = RelationsResponse),
+        (status = 400, description = "A scope narrowing relation reads cannot apply (VELES-009), or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse)
     ),
     tag = "graph"
 )]
@@ -265,9 +268,23 @@ pub async fn get_point_relations(
         Err(r) => return r,
     };
 
-    // Edge listing takes edge-store shard locks — run it on the blocking pool.
-    let raw_edges = match run_blocking(move || coll.get_outgoing_edges(id)).await {
-        Ok(edges) => edges,
+    // The read gate and the edge listing (edge-store shard locks) run on the
+    // blocking pool. Edges carry no payload a scope could filter, so a scope
+    // refuses the read, as on every other graph read.
+    let gate_state = Arc::clone(&state);
+    let listed = run_blocking(move || {
+        authorize_unscoped_read(
+            &gate_state,
+            &name,
+            QueryOperationKind::GraphTraversal,
+            "relation reads",
+        )
+        .map(|()| coll.get_outgoing_edges(id))
+    })
+    .await;
+    let raw_edges = match listed {
+        Ok(Ok(edges)) => edges,
+        Ok(Err(refusal)) => return auto_core_error_response(&refusal),
         Err(resp) => return resp,
     };
     let edges: Vec<RelationEdge> = raw_edges

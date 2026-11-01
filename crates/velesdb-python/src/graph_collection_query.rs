@@ -160,8 +160,9 @@ impl PyGraphCollection {
         let parsed = parse_velesql(query_str)?;
         let rust_params = convert_params(py, params)?;
         // EXPLAIN ANALYZE *executes* the query — route through the gated
-        // `Database` facade twin (deny fails closed, scope narrows the
-        // measured execution), mirroring `Collection.explain_analyze`.
+        // `Database` facade twin (deny fails closed, and a scope is refused:
+        // the plan step's calibrated statistics cannot be row-narrowed,
+        // VELES-009), mirroring `Collection.explain_analyze`.
         let output = py.detach(move || {
             self.db
                 .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)

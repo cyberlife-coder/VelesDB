@@ -1,9 +1,11 @@
 //! Aggregation query dispatch and execution.
 //!
 //! Handles detection and execution of GROUP BY / aggregate function queries,
-//! routing them to `execute_aggregate` on the appropriate collection.
+//! routing them to `Database::execute_aggregate`, which applies the read gate.
 
 use axum::{http::StatusCode, response::IntoResponse, Json};
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 use velesdb_core::velesql::Query;
 
@@ -29,21 +31,19 @@ pub(crate) fn execute_aggregation_query(
     state: &Arc<AppState>,
     collection_name: &str,
     parsed: &Query,
-    params: &std::collections::HashMap<String, serde_json::Value>,
+    params: &HashMap<String, serde_json::Value>,
     start: std::time::Instant,
 ) -> axum::response::Response {
-    // Prefer typed vector collection for aggregation.
-    let result = if let Some(vc) = state.db.get_vector_collection(collection_name) {
-        vc.execute_aggregate(parsed, params)
-    } else if let Some(any) = state.db.get_any_collection(collection_name) {
-        any.execute_aggregate(parsed, params)
-    } else {
-        state.operational_metrics.inc_errors();
-        return velesql_collection_not_found(collection_name);
-    };
-
-    let result = match result {
+    // Through the database facade, never a collection handle: the facade is
+    // where the read gate runs (a denial refuses the aggregate, a scope
+    // narrows its rows) and where scalar subqueries are resolved.
+    let params = with_collection_param(parsed, collection_name, params);
+    let result = match state.db.execute_aggregate(parsed, &params) {
         Ok(r) => r,
+        Err(velesdb_core::Error::CollectionNotFound(name)) => {
+            state.operational_metrics.inc_errors();
+            return velesql_collection_not_found(&name);
+        }
         Err(e) => {
             state.operational_metrics.inc_errors();
             return velesql_execution_error(
@@ -71,6 +71,26 @@ pub(crate) fn execute_aggregation_query(
         },
     })
     .into_response()
+}
+
+/// The parameters an aggregate executes with: the caller's, plus the resolved
+/// collection as `_collection` when the query has no `FROM` (the request
+/// body's `collection`), so the read gate and the executor both see the
+/// collection this handler resolved.
+fn with_collection_param<'a>(
+    parsed: &Query,
+    collection_name: &str,
+    params: &'a HashMap<String, serde_json::Value>,
+) -> Cow<'a, HashMap<String, serde_json::Value>> {
+    if !parsed.select.from.is_empty() {
+        return Cow::Borrowed(params);
+    }
+    let mut owned = params.clone();
+    owned.insert(
+        "_collection".to_string(),
+        serde_json::json!(collection_name),
+    );
+    Cow::Owned(owned)
 }
 
 /// Resolve the collection name for an aggregation query.

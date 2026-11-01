@@ -7,7 +7,8 @@
 //! per-kind `*_tests.rs` suites cover them again through each public API.
 
 use crate::collection::Collection;
-use crate::{Database, DistanceMetric, Point};
+use crate::observer::QueryOperationKind;
+use crate::{Database, DistanceMetric, Error, Point};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 
@@ -31,6 +32,29 @@ pub(super) fn get_collection(db: &Database, name: &str) -> Result<Collection, Ag
         .or_else(|| db.get_graph_collection(name).map(|gc| gc.inner))
         .or_else(|| db.get_metadata_collection(name).map(|mc| mc.inner))
         .ok_or_else(|| AgentMemoryError::CollectionError("Collection not found".to_string()))
+}
+
+/// Consults the database's read gate for `collection_name` before a memory
+/// read that cannot carry a scope filter: a denial fails the call, and a
+/// scope filter refuses it rather than run unscoped — the same fail-closed
+/// answer every other uncomposable read gives. `operation` is the read's
+/// kind (`VectorSearch` for similarity recalls, `Select` for scans and
+/// exports); with no observer this is a single `Option` check.
+pub(super) fn authorize_memory_read(
+    db: &Database,
+    collection_name: &str,
+    operation: QueryOperationKind,
+    context: &str,
+) -> Result<(), AgentMemoryError> {
+    let scope = db
+        .authorize_read(collection_name, operation, None, None)
+        .map_err(AgentMemoryError::DatabaseError)?;
+    if scope.is_some() {
+        return Err(AgentMemoryError::DatabaseError(Error::Config(format!(
+            "scope narrowing is not supported for {context}"
+        ))));
+    }
+    Ok(())
 }
 
 /// Validates that `actual` matches the `expected` embedding dimension.
@@ -223,6 +247,12 @@ pub(super) fn serialize_tracked_points(
     collection_name: &str,
     stored_ids: &RwLock<HashSet<u64>>,
 ) -> Result<Vec<u8>, AgentMemoryError> {
+    authorize_memory_read(
+        db,
+        collection_name,
+        QueryOperationKind::Select,
+        "memory serialization",
+    )?;
     let collection = get_collection(db, collection_name)?;
     let all_ids: Vec<u64> = stored_ids.read().iter().copied().collect();
     serialize_points(&collection, &all_ids)
@@ -263,6 +293,12 @@ pub(super) fn search_filtered(
     kind: super::ttl::MemoryKind,
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
     validate_dimension(dimension, query_embedding.len())?;
+    authorize_memory_read(
+        db,
+        collection_name,
+        QueryOperationKind::VectorSearch,
+        "memory similarity recalls",
+    )?;
     let collection = get_collection(db, collection_name)?;
     search_live(&collection, query_embedding, k, ttl, kind, None)
 }
@@ -630,6 +666,12 @@ pub(super) fn execute_velesql(
     ttl: &super::ttl::MemoryTtl,
     kind: super::ttl::MemoryKind,
 ) -> Result<Vec<crate::SearchResult>, AgentMemoryError> {
+    authorize_memory_read(
+        db,
+        collection_name,
+        QueryOperationKind::Select,
+        "memory VelesQL reads",
+    )?;
     let collection = get_collection(db, collection_name)?;
     let results = collection
         .execute_query_str(sql, params)
@@ -722,6 +764,12 @@ pub(super) fn relations_of(
     ttl: &super::ttl::MemoryTtl,
     kind: super::ttl::MemoryKind,
 ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+    authorize_memory_read(
+        db,
+        collection_name,
+        QueryOperationKind::GraphTraversal,
+        "memory relation reads",
+    )?;
     let collection = get_collection(db, collection_name)?;
     Ok(filter_live_far_end(
         collection.get_outgoing_edges(id),
@@ -753,6 +801,12 @@ pub(super) fn relations_of_bounded(
     kind: super::ttl::MemoryKind,
     cap: usize,
 ) -> Result<super::BoundedRelations, AgentMemoryError> {
+    authorize_memory_read(
+        db,
+        collection_name,
+        QueryOperationKind::GraphTraversal,
+        "memory relation reads",
+    )?;
     let collection = get_collection(db, collection_name)?;
     let (edges, total) = collection.get_outgoing_edges_bounded(id, cap);
     Ok(super::BoundedRelations {
@@ -785,6 +839,12 @@ pub(super) fn incoming_relations_of(
     ttl: &super::ttl::MemoryTtl,
     kind: super::ttl::MemoryKind,
 ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
+    authorize_memory_read(
+        db,
+        collection_name,
+        QueryOperationKind::GraphTraversal,
+        "memory relation reads",
+    )?;
     let collection = get_collection(db, collection_name)?;
     Ok(filter_live_far_end(
         collection.get_incoming_edges(id),
@@ -810,6 +870,12 @@ pub(super) fn incoming_relations_of_bounded(
     kind: super::ttl::MemoryKind,
     cap: usize,
 ) -> Result<super::BoundedRelations, AgentMemoryError> {
+    authorize_memory_read(
+        db,
+        collection_name,
+        QueryOperationKind::GraphTraversal,
+        "memory relation reads",
+    )?;
     let collection = get_collection(db, collection_name)?;
     let (edges, total) = collection.get_incoming_edges_bounded(id, cap);
     Ok(super::BoundedRelations {

@@ -182,13 +182,21 @@ fn test_collection_handle_insert_batch_raw_happy_path() {
     handle
         .insert_batch_raw(&[100u64, 101], &[1.0, 0.0, 0.0, 1.0], 2)
         .expect("test: handle bulk insert through borrow_mut");
-    assert_eq!(handle.len(), 2, "both rows landed in the shared store");
+    assert_eq!(
+        handle.len().unwrap(),
+        2,
+        "both rows landed in the shared store"
+    );
 
     // The insert is visible through a freshly resolved handle (shared Rc).
     let handle2 = db.get_collection("vecs").expect("test: second handle");
-    assert_eq!(handle2.len(), 2, "second handle sees the same store");
+    assert_eq!(
+        handle2.len().unwrap(),
+        2,
+        "second handle sees the same store"
+    );
     assert_eq!(handle2.dimension(), 2);
-    assert!(!handle2.is_empty());
+    assert!(!handle2.is_empty().unwrap());
 }
 
 // =========================================================================

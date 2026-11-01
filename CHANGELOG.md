@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The read gate decides every read a `VelesQL` statement makes, aggregates
+  included.** In 7.1.0 a `DatabaseObserver`'s `on_query_request` was never
+  asked about an aggregate: `Database::execute_aggregate`, the server's
+  `/aggregate` and the aggregates `/query` routes there, the CLI and the Tauri
+  `query` command ran `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `GROUP BY` and
+  `HAVING` over every stored row, ignoring an `AllowWithScope` filter and a
+  `Deny` alike. A scalar subquery reduced by an aggregate (`WHERE amount >
+  (SELECT MAX(score) FROM other)`) read `other` the same way, in a `SELECT`,
+  an `UPDATE`, a `DELETE` or an `INSERT`. Other reads the gate missed or
+  decided wrongly:
+  - every operand of a `UNION`, `INTERSECT` or `EXCEPT` after the first read
+    its collection unscoped, and undecided when it named another collection;
+  - a JOIN read its secondary collection undecided;
+  - a `MATCH` addressed through the `_collection` parameter (how `/query`,
+    the REPL and the SDKs send one) was decided on an empty collection name,
+    and a scope was dropped, since a traversal never reads the `WHERE` it was
+    folded into; the collections its `@collection` nodes enrich from were not
+    decided at all;
+  - `SELECT EDGES` was not decided;
+  - REST `GET /collections/{name}/points/{id}`,
+    `POST /collections/{name}/points/scroll` and
+    `GET /collections/{name}/points/{id}/relations` were not decided;
+  - `velesdb-mobile` `get` / `getById` were not decided, and now throw a
+    `MobileObserver`'s denial;
+  - `velesdb-wasm` decided a JOIN on its first collection only, so a
+    `WasmObserver` never saw the secondary one.
+
+  In 8.0.0 each of these reads asks the observer about the collection it
+  reads. A `Deny` aborts the statement or request with the observer's error.
+  The remaining reads that skipped the gate are decided too:
+
+  - collection metadata reads — `DESCRIBE COLLECTION`, a plan-only `EXPLAIN`
+    (VelesQL and REST `/query/explain` with `analyze: false`), REST
+    `GET /collections/{name}` `/empty` `/sanity` `/config` `/stats`
+    `/diagnostics`, Python `count()`/`len()`/`info()`/`is_empty()`/`analyze()`/
+    `explain()`, mobile `count()`/`all_ids()`/`get_stats()`/`diagnostics()`,
+    wasm `len`/`is_empty`/`DESCRIBE COLLECTION`, Tauri `get_collection`/
+    `list_collections`/`is_empty`/`list_indexes` — which leaked `point_count`
+    and statistics undecided; a `Deny` now refuses them and a scope they
+    cannot honour refuses with `VELES-009` rather than run unscoped;
+  - `GET /collections/{name}/graph/traverse/stream` (SSE), which never
+    consulted the observer at all;
+  - every `AgentMemory` read — the `query_semantic`/`query_episodic`/
+    `query_procedural` `VelesQL` bridges and the native `query`/`recent`/
+    `recall`/`list_all`/`serialize`/relation accessors — which read the
+    `_semantic_memory`/`_episodic_memory`/`_procedural_memory` collections
+    undecided (the Tauri memory commands ride on them);
+  - the remaining Tauri command reads — `search`, `search_ids`,
+    `batch_search`, `text_search`, `hybrid_search`, `multi_query_search`,
+    `sparse_search`, `hybrid_sparse_search`, `get_points`,
+    `scroll_collection`, `get_edges`, `traverse_graph`,
+    `traverse_graph_parallel`, `get_node_degree` — which ran on detached
+    collection leaves and never consulted an observer passed to
+    `VelesDbState::new_with_observer`.
+  A scope is AND-composed into the `WHERE` of the statement's target and of
+  every set-operation operand, so it can only narrow. Where a read cannot
+  apply one — a traversal, a JOIN's secondary side, `@collection`
+  enrichment, `SELECT EDGES` — the statement is refused with `VELES-009`
+  rather than run unscoped, as the server's graph and `/match` endpoints
+  already answered (a point's relations now answer the same way). Over REST
+  a point outside the scope reads as not found, and a scroll returns only the
+  scoped points. Inside `velesdb-core` the
+  executors that read for a statement take an `AuthorizedQuery` that only
+  the gate builds, so a statement path that skips the gate does not compile.
+  What an integrator sees change is in
+  [`MIGRATION_v8.0.0.md`](docs/guides/MIGRATION_v8.0.0.md) §2.
+
+  The follow-up adversarial pass closed what it still missed:
+  - a scope filter the row-filter lowering cannot express — a
+    `similarity()`/vector/graph conjunct (lowered to a match-all tautology,
+    running *unscoped*), a full-text `MATCH` (lowered to substring
+    `CONTAINS`, narrowing by the wrong predicate), a `$param` or subquery
+    value (no policy value of its own) — is refused with `VELES-009` at the
+    gate itself, on every surface. `CONTAINS_TEXT` stays legal: it already
+    is a strict substring predicate, so its lowering is faithful;
+  - a scope column qualified with a JOIN table (`other.col`) is refused for
+    the same reason — pushdown would apply it to the join side, where a
+    `LEFT JOIN` keeps every base row anyway;
+  - `SemanticMemory::edge_count`/`count`/`is_empty` and
+    `EpisodicMemory::get_with_embedding`, decided like their siblings —
+    the `edge_count` gate had been written inside `clear()` (a mutation)
+    instead;
+  - every `PyGraphCollection` direct read (`get_edges`, `get_outgoing*`/
+    `get_incoming*`, `has_edge`, `node_degree`, `get_node_payload`,
+    `all_node_ids`, `traverse_*`, `edge_count`, `__len__`/`count`/`is_empty`,
+    `get`, `__contains__`), gated as `GraphTraversal`;
+  - the remaining metadata reads: Python `analyze()`/`get_collection_stats`/
+    `analyze_collection`/`collection_diagnostics`, mobile `analyze()`; the
+    index-metadata getters on both (Tauri already gates `list_indexes`), and
+    the collection-config getters (`dimension`, `metric`, `storage_mode`,
+    `is_metadata_only`, `pending_reopen`, `guard_rails`, `is_delta_active`,
+    `check_auto_reindex_divergence`) that duplicate what `info()` already
+    gates;
+  - `Database::explain_query`/`analyze_collection`/`collection_diagnostics`
+    now gate in-core, so a surface can no longer forget to decide them —
+    REST `POST /analyze` was never decided. `get_collection_stats` stays
+    surface-gated by design: core consults it on every uncached plan build;
+  - Python `explain()` now also authorizes the query's `FROM` — a plan for
+    `SELECT * FROM denied` no longer ships to a caller who cannot read it;
+  - `on_query` telemetry for a `MATCH` addressed through `_collection`
+    reported an empty collection name; it now reports the gate's target.
+
 ### Added
 
 - **The learning-loop `Stop` checklist names the memories and the outcomes

@@ -83,7 +83,13 @@ and the sparse/batch/multi/graph-embedding variants) called the collection
 directly and never consulted the gate — the OSS server registered no observer
 at all (`Database::open`, never `open_with_observer`). As of 3.10.0, the gate
 genuinely covers every HTTP search entry point (dense/text/hybrid/sparse/
-batch/multi-query/ids/graph-embedding/MATCH), closing that gap.
+batch/multi-query/ids/graph-embedding/MATCH), closing that gap. It still
+held for VelesQL `SELECT`/`MATCH` only in their simplest shape until 8.0.0:
+aggregates (`Database::execute_aggregate`, REST `/aggregate`), the scalar
+subqueries they resolve, set-operation operands after the first, JOIN
+secondary collections, `MATCH` `@collection` enrichment, `SELECT EDGES`, and
+REST point lookup and scroll read without asking the observer. 8.0.0 asks it
+for every collection a statement reads (see the `CHANGELOG.md` Security entry).
 
 This design ensures:
 

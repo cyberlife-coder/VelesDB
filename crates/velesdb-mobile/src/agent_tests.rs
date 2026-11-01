@@ -12,7 +12,7 @@ fn create_test_db() -> (TempDir, std::sync::Arc<VelesDatabase>) {
 fn test_semantic_memory_new() {
     let (_dir, db) = create_test_db();
     let memory = VelesSemanticMemory::new(&db, 4).expect("test: construct semantic memory");
-    assert_eq!(memory.dimension(), 4);
+    assert_eq!(memory.dimension().expect("test: dimension"), 4);
     assert!(memory.is_empty().expect("test: is_empty on fresh memory"));
 }
 
