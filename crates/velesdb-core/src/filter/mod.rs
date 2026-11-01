@@ -28,9 +28,11 @@ mod point_ids;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+// Re-exported for the bitmap prefilter in `collection::core`, a
+// `persistence`-gated module — outside it only `point_ids.rs` itself reads
+// these, so an ungated import is an unused one without the feature.
 #[cfg(feature = "persistence")]
-pub(crate) use point_ids::exact_as_f64;
-pub(crate) use point_ids::value_as_point_id;
+pub(crate) use point_ids::{exact_as_f64, value_as_point_id};
 
 /// A filter for metadata-based search refinement.
 ///
