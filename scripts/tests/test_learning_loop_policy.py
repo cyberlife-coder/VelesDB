@@ -1747,6 +1747,76 @@ class LearningLoopPolicy(unittest.TestCase):
         self.assertNotIn("failed, then passed", reason)
         self.assertNotIn("still failing", reason)
 
+    def test_a_pass_in_another_repo_does_not_resolve_a_failure_here(self) -> None:
+        """The same command in two opted-in checkouts is two checks, not one.
+
+        Check records are keyed by command text alone, so `cargo test`
+        failing in this repository and `cargo test` passing in another one
+        collapse into a single `.failed`/`.last` pair — and the checklist
+        reports "failed, then passed" for a check that still fails in the
+        edited repository. A "verified" outcome that was never observed must
+        not be emitted: the pass belongs to the other checkout.
+        """
+        other = self.private / "other-check-repo"
+        (other / "src").mkdir(parents=True)
+        (other / ".velesdb-hooks.json").write_text(
+            json.dumps(
+                {
+                    "project": "velesdb-other",
+                    "session": "rolling",
+                    "enforce_learning_loop": True,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        session_id = "claude-check-cross-repo"
+
+        def bash_in(cwd: Path, command: str, *, exit_code: int) -> None:
+            if exit_code == 0:
+                script = "post-tool-use.sh"
+                payload = hook_payload(
+                    "PostToolUse",
+                    cwd=cwd,
+                    session_id=session_id,
+                    tool_name="Bash",
+                    tool_input={"command": command},
+                    tool_response={
+                        "stdout": "ok",
+                        "stderr": "",
+                        "interrupted": False,
+                        "isImage": False,
+                    },
+                )
+            else:
+                script = "post-tool-use-failure.sh"
+                payload = hook_payload(
+                    "PostToolUseFailure", cwd=cwd, session_id=session_id
+                )
+                payload.update(
+                    {
+                        "tool_name": "Bash",
+                        "tool_input": {"command": command},
+                        "tool_use_id": f"call-{session_id}",
+                        "error": f"Exit code {exit_code}\nerror: test failed",
+                        "is_interrupt": False,
+                    }
+                )
+            result = self.run_hook("claude", script, payload)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+        # `cargo test` fails HERE and is never re-run here; an identical
+        # command passing in the OTHER repository must not resolve it.
+        bash_in(self.nested, "cargo test", exit_code=101)
+        bash_in(other, "cargo test", exit_code=0)
+        reason = self.stop_reason("claude", session_id)
+        self.assertNotIn(
+            "failed, then passed",
+            reason,
+            "a pass observed in another checkout is not this repo's recovery",
+        )
+        self.assertIn("still failing", reason)
+
     def test_a_git_revert_in_the_session_is_evidence_on_both_hosts(self) -> None:
         git = shutil.which("git")
         if git is None:
