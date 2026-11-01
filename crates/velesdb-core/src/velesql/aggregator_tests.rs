@@ -151,8 +151,8 @@ fn test_process_batch_keeps_an_infinite_extreme() {
     assert_eq!(result.maxs.get("x"), Some(&f64::INFINITY));
     assert_eq!(result.mins.get("x"), Some(&f64::NEG_INFINITY));
     // No JSON number holds an infinity, so there is no exact extreme.
-    assert!(result.max_values.get("x").is_none());
-    assert!(result.min_values.get("x").is_none());
+    assert!(!result.max_values.contains_key("x"));
+    assert!(!result.min_values.contains_key("x"));
 }
 
 #[test]
@@ -166,8 +166,8 @@ fn test_process_batch_skips_a_nan_as_no_value() {
     assert_eq!(result.mins.get("x"), Some(&2.0));
     assert_eq!(result.maxs.get("x"), Some(&5.0));
     // A column of NaNs has no value at all: no count, no extreme.
-    assert!(result.counts.get("y").is_none());
-    assert!(result.maxs.get("y").is_none());
+    assert!(!result.counts.contains_key("y"));
+    assert!(!result.maxs.contains_key("y"));
 }
 
 #[test]
