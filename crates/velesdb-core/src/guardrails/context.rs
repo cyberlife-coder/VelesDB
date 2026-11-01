@@ -45,9 +45,9 @@ pub struct QueryContext {
     /// Filter strategy the executor actually ran (for EXPLAIN ANALYZE).
     ///
     /// `Arc` so the query pipeline can hand the cell to the search options,
-    /// which flow through every dispatch path — including the vector leg of
-    /// the CBO `Parallel` strategy, which runs on a rayon worker thread
-    /// (a thread-local channel would silently lose that leg's record).
+    /// which flow through every dispatch path: a shared atomic cell, not a
+    /// thread-local, so the record does not depend on which thread the
+    /// dispatch runs on.
     executed_filter_strategy: Arc<ExecutedStrategyCell>,
     /// Milliseconds added to the measured time (test-only fault hook; see
     /// [`QueryClockSkewGuard`]).
@@ -299,9 +299,9 @@ impl QueryContext {
 
     /// Accumulates graph-traversal counters measured during MATCH execution.
     ///
-    /// Uses `fetch_add` so multiple traversal phases compose: a multi-pattern
-    /// MATCH, and the `GraphFirst` + `VectorFirst` legs of the Parallel
-    /// strategy, each add their own counts. Read back by EXPLAIN ANALYZE.
+    /// Uses `fetch_add` so multiple traversal phases compose: each pattern of
+    /// a multi-pattern MATCH adds its own counts, as does a `VectorFirst`
+    /// MATCH for the candidates it examined. Read back by EXPLAIN ANALYZE.
     pub fn add_traversal(&self, nodes_visited: u64, edges_traversed: u64) {
         self.traversal_nodes_visited
             .fetch_add(nodes_visited, Ordering::Relaxed);

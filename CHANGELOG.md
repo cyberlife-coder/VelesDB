@@ -321,6 +321,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no `Parallel` plan. `ExecutionStrategy::Parallel`,
   `MatchExecutionStrategy::Parallel` and
   `QueryPlanner::with_thresholds(graph_first, vector_first)` are removed.
+  One visible difference remains on `MATCH`: the union gave a row the
+  VectorFirst leg's similarity score (and `RETURN similarity()` its
+  projection); a `GraphFirst` row carries none — its `score` is the
+  depth-derived value every graph-reached row gets. `VectorFirst` rows
+  still carry theirs.
   *Migration*: drop the `Parallel` arm of a `match` on either enum; build a
   planner with `QueryPlanner::with_vector_first_threshold(vector_first)`.
 - **BREAKING — `AsyncIndexBuilder`'s test-only calls.** `search_buffer`,

@@ -1,8 +1,8 @@
 //! Internal dispatch helpers for MATCH query execution.
 //!
 //! Extracted from `select_dispatch.rs` (Martin Fowler: Extract Module) to keep
-//! file NLOC under 500. These methods handle MATCH dispatch, parallel
-//! execution, result merging, and MATCH-specific metrics.
+//! file NLOC under 500. These methods handle MATCH dispatch, result
+//! finalization, and MATCH-specific metrics.
 
 use crate::collection::types::Collection;
 use crate::error::Result;
