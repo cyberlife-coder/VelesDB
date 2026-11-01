@@ -63,8 +63,12 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// one id are applied one after another, each counted exactly once.
     ///
     /// # Errors
-    /// Returns [`MemoryError::UnknownMemory`] if `id` is not a live fact, or a
-    /// storage error if the read-back or persist fails.
+    /// Returns [`MemoryError::UnknownMemory`] if `id` is not a live fact,
+    /// [`MemoryError::InternalScaffolding`] if `id` is an internal entity hub
+    /// or system fact — scaffolding is enumerable but can never have earned a
+    /// caller outcome, and stamping confidence onto it would race the
+    /// service's own writers — or a storage error if the read-back or
+    /// persist fails.
     pub fn feedback(&self, id: u64, success: bool) -> Result<f32, MemoryError> {
         let _generation = self.enter_generation();
         let _fact = self.fact_locks.for_fact(id);

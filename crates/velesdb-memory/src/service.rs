@@ -587,6 +587,15 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         let embedding = self.embedder.embed(&content)?;
         let mut meta = Map::new();
         meta.insert(HUB_FIELD.to_string(), Value::Bool(true));
+        // The check-then-store must hold the hub's stripe, serialized with
+        // `wire_attributes`' merge on the same id: an unlocked bare store
+        // landing between a racing call's create and merge would overwrite
+        // the attributes it just wrote. Re-check inside the lock — the loser
+        // of the race finds the hub already stored and stores nothing.
+        let _fact = self.fact_locks.for_fact(id);
+        if self.store.get(id)?.is_some() {
+            return Ok(id);
+        }
         // Topic hubs are graph anchors — they never expire.
         self.store_fact(id, &content, &embedding, Some(&meta), None)?;
         Ok(id)

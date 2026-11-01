@@ -5,18 +5,23 @@
 //! update, and writes it back; a re-store (`remember` of the same content)
 //! reads the fact's reserved `_veles_*` state and carries it into the new
 //! payload; `wire_attributes` merges new keys into an entity hub's metadata
-//! the same read-modify-write way. Any two of those interleaved on the same
-//! fact lose the first write, so every service path that performs such a
-//! sequence — `write_fact`, `feedback`, `wire_attributes` — holds the fact's
-//! stripe across the read and the write, making it atomic per fact.
+//! the same read-modify-write way; `remember_hub`'s check-then-create is a
+//! read (`get` → absent) followed by a bare `store_fact` that would
+//! overwrite a merge a racing call landed in between. Any two of those
+//! interleaved on the same fact lose the first write, so every service path
+//! that performs such a sequence — `write_fact`, `feedback`,
+//! `wire_attributes`, `remember_hub` — holds the fact's stripe across the
+//! read and the write, making it atomic per fact.
 //!
 //! What the stripe does NOT cover, by design: single-call writes
 //! (`store_fact`, `delete`, `store_with_*`) need no lock — one store call is
 //! one engine upsert — and internal scaffolding ids (entity hubs, context
 //! system facts) are unreachable by `feedback`, which refuses them, so no
 //! caller-reachable sequence can RMW a scaffolding fact against its own
-//! writers. The only scaffolding-side merge is `wire_attributes`'s, which is
-//! why it takes the stripe.
+//! writers. Scaffolding's own writers are `remember_hub` (create) and
+//! `wire_attributes` (merge) — both striped on the hub id, since a bare
+//! create landing between another call's create and merge is exactly the
+//! lost update `fact_locks_tests` reproduces.
 //!
 //! The stripe is complete BECAUSE the store is opened by a single process
 //! (`velesdb-core` holds an exclusive `flock` on `velesdb.lock` for the
@@ -53,3 +58,7 @@ impl FactWriteLocks {
         self.0[stripe].lock()
     }
 }
+
+#[cfg(all(test, feature = "persistence"))]
+#[path = "fact_locks_tests.rs"]
+mod tests;
