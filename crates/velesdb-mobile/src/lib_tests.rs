@@ -286,7 +286,7 @@ fn test_collection_upsert_and_search() {
     };
     col.upsert(point).unwrap();
 
-    assert_eq!(col.count(), 1);
+    assert_eq!(col.count().unwrap(), 1);
 
     let results = col.search(vec![1.0, 0.0, 0.0, 0.0], 1).unwrap();
     assert_eq!(results.len(), 1);
@@ -433,7 +433,7 @@ fn test_collection_upsert_batch() {
     ];
 
     col.upsert_batch(points).unwrap();
-    assert_eq!(col.count(), 3);
+    assert_eq!(col.count().unwrap(), 3);
 }
 
 #[test]
@@ -457,10 +457,10 @@ fn test_collection_delete() {
     })
     .unwrap();
 
-    assert_eq!(col.count(), 1);
+    assert_eq!(col.count().unwrap(), 1);
 
     col.delete(42).unwrap();
-    assert_eq!(col.count(), 0);
+    assert_eq!(col.count().unwrap(), 0);
 }
 
 #[test]
@@ -494,7 +494,7 @@ fn test_collection_compact_storage() {
         freed > 0,
         "compact_storage should reclaim bytes after 2 deletes"
     );
-    assert_eq!(col.count(), 3);
+    assert_eq!(col.count().unwrap(), 3);
 }
 
 #[test]
@@ -652,7 +652,7 @@ fn test_collection_with_json_payload() {
     };
 
     col.upsert(point).unwrap();
-    assert_eq!(col.count(), 1);
+    assert_eq!(col.count().unwrap(), 1);
 
     let fetched = col.get_by_id(1).unwrap().expect("point 1 should exist");
     let payload_str = fetched.payload.expect("payload should persist");
@@ -692,7 +692,11 @@ fn test_all_five_metrics() {
             payload: None,
         })
         .unwrap();
-        assert_eq!(col.count(), 1, "Collection {name} should have 1 point");
+        assert_eq!(
+            col.count().unwrap(),
+            1,
+            "Collection {name} should have 1 point"
+        );
     }
 
     assert_eq!(db.list_collections().len(), 5);
@@ -731,7 +735,11 @@ fn test_untrained_storage_modes_full_upsert_flow() {
             payload: None,
         })
         .unwrap();
-        assert_eq!(col.count(), 1, "Collection {name} should have 1 point");
+        assert_eq!(
+            col.count().unwrap(),
+            1,
+            "Collection {name} should have 1 point"
+        );
     }
 
     assert_eq!(db.list_collections().len(), 3);
@@ -1139,7 +1147,7 @@ fn test_collection_diagnostics_with_data() {
     let col = db.get_collection("diag_test".to_string()).unwrap().unwrap();
 
     // Empty collection: no vectors, not search-ready, index empty.
-    let empty = col.diagnostics();
+    let empty = col.diagnostics().unwrap();
     assert!(!empty.has_vectors);
     assert!(!empty.search_ready);
     assert!(empty.dimension_configured);
@@ -1161,7 +1169,7 @@ fn test_collection_diagnostics_with_data() {
     .unwrap();
 
     // Populated collection: vectors present, search-ready, index healthy.
-    let diag = col.diagnostics();
+    let diag = col.diagnostics().unwrap();
     assert!(diag.has_vectors);
     assert!(diag.search_ready);
     assert!(diag.dimension_configured);
@@ -1366,7 +1374,7 @@ fn test_collection_flush_and_all_ids() {
 
     col.flush().unwrap();
 
-    let mut ids = col.all_ids();
+    let mut ids = col.all_ids().unwrap();
     ids.sort_unstable();
     assert_eq!(ids, vec![4, 9]);
 }
@@ -1456,7 +1464,7 @@ fn test_collection_analyze_and_get_stats() {
     let analyzed = col.analyze().unwrap();
     assert!(analyzed.total_points >= 2);
 
-    let snapshot = col.get_stats();
+    let snapshot = col.get_stats().unwrap();
     assert!(snapshot.total_points >= 2);
     assert!(snapshot.field_stats_count >= 1 || snapshot.column_stats_count >= 1);
 }
@@ -1901,4 +1909,21 @@ fn test_open_without_config_keeps_default_limits() {
         .unwrap();
     db2.create_collection("second".to_string(), 4, DistanceMetric::Cosine)
         .unwrap();
+}
+
+/// GIVEN a database whose observer denies every read
+/// WHEN collection metadata is read — count, all_ids, stats, diagnostics
+/// THEN each fails with the denial like every other mobile read.
+#[test]
+fn test_observer_deny_blocks_metadata_reads() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = seed_gated_db(path, std::sync::Arc::new(DenyAllObserver));
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    assert!(col.count().is_err(), "count must be gated");
+    assert!(col.all_ids().is_err(), "all_ids must be gated");
+    assert!(col.get_stats().is_err(), "get_stats must be gated");
+    assert!(col.diagnostics().is_err(), "diagnostics must be gated");
 }

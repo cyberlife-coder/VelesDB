@@ -184,7 +184,7 @@ fn upsert_with_invalid_json_payload_errors() {
         "unexpected error message: {message}"
     );
     // The bad upsert must not have committed a point.
-    assert_eq!(col.count(), 0);
+    assert_eq!(col.count().unwrap(), 0);
 }
 
 #[test]

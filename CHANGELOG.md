@@ -38,6 +38,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   In 8.0.0 each of these reads asks the observer about the collection it
   reads. A `Deny` aborts the statement or request with the observer's error.
+  The remaining reads that skipped the gate are decided too:
+
+  - collection metadata reads — `DESCRIBE COLLECTION`, a plan-only `EXPLAIN`
+    (VelesQL and REST `/query/explain` with `analyze: false`), REST
+    `GET /collections/{name}` `/empty` `/sanity` `/config` `/stats`
+    `/diagnostics`, Python `count()`/`len()`/`info()`/`is_empty()`/`analyze()`/
+    `explain()`, mobile `count()`/`all_ids()`/`get_stats()`/`diagnostics()`,
+    wasm `len`/`is_empty`/`DESCRIBE COLLECTION`, Tauri `get_collection`/
+    `list_collections`/`is_empty`/`list_indexes` — which leaked `point_count`
+    and statistics undecided; a `Deny` now refuses them and a scope they
+    cannot honour refuses with `VELES-009` rather than run unscoped;
+  - `GET /collections/{name}/graph/traverse/stream` (SSE), which never
+    consulted the observer at all;
+  - every `AgentMemory` read — the `query_semantic`/`query_episodic`/
+    `query_procedural` `VelesQL` bridges and the native `query`/`recent`/
+    `recall`/`list_all`/`serialize`/relation accessors — which read the
+    `_semantic_memory`/`_episodic_memory`/`_procedural_memory` collections
+    undecided (the Tauri memory commands ride on them);
+  - the remaining Tauri command reads — `search`, `search_ids`,
+    `batch_search`, `text_search`, `hybrid_search`, `multi_query_search`,
+    `sparse_search`, `hybrid_sparse_search`, `get_points`,
+    `scroll_collection`, `get_edges`, `traverse_graph`,
+    `traverse_graph_parallel`, `get_node_degree` — which ran on detached
+    collection leaves and never consulted an observer passed to
+    `VelesDbState::new_with_observer`.
   A scope is AND-composed into the `WHERE` of the statement's target and of
   every set-operation operand, so it can only narrow. Where a read cannot
   apply one — a traversal, a JOIN's secondary side, `@collection`

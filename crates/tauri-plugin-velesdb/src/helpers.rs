@@ -206,3 +206,57 @@ pub fn timed_search_response(
 #[cfg(test)]
 #[path = "helpers_tests.rs"]
 mod tests;
+
+/// Consults the database's read gate for `name` before a collection read:
+/// `Err` is the observer's denial, `Ok(Some(filter))` a scope to AND into the
+/// read, `Ok(None)` a plain allow. With no observer this is a single `Option`
+/// check.
+pub(crate) fn authorize_collection_read(
+    db: &velesdb_core::Database,
+    name: &str,
+    operation: velesdb_core::observer::QueryOperationKind,
+) -> Result<Option<velesdb_core::Filter>> {
+    db.authorize_read(name, operation, None, None)
+        .map_err(Error::Database)
+}
+
+/// Fails a read whose shape cannot carry an observer scope filter (fail
+/// closed), the same refusal every other uncomposable read gives.
+pub(crate) fn deny_if_scoped(scope: Option<&velesdb_core::Filter>, context: &str) -> Result<()> {
+    if scope.is_some() {
+        return Err(Error::InvalidConfig(format!(
+            "scope narrowing is not supported for {context}"
+        )));
+    }
+    Ok(())
+}
+
+/// AND-composes a caller filter with an observer scope filter, so the scope
+/// can only narrow what the caller asked for.
+pub(crate) fn and_scope(
+    caller: Option<velesdb_core::Filter>,
+    scope: Option<velesdb_core::Filter>,
+) -> Option<velesdb_core::Filter> {
+    match (caller, scope) {
+        (None, None) => None,
+        (Some(c), None) => Some(c),
+        (None, Some(s)) => Some(s),
+        (Some(c), Some(s)) => Some(velesdb_core::Filter::new(velesdb_core::Condition::And {
+            conditions: vec![c.condition, s.condition],
+        })),
+    }
+}
+
+/// Decides a read that cannot carry an observer scope: the denial propagates
+/// and a scope refuses (fail closed) — the metadata/graph-read shape.
+pub(crate) fn require_unscoped_read(
+    db: &velesdb_core::Database,
+    name: &str,
+    operation: velesdb_core::observer::QueryOperationKind,
+    context: &str,
+) -> Result<()> {
+    deny_if_scoped(
+        authorize_collection_read(db, name, operation)?.as_ref(),
+        context,
+    )
+}

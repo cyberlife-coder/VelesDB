@@ -136,3 +136,86 @@ fn query_command_aggregates_refuse_a_denied_read() {
 
     assert!(err.contains("items are off limits"), "{err}");
 }
+
+/// GIVEN the observer denies `items`
+/// WHEN a `search`, `get_points`, or `scroll_collection` command runs —
+///      collection reads that previously never consulted the observer
+/// THEN each fails with the observer's message.
+#[test]
+fn search_and_point_reads_refuse_a_denied_read() {
+    use tauri_plugin_velesdb::commands::{get_points, scroll_collection, search};
+    use tauri_plugin_velesdb::types::{GetPointsRequest, ScrollRequest, SearchRequest};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = app_under(dir.path(), ItemsPolicy { deny: true });
+
+    let search_req: SearchRequest = serde_json::from_value(serde_json::json!({
+        "collection": "items", "vector": [1.0, 0.0, 0.0, 0.0], "top_k": 4,
+    }))
+    .expect("search request");
+    let err =
+        run(search(app.handle().clone(), app.state(), search_req)).expect_err("denied search");
+    assert!(
+        format!("{err:?}").contains("items are off limits"),
+        "{err:?}"
+    );
+
+    let get_req: GetPointsRequest = serde_json::from_value(serde_json::json!({
+        "collection": "items", "ids": [1],
+    }))
+    .expect("get request");
+    let err =
+        run(get_points(app.handle().clone(), app.state(), get_req)).expect_err("denied get_points");
+    assert!(
+        format!("{err:?}").contains("items are off limits"),
+        "{err:?}"
+    );
+
+    let scroll_req: ScrollRequest = serde_json::from_value(serde_json::json!({
+        "collection": "items", "batch_size": 10,
+    }))
+    .expect("scroll request");
+    let err = run(scroll_collection(
+        app.handle().clone(),
+        app.state(),
+        scroll_req,
+    ))
+    .expect_err("denied scroll");
+    assert!(
+        format!("{err:?}").contains("items are off limits"),
+        "{err:?}"
+    );
+}
+
+/// GIVEN `items` scoped to `category = 'tech'`
+/// WHEN `get_points` and `scroll_collection` run
+/// THEN the scope narrows them: out-of-scope rows drop out like misses.
+#[test]
+fn point_reads_are_narrowed_by_the_scope() {
+    use tauri_plugin_velesdb::commands::{get_points, scroll_collection};
+    use tauri_plugin_velesdb::types::{GetPointsRequest, ScrollRequest};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let app = app_under(dir.path(), ItemsPolicy { deny: false });
+
+    let get_req: GetPointsRequest = serde_json::from_value(serde_json::json!({
+        "collection": "items", "ids": [1, 4],
+    }))
+    .expect("get request");
+    let points =
+        run(get_points(app.handle().clone(), app.state(), get_req)).expect("scoped get_points");
+    assert!(
+        points[0].is_some() && points[1].is_none(),
+        "in-scope kept, out-of-scope hidden: {points:?}"
+    );
+
+    let scroll_req: ScrollRequest = serde_json::from_value(serde_json::json!({
+        "collection": "items", "batch_size": 10,
+    }))
+    .expect("scroll request");
+    let page = run(scroll_collection(
+        app.handle().clone(),
+        app.state(),
+        scroll_req,
+    ))
+    .expect("scoped scroll");
+    assert_eq!(page.points.len(), 3, "only the scoped rows: {page:?}");
+}

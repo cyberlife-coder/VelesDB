@@ -179,9 +179,21 @@ impl VelesCollection {
     }
 
     /// Returns the number of points in the collection.
+    ///
+    /// The count is a collection read, so it passes the read gate like every
+    /// other read: a denial fails it, and a scope — there are no rows to
+    /// narrow — refuses it rather than leak the unscoped count.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
     #[allow(clippy::cast_possible_truncation)]
-    pub fn count(&self) -> u64 {
-        self.inner.config().point_count as u64
+    pub fn count(&self) -> Result<u64, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "count")?;
+        Ok(self.inner.config().point_count as u64)
     }
 
     /// Returns the vector dimension.
@@ -626,8 +638,19 @@ impl VelesCollection {
     }
 
     /// Returns all point IDs currently present in the collection.
-    pub fn all_ids(&self) -> Vec<u64> {
-        self.inner.all_ids()
+    ///
+    /// A listing of the collection's rows — a read the gate decides: a denial
+    /// fails it, and a scope, which ids cannot be filtered by, refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn all_ids(&self) -> Result<Vec<u64>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "all_ids")?;
+        Ok(self.inner.all_ids())
     }
 
     /// Creates a secondary metadata index for a payload field.
@@ -689,13 +712,35 @@ impl VelesCollection {
     }
 
     /// Returns the latest known collection statistics snapshot.
-    pub fn get_stats(&self) -> MobileCollectionStats {
-        self.inner.get_stats().into()
+    ///
+    /// Statistics are a collection read: a denial fails the call, and a scope
+    /// — there are no rows to narrow — refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn get_stats(&self) -> Result<MobileCollectionStats, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "get_stats")?;
+        Ok(self.inner.get_stats().into())
     }
 
     /// Returns a health/readiness diagnostics snapshot for this collection.
-    pub fn diagnostics(&self) -> MobileCollectionDiagnostics {
-        self.inner.diagnostics().into()
+    ///
+    /// Diagnostics carry the point count — a read the gate decides: a denial
+    /// fails it, and a scope refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn diagnostics(&self) -> Result<MobileCollectionDiagnostics, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "diagnostics")?;
+        Ok(self.inner.diagnostics().into())
     }
 }
 

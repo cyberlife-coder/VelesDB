@@ -125,6 +125,13 @@ In 8.0.0 each one asks the observer about the collection it reads.
 | REST `GET /collections/{name}/points/{id}` | undecided | the denial's status and code | a point outside the scope is `404` `VELES-003` |
 | REST `POST /collections/{name}/points/scroll` | undecided | the denial's status and code | the scoped points |
 | REST `GET /collections/{name}/points/{id}/relations` | undecided | the denial's status and code | refused, `400` `VELES-009` |
+| `DESCRIBE COLLECTION`, on any surface | undecided | the denial | refused, `VELES-009` |
+| A plan-only `EXPLAIN` (VelesQL, REST `/query/explain` with `analyze: false`, Python `explain()`) | undecided | the denial | refused, `VELES-009` |
+| Collection metadata — REST `GET /collections/{name}` `/empty` `/sanity` `/config` `/stats` `/diagnostics`, Python `count()`/`len()`/`info()`/`is_empty()`/`analyze()`, wasm `len`/`is_empty` | undecided | the denial | refused, `VELES-009` |
+| Mobile `count()`, `all_ids()`, `get_stats()`, `diagnostics()` | undecided | throws the denial | (scopes are not bridged on mobile) |
+| `GET /collections/{name}/graph/traverse/stream` (SSE) | never asked | the denial's status and code | refused, `400` `VELES-009` |
+| Every `AgentMemory` read — `query_semantic`/`query_episodic`/`query_procedural` and the native `query`/`recent`/`recall`/`list_all`/`serialize`/relation accessors — and the Tauri memory commands over them | undecided | the denial | refused, `VELES-009` |
+| Tauri `search`, `search_ids`, `batch_search`, `text_search`, `hybrid_search`, `multi_query_search`, `sparse_search`, `hybrid_sparse_search`, `get_points`, `scroll_collection`, `get_edges`, `traverse_graph`, `traverse_graph_parallel`, `get_node_degree`, `get_collection`, `list_collections`, `is_empty`, `list_indexes` | never asked | the command fails with the denial | the scope narrows the filterable reads; the others refuse |
 
 A read refused with `VELES-009` has no row filter to compose the scope into,
 so it is refused rather than run unscoped, as the server's graph and `/match`
@@ -441,6 +448,13 @@ Rejections carry core's codes and a new `recoverable` field:
 every other mobile read, so they throw when a `MobileObserver` denies the
 read; 7.1.0 returned the points. A Swift call needs `try`, and Kotlin code
 that must not fail on a denial catches `VelesException`.
+
+### Metadata reads throw
+
+`count()`, `allIds()`, `getStats()` and `diagnostics()` now pass the same
+gate — a `point_count` is a collection read — so they return `Result` and
+throw the `MobileObserver`'s denial where 7.1.0 returned the value. The
+same `try`/catch applies.
 
 ### Errors
 

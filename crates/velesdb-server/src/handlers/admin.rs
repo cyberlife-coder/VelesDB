@@ -16,8 +16,8 @@ use crate::types::{
 use crate::AppState;
 
 use super::helpers::{
-    auto_core_error_response, error_response, get_collection_or_404, get_vector_collection_or_404,
-    worker_failure,
+    authorize_unscoped_read, auto_core_error_response, error_response, get_collection_or_404,
+    get_vector_collection_or_404, worker_failure,
 };
 
 /// Get detailed collection configuration (HNSW params, storage mode, schema, etc.).
@@ -41,6 +41,14 @@ pub async fn get_collection_config(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
 
     let config = collection.config();
     let graph_schema = config
@@ -313,6 +321,14 @@ pub async fn get_collection_stats(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
     match state.db.get_collection_stats(&name) {
         Ok(Some(stats)) => {
             let response = map_stats_to_response(&stats);
@@ -343,6 +359,14 @@ pub async fn collection_diagnostics(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
     match state.db.collection_diagnostics(&name) {
         Ok(diag) => (StatusCode::OK, Json(diagnostics_to_response(&diag))).into_response(),
         Err(e) => auto_core_error_response(&e),

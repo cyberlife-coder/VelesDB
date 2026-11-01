@@ -418,12 +418,14 @@ impl Collection {
     /// an `IndexLookup` node and a MATCH reports a real traversal strategy.
     /// Semantically invalid queries raise `ValueError`.
     ///
-    /// Deliberately NOT routed through the read gate: EXPLAIN builds a plan
-    /// from the AST plus collection statistics and never touches point data,
-    /// so there is nothing for a governance observer to scope or leak
-    /// (`explain_analyze`, which *executes* the query, is gated).
+    /// The read gate decides a plan-only EXPLAIN too: `analyze()` walks the
+    /// column store to calibrate the plan, so a denied read must refuse and a
+    /// scope — no rows to narrow — refuses rather than leak the statistics
+    /// (`explain_analyze`, which *executes* the query, is gated the same way).
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "explain")?;
         let parsed = parse_velesql(query_str)?;
         validate_query(&parsed)?;
         let indexed = self.inner.config().indexed_fields.iter().cloned().collect();

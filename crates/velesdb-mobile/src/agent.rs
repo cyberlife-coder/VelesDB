@@ -152,9 +152,10 @@ impl VelesSemanticMemory {
         self.with_content(results)
     }
 
-    /// Returns the number of stored knowledge facts.
+    /// Returns the number of stored knowledge facts, through the same read
+    /// gate as every other read of the collection.
     pub fn len(&self) -> Result<u64, VelesError> {
-        Ok(self.collection.count())
+        self.collection.count()
     }
 
     /// Returns true if no knowledge facts are stored.
@@ -180,7 +181,7 @@ impl VelesSemanticMemory {
     /// Best-effort: individual delete failures are non-fatal so the operation
     /// clears as much as possible.
     pub fn clear(&self) -> Result<(), VelesError> {
-        for id in self.collection.all_ids() {
+        for id in self.collection.all_ids()? {
             let _ = self.collection.delete(id);
         }
         Ok(())

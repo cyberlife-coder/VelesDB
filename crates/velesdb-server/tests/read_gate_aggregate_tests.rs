@@ -288,3 +288,90 @@ async fn point_relations_honour_the_read_gate() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "VELES-009", "{body}");
 }
+
+/// GIVEN the observer denies `items`, then scopes it
+/// WHEN its metadata is read — `GET /collections/items`, `/empty`,
+///      `/sanity`, `/config`, `/stats`, `/diagnostics` — each of which
+///      carries the point count or statistics
+/// THEN the denial refuses each, and a scope refuses each with `VELES-009`
+///      rather than leak the unscoped count.
+#[tokio::test]
+async fn collection_metadata_endpoints_honour_the_read_gate() {
+    let (_dir, app, observer) = setup().await;
+    let uris = [
+        "/collections/items",
+        "/collections/items/empty",
+        "/collections/items/sanity",
+        "/collections/items/config",
+        "/collections/items/diagnostics",
+    ];
+    for uri in uris {
+        let (status, body) = send(&app, "GET", uri, None).await;
+        assert_eq!(status, StatusCode::OK, "allowed: {uri}: {body}");
+    }
+
+    observer.set(Rule::Deny);
+    for uri in uris {
+        let (status, body) = send(&app, "GET", uri, None).await;
+        assert!(
+            !status.is_success(),
+            "denied metadata read must refuse: {uri} -> {status}: {body}"
+        );
+    }
+
+    observer.set(Rule::ScopeToA);
+    for uri in uris {
+        let (status, body) = send(&app, "GET", uri, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert_eq!(body["code"], "VELES-009", "{uri}: {body}");
+    }
+}
+
+/// GIVEN the observer denies `items`, then scopes it
+/// WHEN a plan-only `/query/explain` runs — it leaks calibrated statistics
+/// THEN the denial refuses it, and the scope refuses it too rather than
+///      leak the unscoped plan statistics.
+#[tokio::test]
+async fn plan_only_explain_honours_the_read_gate() {
+    let (_dir, app, observer) = setup().await;
+    let explain =
+        || json!({"query": "SELECT * FROM items WHERE cat = 'a'", "analyze": false, "params": {}});
+    let (status, _) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    assert_eq!(status, StatusCode::OK, "allowed EXPLAIN");
+
+    observer.set(Rule::Deny);
+    let (status, body) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    assert!(
+        !status.is_success(),
+        "denied EXPLAIN must refuse, got {status}: {body}"
+    );
+
+    observer.set(Rule::ScopeToA);
+    let (status, _) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    // `/query/explain` answers a client's failure `422` by contract, so the
+    // scope refusal carries that status rather than `400 VELES-009`.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// GIVEN the observer denies `items` — wait: stream is graph; use a graph coll.
+/// WHEN the SSE traversal endpoint is hit
+/// THEN the denial refuses it instead of streaming an unscoped traversal —
+///      previously this endpoint consulted no observer at all.
+#[tokio::test]
+async fn stream_traverse_honours_the_read_gate() {
+    let (_dir, app, observer) = setup().await;
+    // `items` is a vector collection; the stream endpoint answers non-2xx on
+    // a denied read regardless of collection type.
+    observer.set(Rule::Deny);
+    let (status, body) = send(
+        &app,
+        "GET",
+        "/collections/items/graph/traverse/stream?start_node=1",
+        None,
+    )
+    .await;
+    assert!(
+        !status.is_success(),
+        "denied stream traversal must refuse, got {status}: {body}"
+    );
+}

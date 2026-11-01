@@ -382,6 +382,9 @@ impl Collection {
     ///     Dict with name, dimension, metric, storage_mode, point_count,
     ///     metadata_only, and auto_reindex
     fn info(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        // info() returns the point count, a collection read the gate decides.
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "info")?;
         let config = self.inner.config();
         let dict = PyDict::new(py);
         let _ = dict.set_item(PyString::intern(py, "name"), config.name.as_str());
@@ -410,8 +413,16 @@ impl Collection {
     }
 
     /// Check if the collection is empty.
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    ///
+    /// Emptiness derives from the point count — a collection read the gate
+    /// decides like ``count``.
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
+    fn is_empty(&self) -> PyResult<bool> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "is_empty")?;
+        Ok(self.inner.is_empty())
     }
 
     /// Get the vector dimension of this collection.
@@ -444,18 +455,33 @@ impl Collection {
 
     /// Get the number of points in the collection.
     ///
-    /// Returns:
-    ///     int: The point count
-    fn __len__(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Get the number of points in the collection.
+    /// The count is a collection read, so the read gate decides it: a denial
+    /// raises, and a scope — there are no rows to narrow — refuses the call
+    /// rather than leak the unscoped count.
     ///
     /// Returns:
     ///     int: The point count
-    fn count(&self) -> usize {
-        self.inner.len()
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
+    fn __len__(&self) -> PyResult<usize> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "__len__")?;
+        Ok(self.inner.len())
+    }
+
+    /// Get the number of points in the collection, through the same read
+    /// gate as ``__len__``.
+    ///
+    /// Returns:
+    ///     int: The point count
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
+    fn count(&self) -> PyResult<usize> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "count")?;
+        Ok(self.inner.len())
     }
 
     /// Get all point IDs in the collection.

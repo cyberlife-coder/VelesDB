@@ -31,7 +31,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::observer::QueryOperationKind;
-use crate::velesql::{CompoundQuery, Condition, DmlStatement, Query, SelectStatement};
+use crate::velesql::{
+    CompoundQuery, Condition, DmlStatement, IntrospectionStatement, Query, SelectStatement,
+};
 use crate::{Error, Result};
 
 use super::query_engine::{derive_operation_kind, derive_select_operation_kind, RawGateOutcome};
@@ -123,6 +125,9 @@ impl Database {
             let graph = QueryOperationKind::GraphTraversal;
             self.require_unscoped(&stmt.collection, graph, "SELECT EDGES")?;
         }
+        if let Some(intro) = &query.introspection {
+            self.authorize_introspection(intro, params)?;
+        }
         if !Self::is_read_path(query) {
             return Ok(admitted(Cow::Borrowed(query)));
         }
@@ -149,6 +154,60 @@ impl Database {
             .filter_map(|node| node.collection.as_deref());
         for name in annotated {
             self.require_unscoped(name, graph, "MATCH @collection enrichment")?;
+        }
+        Ok(())
+    }
+
+    /// A `DESCRIBE COLLECTION` reads a collection's metadata — its
+    /// `point_count` and type — and a plan-only `EXPLAIN` reads its
+    /// statistics. Both are reads the gate decides like any other: a denial
+    /// refuses them, and a scope, with no row to narrow, refuses them too
+    /// rather than leak the unscoped count. `SHOW COLLECTIONS` names the
+    /// collections only — no per-collection data — so it is not consulted.
+    fn authorize_introspection(
+        &self,
+        stmt: &IntrospectionStatement,
+        params: &Params,
+    ) -> Result<()> {
+        match stmt {
+            IntrospectionStatement::DescribeCollection(desc) => self.require_unscoped(
+                &desc.name,
+                QueryOperationKind::Select,
+                "DESCRIBE COLLECTION",
+            ),
+            IntrospectionStatement::Explain(inner) => {
+                self.authorize_unscoped_statement(inner, params)
+            }
+            IntrospectionStatement::ShowCollections => Ok(()),
+        }
+    }
+
+    /// Decides every collection `query` reads with no scope channel — a
+    /// plan-only `EXPLAIN`'s calibrated statistics cannot be row-narrowed, so
+    /// a scope refuses the statement rather than leak them. Subqueries the
+    /// statement carries are irrelevant here: the plan never executes them.
+    fn authorize_unscoped_statement(&self, query: &Query, params: &Params) -> Result<()> {
+        if let Some(DmlStatement::SelectEdges(stmt)) = &query.dml {
+            let graph = QueryOperationKind::GraphTraversal;
+            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES")?;
+        }
+        if !Self::is_read_path(query) {
+            return Ok(());
+        }
+        let target = read_target(query, params);
+        if query.is_match_query() {
+            return self.authorize_match(query, target);
+        }
+        if let Some(name) = target {
+            self.require_unscoped(name, derive_operation_kind(query), "a plan-only EXPLAIN")?;
+        }
+        self.authorize_joins(&query.select)?;
+        if let Some(compound) = query.compound.as_ref() {
+            for (_, operand) in &compound.operations {
+                self.authorize_joins(operand)?;
+                let operation = derive_select_operation_kind(operand);
+                self.require_unscoped(&operand.from, operation, "a set-operation operand")?;
+            }
         }
         Ok(())
     }

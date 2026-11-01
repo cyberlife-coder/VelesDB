@@ -23,11 +23,12 @@
 //! core method (`traverse_bfs_stream(config, cb)`) and is tracked as
 //! a post-seed EPIC in `docs/TECH_DEBT_REGISTRY.md`.
 
+use axum::response::IntoResponse;
 use axum::{
     extract::{Path, Query, State},
     response::sse::{Event, KeepAlive, Sse},
 };
-use futures::stream::{self, Stream};
+use futures::stream;
 use std::convert::Infallible;
 use std::time::Instant;
 use tracing::warn;
@@ -67,9 +68,21 @@ pub async fn stream_traverse(
     State(state): State<Arc<AppState>>,
     Path(collection): Path<String>,
     Query(params): Query<StreamTraverseParams>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> axum::response::Response {
     let start_time = Instant::now();
     state.onboarding_metrics.record_graph_request();
+
+    // The read gate decides the traversal like every other graph read: a
+    // denial refuses the request outright, and a scope — edges carry no
+    // payload a filter could narrow — refuses it too (fail closed).
+    if let Err(refusal) = crate::handlers::helpers::authorize_unscoped_read(
+        &state,
+        &collection,
+        velesdb_core::observer::QueryOperationKind::GraphTraversal,
+        "graph traversal streaming",
+    ) {
+        return crate::handlers::helpers::auto_core_error_response(&refusal);
+    }
 
     // Snapshot the parameters and state needed by the blocking worker.
     let coll_handle = state.db.get_graph_collection(&collection);
@@ -100,7 +113,9 @@ pub async fn stream_traverse(
         ))
     });
 
-    Sse::new(stream::iter(events)).keep_alive(KeepAlive::default())
+    Sse::new(stream::iter(events))
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 /// Runs the graph traversal synchronously on the calling (blocking)

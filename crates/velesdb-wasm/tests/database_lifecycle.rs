@@ -35,7 +35,7 @@ fn wasm_database_get_collection_dimension() {
         .get_collection("embeddings")
         .expect("test: get should succeed");
     assert_eq!(handle.dimension(), 768);
-    assert!(handle.is_empty());
+    assert!(handle.is_empty().unwrap());
 }
 
 #[test]
@@ -45,8 +45,8 @@ fn wasm_database_handle_insert_and_len() {
         .expect("test: create");
     let handle = db.get_collection("v").expect("test: get");
     handle.insert(42, &[1.0, 2.0, 3.0]).expect("test: insert");
-    assert_eq!(handle.len(), 1);
-    assert!(!handle.is_empty());
+    assert_eq!(handle.len().unwrap(), 1);
+    assert!(!handle.is_empty().unwrap());
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn wasm_database_shared_state_between_handles() {
     h1.insert(1, &[0.5, 0.5]).expect("test: insert via h1");
 
     let h2 = db.get_collection("shared").expect("test: get h2");
-    assert_eq!(h2.len(), 1, "h2 should see h1's insert");
+    assert_eq!(h2.len().unwrap(), 1, "h2 should see h1's insert");
 }
 
 #[test]
@@ -70,5 +70,5 @@ fn wasm_database_handle_remove() {
     handle.insert(10, &[1.0, 0.0]).expect("test: insert");
     assert!(handle.remove(10), "remove existing should return true");
     assert!(!handle.remove(10), "remove missing should return false");
-    assert!(handle.is_empty());
+    assert!(handle.is_empty().unwrap());
 }
