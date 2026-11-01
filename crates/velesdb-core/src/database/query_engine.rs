@@ -466,8 +466,31 @@ impl Database {
         match observer.on_query_request(&ctx)? {
             AccessDecision::Allow => Ok(RawGateOutcome::Allow),
             AccessDecision::Deny(err) => Ok(RawGateOutcome::Deny(err)),
-            AccessDecision::AllowWithScope(scope) => Ok(RawGateOutcome::Scope(scope)),
+            AccessDecision::AllowWithScope(scope) => {
+                Self::check_scope_expressible(&scope)?;
+                Ok(RawGateOutcome::Scope(scope))
+            }
         }
+    }
+
+    /// Fails closed on a scope filter the row-filter lowering cannot express
+    /// (VELES-009): a `similarity()`/vector/graph conjunct would lower to a
+    /// match-all tautology — silently unscoped — and a full-text `MATCH`, a
+    /// `$param` or a subquery would silently narrow by the wrong predicate.
+    /// The refusal is [`Error::Config`], the same answer a scope gets on a
+    /// read that has no filter channel at all.
+    fn check_scope_expressible(scope: &AccessScope) -> Result<()> {
+        let Some(filter) = &scope.filter else {
+            return Ok(());
+        };
+        if let Some(construct) = crate::filter::inexpressible_scope_construct(filter) {
+            return Err(Error::Config(format!(
+                "observer scope filter contains {construct}, which cannot be \
+                 expressed as a row-level metadata predicate; refusing to run \
+                 unscoped"
+            )));
+        }
+        Ok(())
     }
 
     /// Test-only accessor exposing the [`Cow`] statement

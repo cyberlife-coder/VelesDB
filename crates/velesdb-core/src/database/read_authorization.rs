@@ -97,6 +97,74 @@ pub(super) fn narrow_where(slot: &mut Option<Condition>, filter: Condition) {
     });
 }
 
+/// Refuses a scope whose columns are qualified with one of `select`'s JOIN
+/// tables or aliases (fail closed, `VELES-009`).
+///
+/// A scope is a predicate on the *scoped* collection's own rows, so its
+/// column references must be unqualified payload paths (or qualify the
+/// collection itself). Once composed into the WHERE of a select that JOINs,
+/// pushdown classifies a `join_table.col` conjunct as belonging to the join
+/// side ([`analyze_for_pushdown`]) and applies it to that store — where a
+/// `LEFT JOIN` keeps every base row anyway, so the base would be returned
+/// unscoped. Refusing is the only answer that cannot leak.
+///
+/// [`analyze_for_pushdown`]: crate::collection::search::query::pushdown::analyze_for_pushdown
+fn require_join_free_scope(select: &SelectStatement, filter: &Condition) -> Result<()> {
+    if select.joins.is_empty() {
+        return Ok(());
+    }
+    let join_tables =
+        crate::collection::search::query::pushdown::extract_join_tables(&select.joins);
+    if let Some(column) = join_qualified_column(filter, &join_tables) {
+        return Err(Error::Config(format!(
+            "observer scope column '{column}' names a JOIN table; a scope \
+             must predicate on the scoped collection's own rows (unqualified \
+             payload paths) — refusing to run unscoped"
+        )));
+    }
+    Ok(())
+}
+
+/// The first column reference in `filter` qualified with a name in
+/// `join_tables` (`table.column`), or `None` when none qualifies.
+fn join_qualified_column<'c>(
+    filter: &'c Condition,
+    join_tables: &std::collections::HashSet<String>,
+) -> Option<&'c str> {
+    let column = scope_leaf_column(filter);
+    if let Some(c) = column {
+        return c
+            .split_once('.')
+            .filter(|(table, _)| join_tables.contains(*table))
+            .map(|_| c);
+    }
+    match filter {
+        Condition::And(l, r) | Condition::Or(l, r) => join_qualified_column(l, join_tables)
+            .or_else(|| join_qualified_column(r, join_tables)),
+        Condition::Not(inner) | Condition::Group(inner) => {
+            join_qualified_column(inner, join_tables)
+        }
+        _ => None,
+    }
+}
+
+/// The column a column-bearing leaf condition references, else `None`.
+fn scope_leaf_column(condition: &Condition) -> Option<&str> {
+    match condition {
+        Condition::Comparison(c) => Some(&c.column),
+        Condition::In(c) => Some(&c.column),
+        Condition::Between(c) => Some(&c.column),
+        Condition::Like(c) => Some(&c.column),
+        Condition::IsNull(c) => Some(&c.column),
+        Condition::Match(c) => Some(&c.column),
+        Condition::Contains(c) => Some(&c.column),
+        Condition::ContainsText(c) => Some(&c.column),
+        Condition::GeoDistance(c) => Some(&c.column),
+        Condition::GeoBbox(c) => Some(&c.column),
+        _ => None,
+    }
+}
+
 impl Database {
     /// Puts a statement through the read gate: asks the observer about every
     /// collection the statement reads and enforces each answer (see the
@@ -224,6 +292,7 @@ impl Database {
         let mut scoped: Option<Query> = None;
         if let Some(name) = target {
             if let Some(filter) = self.scope_filter(name, derive_operation_kind(query))? {
+                require_join_free_scope(&query.select, &filter)?;
                 let owned = scoped.get_or_insert_with(|| query.clone());
                 narrow_where(&mut owned.select.where_clause, filter);
             }
@@ -265,7 +334,11 @@ impl Database {
         for (_, operand) in &compound.operations {
             self.authorize_joins(operand)?;
             let operation = derive_select_operation_kind(operand);
-            filters.push(self.scope_filter(&operand.from, operation)?);
+            let filter = self.scope_filter(&operand.from, operation)?;
+            if let Some(filter) = &filter {
+                require_join_free_scope(operand, filter)?;
+            }
+            filters.push(filter);
         }
         Ok(filters)
     }

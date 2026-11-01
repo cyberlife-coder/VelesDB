@@ -24,6 +24,8 @@ mod conversion;
 mod conversion_tests;
 mod matching;
 
+pub(crate) use conversion::inexpressible_scope_construct;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
