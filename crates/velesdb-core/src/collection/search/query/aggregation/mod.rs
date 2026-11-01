@@ -171,7 +171,7 @@ impl Collection {
         // Id order, so a float SUM or AVG is the same on every run, whatever
         // the storage order: the parallel path sums fixed chunks of this
         // order and merges them in order.
-        let ids = Self::aggregate_scan_ids(&*vector_storage, filter.as_ref());
+        let ids = Self::aggregate_scan_ids(&*vector_storage, &*payload_storage, filter.as_ref());
 
         if ids.len() >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
             Ok(Self::aggregate_parallel(
@@ -198,19 +198,21 @@ impl Collection {
     /// The points an aggregate scans, in id order (so a float SUM or AVG is
     /// the same on every run): the existing points `id = n` / `id IN (...)`
     /// names when the static WHERE does — the lookup EXPLAIN reports — else
-    /// every point.
+    /// every point of the scan universe (`Self::scan_universe_ids`), so a
+    /// metadata collection's payload-only points count too.
     pub(super) fn aggregate_scan_ids(
         vector_storage: &dyn VectorStorage,
+        payload_storage: &dyn PayloadStorage,
         filter: Option<&crate::filter::Filter>,
     ) -> Vec<u64> {
         let Some(named) = filter.and_then(|f| f.condition.point_ids()) else {
-            let mut ids = vector_storage.ids();
+            let mut ids = Self::scan_universe_ids(vector_storage, payload_storage);
             ids.sort_unstable();
             return ids;
         };
         named
             .into_iter()
-            .filter(|&id| vector_storage.retrieve(id).ok().flatten().is_some())
+            .filter(|&id| Self::in_scan_universe(vector_storage, payload_storage, id))
             .collect()
     }
 

@@ -78,7 +78,7 @@ impl Collection {
         };
         // Rows feed the grouper in id order, so a float SUM or AVG adds its
         // values in the same order on every run, whatever the storage order.
-        let ids = Self::aggregate_scan_ids(&*vector_storage, filter.as_ref());
+        let ids = Self::aggregate_scan_ids(&*vector_storage, &*payload_storage, filter.as_ref());
         let mut graph_cache = GraphMatchEvalCache::default();
 
         for id in ids {

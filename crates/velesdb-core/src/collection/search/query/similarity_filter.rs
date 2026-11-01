@@ -419,12 +419,7 @@ impl Collection {
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
 
-        let vector_ids = vector_storage.ids();
-        let ids: Vec<u64> = if vector_ids.is_empty() {
-            payload_storage.ids()
-        } else {
-            vector_ids
-        };
+        let ids = Self::scan_universe_ids(&*vector_storage, &*payload_storage);
         let total_ids = ids.len();
 
         // Record rows actually visited as payload-mirror scan debt: once the
@@ -447,6 +442,37 @@ impl Collection {
             results,
             unscanned_ids: total_ids.saturating_sub(visited),
         }
+    }
+
+    /// The ids a full scan visits, in storage order: every point of the
+    /// vector storage, or — a metadata collection stores no vectors — every
+    /// point of the payload storage. This is also the universe an
+    /// `execute_aggregate` scans (`aggregate_scan_ids`): a point no SELECT
+    /// can reach counts in no aggregate either.
+    pub(super) fn scan_universe_ids(
+        vector_storage: &dyn VectorStorage,
+        payload_storage: &dyn PayloadStorage,
+    ) -> Vec<u64> {
+        let vector_ids = vector_storage.ids();
+        if vector_ids.is_empty() {
+            payload_storage.ids()
+        } else {
+            vector_ids
+        }
+    }
+
+    /// Whether `id` is in the scan universe ([`Self::scan_universe_ids`])
+    /// without listing it: vector-backed where any point carries a vector,
+    /// payload-backed where none does. A payload-only id in a vector
+    /// collection hydrates to nothing — `get` requires the vector — so it
+    /// is as invisible to a scan as a missing one.
+    pub(super) fn in_scan_universe(
+        vector_storage: &dyn VectorStorage,
+        payload_storage: &dyn PayloadStorage,
+        id: u64,
+    ) -> bool {
+        vector_storage.retrieve(id).ok().flatten().is_some()
+            || (vector_storage.is_empty() && payload_storage.retrieve(id).ok().flatten().is_some())
     }
 
     /// Shared scan body: iterates `ids`, hydrates each matching point, and
