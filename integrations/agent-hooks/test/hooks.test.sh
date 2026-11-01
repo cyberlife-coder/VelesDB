@@ -2475,6 +2475,39 @@ else
   fail "Evidence: only a single check command, with its own exit status, is classified:$check_kind_wrong"
 fi
 
+# A command holding a control character is no check either: the record
+# alphabet refuses it (valid_check_record), and a second line's words
+# describe a different command than the one whose exit status was
+# observed — `read` is line-based, so `cargo test\nsleep 5` would parse
+# as the first line while its status came from the last, and a tab would
+# split words the per-word check never sees. Recorded anyway, such a
+# command writes a record collect_checks can never consume — a poisoned
+# evidence window for every later checkpoint.
+control_command_wrong=""
+for command_text in $'cargo test\nsleep 5' $'cargo\ttest' $'cargo test\n' $'cargo test\r'; do
+  if with_hook_lib check_kind "$command_text" >/dev/null; then
+    control_command_wrong="$control_command_wrong [$(printf '%q' "$command_text")] classified a check;"
+  fi
+  if with_hook_lib check_failure_counts "$command_text" 1; then
+    control_command_wrong="$control_command_wrong [$(printf '%q' "$command_text")] exit 1 counted;"
+  fi
+done
+# The record layer must keep no trace of one either: a refused command
+# writes nothing, while a well-formed one still records and collects.
+ctl_dir="$TMP_TEST_DIR/ctl-check.records"
+mkdir -p "$ctl_dir"
+with_hook_lib record_check_outcome "$ctl_dir" /repo $'cargo test\nsleep 5' fail
+with_hook_lib record_check_outcome "$ctl_dir" /repo $'cargo\ttest' fail
+with_hook_lib record_check_outcome "$ctl_dir" /repo "cargo test" fail
+ctl_count="$(find "$ctl_dir" -name '*.json' | wc -l | tr -d ' ')"
+[ "$ctl_count" = "2" ] || control_command_wrong="$control_command_wrong $ctl_count records kept, want 2;"
+with_hook_lib collect_checks "$ctl_dir" || control_command_wrong="$control_command_wrong collect_checks refused a healthy dir;"
+if [ -z "$control_command_wrong" ]; then
+  pass "Evidence: a command holding a control character is never a check and keeps no record"
+else
+  fail "Evidence: a command holding a control character is never a check and keeps no record:$control_command_wrong"
+fi
+
 failure_cases=(
   "101|Exit code 101
 error: test failed, to rerun pass --lib"

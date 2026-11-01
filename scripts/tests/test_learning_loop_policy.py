@@ -2211,6 +2211,44 @@ class LearningLoopPolicy(unittest.TestCase):
         """
         self.assertEqual(self.run_common(script).returncode, 0)
 
+    def test_a_control_character_check_command_keeps_no_record(self) -> None:
+        """N7: `.command` is interpolated into the checklist verbatim like
+        `.repository`, so a command holding a control character records
+        nothing. A multi-line command's exit status belongs to its last
+        line anyway — recording it as the first line's verdict would be
+        false evidence, and the record itself is one valid_check_record
+        refuses forever."""
+        script = r"""
+            dir="$TMPDIR/n7.records"; mkdir -p "$dir"
+            record_check_outcome "$dir" "/repo" $'cargo test\nsleep 5' fail || exit 3
+            record_check_outcome "$dir" "/repo" $'cargo\ttest' fail || exit 4
+            record_check_outcome "$dir" "/repo" "cargo test" fail || exit 5
+            [ "$(find "$dir" -name '*.json' | wc -l | tr -d ' ')" = "2" ] || exit 6
+            collect_checks "$dir" || exit 7
+        """
+        self.assertEqual(self.run_common(script).returncode, 0)
+
+    def test_a_multi_line_check_command_never_poisons_the_window(self) -> None:
+        """N7: a multi-line Bash command must leave no check record at
+        all — recorded, its embedded newline fails the record alphabet
+        and the whole evidence window reads malformed at every later
+        Stop."""
+        session_id = "claude-check-multiline"
+        self.recall_returning("claude", session_id, [self.memory("701")])
+        for command in ("cargo test\nsleep 5", "cargo\ttest"):
+            self.bash(session_id, command, exit_code=1)
+            self.bash(session_id, command, exit_code=0)
+        records = [
+            record
+            for directory in self.marker_root.glob("*check-outcomes*.records")
+            for record in directory.glob("*.json")
+        ]
+        self.assertEqual(records, [])
+        reason = self.stop_reason("claude", session_id)
+        self.assertNotIn("malformed", reason.lower())
+        self.assertNotIn("sleep 5", reason)
+        self.assertNotIn("still failing", reason)
+
     def test_a_stale_verdict_survives_a_later_recall_that_did_not_judge_it(self) -> None:
         """N5: stale outranks fresh, which outranks no verdict at all; a recall
         without `anchor_root`, or a `recall_fused`, never clears it."""

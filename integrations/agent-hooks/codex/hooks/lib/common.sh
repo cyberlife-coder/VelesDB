@@ -785,10 +785,17 @@ record_recalled_memories() {
 # NAME=value assignments, and minus a wrapping `flock LOCKFILE`. Fails when a
 # word holds a character that hands the exit status to something else — a
 # pipe, a chain, a subshell, an expansion or a redirected input — or when
-# nothing is left.
+# nothing is left. COMMAND itself holding a control character fails too: the
+# word read is line-based, so a second line's words describe a different
+# command than the one whose exit status was observed, and a tab is split
+# away into separate words the per-word check below never sees — either way
+# the parsed words would not name the command that ran.
 parse_check_command() {
   local -a words=() kept=()
   local word
+  case "$1" in
+    *[[:cntrl:]]*) return 1 ;;
+  esac
   read -r -a words <<<"$1"
   for word in ${words[@]+"${words[@]}"}; do
     [ "$word" = "2>&1" ] || kept+=("$word")
@@ -941,7 +948,9 @@ check_failure_counts() {
 # parent's), and a pass observed in repo B must never resolve a failure in
 # repo A. A root that cannot be named honestly in the checklist — empty,
 # over-long, or holding a control character the checklist interpolates raw —
-# keeps no record at all.
+# keeps no record at all. The command is interpolated raw into the checklist
+# exactly like the root, so a command holding a control character keeps no
+# record either — and it is not one check to begin with (parse_check_command).
 record_check_outcome() {
   local dir="$1"
   local repo="$2"
@@ -952,6 +961,9 @@ record_check_outcome() {
     '' | *[[:cntrl:]]*) return 0 ;;
   esac
   [ "${#repo}" -le 4096 ] || return 0
+  case "$3" in
+    *[[:cntrl:]]*) return 0 ;;
+  esac
   kind="$(check_kind "$3")" || return 0
   [ "${#3}" -le "$EVIDENCE_COMMAND_MAX" ] || return 0
   key="$(safe_marker_key "$repo"$'\n'"$3")"
