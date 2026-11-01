@@ -41,13 +41,10 @@ pub(crate) const RL_NEUTRAL_CONFIDENCE: f32 = 0.5;
 /// signal and feedback only tips genuinely close calls.
 const RL_RERANK_WEIGHT: f32 = 0.5;
 
-/// One recalled hit: `(id, similarity, content)`.
-type Hit = (u64, f32, String);
-/// A recalled hit paired with its raw payload and the blended re-rank key, as
-/// sorted by [`MemoryService::rl_rerank`].
-type RankedHit = (Hit, Option<Metadata>, f32);
-/// Reordered hits and their raw payloads, returned by [`MemoryService::rl_rerank`].
-type RerankedHits = (Vec<Hit>, Vec<Option<Metadata>>);
+use super::recall::{Candidates, Hit};
+
+/// A hit with its raw payload and the caller's tag, in re-rank order.
+type TaggedHit<T> = (Hit, Option<Metadata>, T);
 
 impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// Record an outcome for a recalled fact and return its new confidence.
@@ -60,24 +57,34 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// agent's memory learns which facts are worth surfacing.
     ///
     /// # Concurrency
-    /// The update is a read-modify-write that is **not** atomic across the
-    /// `get_metadata`/`update_metadata` pair. Two `feedback` calls racing on the
-    /// same `id` are last-writer-wins: one increment can be lost. This is
-    /// acceptable for a soft, approximate ranking signal — feedback still moves
-    /// confidence in the right direction — but callers needing exact tallies
-    /// must serialize their own calls per id.
+    /// Atomic per fact: the read of the current confidence and tallies and
+    /// the write of the update happen under the fact's write lock, which a
+    /// re-store of the same fact also takes. Concurrent `feedback` calls on
+    /// one id are applied one after another, each counted exactly once.
     ///
     /// # Errors
-    /// Returns [`MemoryError::UnknownMemory`] if `id` is not a live fact, or a
-    /// storage error if the read-back or persist fails.
+    /// Returns [`MemoryError::UnknownMemory`] if `id` is not a live fact,
+    /// [`MemoryError::InternalScaffolding`] if `id` is an internal entity hub
+    /// or system fact — scaffolding is enumerable but can never have earned a
+    /// caller outcome, and stamping confidence onto it would race the
+    /// service's own writers — or a storage error if the read-back or
+    /// persist fails.
     pub fn feedback(&self, id: u64, success: bool) -> Result<f32, MemoryError> {
         let _generation = self.enter_generation();
+        let _fact = self.fact_locks.for_fact(id);
         // Raw payload (reserved keys included) so we can read the current RL
         // state the caller-facing metadata hides.
         let payload = self
             .store
             .get_metadata(id)?
             .ok_or(MemoryError::UnknownMemory(id))?;
+        // Scaffolding ids are enumerable (`list` with `include_internal`)
+        // but never returned by recall, so one can never have earned an
+        // outcome; and the scaffolding writers take no stripe — a confidence
+        // read-modify-write here could race their merges and lose both.
+        if crate::storage::is_internal_scaffolding(&payload) {
+            return Err(MemoryError::InternalScaffolding(id));
+        }
 
         let confidence = read_confidence(&payload);
         let mut success_count = read_count(&payload, RL_SUCCESS_KEY);
@@ -117,31 +124,38 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// blend factor of exactly `1.0`, so a result set with no feedback is
     /// returned untouched — the stable sort preserves the incoming similarity
     /// order exactly.
-    pub(crate) fn rl_rerank(hits: Vec<Hit>, payloads: Vec<Option<Metadata>>) -> RerankedHits {
-        if hits.len() < 2 {
-            return (hits, payloads);
-        }
-        let mut ranked: Vec<RankedHit> = hits
+    pub(crate) fn rl_rerank(hits: Vec<Hit>, payloads: Vec<Option<Metadata>>) -> Candidates {
+        let tags = vec![(); hits.len()];
+        Self::rl_rerank_tagged(hits, payloads, tags, |()| 1.0)
+            .into_iter()
+            .map(|(hit, payload, ())| (hit, payload))
+            .unzip()
+    }
+
+    /// [`Self::rl_rerank`] with one tag per hit, carried through the sort,
+    /// whose `factor` further scales that hit's blended key — how anchored
+    /// recall down-weights a stale lesson in the same single sort.
+    pub(crate) fn rl_rerank_tagged<T>(
+        hits: Vec<Hit>,
+        payloads: Vec<Option<Metadata>>,
+        tags: Vec<T>,
+        factor: impl Fn(&T) -> f32,
+    ) -> Vec<TaggedHit<T>> {
+        let mut ranked: Vec<(f32, TaggedHit<T>)> = hits
             .into_iter()
             .zip(payloads)
-            .map(|(hit, payload)| {
+            .zip(tags)
+            .map(|((hit, payload), tag)| {
                 let confidence = payload
                     .as_ref()
                     .map_or(RL_NEUTRAL_CONFIDENCE, read_confidence);
-                let blended = blended_score(hit.1, confidence);
-                (hit, payload, blended)
+                let key = blended_score(hit.1, confidence) * factor(&tag);
+                (key, (hit, payload, tag))
             })
             .collect();
-        // Stable sort: equal blended scores (e.g. all-neutral) keep input order.
-        ranked.sort_by(|a, b| b.2.total_cmp(&a.2));
-
-        let mut out_hits = Vec::with_capacity(ranked.len());
-        let mut out_payloads = Vec::with_capacity(ranked.len());
-        for (hit, payload, _) in ranked {
-            out_hits.push(hit);
-            out_payloads.push(payload);
-        }
-        (out_hits, out_payloads)
+        // Stable sort: equal keys (e.g. all-neutral) keep input order.
+        ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+        ranked.into_iter().map(|(_, item)| item).collect()
     }
 }
 
