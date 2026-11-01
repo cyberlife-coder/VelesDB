@@ -239,7 +239,7 @@ nowhere" claims were **false**: `velesdb-python` already exposes
 `search_with_ef`, `search_ids`, `search_batch_parallel`,
 `multi_query_search`, `multi_query_search_ids`, `sparse_search`,
 `hybrid_sparse_search`, `execute_match_with_similarity`, `flush_full`,
-`upsert_bulk_from_raw`, `is_delta_active`, `explain_analyze_query`,
+`upsert_bulk_from_raw`, `explain_analyze_query`,
 `GraphCollection::add_edges_batch`/`delete`/`remove_edge` natively. The
 genuine, worth-closing gaps that survived verification are below.
 
@@ -255,7 +255,7 @@ genuine, worth-closing gaps that survived verification are below.
   have no vector index) — use `text_search`/VelesQL. Documented, not debt.
 - `velesdb-server` is the source of truth for `execute_aggregate`,
   `rebuild_index`, `compact_storage`, `apply_advanced_config`,
-  `update_guardrails`, `explain_analyze_query`, `push_to_delta_if_active` —
+  `update_guardrails`, `explain_analyze_query` —
   the TS SDK merely forwards to native server routes.
 
 **What is missing** (backlog — each row: core fn · surfaces lacking it ·

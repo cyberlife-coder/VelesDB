@@ -41,6 +41,44 @@ pub(crate) fn hydrate_point(
     Some(SearchResult::new(point, score))
 }
 
+/// Hydrates, in `pairs` order, the first `limit` points that exist, are not
+/// TTL-expired at `now_secs` and whose payload `accept` takes (`None` when
+/// the point has none).
+///
+/// A point's payload is read and judged before its vector is copied, so a
+/// filtered search copies the vectors of the `limit` points it returns, not
+/// of every candidate it rejects.
+pub(crate) fn hydrate_accepted(
+    pairs: impl IntoIterator<Item = (u64, f32)>,
+    limit: usize,
+    now_secs: u64,
+    vector_storage: &dyn VectorStorage,
+    payload_storage: &dyn PayloadStorage,
+    accept: impl Fn(Option<&serde_json::Value>) -> bool,
+) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    for (id, score) in pairs {
+        if results.len() >= limit {
+            break;
+        }
+        let payload = payload_storage.retrieve(id).ok().flatten();
+        if is_payload_expired(payload.as_ref(), now_secs) || !accept(payload.as_ref()) {
+            continue;
+        }
+        let Some(vector) = vector_storage.retrieve(id).ok().flatten() else {
+            continue;
+        };
+        let point = Point {
+            id,
+            vector,
+            payload,
+            sparse_vectors: None,
+        };
+        results.push(SearchResult::new(point, score));
+    }
+    results
+}
+
 /// Resolves a slice of `(id, score)` tuples into `SearchResult` values,
 /// taking at most `limit` results.
 pub(crate) fn resolve_id_score_pairs(
@@ -72,19 +110,11 @@ pub(crate) fn resolve_scored_results(
         .collect()
 }
 
-/// Sorts `SearchResult` values by score according to metric direction.
-///
-/// - `higher_is_better = true`: descending (cosine, dot product)
-/// - `higher_is_better = false`: ascending (euclidean distance)
-///
-/// Uses unstable sort: equal-score tie-breaking order is irrelevant for ranking.
-pub(crate) fn sort_results_by_metric(results: &mut [SearchResult], higher_is_better: bool) {
-    results.sort_unstable_by(|a, b| metric_score_order(a.score, b.score, higher_is_better));
-}
-
-/// Sorts `(id, score, payload)` candidates with the same ordering as
-/// [`sort_results_by_metric`] — the deferred-hydration filter path ranks
-/// candidates before any vector is read, so it sorts triples, not results.
+/// Sorts `(id, score, payload)` candidates by score according to metric
+/// direction: descending when `higher_is_better` (cosine, dot product),
+/// ascending otherwise (euclidean distance). The deferred-hydration filter
+/// path ranks candidates before any vector is read, so it sorts triples, not
+/// results.
 pub(crate) fn sort_scored_ids_by_metric<P>(entries: &mut [(u64, f32, P)], higher_is_better: bool) {
     entries.sort_unstable_by(|a, b| metric_score_order(a.1, b.1, higher_is_better));
 }

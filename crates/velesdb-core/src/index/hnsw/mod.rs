@@ -30,6 +30,8 @@ mod native_index_io;
 #[cfg(test)]
 mod native_index_tests;
 mod native_inner;
+#[cfg(test)]
+pub(crate) use native_inner::auto_walks;
 /// The placement token, for tests outside this module that drive the mappings
 /// directly (`Placed::for_test`).
 #[cfg(test)]

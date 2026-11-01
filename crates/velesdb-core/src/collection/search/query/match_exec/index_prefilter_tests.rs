@@ -244,3 +244,36 @@ fn a_float_equality_is_looked_up_as_twice_the_where_tolerance() {
         Some(PredicateKind::Exact(_))
     ));
 }
+
+/// A predicate no index covers narrows nothing, so the pre-filter keeps what
+/// the indexed predicates found instead of giving up on all of them: WHERE
+/// re-checks every candidate it lets through.
+#[cfg(feature = "persistence")]
+#[test]
+fn a_predicate_no_index_covers_is_skipped_not_fatal() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = crate::collection::Collection::create(
+        dir.path().join("g"),
+        2,
+        crate::distance::DistanceMetric::Cosine,
+    )
+    .expect("test: create");
+    let points: Vec<crate::point::Point> = (1..=3_u64)
+        .map(|id| {
+            let payload = serde_json::json!({ "_labels": ["Person"], "age": id * 10 });
+            crate::point::Point::new(id, vec![1.0, 0.0], Some(payload))
+        })
+        .collect();
+    coll.upsert(points).expect("test: upsert");
+
+    // `nickname` is on no node, so no index covers it.
+    let query = crate::velesql::Parser::parse(
+        "MATCH (p:Person) WHERE p.age > 15 AND p.nickname = 'x' RETURN p",
+    )
+    .expect("test: parse");
+    let mc = query.match_clause.expect("test: a MATCH query");
+    let where_clause = mc.where_clause.expect("test: a WHERE clause");
+
+    let set = compute_index_prefilter(&coll, &mc.patterns[0], &where_clause, &HashMap::new());
+    assert_eq!(set, Some(HashSet::from([2, 3])));
+}

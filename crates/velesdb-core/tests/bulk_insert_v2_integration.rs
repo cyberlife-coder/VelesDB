@@ -4,7 +4,7 @@
 //! Validates the `AsyncIndexBuilder` + `DirectVectorWriter` pipeline:
 //! - Enqueue vectors into the async builder
 //! - Flush synchronously into the HNSW index
-//! - Verify search returns correct results
+//! - Verify search returns correct results, before a flush as after it
 
 #![allow(
     clippy::cast_precision_loss,
@@ -44,34 +44,6 @@ fn create_test_collection(
 // ── AsyncIndexBuilder standalone integration ────────────────────────────
 
 #[test]
-fn async_builder_enqueue_and_buffer_search() {
-    let config = AsyncIndexBuilderConfig {
-        merge_threshold: 100_000,
-        segment_count: Some(2),
-    };
-    let builder = AsyncIndexBuilder::new(config);
-
-    let dim = 16;
-    // Enqueue vectors into the async builder buffer.
-    let vectors: Vec<(u64, Vec<f32>)> = (0..100).map(|i| (i, make_vector(i, dim))).collect();
-    let threshold_reached = builder.enqueue(vectors);
-    assert!(
-        !threshold_reached,
-        "threshold should not be reached for 100 vectors"
-    );
-    assert_eq!(builder.buffer_len(), 100);
-
-    // Brute-force search in the buffer should find results.
-    let query = make_vector(0, dim);
-    let buffer_results = builder.search_buffer(&query, 5, DistanceMetric::Cosine);
-    assert!(
-        !buffer_results.is_empty(),
-        "buffer search must return results"
-    );
-    assert_eq!(buffer_results[0].0, 0, "closest vector should be id=0");
-}
-
-#[test]
 fn async_builder_threshold_triggers_correctly() {
     let config = AsyncIndexBuilderConfig {
         merge_threshold: 50,
@@ -80,27 +52,10 @@ fn async_builder_threshold_triggers_correctly() {
     let builder = AsyncIndexBuilder::new(config);
 
     // Enqueue 49 vectors — should not trigger.
-    let batch1: Vec<(u64, Vec<f32>)> = (0..49).map(|i| (i, make_vector(i, 4))).collect();
-    assert!(!builder.enqueue(batch1), "49 < 50, should not trigger");
+    assert!(!builder.enqueue(0..49), "49 < 50, should not trigger");
 
     // Enqueue 1 more — should trigger (total = 50).
-    let batch2: Vec<(u64, Vec<f32>)> = vec![(49, make_vector(49, 4))];
-    assert!(builder.enqueue(batch2), "50 >= 50, should trigger");
-}
-
-#[test]
-fn async_builder_drain_returns_all_vectors() {
-    let config = AsyncIndexBuilderConfig::default();
-    let builder = AsyncIndexBuilder::new(config);
-
-    let dim = 8;
-    let vectors: Vec<(u64, Vec<f32>)> = (0..25).map(|i| (i, make_vector(i, dim))).collect();
-    builder.enqueue(vectors);
-    assert_eq!(builder.buffer_len(), 25);
-
-    let drained = builder.drain_buffer();
-    assert_eq!(drained.len(), 25, "drain must return all buffered vectors");
-    assert_eq!(builder.buffer_len(), 0, "buffer must be empty after drain");
+    assert!(builder.enqueue([49]), "50 >= 50, should trigger");
 }
 
 // ── Collection upsert_bulk + flush consistency ──────────────────────────
@@ -387,5 +342,308 @@ fn v2_path_maintains_recall() {
     assert!(
         recall >= 0.90,
         "V2 path search must match standard path within parity floor: got {recall:.2}"
+    );
+}
+
+// ── Visibility before the builder drains ────────────────────────────────
+
+/// Points per batch: above the 100-point brute-force shortcut, so a search
+/// walks the graph.
+const VISIBILITY_BATCH: u64 = 300;
+/// A point of the second batch, which the builder still holds.
+const PENDING_TARGET: u64 = VISIBILITY_BATCH + VISIBILITY_BATCH / 2;
+
+/// Dispersed values (xorshift), so every point is its own nearest neighbour.
+fn dispersed(id: u64) -> Vec<f32> {
+    let mut state = id.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    (0..16)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        })
+        .collect()
+}
+
+/// A collection whose first batch a flush linked and whose second batch the
+/// builder still holds: `upsert_bulk` has returned for both. Only the linked
+/// batch carries the text the hybrid test searches for, so a hit on the
+/// pending target there comes from its vector.
+fn collection_with_pending_batch(dir: &std::path::Path) -> VectorCollection {
+    let config = AsyncIndexBuilderConfig {
+        merge_threshold: 10_000,
+        segment_count: None,
+    };
+    let coll = VectorCollection::create_with_async_builder(
+        dir.join("pending"),
+        16,
+        DistanceMetric::Euclidean,
+        config,
+    )
+    .expect("create collection with async builder");
+    let batch = |ids: std::ops::Range<u64>, cat: &str, title: &str| -> Vec<Point> {
+        ids.map(|id| {
+            let payload = serde_json::json!({ "cat": cat, "title": title });
+            Point::new(id, dispersed(id), Some(payload))
+        })
+        .collect()
+    };
+    coll.upsert_bulk(&batch(0..VISIBILITY_BATCH, "linked", "zebra"))
+        .expect("first upsert_bulk");
+    coll.flush().expect("flush links the first batch");
+    coll.upsert_bulk(&batch(
+        VISIBILITY_BATCH..2 * VISIBILITY_BATCH,
+        "pending",
+        "okapi",
+    ))
+    .expect("second upsert_bulk");
+    coll
+}
+
+fn ids(results: &[velesdb_core::SearchResult]) -> Vec<u64> {
+    results.iter().map(|r| r.point.id).collect()
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_dense_search() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let hits = coll
+        .search(&dispersed(PENDING_TARGET), 5)
+        .expect("dense search");
+    assert_eq!(
+        ids(&hits).first(),
+        Some(&PENDING_TARGET),
+        "got {:?}",
+        ids(&hits)
+    );
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_filtered_search() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let filter = velesdb_core::Filter::new(velesdb_core::Condition::eq("cat", "pending"));
+    let hits = coll
+        .search_with_filter(&dispersed(PENDING_TARGET), 5, &filter)
+        .expect("filtered search");
+    assert_eq!(
+        ids(&hits).first(),
+        Some(&PENDING_TARGET),
+        "got {:?}",
+        ids(&hits)
+    );
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_velesql_near() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "v".to_string(),
+        serde_json::json!(dispersed(PENDING_TARGET)),
+    );
+    for sql in [
+        "SELECT * FROM pending WHERE vector NEAR $v LIMIT 5",
+        "SELECT * FROM pending WHERE vector NEAR $v AND cat = 'pending' LIMIT 5",
+    ] {
+        let hits = coll.execute_query_str(sql, &params).expect("VelesQL NEAR");
+        assert_eq!(
+            ids(&hits).first(),
+            Some(&PENDING_TARGET),
+            "{sql}: got {:?}",
+            ids(&hits)
+        );
+    }
+}
+
+#[test]
+fn a_bulk_point_the_builder_holds_is_found_by_hybrid_search() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_pending_batch(tmp.path());
+    let hits = coll
+        .hybrid_search(&dispersed(PENDING_TARGET), "zebra", 5, Some(0.5))
+        .expect("hybrid search");
+    assert!(ids(&hits).contains(&PENDING_TARGET), "got {:?}", ids(&hits));
+}
+
+// ── Restricted searches and the points the builder holds ────────────────
+
+/// The query of the restricted-search tests: every pending point lies next
+/// to it, every linked point far from it.
+fn restricted_query() -> Vec<f32> {
+    dispersed(1_000_000)
+}
+
+/// A pending point near `restricted_query`: the query with one coordinate
+/// nudged, so each is distinct and all are closer than any linked point.
+fn near_query(id: u64) -> Vec<f32> {
+    let mut v = restricted_query();
+    let len = v.len();
+    let i = usize::try_from(id).expect("test: id fits a usize") % len;
+    v[i] += 1e-3 * (1.0 + (id % 7) as f32);
+    v
+}
+
+/// `VISIBILITY_BATCH` linked points — `cat` `"rare"` for ids 0..3, `"linked"`
+/// otherwise, text "zebra" — then `VISIBILITY_BATCH` pending points, all
+/// nearer the query than any linked one, `cat` `"pending"`, text "okapi".
+fn collection_with_close_pending(dir: &std::path::Path, indexed: bool) -> VectorCollection {
+    let config = AsyncIndexBuilderConfig {
+        merge_threshold: 10_000,
+        segment_count: None,
+    };
+    let coll = VectorCollection::create_with_async_builder(
+        dir.join("restricted"),
+        16,
+        DistanceMetric::Euclidean,
+        config,
+    )
+    .expect("create collection with async builder");
+    if indexed {
+        coll.create_index("cat").expect("secondary index on cat");
+    }
+    let linked: Vec<Point> = (0..VISIBILITY_BATCH)
+        .map(|id| {
+            let cat = if id < 3 { "rare" } else { "linked" };
+            let payload = serde_json::json!({ "cat": cat, "title": "zebra" });
+            Point::new(id, dispersed(id), Some(payload))
+        })
+        .collect();
+    coll.upsert_bulk(&linked).expect("linked upsert_bulk");
+    coll.flush().expect("flush links the first batch");
+    let pending: Vec<Point> = (VISIBILITY_BATCH..2 * VISIBILITY_BATCH)
+        .map(|id| {
+            let payload = serde_json::json!({ "cat": "pending", "title": "okapi" });
+            Point::new(id, near_query(id), Some(payload))
+        })
+        .collect();
+    coll.upsert_bulk(&pending).expect("pending upsert_bulk");
+    coll
+}
+
+fn cats(results: &[velesdb_core::SearchResult]) -> Vec<String> {
+    results
+        .iter()
+        .map(|r| {
+            r.point
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("cat"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("?")
+                .to_string()
+        })
+        .collect()
+}
+
+fn assert_k_linked(label: &str, results: &[velesdb_core::SearchResult], k: usize) {
+    let cats = cats(results);
+    assert_eq!(cats.len(), k, "{label}: got {cats:?}");
+    assert!(
+        cats.iter().all(|c| c == "linked"),
+        "{label}: a result outside the filter, {cats:?}"
+    );
+}
+
+/// A filter that selects against the pending points must still return `k`
+/// linked matches: pending points nearer the query must not take their
+/// places before the filter runs.
+#[test]
+fn a_filter_against_the_pending_points_still_returns_k_matches() {
+    let k = 5;
+    for indexed in [false, true] {
+        let tmp = TempDir::new().expect("temp dir");
+        let coll = collection_with_close_pending(tmp.path(), indexed);
+        let q = restricted_query();
+        let filter = velesdb_core::Filter::new(velesdb_core::Condition::eq("cat", "linked"));
+        let label = |what: &str| format!("{what} (secondary index: {indexed})");
+
+        let hits = coll.search_with_filter(&q, k, &filter).expect("filtered");
+        assert_k_linked(&label("search_with_filter"), &hits, k);
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("v".to_string(), serde_json::json!(q));
+        for sql in [
+            "SELECT * FROM restricted WHERE vector NEAR $v AND cat = 'linked' LIMIT 5",
+            "SELECT * FROM restricted WHERE vector NEAR $v AND cat = 'linked' LIMIT 5 \
+             WITH (mode='balanced')",
+        ] {
+            let hits = coll.execute_query_str(sql, &params).expect("VelesQL");
+            assert_k_linked(&label(sql), &hits, k);
+        }
+
+        let batch = coll
+            .search_batch_with_filters(&[q.as_slice()], k, &[Some(filter.clone())])
+            .expect("batch");
+        assert_k_linked(&label("search_batch_with_filters"), &batch[0], k);
+
+        let multi = coll
+            .multi_query_search(
+                &[q.as_slice()],
+                k,
+                velesdb_core::fusion::FusionStrategy::Average,
+                Some(&filter),
+            )
+            .expect("multi-query");
+        assert_k_linked(&label("multi_query_search"), &multi, k);
+
+        let hybrid = coll
+            // Text only the pending points carry: the linked matches can come
+            // only from the vector branch, which the pending points crowded.
+            .hybrid_search_with_filter(&q, "okapi", k, Some(0.5), &filter)
+            .expect("hybrid");
+        assert_k_linked(&label("hybrid_search_with_filter"), &hybrid, k);
+    }
+}
+
+/// A selective filter answered by an exact bitmap scan returns every match,
+/// however many pending points lie nearer the query.
+#[test]
+fn an_exact_prefilter_returns_every_match_past_the_pending_points() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_close_pending(tmp.path(), true);
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!(restricted_query()));
+    let hits = coll
+        .execute_query_str(
+            "SELECT * FROM restricted WHERE vector NEAR $v AND cat = 'rare' LIMIT 3 \
+             WITH (mode='balanced')",
+            &params,
+        )
+        .expect("VelesQL");
+    let mut got = ids(&hits);
+    got.sort_unstable();
+    assert_eq!(got, vec![0, 1, 2]);
+}
+
+/// An id `upsert_bulk` wrote twice while the builder held it is one point.
+#[test]
+fn an_id_bulk_loaded_twice_while_pending_is_returned_once() {
+    let tmp = TempDir::new().expect("temp dir");
+    let coll = collection_with_close_pending(tmp.path(), false);
+    let again = [Point::new(
+        VISIBILITY_BATCH,
+        near_query(VISIBILITY_BATCH),
+        None,
+    )];
+    coll.upsert_bulk(&again)
+        .expect("second upsert_bulk of one id");
+    let hits = coll
+        .search(&near_query(VISIBILITY_BATCH), 20)
+        .expect("search");
+    // `near_query` repeats every 112 ids, so 300 ties with 412 at distance 0.
+    assert!(ids(&hits).contains(&VISIBILITY_BATCH), "premise");
+    let mut got = ids(&hits);
+    let returned = got.len();
+    got.sort_unstable();
+    got.dedup();
+    assert_eq!(
+        got.len(),
+        returned,
+        "an id was returned twice: {:?}",
+        ids(&hits)
     );
 }

@@ -70,8 +70,9 @@ fn deferred_from_dict(value: &Bound<'_, PyAny>) -> PyResult<DeferredIndexerConfi
 }
 
 /// Build an `AsyncIndexBuilderConfig` from a Python dict, overriding only the
-/// keys present on top of the struct defaults. `segment_count` accepts a
-/// Python `None` to fall back to the CPU count.
+/// keys present on top of the struct defaults. `segment_count` accepts an int
+/// or `None` and is stored as given: core reserves it and reads it nowhere —
+/// a flush links on core's dedicated graph pool whatever it holds.
 fn async_builder_from_dict(value: &Bound<'_, PyAny>) -> PyResult<AsyncIndexBuilderConfig> {
     let dict = value.cast::<PyDict>()?;
     let mut cfg = AsyncIndexBuilderConfig::default();
@@ -707,16 +708,6 @@ impl Collection {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
         })?;
         Ok(crate::utils::json_to_python(py, &json))
-    }
-
-    /// Check if the streaming delta buffer is active (HNSW rebuild in progress).
-    ///
-    /// Returns:
-    ///     bool: True if delta buffer is active
-    fn is_delta_active(&self) -> PyResult<bool> {
-        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
-        deny_if_scoped(scope, "is_delta_active")?;
-        Ok(self.inner.is_delta_active())
     }
 
     /// Membership test: ``id in collection``.

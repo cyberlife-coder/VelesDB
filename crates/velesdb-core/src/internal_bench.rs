@@ -189,3 +189,45 @@ pub fn vacuum_settled_under_seal() -> u64 {
 pub fn reset_vacuum_reconciled_under_guard() {
     crate::index::hnsw::index::swap_count::reset_reconciled_under_guard();
 }
+
+/// How many ids a merge reads and inserts under one `vector_storage` read
+/// guard: `Collection::index_current`'s chunk.
+#[cfg(feature = "persistence")]
+pub const MERGE_CHUNK: usize = crate::collection::search::pending::MERGE_CHUNK;
+
+/// Nanoseconds the last merge chunk held its `vector_storage` read guard.
+#[cfg(feature = "persistence")]
+static MERGE_CHUNK_HOLD_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Records how long a merge chunk held its `vector_storage` read guard.
+#[cfg(feature = "persistence")]
+pub(crate) fn note_merge_chunk_hold(held: std::time::Duration) {
+    let nanos = u64::try_from(held.as_nanos()).unwrap_or(u64::MAX);
+    MERGE_CHUNK_HOLD_NANOS.store(nanos, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Removes `ids` from `collection`'s HNSW index and leaves them stored, as a
+/// merge finds the ids its queue holds: stored, not indexed.
+#[cfg(feature = "persistence")]
+pub fn unindex(collection: &crate::VectorCollection, ids: &[u64]) {
+    collection.inner.remove_from_index_for_bench(ids);
+}
+
+/// Merges `ids` — at most [`MERGE_CHUNK`] of them, one chunk — into
+/// `collection`'s index exactly as the async builder's flush and the
+/// deferred merge do (`Collection::index_current`), and returns how long the
+/// chunk held the `vector_storage` read guard: the longest a writer waits on
+/// a merge.
+///
+/// # Panics
+///
+/// If `ids` holds more than one chunk.
+#[cfg(feature = "persistence")]
+pub fn merge_one_chunk(collection: &crate::VectorCollection, ids: &[u64]) -> std::time::Duration {
+    assert!(ids.len() <= MERGE_CHUNK, "one chunk at most");
+    MERGE_CHUNK_HOLD_NANOS.store(0, std::sync::atomic::Ordering::Relaxed);
+    collection.inner.index_current(ids);
+    std::time::Duration::from_nanos(
+        MERGE_CHUNK_HOLD_NANOS.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}

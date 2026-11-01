@@ -1,4 +1,4 @@
-# Core: streaming inserts, backpressure and the delta buffer
+# Core: streaming inserts and backpressure
 
 For continuously arriving data — IoT sensors, live embeddings, log streams —
 `velesdb-core` ships a bounded-channel ingestion pipeline with automatic
@@ -51,22 +51,20 @@ exits unexpectedly, `BackpressureError::DrainTaskDead` is returned;
 Dropping points silently is never done for you: backpressure is always
 surfaced as an error value.
 
-## Delta buffer (insert-and-search)
+## When a streamed point is searchable
 
-During an HNSW rebuild, freshly inserted vectors are not yet reachable through
-the graph. The delta buffer accumulates them and merges them into search
-results with a brute-force scan, so new data is searchable immediately instead
-of waiting for the rebuild to finish.
+A point is searchable once its micro-batch is flushed — after `batch_size`
+points or `flush_interval_ms`, whichever comes first: the drain upserts the
+batch through the collection's ordinary write path, and search finds each
+point from then on. A point the HNSW graph has not indexed yet (the deferred
+indexer or the async index builder still holds it) is scored exactly on
+every search until a merge indexes it.
 
 ```rust,ignore
-// The delta buffer is managed automatically by the streaming pipeline.
-// When it is active, search results transparently include buffered vectors.
+collection.stream_insert(point)?;
+// ... at most `flush_interval_ms` later:
 let results = collection.search(&query, 10)?;
-// ^ covers both HNSW-indexed and delta-buffered vectors
 ```
-
-The cost is a linear scan over the buffered slice, so the buffer is bounded and
-drained by the rebuild; it is a freshness mechanism, not a second index.
 
 ## Types
 

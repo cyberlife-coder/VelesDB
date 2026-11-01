@@ -560,23 +560,6 @@ impl QueryPlan {
             MatchExecutionStrategy::VectorFirst { threshold, .. } => {
                 (Vec::new(), 1, true, Some(*threshold))
             }
-            MatchExecutionStrategy::Parallel {
-                graph_hint,
-                vector_hint,
-            } => {
-                let (labels, depth) = match graph_hint.as_ref() {
-                    MatchExecutionStrategy::GraphFirst {
-                        start_labels,
-                        max_depth,
-                    } => (start_labels.clone(), *max_depth),
-                    _ => (Vec::new(), 1),
-                };
-                let threshold = match vector_hint.as_ref() {
-                    MatchExecutionStrategy::VectorFirst { threshold, .. } => Some(*threshold),
-                    _ => None,
-                };
-                (labels, depth, true, threshold)
-            }
         }
     }
 }

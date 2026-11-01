@@ -135,7 +135,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `QueryLimits::client_timeout_ms` (the budget a request's own
   `timeout_ms` resolves to) and `QueryLimits::timeout_budget` (whose budget
   ran out — the one classification `VelesQL` and the REST search share).
-
 - **LlamaIndex `GraphLoader.load_from_nodes(extract_relations=True)` writes
   node relationships as edges.** The option was documented but never read, and
   the call always returned `"edges": 0`. Each `SOURCE`, `PREVIOUS`, `NEXT`,
@@ -148,6 +147,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING — `AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a
+  callback that indexes them.** `enqueue` took `(id, vector)` copies and a
+  flush inserted them, so a point overwritten or deleted between the two
+  was indexed on its old vector or put back in the graph (see Fixed).
+  `enqueue` now takes the ids (`impl IntoIterator<Item = u64>`), and
+  `flush_sync(index, index_current)` hands the buffered ids, each once, to
+  `index_current`, which indexes what storage holds for them and returns
+  the ids it settled: inserted, already held by the graph as storage holds
+  them, or no longer stored. The builder drops only those and keeps the
+  rest queued. It returns a `FlushOutcome`: `indexed`, the ids settled plus
+  the placed ids linked, and `kept`, the distinct ids it kept queued — a
+  state the next flush retries, logged as a warning, not an error. Only a
+  failed link is an error.
+  *Migration*: enqueue the ids; pass a closure that inserts what your
+  vector storage holds for them into the index and returns the ids it
+  inserted, found indexed already, or found deleted; read the count from
+  `outcome.indexed`.
 - **BREAKING (behaviour): `velesdb-server` sends no CORS header unless origins
   are configured.** 7.1.0 answered every origin with
   `Access-Control-Allow-Origin: *` by default, so any web page open in a
@@ -161,7 +177,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/guides/SERVER_SECURITY.md` §6: no cross-origin read, and no
   cross-origin request with a body — which needed the next entry to be true.
   Migration: `docs/guides/MIGRATION_v8.0.0.md`, section 2.
-
 - **BREAKING (behaviour): `POST /collections/{name}/points/stream` and
   `.../points/raw` refuse a `Content-Type` other than the one they document**
   (`application/x-ndjson`, `application/octet-stream`) with `415`. In 7.1.0
@@ -170,7 +185,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CORS policy. One shared extractor (`handlers::content_type`) guards both;
   every other route that takes a body is a JSON route, which axum already
   restricts to `application/json`. The TypeScript SDK sends both types.
-
 - **BREAKING (behaviour): a request that changes state from a browser origin
   the CORS policy does not allow is refused with `403`.** CORS only hides
   answers; in 7.1.0 a page on any site could still fire the body-less
@@ -180,7 +194,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if that origin is the server's own (`Origin`'s authority equals `Host`) or
   allowed by `cors_origins` (`["*"]`: any). Requests without `Origin` — curl,
   the SDKs, backends — are not affected.
-
 - **`VelesConfig::load_from_path_engine_only` reads only the environment
   variables of engine sections** (and of removed sections, so their warning
   still fires). In 7.1.0 a `VELESDB_SERVER_*` or `VELESDB_LOGGING_*` variable
@@ -199,7 +212,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hosting shell validates `[server] workers` and log levels by the engine's
   own rules instead of a copy, and so is `VelesConfig::is_engine_table`, which
   tells such a shell which top-level tables of a shared file the engine reads.
-
 - **BREAKING (behaviour): `velesdb-server` answers only the `Host` names it
   is configured for, with `421 Misdirected Request` otherwise.** A
   DNS-rebinding page (a name that resolves to `127.0.0.1` after the page
@@ -226,7 +238,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `examples/node-express-rag/docker-compose.yml` now sets
   `VELESDB_ALLOWED_HOSTS: velesdb`, and the root `docker-compose.yml`, the
   `Dockerfile` and the deployment guides show how.
-
 - **BREAKING (Rust API) — `Error::GuardRail` says which limit was crossed.**
   The variant is `GuardRail { kind: GuardRailKind, message: String }`, where it
   was `GuardRail(String)`; `GuardRailKind` (`Timeout(TimeoutBudget)`, `Depth`,
@@ -307,7 +318,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same MATCH gets the same answer on every surface. A test runs every form
   through the validator and the executor and fails if their verdicts differ;
   `rejected_cases` R005–R009 lock the refusal in both engines.
-
 - **BREAKING (behavior) — the TypeScript SDK refuses a filter that is not
   core-shaped.** `normalizeFilter`, now called on every filter before it
   leaves the SDK (REST search, batch, text, hybrid, multi-query, sparse,
@@ -378,7 +388,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match instead, see Fixed). REST still
   returns the BM25 score. A caller that sorts or thresholds on it must handle
   `null`.
-
 - **BREAKING (behavior) — LlamaIndex `GraphLoader` with a graph collection
   writes its nodes there, at VelesDB point ids.** In 7.1.0 `add_node` and
   `load_from_nodes` wrote every node into the vector store's collection — a
@@ -423,6 +432,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **BREAKING — the `Parallel` execution strategy, on SELECT and on MATCH.**
+  It ran the GraphFirst pass and the VectorFirst search and merged them, but
+  GraphFirst is exact over every row its filter or pattern admits: the
+  VectorFirst rows the union added were rows it already returned, so the
+  plan only cost both legs (on 20 000 768-d points, a `Parallel` SELECT's
+  p50 was 40–48 ms against 25–31 ms for GraphFirst). The planners now pick
+  `GraphFirst` in the band where they picked `Parallel`, and EXPLAIN shows
+  no `Parallel` plan. `ExecutionStrategy::Parallel`,
+  `MatchExecutionStrategy::Parallel` and
+  `QueryPlanner::with_thresholds(graph_first, vector_first)` are removed.
+  One visible difference remains on `MATCH`: the union gave a row the
+  VectorFirst leg's similarity score (and `RETURN similarity()` its
+  projection); a `GraphFirst` row carries none — its `score` is the
+  depth-derived value every graph-reached row gets. `VectorFirst` rows
+  still carry theirs. The union also ran `sort_match_results_by_score`
+  over its merged rows, and that ordering leaves with it: a `Parallel`
+  MATCH without `ORDER BY` returned its first N best-scored, and the same
+  MATCH now returns GraphFirst's first N in traversal order. `ORDER BY`
+  sorts as before.
+  *Migration*: drop the `Parallel` arm of a `match` on either enum; build a
+  planner with `QueryPlanner::with_vector_first_threshold(vector_first)`.
+- **BREAKING — `AsyncIndexBuilder`'s test-only calls.** `search_buffer`,
+  `drain_buffer`, `buffer_len`, `is_building` and `trigger_build_async` had
+  no caller in core, the server or any binding: only tests reached them.
+  `trigger_build_async` spawned a thread that drained one of the builder's
+  two queues and could report a build done with slots still unlinked;
+  `drain_buffer`, `buffer_len` and `is_building` served it or its tests, and
+  `search_buffer` was a scan no search called: searches now score the
+  builder's pending points themselves (see Fixed). `enqueue`, `flush_sync`
+  (both changed, see Changed) and `merge_threshold` stay.
+  *Migration*: `VectorCollection::flush` indexes what the builder holds;
+  searching the collection already finds it (see Fixed).
+- **BREAKING — `velesql::match_clause`, a second MATCH parser no query used.**
+  `parse_match_clause`, `parse_node_pattern` and `parse_relationship_pattern`
+  scanned strings beside the pest grammar that every query goes through; only
+  their own tests and a benchmark called them, and they had drifted from it
+  (they read a named path `p = (a)-->(b)`, which the grammar refuses, and an
+  unbounded `[*]`, which validation refuses). The behaviours their tests
+  checked that the grammar shares are now tested against `Parser::parse`, and
+  `match_parser_benchmark` times whole statements under new ids.
+  *Migration*: `velesql::Parser::parse("MATCH ...")?.match_clause`.
+- **The composite graph index (`CompositeGraphIndex`,
+  `CompositeIndexManager`).** No path created one, so the manager every
+  collection carried stayed empty: every labelled node payload write took its
+  write lock to find that out, and every MATCH with two equality predicates on one alias
+  asked it for a lookup it could never answer. Both calls are gone, and the
+  MATCH pre-filter now intersects every indexed predicate rather than skipping
+  the equality ones a composite lookup was assumed to cover. Crate-private;
+  no public API changes.
+- **BREAKING — Python: `velesdb.SearchResult`.** The class had no methods and
+  no call returned or built one: every search returns dicts (`SearchResultDict`
+  in the stub). It is no longer importable, listed in `__all__`, or stubbed.
+  *Migration*: drop the import; read results as dicts.
+- **Crate-private code that `#[allow(dead_code)]` kept alive.** With the
+  allows lifted, the compiler named what nothing called:
+  `NativeHnswInner::{search_neighbours, is_empty, metric}`,
+  `ShardedIndex::{clear, reserve}` and `NativeHnswIndex`'s unread `params`
+  field are removed; helpers only tests call (`Collection::create`,
+  `create_with_hnsw_params`, `sparse_indexes`, the range index's accessors, the HNSW
+  safety-counter snapshot, `BitVecVisited::contains`, `ShardedIndex::is_empty`,
+  the trigram SIMD level's `name`, and `Layer::get_neighbors` outside `gpu`)
+  are now `#[cfg(test)]`, so a production build no longer compiles them. Two allows
+  were stale — `SnapshotBuilder::empty` and `merge_batch_postings` have
+  production callers — and are dropped. `RaBitQVectorStore`, unused without
+  `persistence`, is now compiled only with it instead of carrying two
+  `allow`s, and `velesdb-wasm`'s `delete_edges_where` loses a stale one (the
+  memory store calls it). No public API changes.
+- **BREAKING — the delta buffer's and the deferred indexer's own searches
+  and merges.** `DeltaBuffer::search`, `DeferredIndexer::{search,
+  merge_with_hnsw, swap_and_drain, drain_all}` and
+  `collection::streaming::{merge_with_delta, merge_with_delta_scored}` had
+  no caller outside tests: a search merges what the deferred indexer holds
+  through the collection (see Fixed), and a flush indexes it. They scored
+  the copy each buffer took, where a search now scores what storage holds.
+  *Migration*: search the collection; `VectorCollection::flush` indexes
+  what the deferred indexer holds.
+- **BREAKING — the collection-level delta buffer, which nothing activated.**
+  Every collection carried a `DeltaBuffer` meant to hold writes while an
+  HNSW rebuild ran, but no rebuild path ever activated it: writes checked
+  it, deletes purged it, every flush drained it and every search read it,
+  always empty. It is removed with what only fed or reported it:
+  `VectorCollection::push_to_delta_if_active` and
+  `VectorCollection::is_delta_active` (always `false`), Python's
+  `Collection.is_delta_active()`, and the stream ingester's and the NDJSON
+  stream route's copies into it. `DeltaBuffer` stays, as the deferred
+  indexer's write buffer, without the activation state machine it kept for
+  rebuilds: `activate`, `try_activate`, `deactivate_and_drain`,
+  `is_active`, `is_searchable`, `stats` and `ActivateError` are removed, and
+  it accepts every write.
+  *Migration*: drop the calls; `is_delta_active()` returned `false` on every
+  collection. A `DeltaBuffer` you build yourself needs no activation; use
+  `len`/`is_empty` for its size.
+- **The edge property index (`EdgePropertyIndex`).** Every edge write fed it
+  (and cloned the edge's properties to do so), every open rebuilt it from the
+  edge snapshot and again from the edge WAL replay, and nothing ever read it
+  or removed an entry from it when an edge went away. It, its rebuilds and
+  the edge WAL replay's per-entry callback that only it used are removed.
+  Crate-private and never persisted; no public API or format changes.
 - **BREAKING — `CollectionConfig.description` (TypeScript SDK).** Core has no
   collection description: `CreateCollectionRequest` has no such field, so the
   REST server dropped it silently, and the WASM backend stored it where
@@ -453,6 +560,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A collection lock and a rayon pool could deadlock the process.** The
+  dense and sparse legs of a hybrid search, both legs of a `Parallel`
+  SELECT and MATCH, and the vector and payload stores of `upsert_bulk` ran as
+  the two halves of a `rayon::join` on the global pool, each taking
+  collection locks there; a batch search's resolve, an aggregation's scan
+  and the lazy PQ training held storage or quantizer guards across a join on
+  that pool; and a merge into the HNSW index held the storage guard across
+  the graph pool's `install`, which, called from an application's own rayon
+  job, let that worker run the application's other jobs meanwhile. Once a
+  writer queued behind such a guard, `parking_lot` parked every new reader,
+  among them the jobs the guard holder was waiting for. The legs and the
+  stores now run one after the other (the `Parallel` strategies are removed,
+  see Removed); the resolve, the scan and the training run on a dedicated
+  pool whose jobs take no lock; and a caller that is itself a rayon worker
+  waits on no pool at all — it runs that work, and the HNSW place, link and
+  vacuum-settle phases, on its own thread.
+- **A failed flush step stopped every step after it.** `flush` and
+  `flush_full` returned at the first failing step, so a failure of the
+  config, the vector or payload storage or the async builder's drain left
+  the HNSW save, the quantizers and the sparse, BM25 and secondary indexes
+  unwritten; and `upsert_bulk` returned a failed builder flush before
+  refreshing the point count, applying the batch's sparse vectors and moving
+  the write generation, for points it had stored. Every step now runs and
+  the first error is returned at the end, with two exceptions that keep a
+  file from describing what is not on disk: the HNSW save waits on a drain
+  whose link succeeded, and `vectors.idx` on a vector storage flush that
+  succeeded. `upsert_bulk` always finishes its bookkeeping. Ids the builder
+  could not index stay queued, and searchable, for the next flush, and are
+  logged rather than failing it.
+
+- **`upsert_bulk` with an async index builder returned before its points
+  could be found.** Its V2 path places each vector in the graph's arena and
+  leaves linking it to the builder until `merge_threshold` points wait or a
+  flush runs. A graph walk cannot reach an unlinked slot, and no search read
+  what the builder held — the module doc said its buffer was "searchable via
+  brute-force scan", but that scan had no caller — so dense, filtered, VelesQL
+  `NEAR` and hybrid search all missed such a point (on a collection over the
+  100-point exhaustive shortcut) until the next flush. Every vector search now
+  reads the builder's pending ids before its index search, scores them
+  exactly on what the collection holds for each now (a point deleted or
+  overwritten since is skipped or scored on its new vector, an id queued
+  twice is scored once) and merges them with the index's results. The
+  search's own restriction applies to them before they compete for its `k`:
+  a filter's bitmap or a graph anchor set admits only its ids, and a search
+  that post-filters keeps every admitted pending point, so pending points
+  outside a filter or anchor set neither appear nor take the place of a
+  match. A flush drops what it indexes from its queue only once indexed, so a
+  search racing it finds every point. The cost is an exact scan of the
+  pending points on each search, up to `merge_threshold` (default 10 000) of
+  them, more while a flush that failed or found another running leaves its
+  queue behind (the next `upsert_bulk` over the threshold flushes again and
+  returns a failing link's error). A post-filtered search scans and keeps
+  all admitted pending points rather than its `k`, and a batch or
+  multi-query search pays the scan once per query. Measured at 10 000
+  pending 768-d points (`bulk_insert_v2_benchmark`'s
+  `search_with_10k_pending_768d`, on a shared 4-vCPU cloud sandbox, not the
+  reference machine): see `docs/BENCHMARKS.md`. It lasts only until a flush
+  or the threshold links them.
+- **A restricted search could return the deferred indexer's points outside
+  its restriction, or lose its matches to them.** It merged its
+  unrestricted top `k` into every search: a filter applied
+  after the merge could find its places taken by buffered points it rejects
+  and return fewer matches or none, and a graph-anchored `NEAR` over more
+  than 10 000 anchors could return buffered points outside the anchor set.
+  They now go through the same merge as the async index builder's points,
+  under the same restriction: only the ids the search's bitmap admits, and
+  every admitted point when the search post-filters.
+- **A search could score a point on a vector it no longer has.** An
+  unindexed point was scored on the copy its source took: the async index
+  builder's arena slot, the deferred indexer's buffer.
+  A point bulk-loaded and then overwritten before a flush was scored on its
+  first vector, and the index's result for a point overwritten since it was
+  indexed could outrank the newer one, since the newer one won only within
+  each source's own top `k`. Every unindexed point is now scored on what
+  vector storage holds for it, and the index's result for an unindexed id
+  is dropped before ranking, so only the current vector competes; when such
+  ids crowd the index's `k`, it is asked for more — at least twice as many
+  each time, never more than `k` plus the pending count, so at most
+  `log2((k + pending) / k)` more index searches, run in parallel across a
+  batch's queries — so the next point it ranks keeps its place.
+- **A point deleted and then written again while the deferred indexer
+  buffered it stayed out of search** until the next merge: the delete
+  recorded the id in a set that filtered the buffer's results, and the
+  rewrite did not clear it. The set is gone: a delete removes the point from
+  the buffer, and a search skips a point storage no longer holds.
+- **An async index builder flush indexed the copy `upsert_bulk` queued.** A
+  point overwritten since was indexed on its old vector, and a point deleted
+  since was put back in the graph, where it could take a search's places
+  only to be dropped when results were read. A flush now inserts what
+  storage holds for each queued id when it runs, and leaves out an id it no
+  longer holds. It also leaves out an id the graph already holds as storage
+  does — a point upserted straight into the graph after `upsert_bulk`
+  queued it — which 7.1.0 inserted a second time, leaving its first node in
+  the graph, unmapped, until `vacuum`. The deferred indexer's merge skips
+  such an id the same way.
+- **A search could return fewer than `k` results, or none, near a point
+  deleted or overwritten since the last `vacuum`.** A delete or an upsert
+  leaves the point's old node in the graph, mapped to no id. The graph walk
+  ranked those nodes with the rest and was cut to `k` before they were
+  dropped, so a `k = 1` search at a deleted or moved point's old vector
+  could come back empty; most visibly without reranking (`Fast` quality, or
+  an index built without exact-distance features). Present in 7.1.0.
+  When such nodes cut a search short, `HnswIndex` and `NativeHnswIndex` now
+  walk again for the walk's whole `ef` pool and keep its first `k` mapped
+  nodes; if that pool was all used and still falls short, once more at
+  twice the `ef` (at most 10 000). A search that fetches more candidates
+  than it keeps (reranked, PQ-rescored) walks again only when such nodes
+  leave fewer than it keeps, and a walk already run is not repeated. A
+  search near no such node runs one walk, exactly as before. A neighbourhood so dense with deleted points
+  that this still falls short needs `vacuum`.
+- **A search racing a deferred-indexer merge could miss its points.** The
+  merge emptied its buffer before inserting what it held. It now inserts
+  first and drops only what it inserted, as the async index builder does,
+  and keeps an entry written again during the merge for the next one.
+- **A merge could undo a delete or an upsert that raced it.** The async
+  index builder's flush and the deferred indexer's merge read the vectors
+  to insert, let go of storage, then inserted them: a delete landing in
+  between was undone (the point put back in the graph), and an upsert
+  landing in between was overwritten by the vector read before it. Each
+  chunk of 256 ids is now read and inserted under one `vector_storage` read
+  guard, which a delete or an upsert must wait for before it writes; a
+  writer waits at most one chunk's insert.
+- **A merge dropped ids it had failed to insert, and a panicking merge
+  stopped every later one.** The builder and the deferred indexer drop only
+  the ids the merge settled — inserted, held already, or deleted — and
+  keep the rest queued, and the flags that serialize their merges are now
+  cleared by a guard, so a merge that panics no longer leaves every later
+  flush skipping. A chunk the graph refuses is retried one vector at a
+  time, so one refused vector no longer keeps the rest of its chunk out; a
+  stored vector of the wrong dimension is logged and left out of the index
+  instead of being retried forever; a builder flush that keeps ids returns
+  an error saying how many; and a deferred merge that keeps entries
+  restarts the buffer's age, so the age trigger does not fire on every
+  write that follows.
+- **Sparse and fused hybrid searches returned fewer than `k` results when a
+  TTL-expired point ranked among the first `k`.** Their resolution took the
+  first `k` hits, then dropped the expired ones, so each expired hit cost a
+  place: sparse search, the dense + sparse fused hybrid, and a VelesQL
+  `NEAR` + `MATCH` under a score-level `USING FUSION` (anchored, or with no
+  filter). An expired hit is now skipped before `k` is counted, and its
+  vector is not read. Present in 7.1.0.
+- **Filtered hybrid and batch searches copied the vector of every
+  candidate.** `hybrid_search_with_filter`, a filtered VelesQL `NEAR` +
+  `MATCH` under a score-level `USING FUSION` (`maximum`, `average`, `rsf`)
+  and `search_batch_with_filters` read each candidate's vector before
+  testing its payload, then kept `k`; they now test the payload first and
+  read the vectors of the `k` points they return.
+  `search_batch_with_filters` also no longer returns a TTL-expired point,
+  which every other search already hid.
+- **The MATCH pre-filter gave up when one predicate had no index.** A
+  `WHERE` of `AND`-ed comparisons on a single-node pattern narrows the nodes
+  it scans with the property indexes; one comparison on a property no node
+  carries discarded what the others had found, and every node was scanned.
+  Such a comparison is now skipped: `WHERE` re-checks every node the
+  pre-filter lets through, so results are unchanged and fewer nodes are
+  scanned.
 - **`velesdb-server` applies the `[server]` and `[logging]` settings
   `docs/guides/CONFIGURATION.md` documents.** In 7.1.0 `workers`,
   `max_body_size`, `cors_enabled`, `cors_origins` and the whole `[logging]`
@@ -508,7 +771,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which outranked `[logging] level` and `VELESDB_LOGGING_LEVEL` in every
     container. Unset, the image logs at the server default: `info`, plus
     `tower_http`'s per-request debug lines.
-
 - **`POST /collections` with `collection_type: "graph"` honours `dimension`
   and `metric`.** In 7.1.0 the handler created every graph collection without
   embeddings and with cosine, whatever the body said; `dimension` now gives the
@@ -518,7 +780,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   query of the wrong dimension now answers `400`, as documented, instead of
   `500`. The `CreateCollectionRequest` field docs (and so the OpenAPI
   descriptions) name the graph case.
-
 - **A client's error no longer opens a collection's circuit breaker.** Every
   failed query counted toward the breaker, so five in a row of one client's
   mistake — a MATCH `ORDER BY` the executor cannot run, a query vector of the
@@ -541,7 +802,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record a `400` refusing the request body, nor a read the access gate denied
   (`AccessDecision::Deny`, whatever error carries it). The server's
   `4xx`/`5xx` choice reads the same classification.
-
 - **The TypeScript SDK's agent memory works over REST.**
   `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`,
   `recallRecentEvents` and `recallOlderThanEvents` sent a flat
@@ -578,7 +838,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by earlier versions still load: the deserializer reads both shapes. The SDK
   gains a suite that runs its search family over a real velesdb-wasm build
   instead of a fake store, run by the `wasm-check` CI job.
-
 - **LlamaIndex `GraphLoader` reaches its graph collection.** It opened a
   second `velesdb.Database` on the vector store's path, which core refuses
   once the store holds it open (`VELES-031`), and silently fell back to an
@@ -608,7 +867,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server, and run offline with the frameworks' fake embeddings and LLM when no
   OpenAI key is set or with `--offline`; each integration's test suite runs
   its example that way.
-
 - **The Python quickstart and examples run on 8.0.0.** The root README's
   "three commands that work" ran `examples/python/hello_velesdb.py`, which
   passed `SearchOptions(top_k=...)`: 8.0.0 removed that alias, so the script
@@ -663,6 +921,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`segment_count` is documented as inert in Python, Mobile and TypeScript.**
+  Core reserves the async index builder's `segment_count` and reads it
+  nowhere: a flush links on core's dedicated graph pool. The Python binding
+  said `None` fell back to the CPU count, Mobile that flushes ran on the
+  global thread pool, and the TypeScript SDK that it set parallel segments
+  defaulting to the CPU count.
 - **TypeScript SDK README:** the stale "What's New in v3.12.0" section under
   the v8.0.0 banner is replaced by what 8.0.0 changes; filters, the HNSW
   options, the search and query options, graph schema mode, traversal and

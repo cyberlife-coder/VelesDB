@@ -3,7 +3,7 @@
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::index::{JsonValue, SecondaryIndex};
-use parking_lot::RwLock;
+use crate::lock_audit::RwLock;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -82,7 +82,7 @@ impl Collection {
         let is_new = !indexes.contains_key(field_name);
         indexes
             .entry(field_name.to_string())
-            .or_insert_with(|| SecondaryIndex::BTree(RwLock::new(BTreeMap::new())));
+            .or_insert_with(|| SecondaryIndex::BTree(parking_lot::RwLock::new(BTreeMap::new())));
 
         // Backfill: scan existing payloads to populate the index.
         // Runs for both new indexes AND existing indexes (to catch points

@@ -1,9 +1,11 @@
 //! HNSW safety and observability counters.
 //!
-//! Provides always-on atomic counters for lock-rank invariant violations and
-//! corruption signals.
-//! These counters are active in both debug and release builds to maintain
-//! high observability parity (per CONTEXT.md locked decision).
+//! Atomic counters for lock-rank invariant violations and corruption signals.
+//! The module is compiled only where a consumer exists — the parent `mod.rs`
+//! gates it on `cfg(any(test, debug_assertions))`: the sole writers are the
+//! `#[cfg(debug_assertions)]` lock-rank checks in `locking`, and the sole
+//! readers are the tests calling `snapshot()`. Release builds (F-25) make
+//! lock-rank tracking a complete no-op, so nothing there touches these.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,7 +23,6 @@ pub(crate) struct HnswSafetyCounters {
 
 impl HnswSafetyCounters {
     /// Creates a new counter set with all values at zero.
-    #[allow(dead_code)] // Reason: Used only via HNSW_COUNTERS static initialization
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -31,7 +32,11 @@ impl HnswSafetyCounters {
     }
 
     /// Increments the invariant violation counter.
-    #[allow(dead_code)] // Reason: Observability — wired into lock-rank violation detection
+    ///
+    /// Sole caller: the `#[cfg(debug_assertions)]` lock-rank check in
+    /// `locking::record_lock_acquire` — gated the same so a `cfg(test)`
+    /// build without debug assertions has no dead code.
+    #[cfg(debug_assertions)]
     #[inline]
     pub fn record_invariant_violation(&self) {
         self.invariant_violation_total
@@ -39,7 +44,10 @@ impl HnswSafetyCounters {
     }
 
     /// Increments the corruption detection counter.
-    #[allow(dead_code)] // Reason: Observability — wired into graph integrity checks
+    ///
+    /// Sole caller: the `#[cfg(debug_assertions)]` lock-rank check in
+    /// `locking::record_lock_release` — gated the same for the same reason.
+    #[cfg(debug_assertions)]
     #[inline]
     pub fn record_corruption(&self) {
         self.corruption_detected_total
@@ -47,7 +55,7 @@ impl HnswSafetyCounters {
     }
 
     /// Returns a snapshot of all counters.
-    #[allow(dead_code)] // Reason: Used in tests for observability verification
+    #[cfg(test)]
     #[must_use]
     pub fn snapshot(&self) -> CounterSnapshot {
         CounterSnapshot {
@@ -57,8 +65,8 @@ impl HnswSafetyCounters {
     }
 }
 
-/// Immutable snapshot of counter values for reporting.
-#[allow(dead_code)] // Reason: Returned by `HnswSafetyCounters::snapshot()` — used in tests
+/// Immutable snapshot of counter values, read by the tests.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_field_names)] // `_total` suffix aligns with Prometheus counter conventions.
 pub(crate) struct CounterSnapshot {
@@ -66,6 +74,5 @@ pub(crate) struct CounterSnapshot {
     pub corruption_detected_total: u64,
 }
 
-/// Global safety counters instance — always active in all builds.
-#[allow(dead_code)] // Reason: Observability infrastructure — used from locking module
+/// Global safety counters instance — compiled wherever the module is.
 pub(crate) static HNSW_COUNTERS: HnswSafetyCounters = HnswSafetyCounters::new();

@@ -152,6 +152,8 @@ pub mod index;
 pub mod internal_bench;
 #[cfg(all(test, feature = "internal-bench"))]
 mod internal_bench_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod lock_audit;
 pub mod lock_rank;
 pub mod metrics;
 #[cfg(test)]
@@ -162,6 +164,8 @@ mod perf_optimizations_tests;
 pub mod point;
 #[cfg(test)]
 mod point_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod pools;
 pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;

@@ -53,9 +53,10 @@ impl MigrationLock {
     /// unwritable. Neither an active nor a dead lock is stolen automatically.
     pub fn acquire(workspace: &Path, holder: &str) -> Result<Self, MigrationError> {
         let path = workspace.join(LOCK_FILE);
+        let (token, body) = serialise_lock_record(holder)?;
         let guard = open_and_lock_guard(workspace)?;
         ensure_lock_record_absent(workspace, &path)?;
-        let token = create_lock_record(&path, holder)?;
+        write_lock_record(&path, &body)?;
         Ok(Self { path, token, guard })
     }
 
@@ -216,7 +217,12 @@ fn ensure_lock_record_absent(workspace: &Path, path: &Path) -> Result<(), Migrat
     }
 }
 
-fn create_lock_record(path: &Path, holder: &str) -> Result<String, MigrationError> {
+/// Build the lock record for `holder` without touching the workspace.
+///
+/// `read_lock_body` refuses a record past this bound, so one written anyway
+/// could never be released: the holder is refused before the OS guard is
+/// even opened, keeping a refused `acquire` a pure no-op.
+fn serialise_lock_record(holder: &str) -> Result<(String, Vec<u8>), MigrationError> {
     let token = next_lock_token();
     let record = LockRecord {
         format_version: LOCK_FORMAT_VERSION,
@@ -225,25 +231,27 @@ fn create_lock_record(path: &Path, holder: &str) -> Result<String, MigrationErro
     };
     let body = serde_json::to_vec_pretty(&record)
         .map_err(|err| MigrationError::integrity(format!("cannot serialise {LOCK_FILE}: {err}")))?;
-    // `read_lock_body` refuses a record past this bound, so one written
-    // anyway could never be released: refuse it before anything exists.
     if body.len() as u64 > MAX_LOCK_RECORD_BYTES {
         return Err(MigrationError::precondition(format!(
             "refusing {LOCK_FILE}: holder name too long ({} byte record, limit {MAX_LOCK_RECORD_BYTES})",
             body.len()
         )));
     }
+    Ok((token, body))
+}
+
+fn write_lock_record(path: &Path, body: &[u8]) -> Result<(), MigrationError> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .map_err(|err| MigrationError::environment(format!("cannot create {LOCK_FILE}: {err}")))?;
-    file.write_all(&body)
+    file.write_all(body)
         .map_err(|err| MigrationError::environment(format!("cannot write {LOCK_FILE}: {err}")))?;
     file.flush()
         .and_then(|()| file.sync_all())
         .map_err(|err| MigrationError::environment(format!("cannot persist {LOCK_FILE}: {err}")))?;
-    Ok(token)
+    Ok(())
 }
 
 fn next_lock_token() -> String {

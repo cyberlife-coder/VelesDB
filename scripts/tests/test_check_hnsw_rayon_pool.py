@@ -153,6 +153,61 @@ class HnswRayonPoolGuard(unittest.TestCase):
                     result = run_guard(Path(holder.name))
                 self.assertEqual(result.returncode, 1, f"{call} slipped past: {result.stdout}")
 
+    def test_std_thread_fanout_under_the_guard_is_refused(self):
+        """#2343's cycle needs no pool: joining a thread taking `inner` is the same wait.
+
+        A holder of `inner.read()` that joins a `std::thread` deadlocks
+        identically to one joining a pool, so every `std::thread` fan-out
+        form is refused until its `path::fn` is justified in ALLOWED.
+        """
+        for call in (
+            "let h = std::thread::spawn(|| inner.score(0));\n        h.join();",
+            "std::thread::spawn(|| inner.score(0)).join();",
+            "std::thread::scope(|s| s.spawn(|| inner.score(0)));",
+            "std::thread::JoinHandle::join(h);",
+            "h.join();",
+        ):
+            with self.subTest(call=call):
+                body = (
+                    "impl HnswIndex {\n    fn sneaky(&self) {\n"
+                    "        let inner = self.inner.read();\n"
+                    f"        {call}\n    }}\n}}\n"
+                )
+                holder = tree({str(HNSW / "probe.rs"): body})
+                with holder:
+                    result = run_guard(Path(holder.name))
+                self.assertEqual(result.returncode, 1, f"{call} slipped past: {result.stdout}")
+
+    def test_thread_fanout_inside_an_install_is_refused(self):
+        """`.install(` excuses a rayon submission, never a thread join.
+
+        A rayon job on the dedicated pool cannot take `inner`; a spawned
+        thread joined inside that job still parks the worker the holder
+        waits on, so the install does not vouch for it.
+        """
+        body = (
+            "impl HnswIndex {\n    fn sneaky(&self) {\n"
+            "        let inner = self.inner.read();\n"
+            "        graph_pool()?.install(|| std::thread::scope(|s| s.spawn(|| inner.score(0))))\n"
+            "    }\n}\n"
+        )
+        holder = tree({str(HNSW / "probe.rs"): body})
+        with holder:
+            result = run_guard(Path(holder.name))
+        self.assertEqual(result.returncode, 1, result.stdout)
+
+    def test_a_join_that_takes_an_argument_is_not_thread_fanout(self):
+        """`slice::join`/`Path::join` take an argument; only `x.join()` waits."""
+        body = (
+            "impl HnswIndex {\n    fn f(&self) -> String {\n"
+            "        let inner = self.inner.read();\n"
+            "        inner.names.join(\",\")\n    }\n}\n"
+        )
+        holder = tree({str(HNSW / "probe.rs"): body})
+        with holder:
+            result = run_guard(Path(holder.name))
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_a_closed_install_does_not_vouch_for_what_follows(self):
         """Indentation is not containment.
 

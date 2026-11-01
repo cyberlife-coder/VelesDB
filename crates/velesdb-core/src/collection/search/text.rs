@@ -1,5 +1,6 @@
 //! Text and hybrid search methods for Collection.
 
+use super::pending::PendingRestriction;
 use super::resolve;
 use super::OrderedFloat;
 use crate::collection::expiry::{is_payload_expired, now_unix_secs};
@@ -30,7 +31,7 @@ fn resolve_rrf_params(vector_weight: Option<f32>, rrf_k: Option<u32>) -> (f32, f
 ///
 /// Returns `(metric, weight, text_weight, rrf_constant)`.
 fn validated_hybrid_params(
-    config: &parking_lot::RwLockReadGuard<'_, crate::collection::types::CollectionConfig>,
+    config: &crate::lock_audit::ReadGuard<'_, crate::collection::types::CollectionConfig>,
     vector_query: &[f32],
     vector_weight: Option<f32>,
     rrf_k: Option<u32>,
@@ -62,15 +63,18 @@ fn compute_hybrid_scored(
     weight: f32,
     text_weight: f32,
     rrf_constant: f32,
+    restriction: PendingRestriction<'_>,
 ) -> Result<HybridScored> {
     // `search_with_quality`, not `search`: the latter pins `Balanced` and so
     // ignores the configured `[search]` quality (#2430).
-    let raw = collection.storage.index.search_with_quality(
-        vector_query,
-        overfetch_k,
-        collection.runtime_search_quality(),
-    )?;
-    let vec_res = collection.merge_delta(raw, vector_query, overfetch_k, metric);
+    let vec_res =
+        collection.search_merging_pending(vector_query, overfetch_k, metric, restriction, |n| {
+            collection.storage.index.search_with_quality(
+                vector_query,
+                n,
+                collection.runtime_search_quality(),
+            )
+        })?;
     let text_res = collection
         .storage
         .text_index
@@ -245,6 +249,7 @@ impl Collection {
             weight,
             text_weight,
             rrf_constant,
+            PendingRestriction::NONE,
         )?;
 
         let scored_ids = Self::top_k_from_scores(fused_scores, k);
@@ -335,37 +340,32 @@ impl Collection {
     }
 
     /// Resolves scored IDs to `SearchResult` with per-component score
-    /// breakdown, keeping the first `limit` results `keep` accepts, in
-    /// `scored_ids` order.
+    /// breakdown, keeping the first `limit` points whose payload `accept`
+    /// takes, in `scored_ids` order; a rejected point's vector is never
+    /// copied ([`resolve::hydrate_accepted`]).
     fn resolve_scored_ids_with_components(
         &self,
         scored_ids: &[(u64, f32)],
         component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
-        keep: impl Fn(&SearchResult) -> bool,
+        accept: impl Fn(Option<&serde_json::Value>) -> bool,
         limit: usize,
     ) -> Vec<SearchResult> {
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
-        let now_secs = now_unix_secs();
-
-        scored_ids
-            .iter()
-            .filter_map(|&(id, score)| {
-                let mut result = resolve::hydrate_point(
-                    id,
-                    score,
-                    now_secs,
-                    &*vector_storage,
-                    &*payload_storage,
-                )?;
-                if !keep(&result) {
-                    return None;
-                }
-                attach_rrf_components(&mut result, component_map);
-                Some(result)
-            })
-            .take(limit)
-            .collect()
+        let mut results = resolve::hydrate_accepted(
+            scored_ids.iter().copied(),
+            limit,
+            now_unix_secs(),
+            &*vector_storage,
+            &*payload_storage,
+            accept,
+        );
+        drop(payload_storage);
+        drop(vector_storage);
+        for result in &mut results {
+            attach_rrf_components(result, component_map);
+        }
+        results
     }
 
     /// Performs hybrid search (vector + text) with metadata filtering.
@@ -409,6 +409,7 @@ impl Collection {
             weight,
             text_weight,
             rrf_constant,
+            PendingRestriction::post_filtered(),
         )?;
 
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
@@ -418,13 +419,7 @@ impl Collection {
         Ok(self.resolve_scored_ids_with_components(
             &scored_ids,
             &component_map,
-            |result| {
-                result
-                    .point
-                    .payload
-                    .as_ref()
-                    .is_some_and(|payload| filter.matches(payload))
-            },
+            |payload| payload.is_some_and(|payload| filter.matches(payload)),
             k,
         ))
     }

@@ -10,6 +10,7 @@
 //! - `maximum` / `average` / `rsf` -> score-level fusion of the raw vector
 //!   similarity and BM25 score streams via [`FusionStrategy`].
 
+use crate::collection::search::pending::PendingRestriction;
 use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::fusion::FusionStrategy;
@@ -148,12 +149,36 @@ impl Collection {
         filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
         let candidate_k = k.saturating_mul(2).max(k + 10);
+        let restriction = PendingRestriction::NONE.post_filtered_if(filter.is_some());
         let (vector_stream, text_stream) =
-            self.hybrid_score_streams(vector_query, text_query, candidate_k)?;
+            self.hybrid_score_streams(vector_query, text_query, candidate_k, restriction)?;
         let direction = self.storage.config.read().metric.score_direction();
         let fused = fuse_streams(strategy, vector_stream, direction, text_stream)?;
-        let resolved = self.resolve_fused_results(&fused, fused.len());
-        Ok(apply_post_filter(resolved, filter, k))
+        Ok(match filter {
+            Some(filter) => self.resolve_fused_matching(&fused, filter, k),
+            None => self.resolve_fused_results(&fused, k),
+        })
+    }
+
+    /// Resolves the first `k` fused points whose payload `filter` matches,
+    /// in fused order, reading each candidate's payload before copying its
+    /// vector: a point without a payload matches no filter.
+    fn resolve_fused_matching(
+        &self,
+        fused: &[(u64, f32)],
+        filter: &crate::filter::Filter,
+        k: usize,
+    ) -> Vec<SearchResult> {
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        crate::collection::search::resolve::hydrate_accepted(
+            fused.iter().copied(),
+            k,
+            crate::collection::expiry::now_unix_secs(),
+            &*vector_storage,
+            &*payload_storage,
+            |payload| payload.is_some_and(|payload| filter.matches(payload)),
+        )
     }
 
     /// Builds the `(id, score)` vector-similarity and BM25 streams used by
@@ -163,6 +188,7 @@ impl Collection {
         vector_query: &[f32],
         text_query: &str,
         candidate_k: usize,
+        restriction: PendingRestriction<'_>,
     ) -> Result<(ScoreStream, ScoreStream)> {
         let metric = {
             let config = self.storage.config.read();
@@ -170,12 +196,14 @@ impl Collection {
             config.metric
         };
         // Not `search`, which pins `Balanced` and ignores `[search]` (#2430).
-        let raw = self.storage.index.search_with_quality(
-            vector_query,
-            candidate_k,
-            self.runtime_search_quality(),
-        )?;
-        let vec_res = self.merge_delta(raw, vector_query, candidate_k, metric);
+        let vec_res =
+            self.search_merging_pending(vector_query, candidate_k, metric, restriction, |n| {
+                self.storage.index.search_with_quality(
+                    vector_query,
+                    n,
+                    self.runtime_search_quality(),
+                )
+            })?;
         let vector_stream: Vec<(u64, f32)> = vec_res.iter().map(|sr| (sr.id, sr.score)).collect();
         let text_stream = self.storage.text_index.search(text_query, candidate_k);
         Ok((vector_stream, text_stream))
@@ -241,23 +269,4 @@ fn score_fusion_strategy(fc: &FusionClause) -> FusionStrategy {
         }
         _ => FusionStrategy::Average,
     }
-}
-
-/// Applies an optional metadata filter to fused results, truncating to `k`.
-fn apply_post_filter(
-    results: Vec<SearchResult>,
-    filter: Option<&crate::filter::Filter>,
-    k: usize,
-) -> Vec<SearchResult> {
-    let Some(filter) = filter else {
-        return results.into_iter().take(k).collect();
-    };
-    results
-        .into_iter()
-        .filter(|r| match r.point.payload.as_ref() {
-            Some(p) => filter.matches(p),
-            None => false,
-        })
-        .take(k)
-        .collect()
 }

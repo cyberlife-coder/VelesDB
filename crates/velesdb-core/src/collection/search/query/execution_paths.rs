@@ -229,7 +229,7 @@ impl Collection {
     }
 
     /// Dispatches a filtered vector query according to the CBO strategy
-    /// (GraphFirst, Parallel, or the default VectorFirst path).
+    /// (GraphFirst, or the default VectorFirst path).
     fn dispatch_vector_with_strategy(
         &self,
         vector: &[f32],
@@ -242,35 +242,6 @@ impl Collection {
         match cbo_strategy {
             crate::velesql::ExecutionStrategy::GraphFirst => {
                 Ok(self.scan_and_score_by_vector(filter, vector, execution_limit))
-            }
-            crate::velesql::ExecutionStrategy::Parallel => {
-                // R2 (#1390): run the GraphFirst scan and the VectorFirst HNSW
-                // branch CONCURRENTLY via `rayon::join`. Both legs are read-only
-                // over immutable collection data and the merge below is a
-                // best-score-by-id union (order-insensitive), so the concurrent
-                // result set is byte-for-byte identical to the former sequential
-                // execution — only wall-clock latency changes. The two closures
-                // each take read locks only (no writer during a query), so there
-                // is no lock-ordering hazard, mirroring the concurrent hybrid
-                // dense/sparse path in `hybrid_sparse::execute_both_branches`.
-                #[cfg(feature = "persistence")]
-                let (graph_results, vector_results) = rayon::join(
-                    || self.scan_and_score_by_vector(filter, vector, execution_limit),
-                    || self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
-                );
-                #[cfg(not(feature = "persistence"))]
-                let (graph_results, vector_results) = (
-                    self.scan_and_score_by_vector(filter, vector, execution_limit),
-                    self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
-                );
-                let vector_results = vector_results?;
-                let higher = self.storage.config.read().metric.higher_is_better();
-                Ok(merge_select_parallel_results(
-                    graph_results,
-                    vector_results,
-                    higher,
-                    execution_limit,
-                ))
             }
             _ => self.search_with_filter_and_opts(vector, cbo_search_k, filter, search_opts),
         }
@@ -592,18 +563,18 @@ impl Collection {
         cbo_strategy: crate::velesql::ExecutionStrategy,
         cbo_over_fetch: usize,
     ) -> Result<Vec<SearchResult>> {
-        // `cbo_strategy` (VectorFirst / GraphFirst / Parallel) only has a
+        // `cbo_strategy` (VectorFirst / GraphFirst) only has a
         // physically distinct realization on the NEAR + metadata-filter arm
         // below, which routes through `dispatch_vector_with_strategy`. Every
         // other arm has exactly one sensible physical plan, so it deliberately
         // ignores `cbo_strategy` (documented per-arm). This is intentional, not
-        // an oversight: forcing a graph/parallel shape onto these arms would add
+        // an oversight: forcing a graph-first shape onto these arms would add
         // machinery with no cost benefit (audit F-2.15, #1390).
         match (vector_search, first_similarity, filter_condition) {
             // similarity() with optional NEAR vector and optional metadata filter.
             // Strategy IGNORED (deliberate): a similarity() threshold is
             // intrinsically VectorFirst — it must score vector candidates before
-            // it can apply the threshold, so GraphFirst/Parallel have no
+            // it can apply the threshold, so GraphFirst has no
             // meaningful realization here. The optional metadata filter is
             // applied as a post-filter over the scored candidates.
             (search_vec, Some(sim), filter_cond) => self.dispatch_similarity_query(
@@ -617,8 +588,8 @@ impl Collection {
             ),
             // NEAR + metadata filter (no similarity threshold). This is the ONLY
             // arm that HONORS `cbo_strategy`: it dispatches to
-            // `dispatch_vector_with_strategy`, which realizes VectorFirst,
-            // GraphFirst, and Parallel as three physically distinct plans.
+            // `dispatch_vector_with_strategy`, which realizes VectorFirst and
+            // GraphFirst as two physically distinct plans.
             (Some(vector), None, Some(cond)) => self.dispatch_near_with_filter(
                 vector,
                 cond,
@@ -700,41 +671,3 @@ impl Collection {
 #[cfg(test)]
 #[path = "execution_paths_tests.rs"]
 mod execution_paths_tests;
-
-/// Merges GraphFirst and VectorFirst `SearchResult` sets for the SELECT Parallel
-/// path (sequential execution, union semantics — best score wins per ID).
-fn merge_select_parallel_results(
-    graph: Vec<SearchResult>,
-    vector: Vec<SearchResult>,
-    higher_is_better: bool,
-    limit: usize,
-) -> Vec<SearchResult> {
-    let mut by_id: rustc_hash::FxHashMap<u64, SearchResult> =
-        rustc_hash::FxHashMap::with_capacity_and_hasher(
-            graph.len() + vector.len(),
-            rustc_hash::FxBuildHasher,
-        );
-    for r in graph.into_iter().chain(vector) {
-        by_id
-            .entry(r.point.id)
-            .and_modify(|existing| {
-                let better = if higher_is_better {
-                    r.score > existing.score
-                } else {
-                    r.score < existing.score
-                };
-                if better {
-                    *existing = r.clone();
-                }
-            })
-            .or_insert(r);
-    }
-    let mut merged: Vec<SearchResult> = by_id.into_values().collect();
-    if higher_is_better {
-        merged.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-    } else {
-        merged.sort_unstable_by(|a, b| a.score.total_cmp(&b.score));
-    }
-    merged.truncate(limit);
-    merged
-}

@@ -39,8 +39,6 @@ pub struct NativeHnswIndex {
     pub(crate) inner: RwLock<NativeHnswInner>,
     pub(crate) mappings: ShardedMappings,
     pub(crate) enable_vector_storage: bool,
-    #[allow(dead_code)] // Retained for future vacuum/rebuild operations
-    pub(crate) params: HnswParams,
     /// Serializes saves of this index (#2262), as `HnswIndex::saving` does
     /// for the other one. A save rewrites its vectors and graph files in
     /// place and stamps every file with the generation after the one it read
@@ -87,7 +85,6 @@ impl NativeHnswIndex {
             inner: RwLock::new(inner),
             mappings: ShardedMappings::new(),
             enable_vector_storage: true,
-            params,
             saving: Mutex::new(()),
         })
     }
@@ -175,17 +172,25 @@ impl NativeHnswIndex {
     ) -> Vec<ScoredResult> {
         let ef_search = quality.ef_search_for_scale(k, self.len());
         let inner = self.inner.read();
-        let neighbors = inner.search_auto(query, k, ef_search);
-
-        let results: Vec<ScoredResult> = neighbors
-            .into_iter()
-            .filter_map(|(node_id, raw_dist)| {
-                self.mappings.get_id(node_id).map(|id| {
-                    let score = inner.transform_score(raw_dist);
-                    ScoredResult::new(id, score)
-                })
-            })
-            .collect();
+        // A node a delete or an upsert left behind maps to no id: walked
+        // past rather than left to take a result's place.
+        let results = super::upsert::search_past_unmapped(
+            k,
+            k,
+            ef_search,
+            |k, ef| inner.search_auto(query, k, ef),
+            |nodes, k| {
+                nodes
+                    .iter()
+                    .filter_map(|&(node_id, raw_dist)| {
+                        self.mappings
+                            .get_id(node_id)
+                            .map(|id| ScoredResult::new(id, inner.transform_score(raw_dist)))
+                    })
+                    .take(k)
+                    .collect()
+            },
+        );
         drop(inner);
         results
     }
@@ -290,12 +295,7 @@ impl NativeHnswIndex {
         k: usize,
         quality: SearchQuality,
     ) -> Vec<Vec<ScoredResult>> {
-        use rayon::prelude::*;
-
-        queries
-            .par_iter()
-            .map(|q| self.search_with_quality(q, k, quality))
-            .collect()
+        crate::pools::map(queries, |q| self.search_with_quality(q, k, quality))
     }
 
     /// Brute-force exact nearest neighbor search with parallel execution.
@@ -325,8 +325,6 @@ impl NativeHnswIndex {
     #[expect(clippy::significant_drop_tightening)]
     #[must_use]
     pub fn brute_force_search_parallel(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
-        use rayon::prelude::*;
-
         // Preserve fast-insert semantics: exact-distance features are gated
         // on `enable_vector_storage` even though the graph stores vectors.
         if !self.enable_vector_storage {
@@ -350,10 +348,8 @@ impl NativeHnswIndex {
             return Vec::new();
         }
 
-        let mut results: Vec<ScoredResult> = flat
-            .par_chunks(dimension)
-            .enumerate()
-            .filter_map(|(idx, vec)| {
+        let mut results: Vec<ScoredResult> =
+            crate::pools::filter_map_chunks_enumerated(&flat, dimension, |idx, vec| {
                 let id = self.mappings.get_id(idx)?;
                 let raw_distance = inner.compute_distance(query, vec);
                 // Reason: compute_distance returns squared L2 for Euclidean
@@ -361,8 +357,7 @@ impl NativeHnswIndex {
                 // restore actual Euclidean distance for user-visible scores.
                 let score = inner.transform_score(raw_distance);
                 Some(ScoredResult::new(id, score))
-            })
-            .collect();
+            });
 
         self.metric.sort_scored_results(&mut results);
 

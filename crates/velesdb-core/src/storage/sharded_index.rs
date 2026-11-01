@@ -129,20 +129,10 @@ impl ShardedIndex {
     }
 
     /// Returns true if the index is empty.
+    #[cfg(test)]
     #[must_use]
-    #[allow(dead_code)] // API completeness
     pub fn is_empty(&self) -> bool {
         self.shards.iter().all(|s| s.read().entries.is_empty())
-    }
-
-    /// Clears all entries from all shards.
-    #[allow(dead_code)] // API completeness; production code uses replace_all()
-    pub fn clear(&self) {
-        for shard in &self.shards {
-            shard.write().entries.clear();
-        }
-        self.entry_count
-            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Atomically replaces all entries in the index.
@@ -200,17 +190,6 @@ impl ShardedIndex {
             }
         }
         map
-    }
-
-    /// Reserves capacity in all shards.
-    ///
-    /// Distributes the expected capacity evenly across shards.
-    #[allow(dead_code)] // API completeness
-    pub fn reserve(&self, additional: usize) {
-        let per_shard = additional / NUM_SHARDS + 1;
-        for shard in &self.shards {
-            shard.write().entries.reserve(per_shard);
-        }
     }
 }
 

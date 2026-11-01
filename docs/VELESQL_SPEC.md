@@ -1980,7 +1980,9 @@ The query planner automatically chooses the optimal strategy:
 |----------|-----------|-------------|
 | **GraphFirst** | No similarity condition | Traverse graph, then filter |
 | **VectorFirst** | Similarity on start node | Vector search, then validate graph |
-| **Parallel** | Large collection, high threshold | Execute both in parallel |
+
+No strategy runs both: GraphFirst enumerates every row a VectorFirst search
+could return, so a union would add nothing and cost both.
 
 ### REST API
 
@@ -2162,7 +2164,7 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 | `nodes_visited` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) graph-traversal node count (start nodes examined + nodes reached by following edges); 0 for non-MATCH queries |
 | `edges_traversed` | u64 | For MATCH queries, an approximate (best-effort, lower-bound) count of edges followed during traversal; 0 for non-MATCH queries |
 | `traversal_counters_approximate` | bool | `true` when `nodes_visited` / `edges_traversed` are strategy-dependent approximations (a lower bound), not exact measured counts; `false` for non-graph queries where both counters are 0. |
-| `executed_filter_strategy` | string \| absent | The filter strategy the executor **actually ran**, recorded at the dispatch site itself (`"pre-filtering (high selectivity)"`, `"pre-filtering (exact, brute-force scan)"`, or `"post-filtering (low selectivity)"`). Present for single SELECTs that went through the filtered vector-search dispatch — under the CBO `Parallel` strategy it describes the vector leg. **Omitted** for MATCH, compound queries, and arms where the pre/post-filter notion does not apply. Unlike the plan's `filter_strategy` (an estimate), this is ground truth: comparing the two surfaces plan/execution divergence. |
+| `executed_filter_strategy` | string \| absent | The filter strategy the executor **actually ran**, recorded at the dispatch site itself (`"pre-filtering (high selectivity)"`, `"pre-filtering (exact, brute-force scan)"`, or `"post-filtering (low selectivity)"`). Present for single SELECTs that went through the filtered vector-search dispatch. **Omitted** for MATCH, compound queries, and arms where the pre/post-filter notion does not apply. Unlike the plan's `filter_strategy` (an estimate), this is ground truth: comparing the two surfaces plan/execution divergence. |
 
 > **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
 > lower bound** on the graph traversal across all MATCH strategies — not exact
@@ -2170,8 +2172,7 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 > edges/nodes reached; for the similarity-anchored **VectorFirst** strategy (a
 > `similarity()` predicate on the start node) they are the candidate nodes
 > evaluated plus the per-candidate existence-BFS edges/nodes — each BFS uses
-> `limit(1)` and so undercounts the true frontier; the **Parallel** strategy sums
-> both legs (a node touched by both is counted twice).
+> `limit(1)` and so undercounts the true frontier.
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 
