@@ -541,6 +541,9 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             }
             reject_oversized_metadata(Some(&meta))?;
             let hub_id = self.entity_hub(&entity, entity_ids)?;
+            // `update_metadata` is a read-modify-write merge: two concurrent
+            // enrichments of one entity would lose each other's attributes.
+            let _fact = self.fact_locks.for_fact(hub_id);
             self.store.update_metadata(hub_id, &meta)?;
         }
         Ok(())

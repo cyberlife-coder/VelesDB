@@ -138,6 +138,32 @@ fn feedback_on_unknown_id_errors() {
     assert!(svc.feedback(999, true).is_err(), "unknown id must error");
 }
 
+/// A scaffolding id is discoverable (`list` with `include_internal`) yet
+/// never returned by recall: reinforcing one can never be a real outcome,
+/// and its writers hold no stripe — so `feedback` refuses it with a typed
+/// error and stamps no `_veles_rl_*` onto the hub.
+#[test]
+fn feedback_on_internal_scaffolding_is_refused_and_stamps_nothing() {
+    use crate::error::MemoryError;
+    use crate::storage::FactStore;
+
+    let (_dir, svc) = service();
+    let hub = svc.remember_hub("an entity").expect("hub");
+    let err = svc
+        .feedback(hub, true)
+        .expect_err("hub must refuse feedback");
+    assert!(
+        matches!(err, MemoryError::InternalScaffolding(id) if id == hub),
+        "expected the scaffolding refusal, got {err:?}"
+    );
+    let payload = svc.store.get_metadata(hub).unwrap().unwrap();
+    assert!(
+        !payload.contains_key(super::RL_CONFIDENCE_KEY)
+            && !payload.contains_key(super::RL_SUCCESS_KEY),
+        "a refused feedback must stamp no confidence onto the hub"
+    );
+}
+
 #[test]
 fn blend_never_inverts_ranking_even_on_negative_similarity() {
     use super::blended_score;

@@ -74,6 +74,13 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             .store
             .get_metadata(id)?
             .ok_or(MemoryError::UnknownMemory(id))?;
+        // Scaffolding ids are enumerable (`list` with `include_internal`)
+        // but never returned by recall, so one can never have earned an
+        // outcome; and the scaffolding writers take no stripe — a confidence
+        // read-modify-write here could race their merges and lose both.
+        if crate::storage::is_internal_scaffolding(&payload) {
+            return Err(MemoryError::InternalScaffolding(id));
+        }
 
         let confidence = read_confidence(&payload);
         let mut success_count = read_count(&payload, RL_SUCCESS_KEY);

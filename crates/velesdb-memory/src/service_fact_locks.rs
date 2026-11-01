@@ -4,15 +4,24 @@
 //! `feedback` reads a fact's learned confidence and tallies, computes the
 //! update, and writes it back; a re-store (`remember` of the same content)
 //! reads the fact's reserved `_veles_*` state and carries it into the new
-//! payload. Either one interleaved with another on the same fact loses the
-//! first write. Holding the fact's lock across the read and the write makes
-//! each of them atomic per fact.
+//! payload; `wire_attributes` merges new keys into an entity hub's metadata
+//! the same read-modify-write way. Any two of those interleaved on the same
+//! fact lose the first write, so every service path that performs such a
+//! sequence — `write_fact`, `feedback`, `wire_attributes` — holds the fact's
+//! stripe across the read and the write, making it atomic per fact.
 //!
-//! This is the complete defense, not a partial one: the store is opened by a
-//! single process (`velesdb-core` holds an exclusive `flock` on
-//! `velesdb.lock` for the `Database`'s lifetime — see
-//! `tests/working_index_two_daemons_process.rs`), so every writer of a fact
-//! runs inside this service.
+//! What the stripe does NOT cover, by design: single-call writes
+//! (`store_fact`, `delete`, `store_with_*`) need no lock — one store call is
+//! one engine upsert — and internal scaffolding ids (entity hubs, context
+//! system facts) are unreachable by `feedback`, which refuses them, so no
+//! caller-reachable sequence can RMW a scaffolding fact against its own
+//! writers. The only scaffolding-side merge is `wire_attributes`'s, which is
+//! why it takes the stripe.
+//!
+//! The stripe is complete BECAUSE the store is opened by a single process
+//! (`velesdb-core` holds an exclusive `flock` on `velesdb.lock` for the
+//! `Database`'s lifetime — see `tests/working_index_two_daemons_process.rs`),
+//! so every writer of a fact runs inside this service.
 //!
 //! Locks are striped rather than one per id: a fixed table, so memory stays
 //! constant however many facts exist, and two facts share a stripe only by

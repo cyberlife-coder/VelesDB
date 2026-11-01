@@ -130,6 +130,16 @@ pub enum MemoryError {
     )]
     SelfRelation(u64),
 
+    /// [`crate::service::MemoryService::feedback`] named an internal
+    /// scaffolding fact — an entity hub or a context-compiler system fact,
+    /// marked by one of the `INTERNAL_MARKER_FIELDS` in [`crate::storage`].
+    /// Such ids are enumerable (`list` with `include_internal`) but never
+    /// returned by recall, so they cannot have earned an outcome.
+    #[error(
+        "memory {0} is internal scaffolding, not a recalled fact: feedback applies only to ids a recall returned"
+    )]
+    InternalScaffolding(u64),
+
     /// Caller metadata or a recall filter named a reserved key (`content` or a
     /// `_veles_`-prefixed system key), which callers may not set or filter on.
     /// [`crate::storage::AUTO_DATE_FIELD`] is the one documented exception:
@@ -439,6 +449,7 @@ impl MemoryError {
         match self {
             Self::EmptyFact
             | Self::ReservedKey(_)
+            | Self::InternalScaffolding(_)
             | Self::InvalidFilter(_)
             | Self::InvalidRelation(_)
             | Self::FactTooLarge { .. }
