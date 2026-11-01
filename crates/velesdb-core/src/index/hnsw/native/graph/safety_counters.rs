@@ -1,9 +1,11 @@
 //! HNSW safety and observability counters.
 //!
-//! Provides always-on atomic counters for lock-rank invariant violations and
-//! corruption signals.
-//! These counters are active in both debug and release builds to maintain
-//! high observability parity (per CONTEXT.md locked decision).
+//! Atomic counters for lock-rank invariant violations and corruption signals.
+//! The module is compiled only where a consumer exists — the parent `mod.rs`
+//! gates it on `cfg(any(test, debug_assertions))`: the sole writers are the
+//! `#[cfg(debug_assertions)]` lock-rank checks in `locking`, and the sole
+//! readers are the tests calling `snapshot()`. Release builds (F-25) make
+//! lock-rank tracking a complete no-op, so nothing there touches these.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -30,6 +32,11 @@ impl HnswSafetyCounters {
     }
 
     /// Increments the invariant violation counter.
+    ///
+    /// Sole caller: the `#[cfg(debug_assertions)]` lock-rank check in
+    /// `locking::record_lock_acquire` — gated the same so a `cfg(test)`
+    /// build without debug assertions has no dead code.
+    #[cfg(debug_assertions)]
     #[inline]
     pub fn record_invariant_violation(&self) {
         self.invariant_violation_total
@@ -37,6 +44,10 @@ impl HnswSafetyCounters {
     }
 
     /// Increments the corruption detection counter.
+    ///
+    /// Sole caller: the `#[cfg(debug_assertions)]` lock-rank check in
+    /// `locking::record_lock_release` — gated the same for the same reason.
+    #[cfg(debug_assertions)]
     #[inline]
     pub fn record_corruption(&self) {
         self.corruption_detected_total
@@ -63,5 +74,5 @@ pub(crate) struct CounterSnapshot {
     pub corruption_detected_total: u64,
 }
 
-/// Global safety counters instance — always active in all builds.
+/// Global safety counters instance — compiled wherever the module is.
 pub(crate) static HNSW_COUNTERS: HnswSafetyCounters = HnswSafetyCounters::new();

@@ -15,6 +15,11 @@ mod insert;
 pub(crate) mod locking;
 mod neighbors;
 mod reorder;
+// Counters exist only where a consumer does: the lock-rank checks in
+// `locking` (debug_assertions builds) and the test suites that read
+// `HNSW_COUNTERS::snapshot` (cfg(test)). In release non-test builds the
+// module is empty of callers and would be dead code.
+#[cfg(any(test, debug_assertions))]
 pub(crate) mod safety_counters;
 mod search;
 pub(crate) use search::ResumableSearch;
