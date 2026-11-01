@@ -39,6 +39,8 @@ mod ddl_lifecycle;
 mod default_limit;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
+#[path = "bdd/exact_numbers.rs"]
+mod exact_numbers;
 #[path = "bdd/explain_analyze.rs"]
 mod explain_analyze;
 #[path = "bdd/explain_configurable_threshold.rs"]

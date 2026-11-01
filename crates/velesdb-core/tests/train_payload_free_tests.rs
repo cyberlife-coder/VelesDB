@@ -45,22 +45,18 @@ fn payload_free_db(name: &str) -> (TempDir, Database) {
     (dir, db)
 }
 
-/// The two id views disagree, and only one of them is authoritative.
+/// Both id views list every point, payload or not.
 #[test]
-fn payload_free_points_are_invisible_to_the_payload_id_view() {
+fn payload_free_points_are_listed_by_every_id_view() {
     let (_dir, db) = payload_free_db("vecs");
     let coll = db.get_vector_collection("vecs").expect("test: exists");
 
     assert_eq!(
-        coll.all_ids().len(),
-        0,
-        "all_ids reads the payload store, which is empty here"
-    );
-    assert_eq!(
-        u64::try_from(coll.all_point_ids().len()).expect("test: id count fits in u64"),
+        u64::try_from(coll.all_ids().len()).expect("test: id count fits in u64"),
         POINTS,
-        "all_point_ids unions vector storage and sees every point"
+        "all_ids lists every point, not only those with a payload"
     );
+    assert_eq!(coll.all_ids(), coll.all_point_ids());
 }
 
 /// Training must succeed on a collection that carries no payloads.
