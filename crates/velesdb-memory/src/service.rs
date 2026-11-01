@@ -822,6 +822,18 @@ fn reject_self_links(fact_id: u64, links: &[Link]) -> Result<(), MemoryError> {
 /// overwritten) or no clock is available ([`clock::today_ymd`] returns `None`
 /// on `wasm32-unknown-unknown`). Returns an owned map either way, `None` only
 /// when there is nothing to store at all (no caller metadata AND no clock).
+fn stamp_with_today(metadata: Option<&Metadata>) -> Option<Metadata> {
+    if metadata.is_some_and(|meta| meta.contains_key(AUTO_DATE_FIELD)) {
+        return metadata.cloned();
+    }
+    let Some(today) = clock::today_ymd() else {
+        return metadata.cloned();
+    };
+    let mut stamped = metadata.cloned().unwrap_or_default();
+    stamped.insert(AUTO_DATE_FIELD.to_owned(), Value::from(today));
+    Some(stamped)
+}
+
 /// `metadata` with the service's own reserved `system` entries added.
 fn with_system_entries(metadata: Option<Metadata>, system: Option<&Metadata>) -> Option<Metadata> {
     let Some(system) = system else {
@@ -834,18 +846,6 @@ fn with_system_entries(metadata: Option<Metadata>, system: Option<&Metadata>) ->
             .map(|(key, value)| (key.clone(), value.clone())),
     );
     Some(merged)
-}
-
-fn stamp_with_today(metadata: Option<&Metadata>) -> Option<Metadata> {
-    if metadata.is_some_and(|meta| meta.contains_key(AUTO_DATE_FIELD)) {
-        return metadata.cloned();
-    }
-    let Some(today) = clock::today_ymd() else {
-        return metadata.cloned();
-    };
-    let mut stamped = metadata.cloned().unwrap_or_default();
-    stamped.insert(AUTO_DATE_FIELD.to_owned(), Value::from(today));
-    Some(stamped)
 }
 
 /// Maximum byte length for a relation label (prevents oversized graph edge labels

@@ -5,8 +5,8 @@
 use super::recall::recollection;
 use super::{Link, MemoryService, Metadata};
 use crate::anchor::{
-    anchors_entry, check_anchor_count, payload_freshness, AnchorProbe, AnchoredRecollection,
-    FileAnchor, Freshness,
+    anchors_entry, check_anchor_count, payload_freshness, AnchorError, AnchorProbe, AnchorSet,
+    AnchoredRecollection, Freshness,
 };
 use crate::embedder::Embedder;
 use crate::error::MemoryError;
@@ -22,8 +22,8 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     /// earlier remember of the same fact recorded; non-empty `anchors`
     /// replace them, which is how a re-verified lesson is re-anchored.
     ///
-    /// Build each [`FileAnchor`] with [`crate::anchor::AnchorRoot::anchor`],
-    /// so its digest is read by the server from the file itself.
+    /// Build `anchors` with [`crate::anchor::AnchorRoot::anchors`],
+    /// so each digest is read by the server from the file itself.
     ///
     /// # Errors
     /// [`MemoryError::Anchor`] for more than
@@ -35,13 +35,19 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         links: &[Link],
         metadata: Option<&Metadata>,
         ttl_seconds: Option<u64>,
-        anchors: &[FileAnchor],
+        anchors: Option<&AnchorSet>,
     ) -> Result<u64, MemoryError>
     where
         S: GraphStore,
     {
-        check_anchor_count(anchors.len())?;
-        let system = (!anchors.is_empty()).then(|| anchors_entry(anchors));
+        let files = anchors.map_or(&[][..], |set| set.files.as_slice());
+        check_anchor_count(files.len())?;
+        if !files.is_empty() && anchors.is_some_and(|set| set.root.is_empty()) {
+            return Err(MemoryError::Anchor(AnchorError::MissingRoot));
+        }
+        let system = anchors
+            .filter(|set| !set.files.is_empty())
+            .map(anchors_entry);
         let _generation = self.enter_generation();
         self.remember_inner(fact, links, metadata, ttl_seconds, true, system.as_ref())
     }
@@ -68,9 +74,15 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     where
         S: RecallStore,
     {
-        let _generation = self.enter_generation();
-        let Some((hits, payloads)) = self.recall_candidates(query, k, filter)? else {
-            return Ok(Vec::new());
+        // Freshness is judged AFTER the generation gate is released: probing
+        // a file is I/O, and I/O under the gate parks every generation
+        // writer — and, behind a queued writer, every reader of the daemon.
+        let (hits, payloads) = {
+            let _generation = self.enter_generation();
+            let Some(candidates) = self.recall_candidates(query, k, filter)? else {
+                return Ok(Vec::new());
+            };
+            candidates
         };
         let verdicts: Vec<Freshness> = payloads
             .iter()

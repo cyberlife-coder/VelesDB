@@ -295,14 +295,19 @@ the paths are in `changed`, and the fact's ranking key is halved) or
 Staleness is recomputed on every such recall and never stored: it changes the
 order, not the learned confidence, and restoring the file makes the lesson
 fresh again. Remembering the fact again with `anchors` re-anchors it; without
-`anchors`, it keeps the ones it had.
+`anchors`, it keeps the ones it had. Anchors record the canonical checkout
+root they were read under, so a `recall` naming a *different* checkout
+reports `unverified`, never `stale`, and does not demote the lesson. An
+`anchor_root` sent without `anchors` is validated, not silently ignored.
 
 The server computes every digest itself — the agent never supplies one — and
 reads only below an `anchor_root` that lies inside `VELESDB_MEMORY_INGEST_ROOTS`:
 paths are refused unless they are plain relative names (no root, `.` or `..`),
 a symlink resolving out of the checkout is refused rather than followed, only
-regular files of at most 1 MiB are read, and one request reads at most 256
-files and 16 MiB. Without ingest roots, anchoring is refused. Plain `recall`,
+regular files of at most 1 MiB are read — the type check runs on the opened
+handle, so a FIFO swapped under an anchored path reports `unverified` instead
+of blocking the recall — and one request reads at most 256 files and 16 MiB.
+Without ingest roots, anchoring is refused. Plain `recall`,
 `recall_where` and `recall_fused` do not read anchors. In Rust, the same is
 `MemoryService::remember_anchored` and `MemoryService::recall_anchored` with an
 `anchor::AnchorRoot`; the language bindings do not expose it yet.

@@ -24,7 +24,7 @@ struct GateWitness<'a> {
 }
 
 impl AnchorProbe for GateWitness<'_> {
-    fn root(&self) -> &str {
+    fn root(&self) -> &'static str {
         "/work/repo"
     }
 

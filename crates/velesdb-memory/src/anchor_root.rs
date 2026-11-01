@@ -16,7 +16,7 @@
 //! 4. the joined path, canonicalized again, still lies below the canonical
 //!    checkout root: a symlink inside the checkout that points out of it is
 //!    refused, not followed;
-//! 5. the target is a regular file of at most
+//! 5. the OPENED HANDLE is a regular file of at most
 //!    [`crate::limits::MAX_ANCHOR_FILE_BYTES`], and the read itself is
 //!    bounded to that size plus one byte, so a file growing between the
 //!    `stat` and the read is refused rather than read whole.
@@ -32,9 +32,14 @@
 //! files and [`crate::limits::MAX_ANCHOR_BYTES_PER_RECALL`] bytes in total;
 //! past either budget the remaining anchors are unverifiable.
 //!
-//! TOCTOU between the check and the read is an accepted non-goal, as for the
-//! ingest pipeline: a local single-user server, and a verdict about the bytes
-//! actually read.
+//! The open itself cannot block: on unix it carries `O_NONBLOCK` and
+//! `O_NOFOLLOW`, so a FIFO swapped in under an anchor reports unverifiable
+//! instead of parking the recall (and, behind a queued writer, the daemon)
+//! on a writer that never comes, and a final symlink swapped in after
+//! canonicalization is refused rather than followed. The remaining TOCTOU —
+//! a regular file swapped for another between canonicalization and open — is
+//! an accepted non-goal, as for the ingest pipeline: a local single-user
+//! server, and a verdict about the bytes actually read.
 
 use std::collections::HashMap;
 use std::fs;
@@ -42,8 +47,8 @@ use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use super::{
-    check_anchor_count, AnchorError, AnchorObservation, AnchorProbe, ContentDigest, FileAnchor,
-    RepoPath,
+    check_anchor_count, AnchorError, AnchorObservation, AnchorProbe, AnchorSet, ContentDigest,
+    FileAnchor, RepoPath,
 };
 use crate::limits::{
     MAX_ANCHOR_BYTES_PER_RECALL, MAX_ANCHOR_FILES_PER_RECALL, MAX_ANCHOR_FILE_BYTES,
@@ -104,6 +109,13 @@ impl AnchorRoot {
         })
     }
 
+    /// The canonical checkout root this probe reads below, in the same form
+    /// [`AnchorSet::root`] records it.
+    #[must_use]
+    pub fn root(&self) -> &str {
+        self.root.to_str().unwrap_or("")
+    }
+
     /// Anchor a lesson to `path` as it is now: validate the path and read
     /// the file's current digest.
     ///
@@ -116,10 +128,30 @@ impl AnchorRoot {
         Ok(FileAnchor { path, digest })
     }
 
+    /// Anchor a lesson to `paths` as they are now, recording this probe's
+    /// canonical root with the files. The count is checked before any file
+    /// is read.
+    ///
+    /// # Errors
+    /// [`AnchorError::TooMany`], and the errors of [`Self::anchor`].
+    pub fn anchors(&mut self, paths: &[&str]) -> Result<AnchorSet, AnchorError> {
+        check_anchor_count(paths.len())?;
+        let files = paths
+            .iter()
+            .map(|path| self.anchor(path))
+            .collect::<Result<_, _>>()?;
+        Ok(AnchorSet {
+            root: self.root().to_owned(),
+            files,
+        })
+    }
+
     /// Resolve an adapter's anchor request — a checkout root and the
-    /// repository-relative paths below it — into anchors, reading each file
-    /// once. No path means no anchor, whatever the root. The count is checked
-    /// before any file is read.
+    /// repository-relative paths below it — into an [`AnchorSet`] recording
+    /// the canonical root and each file's digest. `None` means a plain
+    /// remember: no paths at all. A root sent WITHOUT paths is still
+    /// validated, so a mistyped or refused root is reported rather than
+    /// silently ignored.
     ///
     /// # Errors
     /// [`AnchorError::MissingRoot`] for paths without a root,
@@ -129,14 +161,24 @@ impl AnchorRoot {
         requested_root: Option<&str>,
         paths: &[String],
         allowlist: &[PathBuf],
-    ) -> Result<Vec<FileAnchor>, AnchorError> {
+    ) -> Result<Option<AnchorSet>, AnchorError> {
         if paths.is_empty() {
-            return Ok(Vec::new());
+            return match requested_root {
+                Some(root) => Self::open(root, allowlist).map(|_| None),
+                None => Ok(None),
+            };
         }
         check_anchor_count(paths.len())?;
         let requested_root = requested_root.ok_or(AnchorError::MissingRoot)?;
         let mut root = Self::open(requested_root, allowlist)?;
-        paths.iter().map(|path| root.anchor(path)).collect()
+        let files = paths
+            .iter()
+            .map(|path| root.anchor(path))
+            .collect::<Result<_, _>>()?;
+        Ok(Some(AnchorSet {
+            root: root.root().to_owned(),
+            files,
+        }))
     }
 
     /// The current digest of `path`, for anchoring a lesson to it now.
@@ -194,6 +236,10 @@ impl AnchorRoot {
 }
 
 impl AnchorProbe for AnchorRoot {
+    fn root(&self) -> &str {
+        Self::root(self)
+    }
+
     fn observe(&mut self, anchor: &FileAnchor) -> AnchorObservation {
         match self.look(&anchor.path) {
             Look::Digest(digest) if digest == anchor.digest => AnchorObservation::Unchanged,
@@ -205,8 +251,14 @@ impl AnchorProbe for AnchorRoot {
 }
 
 /// Read a regular file of at most `cap` bytes, refusing anything else.
+///
+/// Type and size are checked on the OPENED HANDLE, never on the path: a path
+/// check followed by a path open would leave room for a swap in between, and
+/// a FIFO swapped in that gap opens for reading and then waits for a writer
+/// forever — hanging the recall and, behind a queued writer, the daemon.
 fn read_bounded(path: &Path, cap: usize) -> Result<Vec<u8>, &'static str> {
-    let metadata = fs::metadata(path).map_err(|_| "it cannot be inspected")?;
+    let file = open_for_anchor(path)?;
+    let metadata = file.metadata().map_err(|_| "it cannot be inspected")?;
     if !metadata.is_file() {
         return Err("it is not a regular file");
     }
@@ -214,7 +266,6 @@ fn read_bounded(path: &Path, cap: usize) -> Result<Vec<u8>, &'static str> {
     if !matches!(usize::try_from(metadata.len()), Ok(len) if len <= cap) {
         return Err(too_large);
     }
-    let file = fs::File::open(path).map_err(|_| "it cannot be opened")?;
     let limit = u64::try_from(cap).map_or(u64::MAX, |cap| cap.saturating_add(1));
     let mut bytes = Vec::new();
     file.take(limit)
@@ -224,6 +275,27 @@ fn read_bounded(path: &Path, cap: usize) -> Result<Vec<u8>, &'static str> {
         return Err(too_large);
     }
     Ok(bytes)
+}
+
+/// The open behind [`read_bounded`]. `O_NONBLOCK` keeps a FIFO from blocking
+/// the probe (it has no effect on a regular file); `O_NOFOLLOW` refuses a
+/// final-component symlink swapped in since the canonicalization instead of
+/// reading it through.
+#[cfg(unix)]
+fn open_for_anchor(path: &Path) -> Result<fs::File, &'static str> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| "it cannot be opened")
+}
+
+/// The non-unix open behind [`read_bounded`]: `O_NONBLOCK` does not exist
+/// there, so this is a plain open; the handle check still applies.
+#[cfg(not(unix))]
+fn open_for_anchor(path: &Path) -> Result<fs::File, &'static str> {
+    fs::File::open(path).map_err(|_| "it cannot be opened")
 }
 
 #[cfg(test)]

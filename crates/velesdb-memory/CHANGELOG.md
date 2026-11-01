@@ -50,9 +50,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concurrent calls are applied one after another and each is counted once.
   Before, two calls could read the same tallies and the second write erased
   the first.
+- **Anchored recall can no longer park the daemon on a planted FIFO.** The
+  probe opens anchored files with `O_NONBLOCK` and `O_NOFOLLOW` on unix and
+  checks type and size on the opened handle, so a FIFO swapped under an
+  anchored path is `unverifiable` instead of blocking `open()` forever; and
+  `recall_anchored` releases the generation gate before probing, so file I/O
+  never happens while a generation writer may be queued.
 
 ### Changed
 
+- **BREAKING: anchors now record their checkout root, and the anchor API moves
+  to `AnchorSet`.** `remember_anchored` takes `Option<&AnchorSet>` instead of
+  `&[FileAnchor]`, `AnchorRoot::resolve_request` returns
+  `Option<AnchorSet>` (and validates an `anchor_root` sent without `anchors`),
+  `assess_freshness` takes `&AnchorSet`, and `AnchorProbe` gains a required
+  `root()` so a probe names the checkout it reads. The stored `_veles_anchors`
+  entry is now `{root, files}`; a fact anchored before this change carries a
+  rootless entry that reads as `unverified`, never `stale`, and a `recall`
+  probing a *different* checkout reports `unverified` instead of wrongly
+  demoting the lesson. Migration: build anchors through `AnchorRoot::anchors`
+  or `AnchorRoot::resolve_request` and pass the `AnchorSet` on; implement
+  `AnchorProbe::root` on custom probes.
 - **BREAKING: the `migrate-embeddings` parsers fail with `MigrateUsageError`, not
   `String`.** `migration::parse_migrate_args`, `require_destination` and
   `default_scratch_parent` return `MigrateUsageError` (`Flag(FlagError)`,

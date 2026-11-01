@@ -27,7 +27,7 @@ fn set(files: Vec<FileAnchor>) -> AnchorSet {
 struct TableProbe(Vec<(&'static str, AnchorObservation)>);
 
 impl AnchorProbe for TableProbe {
-    fn root(&self) -> &str {
+    fn root(&self) -> &'static str {
         ROOT
     }
 
@@ -167,7 +167,7 @@ fn an_unverifiable_file_is_never_evidence_of_staleness() {
 fn anchors_from_another_checkout_are_unverified_never_stale() {
     struct Elsewhere(usize);
     impl AnchorProbe for Elsewhere {
-        fn root(&self) -> &str {
+        fn root(&self) -> &'static str {
             "/work/other-clone"
         }
         fn observe(&mut self, _anchor: &FileAnchor) -> AnchorObservation {

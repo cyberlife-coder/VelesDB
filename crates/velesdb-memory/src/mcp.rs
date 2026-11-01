@@ -334,7 +334,7 @@ impl McpServer {
             let anchors =
                 AnchorRoot::resolve_request(anchor_root.as_deref(), &anchors, &allowlist)?;
             service.run(|current| {
-                current.remember_anchored(&fact, &links, metadata.as_ref(), ttl, &anchors)
+                current.remember_anchored(&fact, &links, metadata.as_ref(), ttl, anchors.as_ref())
             })
         })
         .await
