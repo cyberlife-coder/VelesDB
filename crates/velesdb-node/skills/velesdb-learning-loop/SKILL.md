@@ -122,8 +122,14 @@ it. If not, it is noise.
 Before proposing an approach or writing code for a feature/module/area, run:
 
 ```
-recall_fused("<area> design decisions and known pitfalls", filter={"project":"velesdb"})
+recall("<area> design decisions and known pitfalls", filter={"project":"velesdb"}, anchor_root="<absolute path of this checkout>")
 ```
+
+Only `recall` judges anchors: `recall_where` and `recall_fused` never report
+`freshness`, so a recall meant to surface stale lessons must be `recall` with
+`anchor_root`. Omit `anchor_root` when the checkout does not matter — an
+anchored lesson judged under a different checkout is `unverified`, never
+`stale`.
 
 Read what comes back for:
 
@@ -259,7 +265,7 @@ Before marking a change "tested" or a PR "ready", recall the project's own
 test standard rather than trusting a green suite or a coverage number:
 
 ```
-recall_fused("test standard adversarial axes", filter={"project":"velesdb","topic":"test-standard"})
+recall("test standard adversarial axes", filter={"project":"velesdb","topic":"test-standard"}, anchor_root="<absolute path of this checkout>")
 ```
 
 Confirm, for the change at hand, that the four axes were exercised — not
