@@ -32,14 +32,19 @@
 //! files and [`crate::limits::MAX_ANCHOR_BYTES_PER_RECALL`] bytes in total;
 //! past either budget the remaining anchors are unverifiable.
 //!
-//! The open itself cannot block: on unix it carries `O_NONBLOCK` and
+//! The open itself is hardened against swaps between canonicalization and
+//! open, asymmetrically by platform. On unix it carries `O_NONBLOCK` and
 //! `O_NOFOLLOW`, so a FIFO swapped in under an anchor reports unverifiable
 //! instead of parking the recall (and, behind a queued writer, the daemon)
-//! on a writer that never comes, and a final symlink swapped in after
-//! canonicalization is refused rather than followed. The remaining TOCTOU —
-//! a regular file swapped for another between canonicalization and open — is
-//! an accepted non-goal, as for the ingest pipeline: a local single-user
-//! server, and a verdict about the bytes actually read.
+//! on a writer that never comes, and a final-component symlink swapped in
+//! is refused rather than followed. `O_NOFOLLOW` guards the FINAL component
+//! only: an intermediate directory component replaced by a symlink in the
+//! gap still redirects the open, as does a regular file swapped for
+//! another — and on non-unix builds, where [`open_for_anchor`] is a plain
+//! `File::open`, the final-component swap is followed too and a swapped-in
+//! FIFO can block. Those residual windows are accepted, as for the ingest
+//! pipeline: a local single-user server, and a verdict about the bytes
+//! actually read.
 
 use std::collections::HashMap;
 use std::fs;
@@ -68,7 +73,7 @@ enum Look {
 /// A checkout root inside the allowlist, with this request's read budget.
 #[derive(Debug)]
 pub struct AnchorRoot {
-    root: PathBuf,
+    root: String,
     bytes_left: usize,
     files_left: usize,
     seen: HashMap<RepoPath, Look>,
@@ -79,7 +84,9 @@ impl AnchorRoot {
     /// already-canonical `allowlist` roots.
     ///
     /// # Errors
-    /// [`AnchorError::Disabled`] when `allowlist` is empty, and
+    /// [`AnchorError::Disabled`] when `allowlist` is empty,
+    /// [`AnchorError::NonUtf8Root`] when the canonical root is not UTF-8 —
+    /// it could not be recorded with the anchors — and
     /// [`AnchorError::RootRefused`] for a relative, unresolvable,
     /// non-directory or out-of-allowlist root.
     pub fn open(requested: &str, allowlist: &[PathBuf]) -> Result<Self, AnchorError> {
@@ -101,6 +108,16 @@ impl AnchorRoot {
         if !allowlist.iter().any(|allowed| root.starts_with(allowed)) {
             return Err(refuse("it is outside the configured ingest roots"));
         }
+        // The canonical root is recorded with the anchors and later compared
+        // to the probe's name for the checkout — as a string. A root that
+        // cannot be a string cannot be recorded, so it is its own error,
+        // never an empty one silently unverifying every lesson anchored here.
+        let root = root
+            .into_os_string()
+            .into_string()
+            .map_err(|_| AnchorError::NonUtf8Root {
+                root: requested.to_owned(),
+            })?;
         Ok(Self {
             root,
             bytes_left: MAX_ANCHOR_BYTES_PER_RECALL,
@@ -110,10 +127,12 @@ impl AnchorRoot {
     }
 
     /// The canonical checkout root this probe reads below, in the same form
-    /// [`AnchorSet::root`] records it.
+    /// [`AnchorSet::root`] records it. Never empty: [`Self::open`] admits
+    /// only a canonical, UTF-8 root, and a root the probe cannot name cannot
+    /// record itself.
     #[must_use]
     pub fn root(&self) -> &str {
-        self.root.to_str().unwrap_or("")
+        &self.root
     }
 
     /// Anchor a lesson to `path` as it is now: validate the path and read
@@ -215,12 +234,12 @@ impl AnchorRoot {
         if self.files_left == 0 {
             return Look::Refused("the request's anchor file budget is spent");
         }
-        let canonical = match fs::canonicalize(self.root.join(path.as_str())) {
+        let canonical = match fs::canonicalize(Path::new(&self.root).join(path.as_str())) {
             Ok(canonical) => canonical,
             Err(err) if err.kind() == ErrorKind::NotFound => return Look::Missing,
             Err(_) => return Look::Refused("it cannot be resolved"),
         };
-        if !canonical.starts_with(&self.root) {
+        if !canonical.starts_with(Path::new(&self.root)) {
             return Look::Refused("it resolves outside the anchor root");
         }
         let cap = MAX_ANCHOR_FILE_BYTES.min(self.bytes_left);
@@ -291,8 +310,12 @@ fn open_for_anchor(path: &Path) -> Result<fs::File, &'static str> {
         .map_err(|_| "it cannot be opened")
 }
 
-/// The non-unix open behind [`read_bounded`]: `O_NONBLOCK` does not exist
-/// there, so this is a plain open; the handle check still applies.
+/// The non-unix open behind [`read_bounded`]. Neither `O_NOFOLLOW` nor
+/// `O_NONBLOCK` exists portably here, so the residual windows the module doc
+/// names stay OPEN on this build: a final-component symlink swapped in after
+/// canonicalization is followed, and a swapped-in FIFO can block the open on
+/// a writer that may never come. The handle-level type/size check still
+/// applies, so what did open is verified before a byte is trusted.
 #[cfg(not(unix))]
 fn open_for_anchor(path: &Path) -> Result<fs::File, &'static str> {
     fs::File::open(path).map_err(|_| "it cannot be opened")

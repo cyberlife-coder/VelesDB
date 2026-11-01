@@ -35,6 +35,48 @@ fn no_allowlist_disables_anchoring() {
     );
 }
 
+/// The disabled message may name `VELESDB_MEMORY_INGEST_ROOTS` only on a
+/// build where configuring it is possible — the same gate
+/// `anchor_allowlist`'s producer carries.
+#[test]
+fn disabled_names_a_remedy_only_where_one_exists() {
+    let message = AnchorError::Disabled.to_string();
+    if cfg!(all(feature = "context", not(target_arch = "wasm32"))) {
+        assert!(message.contains("VELESDB_MEMORY_INGEST_ROOTS"), "{message}");
+    } else {
+        assert!(
+            !message.contains("VELESDB_MEMORY_INGEST_ROOTS"),
+            "a build that can configure no ingest roots must not name the variable: {message}"
+        );
+    }
+}
+
+/// A requested root that canonicalizes to a non-UTF-8 path is its own
+/// error — the anchors could not record it, so it must not silently become
+/// an empty root that unverifies every lesson anchored below it.
+/// Linux-only: APFS (and NTFS) refuse non-UTF-8 names at create time, so the
+/// defensive guard the check exercises is only reachable on filesystems that
+/// permit raw-byte paths.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_non_utf8_root_is_refused_as_such_not_recorded_empty() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let (dir, allowlist, _repo) = checkout();
+    fs::create_dir(dir.path().join(OsStr::from_bytes(b"odd-\xff"))).unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join(OsStr::from_bytes(b"odd-\xff")),
+        dir.path().join("repo-alias"),
+    )
+    .unwrap();
+    let requested = dir.path().join("repo-alias").to_str().unwrap().to_owned();
+    match AnchorRoot::open(&requested, &allowlist) {
+        Err(AnchorError::NonUtf8Root { root }) => assert_eq!(root, requested),
+        other => panic!("expected a non-UTF-8 refusal, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_root_outside_the_allowlist_is_refused_citing_the_requested_root() {
     let (_dir, allowlist, _repo) = checkout();

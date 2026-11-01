@@ -95,11 +95,37 @@ pub enum AnchorError {
     /// Anchor paths were given without the checkout root they are relative to.
     #[error("anchor paths need the checkout root they are relative to (`anchor_root`)")]
     MissingRoot,
-    /// No allowlisted root is configured, so no file may be read.
+    /// No allowlisted root is configured, so no file may be read. The remedy
+    /// named is the one this build can honor: the allowlist's only producer,
+    /// `McpServer`'s ingest roots, is gated on
+    /// `all(feature = "context", not(target_arch = "wasm32"))` — under that
+    /// gate the daemon reads `VELESDB_MEMORY_INGEST_ROOTS`; off it no
+    /// configuration exists and naming the variable prescribes a knob that
+    /// does nothing.
+    #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
     #[error(
         "file anchoring is disabled: set VELESDB_MEMORY_INGEST_ROOTS to allow the server to read anchored files"
     )]
     Disabled,
+    /// The arm for a build that can hold no ingest-root allowlist at all.
+    #[cfg(not(all(feature = "context", not(target_arch = "wasm32"))))]
+    #[error(
+        "file anchoring is disabled: this server can configure no ingest roots, so it may read no anchored file"
+    )]
+    Disabled,
+
+    /// The canonical checkout root is not UTF-8, so it cannot be recorded
+    /// with the anchors honestly — a root that cannot be recorded could
+    /// later be judged against another probe's name for it, silently
+    /// unverifying the lesson. Cites the root as requested, never the
+    /// resolved location.
+    #[error(
+        "anchor root '{root}' canonicalizes to a path that is not UTF-8; the anchors cannot record it"
+    )]
+    NonUtf8Root {
+        /// The root as the caller wrote it.
+        root: String,
+    },
     /// The checkout root is relative, unresolvable, not a directory, or
     /// outside every allowlisted root. Cites the root as requested, never
     /// the resolved location.
