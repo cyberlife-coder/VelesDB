@@ -138,6 +138,32 @@ fn feedback_on_unknown_id_errors() {
     assert!(svc.feedback(999, true).is_err(), "unknown id must error");
 }
 
+/// A scaffolding id is discoverable (`list` with `include_internal`) yet
+/// never returned by recall: reinforcing one can never be a real outcome,
+/// and its writers hold no stripe — so `feedback` refuses it with a typed
+/// error and stamps no `_veles_rl_*` onto the hub.
+#[test]
+fn feedback_on_internal_scaffolding_is_refused_and_stamps_nothing() {
+    use crate::error::MemoryError;
+    use crate::storage::FactStore;
+
+    let (_dir, svc) = service();
+    let hub = svc.remember_hub("an entity").expect("hub");
+    let err = svc
+        .feedback(hub, true)
+        .expect_err("hub must refuse feedback");
+    assert!(
+        matches!(err, MemoryError::InternalScaffolding(id) if id == hub),
+        "expected the scaffolding refusal, got {err:?}"
+    );
+    let payload = svc.store.get_metadata(hub).unwrap().unwrap();
+    assert!(
+        !payload.contains_key(super::RL_CONFIDENCE_KEY)
+            && !payload.contains_key(super::RL_SUCCESS_KEY),
+        "a refused feedback must stamp no confidence onto the hub"
+    );
+}
+
 #[test]
 fn blend_never_inverts_ranking_even_on_negative_similarity() {
     use super::blended_score;
@@ -159,5 +185,46 @@ fn blend_never_inverts_ranking_even_on_negative_similarity() {
     assert!(
         blended_score(-0.12, 1.0) > blended_score(-0.10, 0.5),
         "reinforcement must overcome a small similarity gap even when negative"
+    );
+}
+
+/// Agents racing on one fact must not lose a single increment: every
+/// positive outcome lands in the success tally. The read-modify-write in
+/// `feedback` spans `get_metadata` and `update_metadata`; without per-fact
+/// serialization two calls read the same tally and the second write erases
+/// the first. The barrier releases every thread at once, so the race is the
+/// common case rather than an accident of scheduling.
+#[test]
+fn concurrent_feedback_on_one_fact_loses_no_increment() {
+    use std::sync::Barrier;
+
+    use crate::storage::FactStore;
+
+    const AGENTS: usize = 8;
+    const CALLS_PER_AGENT: usize = 25;
+    const EXPECTED_TALLY: u64 = 200;
+
+    let (_dir, svc) = service();
+    let id = svc.remember("contended fact", &[], None).unwrap();
+    let start = Barrier::new(AGENTS);
+    std::thread::scope(|scope| {
+        for _ in 0..AGENTS {
+            scope.spawn(|| {
+                start.wait();
+                for _ in 0..CALLS_PER_AGENT {
+                    svc.feedback(id, true).unwrap();
+                }
+            });
+        }
+    });
+
+    let payload = svc.store.get_metadata(id).unwrap().unwrap();
+    let tally = payload
+        .get(super::RL_SUCCESS_KEY)
+        .and_then(serde_json::Value::as_u64);
+    assert_eq!(
+        tally,
+        Some(EXPECTED_TALLY),
+        "every concurrent positive feedback must be counted exactly once"
     );
 }

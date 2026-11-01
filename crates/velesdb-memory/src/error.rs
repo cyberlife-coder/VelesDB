@@ -130,6 +130,16 @@ pub enum MemoryError {
     )]
     SelfRelation(u64),
 
+    /// [`crate::service::MemoryService::feedback`] named an internal
+    /// scaffolding fact — an entity hub or a context-compiler system fact,
+    /// marked by one of the `INTERNAL_MARKER_FIELDS` in [`crate::storage`].
+    /// Such ids are enumerable (`list` with `include_internal`) but never
+    /// returned by recall, so they cannot have earned an outcome.
+    #[error(
+        "memory {0} is internal scaffolding, not a recalled fact: feedback applies only to ids a recall returned"
+    )]
+    InternalScaffolding(u64),
+
     /// Caller metadata or a recall filter named a reserved key (`content` or a
     /// `_veles_`-prefixed system key), which callers may not set or filter on.
     /// [`crate::storage::AUTO_DATE_FIELD`] is the one documented exception:
@@ -402,6 +412,13 @@ pub enum MemoryError {
     #[error("cannot ingest path: {0}")]
     IngestPath(String),
 
+    /// A file anchor was refused: a path that is not repository-relative,
+    /// too many anchors, anchoring disabled, a checkout root outside the
+    /// allowlist, or a file that cannot be read when the lesson is anchored.
+    #[cfg(feature = "persistence")]
+    #[error(transparent)]
+    Anchor(#[from] crate::anchor::AnchorError),
+
     /// A `remember` link failed after the fact was stored AND the
     /// compensating rollback delete also failed — unlike every other error
     /// from `remember`, the fact **remains stored**. Both errors are
@@ -432,6 +449,7 @@ impl MemoryError {
         match self {
             Self::EmptyFact
             | Self::ReservedKey(_)
+            | Self::InternalScaffolding(_)
             | Self::InvalidFilter(_)
             | Self::InvalidRelation(_)
             | Self::FactTooLarge { .. }
@@ -462,6 +480,8 @@ impl MemoryError {
             Self::UnknownMemory(_) => ErrorCategory::NotFound,
             #[cfg(feature = "persistence")]
             Self::Provenance(cause) => cause.category(),
+            #[cfg(feature = "persistence")]
+            Self::Anchor(_) => ErrorCategory::InvalidInput,
             #[cfg(feature = "persistence")]
             Self::Memory(_) | Self::NotARegularFile { .. } => ErrorCategory::Internal,
             #[cfg(feature = "persistence")]
