@@ -26,7 +26,7 @@ The same cycle needs no pool: a thread holding `inner` that joins a
 NOT break it, because the join inside still parks the worker the holder
 waits on. `std::thread` fan-out under `index/hnsw/` is therefore refused
 outright, `.install(` or not, until its `path::fn` lands in ALLOWED with
-the reason. The crate-level twin of this scan — one `no collection lock`
+the reason. The crate-level twin of this scan — one `no collection lock:`
 marker per site — is `lock_audit_tests::no_unjustified_thread_fanout` in
 `crates/velesdb-core/src/lock_audit_tests.rs`.
 

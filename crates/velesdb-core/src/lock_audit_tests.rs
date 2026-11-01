@@ -328,8 +328,11 @@ fn pool_violations(source: &str) -> Vec<String> {
 
 /// The marker a `std::thread` fan-out site must carry — in a `//` comment on
 /// its line or in the comment block directly above it — saying why the
-/// thread (or the wait on it) can take no collection lock.
-const NO_LOCK_MARKER: &str = "no collection lock";
+/// thread (or the wait on it) can take no collection lock. The colon is the
+/// marker: ordinary prose like "takes no collection lock." must not excuse
+/// a site, and neither may a `//` inside a same-line string literal that the
+/// raw scan cannot tell from a comment — both read as unmarked.
+const NO_LOCK_MARKER: &str = "no collection lock:";
 
 /// The ways a module can wait on OS-thread fan-out — the deadlock of
 /// `no_module_but_pools_names_rayon` one level down, needing no pool: a
@@ -541,7 +544,7 @@ fn the_fanout_scan_allows_marked_and_non_wait_forms() {
         std::thread::spawn(move || { probe_update(); });
         // no collection lock: `work` only reads the config file it was given.
         let h = std::thread::spawn(work); h.join()
-        std::thread::spawn(work); // no collection lock — a marker on the call's own line.
+        std::thread::spawn(work); // no collection lock: a marker on the call's own line.
         fn f(v: &[&str]) -> String { v.join(", ") }
         fn g(h: H) { h.join(other) }
         fn t() { tokio::spawn(probe()); }
@@ -553,7 +556,7 @@ fn the_fanout_scan_allows_marked_and_non_wait_forms() {
 
 /// The same rule one lock down: no module waits on `std::thread` fan-out —
 /// `thread::spawn`, `thread::scope`, a `JoinHandle`'s `join` — unless the
-/// site carries `no collection lock`, the marker naming why it cannot close
+/// site carries `no collection lock:`, the marker naming why it cannot close
 /// a cycle.
 #[test]
 fn no_unjustified_thread_fanout() {
