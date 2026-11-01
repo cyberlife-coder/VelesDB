@@ -408,8 +408,10 @@ impl Collection {
     }
 
     /// Check if this is a metadata-only collection.
-    fn is_metadata_only(&self) -> bool {
-        self.inner.is_metadata_only()
+    fn is_metadata_only(&self) -> PyResult<bool> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "is_metadata_only")?;
+        Ok(self.inner.is_metadata_only())
     }
 
     /// Check if the collection is empty.
@@ -430,8 +432,11 @@ impl Collection {
     /// Returns:
     ///     int: The dimension (e.g. 768 for BERT embeddings)
     #[getter]
-    fn dimension(&self) -> usize {
-        self.inner.dimension()
+    fn dimension(&self) -> PyResult<usize> {
+        // The dimension is part of the collection config `info()` gates.
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "dimension")?;
+        Ok(self.inner.dimension())
     }
 
     /// Get the distance metric used by this collection.
@@ -439,8 +444,10 @@ impl Collection {
     /// Returns:
     ///     str: The canonical metric name (e.g. "cosine", "euclidean", "dot")
     #[getter]
-    fn metric(&self) -> String {
-        self.inner.metric().canonical_name().to_owned()
+    fn metric(&self) -> PyResult<String> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "metric")?;
+        Ok(self.inner.metric().canonical_name().to_owned())
     }
 
     /// Get the storage mode of this collection.
@@ -449,8 +456,10 @@ impl Collection {
     ///     str: The canonical storage mode name (e.g. "full", "sq8", "binary",
     ///          "pq", "rabitq").
     #[getter]
-    fn storage_mode(&self) -> String {
-        self.inner.storage_mode().canonical_name().to_owned()
+    fn storage_mode(&self) -> PyResult<String> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "storage_mode")?;
+        Ok(self.inner.storage_mode().canonical_name().to_owned())
     }
 
     /// Get the number of points in the collection.
@@ -576,12 +585,15 @@ impl Collection {
     /// Returns:
     ///     list[str]: config field names (``"deferred_indexing"``,
     ///     ``"async_index_builder"``); empty when every setting is live.
-    fn pending_reopen(&self) -> Vec<&'static str> {
-        self.inner
+    fn pending_reopen(&self) -> PyResult<Vec<&'static str>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "pending_reopen")?;
+        Ok(self
+            .inner
             .pending_reopen()
             .into_iter()
             .map(velesdb_core::collection::streaming::PendingReopen::field_name)
-            .collect()
+            .collect())
     }
 
     /// Get the current query guardrail limits for this collection.
@@ -591,6 +603,8 @@ impl Collection {
     ///     ``memory_limit_bytes``, ``timeout_ms``, ``rate_limit_qps``,
     ///     ``circuit_failure_threshold``, ``circuit_recovery_seconds``.
     fn guard_rails(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "guard_rails")?;
         let limits = self.inner.guard_rails().limits();
         let dict = PyDict::new(py);
         dict.set_item("max_depth", limits.max_depth)?;
@@ -624,6 +638,8 @@ impl Collection {
     ///     ``ratio`` (and ``reason`` when a reindex is recommended), or
     ///     ``None`` when no auto-reindex manager is attached.
     fn check_auto_reindex_divergence(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "check_auto_reindex_divergence")?;
         let Some(check) = self.inner.check_auto_reindex_divergence() else {
             return Ok(None);
         };
@@ -646,8 +662,10 @@ impl Collection {
     /// Returns:
     ///     bool: True if the index exists
     #[pyo3(signature = (field))]
-    fn has_secondary_index(&self, field: &str) -> bool {
-        self.inner.has_secondary_index(field)
+    fn has_secondary_index(&self, field: &str) -> PyResult<bool> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_secondary_index")?;
+        Ok(self.inner.has_secondary_index(field))
     }
 
     /// Drop a secondary index on a payload field.
@@ -667,8 +685,10 @@ impl Collection {
     ///
     /// Returns:
     ///     int: Memory usage in bytes
-    fn indexes_memory_usage(&self) -> usize {
-        self.inner.indexes_memory_usage()
+    fn indexes_memory_usage(&self) -> PyResult<usize> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "indexes_memory_usage")?;
+        Ok(self.inner.indexes_memory_usage())
     }
 
     /// Analyze the collection and compute fresh statistics.
@@ -678,6 +698,10 @@ impl Collection {
     ///           column_stats, index_stats, etc.
     fn analyze(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use crate::collection_helpers::core_err;
+        // analyze() walks the column store for fresh statistics — the same
+        // collection data explain() is gated for touching.
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "analyze")?;
         let stats = py.detach(|| self.inner.analyze().map_err(core_err))?;
         let json = serde_json::to_value(&stats).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Stats serialization failed: {e}"))
@@ -689,8 +713,10 @@ impl Collection {
     ///
     /// Returns:
     ///     bool: True if delta buffer is active
-    fn is_delta_active(&self) -> bool {
-        self.inner.is_delta_active()
+    fn is_delta_active(&self) -> PyResult<bool> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "is_delta_active")?;
+        Ok(self.inner.is_delta_active())
     }
 
     /// Membership test: ``id in collection``.

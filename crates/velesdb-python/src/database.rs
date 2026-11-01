@@ -840,6 +840,20 @@ impl Database {
         // when the in-memory cache is cold, so in the worst case it
         // performs a small I/O. Release the GIL so other Python threads
         // are not blocked on that read.
+        // Core `get_collection_stats` also feeds internal plan builds, so it
+        // cannot consult the gate itself — this binding must, like the REST
+        // /stats handler. (analyze_collection / collection_diagnostics ARE
+        // gated in-core.)
+        let scope = self
+            .inner
+            .authorize_read(
+                name,
+                velesdb_core::QueryOperationKind::Select,
+                None,
+                None,
+            )
+            .map_err(core_err)?;
+        crate::collection::deny_if_scoped(scope, "get_collection_stats")?;
         let name_owned = name.to_string();
         let inner = Arc::clone(&self.inner);
         let maybe_stats = py

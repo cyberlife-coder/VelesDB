@@ -424,9 +424,24 @@ impl Collection {
     /// (`explain_analyze`, which *executes* the query, is gated the same way).
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
+        let parsed = parse_velesql(query_str)?;
+        // The plan is built from this collection's stats AND names the query's
+        // FROM — gate both: `coll.explain("SELECT * FROM denied")` must not
+        // produce a plan for a collection the caller cannot read.
         let scope = self.authorize(QueryOperationKind::Select, None, None)?;
         deny_if_scoped(scope, "explain")?;
-        let parsed = parse_velesql(query_str)?;
+        if !parsed.select.from.is_empty() && parsed.select.from != self.name {
+            let scope = self
+                .db
+                .authorize_read(
+                    &parsed.select.from,
+                    QueryOperationKind::Select,
+                    None,
+                    None,
+                )
+                .map_err(core_err)?;
+            deny_if_scoped(scope, "explain")?;
+        }
         validate_query(&parsed)?;
         let indexed = self.inner.config().indexed_fields.iter().cloned().collect();
         // `analyze()` computes fresh statistics (cardinality, size histograms)
