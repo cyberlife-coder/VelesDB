@@ -415,12 +415,13 @@ impl Collection {
 
     /// The exact bitmap of `id = n` / `id IN (...)`: the points `values`
     /// name, none of which needs an index. `None` (full scan) for an id a
-    /// bitmap cannot hold, above `u32::MAX`, or a value that is not a
-    /// non-negative integer.
+    /// bitmap cannot hold, above `u32::MAX`, or a value that names no point
+    /// id exactly (a fraction, a negative, an integer-valued float past
+    /// 2^53 — see `value_as_point_id`).
     fn bitmap_for_point_ids(values: &[serde_json::Value]) -> Option<roaring::RoaringBitmap> {
         values
             .iter()
-            .map(|value| u32::try_from(value.as_u64()?).ok())
+            .map(|value| u32::try_from(crate::filter::value_as_point_id(value)?).ok())
             .collect()
     }
 

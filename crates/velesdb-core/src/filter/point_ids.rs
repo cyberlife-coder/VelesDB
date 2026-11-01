@@ -10,8 +10,30 @@ use serde_json::Value;
 use super::{Condition, POINT_ID_FIELD};
 
 /// 2^53: an integer at or past it may share its `f64` with a neighbour.
-#[cfg(feature = "persistence")]
 const F64_EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// The point id a JSON value names, when it names one exactly: a
+/// non-negative integer, an integer-valued float included (`id = 5.0`
+/// names point 5 — `values_equal` calls `5` and `5.0` equal, so the
+/// point-id lookup must find what the filter matches). `None` for a
+/// fraction, a negative, or a magnitude at or past 2^53 whose `f64`
+/// stands for several integers — that literal falls back to the filter.
+pub(crate) fn value_as_point_id(value: &Value) -> Option<u64> {
+    let number = value.as_number()?;
+    number
+        .as_u64()
+        .or_else(|| number.as_f64().and_then(float_as_point_id))
+}
+
+/// The point id an `f64` names when it is a non-negative integer below
+/// 2^53, where the cast is exact by construction — past it one `f64`
+/// stands for several integers.
+fn float_as_point_id(f: f64) -> Option<u64> {
+    #[allow(clippy::cast_possible_truncation)]
+    // Reason: `f` is checked non-negative, integral and below 2^53, so the
+    // float->u64 conversion cannot truncate.
+    (f >= 0.0 && f < F64_EXACT_INTEGER_LIMIT && f.fract() == 0.0).then(|| f as u64)
+}
 
 /// Whether a payload index or mirror keyed on `f64` answers for `value`
 /// exactly: anything but a number of magnitude 2^53 or more, integer or
@@ -42,15 +64,19 @@ impl Condition {
     }
 
     /// The points this condition can match, when it names them: `id = n`
-    /// and `id IN (...)` with non-negative integers, sorted and deduplicated,
-    /// or the smallest such set among the members of an `AND`. `None` when
-    /// any point may match.
+    /// and `id IN (...)` with values naming an exact point id
+    /// ([`value_as_point_id`]: a non-negative integer, an integer-valued
+    /// float below 2^53 included), sorted and deduplicated, or the smallest
+    /// such set among the members of an `AND`. `None` when any point may
+    /// match.
     pub(crate) fn point_ids(&self) -> Option<Vec<u64>> {
         let ids = match self {
-            Self::Eq { field, value } if field == POINT_ID_FIELD => vec![value.as_u64()?],
+            Self::Eq { field, value } if field == POINT_ID_FIELD => {
+                vec![value_as_point_id(value)?]
+            }
             Self::In { field, values } if field == POINT_ID_FIELD => values
                 .iter()
-                .map(Value::as_u64)
+                .map(value_as_point_id)
                 .collect::<Option<Vec<u64>>>()?,
             Self::And { conditions } => {
                 return conditions

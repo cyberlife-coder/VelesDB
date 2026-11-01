@@ -428,3 +428,30 @@ fn test_in_binary_search_over_a_public_unsorted_list() {
     );
 }
 
+
+#[test]
+fn test_point_ids_accepts_an_integer_valued_float() {
+    // `id = 5.0` names point 5 — `values_equal` calls 5 and 5.0 equal, so
+    // the point-id lookup must resolve it rather than fall back to a scan.
+    let eq = Condition::Eq {
+        field: crate::filter::POINT_ID_FIELD.to_string(),
+        value: json!(5.0),
+    };
+    assert_eq!(eq.point_ids(), Some(vec![5]));
+
+    let in_list = Condition::is_in(
+        crate::filter::POINT_ID_FIELD,
+        vec![json!(5.0), json!(7)],
+    );
+    assert_eq!(in_list.point_ids(), Some(vec![5, 7]));
+
+    // A fraction, or a magnitude at 2^53 whose f64 stands for several
+    // integers, names no exact id — the filter itself must decide.
+    for value in [json!(5.5), json!(9_007_199_254_740_992.0_f64)] {
+        let cond = Condition::Eq {
+            field: crate::filter::POINT_ID_FIELD.to_string(),
+            value,
+        };
+        assert_eq!(cond.point_ids(), None);
+    }
+}
