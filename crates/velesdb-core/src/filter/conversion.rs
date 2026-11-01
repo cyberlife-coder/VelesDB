@@ -58,6 +58,10 @@ fn engine_handled_identity() -> Condition {
 /// `CONTAINS_TEXT` is deliberately absent: it already *is* a strict substring
 /// metadata predicate ([`crate::velesql::ContainsTextCondition`]), so its
 /// `Contains` lowering is faithful, not a degradation.
+// Only `database::query_engine` consults this helper, and the whole `database`
+// module is `#[cfg(feature = "persistence")]` — gate it the same way or the
+// no-persistence (wasm) build warns dead code.
+#[cfg(feature = "persistence")]
 pub(crate) fn inexpressible_scope_construct(
     condition: &crate::velesql::Condition,
 ) -> Option<&'static str> {
