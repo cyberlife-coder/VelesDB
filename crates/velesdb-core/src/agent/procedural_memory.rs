@@ -589,6 +589,12 @@ impl ProceduralMemory {
     ///
     /// Returns an error when collection access fails.
     pub fn list_all(&self) -> Result<Vec<ProcedureMatch>, AgentMemoryError> {
+        memory_helpers::authorize_memory_read(
+            &self.db,
+            &self.collection_name,
+            crate::observer::QueryOperationKind::Select,
+            "procedural memory list_all",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();

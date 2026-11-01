@@ -14,6 +14,9 @@ use super::error::AgentMemoryError;
 use super::memory_helpers;
 use super::ttl::{MemoryKind, MemoryTtl};
 
+#[path = "semantic_memory_relations.rs"]
+mod semantic_memory_relations;
+
 /// Long-term semantic memory for storing knowledge facts with vector similarity search.
 ///
 /// Each fact is stored as an embedding vector with associated text content.
@@ -79,6 +82,17 @@ impl SemanticMemory {
     #[must_use]
     pub fn collection_name(&self) -> &str {
         &self.collection_name
+    }
+
+    /// Consults the database's read gate for this memory's collection — the
+    /// deny/scope decision every memory read honours (fail closed on a
+    /// scope, which a memory read cannot compose).
+    fn gate(
+        &self,
+        operation: crate::observer::QueryOperationKind,
+        context: &'static str,
+    ) -> Result<(), AgentMemoryError> {
+        memory_helpers::authorize_memory_read(&self.db, &self.collection_name, operation, context)
     }
 
     /// Returns the embedding dimension for this collection.
@@ -390,93 +404,9 @@ impl SemanticMemory {
         )
     }
 
-    /// Returns the outgoing relations of a fact (edges it points from).
-    ///
-    /// # Errors
-    ///
-    /// Returns `CollectionError` when the collection cannot be resolved.
-    pub fn relations(
-        &self,
-        id: u64,
-    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
-        memory_helpers::relations_of(
-            &self.db,
-            &self.collection_name,
-            id,
-            &self.ttl,
-            MemoryKind::Semantic,
-        )
-    }
-
-    /// Returns the incoming relations of a fact (edges pointing at it).
-    ///
-    /// The mirror of [`Self::relations`]: edges whose *source* is TTL-expired
-    /// are filtered out.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CollectionError` when the collection cannot be resolved.
-    pub fn incoming_relations(
-        &self,
-        id: u64,
-    ) -> Result<Vec<crate::collection::graph::GraphEdge>, AgentMemoryError> {
-        memory_helpers::incoming_relations_of(
-            &self.db,
-            &self.collection_name,
-            id,
-            &self.ttl,
-            MemoryKind::Semantic,
-        )
-    }
-
-    /// Returns at most `cap` outgoing relations of a fact, plus whether its
-    /// total degree exceeded the scan — work and transient allocation
-    /// O(cap), never O(degree) (#1820).
-    ///
-    /// Prefer this over [`Self::relations`] wherever the caller keeps only a
-    /// bounded prefix: on a super-node (an entity hub mentioned by thousands
-    /// of facts) the unbounded accessor materializes the whole degree before
-    /// the caller's own cap can apply.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CollectionError` when the collection cannot be resolved.
-    pub fn relations_bounded(
-        &self,
-        id: u64,
-        cap: usize,
-    ) -> Result<super::BoundedRelations, AgentMemoryError> {
-        memory_helpers::relations_of_bounded(
-            &self.db,
-            &self.collection_name,
-            id,
-            &self.ttl,
-            MemoryKind::Semantic,
-            cap,
-        )
-    }
-
-    /// Returns at most `cap` incoming relations of a fact, plus whether its
-    /// total incoming degree exceeded the scan — the mirror of
-    /// [`Self::relations_bounded`].
-    ///
-    /// # Errors
-    ///
-    /// Returns `CollectionError` when the collection cannot be resolved.
-    pub fn incoming_relations_bounded(
-        &self,
-        id: u64,
-        cap: usize,
-    ) -> Result<super::BoundedRelations, AgentMemoryError> {
-        memory_helpers::incoming_relations_of_bounded(
-            &self.db,
-            &self.collection_name,
-            id,
-            &self.ttl,
-            MemoryKind::Semantic,
-            cap,
-        )
-    }
+    // The `relations`/`incoming_relations` accessors live in
+    // `semantic_memory_relations.rs` (`#[path]` child module — file budget);
+    // they delegate to `memory_helpers`' gated relation reads.
 
     /// Removes a relation edge created by [`Self::relate`].
     ///
@@ -526,6 +456,10 @@ impl SemanticMemory {
         k: usize,
         quality: Option<crate::SearchQuality>,
     ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::VectorSearch,
+            "semantic memory queries",
+        )?;
         memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let results = memory_helpers::search_live(
@@ -602,6 +536,10 @@ impl SemanticMemory {
             .saturating_mul(2)
             .max(need.saturating_add(8));
 
+        self.gate(
+            crate::observer::QueryOperationKind::VectorSearch,
+            "semantic memory queries",
+        )?;
         memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let raw =
@@ -666,6 +604,10 @@ impl SemanticMemory {
         exclude: &Map<String, Value>,
         quality: Option<crate::SearchQuality>,
     ) -> Result<Vec<(u64, f32, String)>, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::VectorSearch,
+            "semantic memory queries",
+        )?;
         memory_helpers::validate_dimension(self.dimension, query_embedding.len())?;
         if exclude.is_empty() || k == 0 {
             return self.query_at(query_embedding, k, quality);
@@ -735,6 +677,7 @@ impl SemanticMemory {
     ///
     /// Returns an error when collection access fails.
     pub fn get(&self, id: u64) -> Result<Option<(String, Vec<f32>)>, AgentMemoryError> {
+        self.gate(crate::observer::QueryOperationKind::Select, "get")?;
         if self.ttl.is_expired(MemoryKind::Semantic, id) {
             return Ok(None);
         }
@@ -755,6 +698,7 @@ impl SemanticMemory {
     ///
     /// Returns an error when collection access fails.
     pub fn get_metadata(&self, id: u64) -> Result<Option<Map<String, Value>>, AgentMemoryError> {
+        self.gate(crate::observer::QueryOperationKind::Select, "get_metadata")?;
         if self.ttl.is_expired(MemoryKind::Semantic, id) {
             return Ok(None);
         }
@@ -779,6 +723,10 @@ impl SemanticMemory {
         &self,
         ids: &[u64],
     ) -> Result<Vec<Option<Map<String, Value>>>, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::Select,
+            "semantic memory get_metadata_batch",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let points = collection.get(ids);
         Ok(ids
@@ -799,6 +747,10 @@ impl SemanticMemory {
     ///
     /// Returns an error when collection access fails.
     pub fn list_all(&self) -> Result<Vec<(u64, String)>, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::Select,
+            "semantic memory list_all",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let all_ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
 
@@ -812,15 +764,30 @@ impl SemanticMemory {
     }
 
     /// Returns the number of tracked facts.
-    #[must_use]
-    pub fn count(&self) -> usize {
-        self.stored_ids.read().len()
+    ///
+    /// The tracked-fact cardinality is the collection's `point_count` — a
+    /// collection read the gate decides like every other metadata read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the read gate denies the read or returns a
+    /// scope a cardinality cannot honour.
+    pub fn count(&self) -> Result<usize, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::Select,
+            "semantic memory count",
+        )?;
+        Ok(self.stored_ids.read().len())
     }
 
-    /// Returns `true` when no facts are tracked.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.stored_ids.read().is_empty()
+    /// Returns `true` when no facts are tracked, through the same gate as
+    /// [`Self::count`] (emptiness derives from the same cardinality).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the read gate denies the read or returns a scope.
+    pub fn is_empty(&self) -> Result<bool, AgentMemoryError> {
+        Ok(self.count()? == 0)
     }
 
     /// Returns the total number of graph edges in this memory's collection,
@@ -832,8 +799,13 @@ impl SemanticMemory {
     ///
     /// # Errors
     ///
-    /// Returns an error when the collection cannot be accessed.
+    /// Returns an error when the collection cannot be accessed or the read
+    /// gate denies the read (or returns a scope a count cannot honour).
     pub fn edge_count(&self) -> Result<usize, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::GraphTraversal,
+            "semantic memory edge_count",
+        )?;
         Ok(memory_helpers::get_collection(&self.db, &self.collection_name)?.edge_count())
     }
 

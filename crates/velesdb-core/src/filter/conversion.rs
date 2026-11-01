@@ -40,6 +40,54 @@ fn engine_handled_identity() -> Condition {
     Condition::And { conditions: vec![] }
 }
 
+/// Names a `VelesQL` construct an observer *scope* filter cannot express as a
+/// row-level metadata predicate — the first one found, depth-first, or `None`
+/// when the whole tree lowers faithfully through [`From`].
+///
+/// The `From` lowering must stay total: the query engine pre-extracts
+/// engine-handled conditions before lowering a WHERE clause, so
+/// `VectorSearch`/`Similarity`/`GraphMatch` map to an always-true sentinel
+/// and `MATCH` to a substring `Contains`. An observer scope cannot afford
+/// that: a conjunct lowered to "match all" silently narrows nothing, and a
+/// `MATCH` lowered to substring containment narrows by the *wrong* predicate.
+/// A `$param` or subquery compared value is likewise not a policy value — it
+/// would bind to the *caller's* params or lower to `NULL`, so a scope must be
+/// self-contained. Callers enforcing a scope consult this first and fail
+/// closed (`VELES-009`).
+///
+/// `CONTAINS_TEXT` is deliberately absent: it already *is* a strict substring
+/// metadata predicate ([`crate::velesql::ContainsTextCondition`]), so its
+/// `Contains` lowering is faithful, not a degradation.
+// Only `database::query_engine` consults this helper, and the whole `database`
+// module is `#[cfg(feature = "persistence")]` — gate it the same way or the
+// no-persistence (wasm) build warns dead code.
+#[cfg(feature = "persistence")]
+pub(crate) fn inexpressible_scope_construct(
+    condition: &crate::velesql::Condition,
+) -> Option<&'static str> {
+    use crate::velesql::{Condition as C, Value as V};
+    const ENGINE: &str = "a vector-similarity or graph-match directive";
+    const VALUE: &str = "a parameter placeholder or subquery value";
+    let unbound = |v: &V| matches!(v, V::Parameter(_) | V::Subquery(_));
+    match condition {
+        C::VectorSearch(_)
+        | C::VectorFusedSearch(_)
+        | C::SparseVectorSearch(_)
+        | C::Similarity(_)
+        | C::GraphMatch(_) => Some(ENGINE),
+        C::Match(_) => Some("a full-text MATCH"),
+        C::Comparison(c) => unbound(&c.value).then_some(VALUE),
+        C::In(c) => c.values.iter().any(&unbound).then_some(VALUE),
+        C::Between(c) => (unbound(&c.low) || unbound(&c.high)).then_some(VALUE),
+        C::Contains(c) => c.values.iter().any(&unbound).then_some(VALUE),
+        C::And(l, r) | C::Or(l, r) => {
+            inexpressible_scope_construct(l).or_else(|| inexpressible_scope_construct(r))
+        }
+        C::Not(inner) | C::Group(inner) => inexpressible_scope_construct(inner),
+        C::IsNull(_) | C::Like(_) | C::ContainsText(_) | C::GeoDistance(_) | C::GeoBbox(_) => None,
+    }
+}
+
 /// Converts a comparison condition using the shared value converter.
 fn convert_comparison(
     column: String,

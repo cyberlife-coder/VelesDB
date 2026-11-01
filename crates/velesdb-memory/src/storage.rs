@@ -542,7 +542,10 @@ impl FactStore for NativeStore {
     }
 
     fn count(&self) -> usize {
-        self.memory.semantic().count()
+        // A gate refusal reads as an empty corpus — like `edge_count`'s
+        // `.ok()` below, "cannot say" degrades to the honest floor for an
+        // idf proxy rather than lying upward.
+        self.memory.semantic().count().unwrap_or(0)
     }
 
     fn list(

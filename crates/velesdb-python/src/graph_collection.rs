@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::collection::retain_by_filters;
+use crate::collection::{deny_if_scoped, retain_by_filters};
 use crate::collection_helpers::{core_err, point_to_dict, search_result_to_dict};
 use crate::graph::{dict_to_edge, edge_to_dict, traversal_to_dict};
 use crate::utils::{extract_vector, json_to_python, python_to_json};
@@ -118,6 +118,18 @@ impl PyGraphCollection {
     pub fn new(inner: GraphCollection, db: Arc<CoreDatabase>, name: String) -> Self {
         Self { inner, db, name }
     }
+
+    /// Routes a read through the database's read gate, as `GraphTraversal` —
+    /// the operation every edge/traversal read on a graph collection is.
+    /// A scope filter fails closed (`deny_if_scoped`): no graph read has a
+    /// metadata-filtered leaf to narrow, mirroring `MobileGraphStore`.
+    fn authorize(&self, context: &str) -> PyResult<()> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::GraphTraversal, None, None)
+            .map_err(core_err)?;
+        deny_if_scoped(scope, context)
+    }
 }
 
 #[pymethods]
@@ -207,6 +219,7 @@ impl PyGraphCollection {
     ///     >>> knows_edges = graph.get_edges(label="KNOWS")
     #[pyo3(signature = (label=None))]
     fn get_edges(&self, py: Python<'_>, label: Option<String>) -> PyResult<Vec<Py<PyAny>>> {
+        self.authorize("get_edges")?;
         let edges = py.detach(|| self.inner.get_edges(label.as_deref()));
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
@@ -220,14 +233,19 @@ impl PyGraphCollection {
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
     fn get_outgoing(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        self.authorize("get_outgoing")?;
         let edges = py.detach(|| self.inner.get_outgoing(node_id));
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
 
     /// Returns `true` if an edge with the given ID exists.
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
     #[pyo3(signature = (edge_id))]
-    fn has_edge(&self, edge_id: u64) -> bool {
-        self.inner.has_edge(edge_id)
+    fn has_edge(&self, edge_id: u64) -> PyResult<bool> {
+        self.authorize("has_edge")?;
+        Ok(self.inner.has_edge(edge_id))
     }
 
     /// Alias for `get_outgoing`.
@@ -248,6 +266,7 @@ impl PyGraphCollection {
     ///     List of edge dicts
     #[pyo3(signature = (node_id))]
     fn get_incoming(&self, py: Python<'_>, node_id: u64) -> PyResult<Vec<Py<PyAny>>> {
+        self.authorize("get_incoming")?;
         let edges = py.detach(|| self.inner.get_incoming(node_id));
         Ok(edges.iter().map(|e| edge_to_dict(py, e)).collect())
     }
@@ -269,8 +288,9 @@ impl PyGraphCollection {
     /// Returns:
     ///     Tuple of (in_degree, out_degree)
     #[pyo3(signature = (node_id))]
-    fn node_degree(&self, node_id: u64) -> (usize, usize) {
-        self.inner.node_degree(node_id)
+    fn node_degree(&self, node_id: u64) -> PyResult<(usize, usize)> {
+        self.authorize("node_degree")?;
+        Ok(self.inner.node_degree(node_id))
     }
 
     /// Upsert the payload (properties) for a node.
@@ -336,6 +356,7 @@ impl PyGraphCollection {
     ///     Dict of properties, or None if no payload is stored
     #[pyo3(signature = (node_id))]
     fn get_node_payload(&self, py: Python<'_>, node_id: u64) -> PyResult<Option<Py<PyAny>>> {
+        self.authorize("get_node_payload")?;
         let value = py.detach(|| self.inner.get_node_payload(node_id).map_err(core_err))?;
         Ok(value.map(|v| json_to_python(py, &v)))
     }
@@ -344,8 +365,13 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     List of node IDs
-    fn all_node_ids(&self, py: Python<'_>) -> Vec<u64> {
-        py.detach(|| self.inner.all_node_ids())
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a
+    ///         scope (ids carry no payload to filter — fail closed).
+    fn all_node_ids(&self, py: Python<'_>) -> PyResult<Vec<u64>> {
+        self.authorize("all_node_ids")?;
+        Ok(py.detach(|| self.inner.all_node_ids()))
     }
 
     /// Perform BFS traversal from a source node.
@@ -374,6 +400,7 @@ impl PyGraphCollection {
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.authorize("traverse_bfs")?;
         let effective_rel_types = rel_types.or(relationship_types);
         let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.detach(|| self.inner.traverse_bfs(source_id, &config));
@@ -406,6 +433,7 @@ impl PyGraphCollection {
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.authorize("traverse_dfs")?;
         let effective_rel_types = rel_types.or(relationship_types);
         let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.detach(|| self.inner.traverse_dfs(source_id, &config));
@@ -439,6 +467,7 @@ impl PyGraphCollection {
         rel_types: Option<Vec<String>>,
         relationship_types: Option<Vec<String>>,
     ) -> PyResult<Vec<Py<PyAny>>> {
+        self.authorize("traverse_bfs_parallel")?;
         let effective_rel_types = rel_types.or(relationship_types);
         let config = build_traversal_config(max_depth, limit, effective_rel_types);
         let results = py.detach(|| self.inner.traverse_bfs_parallel(&source_ids, &config));
@@ -517,8 +546,12 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     int: Edge count
-    fn edge_count(&self) -> usize {
-        self.inner.edge_count()
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
+    fn edge_count(&self) -> PyResult<usize> {
+        self.authorize("edge_count")?;
+        Ok(self.inner.edge_count())
     }
 
     /// Full durability flush including WAL serialization.
@@ -533,24 +566,37 @@ impl PyGraphCollection {
     ///
     /// Returns:
     ///     int: Point count
-    fn __len__(&self) -> usize {
-        self.inner.len()
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
+    fn __len__(&self) -> PyResult<usize> {
+        self.authorize("__len__")?;
+        Ok(self.inner.len())
     }
 
-    /// Returns the number of points (nodes with payload) in the graph.
+    /// Returns the number of points (nodes with payload) in the graph,
+    /// through the same read gate as ``__len__``.
     ///
     /// Returns:
     ///     int: Point count
-    fn count(&self) -> usize {
-        self.inner.len()
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
+    fn count(&self) -> PyResult<usize> {
+        self.authorize("count")?;
+        Ok(self.inner.len())
     }
 
     /// Check if the graph collection has no stored points.
     ///
     /// Returns:
     ///     bool: True if empty
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
+    fn is_empty(&self) -> PyResult<bool> {
+        self.authorize("is_empty")?;
+        Ok(self.inner.is_empty())
     }
 
     /// Get points by their IDs.
@@ -562,6 +608,7 @@ impl PyGraphCollection {
     ///     List of point dicts (or None for missing IDs)
     #[pyo3(signature = (ids))]
     fn get(&self, py: Python<'_>, ids: Vec<u64>) -> PyResult<Vec<Option<Py<PyAny>>>> {
+        self.authorize("get")?;
         let points = py.detach(|| self.inner.get(&ids));
         let py_points = points
             .into_iter()
@@ -611,8 +658,11 @@ impl PyGraphCollection {
     /// as the ``sq_contains`` slot. Uses ``get_node_payload`` because
     /// graph nodes are payload-addressed (not vector-addressed like
     /// :py:class:`Collection`).
-    fn __contains__(&self, node_id: u64) -> bool {
-        matches!(self.inner.get_node_payload(node_id), Ok(Some(_)))
+    fn __contains__(&self, node_id: u64) -> PyResult<bool> {
+        // Membership reveals node existence, so it is a gated read (same
+        // rationale as Collection.__contains__).
+        self.authorize("__contains__")?;
+        Ok(matches!(self.inner.get_node_payload(node_id), Ok(Some(_))))
     }
 
     /// Graceful shutdown: full durability flush including WAL serialization.

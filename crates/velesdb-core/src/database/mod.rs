@@ -38,6 +38,7 @@ mod query_engine;
 mod query_engine_agg;
 mod query_engine_dml;
 mod query_join;
+mod read_authorization;
 mod stats;
 mod subquery_resolver;
 mod training;

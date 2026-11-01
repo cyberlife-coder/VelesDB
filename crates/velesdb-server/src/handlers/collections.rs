@@ -14,7 +14,8 @@ use velesdb_core::index::HnswParams;
 use velesdb_core::{DistanceMetric, StorageMode};
 
 use super::helpers::{
-    auto_core_error_response, error_response, get_collection_or_404, run_blocking, worker_failure,
+    authorize_unscoped_read, auto_core_error_response, error_response, get_collection_or_404,
+    run_blocking, worker_failure,
 };
 
 /// List all collections.
@@ -405,6 +406,15 @@ pub async fn get_collection(
         Err(resp) => return resp,
     };
 
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
+
     let config = collection.config();
     Json(CollectionResponse {
         name: config.name,
@@ -437,6 +447,15 @@ pub async fn collection_sanity(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
 
     let config = collection.config();
     build_sanity_response(&state, &config, &collection)
@@ -533,6 +552,15 @@ pub async fn is_empty(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
 
     Json(serde_json::json!({
         "is_empty": collection.is_empty()

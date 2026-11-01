@@ -93,6 +93,23 @@ fn explain_plan_only(
     parsed: &velesdb_core::velesql::Query,
 ) -> axum::response::Response {
     let select = &parsed.select;
+    // Plan-only EXPLAIN leaks the collection's calibrated statistics, so the
+    // read gate decides it like a metadata read: a denial refuses it, and a
+    // scope — no rows to narrow — refuses it too rather than leak the stats.
+    if !select.from.is_empty() {
+        if let Err(refusal) = crate::handlers::helpers::authorize_unscoped_read(
+            state,
+            &select.from,
+            velesdb_core::observer::QueryOperationKind::Select,
+            "plan-only EXPLAIN",
+        ) {
+            return super::velesql_helpers::velesql_execution_error(
+                &refusal,
+                "VELESQL_EXPLAIN_ERROR",
+                "The read gate refused the plan",
+            );
+        }
+    }
     let (features, estimated_cost, query_type) = explain_preamble(parsed);
 
     // Single-sourced from core: the plan steps come from the canonical

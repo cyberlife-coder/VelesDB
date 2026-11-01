@@ -418,13 +418,25 @@ impl Collection {
     /// an `IndexLookup` node and a MATCH reports a real traversal strategy.
     /// Semantically invalid queries raise `ValueError`.
     ///
-    /// Deliberately NOT routed through the read gate: EXPLAIN builds a plan
-    /// from the AST plus collection statistics and never touches point data,
-    /// so there is nothing for a governance observer to scope or leak
-    /// (`explain_analyze`, which *executes* the query, is gated).
+    /// The read gate decides a plan-only EXPLAIN too: `analyze()` walks the
+    /// column store to calibrate the plan, so a denied read must refuse and a
+    /// scope — no rows to narrow — refuses rather than leak the statistics
+    /// (`explain_analyze`, which *executes* the query, is gated the same way).
     #[pyo3(signature = (query_str))]
     fn explain(&self, py: Python<'_>, query_str: &str) -> PyResult<Py<PyAny>> {
         let parsed = parse_velesql(query_str)?;
+        // The plan is built from this collection's stats AND names the query's
+        // FROM — gate both: `coll.explain("SELECT * FROM denied")` must not
+        // produce a plan for a collection the caller cannot read.
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "explain")?;
+        if !parsed.select.from.is_empty() && parsed.select.from != self.name {
+            let scope = self
+                .db
+                .authorize_read(&parsed.select.from, QueryOperationKind::Select, None, None)
+                .map_err(core_err)?;
+            deny_if_scoped(scope, "explain")?;
+        }
         validate_query(&parsed)?;
         let indexed = self.inner.config().indexed_fields.iter().cloned().collect();
         // `analyze()` computes fresh statistics (cardinality, size histograms)
@@ -457,8 +469,10 @@ impl Collection {
         let rust_params = convert_params(py, params)?;
         // EXPLAIN ANALYZE *executes* the query, so it must pass the same
         // control-plane read gate as `query()`. The `Database` facade twin is
-        // gated internally (deny fails closed, a scope narrows the measured
-        // execution), unlike the detached leaf method used before (#1392).
+        // gated internally — deny fails closed, and a scope is refused rather
+        // than narrowed: the plan step's calibrated statistics cannot be
+        // row-narrowed (VELES-009), unlike the detached leaf method used
+        // before (#1392).
         let output = py.detach(move || {
             self.db
                 .explain_analyze_query(&retarget_to_collection(&parsed, &self.name), &rust_params)

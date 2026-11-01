@@ -25,6 +25,7 @@ use crate::types::{
 };
 use crate::AppState;
 use velesdb_core::api_types::serde_id;
+use velesdb_core::observer::QueryOperationKind;
 use velesdb_core::Point;
 
 use crate::handlers::helpers::{
@@ -199,7 +200,9 @@ fn build_points_from_request(req: UpsertPointsRequest) -> Result<Vec<Point>, Str
     ),
     responses(
         (status = 200, description = "Point found", body = Object),
-        (status = 404, description = "Point or collection not found", body = ErrorResponse)
+        (status = 400, description = "A read the access gate denied with a client error (its own code)", body = ErrorResponse),
+        (status = 404, description = "Point or collection not found, or the point is outside the access gate's scope", body = ErrorResponse),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse)
     )
 )]
 pub async fn get_point(
@@ -211,13 +214,25 @@ pub async fn get_point(
         Err(resp) => return resp,
     };
 
-    // Point lookup takes storage read locks — run it on the blocking pool.
-    let points = match run_blocking(move || collection.get(&[id])).await {
-        Ok(p) => p,
+    // The read gate and the point lookup (storage read locks) both run on
+    // the blocking pool. A denial refuses the read; a scope hides a point
+    // outside it, which then reads as not found.
+    let gate_state = Arc::clone(&state);
+    let read = run_blocking(move || -> velesdb_core::Result<Option<Point>> {
+        let scope = gate_state
+            .db
+            .authorize_read(&name, QueryOperationKind::Select, None, None)?;
+        let point = collection.get(&[id]).into_iter().next().flatten();
+        Ok(point.filter(|p| in_scope(p, scope.as_ref())))
+    })
+    .await;
+    let point = match read {
+        Ok(Ok(point)) => point,
+        Ok(Err(refusal)) => return auto_core_error_response(&refusal),
         Err(resp) => return resp,
     };
 
-    match points.into_iter().next().flatten() {
+    match point {
         // ID as a string for JS precision-safety above 2^53-1, consistent with
         // every other read surface (search/scroll/relations, see `serde_id`).
         Some(point) => Json(serde_json::json!({
@@ -281,10 +296,11 @@ const MAX_SCROLL_BATCH_SIZE: u32 = 10_000;
     params(("name" = String, Path, description = "Collection name")),
     request_body = ScrollRequest,
     responses(
-        (status = 200, description = "Scroll batch", body = ScrollResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 200, description = "Scroll batch, narrowed to the access gate's scope when it returns one", body = ScrollResponse),
+        (status = 400, description = "Invalid request, or a read the access gate denied with a client error (its own code)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 422, response = crate::types::MalformedBody)
+        (status = 422, response = crate::types::MalformedBody),
+        (status = 500, description = "An engine fault, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse)
     )
 )]
 pub async fn scroll_points(
@@ -312,9 +328,9 @@ pub async fn scroll_points(
     let batch_size = req.batch_size as usize;
     let cursor = req.cursor;
 
-    // scroll_batch is blocking (reads from storage).
+    // The read gate and scroll_batch (storage reads) are blocking.
     let result = tokio::task::spawn_blocking(move || {
-        collection.scroll_batch(cursor, batch_size, filter.as_ref())
+        scroll_gated(&state, &name, &collection, cursor, batch_size, filter)
     })
     .await;
 
@@ -322,6 +338,44 @@ pub async fn scroll_points(
         Ok(Ok(batch)) => build_scroll_response(batch),
         Ok(Err(e)) => auto_core_error_response(&e),
         Err(e) => auto_core_error_response(&worker_failure("blocking", &e)),
+    }
+}
+
+/// One scroll page through the read gate: a denial refuses it, and a scope
+/// is AND-composed with the caller's filter, so it can only narrow the page.
+fn scroll_gated(
+    state: &AppState,
+    name: &str,
+    collection: &velesdb_core::collection::VectorCollection,
+    cursor: Option<u64>,
+    batch_size: usize,
+    filter: Option<velesdb_core::Filter>,
+) -> velesdb_core::Result<velesdb_core::ScrollBatch> {
+    let scope = state
+        .db
+        .authorize_read(name, QueryOperationKind::Select, None, None)?;
+    let effective = and_scope(filter, scope);
+    collection.scroll_batch(cursor, batch_size, effective.as_ref())
+}
+
+/// Whether a point falls inside a read scope: always without one, and only
+/// when its payload matches the scope filter with one (a point without a
+/// payload matches no filter).
+fn in_scope(point: &Point, scope: Option<&velesdb_core::Filter>) -> bool {
+    scope.is_none_or(|filter| point.payload.as_ref().is_some_and(|p| filter.matches(p)))
+}
+
+/// AND-composes the caller's filter with the read gate's scope filter, so the
+/// scope can only narrow what the caller asked for.
+fn and_scope(
+    caller: Option<velesdb_core::Filter>,
+    scope: Option<velesdb_core::Filter>,
+) -> Option<velesdb_core::Filter> {
+    match (caller, scope) {
+        (Some(caller), Some(scope)) => Some(velesdb_core::Filter::new(
+            velesdb_core::Condition::and(vec![caller.condition, scope.condition]),
+        )),
+        (caller, scope) => caller.or(scope),
     }
 }
 

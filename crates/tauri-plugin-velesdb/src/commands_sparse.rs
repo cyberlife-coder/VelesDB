@@ -31,7 +31,16 @@ pub async fn sparse_search<R: Runtime>(
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let idx_name = request.index_name.unwrap_or_default();
 
-            let search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
+            let scope = crate::helpers::authorize_collection_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::VectorSearch,
+            )?;
+            let mut search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
+            if let Some(scope) = scope {
+                search_results
+                    .retain(|r| r.point.payload.as_ref().is_some_and(|p| scope.matches(p)));
+            }
             Ok(map_core_results(search_results))
         })
         .await
@@ -56,8 +65,17 @@ pub async fn hybrid_sparse_search<R: Runtime>(
             let core_sv = parse_sparse_vector(&request.sparse_vector)?;
             let strategy = velesdb_core::fusion::FusionStrategy::rrf_default();
 
-            let search_results =
+            let scope = crate::helpers::authorize_collection_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::VectorSearch,
+            )?;
+            let mut search_results =
                 coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;
+            if let Some(scope) = scope {
+                search_results
+                    .retain(|r| r.point.payload.as_ref().is_some_and(|p| scope.matches(p)));
+            }
             Ok(map_core_results(search_results))
         })
         .await

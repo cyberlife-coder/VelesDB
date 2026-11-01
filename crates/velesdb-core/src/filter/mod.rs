@@ -24,6 +24,12 @@ mod conversion;
 mod conversion_tests;
 mod matching;
 
+// Only `database::query_engine` consults this helper, and the whole `database`
+// module is `#[cfg(feature = "persistence")]` — gate the re-export the same
+// way or the no-persistence (wasm) build warns dead code.
+#[cfg(feature = "persistence")]
+pub(crate) use conversion::inexpressible_scope_construct;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
