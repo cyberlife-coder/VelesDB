@@ -21,7 +21,9 @@
 //!    application's job that reads the collection behind a queued writer,
 //!    would park on the worker the guard holder needs. A worker therefore
 //!    gets the sequential form of the work, on its own thread, every time;
-//!    no caller can choose otherwise.
+//!    no caller can choose otherwise. The same form answers a dedicated pool
+//!    that cannot be built: the work still makes progress, on the calling
+//!    thread, never refused.
 //!
 //! No other module of the crate names rayon, a thread pool or a parallel
 //! iterator: `lock_audit_tests::no_module_but_pools_names_rayon` refuses one
@@ -54,38 +56,46 @@ fn dedicated(name: &'static str) -> Option<rayon::ThreadPool> {
 /// `HnswIndex::link_placed` and a vacuum's settle. Its jobs reach the graph's
 /// arena, layers and entry point, never `HnswIndex` itself nor a collection
 /// lock (\#2343).
-fn graph_pool() -> crate::error::Result<&'static rayon::ThreadPool> {
+fn graph_pool() -> Option<&'static rayon::ThreadPool> {
     static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
-    POOL.get_or_init(|| dedicated("veles-hnsw-graph"))
-        .as_ref()
-        .ok_or_else(|| {
-            crate::error::Error::Internal(
-                "the dedicated rayon pool HNSW graph work runs on is unavailable".to_string(),
-            )
-        })
+    POOL.get_or_init(|| dedicated("veles-hnsw-graph")).as_ref()
+}
+
+/// Runs `parallel` on `pool` and waits for it — or runs `sequential` on this
+/// thread when it is a rayon worker (rule 2 of the module documentation), or
+/// when `pool` is `None` because the dedicated pool could not be built (the
+/// failure is logged in [`dedicated`]). The sequential form is the design's
+/// answer to a caller that must not wait on a pool, so a build failure
+/// degrades to it rather than refuse the work: the caller makes progress on
+/// its own thread, slower and never deadlocked by the wait it cannot make.
+pub(crate) fn run_on<R: Send>(
+    pool: Option<&rayon::ThreadPool>,
+    parallel: impl FnOnce() -> R + Send,
+    sequential: impl FnOnce() -> R,
+) -> R {
+    if on_a_rayon_worker() {
+        return sequential();
+    }
+    match pool {
+        Some(pool) => pool.install(parallel),
+        None => sequential(),
+    }
 }
 
 /// Runs `parallel` on the graph pool and waits for it — or, when this
-/// thread is a rayon worker, runs `sequential` on it instead (rule 2 of the
-/// module documentation).
-///
-/// # Errors
-///
-/// Returns an error when the graph pool cannot be built.
+/// thread is a rayon worker, or the pool cannot be built, runs `sequential`
+/// on it instead (rule 2 of the module documentation, and [`run_on`]).
 pub(crate) fn on_graph_pool<R: Send>(
     parallel: impl FnOnce() -> R + Send,
     sequential: impl FnOnce() -> R,
-) -> crate::error::Result<R> {
-    if on_a_rayon_worker() {
-        return Ok(sequential());
-    }
-    Ok(graph_pool()?.install(parallel))
+) -> R {
+    run_on(graph_pool(), parallel, sequential)
 }
 
 /// Runs `parallel` on the pool for parallel work over data a collection
 /// guard protects, and waits for it — or runs `sequential` on this thread
 /// when it is a rayon worker (rule 2 of the module documentation), or when
-/// the pool cannot be built.
+/// the pool cannot be built ([`run_on`]).
 ///
 /// Its jobs read through the guards their caller holds and take none, so a
 /// caller holding a guard always gets its workers back.
@@ -94,13 +104,11 @@ pub(crate) fn on_guarded_pool<R: Send>(
     sequential: impl FnOnce() -> R,
 ) -> R {
     static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
-    if on_a_rayon_worker() {
-        return sequential();
-    }
-    match POOL.get_or_init(|| dedicated("veles-guarded")) {
-        Some(pool) => pool.install(parallel),
-        None => sequential(),
-    }
+    run_on(
+        POOL.get_or_init(|| dedicated("veles-guarded")).as_ref(),
+        parallel,
+        sequential,
+    )
 }
 
 // ---------------------------------------------------------------------------

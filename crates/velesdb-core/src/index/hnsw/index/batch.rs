@@ -96,9 +96,8 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns an error if a vector has the wrong dimension, if the dedicated
-    /// pool is unavailable, or if the graph refuses the batch; it inserts
-    /// nothing then.
+    /// Returns an error if a vector has the wrong dimension or if the graph
+    /// refuses the batch; it inserts nothing then.
     fn try_insert_batch(&self, items: &[(u64, &[f32])]) -> crate::error::Result<usize> {
         if let Some(e) = items
             .iter()
@@ -161,7 +160,6 @@ impl HnswIndex {
                     Ok(slots)
                 },
             )
-            .and_then(|placed| placed)
         } else {
             inner.place_parallel(&vectors)
         };
@@ -279,10 +277,9 @@ impl HnswIndex {
     ///
     /// # Errors
     ///
-    /// Returns an error if the arena does not hold a slot a mapping names, or
-    /// if the dedicated pool cannot be built. It links nothing then, except
-    /// from a rayon worker, where the slices before the failing one stay
-    /// linked; a later call skips them.
+    /// Returns an error if the arena does not hold a slot a mapping names.
+    /// It links nothing then, except from a rayon worker, where the slices
+    /// before the failing one stay linked; a later call skips them.
     #[cfg(feature = "persistence")]
     pub(crate) fn link_placed(&self, ids: &[u64]) -> crate::error::Result<usize> {
         if ids.is_empty() {
@@ -306,7 +303,7 @@ impl HnswIndex {
                     .chunks(PARALLEL_BATCH_MIN - 1)
                     .try_for_each(|slice| graph.link_placed(slice))
             },
-        )??;
+        )?;
         drop(inner);
         Ok(unlinked.len())
     }

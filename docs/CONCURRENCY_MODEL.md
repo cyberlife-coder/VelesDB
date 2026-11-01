@@ -555,7 +555,9 @@ every submission in core goes through it:
   caller holds and take none, so a caller holding a guard always gets its
   workers back. A caller that is a rayon worker gets the sequential form of
   the work on its own thread instead — the graph pool places in slices under
-  `PARALLEL_BATCH_MIN`, node by node — every time: no caller chooses.
+  `PARALLEL_BATCH_MIN`, node by node — every time: no caller chooses. The
+  same form answers a dedicated pool that cannot be built (the failure is
+  logged): the work still makes progress on the calling thread.
 
 `crate::lock_audit` checks the rule in every unit test. The collection's
 locks are its `RwLock` and `Mutex` wrappers, so every accessor goes through

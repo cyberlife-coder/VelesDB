@@ -407,7 +407,6 @@ impl HnswIndex {
                 Ok(slots)
             },
         )
-        .and_then(|slots| slots)
         .map_err(|e| VacuumError::RebuildFailed(e.to_string()))?;
         let slots = one_slot_each(slots, refs.len())?;
         carried.extend(

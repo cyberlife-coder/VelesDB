@@ -81,16 +81,32 @@ fn a_dedicated_pool_runs_sequential_work_on_any_rayon_worker() {
 
     let worker_ran = || crate::pools::on_a_rayon_worker();
     assert!(on_guarded_pool(worker_ran, || false));
-    assert!(on_graph_pool(worker_ran, || false).expect("test: graph pool"));
+    assert!(on_graph_pool(worker_ran, || false));
 
     for pool in [one_thread_pool(), crate::pools::application_pool(1)] {
         let parallel = pool.install(|| on_guarded_pool(|| true, || false));
         assert!(!parallel, "a rayon worker waited on the guarded pool");
-        let parallel = pool
-            .install(|| on_graph_pool(|| true, || false))
-            .expect("test");
+        let parallel = pool.install(|| on_graph_pool(|| true, || false));
         assert!(!parallel, "a rayon worker waited on the graph pool");
     }
+}
+
+/// A dedicated pool that cannot be built answers `None`, and `run_on` runs
+/// the sequential form of the work on the calling thread: the work still
+/// makes progress — slower, and never deadlocked by a wait it cannot make.
+#[test]
+fn a_dedicated_pool_that_cannot_be_built_runs_sequential_work() {
+    let pool = one_thread_pool();
+    assert_eq!(
+        crate::pools::run_on(Some(&pool), || "parallel", || "sequential"),
+        "parallel",
+        "a pool that built runs the parallel form"
+    );
+    assert_eq!(
+        crate::pools::run_on(None, || "parallel", || "sequential"),
+        "sequential",
+        "no pool runs the sequential form, on this thread"
+    );
 }
 
 #[test]
