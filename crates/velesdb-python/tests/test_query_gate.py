@@ -17,7 +17,10 @@ read gate. This module proves the rest of the Python read surface does too:
   scope ⇒ fail closed (no payload to filter on).
 * ``PyGraphCollection.query`` / ``match_query`` / ``query_ids`` /
   ``explain_analyze`` — same mechanisms.
-* ``explain()`` stays ungated by design: it builds a plan and reads no data.
+* ``Collection.explain()`` is gated too: its plan is calibrated by
+  ``analyze()``, which walks the column store — a denied read must refuse
+  rather than leak the statistics. ``PyGraphCollection.explain()`` stays
+  ungated by design: it builds a plan and reads no data.
 * With no observer registered, every path behaves exactly as before
   (zero-overhead allow).
 """
@@ -156,11 +159,21 @@ def test_explain_analyze_deny_fails_closed():
             collection.explain_analyze("SELECT * FROM docs LIMIT 10")
 
 
-def test_explain_stays_ungated_plan_only():
-    """``explain()`` builds a plan without reading data — allowed by design."""
+def test_explain_deny_fails_closed():
+    """``explain()`` calibrates the plan with ``analyze()``, which walks the
+    column store — a denied read must refuse rather than leak the statistics."""
     with _Db(observer=_deny_reads) as db:
         collection = _seed(db)
-        plan = collection.explain("SELECT * FROM docs LIMIT 10")
+        with pytest.raises(Exception):
+            collection.explain("SELECT * FROM docs LIMIT 10")
+
+
+def test_graph_explain_stays_ungated_plan_only():
+    """``PyGraphCollection.explain()`` builds the plan from the AST alone —
+    no stats walk — so it stays ungated by design."""
+    with _Db(observer=_deny_reads) as db:
+        graph = _seed_graph(db)
+        plan = graph.explain("MATCH (n) RETURN n LIMIT 10")
     assert "tree" in plan
 
 
@@ -273,11 +286,14 @@ def test_match_query_scope_fails_closed():
             collection.match_query("MATCH (n) RETURN n LIMIT 10")
 
 
-def test_explain_analyze_scope_narrows():
+def test_explain_analyze_scope_is_refused():
+    """EXPLAIN ANALYZE plans before it executes, and a scope cannot narrow a
+    plan — the calibrated statistics would leak, so the read gate refuses
+    the statement with VELES-009 instead."""
     with _Db(observer=_scope_to_acme) as db:
         collection = _seed(db)
-        out = collection.explain_analyze("SELECT * FROM docs LIMIT 10")
-    assert out["actual_stats"]["actual_rows"] == 1
+        with pytest.raises(Exception, match="scope narrowing is not supported"):
+            collection.explain_analyze("SELECT * FROM docs LIMIT 10")
 
 
 def test_scroll_scope_narrows():

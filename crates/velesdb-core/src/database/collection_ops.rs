@@ -536,13 +536,24 @@ impl Database {
 
     /// Returns diagnostics for a named collection.
     ///
+    /// Diagnostics carry the point count and index health — a collection read
+    /// the gate decides in-core so every surface inherits it: a denial
+    /// refuses it and a scope, with no rows to narrow, refuses it too
+    /// (`VELES-009`).
+    ///
     /// # Errors
     ///
-    /// Returns `Error::CollectionNotFound` if the collection does not exist.
+    /// Returns `Error::CollectionNotFound` if the collection does not exist,
+    /// or the read gate's refusal.
     pub fn collection_diagnostics(
         &self,
         name: &str,
     ) -> Result<crate::collection::CollectionDiagnostics> {
+        self.require_unscoped(
+            name,
+            crate::observer::QueryOperationKind::Select,
+            "collection diagnostics",
+        )?;
         if let Some(c) = self.get_vector_collection(name) {
             return Ok(c.diagnostics());
         }

@@ -246,7 +246,7 @@ fn test_database_create_collection_with_storage() {
 
     let col = db.get_collection("sq8_collection".to_string()).unwrap();
     assert!(col.is_some());
-    assert_eq!(col.unwrap().dimension(), 384);
+    assert_eq!(col.unwrap().dimension().expect("test: dimension"), 384);
 }
 
 #[test]
@@ -286,7 +286,7 @@ fn test_collection_upsert_and_search() {
     };
     col.upsert(point).unwrap();
 
-    assert_eq!(col.count(), 1);
+    assert_eq!(col.count().unwrap(), 1);
 
     let results = col.search(vec![1.0, 0.0, 0.0, 0.0], 1).unwrap();
     assert_eq!(results.len(), 1);
@@ -433,7 +433,7 @@ fn test_collection_upsert_batch() {
     ];
 
     col.upsert_batch(points).unwrap();
-    assert_eq!(col.count(), 3);
+    assert_eq!(col.count().unwrap(), 3);
 }
 
 #[test]
@@ -457,10 +457,10 @@ fn test_collection_delete() {
     })
     .unwrap();
 
-    assert_eq!(col.count(), 1);
+    assert_eq!(col.count().unwrap(), 1);
 
     col.delete(42).unwrap();
-    assert_eq!(col.count(), 0);
+    assert_eq!(col.count().unwrap(), 0);
 }
 
 #[test]
@@ -494,7 +494,7 @@ fn test_collection_compact_storage() {
         freed > 0,
         "compact_storage should reclaim bytes after 2 deletes"
     );
-    assert_eq!(col.count(), 3);
+    assert_eq!(col.count().unwrap(), 3);
 }
 
 #[test]
@@ -518,7 +518,7 @@ fn test_collection_guardrails_update_and_read() {
     })
     .unwrap();
 
-    let read = col.guard_rails();
+    let read = col.guard_rails().expect("test: guard_rails");
     assert_eq!(read.max_depth, 7);
     assert_eq!(read.timeout_ms, 5000);
     assert_eq!(read.rate_limit_qps, 50);
@@ -532,7 +532,7 @@ fn test_update_guardrails_refuses_a_zero_rate_limit_and_changes_nothing() {
     db.create_collection("gr".to_string(), 4, DistanceMetric::Cosine)
         .unwrap();
     let col = db.get_collection("gr".to_string()).unwrap().unwrap();
-    let before = col.guard_rails();
+    let before = col.guard_rails().expect("test: guard_rails");
 
     let refused = db.update_guardrails(MobileQueryLimits {
         rate_limit_qps: 0,
@@ -541,7 +541,10 @@ fn test_update_guardrails_refuses_a_zero_rate_limit_and_changes_nothing() {
     });
 
     assert!(refused.is_err());
-    assert_eq!(col.guard_rails().timeout_ms, before.timeout_ms);
+    assert_eq!(
+        col.guard_rails().expect("test: guard_rails").timeout_ms,
+        before.timeout_ms
+    );
 }
 
 #[test]
@@ -617,7 +620,10 @@ fn test_collection_apply_advanced_config() {
     .unwrap();
 
     // Both streaming components were installed live (none ran before).
-    assert!(col.pending_reopen().is_empty());
+    assert!(col
+        .pending_reopen()
+        .expect("test: pending_reopen")
+        .is_empty());
 
     let cfg2 = col.inner.config();
     assert_eq!(cfg2.pq_rescore_oversampling, Some(8));
@@ -652,9 +658,9 @@ fn test_collection_with_json_payload() {
     };
 
     col.upsert(point).unwrap();
-    assert_eq!(col.count(), 1);
+    assert_eq!(col.count().unwrap(), 1);
 
-    let fetched = col.get_by_id(1).expect("point 1 should exist");
+    let fetched = col.get_by_id(1).unwrap().expect("point 1 should exist");
     let payload_str = fetched.payload.expect("payload should persist");
     let got: serde_json::Value =
         serde_json::from_str(&payload_str).expect("stored payload must be valid JSON");
@@ -692,7 +698,11 @@ fn test_all_five_metrics() {
             payload: None,
         })
         .unwrap();
-        assert_eq!(col.count(), 1, "Collection {name} should have 1 point");
+        assert_eq!(
+            col.count().unwrap(),
+            1,
+            "Collection {name} should have 1 point"
+        );
     }
 
     assert_eq!(db.list_collections().len(), 5);
@@ -731,7 +741,11 @@ fn test_untrained_storage_modes_full_upsert_flow() {
             payload: None,
         })
         .unwrap();
-        assert_eq!(col.count(), 1, "Collection {name} should have 1 point");
+        assert_eq!(
+            col.count().unwrap(),
+            1,
+            "Collection {name} should have 1 point"
+        );
     }
 
     assert_eq!(db.list_collections().len(), 3);
@@ -1139,7 +1153,7 @@ fn test_collection_diagnostics_with_data() {
     let col = db.get_collection("diag_test".to_string()).unwrap().unwrap();
 
     // Empty collection: no vectors, not search-ready, index empty.
-    let empty = col.diagnostics();
+    let empty = col.diagnostics().unwrap();
     assert!(!empty.has_vectors);
     assert!(!empty.search_ready);
     assert!(empty.dimension_configured);
@@ -1161,7 +1175,7 @@ fn test_collection_diagnostics_with_data() {
     .unwrap();
 
     // Populated collection: vectors present, search-ready, index healthy.
-    let diag = col.diagnostics();
+    let diag = col.diagnostics().unwrap();
     assert!(diag.has_vectors);
     assert!(diag.search_ready);
     assert!(diag.dimension_configured);
@@ -1209,7 +1223,7 @@ fn test_regular_collection_not_metadata_only() {
         .unwrap()
         .unwrap();
 
-    assert!(!col.is_metadata_only());
+    assert!(!col.is_metadata_only().expect("test: is_metadata_only"));
 }
 
 // =========================================================================
@@ -1277,7 +1291,7 @@ fn test_get_by_id_existing() {
     })
     .unwrap();
 
-    let result = col.get_by_id(42);
+    let result = col.get_by_id(42).unwrap();
     assert!(result.is_some());
     let point = result.unwrap();
     assert_eq!(point.id, 42);
@@ -1298,7 +1312,7 @@ fn test_get_by_id_missing() {
         .unwrap()
         .unwrap();
 
-    let result = col.get_by_id(999);
+    let result = col.get_by_id(999).unwrap();
     assert!(result.is_none());
 }
 
@@ -1332,7 +1346,7 @@ fn test_get_multiple_ids() {
     ])
     .unwrap();
 
-    let results = col.get(vec![1, 2, 999]); // 999 doesn't exist
+    let results = col.get(vec![1, 2, 999]).unwrap(); // 999 doesn't exist
     assert_eq!(results.len(), 2); // Only 2 found
 }
 
@@ -1366,7 +1380,7 @@ fn test_collection_flush_and_all_ids() {
 
     col.flush().unwrap();
 
-    let mut ids = col.all_ids();
+    let mut ids = col.all_ids().unwrap();
     ids.sort_unstable();
     assert_eq!(ids, vec![4, 9]);
 }
@@ -1385,9 +1399,13 @@ fn test_collection_secondary_index_lifecycle() {
         .unwrap()
         .unwrap();
 
-    assert!(!col.has_secondary_index("category".to_string()));
+    assert!(!col
+        .has_secondary_index("category".to_string())
+        .expect("test"));
     col.create_index("category".to_string()).unwrap();
-    assert!(col.has_secondary_index("category".to_string()));
+    assert!(col
+        .has_secondary_index("category".to_string())
+        .expect("test"));
 }
 
 #[test]
@@ -1409,10 +1427,14 @@ fn test_collection_property_and_range_index_lifecycle() {
     col.create_range_index("Doc".to_string(), "year".to_string())
         .unwrap();
 
-    assert!(col.has_property_index("Doc".to_string(), "title".to_string()));
-    assert!(col.has_range_index("Doc".to_string(), "year".to_string()));
+    assert!(col
+        .has_property_index("Doc".to_string(), "title".to_string())
+        .expect("test"));
+    assert!(col
+        .has_range_index("Doc".to_string(), "year".to_string())
+        .expect("test"));
 
-    let indexes = col.list_indexes();
+    let indexes = col.list_indexes().expect("test: list_indexes");
     assert!(indexes
         .iter()
         .any(|idx| idx.label == "Doc" && idx.property == "title" && idx.index_type == "hash"));
@@ -1420,13 +1442,17 @@ fn test_collection_property_and_range_index_lifecycle() {
         .iter()
         .any(|idx| idx.label == "Doc" && idx.property == "year" && idx.index_type == "range"));
 
-    let usage = col.indexes_memory_usage();
+    let usage = col
+        .indexes_memory_usage()
+        .expect("test: indexes_memory_usage");
     assert!(usage > 0);
 
     assert!(col
         .drop_index("Doc".to_string(), "title".to_string())
         .unwrap());
-    assert!(!col.has_property_index("Doc".to_string(), "title".to_string()));
+    assert!(!col
+        .has_property_index("Doc".to_string(), "title".to_string())
+        .expect("test"));
 }
 
 #[test]
@@ -1456,7 +1482,7 @@ fn test_collection_analyze_and_get_stats() {
     let analyzed = col.analyze().unwrap();
     assert!(analyzed.total_points >= 2);
 
-    let snapshot = col.get_stats();
+    let snapshot = col.get_stats().unwrap();
     assert!(snapshot.total_points >= 2);
     assert!(snapshot.field_stats_count >= 1 || snapshot.column_stats_count >= 1);
 }
@@ -1619,6 +1645,22 @@ fn test_observer_deny_blocks_text_hybrid_and_velesql() {
             .is_err(),
         "VelesQL query must be gated"
     );
+}
+
+/// GIVEN a database whose observer denies every read
+/// WHEN a point is fetched by id, singly or in a batch
+/// THEN the lookup fails with the denial instead of returning the payload,
+///      as every other mobile read already does.
+#[test]
+fn test_observer_deny_blocks_point_lookup() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = seed_gated_db(path, std::sync::Arc::new(DenyAllObserver));
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    assert!(col.get(vec![1]).is_err(), "get must be gated");
+    assert!(col.get_by_id(1).is_err(), "get_by_id must be gated");
 }
 
 #[test]
@@ -1885,4 +1927,21 @@ fn test_open_without_config_keeps_default_limits() {
         .unwrap();
     db2.create_collection("second".to_string(), 4, DistanceMetric::Cosine)
         .unwrap();
+}
+
+/// GIVEN a database whose observer denies every read
+/// WHEN collection metadata is read — count, all_ids, stats, diagnostics
+/// THEN each fails with the denial like every other mobile read.
+#[test]
+fn test_observer_deny_blocks_metadata_reads() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let db = seed_gated_db(path, std::sync::Arc::new(DenyAllObserver));
+    let col = db.get_collection("vectors".to_string()).unwrap().unwrap();
+
+    assert!(col.count().is_err(), "count must be gated");
+    assert!(col.all_ids().is_err(), "all_ids must be gated");
+    assert!(col.get_stats().is_err(), "get_stats must be gated");
+    assert!(col.diagnostics().is_err(), "diagnostics must be gated");
 }

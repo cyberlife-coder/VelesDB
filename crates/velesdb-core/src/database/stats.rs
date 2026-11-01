@@ -7,15 +7,27 @@ use super::Database;
 impl Database {
     /// Analyzes a collection, caches stats, and persists them to disk.
     ///
+    /// ANALYZE walks the column store and returns what it computed — a
+    /// collection read the gate decides in-core so every surface inherits it
+    /// (the REST `POST /analyze`, the `ANALYZE` DDL statement, the Python and
+    /// CLI facades): a denial refuses it and a scope, with no rows to narrow,
+    /// refuses it too (`VELES-009`).
+    ///
     /// # Errors
     ///
     /// Returns an error if the name is invalid, the collection does not exist,
-    /// analysis fails, or stats cannot be serialized and written to disk.
+    /// the read gate denies the read, analysis fails, or stats cannot be
+    /// serialized and written to disk.
     pub fn analyze_collection(
         &self,
         name: &str,
     ) -> Result<crate::collection::stats::CollectionStats> {
         crate::validation::validate_collection_name(name)?;
+        self.require_unscoped(
+            name,
+            crate::observer::QueryOperationKind::Select,
+            "collection statistics",
+        )?;
 
         let collection = self.resolve_collection(name)?;
         let stats = collection.analyze()?;
@@ -42,6 +54,15 @@ impl Database {
     }
 
     /// Returns cached statistics when available, loading from disk if present.
+    ///
+    /// This method is deliberately **not** gated in-core: it is also the
+    /// engine's own calibration source — `build_plan_with_stats` consults it
+    /// on every uncached `execute_query`, so a consult per call would fire
+    /// the observer on internal plan builds, not on caller reads. Every
+    /// *surface* that exposes it to a caller must gate it instead: the REST
+    /// `GET /stats` handler and the Python `get_collection_stats` binding do
+    /// (`authorize_unscoped_read` / `deny_if_scoped`). New surfaces must do
+    /// the same — this is the documented boundary, not an oversight.
     ///
     /// # Errors
     ///

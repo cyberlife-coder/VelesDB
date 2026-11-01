@@ -284,7 +284,7 @@ mod tests {
         sm.store_with_ttl(7, "ephemeral", &emb, 0).unwrap();
 
         // Not tracked and not physically present.
-        assert_eq!(sm.count(), 0);
+        assert_eq!(sm.count().expect("test: count"), 0);
         assert!(sm.get(7).unwrap().is_none());
     }
 
@@ -296,12 +296,12 @@ mod tests {
 
         let emb = vec![1.0_f32, 0.0, 0.0, 0.0];
         sm.store(7, "live", &emb).unwrap();
-        assert_eq!(sm.count(), 1);
+        assert_eq!(sm.count().expect("test: count"), 1);
 
         // ttl=0 over an existing id removes it physically.
         sm.store_with_ttl(7, "replace-then-expire", &emb, 0)
             .unwrap();
-        assert_eq!(sm.count(), 0);
+        assert_eq!(sm.count().expect("test: count"), 0);
         assert!(sm.get(7).unwrap().is_none());
     }
 
@@ -322,12 +322,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::open(dir.path()).unwrap());
         let sm = make_semantic(Arc::clone(&db));
-        assert!(sm.is_empty());
-        assert_eq!(sm.count(), 0);
+        assert!(sm.is_empty().expect("test: is_empty"));
+        assert_eq!(sm.count().expect("test: count"), 0);
 
         sm.store(1, "a", &[1.0, 0.0, 0.0, 0.0]).unwrap();
-        assert!(!sm.is_empty());
-        assert_eq!(sm.count(), 1);
+        assert!(!sm.is_empty().expect("test: is_empty"));
+        assert_eq!(sm.count().expect("test: count"), 1);
     }
 
     #[test]
@@ -465,7 +465,7 @@ mod tests {
         sm.store(2, "b", &[0.0, 1.0, 0.0, 0.0]).unwrap();
         sm.clear().unwrap();
 
-        assert!(sm.is_empty());
+        assert!(sm.is_empty().expect("test: is_empty"));
         assert!(sm.list_all().unwrap().is_empty());
     }
 
@@ -481,7 +481,7 @@ mod tests {
             vec![(1, "one", e1.as_slice()), (2, "two", e2.as_slice())];
         sm.store_batch(&facts).unwrap();
 
-        assert_eq!(sm.count(), 2);
+        assert_eq!(sm.count().expect("test: count"), 2);
         assert_eq!(sm.get(1).unwrap().unwrap().0, "one");
         assert_eq!(sm.get(2).unwrap().unwrap().0, "two");
     }
@@ -775,7 +775,7 @@ mod tests {
         }
 
         // Half of each thread's writes were deleted: 4 threads * 12 survivors.
-        assert_eq!(sm.count(), 4 * 12);
+        assert_eq!(sm.count().expect("test: count"), 4 * 12);
     }
 
     // ── Reserved durable-TTL key: user "expires_at" metadata is business data ──

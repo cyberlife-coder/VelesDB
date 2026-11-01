@@ -399,6 +399,11 @@ impl VectorCollection {
 
     /// Executes an aggregation query (GROUP BY / COUNT / SUM / AVG / MIN / MAX).
     ///
+    /// A collection handle carries no observer, so this never consults the
+    /// read gate. A database opened with an observer is aggregated through
+    /// [`Database::execute_aggregate`](crate::Database::execute_aggregate),
+    /// which applies its `Deny` and `AllowWithScope` decisions.
+    ///
     /// # Errors
     ///
     /// - Returns an error if the query is invalid or aggregation computation fails.

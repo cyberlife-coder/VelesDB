@@ -42,9 +42,8 @@ pub(crate) fn execute(
     // Read-path gate (audit F-5.4, #1392): consulted before any store access.
     // Placed ahead of the JOIN early-return below so joined SELECTs are gated
     // too. Set-operation operands re-enter here via `velesql_setops::run_select`,
-    // so each operand is gated with its own source collection. Zero-overhead
-    // when no observer is registered.
-    db.check_query_access(&query.select.from, WasmQueryOperationKind::Select)?;
+    // so each operand is gated with its own source collection.
+    check_select_access(db, &query.select)?;
 
     if !query.let_bindings.is_empty() {
         return Err("LET bindings are not supported in WASM".to_string());
@@ -64,6 +63,17 @@ pub(crate) fn execute(
     };
 
     finalize(&query.select, rows, params)
+}
+
+/// Consults the read gate for every collection a SELECT reads: its source,
+/// and each JOIN's secondary collection, whose rows the join merges into the
+/// result. Zero-overhead when no observer is registered.
+fn check_select_access(db: &DatabaseInner, select: &SelectStatement) -> Result<(), String> {
+    db.check_query_access(&select.from, WasmQueryOperationKind::Select)?;
+    for join in &select.joins {
+        db.check_query_access(&join.table, WasmQueryOperationKind::Select)?;
+    }
+    Ok(())
 }
 
 // --- Plain scan ----------------------------------------------------------

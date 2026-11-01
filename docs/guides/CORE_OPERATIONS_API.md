@@ -29,7 +29,7 @@ a single `Option` check per hook.
 |------|---------------|------------|
 | `on_ddl_request(operation, collection)` | before a VelesQL DDL statement: `CREATE`, `DROP`, `CREATE_INDEX`, `DROP_INDEX`, `ANALYZE`, `TRUNCATE`, `ALTER` | yes, by returning `Err` |
 | `on_dml_mutation_request(operation, collection)` | before a VelesQL `INSERT_EDGE`, `INSERT_NODE`, `DELETE` or `DELETE_EDGE` | yes, by returning `Err` |
-| `on_query_request(&QueryAccessContext)` | before every VelesQL `SELECT` / `MATCH` read, and every `gated_search` / `authorize_read` call | yes, through `AccessDecision` |
+| `on_query_request(&QueryAccessContext)` | before a VelesQL `SELECT`, aggregate, `MATCH` or `SELECT EDGES` reads anything — once for each collection it reads — and on every `gated_search` / `authorize_read` call | yes, through `AccessDecision` |
 | `on_collection_created`, `on_collection_deleted` | after a collection is created or deleted, through VelesQL or the Rust API | no (telemetry) |
 | `on_upsert(collection, count)` | after a VelesQL `INSERT` / `UPSERT` | no (telemetry) |
 | `on_query(collection, duration_us)` | after a VelesQL read through `Database::execute_query` | no (telemetry) |
@@ -49,6 +49,17 @@ and deletion fire for it; a `gated_search` (below) consults
   `Condition`, AND-composed into the query's own filter, so a scope can only
   narrow a result set. `scope.tenant` is forwarded for audit and routing; core
   does not turn it into a filter.
+
+A VelesQL statement can read several collections, and each is decided on its
+own: the collection it targets (its `FROM`, or the `_collection` parameter a
+`MATCH` or an aggregate can be sent with), every `UNION` / `INTERSECT` /
+`EXCEPT` operand, every JOIN's secondary collection, every `@collection` a
+`MATCH` node is enriched from, and every scalar subquery's collection. A scope
+on the target or on an operand joins that select's `WHERE`, so `COUNT`,
+`SUM`, `GROUP BY` and `HAVING` see only the scoped rows. A traversal, a JOIN's
+secondary side, `@collection` enrichment and `SELECT EDGES` have no row filter
+to compose a scope into: a scope with a filter on one of them refuses the
+statement with `Error::Config` (`VELES-009`) rather than run it unscoped.
 
 Its `Err` channel is for a failure of the observer itself; a refusal is a
 `Deny`. `QueryAccessContext` carries the `collection`, the `operation`

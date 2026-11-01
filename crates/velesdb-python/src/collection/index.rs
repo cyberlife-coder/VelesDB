@@ -5,7 +5,8 @@ use pyo3::types::{PyDict, PyString};
 
 use crate::collection_helpers::core_err;
 
-use super::Collection;
+use super::{deny_if_scoped, Collection};
+use velesdb_core::QueryOperationKind;
 
 #[pymethods]
 impl Collection {
@@ -35,14 +36,18 @@ impl Collection {
 
     /// Check if a property index exists.
     #[pyo3(signature = (label, property))]
-    fn has_property_index(&self, label: &str, property: &str) -> bool {
-        self.inner.has_property_index(label, property)
+    fn has_property_index(&self, label: &str, property: &str) -> PyResult<bool> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_property_index")?;
+        Ok(self.inner.has_property_index(label, property))
     }
 
     /// Check if a range index exists.
     #[pyo3(signature = (label, property))]
-    fn has_range_index(&self, label: &str, property: &str) -> bool {
-        self.inner.has_range_index(label, property)
+    fn has_range_index(&self, label: &str, property: &str) -> PyResult<bool> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_range_index")?;
+        Ok(self.inner.has_range_index(label, property))
     }
 
     /// List all indexes on this collection.
@@ -53,6 +58,8 @@ impl Collection {
     ///     is ``secondary``), cardinality (distinct values) and memory_bytes
     ///     (estimated heap size).
     fn list_indexes(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let scope = self.authorize(QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "list_indexes")?;
         let indexes = self.inner.list_indexes();
         let py_indexes: Vec<Py<PyAny>> = indexes
             .into_iter()

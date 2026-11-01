@@ -104,6 +104,61 @@ requests.
 (`ORDER BY d.year`), or order by `similarity()`, `similarity(field, $v)`,
 `depth` or arithmetic over a property (`year - 2000`).
 
+### Reads the access gate now decides
+
+This matters only with a `DatabaseObserver` attached
+(`Database::open_with_observer`, the server's and Tauri's observer
+injection). In 7.1.0 the reads below skipped its `on_query_request`, so a
+`Deny` did not stop them and an `AllowWithScope` filter did not narrow them.
+In 8.0.0 each one asks the observer about the collection it reads.
+
+| Read | 7.1.0 | 8.0.0 under `Deny` | 8.0.0 under a scope |
+|---|---|---|---|
+| An aggregate (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `GROUP BY`, `HAVING`): `Database::execute_aggregate`, REST `/aggregate` and `/query`, the CLI, the Tauri `query` command | every row | the denial | the scoped rows |
+| A scalar subquery reduced by an aggregate, in any statement | every row of its collection | the denial of its collection | its collection's scoped rows |
+| A `UNION` / `INTERSECT` / `EXCEPT` operand after the first | undecided, unscoped | the denial of its collection | its collection's scoped rows |
+| A JOIN's secondary collection | undecided | the denial | refused, `VELES-009` |
+| `MATCH` with its collection in `_collection` | decided on `""`, scope dropped | the denial | refused, `VELES-009` |
+| `MATCH` `@collection` enrichment | undecided | the denial | refused, `VELES-009` |
+| `SELECT EDGES` | undecided | the denial | refused, `VELES-009` |
+| Mobile `get(ids)`, `getById(id)` | undecided | throws the denial | (scopes are not bridged on mobile) |
+| REST `GET /collections/{name}/points/{id}` | undecided | the denial's status and code | a point outside the scope is `404` `VELES-003` |
+| REST `POST /collections/{name}/points/scroll` | undecided | the denial's status and code | the scoped points |
+| REST `GET /collections/{name}/points/{id}/relations` | undecided | the denial's status and code | refused, `400` `VELES-009` |
+| `DESCRIBE COLLECTION`, on any surface | undecided | the denial | refused, `VELES-009` |
+| A plan-only `EXPLAIN` (VelesQL, REST `/query/explain` with `analyze: false`, Python `explain()`) | undecided | the denial | refused, `VELES-009` |
+| Collection metadata — REST `GET /collections/{name}` `/empty` `/sanity` `/config` `/stats` `/diagnostics`, Python `count()`/`len()`/`info()`/`is_empty()`/`analyze()`, wasm `len`/`is_empty` | undecided | the denial | refused, `VELES-009` |
+| Mobile `count()`, `all_ids()`, `get_stats()`, `diagnostics()` | undecided | throws the denial | (scopes are not bridged on mobile) |
+| `GET /collections/{name}/graph/traverse/stream` (SSE) | never asked | the denial's status and code | refused, `400` `VELES-009` |
+| Every `AgentMemory` read — `query_semantic`/`query_episodic`/`query_procedural` and the native `query`/`recent`/`recall`/`list_all`/`serialize`/relation accessors — and the Tauri memory commands over them | undecided | the denial | refused, `VELES-009` |
+| Tauri `search`, `search_ids`, `batch_search`, `text_search`, `hybrid_search`, `multi_query_search`, `sparse_search`, `hybrid_sparse_search`, `get_points`, `scroll_collection`, `get_edges`, `traverse_graph`, `traverse_graph_parallel`, `get_node_degree`, `get_collection`, `list_collections`, `is_empty`, `list_indexes` | never asked | the command fails with the denial | the scope narrows the filterable reads; the others refuse |
+| `SemanticMemory::edge_count`/`count`/`is_empty`, `EpisodicMemory::get_with_embedding` | undecided | the denial | refused, `VELES-009` |
+| Every `PyGraphCollection` direct read (`get_edges`, `get_outgoing*`/`get_incoming*`, `has_edge`, `node_degree`, `get_node_payload`, `all_node_ids`, `traverse_*`, `edge_count`, `__len__`/`count`/`is_empty`, `get`, `__contains__`) | undecided | raises `PermissionError` | refused (`PermissionError`, no filterable leaf) |
+| Index and collection-config metadata — Python `has_*_index`/`list_indexes`/`indexes_memory_usage`/`dimension`/`metric`/`storage_mode`/`is_metadata_only`/`pending_reopen`/`guard_rails`/`is_delta_active`/`check_auto_reindex_divergence`, mobile `has_*_index`/`list_indexes`/`indexes_memory_usage`/`dimension`/`is_metadata_only`/`guard_rails`/`pending_reopen` | undecided | raises / throws the denial | refused |
+| `analyze()` on Python `Collection` and mobile `VelesCollection`, `Database.analyze_collection`/`get_collection_stats`/`collection_diagnostics` (Python), REST `POST /collections/{name}/analyze` | undecided | the denial | refused, `VELES-009` |
+| `Database::explain_query` and Python `Collection.explain()` (now also on the query's `FROM`, not only the bound collection) | undecided | the denial | refused, `VELES-009` |
+
+A read refused with `VELES-009` has no row filter to compose the scope into,
+so it is refused rather than run unscoped, as the server's graph and `/match`
+endpoints already answered. **Fix:** a policy that scopes a collection read by
+a JOIN or a traversal answers `Allow` for it, or the read moves to a
+filterable form — a `SELECT` with the scope's predicate on that collection.
+`QueryAccessContext::collection` now names the collection actually read: a
+`MATCH` sent with `_collection` reports that collection, where 7.1.0 reported
+an empty name.
+
+A scope filter must be a **self-contained row predicate** on the scoped
+collection's own payloads: no `similarity()`/vector/graph directives, no
+full-text `MATCH`, no `$param` placeholders or subquery values (they have no
+resolution context at the gate — they would bind to the *caller's* params),
+and no column qualified with a JOIN table (`other.col` would push down to the
+join side, where a `LEFT JOIN` leaks the base rows anyway). An inexpressible
+scope refuses the read with `VELES-009` on every surface — 7.1.0's
+`AllowWithScope` contract did not exist, and the first 8.0.0 builds lowered
+such a scope to a match-all tautology or a different predicate and ran
+unscoped. `CONTAINS_TEXT` stays legal (it already is a strict substring
+predicate).
+
 ### REST statuses
 
 Every REST error built from a core error (`velesdb_core::Error`) takes its
@@ -126,6 +181,8 @@ failure `422` with a `VELESQL_*` code (their contract).
 | A read the access gate denied | `/search/text` | `500` | the denial error's status |
 | A read the access gate denied | `/search/batch`, `/search/multi`, `/search/multi/ids`, every graph read (`/graph/edges`, `/graph/edges/count`, `/graph/nodes`, `/graph/nodes/{id}/edges`, `/graph/nodes/{id}/payload`, `/graph/nodes/{id}/degree`, `/graph/traverse`, `/graph/traverse/parallel`, `/graph/search`) | `403`, no code | the denial error's status and code |
 | A scope narrowing the endpoint cannot apply | the same | `403` | `400` `VELES-009` |
+| A read the access gate denied | `GET /points/{id}`, `/points/scroll`, `GET /points/{id}/relations` | not asked (section above) | the denial error's status and code |
+| A read the access gate denied | `/aggregate`, an aggregate on `/query` | not asked (section above) | `422` for a client error (a `VELESQL_*` code), the canonical `5xx` for an engine error |
 | Any core error | `/graph/search`, `GET`/`PUT /graph/nodes/{id}/payload` | `500`, no code | its canonical status and code (a query vector of the wrong dimension: `400` `VELES-004`) |
 | An invalid edge | `POST /graph/edges`, `/graph/edges/batch`, `/relations` | `400`, no code | `400` with its code |
 | A core error setting a point's TTL | `/points/{id}/ttl` | `500`, no code | its canonical status and code |
@@ -428,6 +485,20 @@ Rejections carry core's codes and a new `recoverable` field:
 
 **Migration:** an app holding a graph saved by the old `save(path)` calls
 `importSnapshot(path)` once on the new store.
+
+### Point lookup throws
+
+`VelesCollection.get(ids)` and `getById(id)` now pass the read gate, like
+every other mobile read, so they throw when a `MobileObserver` denies the
+read; 7.1.0 returned the points. A Swift call needs `try`, and Kotlin code
+that must not fail on a denial catches `VelesException`.
+
+### Metadata reads throw
+
+`count()`, `allIds()`, `getStats()` and `diagnostics()` now pass the same
+gate — a `point_count` is a collection read — so they return `Result` and
+throw the `MobileObserver`'s denial where 7.1.0 returned the value. The
+same `try`/catch applies.
 
 ### Errors
 

@@ -51,6 +51,12 @@ pub async fn list_indexes<R: Runtime>(
 ) -> std::result::Result<Vec<crate::types::IndexInfoOutput>, CommandError> {
     state
         .run_db(move |db| {
+            crate::helpers::require_unscoped_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::Select,
+                "list_indexes",
+            )?;
             let coll = require_vector_collection(&db, &request.collection)?;
             let indexes = coll.list_indexes();
             Ok(indexes
