@@ -359,10 +359,11 @@ fn scroll_gated(
 }
 
 /// Whether a point falls inside a read scope: always without one, and only
-/// when its payload matches the scope filter with one (a point without a
-/// payload matches no filter).
+/// when the scope filter accepts the point — its payload (`None` reads as
+/// `null`, matching no field condition) and its id (an `id` filter can match
+/// a point with no payload).
 fn in_scope(point: &Point, scope: Option<&velesdb_core::Filter>) -> bool {
-    scope.is_none_or(|filter| point.payload.as_ref().is_some_and(|p| filter.matches(p)))
+    scope.is_none_or(|filter| filter.matches_point(point.id, point.payload.as_ref()))
 }
 
 /// AND-composes the caller's filter with the read gate's scope filter, so the
