@@ -30,6 +30,9 @@ if [ -z "$cwd" ]; then
 fi
 
 resolve_config "$cwd"
+# Drop evidence of sessions idle past the bound (lib/common.sh): records a
+# dead session left behind never reach a checkpoint otherwise.
+prune_stale_evidence || true
 # Open the window a later Stop reads reverts from (lib/common.sh); kept when
 # this is a resume or a post-compaction start of the same session.
 if [ -n "$session_id" ] \

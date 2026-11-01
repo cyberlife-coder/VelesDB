@@ -45,9 +45,12 @@ if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload"; the
 fi
 
 # Credit assignment (lib/common.sh): the ids a successful recall returned, for
-# the Stop checklist to name. Check outcomes are not read here: the shell
-# result shape of a Codex PostToolUse payload has not been measured.
+# the Stop checklist to name — only where the learning loop is opted in, gated
+# like the unlock above, so an unconfigured repository keeps no records.
+# Check outcomes are not read here: the shell result shape of a Codex
+# PostToolUse payload has not been measured.
 if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload" \
+  && learning_loop_enabled && recall_targets_current_project "$payload" \
   && read_exact recalled_dir record_dir_path "codex-recalled-memories" "$session_id"; then
   # shellcheck disable=SC2154 # read_exact sets recalled_dir (printf -v)
   record_recalled_memories "$recalled_dir" "$tool_name" "$payload" || true

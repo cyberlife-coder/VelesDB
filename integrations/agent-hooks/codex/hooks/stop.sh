@@ -52,22 +52,7 @@ fi
 
 # shellcheck disable=SC2154 # read_exact sets checkpoint_manifest (printf -v)
 if valid_private_marker "$checkpoint_manifest"; then
-  if ! jq -e '
-    type == "object"
-    and ((keys | sort) == ["state", "targets"] or (keys | sort) == ["evidence", "state", "targets"])
-    and ((has("evidence") | not)
-      or ((.evidence | type) == "object"
-        and ((.evidence | keys | sort) == ["checks", "recalled", "reverts"])
-        and all(.evidence[]; type == "array")))
-    and (.state == "pending" or .state == "delivered")
-    and ((.targets | type) == "array" and (.targets | length) > 0)
-    and all(.targets[];
-      type == "object"
-      and ((keys | sort) == ["project", "root", "session"])
-      and ((.project | type) == "string")
-      and ((.session | type) == "string")
-      and ((.root | type) == "string" and (.root | length) > 0))
-  ' "$checkpoint_manifest" >/dev/null 2>&1; then
+  if ! valid_checkpoint_manifest "$checkpoint_manifest"; then
     reason="VelesDB checkpoint manifest is malformed. Keep the session open, inspect $checkpoint_manifest, and retry Stop; no captured repository identity was discarded."
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
     exit 0

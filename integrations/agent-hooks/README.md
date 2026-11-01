@@ -31,7 +31,7 @@ Claude Code equivalent · ❌ = not shipped, with the reason spelled out.
 | Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ✅ `codex/hooks/session-start.sh` on `SessionStart`, via `additionalContext` |
 | Save/checkpoint working context | ✅ first Stop plus every later covered edit batch when opted in; otherwise the first Stop keeps the legacy save reminder | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ same session-and-edit checkpoint as Claude; otherwise the first Stop keeps the legacy save reminder |
 | Require successful recall before the first repository edit | ✅ `pre-tool-use.sh` refuses `Edit`/`Write`; `post-tool-use.sh` marks only a successful VelesDB recall | ❌ not implemented | ✅ `codex/hooks/pre-tool-use.sh` refuses `apply_patch`; its PostToolUse partner applies the same success rule |
-| Name the exact memories recall returned in the Stop checklist | ✅ `post-tool-use.sh` records the ids of every successful `recall`, `recall_where`, `recall_fused` and `why`, with the server's `stale` verdict; `stop.sh` names them | ❌ not implemented | ✅ same, through `codex/hooks/post-tool-use.sh`, whose matcher already covers those tools |
+| Name the exact memories recall returned in the Stop checklist | ✅ `post-tool-use.sh` records the ids of every successful `recall`, `recall_where`, `recall_fused` and `why`, with the server's `stale` verdict — only where the learning loop is opted in; `stop.sh` names them | ❌ not implemented | ✅ same, through `codex/hooks/post-tool-use.sh`, whose matcher already covers those tools |
 | Check outcomes as feedback evidence (test, build, lint) | ✅ `post-tool-use.sh` (exit 0) and `post-tool-use-failure.sh` (`Exit code N`) record a single check command; `stop.sh` lists one that failed then passed, or still fails | ❌ not implemented | ❌ **not shipped.** The PostToolUse matcher is limited to VelesDB tools, and the shape a Codex shell result reports its exit status in has not been measured here. Wiring it on an assumed field would record outcomes nobody verified |
 | Reverts as feedback evidence | ✅ `stop.sh` reads git, in each repository the checkpoint names, for commits since the window `session-start.sh` opened whose message reverts another | ❌ not implemented | ✅ same, read at `Stop`, so it needs no shell payload |
 | Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ⚠️ **no pre-compaction hook is possible.** `PreCompact`/`PostCompact` support neither `additionalContext` nor a documented `decision`/`reason`, so nothing a hook prints there reaches the model. `codex/hooks/session-start.sh` compensates *after the fact* on `source == "compact"` |
@@ -447,10 +447,22 @@ self-assessment this design removes.
 
 The records live beside the edit records, under the same rules: one private
 directory per kind and host session, one atomically replaced file per memory or
-per check, at most 64 of each, and a link or a malformed record makes `Stop`
-block and report it instead of following or discarding it. The checkpoint that
-names them consumes them, through the same pending/delivered manifest as the
-edited repositories, so an interrupted `Stop` re-emits the same evidence.
+per check, at most 64 of each — past that cap the OLDEST records are evicted
+and the checklist says the list is truncated and by how many. A `stale`
+verdict also writes a tombstone: it is the strongest verdict of the window and
+a later recall that did not judge anchors never clears it. Records are kept
+only where the learning loop is opted in, and session evidence idle for more
+than a week is pruned at `SessionStart`. A link or a malformed record — or a
+forged entry in a recovered manifest — makes `Stop` block and report it
+instead of following or discarding it. The checkpoint that names them consumes
+them, through the same pending/delivered manifest as the edited repositories,
+so an interrupted `Stop` re-emits the same evidence.
+
+The reverts are read through one hardened `git` helper shared by both hosts:
+`env` scrubbed of `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`/
+`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_NOSYSTEM=1`, `--no-optional-locks`,
+`log.showSignature=false`, no fsmonitor and `core.pager=cat` — so no program a
+repository's own config names can run at `Stop`.
 
 ## `.velesdb-hooks.json` config format
 
