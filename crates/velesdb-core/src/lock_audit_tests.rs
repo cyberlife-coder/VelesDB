@@ -504,6 +504,14 @@ fn the_fanout_scan_refuses_each_unjustified_wait() {
             "fn f() { std::thread::spawn(|| 1); }",
         ),
         (
+            "prose naming the marker without its colon",
+            "fn f() {\n    // takes no collection lock. The merge scores pending points under the\n    std::thread::scope(|s| { s.spawn(|| 1); });\n}",
+        ),
+        (
+            "a `//` inside a same-line string literal",
+            "fn f() { let s = \"docs say: // no collection lock is the marker\"; std::thread::spawn(|| 1); }",
+        ),
+        (
             "a join a marker on another line does not cover",
             "fn f() { let h = std::thread::spawn(|| 1); }\nfn g() { h.join(); }",
         ),
