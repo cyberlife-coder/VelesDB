@@ -34,8 +34,10 @@
 //!    a partition key rather than a sort key. Fixed by snapshotting partition
 //!    keys alongside ORDER BY values, up-front.
 
+use super::group_key::normalise;
 use crate::velesql::{WindowFunction, WindowFunctionType, WindowOrderBy};
 use crate::SearchResult;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 /// Pre-computed per-row snapshot of the inputs a single window function
@@ -354,11 +356,11 @@ fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Valu
 /// Extracts a canonical-JSON string representation of a payload value for
 /// partition keys.
 ///
-/// Uses `serde_json`'s `Display` (`value.to_string()`) rather than extracting
-/// the inner string for `Value::String`. This preserves the JSON type
-/// discriminator (quotes around strings, bare digits for numbers, `null`
-/// literal for NULL) so rows with different types cannot collide into the
-/// same partition.
+/// Numbers key as `GROUP BY` keys them (`group_key::normalise`): `1` and
+/// `1.0`, or `0` and `-0.0`, share a partition. `serde_json`'s `Display`
+/// (`value.to_string()`) then preserves the JSON type discriminator (quotes
+/// around strings, bare digits for numbers, `null` literal for NULL) so
+/// rows with different types cannot collide into the same partition.
 ///
 /// Examples of collisions that this prevents:
 /// - `Value::Null` vs `Value::String("null")` → `null` vs `"null"` (distinct)
@@ -368,7 +370,7 @@ fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Valu
 /// Consistent with `distinct_evaluator::canonical_json_string` which applies the same
 /// rule for DISTINCT deduplication keys.
 fn extract_payload_value(result: &SearchResult, column: &str) -> String {
-    extract_nested_value(result, column).to_string()
+    normalise(Cow::Owned(extract_nested_value(result, column))).to_string()
 }
 
 /// Compares two window ORDER BY values in the order every ORDER BY uses
