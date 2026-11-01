@@ -566,7 +566,13 @@ a test's stand-in for an application's pool, whose jobs may call into a
 collection — and each guard counts itself in a thread-local while it lives,
 which the helpers' assert reads. `no_module_but_pools_names_rayon` refuses
 any other module that names rayon, a thread pool, a parallel iterator or a
-pool's `install`; its fixtures pin each way around it found so far.
+pool's `install`; its fixtures pin each way around it found so far. The
+same rule holds one level down, where no pool is needed for the cycle:
+`no_unjustified_thread_fanout` refuses every `std::thread` fan-out —
+`thread::spawn`, `thread::scope`, a `JoinHandle`'s `join` — unless the site
+carries `no collection lock`, the marker naming why it cannot close a cycle
+(`scripts/check_hnsw_rayon_pool.py` holds `index/hnsw/` to the same rule,
+keyed by ALLOWED reason instead of a marker).
 `rayon_caller_tests` merges 256 ids from a one-worker application pool while
 that pool's other job reads the collection behind a queued writer, and
 requires the merge to finish.

@@ -1445,7 +1445,7 @@
     },
     {
       "script": "scripts/check_hnsw_rayon_pool.py",
-      "purpose": "No HNSW rayon submission reaches the GLOBAL pool without a written reason (#2343): a holder of HnswIndex::inner that joins on the global pool closes a deadlock cycle with a pending vacuum writer.",
+      "purpose": "No HNSW rayon submission reaches the GLOBAL pool without a written reason (#2343): a holder of HnswIndex::inner that joins on the global pool closes a deadlock cycle with a pending vacuum writer. Also refused, .install( or not: std::thread fan-out (spawn, scope, JoinHandle::join, .join()) under index/hnsw/ — the same cycle needs no pool.",
       "workflow": ".github/workflows/ci.yml",
       "job": "lint",
       "required": true,
@@ -1454,7 +1454,7 @@
       "self_test_required": true,
       "blind_spot": {
         "issue": null,
-        "summary": "Two, both declared. (1) It cannot decide whether a submission runs under a held guard: the one that deadlocked reached par_iter three calls down, in another file. It does not try -- it requires every submission to be on the dedicated pool or listed in ALLOWED with a reason, so a new one is refused until someone writes that reason down. (2) Its companion check for a writer on NativeHnswIndex::inner scans index/hnsw/ only, not the whole crate: `inner` is a common field name and a crate-wide scan reported six writers on unrelated locks (cache::lru, velesql::cache). The field is pub(crate), so a writer added from outside index/hnsw/ escapes it; narrowing that field to its module would let the compiler enforce it instead. The behavioural half of the rule is crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs, which parks every global rayon worker and requires each guard holder to finish anyway. Two scope exclusions, named so the promise is not read as wider than the check: `*_tests.rs` files are skipped (a test submitting on the global pool starves nothing a vacuum waits on), and any receiver's `.install(` is accepted, not only `graph_pool()` (every non-global pool breaks the cycle). Neither is checked against what the jobs inside actually take."
+        "summary": "Three, all declared. (1) It cannot decide whether a submission runs under a held guard: the one that deadlocked reached par_iter three calls down, in another file. It does not try -- it requires every submission to be on the dedicated pool or listed in ALLOWED with a reason, so a new one is refused until someone writes that reason down. (2) Its companion check for a writer on NativeHnswIndex::inner scans index/hnsw/ only, not the whole crate: `inner` is a common field name and a crate-wide scan reported six writers on unrelated locks (cache::lru, velesql::cache). The field is pub(crate), so a writer added from outside index/hnsw/ escapes it; narrowing that field to its module would let the compiler enforce it instead. (3) The std::thread half covers spawn/scope/JoinHandle::join and empty .join() calls under index/hnsw/: a detached spawn joined nowhere cannot deadlock the spawner, but the guard cannot prove detachment, so it refuses the spawn too until ALLOWED carries the reason -- the crate-level twin (lock_audit_tests::no_unjustified_thread_fanout) uses a `no collection lock` marker per site instead. The behavioural half of the rule is crates/velesdb-core/src/index/hnsw/index/global_pool_tests.rs, which parks every global worker and requires each guard holder to finish anyway. Two scope exclusions, named so the promise is not read as wider than the check: *_tests.rs files are skipped (a test submitting on the global pool starves nothing a vacuum waits on), and any receiver's .install( is accepted, not only graph_pool() (every non-global pool breaks the cycle). Neither is checked against what the jobs inside actually take."
       },
       "must_refuse": [
         {
@@ -1477,6 +1477,19 @@
           },
           "accepts": {
             "crates/velesdb-core/src/index/hnsw/native_index.rs": "impl NativeHnswIndex {\n    pub fn peek(&self) {\n        let inner = self.inner.read();\n        inner.len();\n    }\n}\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a new HNSW function that joins a std::thread while holding inner.read() - #2343's cycle without a pool",
+          "files": {
+            "crates/velesdb-core/src/index/hnsw/newcomer.rs": "impl HnswIndex {\n    fn a_new_holder(&self) -> usize {\n        let inner = self.inner.read();\n        std::thread::spawn(|| inner.score(0)).join().unwrap_or(0)\n    }\n}\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/index/hnsw/newcomer.rs": "impl HnswIndex {\n    fn a_new_holder(&self) -> usize {\n        let inner = self.inner.read();\n        inner.score(0)\n    }\n}\n"
           },
           "argv": [
             "--root",

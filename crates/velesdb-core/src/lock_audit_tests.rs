@@ -233,6 +233,49 @@ fn is_char_literal(chars: &[char], i: usize) -> bool {
     }
 }
 
+/// One identifier in code-only source: its text, whether it is called
+/// (`name(`) and with an empty argument list (`name()`), whether it follows
+/// a `.`, its 1-based line, and the code before it on the line.
+struct Ident {
+    name: String,
+    called: bool,
+    empty_call: bool,
+    method: bool,
+    line: usize,
+    before: String,
+}
+
+/// The identifiers of `code` (comments and literals already stripped).
+fn idents(code: &str) -> Vec<Ident> {
+    let mut found = Vec::new();
+    for (line_no, line) in code.lines().enumerate() {
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if !(chars[i].is_alphabetic() || chars[i] == '_') || prev_is_ident(&chars, i) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let rest = chars[i..].iter().collect::<String>();
+            let trimmed = rest.trim_start();
+            found.push(Ident {
+                name: chars[start..i].iter().collect(),
+                called: trimmed.starts_with('('),
+                empty_call: trimmed.starts_with("()"),
+                method: start > 0
+                    && chars[..start].iter().rev().find(|c| !c.is_whitespace()) == Some(&'.'),
+                line: line_no + 1,
+                before: chars[..start].iter().collect(),
+            });
+        }
+    }
+    found
+}
+
 /// rayon's parallel-iterator traits, named for a UFCS call or an import.
 const RAYON_TRAITS: &[&str] = &[
     "ParallelIterator",
@@ -254,45 +297,108 @@ const RAYON_TRAITS: &[&str] = &[
 fn pool_violations(source: &str) -> Vec<String> {
     let code = code_only(source);
     let mut found = Vec::new();
-    for (line_no, line) in code.lines().enumerate() {
-        let chars: Vec<char> = line.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            if !(chars[i].is_alphabetic() || chars[i] == '_') || prev_is_ident(&chars, i) {
-                i += 1;
-                continue;
-            }
-            let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            let ident: String = chars[start..i].iter().collect();
-            let rest = chars[i..].iter().collect::<String>();
-            let called = rest.trim_start().starts_with('(');
-            let method =
-                start > 0 && chars[..start].iter().rev().find(|c| !c.is_whitespace()) == Some(&'.');
-            let why = if ident == "rayon" {
-                Some("names rayon")
-            } else if ident.starts_with("ThreadPool") {
-                Some("names a rayon thread pool")
-            } else if RAYON_TRAITS.contains(&ident.as_str()) {
-                Some("names a rayon parallel trait")
-            } else if (ident.starts_with("par_") || ident.starts_with("into_par_")) && called {
-                Some("calls a parallel iterator")
-            } else if method
-                && called
-                && matches!(ident.as_str(), "install" | "broadcast" | "spawn_broadcast")
-            {
-                Some("submits to a thread pool")
-            } else {
-                None
-            };
-            if let Some(why) = why {
-                found.push(format!("line {}: `{ident}` {why}", line_no + 1));
+    for ident in idents(&code) {
+        let why = if ident.name == "rayon" {
+            Some("names rayon")
+        } else if ident.name.starts_with("ThreadPool") {
+            Some("names a rayon thread pool")
+        } else if RAYON_TRAITS.contains(&ident.name.as_str()) {
+            Some("names a rayon parallel trait")
+        } else if (ident.name.starts_with("par_") || ident.name.starts_with("into_par_"))
+            && ident.called
+        {
+            Some("calls a parallel iterator")
+        } else if ident.method
+            && ident.called
+            && matches!(
+                ident.name.as_str(),
+                "install" | "broadcast" | "spawn_broadcast"
+            )
+        {
+            Some("submits to a thread pool")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            found.push(format!("line {}: `{}` {why}", ident.line, ident.name));
+        }
+    }
+    found
+}
+
+/// The marker a `std::thread` fan-out site must carry — in a `//` comment on
+/// its line or in the comment block directly above it — saying why the
+/// thread (or the wait on it) can take no collection lock.
+const NO_LOCK_MARKER: &str = "no collection lock";
+
+/// The ways a module can wait on OS-thread fan-out — the deadlock of
+/// `no_module_but_pools_names_rayon` one level down, needing no pool: a
+/// thread holding a collection guard that joins a thread taking one
+/// deadlocks identically. Every site carries [`NO_LOCK_MARKER`] saying why
+/// it cannot close that cycle. `thread::spawn` is refused on sight: the scan
+/// cannot tell a handle that will be dropped from one that will be joined,
+/// so the marker writes down which it is.
+fn fanout_violations(source: &str) -> Vec<String> {
+    let code = code_only(source);
+    let raw: Vec<&str> = source.lines().collect();
+    let mut found = Vec::new();
+    for ident in idents(&code) {
+        let why = if ident.called
+            && !ident.method
+            && matches!(ident.name.as_str(), "spawn" | "scope")
+            && ident.before.trim_end().ends_with("thread::")
+        {
+            Some("spawns or joins threads")
+        } else if ident.name == "join"
+            && ((ident.method && ident.empty_call)
+                || (ident.called
+                    && !ident.method
+                    && ident.before.trim_end().ends_with("JoinHandle::")))
+        {
+            Some("joins a thread")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            if !marked(&raw, ident.line) {
+                found.push(format!("line {}: `{}` {why}", ident.line, ident.name));
             }
         }
     }
     found
+}
+
+/// Whether the call flagged on `lines[line - 1]` carries [`NO_LOCK_MARKER`]:
+/// on the call's line, in the comment block directly above it, or — when the
+/// call continues a statement, like a `.join()` rustfmt split into a chain —
+/// in the comment block directly above the statement's first line.
+fn marked(lines: &[&str], line: usize) -> bool {
+    let mut statement = line - 1;
+    while statement > 0 && lines[statement].trim_start().starts_with('.') {
+        statement -= 1;
+    }
+    marked_at(lines, line - 1) || marked_at(lines, statement)
+}
+
+/// [`NO_LOCK_MARKER`] on `lines[i]` or in the comment block directly above.
+fn marked_at(lines: &[&str], i: usize) -> bool {
+    if let Some(comment) = lines[i].find("//") {
+        if lines[i][comment..].contains(NO_LOCK_MARKER) {
+            return true;
+        }
+    }
+    let mut j = i;
+    while j > 0 {
+        j -= 1;
+        let above = lines[j].trim_start();
+        if !above.starts_with("//") {
+            return false;
+        }
+        if above.contains(NO_LOCK_MARKER) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Every way around `pools` the review found, refused.
@@ -353,23 +459,125 @@ fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// `(path, text)` of each non-test `.rs` source of this crate. Test files
+/// are exempt from both scans: they stage pools and threads.
+fn prod_sources() -> Vec<(std::path::PathBuf, String)> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_sources(&src, &mut files);
+    files
+        .into_iter()
+        .filter(|path| {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            !(name.ends_with("_tests.rs") || name == "tests.rs")
+        })
+        .map(|path| {
+            let text = std::fs::read_to_string(&path).expect("test: read source");
+            (path, text)
+        })
+        .collect()
+}
+
+/// Every wait on spawned threads the review found, refused without the
+/// marker.
+#[test]
+fn the_fanout_scan_refuses_each_unjustified_wait() {
+    let waits = [
+        (
+            "a scoped thread",
+            "fn f() { std::thread::scope(|s| { s.spawn(|| 1); }); }",
+        ),
+        (
+            "a spawned handle joined later",
+            "fn f() { let h = std::thread::spawn(|| 1); h.join(); }",
+        ),
+        (
+            "spawn().join()",
+            "fn f() { std::thread::spawn(|| 1).join(); }",
+        ),
+        (
+            "a UFCS join",
+            "fn f(h: std::thread::JoinHandle<()>) { std::thread::JoinHandle::join(h); }",
+        ),
+        (
+            "a spawn the scan cannot prove detached",
+            "fn f() { std::thread::spawn(|| 1); }",
+        ),
+        (
+            "a join a marker on another line does not cover",
+            "fn f() { let h = std::thread::spawn(|| 1); }\nfn g() { h.join(); }",
+        ),
+    ];
+    for (name, source) in waits {
+        assert!(
+            !fanout_violations(source).is_empty(),
+            "the scan missed {name}"
+        );
+    }
+}
+
+/// What is not a wait on thread fan-out stays allowed: the marker on the
+/// line or the comment block above it, a `join` that takes an argument, a
+/// `spawn` that is not `std::thread`'s, and the words in comments.
+#[test]
+fn the_fanout_scan_allows_marked_and_non_wait_forms() {
+    let allowed = r#"
+        // no collection lock: the thread only probes the GPU.
+        std::thread::spawn(init_device).join().ok().flatten()
+        // no collection lock: a marker above the statement covers a mid-chain join.
+        std::thread::spawn(init_device)
+            .join()
+            .ok()
+            .flatten()
+        // no collection lock: the handle is dropped — nothing can wait on it.
+        std::thread::spawn(move || { probe_update(); });
+        // no collection lock: `work` only reads the config file it was given.
+        let h = std::thread::spawn(work); h.join()
+        std::thread::spawn(work); // no collection lock — a marker on the call's own line.
+        fn f(v: &[&str]) -> String { v.join(", ") }
+        fn g(h: H) { h.join(other) }
+        fn t() { tokio::spawn(probe()); }
+        // std::thread::spawn in a comment, and "std::thread::scope" in a string.
+        fn s() -> &'static str { "std::thread::scope" }
+    "#;
+    assert_eq!(fanout_violations(allowed), Vec::<String>::new());
+}
+
+/// The same rule one lock down: no module waits on `std::thread` fan-out —
+/// `thread::spawn`, `thread::scope`, a `JoinHandle`'s `join` — unless the
+/// site carries `no collection lock`, the marker naming why it cannot close
+/// a cycle.
+#[test]
+fn no_unjustified_thread_fanout() {
+    let mut violations = Vec::new();
+    let mut scanned = 0;
+    for (path, text) in prod_sources() {
+        scanned += 1;
+        for violation in fanout_violations(&text) {
+            violations.push(format!("{}: {violation}", path.display()));
+        }
+    }
+    assert!(scanned > 100, "the scan read {scanned} files");
+    assert!(
+        violations.is_empty(),
+        "waiting on spawned threads under a collection guard deadlocks like \
+         rayon does: mark the site `no collection lock: <why it cannot>`:\n{}",
+        violations.join("\n")
+    );
+}
+
 /// No module of the crate but `pools` names rayon, a thread pool or a
 /// parallel iterator, so every submission goes through a helper of `pools`,
 /// which holds the rule for it. Test files are exempt: they stage pools.
 #[test]
 fn no_module_but_pools_names_rayon() {
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    rust_sources(&src, &mut files);
     let mut violations = Vec::new();
     let mut scanned = 0;
-    for path in files {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.ends_with("_tests.rs") || name == "tests.rs" || name == "pools.rs" {
+    for (path, text) in prod_sources() {
+        if path.file_name().and_then(|n| n.to_str()) == Some("pools.rs") {
             continue;
         }
         scanned += 1;
-        let text = std::fs::read_to_string(&path).expect("test: read source");
         for violation in pool_violations(&text) {
             violations.push(format!("{}: {violation}", path.display()));
         }
