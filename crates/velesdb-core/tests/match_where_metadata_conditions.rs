@@ -341,3 +341,46 @@ fn test_match_where_in_combined_with_comparison() {
         "IN + AND comparison should intersect correctly"
     );
 }
+
+// ============================================================================
+// `!=` parity with SELECT: a missing or cross-typed property is "not equal"
+// ============================================================================
+
+#[test]
+fn test_match_where_neq_on_missing_or_null_property_keeps_node() {
+    // GIVEN: items where `optional_field` is missing (ids 1, 3), an
+    // explicit null (id 5), 'present' (id 2) and 'value' (id 4).
+    let (_dir, collection) = setup_collection();
+
+    // WHEN: MATCH WHERE n.optional_field != 'present'
+    // THEN: a missing or null property is not equal to 'present', so the
+    // node is kept — the same truth value SELECT's `!=` gives a missing
+    // field. Only node 2 carries 'present' and is excluded.
+    let query =
+        Parser::parse("MATCH (n:Item) WHERE n.optional_field != 'present' RETURN n LIMIT 10")
+            .expect("test: parse");
+    let match_clause = query.match_clause.as_ref().expect("test: match clause");
+    let results = collection
+        .execute_match(match_clause, &HashMap::new())
+        .expect("test: execute match");
+    let mut ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![1, 3, 4, 5]);
+}
+
+#[test]
+fn test_match_where_neq_across_types_keeps_node() {
+    // `category != 5` compares a string property with an integer literal —
+    // never equal, so `!=` holds for every node, as the same predicate
+    // does in a SELECT WHERE.
+    let (_dir, collection) = setup_collection();
+    let query = Parser::parse("MATCH (n:Item) WHERE n.category != 5 RETURN n LIMIT 10")
+        .expect("test: parse");
+    let match_clause = query.match_clause.as_ref().expect("test: match clause");
+    let results = collection
+        .execute_match(match_clause, &HashMap::new())
+        .expect("test: execute match");
+    let mut ids: Vec<u64> = results.iter().map(|r| r.node_id).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+}

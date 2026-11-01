@@ -296,7 +296,12 @@ impl Collection {
         let Some(actual) = element_property(target_id, column_path, |path| {
             Self::json_get_path(target_payload.as_deref()?, path)
         }) else {
-            return Ok(false);
+            // A property the node does not carry is "not equal" to any
+            // literal — the truth value a SELECT's filter `Neq` gives a
+            // missing field, so `WHERE n.prop != x` keeps the same rows in
+            // MATCH as in SELECT. Every other operator still fails: `=`,
+            // `>` and friends on nothing are UNKNOWN, excluded.
+            return Ok(matches!(cmp.operator, crate::velesql::CompareOp::NotEq));
         };
 
         let resolved_value = Self::resolve_where_param(&cmp.value, ctx.params)?;
@@ -318,7 +323,9 @@ impl Collection {
         let Some(actual) =
             element_property(edge_id, property, |path| edge_property_path(&edge, path))
         else {
-            return Ok(false);
+            // Same rule as the node path: an absent edge property is "not
+            // equal" to any literal, as a missing field is for `Neq`.
+            return Ok(matches!(cmp.operator, crate::velesql::CompareOp::NotEq));
         };
         let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
         Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
@@ -562,7 +569,12 @@ impl Collection {
                 matches!(operator, crate::velesql::CompareOp::Eq)
             }
             (_, Value::Null) => matches!(operator, crate::velesql::CompareOp::NotEq),
-            _ => false,
+            // Any pair the typed arms above does not cover — a cross-type
+            // comparison or a JSON `null` against a non-null literal — is
+            // never equal, so `!=` holds for it, exactly as the SELECT
+            // filter's `Neq` treats two values `values_equal` calls
+            // different. `=` and every ordering stay false (UNKNOWN).
+            _ => matches!(operator, crate::velesql::CompareOp::NotEq),
         })
     }
 
