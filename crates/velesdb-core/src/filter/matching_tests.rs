@@ -390,3 +390,40 @@ fn test_an_integer_equals_a_float_only_at_its_exact_value() {
     ));
     assert!(eq(json!(3), json!(3.0)));
 }
+
+#[test]
+fn test_in_binary_search_finds_an_array_member() {
+    // Adversarial review probe: over the binary-search threshold, every array
+    // in the list is `json_value_cmp`-equal to every other (arrays order by
+    // type rank only), so the sorted list keeps them adjacent but the lower
+    // bound is position 0 whatever the probe is. A member past position 0 is
+    // reported absent — the comment's claim that "a hit can only sit at the
+    // lower bound" is false for array/object members.
+    let values: Vec<serde_json::Value> = (0..17).map(|i| json!([i])).collect();
+    let cond = Condition::In {
+        field: "arr".to_string(),
+        values,
+    };
+    for i in 0..17 {
+        assert!(
+            cond.matches(&json!({ "arr": [i] })),
+            "member [{i}] of the IN list must match"
+        );
+    }
+}
+
+#[test]
+fn test_in_binary_search_over_a_public_unsorted_list() {
+    // `Condition::is_in` and `Deserialize` both build `Condition::In` without
+    // the `convert_in` sort the binary search's doc cites as the guarantee —
+    // a publicly constructible >16 list violates the partition precondition.
+    // In a debug build this trips the sortedness debug_assert; in release it
+    // silently answers wrong. Either way the public path cannot reach the
+    // member.
+    let values: Vec<serde_json::Value> = (0..17).rev().map(serde_json::Value::from).collect();
+    let cond = Condition::is_in("n", values);
+    assert!(
+        cond.matches(&json!({ "n": 0 })),
+        "member 0 of the IN list must match"
+    );
+}
