@@ -67,7 +67,7 @@ fn db_with(observer: impl DatabaseObserver + 'static) -> (TempDir, Database) {
         .upsert(vec![Point::new(
             1,
             vec![1.0, 0.0, 0.0, 0.0],
-            Some(serde_json::json!({"tenant": "a", "body": "keep me"}))),
+            Some(serde_json::json!({"tenant": "a", "body": "keep me"})),
         )])
         .expect("test: upsert");
     (dir, db)
