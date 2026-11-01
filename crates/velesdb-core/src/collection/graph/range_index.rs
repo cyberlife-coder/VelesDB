@@ -120,8 +120,15 @@ impl OrderedValue {
 }
 
 /// Current schema version for RangeIndex serialization.
-/// Increment this when making breaking changes to the index format.
-pub const RANGE_INDEX_VERSION: u32 = 1;
+/// Increment this when making breaking changes to the index format —
+/// including the key `Ord`, which is part of the persisted B-tree layout.
+///
+/// Version 2 orders `OrderedValue` numbers by exact value (an integer past
+/// 2^53 is not the `f64` it rounds to; `-0.0` is `0`), where version 1
+/// ordered them as `f64`. A v1 file's keys that v2 folds together would
+/// lose one side's bitmap on load, so [`RangeIndex::from_bytes`] refuses a
+/// mismatched version instead of adopting a stale tree.
+pub const RANGE_INDEX_VERSION: u32 = 2;
 
 /// Range index for ordered property lookups.
 ///
@@ -427,9 +434,16 @@ impl RangeIndex {
     /// Deserialize an index from bytes.
     ///
     /// # Errors
-    /// Returns an error if deserialization fails (corrupted data).
+    /// Returns an error if deserialization fails (corrupted data), or when
+    /// the stored `version` predates [`RANGE_INDEX_VERSION`]: a stale
+    /// file's key order is not today's, so it is discarded — callers fall
+    /// back to an empty index — never adopted.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, postcard::Error> {
-        <Self as PostcardPersistence>::from_bytes(bytes)
+        let index: Self = <Self as PostcardPersistence>::from_bytes(bytes)?;
+        if index.version != RANGE_INDEX_VERSION {
+            return Err(postcard::Error::SerdeDeCustom);
+        }
+        Ok(index)
     }
 
     /// Save the index to a file.
