@@ -8,14 +8,19 @@ use std::cell::RefCell;
 const FIRST_UNMAPPED: usize = 1_000;
 
 /// A walk over nodes `order` (nearest first) that records each `(k, ef)` it
-/// is asked for and returns the first `k` of them.
+/// is asked for and returns the first `k` of them — never more than `ef`, as
+/// a walk's candidate pool bounds its result count.
 fn recording_walk<'a>(
     order: &'a [usize],
     calls: &'a RefCell<Vec<(usize, usize)>>,
 ) -> impl Fn(usize, usize) -> Vec<(usize, f32)> + 'a {
     move |k, ef| {
         calls.borrow_mut().push((k, ef));
-        order.iter().take(k).map(|&node| (node, 0.0)).collect()
+        order
+            .iter()
+            .take(k.min(ef))
+            .map(|&node| (node, 0.0))
+            .collect()
     }
 }
 
@@ -92,6 +97,20 @@ fn candidates_beyond_what_the_search_needs_do_not_trigger_a_walk() {
     let results = search_past_unmapped(30, 10, 64, recording_walk(&order, &calls), live);
     assert_eq!(results.len(), 25);
     assert_eq!(calls.into_inner(), vec![(30, 64)]);
+}
+
+/// The first walk asked for `fetch` results, but `ef` bounds what a walk can
+/// return: with `ef < fetch`, `ef` unmapped nodes still mean its pool was
+/// spent, so the widened walk runs.
+#[test]
+fn a_first_walk_bounded_by_ef_still_widens() {
+    let order: Vec<usize> = (FIRST_UNMAPPED..FIRST_UNMAPPED + 10)
+        .chain(0..200)
+        .collect();
+    let calls = RefCell::new(Vec::new());
+    let results = search_past_unmapped(10, 10, 4, recording_walk(&order, &calls), live);
+    assert!(results.is_empty());
+    assert_eq!(calls.into_inner(), vec![(10, 4), (10, 8)]);
 }
 
 /// Starting from a walk the caller already ran, the helper does not run it

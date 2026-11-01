@@ -104,7 +104,10 @@ pub(crate) fn search_past_unmapped_from(
         }
         (results, walked.len() >= ef)
     } else {
-        (results, walked.len() >= fetch)
+        // `ef <= fetch`: the first walk was `walk(fetch, ef)`, and `ef`
+        // bounds what a walk can return — `ef` nodes mean its pool was
+        // spent, `fetch` could never be reached.
+        (results, walked.len() >= ef)
     };
     let wide = ef.saturating_mul(2).min(WIDEST_EF);
     if !pool_used || wide <= ef {
