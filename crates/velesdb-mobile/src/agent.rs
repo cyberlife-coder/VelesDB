@@ -188,7 +188,11 @@ impl VelesSemanticMemory {
     }
 
     /// Returns the embedding dimension.
-    pub fn dimension(&self) -> u32 {
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal (the underlying collection read).
+    pub fn dimension(&self) -> Result<u32, VelesError> {
         self.collection.dimension()
     }
 }

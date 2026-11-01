@@ -197,9 +197,20 @@ impl VelesCollection {
     }
 
     /// Returns the vector dimension.
+    ///
+    /// Collection config is a collection read — the same data gated
+    /// `get_stats` returns — so it passes the read gate too.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
     #[allow(clippy::cast_possible_truncation)]
-    pub fn dimension(&self) -> u32 {
-        self.inner.config().dimension as u32
+    pub fn dimension(&self) -> Result<u32, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "dimension")?;
+        Ok(self.inner.config().dimension as u32)
     }
 
     /// Gets points by their IDs.
@@ -258,9 +269,18 @@ impl VelesCollection {
         Ok(self.get(vec![id])?.into_iter().next())
     }
 
-    /// Checks if this is a metadata-only collection.
-    pub fn is_metadata_only(&self) -> bool {
-        self.inner.config().metadata_only
+    /// Checks if this is a metadata-only collection, through the same
+    /// gate as `dimension`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn is_metadata_only(&self) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "is_metadata_only")?;
+        Ok(self.inner.config().metadata_only)
     }
 
     /// Performs full-text search using BM25.
@@ -604,9 +624,18 @@ impl VelesCollection {
         Ok(u64::try_from(self.inner.compact_storage()?).unwrap_or(u64::MAX))
     }
 
-    /// Returns the current query guardrail limits for this collection.
-    pub fn guard_rails(&self) -> MobileQueryLimits {
-        self.inner.guard_rails().limits().into()
+    /// Returns the current query guardrail limits for this collection,
+    /// through the read gate (collection config is a collection read).
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn guard_rails(&self) -> Result<MobileQueryLimits, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "guard_rails")?;
+        Ok(self.inner.guard_rails().limits().into())
     }
 
     /// Applies post-creation overrides to advanced configuration fields
@@ -629,12 +658,20 @@ impl VelesCollection {
     /// Streaming settings persisted by `apply_advanced_config` that are not in
     /// force yet and will be after the next open, by config field name
     /// (`deferred_indexing`, `async_index_builder`). Empty when all are live.
-    pub fn pending_reopen(&self) -> Vec<String> {
-        self.inner
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal (collection config is a collection read).
+    pub fn pending_reopen(&self) -> Result<Vec<String>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "pending_reopen")?;
+        Ok(self
+            .inner
             .pending_reopen()
             .into_iter()
             .map(|setting| setting.field_name().to_string())
-            .collect()
+            .collect())
     }
 
     /// Returns all point IDs currently present in the collection.
@@ -660,8 +697,19 @@ impl VelesCollection {
     }
 
     /// Checks whether a secondary metadata index exists for a field.
-    pub fn has_secondary_index(&self, field_name: String) -> bool {
-        self.inner.has_secondary_index(&field_name)
+    ///
+    /// Index metadata is a collection read — gated like `list_indexes`
+    /// (Tauri's precedent for index getters).
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn has_secondary_index(&self, field_name: String) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_secondary_index")?;
+        Ok(self.inner.has_secondary_index(&field_name))
     }
 
     /// Creates a graph/property index for equality lookups.
@@ -676,23 +724,49 @@ impl VelesCollection {
         Ok(())
     }
 
-    /// Checks if a property index exists.
-    pub fn has_property_index(&self, label: String, property: String) -> bool {
-        self.inner.has_property_index(&label, &property)
+    /// Checks if a property index exists, gated like `list_indexes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn has_property_index(&self, label: String, property: String) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_property_index")?;
+        Ok(self.inner.has_property_index(&label, &property))
     }
 
-    /// Checks if a range index exists.
-    pub fn has_range_index(&self, label: String, property: String) -> bool {
-        self.inner.has_range_index(&label, &property)
+    /// Checks if a range index exists, gated like `list_indexes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn has_range_index(&self, label: String, property: String) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_range_index")?;
+        Ok(self.inner.has_range_index(&label, &property))
     }
 
-    /// Lists all index definitions on this collection.
-    pub fn list_indexes(&self) -> Vec<MobileIndexInfo> {
-        self.inner
+    /// Lists all index definitions on this collection — index metadata is a
+    /// collection read (Tauri gates `list_indexes` the same way).
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn list_indexes(&self) -> Result<Vec<MobileIndexInfo>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "list_indexes")?;
+        Ok(self
+            .inner
             .list_indexes()
             .into_iter()
             .map(MobileIndexInfo::from)
-            .collect()
+            .collect())
     }
 
     /// Drops an index and returns true when something was removed.
@@ -702,12 +776,31 @@ impl VelesCollection {
 
     /// Estimated heap bytes of every index `list_indexes` lists (secondary,
     /// graph property and range); the HNSW graph is not counted.
-    pub fn indexes_memory_usage(&self) -> u64 {
-        u64::try_from(self.inner.indexes_memory_usage()).unwrap_or(u64::MAX)
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn indexes_memory_usage(&self) -> Result<u64, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "indexes_memory_usage")?;
+        Ok(u64::try_from(self.inner.indexes_memory_usage()).unwrap_or(u64::MAX))
     }
 
     /// Runs ANALYZE and returns fresh statistics for this collection.
+    ///
+    /// Statistics are a collection read, decided exactly as `get_stats`:
+    /// a denial fails the call and a scope refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal, or the analysis failure.
     pub fn analyze(&self) -> Result<MobileCollectionStats, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "analyze")?;
         Ok(self.inner.analyze()?.into())
     }
 
