@@ -68,7 +68,7 @@ impl Collection {
         self.validate_node_payload_batch(&deduped)?;
 
         // LOCK ORDER: payload_storage(3) → label_index(7), released →
-        // graph_range_indexes(7), released → composite_index_manager.
+        // graph_range_indexes(7).
         //
         // `payload_storage` is held across the whole batch, which the single
         // write did not do between its store and its property indexing. The
@@ -89,7 +89,7 @@ impl Collection {
             let written = deduped
                 .iter()
                 .map(|&(node_id, payload)| (node_id, Some(payload)));
-            self.reindex_node_payloads(written, &old_payloads);
+            self.index_payload_writes(written, &old_payloads);
         } else {
             self.reindex_after_failed_node_write(&storage, &ids, &old_payloads);
         }
@@ -129,24 +129,6 @@ impl Collection {
         Ok(())
     }
 
-    /// Moves these nodes' label, range and composite index entries from the
-    /// payloads they carried before the batch to `held`, what storage now
-    /// holds for each (`None`: nothing).
-    fn reindex_node_payloads<'a, I>(&self, held: I, old_payloads: &'a [Option<Value>])
-    where
-        I: Iterator<Item = (u64, Option<&'a Value>)> + Clone,
-    {
-        self.index_payload_writes(held.clone(), old_payloads);
-        for ((node_id, new), old) in held.zip(old_payloads) {
-            if let Some(old) = old {
-                self.deindex_node_composites(node_id, old);
-            }
-            if let Some(new) = new {
-                self.index_node_composites(node_id, new);
-            }
-        }
-    }
-
     /// Reindexes the nodes of a batch whose write returned an error.
     ///
     /// A failed batch is not all-or-nothing: `LogPayloadStorage` makes each
@@ -162,7 +144,7 @@ impl Collection {
     ) {
         let held = Self::read_back_payloads(storage, ids);
         let held = ids.iter().copied().zip(held.iter().map(Option::as_ref));
-        self.reindex_node_payloads(held, old_payloads);
+        self.index_payload_writes(held, old_payloads);
     }
 
     /// Enforces strict-schema node-type validation for a node payload write.

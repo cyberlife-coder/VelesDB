@@ -7,7 +7,10 @@ writer blocked every new reader, and the global workers that take `inner.read()`
 (`rerank_candidates_simd`, the per-query search) parked. The holder's jobs never
 got a worker, so the guard the writer waited on was never released.
 
-The fix routes every guard holder's rayon work onto the dedicated `graph_pool`.
+The fix routes every guard holder's rayon work onto the dedicated graph pool
+(`crate::pools::on_graph_pool`; `crate::pools` is the only module of the crate
+that names rayon, and a submission looks like a call to one of its parallel
+helpers, `pools::map` and the others, as much as like a `.par_iter(`).
 This guard keeps it that way. Reading the code cannot answer whether a given
 submission runs under a guard — the one that deadlocked reached `par_iter` three
 calls down, in another file — so this guard does not try to decide it. It
@@ -17,6 +20,15 @@ requires instead that each submission be one of:
   * listed in ALLOWED below, with the reason it cannot close the cycle.
 
 A new submission is refused until its author picks one.
+
+The same cycle needs no pool: a thread holding `inner` that joins a
+`std::thread` taking `inner` deadlocks identically — and `.install(` does
+NOT break it, because the join inside still parks the worker the holder
+waits on. `std::thread` fan-out under `index/hnsw/` is therefore refused
+outright, `.install(` or not, until its `path::fn` lands in ALLOWED with
+the reason. The crate-level twin of this scan — one `no collection lock:`
+marker per site — is `lock_audit_tests::no_unjustified_thread_fanout` in
+`crates/velesdb-core/src/lock_audit_tests.rs`.
 
 Two exclusions, stated because a guard's promise must not be wider than what
 it checks. It skips `*_tests.rs`: a test submitting on the global pool starves
@@ -53,7 +65,22 @@ SUBMIT_RE = re.compile(
     r"\.(?:par_iter(?:_mut)?|par_chunks(?:_mut|_exact(?:_mut)?)?|par_bridge|"
     r"into_par_iter|par_drain|par_extend|par_split(?:_mut)?|par_windows|"
     r"par_sort\w*)\s*\(|"
-    r"\brayon::(?:join|scope|spawn|in_place_scope|scope_fifo|spawn_fifo)\s*\("
+    r"\brayon::(?:join|scope|spawn|in_place_scope|scope_fifo|spawn_fifo)\s*\(|"
+    # `crate::pools`' parallel helpers: since every submission in the crate
+    # goes through that module, they are what a submission looks like here.
+    r"\bpools::(?:map|map_enumerated|map_owned|map_range|filter_map_enumerated|"
+    r"map_chunks|filter_map_chunks_enumerated|flat_map)\s*\("
+)
+
+#: `std::thread` fan-out: a spawned thread a caller can wait on, a scope
+#: that joins its spawns, and the join itself. `.join(` matches only the
+#: empty call — `slice::join`/`Path::join` take an argument. Unlike a rayon
+#: submission, none of these is excused by `.install(`: the deadlock needs
+#: no pool, and a join inside the closure still parks its worker.
+THREAD_FANOUT_RE = re.compile(
+    r"\bthread::(?:spawn|scope)\s*\(|"
+    r"\bJoinHandle::join\s*\(|"
+    r"\.join\s*\(\s*\)"
 )
 
 #: `fn name(` at any indentation, capturing the name.
@@ -214,7 +241,7 @@ def installed_at(lines: list[str], index: int) -> bool:
             elif ch in "({[":
                 if depth > 0:
                     depth -= 1
-                elif segment[:position].rstrip().endswith(".install"):
+                elif segment[:position].rstrip().endswith((".install", "pools::on_graph_pool")):
                     return True
     return False
 
@@ -227,14 +254,32 @@ def installed_at(lines: list[str], index: int) -> bool:
 USED_KEYS: set[str] = set()
 
 
+def is_test_file(path: Path) -> bool:
+    """A test source: `*_tests.rs`, `tests.rs`, or anything under a `tests/`
+    directory. Tests stage pools and threads rather than submit under a held
+    guard. `native/tests.rs` matched neither `*_tests.rs` nor `tests/` until
+    this was a function: the std::thread fan-out it stages was the first
+    pattern to actually reach it.
+    """
+    return (
+        path.name.endswith("_tests.rs")
+        or path.name == "tests.rs"
+        or "/tests/" in path.as_posix()
+    )
+
+
 def scan_file(path: Path, root: Path) -> list[str]:
     lines = path.read_text(encoding="utf-8").splitlines()
     violations: list[str] = []
     for index, raw in enumerate(lines):
         code = strip_line(raw)
-        if not SUBMIT_RE.search(code):
+        thread_fanout = THREAD_FANOUT_RE.search(code)
+        if not thread_fanout and not SUBMIT_RE.search(code):
             continue
-        if installed_at(lines, index):
+        # A rayon submission inside `.install(` is on a dedicated pool — the
+        # cycle is broken. `std::thread` fan-out is not excused by it: the
+        # join inside still parks the worker the holder waits on.
+        if not thread_fanout and installed_at(lines, index):
             continue
         name = enclosing_fn(lines, index)
         relative = path.relative_to(root)
@@ -244,15 +289,27 @@ def scan_file(path: Path, root: Path) -> list[str]:
         if key in ALLOWED:
             USED_KEYS.add(key)
             continue
-        violations.append(
-            f"{relative}:{index + 1}: `{name}` submits to the global rayon "
-            f"pool.\n"
-            f"    Put it on the dedicated pool — `graph_pool()?.install(|| ...)` "
-            f"in index/hnsw/index/batch.rs — or add the key `{key}` to ALLOWED "
-            f"in {Path(__file__).name} with the reason it cannot close #2343's "
-            f"cycle. The key carries the path on purpose: two types under "
-            f"index/hnsw/ define functions of the same name."
-        )
+        if thread_fanout:
+            violations.append(
+                f"{relative}:{index + 1}: `{name}` fans out to `std::thread` "
+                f"or joins a thread.\n"
+                f"    A holder of `inner` joining a thread that takes `inner` "
+                f"closes #2343's cycle without any pool — and `.install(` "
+                f"does not break it. Take the lock off the joined thread, or "
+                f"add the key `{key}` to ALLOWED "
+                f"in {Path(__file__).name} with the reason it cannot close "
+                f"the cycle."
+            )
+        else:
+            violations.append(
+                f"{relative}:{index + 1}: `{name}` submits to the global rayon "
+                f"pool.\n"
+                f"    Put it on the dedicated pool — `pools::on_graph_pool(...)` "
+                f"in crates/velesdb-core/src/pools.rs — or add the key `{key}` to ALLOWED "
+                f"in {Path(__file__).name} with the reason it cannot close #2343's "
+                f"cycle. The key carries the path on purpose: two types under "
+                f"index/hnsw/ define functions of the same name."
+            )
     return violations
 
 
@@ -276,7 +333,7 @@ def scan_native_index_writer(root: Path) -> list[str]:
         relative = path.relative_to(root).as_posix()
         if relative in KNOWN_HNSW_WRITERS:
             continue
-        if path.name.endswith("_tests.rs") or "/tests/" in path.as_posix():
+        if is_test_file(path):
             continue
         for index, raw in enumerate(path.read_text(encoding="utf-8").splitlines()):
             if NATIVE_WRITE_RE.search(strip_line(raw)):
@@ -311,7 +368,7 @@ def main() -> int:
     violations: list[str] = []
     files = 0
     for path in sorted(scan_dir.rglob("*.rs")):
-        if path.name.endswith("_tests.rs") or "/tests/" in path.as_posix():
+        if is_test_file(path):
             continue
         files += 1
         violations.extend(scan_file(path, root))

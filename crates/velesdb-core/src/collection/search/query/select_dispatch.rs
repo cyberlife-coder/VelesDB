@@ -24,7 +24,7 @@ impl Collection {
     ///   [`QueryPlanner::choose_hybrid_strategy`], which additionally computes
     ///   a selectivity-aware over-fetch factor clamped to `[2.0, 10.0]` when
     ///   a filter is present. A pure-cost comparison would occasionally pick
-    ///   `GraphFirst`/`Parallel` and lose the natural ordering — observable
+    ///   `GraphFirst` and lose the natural ordering — observable
     ///   as scrambled top-k for `ORDER BY similarity() DESC LIMIT k` queries.
     /// - **All other queries** use the calibrated
     ///   [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`] path, which

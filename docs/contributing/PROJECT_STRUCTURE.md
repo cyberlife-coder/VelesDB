@@ -31,7 +31,7 @@ velesdb-core/
 │   │   │   │   ├── core/      # CRUD, flush, recovery, lifecycle, index management
 │   │   │   │   ├── graph/     # ConcurrentEdgeStore, CsrSnapshot, traversal, streaming
 │   │   │   │   ├── search/    # Query planner, filter pushdown, reranking
-│   │   │   │   ├── streaming/ # Delta buffer, streaming insert
+│   │   │   │   ├── streaming/ # Streaming insert, deferred indexer, async index builder
 │   │   │   │   └── vector_collection/ # VectorCollection impl
 │   │   │   ├── database/      # Database, typed registries, query engine, DDL/DML executors
 │   │   │   ├── index/         # HNSW (native), BM25, Trigram, Secondary, Sparse indexes

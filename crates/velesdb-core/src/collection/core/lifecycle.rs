@@ -1,6 +1,5 @@
 //! Collection lifecycle methods (create, open, flush).
 
-use crate::collection::graph::property_index::CompositeIndexManager;
 use crate::collection::graph::{ConcurrentEdgeStore, LabelIndex, PropertyIndex, RangeIndex};
 use crate::collection::types::{Collection, CollectionConfig};
 use crate::error::Result;
@@ -13,7 +12,7 @@ use super::graph_property_index_wiring::{index_payload_ranges, GraphRangeIndexes
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use parking_lot::{Mutex, RwLock};
+use crate::lock_audit::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -128,8 +127,6 @@ impl Collection {
                 #[cfg(feature = "persistence")]
                 stream_ingester: Arc::new(RwLock::new(None)),
                 #[cfg(feature = "persistence")]
-                delta_buffer: Arc::new(crate::collection::streaming::delta::DeltaBuffer::new()),
-                #[cfg(feature = "persistence")]
                 deferred_indexer: Arc::new(arc_swap::ArcSwapOption::new(deferred_indexer)),
                 async_index_builder: Arc::new(arc_swap::ArcSwapOption::new(async_index_builder)),
                 auto_reindex: Arc::new(RwLock::new(None)),
@@ -163,8 +160,8 @@ impl Collection {
     }
 
     /// Builds the graph half of a `Collection` from its persisted indexes and
-    /// the ones rebuilt from the payloads; the edge property, composite and
-    /// query-tracking indexes start empty.
+    /// the ones rebuilt from the payloads; the query-tracking indexes start
+    /// empty.
     fn build_graph_store(parts: GraphParts) -> Arc<crate::collection::types::GraphStore> {
         let GraphParts {
             property_index,
@@ -182,8 +179,6 @@ impl Collection {
             range_index: Arc::new(RwLock::new(range_index)),
             range_index_dirty: std::sync::atomic::AtomicBool::new(true),
             graph_range_indexes: Arc::new(RwLock::new(graph_range_indexes)),
-            edge_range_indexes: Arc::new(RwLock::new(HashMap::new())),
-            composite_index_manager: Arc::new(RwLock::new(CompositeIndexManager::new())),
             edge_store: Arc::new(edge_store),
             edge_wal_lock: Arc::new(Mutex::new(())),
         })
@@ -523,18 +518,14 @@ impl Collection {
 
     /// Post-open hooks that need a fully assembled collection.
     ///
-    /// 1. Edge property indexes: snapshot-loaded edges must re-enter the
-    ///    property indexes BEFORE the WAL replays (replay indexes its own
-    ///    ADDs — a full pass after it would double-index replayed edges).
-    /// 2. Edge crash durability: replay the edge WAL on top of the loaded
+    /// 1. Edge crash durability: replay the edge WAL on top of the loaded
     ///    `edge_store` snapshot so edge mutations since the last flush
     ///    survive a crash. No-op when `edges.wal` is absent.
-    /// 3. Quantizer restore: reload persisted PQ codebook / `RaBitQ` index
+    /// 2. Quantizer restore: reload persisted PQ codebook / `RaBitQ` index
     ///    AFTER crash recovery so every recovered vector is re-encoded.
     ///    O(n) over stored vectors — same cost class as gap recovery.
     #[cfg(feature = "persistence")]
     fn run_post_open_hooks(&self) -> Result<()> {
-        self.reindex_edge_properties_from_store();
         self.replay_edge_wal()?;
         self.restore_persisted_quantizers()
     }
@@ -804,21 +795,21 @@ impl Collection {
     /// Returns a write guard on the collection config for mutation.
     pub(crate) fn config_write(
         &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, crate::collection::types::CollectionConfig> {
+    ) -> crate::lock_audit::WriteGuard<'_, crate::collection::types::CollectionConfig> {
         self.storage.config.write()
     }
 
     /// Returns a write guard on the PQ quantizer slot.
     pub(crate) fn pq_quantizer_write(
         &self,
-    ) -> parking_lot::RwLockWriteGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+    ) -> crate::lock_audit::WriteGuard<'_, Option<crate::quantization::ProductQuantizer>> {
         self.storage.pq_quantizer.write()
     }
 
     /// Returns a read guard on the PQ quantizer slot.
     pub(crate) fn pq_quantizer_read(
         &self,
-    ) -> parking_lot::RwLockReadGuard<'_, Option<crate::quantization::ProductQuantizer>> {
+    ) -> crate::lock_audit::ReadGuard<'_, Option<crate::quantization::ProductQuantizer>> {
         self.storage.pq_quantizer.read()
     }
 }

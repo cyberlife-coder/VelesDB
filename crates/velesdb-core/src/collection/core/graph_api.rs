@@ -6,9 +6,12 @@
 use crate::collection::graph::{
     EdgeRemoval, GraphEdge, GraphSchema, TraversalConfig, TraversalResult,
 };
+use crate::collection::search::pending::PendingRestriction;
 use crate::collection::types::Collection;
+use crate::distance::DistanceMetric;
 use crate::error::{Error, Result};
 use crate::point::{Point, SearchResult};
+use crate::scored_result::ScoredResult;
 use crate::storage::{LogPayloadStorage, PayloadStorage, VectorStorage};
 
 use super::graph_property_index_wiring::extract_labels;
@@ -60,10 +63,6 @@ impl Collection {
         let payload_guard = self.storage.payload_storage.read();
         Self::validate_edge_referential_integrity(&payload_guard, schema.as_ref(), &edge)?;
 
-        let edge_id = edge.id();
-        let rel_type = edge.label().to_string();
-        let properties = edge.properties().clone();
-
         // WAL-before-apply (crash durability): log the edge to the edge WAL
         // before mutating the in-memory store, so a crash between the two
         // replays the edge on the next open. Unconditional: the append only
@@ -85,9 +84,6 @@ impl Collection {
 
         self.graph.edge_store.add_edge(edge)?;
 
-        // Populate edge property indexes (EPIC-047).
-        self.index_edge_properties(edge_id, &rel_type, &properties);
-
         // Bump write generation so any cached plan for this collection is
         // invalidated on the next query (CACHE-01).
         self.generations
@@ -102,8 +98,7 @@ impl Collection {
     /// Adds multiple edges in batch with crash-durable WAL logging.
     ///
     /// Appends one ADD record per edge to the edge WAL (single open +
-    /// fsync) BEFORE applying the batch to the in-memory store, then
-    /// populates edge property indexes for the successfully added edges.
+    /// fsync) BEFORE applying the batch to the in-memory store.
     ///
     /// # Returns
     ///
@@ -148,18 +143,7 @@ impl Collection {
             &edges,
         )?;
 
-        // Capture property metadata before the edges are moved into the store.
-        let index_meta: Vec<(u64, String, _)> = edges
-            .iter()
-            .filter(|e| !e.properties().is_empty())
-            .map(|e| (e.id(), e.label().to_string(), e.properties().clone()))
-            .collect();
-
         let count = self.graph.edge_store.add_edges_batch(edges);
-
-        for (edge_id, rel_type, properties) in &index_meta {
-            self.index_edge_properties(*edge_id, rel_type, properties);
-        }
 
         if count > 0 {
             self.generations
@@ -169,29 +153,21 @@ impl Collection {
         Ok(count)
     }
 
-    /// Replays the edge WAL on top of the loaded `edge_store` snapshot,
-    /// re-running edge-property indexing for replayed ADD entries.
+    /// Replays the edge WAL on top of the loaded `edge_store` snapshot.
     ///
     /// Called from `Collection::open` AFTER `assemble`, so the snapshot is
     /// already loaded into `self.graph.edge_store`. A missing WAL file is a cheap
     /// no-op (legacy DBs predate this feature). The edge store is mutated
-    /// in place via its `&self` methods; the closure indexes edge
-    /// properties into `self.graph.edge_range_indexes`.
+    /// in place via its `&self` methods.
     ///
     /// # Errors
     ///
     /// Returns an error if the WAL file exists but cannot be read.
     #[cfg(feature = "persistence")]
     pub(crate) fn replay_edge_wal(&self) -> Result<u64> {
-        use crate::collection::graph::edge_wal::{wal_path_for_edges, wal_replay, ReplayOp};
+        use crate::collection::graph::edge_wal::{wal_path_for_edges, wal_replay};
         let wal_path = wal_path_for_edges(&self.storage.path);
-        let replayed = wal_replay(&wal_path, &self.graph.edge_store, |op| {
-            if let ReplayOp::Add(edge) = op {
-                if !edge.properties().is_empty() {
-                    self.index_edge_properties(edge.id(), edge.label(), edge.properties());
-                }
-            }
-        })?;
+        let replayed = wal_replay(&wal_path, &self.graph.edge_store)?;
         if replayed > 0 {
             // Refresh the CSR read snapshot so traversals see replayed edges.
             self.graph.edge_store.build_read_snapshot();
@@ -536,21 +512,6 @@ impl Collection {
         self.graph.edge_store.get_edge(edge_id)
     }
 
-    /// Rebuilds edge property indexes from edges already in the store.
-    ///
-    /// Called on open AFTER the edge snapshot is loaded and BEFORE the edge
-    /// WAL replays (replay indexes its own ADDs), so snapshot-loaded edge
-    /// properties become queryable again — previously they were only ever
-    /// indexed at write time and silently lost once the WAL was truncated
-    /// into the snapshot.
-    pub(crate) fn reindex_edge_properties_from_store(&self) {
-        for edge in self.graph.edge_store.all_edges() {
-            if !edge.properties().is_empty() {
-                self.index_edge_properties(edge.id(), edge.label(), edge.properties());
-            }
-        }
-    }
-
     // -------------------------------------------------------------------------
     // Graph schema
     // -------------------------------------------------------------------------
@@ -739,60 +700,54 @@ impl Collection {
     /// Returns `Error::VectorNotAllowed` if no embeddings are configured,
     /// or `Error::DimensionMismatch` if the query dimension is wrong.
     pub fn search_by_embedding(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
+        let metric = self.check_embedding_query(query)?;
+        // Not `VectorIndex::search`: it pins `Balanced` and so ignores `[search]` (#2430).
+        let hits =
+            self.search_merging_pending(query, k, metric, PendingRestriction::NONE, |n| {
+                self.storage
+                    .index
+                    .search_with_quality(query, n, self.runtime_search_quality())
+            })?;
+        Ok(self.hydrate_embedding_hits(&hits))
+    }
+
+    /// Checks that this graph collection has embeddings of `query`'s
+    /// dimension, returning the metric they are compared with.
+    ///
+    /// The existing HNSW index is reused: its dimension is the embedding
+    /// dimension when the collection was created with embeddings, and a graph
+    /// without embeddings (dimension 0) is rejected here.
+    fn check_embedding_query(&self, query: &[f32]) -> Result<DistanceMetric> {
         let config = self.storage.config.read();
         let emb_dim = config
             .embedding_dimension
             .ok_or_else(|| Error::VectorNotAllowed(config.name.clone()))?;
-        drop(config);
-
         if query.len() != emb_dim {
             return Err(Error::DimensionMismatch {
                 expected: emb_dim,
                 actual: query.len(),
             });
         }
+        Ok(config.metric)
+    }
 
-        // Reason: we reuse the existing HNSW index (dimension == emb_dim when created
-        // via create_graph_collection_with_embeddings). For graph-without-embeddings
-        // the HNSW has dimension 0 and the guard above already rejected the call.
-        let metric = self.storage.config.read().metric;
-        // Not `VectorIndex::search`: it pins `Balanced` and so ignores `[search]` (#2430).
-        let ids =
-            self.storage
-                .index
-                .search_with_quality(query, k, self.runtime_search_quality())?;
-        let ids = self.merge_delta(ids, query, k, metric);
-
-        // Acquire each lock once: collect vector data, then collect payload data.
-        // This avoids holding vector_storage while locking payload_storage per item.
-        let vectors: Vec<(u64, f32, Option<Vec<f32>>)> = {
-            let vector_storage = self.storage.vector_storage.read();
-            ids.into_iter()
-                .map(|sr| {
-                    let vec = vector_storage.retrieve(sr.id).ok().flatten();
-                    (sr.id, sr.score, vec)
-                })
-                .collect()
-        };
-        let results = {
-            let payload_storage = self.storage.payload_storage.read();
-            vectors
-                .into_iter()
-                .filter_map(|(id, score, vector)| {
-                    let vector = vector?;
-                    let payload = payload_storage.retrieve(id).ok().flatten();
-                    Some(SearchResult::new(
-                        Point {
-                            id,
-                            vector,
-                            payload,
-                            sparse_vectors: None,
-                        },
-                        score,
-                    ))
-                })
-                .collect()
-        };
-        Ok(results)
+    /// Hydrates embedding hits whose vector is still stored, in hit order,
+    /// reading vector then payload storage (lock order).
+    fn hydrate_embedding_hits(&self, hits: &[ScoredResult]) -> Vec<SearchResult> {
+        let vector_storage = self.storage.vector_storage.read();
+        let payload_storage = self.storage.payload_storage.read();
+        hits.iter()
+            .filter_map(|hit| {
+                let vector = vector_storage.retrieve(hit.id).ok().flatten()?;
+                let payload = payload_storage.retrieve(hit.id).ok().flatten();
+                let point = Point {
+                    id: hit.id,
+                    vector,
+                    payload,
+                    sparse_vectors: None,
+                };
+                Some(SearchResult::new(point, hit.score))
+            })
+            .collect()
     }
 }

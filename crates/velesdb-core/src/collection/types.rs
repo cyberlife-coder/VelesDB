@@ -3,16 +3,12 @@
 //! Configuration types (`CollectionConfig`, `CURRENT_SCHEMA_VERSION`) live in
 //! the sibling `collection_config` module.
 
-use crate::collection::graph::property_index::{
-    CompositeIndexManager, CompositeRangeIndex, EdgePropertyIndex,
-};
+use crate::collection::graph::property_index::CompositeRangeIndex;
 use crate::collection::graph::{
     ConcurrentEdgeStore, GraphSchema, LabelIndex, PropertyIndex, RangeIndex,
 };
 use crate::collection::order_by_advisor::OrderByIndexAdvisor;
 use crate::collection::stats::CollectionStats;
-#[cfg(feature = "persistence")]
-use crate::collection::streaming::delta::DeltaBuffer;
 use crate::collection::streaming::AsyncIndexBuilder;
 #[cfg(feature = "persistence")]
 use crate::collection::streaming::{BackpressureError, DeferredIndexer, StreamIngester};
@@ -20,13 +16,13 @@ use crate::distance::DistanceMetric;
 use crate::guardrails::GuardRails;
 use crate::index::sparse::SparseInvertedIndex;
 use crate::index::{Bm25Index, HnswIndex, SecondaryIndex};
+use crate::lock_audit::{Mutex, RwLock};
 #[cfg(feature = "persistence")]
 use crate::point::Point;
 use crate::quantization::{PQVector, ProductQuantizer, StorageMode};
 use crate::storage::{LogPayloadStorage, MmapStorage, VectorStorage};
 use crate::velesql::{QueryCache, QueryPlanner};
 use arc_swap::ArcSwapOption;
-use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
@@ -197,9 +193,28 @@ impl Default for RuntimeLimits {
 //                                            docs/CONCURRENCY_MODEL.md)
 //   8. (reserved — edge_store now uses internal sharded locking)
 //   9. sparse_indexes
-//  10. delta_buffer
+//  10. (reserved — the collection-level delta buffer is removed)
 //  11. deferred_indexer / async_index_builder (internal locks)
 //  12. stats_io_mutex                         (disk I/O only, no other lock held)
+//
+// The HNSW index's own locks (`HnswIndex::publishing`, then `inner`, then
+// the graph's) come after `vector_storage` (2): a delete removes from the
+// index while holding the storage write guard, and a merge into the index
+// (`Collection::index_current`) inserts each chunk while holding the storage
+// read guard. No path takes `vector_storage` while holding an index lock.
+// That merge holds the read guard for one chunk's read and insert, and a
+// writer waits that long: on average 529 ms (95% CI 511-548 ms) for 256
+// distinct 768-d vectors into a 10K-point Cosine collection, timed inside
+// `index_current` from taking the guard to releasing it
+// (`merge_chunk_hold_benchmark`, needs `internal-bench`; 2026-10-31, 10
+// samples on a shared 4-vCPU cloud sandbox, not the reference machine). A
+// mean, not a bound: it grows with the dimension and with the graph.
+//
+// Rayon: no job on a rayon pool takes any of these locks, and no thread
+// holding one waits on the global pool; parallel work over guarded data runs
+// on `pools::on_guarded_pool`. `crate::lock_audit` (these fields' lock
+// types) checks both in every unit test. See `docs/CONCURRENCY_MODEL.md`,
+// "Collection locks and rayon".
 //
 // `edge_wal_lock` (3b) has two call patterns, both consistent with 3 → 3b:
 //   - `add_edge`/`add_edges_batch` (collection/core/graph_api.rs) acquire it
@@ -324,17 +339,6 @@ pub(crate) struct GraphStore {
     /// never held together with `label_index`).
     pub(crate) graph_range_indexes: Arc<RwLock<HashMap<String, CompositeRangeIndex>>>,
 
-    /// Edge property indexes keyed by `"rel_type.property"` (EPIC-047).
-    ///
-    /// Populated automatically when edges with properties are added.
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) edge_range_indexes: Arc<RwLock<HashMap<String, EdgePropertyIndex>>>,
-
-    /// Composite index manager for multi-property lookups (EPIC-047).
-    ///
-    /// Lock order position: **7** (same tier as `property_index` / `range_index`).
-    pub(crate) composite_index_manager: Arc<RwLock<CompositeIndexManager>>,
-
     /// Concurrent edge store for knowledge graph relationships (EPIC-015).
     ///
     /// Uses sharded internal locking (256 shards) — no outer `RwLock` needed.
@@ -444,7 +448,7 @@ pub(crate) struct GenerationCounters {
     pub(crate) inserts_since_last_hnsw_save: Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// Streaming ingestion, delta buffering and deferred/async/auto indexing.
+/// Streaming ingestion and deferred/async/auto indexing.
 ///
 /// Concern cluster **streaming** of `Collection` (R1.1, EPIC #1384). Three of
 /// the five fields are `#[cfg(feature = "persistence")]`; the cfg attributes
@@ -465,12 +469,6 @@ pub(crate) struct StreamingState {
     #[cfg(feature = "persistence")]
     pub(super) stream_ingester: Arc<RwLock<Option<StreamIngester>>>,
 
-    /// Delta buffer for vectors pending HNSW index insertion (STREAM-02).
-    ///
-    /// Lock order position: **10** (after `sparse_indexes` at 9).
-    #[cfg(feature = "persistence")]
-    pub(crate) delta_buffer: Arc<DeltaBuffer>,
-
     /// Deferred indexer for high-throughput sequential inserts (US-366).
     ///
     /// `None` when deferred indexing is not configured. When `Some`, inserts
@@ -482,7 +480,7 @@ pub(crate) struct StreamingState {
     /// never replaces a live one — see [`PendingReopen`]. Read lock-free with
     /// `load()` on the write and search paths.
     ///
-    /// Lock order position: **11** (after `delta_buffer` at 10).
+    /// Lock order position: **11** (after `sparse_indexes` at 9).
     ///
     /// [`PendingReopen`]: crate::collection::streaming::PendingReopen
     #[cfg(feature = "persistence")]
@@ -600,7 +598,7 @@ pub(crate) struct Collection {
     /// Monotonic generation counters for plan-cache invalidation.
     pub(crate) generations: GenerationCounters,
 
-    /// Streaming ingestion, delta buffering and deferred/async/auto indexing.
+    /// Streaming ingestion and deferred/async/auto indexing.
     pub(crate) streaming: StreamingState,
 
     /// Query-execution guard-rails and runtime ingest/search limits.
@@ -609,7 +607,7 @@ pub(crate) struct Collection {
 
 impl Collection {
     /// Returns a reference to the named sparse indexes lock (EPIC-062 sparse integration).
-    #[allow(dead_code)] // Reason: Used in tests for sparse index verification
+    #[cfg(test)]
     pub(crate) fn sparse_indexes(&self) -> &Arc<RwLock<BTreeMap<String, SparseInvertedIndex>>> {
         &self.query.sparse_indexes
     }
@@ -846,21 +844,6 @@ impl Collection {
         let ingester = StreamIngester::new(self.clone(), config);
         *self.streaming.stream_ingester.write() = Some(ingester);
         Ok(())
-    }
-
-    /// Pushes entries into the delta buffer if it is currently active.
-    ///
-    /// This is a convenience method for callers (e.g., the REST upsert handlers)
-    /// that do not have direct access to the delta buffer internals.
-    ///
-    /// No-op when the delta buffer is inactive.
-    #[cfg(feature = "persistence")]
-    pub fn push_to_delta_if_active(&self, entries: &[(u64, Vec<f32>)]) {
-        if self.streaming.delta_buffer.is_active() {
-            self.streaming
-                .delta_buffer
-                .extend(entries.iter().map(|(id, v)| (*id, v.clone())));
-        }
     }
 
     /// Attaches an [`AutoReindexManager`](crate::collection::auto_reindex::AutoReindexManager)

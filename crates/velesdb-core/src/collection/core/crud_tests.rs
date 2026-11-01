@@ -523,11 +523,9 @@ fn test_upsert_intra_batch_wal_dedup_reduces_entries() {
     assert_eq!(payload, Some(serde_json::json!({"v": "C"})));
 }
 
-/// Issue #424: Parallel I/O in `batch_store_all` must produce the same results
-/// as the sequential implementation for large batches.
-///
-/// Verifies that both vectors and payloads are correctly stored when
-/// payload and vector writes execute concurrently via `rayon::join`.
+/// Issue #424: the bulk store path stores both vectors and payloads of a
+/// large batch correctly. (The two stores ran concurrently via `rayon::join`
+/// once; they now run one after the other, see `store_vectors_and_payloads`.)
 #[test]
 fn test_batch_store_all_parallel_io_correctness() {
     let dir = tempfile::tempdir().unwrap();

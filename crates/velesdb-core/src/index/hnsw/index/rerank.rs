@@ -52,8 +52,22 @@ impl HnswIndex {
         rerank_k: usize,
         ef_search: usize,
     ) -> crate::error::Result<Vec<ScoredResult>> {
+        self.search_with_rerank_with_ef_needing(query, k, rerank_k, ef_search, k)
+    }
+
+    /// [`Self::search_with_rerank_with_ef`] whose candidate walk runs again
+    /// past unmapped nodes only when they leave fewer than `needed`
+    /// candidates, not fewer than `rerank_k`.
+    pub(crate) fn search_with_rerank_with_ef_needing(
+        &self,
+        query: &[f32],
+        k: usize,
+        rerank_k: usize,
+        ef_search: usize,
+        needed: usize,
+    ) -> crate::error::Result<Vec<ScoredResult>> {
         self.validate_dimension(query)?;
-        let candidates = self.search_hnsw_only(query, rerank_k, ef_search);
+        let candidates = self.search_hnsw_only_needing(query, rerank_k, needed, ef_search);
 
         Ok(self.rerank_sort_and_truncate(query, &candidates, k))
     }
@@ -82,7 +96,7 @@ impl HnswIndex {
         } else {
             initial_quality
         };
-        let candidates = self.search_with_quality(query, rerank_k, actual_quality)?;
+        let candidates = self.search_with_quality_needing(query, rerank_k, k, actual_quality)?;
 
         Ok(self.rerank_sort_and_truncate(query, &candidates, k))
     }

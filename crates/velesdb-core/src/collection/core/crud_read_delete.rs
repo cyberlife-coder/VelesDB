@@ -333,16 +333,11 @@ impl Collection {
         );
     }
 
-    /// Removes IDs from delta buffer and deferred indexer (persistence feature).
+    /// Removes IDs from the deferred indexer (persistence feature).
     #[allow(unused_variables)] // `ids` unused when persistence feature is off.
     fn delete_from_deferred_stores(&self, ids: &[u64]) {
-        // Lock order: delta_buffer(10) acquired after sparse_indexes(9) released.
-        #[cfg(feature = "persistence")]
-        for &id in ids {
-            self.streaming.delta_buffer.remove(id);
-        }
-
-        // Lock order: deferred_indexer(11) acquired after delta_buffer(10).
+        // Lock order: deferred_indexer(11) acquired after sparse_indexes(9)
+        // released.
         #[cfg(feature = "persistence")]
         if let Some(di) = self.streaming.deferred_indexer.load().as_ref() {
             for &id in ids {

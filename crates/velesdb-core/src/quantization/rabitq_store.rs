@@ -20,7 +20,6 @@ use super::rabitq::RaBitQCorrection;
 /// XOR + popcount hot loop only touches the bits array (better cache
 /// utilization during graph traversal).
 #[derive(Debug)]
-#[allow(dead_code)] // Phase 3: methods used progressively as integration expands
 pub struct RaBitQVectorStore {
     /// Contiguous binary codes: `[count * words_per_vector]` u64 words.
     bits_data: Vec<u64>,
@@ -34,7 +33,6 @@ pub struct RaBitQVectorStore {
     count: usize,
 }
 
-#[allow(dead_code)] // Phase 3: methods used progressively as integration expands
 impl RaBitQVectorStore {
     /// Creates a new store with pre-allocated capacity.
     ///

@@ -240,6 +240,8 @@ fn handle_response(current_version: &str, response: &UpdateCheckResponse) {
 /// Runs the check on a detached background thread with its own runtime, so
 /// it neither blocks the caller nor keeps the process alive at exit.
 fn spawn(config: UpdateCheckConfig, context: UpdateCheckContext, cadence: Cadence) {
+    // no collection lock: the handle is dropped — nothing can wait on this
+    // thread — and it only runs an update probe over HTTP.
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

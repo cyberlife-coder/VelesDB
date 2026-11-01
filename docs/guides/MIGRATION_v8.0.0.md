@@ -326,6 +326,15 @@ fast sends no search instead.
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
 | `velesql::AggregateResult::to_json` | the `count`, `counts`, `sums`, `avgs`, `mins`, `maxs` fields, or `Database::execute_aggregate` |
 | `Filter::matches(payload)`, `filter::Condition::matches(payload)` | `matches_point(id, Some(payload))`: a filter is tested against a point, its id included |
+| `velesql::match_clause` (`parse_match_clause`, `parse_node_pattern`, `parse_relationship_pattern`) | `velesql::Parser::parse` on the whole `MATCH` statement, then `Query::match_clause` |
+| `AsyncIndexBuilder::{search_buffer, drain_buffer, buffer_len, is_building, trigger_build_async}` | search the collection; `VectorCollection::flush` indexes what the builder holds |
+| `velesql::ExecutionStrategy::Parallel`, `velesql::match_planner::MatchExecutionStrategy::Parallel` | none: the planners pick `GraphFirst` where they picked `Parallel`; a `match` on either enum drops that arm. On `MATCH`, a row the removed band returned carried the vector leg's similarity score; a `GraphFirst` row carries none (its `score` is the depth-derived value every graph-reached row gets) |
+| `velesql::QueryPlanner::with_thresholds(graph_first, vector_first)` | `QueryPlanner::with_vector_first_threshold(vector_first)`: at or below it the planner picks `GraphFirst` |
+| `DeltaBuffer::search`, `DeferredIndexer::search` | search the collection: it merges what the deferred indexer holds |
+| `DeferredIndexer::{merge_with_hnsw, swap_and_drain, drain_all}` | `VectorCollection::flush` indexes what the deferred indexer holds |
+| `collection::streaming::{merge_with_delta, merge_with_delta_scored}` | search the collection |
+| `VectorCollection::{push_to_delta_if_active, is_delta_active}` | none: no rebuild ever activated the buffer they fed and reported on |
+| `DeltaBuffer::{activate, try_activate, deactivate_and_drain, is_active, is_searchable, stats}`, `streaming::delta::ActivateError` | none: a `DeltaBuffer` accepts every write; `len`/`is_empty` give its size |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a
   `usize`. The removed helper returned `usize::MAX` for `perfect`. Without the
@@ -395,6 +404,17 @@ fast sends no search instead.
   number order are discarded on open** (`RANGE_INDEX_VERSION` 2): the stale
   key order is not adopted — the index rebuilds empty, as it always did
   for an absent file.
+- **`AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a callback
+  that indexes them.** `enqueue(ids)` takes any `IntoIterator<Item = u64>`
+  instead of a `Vec<(u64, Vec<f32>)>`, and `flush_sync(index,
+  index_current)` calls `index_current(&ids)` with each buffered id once.
+  It inserts what your storage holds for those ids into the index and
+  returns the ids it settled: inserted, already held by the graph as
+  storage holds them, or no longer stored. The builder keeps any other id
+  queued for the next flush. `flush_sync` returns a `FlushOutcome`
+  (`indexed`, `kept`) rather than a count: read `outcome.indexed` where the
+  count was used. Kept ids are not an error; a failed link is. A flush
+  indexes what storage holds when it runs, not a copy taken at enqueue.
 
 ### Added
 
@@ -427,6 +447,13 @@ included (a filter built from VelesQL reads `id` as the point id), and
 - **`Collection.get_graph_store()` is removed.** Use
   `Database.get_graph_collection()` for a persistent graph, or
   `velesdb.GraphStore()` for an in-memory one.
+- **`velesdb.SearchResult` is removed.** No call ever returned one: every
+  search returns dicts (`result["id"]`, `result["score"]`,
+  `result["payload"]`). Drop the import; to annotate, the stub's
+  `SearchResultDict` is importable under `typing.TYPE_CHECKING`.
+- **`Collection.is_delta_active()` is removed.** It returned `False` on
+  every collection: the buffer it reported on was never activated. Drop the
+  call.
 - **`GraphStore.traverse_dfs` runs core's DFS.**
   - It returns one result per node reached, in depth-first order.
   - An empty `relationship_types` list now follows every edge; it followed none

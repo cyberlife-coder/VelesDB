@@ -146,3 +146,49 @@ fn test_anchor_bitmap_search_defaults_to_balanced() {
         );
     }
 }
+
+/// The bitmap branch restricts what the async index builder still holds to
+/// the anchors too: points `upsert_bulk` wrote but the graph has not linked
+/// yet are merged into every search, and none outside the anchor set may be
+/// returned, however near the query they lie.
+#[test]
+fn test_anchor_bitmap_search_returns_no_pending_point_outside_its_anchors() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let collection = Collection::create_with_async_builder(
+        dir.path().join("v2"),
+        DIM,
+        DistanceMetric::Cosine,
+        crate::collection::streaming::AsyncIndexBuilderConfig {
+            merge_threshold: 100_000,
+            segment_count: None,
+        },
+    )
+    .expect("test: create a V2 collection");
+    let batch = |ids: std::ops::Range<u64>| -> Vec<Point> {
+        ids.map(|id| Point::new(id, vector(id), None)).collect()
+    };
+    collection
+        .upsert_bulk(&batch(0..300))
+        .expect("test: linked upsert_bulk");
+    collection
+        .flush()
+        .expect("test: flush links the first batch");
+    collection
+        .upsert_bulk(&batch(300..600))
+        .expect("test: pending upsert_bulk");
+    let anchors: HashSet<u64> = (0..300).collect();
+
+    let hits = collection
+        .search_anchors_bitmap(&vector(450), &anchors, None, K, DistanceMetric::Cosine)
+        .expect("test: search_anchors_bitmap");
+    let outside: Vec<u64> = hits
+        .iter()
+        .map(|hit| hit.point.id)
+        .filter(|id| !anchors.contains(id))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "pending non-anchors returned: {outside:?}"
+    );
+    assert_eq!(hits.len(), K);
+}

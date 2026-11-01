@@ -304,7 +304,6 @@ pub use json_order::compare_json_values;
 #[cfg(feature = "persistence")]
 pub(crate) use json_order::compare_number_literal;
 pub(crate) use json_order::compare_numbers;
-pub use parser::match_clause;
 pub use parser::Parser;
 pub use planner::{
     Cost, CostEstimator, ExecutionStrategy, QueryPlanner, QueryStats, SelectivityMethod,

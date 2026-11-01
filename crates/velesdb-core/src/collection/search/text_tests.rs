@@ -307,3 +307,26 @@ fn test_filtered_hybrid_search_breaks_ties_by_ascending_id() {
         );
     }
 }
+
+/// Resolving fused hits keeps `limit` live points: a TTL-expired hit among
+/// the first `limit` gives its place to the next one rather than shrinking
+/// the result (the score-fused hybrid without a filter resolves this way).
+#[test]
+fn resolving_fused_hits_skips_an_expired_one_without_losing_a_place() {
+    let (_dir, coll) = setup_collection(4);
+    coll.upsert(vec![
+        make_point_with_payload(
+            1,
+            vec![1.0, 0.0, 0.0, 0.0],
+            serde_json::json!({ crate::collection::expiry::EXPIRES_AT_KEY: 1 }),
+        ),
+        make_point_with_payload(2, vec![0.0, 1.0, 0.0, 0.0], serde_json::json!({})),
+        make_point_with_payload(3, vec![0.0, 0.0, 1.0, 0.0], serde_json::json!({})),
+    ])
+    .expect("test: upsert");
+
+    let resolved = coll.resolve_fused_results(&[(1, 0.9), (2, 0.8), (3, 0.7)], 2);
+
+    let ids: Vec<u64> = resolved.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, vec![2, 3], "expired 1 skipped, 3 takes its place");
+}

@@ -297,8 +297,26 @@ execution.
 | Operation | Latency | Throughput |
 |-----------|---------|------------|
 | **upsert_bulk standard** | 77 ms / 10K | 130K vec/s |
-| **AsyncIndexBuilder enqueue+drain** | 108 µs / 10K | 90M vec/s (buffer only) |
-| **Buffer brute-force search (10K)** | 213 µs | — |
+
+The two rows this table also carried measured the builder's buffer alone —
+`drain_buffer` and `search_buffer`, which no longer exist.
+What a caller pays instead is `search_with_10k_pending_768d`: a search while
+the builder still holds 10K bulk-loaded 768-dimensional points, each of which
+every search scores exactly, on the vector storage holds for it, until a
+flush links it.
+
+| Operation | Latency |
+|-----------|---------|
+| **Search, 10K × 768-d points pending (Cosine, k=10)** | 2.33 ms (95% CI 2.25–2.41 ms) |
+
+*Measured 2026-10-31 on a shared 4-vCPU cloud sandbox (Intel Xeon @ 2.10 GHz)
+while other builds ran, criterion with 50 samples: an order-of-magnitude
+figure, not the reference machine. The scan is single-threaded and linear in
+both the pending count and the dimension; it stops once a flush, or the
+`merge_threshold`-th pending point, links them into the graph. An unfiltered
+search keeps the best `k` of them; a search that post-filters keeps every
+pending point its bitmap admits and resolves them against its filter, and a
+batch or multi-query search pays the scan once per query.*
 
 ---
 

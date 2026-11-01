@@ -440,9 +440,9 @@ threshold decides, as
 records.
 
 `velesql::QueryPlanner` makes the analogous choice for hybrid `MATCH` +
-`NEAR` queries — `GraphFirst` below 1% estimated selectivity, `VectorFirst`
-above 50%, `Parallel` between (`QueryPlanner::with_thresholds` moves both
-bounds). The engine runs its own planner instance; a planner you construct
+`NEAR` queries — `VectorFirst` above 50% estimated selectivity, `GraphFirst`
+at or below it (`QueryPlanner::with_vector_first_threshold` moves the
+bound). The engine runs its own planner instance; a planner you construct
 answers the question but does not steer a query, which `EXPLAIN` shows.
 
 ## Column store

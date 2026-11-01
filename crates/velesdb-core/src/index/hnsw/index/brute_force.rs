@@ -57,6 +57,15 @@ impl HnswIndex {
         Ok(results)
     }
 
+    /// The exact score of `vector` against `query` in the index's result
+    /// space: its distance, clamped to the metric's range as graph results
+    /// are. The one scoring rule for every exhaustive scan.
+    #[inline]
+    pub(crate) fn score(&self, query: &[f32], vector: &[f32]) -> f32 {
+        self.metric
+            .clamp_score(self.compute_distance(query, vector))
+    }
+
     /// Scores vectors whose IDs are present in the bitmap (u32 range).
     fn score_bitmap_ids(
         &self,
@@ -65,12 +74,22 @@ impl HnswIndex {
         vectors: &crate::perf_optimizations::ContiguousVectors,
         scored: &mut Vec<ScoredResult>,
     ) {
-        for id32 in allowed_ids {
-            let id = u64::from(id32);
+        self.score_mapped_ids(query, allowed_ids.iter().map(u64::from), vectors, scored);
+    }
+
+    /// Scores the vector each mapped id's slot holds; an unmapped id is
+    /// skipped.
+    fn score_mapped_ids(
+        &self,
+        query: &[f32],
+        ids: impl Iterator<Item = u64>,
+        vectors: &crate::perf_optimizations::ContiguousVectors,
+        scored: &mut Vec<ScoredResult>,
+    ) {
+        for id in ids {
             if let Some(idx) = self.mappings.get_idx(id) {
                 if let Some(vec) = vectors.get(idx) {
-                    let dist = self.compute_distance(query, vec);
-                    scored.push(ScoredResult::new(id, dist));
+                    scored.push(ScoredResult::new(id, self.score(query, vec)));
                 }
             }
         }
@@ -101,8 +120,7 @@ impl HnswIndex {
                 continue;
             }
             if let Some(vec) = vectors.get(idx) {
-                let dist = self.compute_distance(query, vec);
-                scored.push(ScoredResult::new(id, dist));
+                scored.push(ScoredResult::new(id, self.score(query, vec)));
             }
         }
     }

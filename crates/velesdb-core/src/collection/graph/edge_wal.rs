@@ -167,11 +167,9 @@ pub(crate) fn wal_truncate(wal_path: &Path) -> Result<()> {
 // Replay
 // ---------------------------------------------------------------------------
 
-/// A single decoded WAL mutation, surfaced to the caller so that
-/// collection-level side effects (e.g. edge-property reindexing) can run
-/// alongside the edge-store mutation.
-pub(crate) enum ReplayOp {
-    /// An edge was (re)added; carries the edge for property reindexing.
+/// A single decoded WAL mutation.
+enum ReplayOp {
+    /// An edge was (re)added.
     Add(GraphEdge),
     /// An edge was removed by id.
     Remove(u64),
@@ -179,8 +177,8 @@ pub(crate) enum ReplayOp {
     RemoveNode(u64),
 }
 
-/// Replays the edge WAL against `store`, invoking `on_op` for each applied
-/// mutation, and returns the number of entries applied.
+/// Replays the edge WAL against `store` and returns the number of entries
+/// applied.
 ///
 /// Missing WAL file returns `Ok(0)` (full back-compat for pre-feature DBs).
 /// A truncated final entry (partial crash during append) is logged at
@@ -193,14 +191,7 @@ pub(crate) enum ReplayOp {
 /// # Errors
 ///
 /// Returns [`Error::Index`] if the WAL file exists but cannot be read.
-pub(crate) fn wal_replay<F>(
-    wal_path: &Path,
-    store: &ConcurrentEdgeStore,
-    mut on_op: F,
-) -> Result<u64>
-where
-    F: FnMut(&ReplayOp),
-{
+pub(crate) fn wal_replay(wal_path: &Path, store: &ConcurrentEdgeStore) -> Result<u64> {
     let data = match std::fs::read(wal_path) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -225,7 +216,6 @@ where
         let body = &data[body_start + 1..body_start + body_len];
         if let Some(replay_op) = decode_entry(op, body, body_start) {
             apply_replay_op(store, &replay_op);
-            on_op(&replay_op);
             count += 1;
         }
         pos = body_start + body_len;

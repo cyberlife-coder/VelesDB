@@ -1,53 +1,61 @@
-//! Benchmarks for MATCH clause parser.
+//! Benchmarks for MATCH parsing.
 //! Required by US-001 `DoD`: Parsing < 1µs for simple patterns.
+//!
+//! Each case parses a whole `MATCH` statement through [`Parser::parse`], the
+//! only MATCH parser core has: pattern parsing is not reachable on its own.
+//! The ids differ from the earlier `parse_node_*` / `parse_match_*` ones,
+//! which timed a string-scanning pattern parser no query went through, so a
+//! baseline recorded under those names is not comparable.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use velesdb_core::velesql::match_clause::{
-    parse_match_clause, parse_node_pattern, parse_relationship_pattern,
-};
+use velesdb_core::velesql::Parser;
+
+fn bench_parse(c: &mut Criterion, name: &str, query: &'static str) {
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            let _ = Parser::parse(black_box(query));
+        });
+    });
+}
 
 fn bench_parse_simple_node(c: &mut Criterion) {
-    c.bench_function("parse_node_simple", |b| {
-        b.iter(|| parse_node_pattern(black_box("(n)")));
-    });
+    bench_parse(c, "match_stmt_node", "MATCH (n) RETURN n");
 }
 
 fn bench_parse_node_with_label(c: &mut Criterion) {
-    c.bench_function("parse_node_with_label", |b| {
-        b.iter(|| parse_node_pattern(black_box("(n:Person)")));
-    });
+    bench_parse(c, "match_stmt_node_with_label", "MATCH (n:Person) RETURN n");
 }
 
 fn bench_parse_node_with_props(c: &mut Criterion) {
-    c.bench_function("parse_node_with_props", |b| {
-        b.iter(|| parse_node_pattern(black_box("(n:Person {name: 'Alice', age: 30})")));
-    });
+    bench_parse(
+        c,
+        "match_stmt_node_with_props",
+        "MATCH (n:Person {name: 'Alice', age: 30}) RETURN n",
+    );
 }
 
 fn bench_parse_relationship(c: &mut Criterion) {
-    c.bench_function("parse_relationship", |b| {
-        b.iter(|| parse_relationship_pattern(black_box("-[r:WROTE]->")));
-    });
+    bench_parse(
+        c,
+        "match_stmt_relationship",
+        "MATCH (a)-[r:WROTE]->(b) RETURN a",
+    );
 }
 
 fn bench_parse_match_simple(c: &mut Criterion) {
-    c.bench_function("parse_match_simple", |b| {
-        b.iter(|| {
-            let _ = parse_match_clause(black_box(
-                "MATCH (p:Person)-[:WROTE]->(a:Article) RETURN a.title",
-            ));
-        });
-    });
+    bench_parse(
+        c,
+        "match_stmt_path",
+        "MATCH (p:Person)-[:WROTE]->(a:Article) RETURN a.title",
+    );
 }
 
 fn bench_parse_match_with_where(c: &mut Criterion) {
-    c.bench_function("parse_match_with_where", |b| {
-        b.iter(|| {
-            let _ = parse_match_clause(black_box(
-                "MATCH (p:Person)-[:WROTE]->(a) WHERE p.age > 18 RETURN a",
-            ));
-        });
-    });
+    bench_parse(
+        c,
+        "match_stmt_path_with_where",
+        "MATCH (p:Person)-[:WROTE]->(a) WHERE p.age > 18 RETURN a",
+    );
 }
 
 criterion_group!(
