@@ -764,15 +764,30 @@ impl SemanticMemory {
     }
 
     /// Returns the number of tracked facts.
-    #[must_use]
-    pub fn count(&self) -> usize {
-        self.stored_ids.read().len()
+    ///
+    /// The tracked-fact cardinality is the collection's `point_count` — a
+    /// collection read the gate decides like every other metadata read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the read gate denies the read or returns a
+    /// scope a cardinality cannot honour.
+    pub fn count(&self) -> Result<usize, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::Select,
+            "semantic memory count",
+        )?;
+        Ok(self.stored_ids.read().len())
     }
 
-    /// Returns `true` when no facts are tracked.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.stored_ids.read().is_empty()
+    /// Returns `true` when no facts are tracked, through the same gate as
+    /// [`Self::count`] (emptiness derives from the same cardinality).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the read gate denies the read or returns a scope.
+    pub fn is_empty(&self) -> Result<bool, AgentMemoryError> {
+        Ok(self.count()? == 0)
     }
 
     /// Returns the total number of graph edges in this memory's collection,
@@ -784,8 +799,13 @@ impl SemanticMemory {
     ///
     /// # Errors
     ///
-    /// Returns an error when the collection cannot be accessed.
+    /// Returns an error when the collection cannot be accessed or the read
+    /// gate denies the read (or returns a scope a count cannot honour).
     pub fn edge_count(&self) -> Result<usize, AgentMemoryError> {
+        self.gate(
+            crate::observer::QueryOperationKind::GraphTraversal,
+            "semantic memory edge_count",
+        )?;
         Ok(memory_helpers::get_collection(&self.db, &self.collection_name)?.edge_count())
     }
 
@@ -795,10 +815,6 @@ impl SemanticMemory {
     ///
     /// Returns an error when collection access or deletion fails.
     pub fn clear(&self) -> Result<(), AgentMemoryError> {
-        self.gate(
-            crate::observer::QueryOperationKind::GraphTraversal,
-            "semantic memory edge_count",
-        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let ids: Vec<u64> = self.stored_ids.read().iter().copied().collect();
         if !ids.is_empty() {

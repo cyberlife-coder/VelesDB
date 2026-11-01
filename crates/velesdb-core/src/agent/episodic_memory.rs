@@ -415,11 +415,18 @@ impl EpisodicMemory {
     ///
     /// # Errors
     ///
-    /// Returns an error when the collection is unavailable.
+    /// Returns an error when the collection is unavailable or the read gate
+    /// denies the read (or returns a scope a point lookup cannot honour).
     pub fn get_with_embedding(
         &self,
         id: u64,
     ) -> Result<Option<(String, i64, Vec<f32>)>, AgentMemoryError> {
+        memory_helpers::authorize_memory_read(
+            &self.db,
+            &self.collection_name,
+            crate::observer::QueryOperationKind::Select,
+            "episodic memory get_with_embedding",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         let points = collection.get(&[id]);
