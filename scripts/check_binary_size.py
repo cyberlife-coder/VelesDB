@@ -57,7 +57,10 @@ MIB = 1024 * 1024
 # the family propagates the figure across ten documentation surfaces, and this
 # file is not one of them, so nothing here fails when it moves.
 BINARIES = [
-    ("velesdb-server", 14.25 * MIB),  # measured 13.68 MiB at 6.0.0 and at 5.2.0
+    # Measured 13.68 MiB at 6.0.0 and 5.2.0; ~14.26 MiB on Linux once the
+    # aggregate read-authorization gate covered the server's read surfaces
+    # (8.0.0). Ceiling = measured + ~2 %.
+    ("velesdb-server", 14.5 * MIB),
     ("velesdb", 11.5 * MIB),  # measured 11.04 MiB at 6.0.0, 10.99 at 5.2.0
     # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
     # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.
