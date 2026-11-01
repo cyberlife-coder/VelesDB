@@ -49,5 +49,5 @@ read_exact check_command jq -j '.tool_input.command // empty' <<<"$payload" 2>/d
 check_failure_counts "$check_command" "$exit_code" >/dev/null 2>&1 || done_here
 read_exact checks_dir record_dir_path "check-outcomes" "$session_id" || done_here
 # shellcheck disable=SC2154 # read_exact sets checks_dir and check_command (printf -v)
-record_check_outcome "$checks_dir" "$check_command" fail || true
+record_check_outcome "$checks_dir" "$CONFIG_ROOT" "$check_command" fail || true
 done_here

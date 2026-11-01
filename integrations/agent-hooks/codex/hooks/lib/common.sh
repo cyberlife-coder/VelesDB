@@ -724,7 +724,11 @@ dropped_count() {
 # record_evidence DIR NAME RECORD: atomically write DIR/NAME.json, refusing a
 # link or a non-file there. A new record past EVIDENCE_RECORD_CAP evicts the
 # OLDEST record and counts the drop — the cap keeps the newest evidence, and
-# the checklist says how much fell off.
+# the checklist says how much fell off. A record and its tombstone share one
+# fate: a check's KEY.last and KEY.failed, a memory's ID.json and ID.stale —
+# an eviction that took only one of the pair would silently change the
+# verdict the next checkpoint reports (a `.failed` left without its `.last`
+# reads as nothing, though the check still fails), so the partner goes too.
 record_evidence() {
   local path="$1/$2.json"
   local count
@@ -738,6 +742,12 @@ record_evidence() {
       oldest="$(find "$1" -maxdepth 1 -type f -name '*.json' -exec ls -d1t {} + | tail -n 1)"
       [ -n "$oldest" ] || return 1
       rm -f -- "$oldest" || return 1
+      case "$oldest" in
+        *.last.json) rm -f -- "${oldest%.last.json}.failed.json" ;;
+        *.failed.json) rm -f -- "${oldest%.failed.json}.last.json" ;;
+        *.stale.json) rm -f -- "${oldest%.stale.json}.json" ;;
+        *.json) rm -f -- "${oldest%.json}.stale.json" ;;
+      esac
       bump_dropped "$1" || return 1
     done
   fi
@@ -809,6 +819,12 @@ parse_check_command() {
 check_actually_runs() {
   [ "$1" = test ] || return 0
   shift
+  # `cargo nextest` runs tests only under its `run` subcommand: `list`,
+  # `show-config` and the bare form enumerate or print configuration — none
+  # of which the flag check below can see, since they are not flags.
+  case "$1 ${2:-}" in
+    'cargo nextest') [ "${3:-}" = run ] || return 1 ;;
+  esac
   local word
   for word in "$@"; do
     case "$word" in
@@ -916,23 +932,34 @@ check_failure_counts() {
   [ "$2" != 126 ] && [ "$2" != 127 ]
 }
 
-# record_check_outcome DIR COMMAND STATUS: STATUS (pass or fail) of a check.
-# Two records per command, each replaced whole, so no record is read before it
-# is written: KEY.last holds the latest status, KEY.failed exists once the
-# command has failed in this window.
+# record_check_outcome DIR REPO COMMAND STATUS: STATUS (pass or fail) of a
+# check, observed in REPO — the resolved root the command ran in. Two records
+# per (repository, command) pair, each replaced whole, so no record is read
+# before it is written: KEY.last holds the latest status, KEY.failed exists
+# once the pair has failed in this window. The repository enters the record
+# AND the key: one host session spans checkouts (a subagent shares its
+# parent's), and a pass observed in repo B must never resolve a failure in
+# repo A. A root that cannot be named honestly in the checklist — empty,
+# over-long, or holding a control character the checklist interpolates raw —
+# keeps no record at all.
 record_check_outcome() {
   local dir="$1"
+  local repo="$2"
   local kind
   local key
   local record
-  kind="$(check_kind "$2")" || return 0
-  [ "${#2}" -le "$EVIDENCE_COMMAND_MAX" ] || return 0
-  key="$(safe_marker_key "$2")"
+  case "$repo" in
+    '' | *[[:cntrl:]]*) return 0 ;;
+  esac
+  [ "${#repo}" -le 4096 ] || return 0
+  kind="$(check_kind "$3")" || return 0
+  [ "${#3}" -le "$EVIDENCE_COMMAND_MAX" ] || return 0
+  key="$(safe_marker_key "$repo"$'\n'"$3")"
   # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
-  record="$(jq -cn --arg kind "$kind" --arg command "$2" --arg status "$3" \
-    '{kind: $kind, command: $command, status: $status}')" || return 1
+  record="$(jq -cn --arg kind "$kind" --arg command "$3" --arg repo "$repo" --arg status "$4" \
+    '{kind: $kind, command: $command, repository: $repo, status: $status}')" || return 1
   evidence_dir "$dir" || return 1
-  if [ "$3" = fail ]; then
+  if [ "$4" = fail ]; then
     record_evidence "$dir" "$key.failed" "$record" || return 1
   fi
   record_evidence "$dir" "$key.last" "$record"
@@ -956,14 +983,26 @@ open_evidence_window() {
 }
 
 # What collect_learning_evidence found: the record files it read, which the
-# checkpoint naming them consumes, the three evidence arrays, and how many
+# checkpoint naming them consumes, the checksum each held when it was read
+# (consume deletes a record only while it still holds exactly those bytes —
+# see consume_learning_evidence), the three evidence arrays, and how many
 # records of each kind the cap dropped.
 EVIDENCE_FILES=()
+EVIDENCE_FILE_SUMS=()
 EVIDENCE_RECALLED='[]'
 EVIDENCE_CHECKS='[]'
 DROPPED_RECALLED=0
 DROPPED_CHECKS=0
 LEARNING_EVIDENCE=
+
+# track_evidence FILE: FILE was read for the checkpoint in flight — consume
+# may delete it while it still holds these exact bytes.
+track_evidence() {
+  local sum
+  read_exact_line sum cksum <"$1" || return 1
+  EVIDENCE_FILES+=("$1")
+  EVIDENCE_FILE_SUMS+=("$sum")
+}
 
 # collect_recalled DIR: set EVIDENCE_RECALLED to the recalled-memory records of
 # DIR as one JSON array; return 2 when DIR or one of its records is linked or
@@ -978,7 +1017,9 @@ collect_recalled() {
   local -a stale_files=()
   [ -L "$1" ] && return 2
   DROPPED_RECALLED="$(dropped_count "$1")" || return 2
-  [ "$DROPPED_RECALLED" = "0" ] || EVIDENCE_FILES+=("$1/dropped.count")
+  if [ "$DROPPED_RECALLED" != "0" ]; then
+    track_evidence "$1/dropped.count" || return 2
+  fi
   if [ -d "$1" ]; then
     for file in "$1"/*.json; do
       [ -e "$file" ] || [ -L "$file" ] || continue
@@ -1015,31 +1056,41 @@ collect_recalled() {
   # empty array as an unbound variable under `set -u`.
   EVIDENCE_RECALLED='[]'
   if [ "${#files[@]}" -eq 0 ]; then
-    [ "${#stale_files[@]}" -eq 0 ] || EVIDENCE_FILES+=("${stale_files[@]}")
+    for file in ${stale_files[@]+"${stale_files[@]}"}; do
+      track_evidence "$file" || return 2
+    done
     return 0
   fi
-  EVIDENCE_FILES+=("${files[@]}")
+  for file in "${files[@]}"; do
+    track_evidence "$file" || return 2
+  done
   EVIDENCE_RECALLED="$(jq -sc 'map({id, stale})' "${files[@]}")" || return 2
   if [ "${#stale_files[@]}" -gt 0 ]; then
-    EVIDENCE_FILES+=("${stale_files[@]}")
+    for file in "${stale_files[@]}"; do
+      track_evidence "$file" || return 2
+    done
     stale_ids="$(jq -sc '[.[].id]' "${stale_files[@]}")" || return 2
     EVIDENCE_RECALLED="$(printf '%s' "$EVIDENCE_RECALLED" | jq -c --argjson tombstones "$stale_ids" \
       'map(.stale = (.stale or (.id as $id | ($tombstones | index($id)) != null)))')" || return 2
   fi
 }
 
-# valid_check_record FILE NAME_KEY: FILE holds one check record whose command
-# hashes to NAME_KEY, the key its file name carries.
+# valid_check_record FILE NAME_KEY: FILE holds one check record whose
+# (repository, command) pair hashes to NAME_KEY, the key its file name
+# carries. `.repository` is interpolated raw into the checklist exactly like
+# `.command`, so it is held to the same alphabet.
 valid_check_record() {
   local key
   jq -s -e '
     length == 1 and (.[0] | type == "object"
-      and ((keys | sort) == ["command", "kind", "status"])
+      and ((keys | sort) == ["command", "kind", "repository", "status"])
       and (.kind == "test" or .kind == "build" or .kind == "lint")
       and (.status == "pass" or .status == "fail")
-      and (.command | type == "string" and length > 0 and (test("[[:cntrl:]]") | not)))
+      and (.command | type == "string" and length > 0 and (test("[[:cntrl:]]") | not))
+      and (.repository | type == "string" and length > 0 and length <= 4096
+        and (test("[[:cntrl:]]") | not)))
   ' "$1" >/dev/null 2>&1 || return 1
-  read_exact key safe_marker_key "$(jq -j '.command' "$1")" || return 1
+  read_exact key safe_marker_key "$(jq -j '.repository' "$1")"$'\n'"$(jq -j '.command' "$1")" || return 1
   [ "$key" = "$2" ]
 }
 
@@ -1057,7 +1108,9 @@ collect_checks() {
   EVIDENCE_CHECKS='[]'
   [ -L "$1" ] && return 2
   DROPPED_CHECKS="$(dropped_count "$1")" || return 2
-  [ "$DROPPED_CHECKS" = "0" ] || EVIDENCE_FILES+=("$1/dropped.count")
+  if [ "$DROPPED_CHECKS" != "0" ]; then
+    track_evidence "$1/dropped.count" || return 2
+  fi
   if [ ! -d "$1" ]; then
     [ -e "$1" ] && return 2
     return 0
@@ -1071,13 +1124,13 @@ collect_checks() {
       *.last.json) valid_check_record "$file" "${name%.last.json}" || return 2 ;;
       *) return 2 ;;
     esac
-    EVIDENCE_FILES+=("$file")
+    track_evidence "$file" || return 2
     case "$name" in *.failed.json) continue ;; esac
     failed=false
     [ -f "${file%.last.json}.failed.json" ] && failed=true
     verdicts+=("$(jq -c --argjson failed "$failed" '
-      if .status == "fail" then {kind, command, verdict: "still failing"}
-      elif $failed then {kind, command, verdict: "failed, then passed"}
+      if .status == "fail" then {kind, command, repository, verdict: "still failing"}
+      elif $failed then {kind, command, repository, verdict: "failed, then passed"}
       else empty end' "$file")")
   done
   if [ "${#verdicts[@]}" -eq 0 ]; then
@@ -1093,6 +1146,8 @@ collect_checks() {
 collect_reverts() {
   local since
   local repo
+  local repo_root
+  local toplevel
   local commit
   local body
   valid_private_marker "$1" || { printf '[]'; return 0; }
@@ -1100,6 +1155,19 @@ collect_reverts() {
   evidence_epoch "$since" || { printf '[]'; return 0; }
   command -v git >/dev/null 2>&1 || { printf '[]'; return 0; }
   while IFS= read -r -d '' repo; do # exact-read-ok: NUL-delimited, so no newline separates anything
+    # A root the checklist cannot name honestly — one holding a control
+    # character, which feedback_step interpolates raw — reports no reverts
+    # rather than smuggling forged text into the reason.
+    case "$repo" in
+      *[[:cntrl:]]*) continue ;;
+    esac
+    # `git -C` resolves .git UPWARD: a named root that is not itself a
+    # repository would attribute its nearest ancestor's history to itself.
+    # Only a root that IS its repository's top-level may collect.
+    read_exact_line repo_root physical_dir "$repo" || continue
+    read_exact_line toplevel safe_git "$repo" rev-parse --show-toplevel || continue
+    read_exact_line toplevel physical_dir "$toplevel" || continue
+    [ "$repo_root" = "$toplevel" ] || continue
     while IFS= read -r commit; do
       read_exact body safe_git "$repo" show -s --no-show-signature --format=%B "$commit" || continue
       [[ "$body" =~ This\ reverts\ commit\ ([0-9a-f]{40}) ]] || continue
@@ -1134,6 +1202,7 @@ safe_git() {
 collect_learning_evidence() {
   local reverts
   EVIDENCE_FILES=()
+  EVIDENCE_FILE_SUMS=()
   LEARNING_EVIDENCE=""
   collect_recalled "$1" || return 2
   collect_checks "$2" || return 2
@@ -1154,11 +1223,38 @@ evidence_present() {
 
 # consume_learning_evidence SINCE_MARKER: remove the records the checkpoint
 # just named, and open the next revert window now. Called only once the
-# checkpoint is durable in its pending manifest.
+# checkpoint is durable in its pending manifest. A record is deleted only
+# while it still holds exactly the bytes collect read and reported: a
+# same-session PostToolUse can land a same-named record between the collect
+# and this call (a subagent shares its parent's host session), and deleting
+# it blind would eat evidence nobody named. The claim-by-rename makes the
+# check atomic per record: writers replace through a fresh temp+rename
+# (write_private_marker), so whatever the claimed path holds is one
+# consistent version — a rewrite either lands inside the claim (a checksum
+# mismatch is restored for the next checkpoint) or recreates the original
+# path, which survives either way. A `*.consuming-*` leftover after a kill
+# is invisible to the `*.json` readers and ages out with its directory.
 consume_learning_evidence() {
-  if [ "${#EVIDENCE_FILES[@]}" -gt 0 ]; then
-    rm -f "${EVIDENCE_FILES[@]}" || return 1
-  fi
+  local index
+  local file
+  local claimed
+  local sum
+  [ "${#EVIDENCE_FILES[@]}" -eq 0 ] || for index in "${!EVIDENCE_FILES[@]}"; do
+    file="${EVIDENCE_FILES[$index]}"
+    claimed="${file}.consuming-$$"
+    if mv -f "$file" "$claimed" 2>/dev/null; then
+      read_exact_line sum cksum <"$claimed" 2>/dev/null || sum=""
+      if [ "$sum" = "${EVIDENCE_FILE_SUMS[$index]}" ]; then
+        rm -f "$claimed" || return 1
+      elif [ -e "$file" ] || [ -L "$file" ]; then
+        # The path already holds a newer write: the claimed bytes are a
+        # superseded version of evidence the next checkpoint reports anyway.
+        rm -f "$claimed" || return 1
+      else
+        mv -f "$claimed" "$file" || return 1
+      fi
+    fi
+  done
   write_private_marker "$1" "$(date +%s)"
 }
 
@@ -1169,7 +1265,7 @@ consume_learning_evidence() {
 feedback_step() {
   printf '%s' "$1" | jq -r --arg cap "$EVIDENCE_RECORD_CAP" '
     def memories: [.recalled[] | .id + (if .stale then " (stale: an anchored file changed; re-verify it, then forget and replace it if wrong or remember it again with its anchors if still right)" else "" end)];
-    def outcomes: [(.checks[] | "`\(.command)` (\(.kind)): \(.verdict)"), (.reverts[] | "commit \(.commit) in \(.repository) reverts \(.reverted)")];
+    def outcomes: [(.checks[] | "`\(.command)` (\(.kind)) in \(.repository): \(.verdict)"), (.reverts[] | "commit \(.commit) in \(.repository) reverts \(.reverted)")];
     def drops: ((.dropped.recalled // 0) + (.dropped.checks // 0));
     def truncation:
       if drops == 0 then ""
@@ -1217,6 +1313,11 @@ prune_stale_evidence() {
 # valid_checkpoint_manifest FILE: FILE holds exactly one well-formed
 # checkpoint manifest. Every evidence entry is validated like the record it
 # came from — a forged entry blocks Stop rather than reaching the checklist.
+# `.command` and `.repository` are interpolated RAW into the reason by
+# feedback_step, so they refuse control characters; `.project`, `.session`
+# and `.root` keep the wider contract of valid_project_record — a path or a
+# name may legitimately end in a newline — because they are only ever
+# emitted JSON-escaped inside the reason, never raw.
 valid_checkpoint_manifest() {
   jq -s -e '
     length == 1 and (.[0]
@@ -1233,18 +1334,20 @@ valid_checkpoint_manifest() {
           and (.stale | type) == "boolean"))
         and ((.evidence.checks | type) == "array" and all(.evidence.checks[];
           type == "object"
-          and ((keys | sort) == ["command", "kind", "verdict"])
+          and ((keys | sort) == ["command", "kind", "repository", "verdict"])
           and (.kind == "test" or .kind == "build" or .kind == "lint")
           and (.verdict == "still failing" or .verdict == "failed, then passed")
           and (.command | type == "string" and length > 0 and length <= 300
-            and ((. | gsub("\\b2>&1\\b"; " ") | test("[\\|\\;\\&\\`\\$\\(\\)\\<]|[[:cntrl:]]")) | not))))
+            and ((. | gsub("\\b2>&1\\b"; " ") | test("[\\|\\;\\&\\`\\$\\(\\)\\<]|[[:cntrl:]]")) | not))
+          and (.repository | type == "string" and length > 0 and length <= 4096
+            and (test("[[:cntrl:]]") | not))))
         and ((.evidence.reverts | type) == "array" and all(.evidence.reverts[];
           type == "object"
           and ((keys | sort) == ["commit", "repository", "reverted"])
           and (.commit | type == "string" and test("\\A[0-9a-f]{40}\\z"))
           and (.reverted | type == "string" and test("\\A[0-9a-f]{40}\\z"))
           and (.repository | type == "string" and length > 0 and length <= 4096
-            and (explode | all(. != 0)))))
+            and (test("[[:cntrl:]]") | not))))
         and (((.evidence | has("dropped")) | not)
           or ((.evidence.dropped | type) == "object"
             and ((.evidence.dropped | keys | sort) == ["checks", "recalled"])

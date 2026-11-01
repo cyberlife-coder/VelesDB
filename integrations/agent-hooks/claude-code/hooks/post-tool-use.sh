@@ -131,7 +131,7 @@ if [ -n "$session_id" ] && [ "$tool_name" = "Bash" ] && learning_loop_enabled \
   && read_exact check_command jq -j '.tool_input.command // empty' <<<"$payload"; then
   # PostToolUse fires only once a Bash call succeeded: its exit status was 0.
   # shellcheck disable=SC2154 # read_exact sets checks_dir and check_command (printf -v)
-  record_check_outcome "$checks_dir" "$check_command" pass || true
+  record_check_outcome "$checks_dir" "$CONFIG_ROOT" "$check_command" pass || true
 fi
 # A session this conversation saves becomes the one the SessionStart,
 # PreCompact and Stop reminders name; one it only loads, the one SessionStart
