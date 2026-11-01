@@ -2045,7 +2045,7 @@
       }
     },
     {
-      "description": "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Returns the fact's new confidence in [0,1].",
+      "description": "Reinforce a recalled memory with an outcome: `success=true` if the fact was useful, `false` if it was noise. This durably updates the fact's learned confidence, which `recall` uses to re-rank future results — over repeated feedback, useful facts drift up and noise drifts down, so the memory improves with use without retraining the model. Concurrent feedback on one fact is applied atomically, each call counted once. Returns the fact's new confidence in [0,1].",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -3299,10 +3299,14 @@
       }
     },
     {
-      "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. Ids exceed 2^53 — relay them as strings (`id_str`).",
+      "description": "Recall memories semantically similar to a query (vector). Ranking blends similarity with each fact's learned confidence (see `feedback`); the returned `score` is the raw similarity, never the blended value. `filter` narrows by exact-match metadata, e.g. {\"project\":\"veles\",\"status\":\"resolved\"}. With `anchor_root` (an absolute checkout inside the server's ingest roots), each fact remembered with `anchors` carries `freshness` — `fresh`, `stale` (an anchored file changed or was deleted; listed in `changed`, and the fact is ranked lower) or `unverified`; staleness never changes the learned confidence. Ids exceed 2^53 — relay them as strings (`id_str`).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "anchor_root": {
+            "description": "Optional absolute path of the checkout to check anchored facts\nagainst (inside the ingest roots). Each fact remembered with `anchors`\nthen carries `freshness`; a stale one is ranked lower.",
+            "type": "string"
+          },
           "filter": {
             "additionalProperties": true,
             "description": "Optional exact-match metadata filter (e.g.\n`{\"project\": \"veles\", \"status\": \"resolved\"}`).",
@@ -3335,6 +3339,51 @@
                 "content": {
                   "description": "Stored fact content.",
                   "type": "string"
+                },
+                "freshness": {
+                  "anyOf": [
+                    {
+                      "description": "A fact's freshness against its anchored files.",
+                      "properties": {
+                        "changed": {
+                          "description": "The anchored paths that changed or disappeared (stale only).",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "state": {
+                          "description": "`fresh`: every anchored file is unchanged. `stale`: at least one\nchanged or was deleted — re-verify the fact before relying on it; it is\nranked lower. `unverified`: a file could not be checked (outside the\nroot, too large, budget spent), which says nothing either way.",
+                          "oneOf": [
+                            {
+                              "const": "fresh",
+                              "description": "Every anchored file is unchanged.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "stale",
+                              "description": "An anchored file changed or disappeared.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "unverified",
+                              "description": "An anchored file could not be checked.",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "changed"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Present only on `recall` with `anchor_root`, for a fact remembered\nwith `anchors`: whether its anchored files still hold the bytes it was\nwritten against."
                 },
                 "id": {
                   "description": "Stable id of the memory.",
@@ -3439,6 +3488,51 @@
                 "content": {
                   "description": "Stored fact content.",
                   "type": "string"
+                },
+                "freshness": {
+                  "anyOf": [
+                    {
+                      "description": "A fact's freshness against its anchored files.",
+                      "properties": {
+                        "changed": {
+                          "description": "The anchored paths that changed or disappeared (stale only).",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "state": {
+                          "description": "`fresh`: every anchored file is unchanged. `stale`: at least one\nchanged or was deleted — re-verify the fact before relying on it; it is\nranked lower. `unverified`: a file could not be checked (outside the\nroot, too large, budget spent), which says nothing either way.",
+                          "oneOf": [
+                            {
+                              "const": "fresh",
+                              "description": "Every anchored file is unchanged.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "stale",
+                              "description": "An anchored file changed or disappeared.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "unverified",
+                              "description": "An anchored file could not be checked.",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "changed"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Present only on `recall` with `anchor_root`, for a fact remembered\nwith `anchors`: whether its anchored files still hold the bytes it was\nwritten against."
                 },
                 "id": {
                   "description": "Stable id of the memory.",
@@ -3559,6 +3653,51 @@
                   "description": "Stored fact content.",
                   "type": "string"
                 },
+                "freshness": {
+                  "anyOf": [
+                    {
+                      "description": "A fact's freshness against its anchored files.",
+                      "properties": {
+                        "changed": {
+                          "description": "The anchored paths that changed or disappeared (stale only).",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "state": {
+                          "description": "`fresh`: every anchored file is unchanged. `stale`: at least one\nchanged or was deleted — re-verify the fact before relying on it; it is\nranked lower. `unverified`: a file could not be checked (outside the\nroot, too large, budget spent), which says nothing either way.",
+                          "oneOf": [
+                            {
+                              "const": "fresh",
+                              "description": "Every anchored file is unchanged.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "stale",
+                              "description": "An anchored file changed or disappeared.",
+                              "type": "string"
+                            },
+                            {
+                              "const": "unverified",
+                              "description": "An anchored file could not be checked.",
+                              "type": "string"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "changed"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Present only on `recall` with `anchor_root`, for a fact remembered\nwith `anchors`: whether its anchored files still hold the bytes it was\nwritten against."
+                },
                 "id": {
                   "description": "Stable id of the memory.",
                   "minimum": 0,
@@ -3646,10 +3785,22 @@
       }
     },
     {
-      "description": "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
+      "description": "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots) tie the fact to those files: the server records each file's SHA-256 so a later `recall` can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "anchor_root": {
+            "description": "Absolute path of the checkout `anchors` are relative to. It must lie\ninside the server's ingest roots (`VELESDB_MEMORY_INGEST_ROOTS`);\nwithout them anchoring is refused.",
+            "type": "string"
+          },
+          "anchors": {
+            "default": [],
+            "description": "Optional repository-relative paths of the files this fact is about\n(at most 8, e.g. `[\"src/parser.rs\"]`). The server reads each one\nunder `anchor_root` and records its SHA-256, so a later `recall` with\nthe same root can mark the fact stale once a file changes. Requires\n`anchor_root`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "fact": {
             "description": "The fact to store in memory.",
             "type": "string"

@@ -93,6 +93,8 @@ async fn remember_then_recall_roundtrips_through_the_server() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -101,6 +103,7 @@ async fn remember_then_recall_roundtrips_through_the_server() {
             query: "parking_lot poisoning".to_owned(),
             limit: None,
             filter: None,
+            anchor_root: None,
         }))
         .await
         .expect("recall");
@@ -117,6 +120,8 @@ async fn feedback_tool_reinforces_and_returns_confidence() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -162,6 +167,8 @@ async fn why_returns_the_connected_subgraph() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember decision");
@@ -171,6 +178,8 @@ async fn why_returns_the_connected_subgraph() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember pr");
@@ -196,6 +205,8 @@ async fn forget_removes_a_memory_through_the_server() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -212,6 +223,7 @@ async fn forget_removes_a_memory_through_the_server() {
             query: "France".to_owned(),
             limit: None,
             filter: None,
+            anchor_root: None,
         }))
         .await
         .expect("recall");
@@ -242,6 +254,8 @@ async fn remember_links_are_traversable_by_why() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember pr");
@@ -254,6 +268,8 @@ async fn remember_links_are_traversable_by_why() {
             }],
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember decision with link");
@@ -276,6 +292,8 @@ async fn metadata_and_filter_flow_through_the_server() {
             links: Vec::new(),
             metadata: Some(veles_meta.clone()),
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember veles");
@@ -285,6 +303,8 @@ async fn metadata_and_filter_flow_through_the_server() {
             links: Vec::new(),
             metadata: Some(acme_meta),
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember acme");
@@ -294,6 +314,7 @@ async fn metadata_and_filter_flow_through_the_server() {
             query: "auth bug".to_owned(),
             limit: None,
             filter: Some(veles_meta),
+            anchor_root: None,
         }))
         .await
         .expect("recall filtered");
@@ -314,6 +335,8 @@ async fn remember_accepts_explicit_and_default_ttl() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: Some(3_600),
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember with explicit ttl");
@@ -325,6 +348,8 @@ async fn remember_accepts_explicit_and_default_ttl() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember with default ttl");
@@ -335,6 +360,7 @@ async fn remember_accepts_explicit_and_default_ttl() {
             query: "ttl fact".to_owned(),
             limit: None,
             filter: None,
+            anchor_root: None,
         }))
         .await
         .expect("recall");
@@ -361,6 +387,8 @@ async fn recall_where_filters_by_range_through_the_server() {
             links: Vec::new(),
             metadata: Some(ts_meta(ts)),
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -419,6 +447,8 @@ async fn empty_fact_returns_invalid_params_not_internal_error() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .map(|_| ())
@@ -442,6 +472,8 @@ async fn unknown_link_target_returns_invalid_params_not_internal_error() {
             }],
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .map(|_| ())
@@ -462,6 +494,8 @@ async fn relate_to_unknown_endpoint_returns_invalid_params_not_internal_error() 
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -497,6 +531,8 @@ async fn oversized_fact_returns_invalid_params() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .map(|_| ())
@@ -541,6 +577,8 @@ async fn recall_fused_folds_in_a_graph_reached_fact() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember anchor");
@@ -555,6 +593,8 @@ async fn recall_fused_folds_in_a_graph_reached_fact() {
             }],
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember linked");
@@ -565,6 +605,7 @@ async fn recall_fused_folds_in_a_graph_reached_fact() {
             query: DECISION.to_owned(),
             limit: Some(1),
             filter: None,
+            anchor_root: None,
         }))
         .await
         .expect("recall");
@@ -606,6 +647,8 @@ async fn recall_fused_with_date_field_returns_a_dated_timeline() {
             links: Vec::new(),
             metadata: Some(ts_meta(ts)),
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember dated fact");
@@ -645,6 +688,8 @@ async fn recall_fused_without_date_field_omits_the_timeline() {
         links: Vec::new(),
         metadata: None,
         ttl_seconds: None,
+        anchors: Vec::new(),
+        anchor_root: None,
     }))
     .await
     .expect("remember");
@@ -677,6 +722,8 @@ async fn recall_fused_survives_a_non_finite_graph_boost() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember anchor");
@@ -689,6 +736,8 @@ async fn recall_fused_survives_a_non_finite_graph_boost() {
             }],
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember linked");
@@ -741,6 +790,7 @@ async fn recall_limit_is_capped_at_max() {
             query: "anything".to_owned(),
             limit: Some(usize::MAX),
             filter: None,
+            anchor_root: None,
         }))
         .await
         .expect("recall with huge limit must succeed (silently capped)");
@@ -756,6 +806,8 @@ async fn why_hop_depth_is_capped_at_max() {
         links: Vec::new(),
         metadata: None,
         ttl_seconds: None,
+        anchors: Vec::new(),
+        anchor_root: None,
     }))
     .await
     .expect("remember");
@@ -1027,6 +1079,8 @@ async fn reserved_metadata_key_returns_invalid_params() {
             links: Vec::new(),
             metadata: Some(bad_meta),
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .map(|_| ())
@@ -1070,6 +1124,8 @@ async fn relate_with_empty_relation_returns_invalid_params() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember A");
@@ -1079,6 +1135,8 @@ async fn relate_with_empty_relation_returns_invalid_params() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember B");
@@ -1260,6 +1318,8 @@ async fn remember_recall_relate_forget_feedback_responses_echo_an_id_str_twin() 
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -1270,6 +1330,7 @@ async fn remember_recall_relate_forget_feedback_responses_echo_an_id_str_twin() 
             query: "parking_lot poisoning".to_owned(),
             limit: None,
             filter: None,
+            anchor_root: None,
         }))
         .await
         .expect("recall");
@@ -1286,6 +1347,8 @@ async fn remember_recall_relate_forget_feedback_responses_echo_an_id_str_twin() 
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember pr");
@@ -1324,6 +1387,8 @@ async fn why_response_echoes_id_str_and_from_to_str_on_nodes_and_edges() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember decision");
@@ -1333,6 +1398,8 @@ async fn why_response_echoes_id_str_and_from_to_str_on_nodes_and_edges() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember pr");
@@ -1408,6 +1475,8 @@ async fn relate_by_wrong_numeric_id_fails_but_id_str_round_trip_succeeds() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember decision");
@@ -1417,6 +1486,8 @@ async fn relate_by_wrong_numeric_id_fails_but_id_str_round_trip_succeeds() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember pr");
@@ -1714,6 +1785,8 @@ async fn unrelate_tool_removes_the_edge_and_is_idempotent() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember a");
@@ -1723,6 +1796,8 @@ async fn unrelate_tool_removes_the_edge_and_is_idempotent() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember b");
@@ -1769,6 +1844,8 @@ async fn unrelate_refuses_a_self_loop_as_invalid_params() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -2075,6 +2152,8 @@ async fn remember_tool_answers_while_the_autograph_gate_is_still_shut() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");
@@ -2123,6 +2202,8 @@ async fn dropping_the_server_bounds_shutdown_and_skips_queued_jobs() {
             links: Vec::new(),
             metadata: None,
             ttl_seconds: None,
+            anchors: Vec::new(),
+            anchor_root: None,
         }))
         .await
         .expect("remember");

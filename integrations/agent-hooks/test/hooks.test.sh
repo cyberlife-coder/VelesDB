@@ -2416,6 +2416,168 @@ else
   fail "Harness: no hook call is fed by a pipe: $(head -n 3 <<<"$piped_hooks")"
 fi
 
+# ---------------------------------------------------------------------------
+# Verifiable evidence: which shell commands count as a check, and which exit
+# status a failure reports. A command whose exit status is not the check's own
+# (a pipe, a chain, a subshell) is never evidence.
+# ---------------------------------------------------------------------------
+check_kind_cases=(
+  "test|cargo test -p velesdb-memory -- --test-threads=1"
+  "test|flock /tmp/build.lock cargo test -p velesdb-memory"
+  "test|CARGO_TARGET_DIR=/tmp/t CARGO_INCREMENTAL=0 cargo nextest run"
+  "test|cargo test 2>&1"
+  "build|cargo build --release"
+  "build|cargo check -p velesdb-memory --no-default-features"
+  "lint|cargo clippy --all-targets -- -D warnings"
+  "lint|cargo fmt --all -- --check"
+  "test|pytest -q scripts/tests"
+  "test|python3 -m unittest discover -s scripts/tests"
+  "test|npm test"
+  "lint|npm run lint"
+  "build|pnpm run build"
+  "test|go test ./..."
+  "lint|ruff check ."
+  "lint|shellcheck hooks/*.sh"
+  "-|cargo fmt --all"
+  "-|cargo test | tail -n 5"
+  "-|cargo test 2>&1 | tail -n 5"
+  "-|cd crates && cargo test"
+  "-|cargo test; echo done"
+  "-|(cargo test)"
+  "-|cargo test \$(cat args)"
+  "-|echo cargo test"
+  "-|git status"
+  "-|"
+  "-|cargo te2>&1st"
+  "-|cargo t2>&1est"
+  "test|cargo test 2>&1 -p velesdb-memory"
+  "-|cargo test --no-run"
+  "-|cargo nextest"
+  "-|cargo nextest list"
+  "-|cargo nextest show-config"
+  "-|cargo test -p velesdb-memory --no-run"
+  "-|cargo test -- --list"
+  "-|cargo test --help"
+  "-|pytest --collect-only -q"
+  "-|go test -list ."
+  "-|flock -n /tmp/build.lock cargo test"
+)
+check_kind_wrong=""
+for case_line in "${check_kind_cases[@]}"; do
+  expected="${case_line%%|*}"
+  command_text="${case_line#*|}"
+  if got="$(with_hook_lib check_kind "$command_text")"; then :; else got="-"; fi
+  [ "$got" = "$expected" ] || check_kind_wrong="$check_kind_wrong [$command_text] -> $got (want $expected);"
+done
+if [ -z "$check_kind_wrong" ]; then
+  pass "Evidence: only a single check command, with its own exit status, is classified"
+else
+  fail "Evidence: only a single check command, with its own exit status, is classified:$check_kind_wrong"
+fi
+
+# A command holding a control character is no check either: the record
+# alphabet refuses it (valid_check_record), and a second line's words
+# describe a different command than the one whose exit status was
+# observed — `read` is line-based, so `cargo test\nsleep 5` would parse
+# as the first line while its status came from the last, and a tab would
+# split words the per-word check never sees. Recorded anyway, such a
+# command writes a record collect_checks can never consume — a poisoned
+# evidence window for every later checkpoint.
+control_command_wrong=""
+for command_text in $'cargo test\nsleep 5' $'cargo\ttest' $'cargo test\n' $'cargo test\r'; do
+  if with_hook_lib check_kind "$command_text" >/dev/null; then
+    control_command_wrong="$control_command_wrong [$(printf '%q' "$command_text")] classified a check;"
+  fi
+  if with_hook_lib check_failure_counts "$command_text" 1; then
+    control_command_wrong="$control_command_wrong [$(printf '%q' "$command_text")] exit 1 counted;"
+  fi
+done
+# The record layer must keep no trace of one either: a refused command
+# writes nothing, while a well-formed one still records and collects.
+ctl_dir="$TMP_TEST_DIR/ctl-check.records"
+mkdir -p "$ctl_dir"
+with_hook_lib record_check_outcome "$ctl_dir" /repo $'cargo test\nsleep 5' fail
+with_hook_lib record_check_outcome "$ctl_dir" /repo $'cargo\ttest' fail
+with_hook_lib record_check_outcome "$ctl_dir" /repo "cargo test" fail
+ctl_count="$(find "$ctl_dir" -name '*.json' | wc -l | tr -d ' ')"
+[ "$ctl_count" = "2" ] || control_command_wrong="$control_command_wrong $ctl_count records kept, want 2;"
+with_hook_lib collect_checks "$ctl_dir" || control_command_wrong="$control_command_wrong collect_checks refused a healthy dir;"
+if [ -z "$control_command_wrong" ]; then
+  pass "Evidence: a command holding a control character is never a check and keeps no record"
+else
+  fail "Evidence: a command holding a control character is never a check and keeps no record:$control_command_wrong"
+fi
+
+failure_cases=(
+  "101|Exit code 101
+error: test failed, to rerun pass --lib"
+  "1|Exit code 1"
+  "-|Command timed out after 2m 0s"
+  "-|Exit code 0"
+  "-|Exit code 01"
+  "-|exit code 1"
+  "-|"
+)
+failure_wrong=""
+for case_line in "${failure_cases[@]}"; do
+  expected="${case_line%%|*}"
+  error_text="${case_line#*|}"
+  if got="$(with_hook_lib failure_exit_code "$error_text")"; then :; else got="-"; fi
+  [ "$got" = "$expected" ] || failure_wrong="$failure_wrong [$error_text] -> $got (want $expected);"
+done
+if [ -z "$failure_wrong" ]; then
+  pass "Evidence: a failure counts only with a documented non-zero 'Exit code N' first line"
+else
+  fail "Evidence: a failure counts only with a documented non-zero 'Exit code N' first line:$failure_wrong"
+fi
+
+# An exit status that reports the launch, not the check: 126 (not
+# executable), 127 (not found), and for a `flock`-wrapped command the
+# sysexits range flock uses for its own failures (64-78).
+launch_cases=(
+  "yes|101|cargo test"
+  "yes|1|pytest -q"
+  "no|127|cargo test"
+  "no|126|cargo test"
+  "yes|101|flock /tmp/build.lock cargo test"
+  "yes|1|flock /tmp/build.lock pytest -q"
+  "no|66|flock /tmp/build.lock cargo test"
+  "no|69|flock /tmp/build.lock cargo test"
+  "no|78|flock /tmp/build.lock cargo test"
+  "yes|66|cargo test"
+)
+launch_wrong=""
+for case_line in "${launch_cases[@]}"; do
+  expected="${case_line%%|*}"
+  rest="${case_line#*|}"
+  code="${rest%%|*}"
+  command_text="${rest#*|}"
+  if with_hook_lib check_failure_counts "$command_text" "$code"; then got=yes; else got=no; fi
+  [ "$got" = "$expected" ] || launch_wrong="$launch_wrong [$command_text exit $code] -> $got (want $expected);"
+done
+if [ -z "$launch_wrong" ]; then
+  pass "Evidence: an exit status that reports the launch, not the check, is no failure"
+else
+  fail "Evidence: an exit status that reports the launch, not the check, is no failure:$launch_wrong"
+fi
+
+# Every git call in the hooks goes through safe_git, which neutralizes the
+# repository's own config: a cloned repository chooses its .git/config, and
+# signature verification, an fsmonitor hook or a pager named there would
+# otherwise run at Stop. Comments are skipped; `command -v git` only looks.
+direct_git=""
+for host_lib in "$ROOT"/*/hooks/lib/*.sh "$ROOT"/*/hooks/*.sh; do
+  hits="$(grep -nE '(^|[^A-Za-z0-9_-])git[[:space:]]' "$host_lib" \
+    | grep -vE '^[0-9]+:[[:space:]]*#' \
+    | grep -vE 'command -v git|safe_git\(\)|^[0-9]+:[[:space:]]+(env|-u|GIT_)|--no-optional-locks' || true)"
+  [ -z "$hits" ] || direct_git="$direct_git ${host_lib#"$ROOT"/}:$(head -n 1 <<<"$hits");"
+done
+if [ -z "$direct_git" ]; then
+  pass "Evidence: every hook git call goes through safe_git"
+else
+  fail "Evidence: every hook git call goes through safe_git:$direct_git"
+fi
+
 if [ "$FAILED" -ne 0 ]; then
   echo "FAILURES DETECTED"
   exit 1

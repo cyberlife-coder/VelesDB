@@ -60,6 +60,7 @@ EXPECTED_HOOKS = (
     ("PreCompact", "pre-compact.sh"),
     ("PreToolUse", "pre-tool-use.sh"),
     ("PostToolUse", "post-tool-use.sh"),
+    ("PostToolUseFailure", "post-tool-use-failure.sh"),
 )
 
 #: What the install must contain after the local layer is absorbed. The two
@@ -69,6 +70,7 @@ EXPECTED_FILES = (
     "stop.sh",
     "pre-compact.sh",
     "post-tool-use.sh",
+    "post-tool-use-failure.sh",
     "lib/common.sh",
     "lib/freshness.sh",
     "update-daemon.sh",

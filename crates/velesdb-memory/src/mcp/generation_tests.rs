@@ -46,6 +46,7 @@ async fn mcp_request_holds_the_live_generation_until_completion() {
                 query: "blocked".to_owned(),
                 limit: Some(1),
                 filter: None,
+                anchor_root: None,
             }))
             .await
     });

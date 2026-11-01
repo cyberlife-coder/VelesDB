@@ -702,10 +702,12 @@ otherwise it exits with an explicit message.
 ## The `PostToolUse` hook
 
 [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md) ships
-five Claude Code hooks. Three (`SessionStart`, `Stop`, `PreCompact`) are
+six Claude Code hooks. Three (`SessionStart`, `Stop`, `PreCompact`) are
 advisory continuations: they ask the model to call the corresponding memory or
 compiler tool. `PreToolUse` is binding for opted-in repositories, but only for
-recall-before-edit; it does not shrink context. See [Agent Memory → harness
+recall-before-edit; it does not shrink context. `PostToolUseFailure` records a
+failed check command as evidence for the learning-loop checklist; it does not
+shrink context either. See [Agent Memory → harness
 hooks](AGENT_MEMORY.md#agent-harness-hooks-mcp-server-path) for the full table.
 
 `PostToolUse` is different. Its output schema carries replacement content
