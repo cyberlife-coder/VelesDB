@@ -123,6 +123,17 @@ impl<T: ?Sized> RwLock<T> {
         let held = Held::acquire();
         WriteGuard(self.0.write(), held)
     }
+
+    /// `parking_lot`'s `try_read`, checked as [`read`](Self::read) is: the
+    /// shared guard, or `None` when a writer holds the lock or has already
+    /// taken the writer slot and only waits for readers to drain. `None` is
+    /// how a test proves a writer is queued.
+    #[cfg(test)]
+    pub(crate) fn try_read(&self) -> Option<ReadGuard<'_, T>> {
+        self.0
+            .try_read()
+            .map(|guard| ReadGuard(guard, Held::acquire()))
+    }
 }
 
 impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for RwLock<T> {

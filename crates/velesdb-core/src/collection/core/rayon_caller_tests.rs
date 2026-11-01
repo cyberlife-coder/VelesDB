@@ -11,7 +11,8 @@
 use crate::collection::Collection;
 use crate::distance::DistanceMetric;
 use crate::point::Point;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 const DIM: usize = 64;
@@ -42,6 +43,15 @@ fn vector(id: u64) -> Vec<f32> {
 /// one-worker application pool, while that pool's other job reads the
 /// collection behind a writer queued on the merge's storage guard.
 ///
+/// The interleaving is staged, never timed. `rayon::join` runs its first arm
+/// inline on the worker and queues the second, so the merge runs first and
+/// the reader leg is the job an `in_worker_cross` wait would steal. The
+/// merge signals through `merge_hooks::set_after_read` once it holds the
+/// `vector_storage` read guard — where a racing writer then queues — and
+/// the reader leg reads only once the writer is provably queued:
+/// `try_read` going `None` means a writer took the writer slot, whether it
+/// runs or still waits for the merge's readers to drain.
+///
 /// Returns `Err` when the probe did not finish before `DEADLINE`.
 fn merge_from_an_application_job(merged: u64) -> Result<(), mpsc::RecvTimeoutError> {
     let dir = tempfile::tempdir().expect("test: temp dir");
@@ -52,22 +62,41 @@ fn merge_from_an_application_job(merged: u64) -> Result<(), mpsc::RecvTimeoutErr
     let ids: Vec<u64> = (0..merged).collect();
     coll.remove_from_index_for_bench(&ids);
 
+    let (guard_held_tx, guard_held_rx) = mpsc::channel();
+    let writer_done = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let coll = coll.clone();
+        let writer_done = writer_done.clone();
+        std::thread::spawn(move || {
+            // The merge signals once it holds the storage read guard, so the
+            // upsert's `vector_storage.write()` queues behind it.
+            let _ = guard_held_rx.recv();
+            let result = coll.upsert([Point::without_payload(POINTS, vector(POINTS))]);
+            writer_done.store(true, Ordering::Release);
+            result.expect("test: writer");
+        })
+    };
+
     let (done_tx, done_rx) = mpsc::channel();
     let probe = {
         let coll = coll.clone();
         std::thread::spawn(move || {
             crate::pools::application_pool(1).install(|| {
                 rayon::join(
-                    || coll.index_current(&ids),
                     || {
-                        let writer = {
-                            let coll = coll.clone();
-                            std::thread::spawn(move || {
-                                coll.upsert([Point::without_payload(POINTS, vector(POINTS))])
-                                    .expect("test: writer");
-                            })
-                        };
-                        std::thread::sleep(Duration::from_millis(300));
+                        crate::collection::search::pending::merge_hooks::set_after_read(
+                            move || {
+                                let _ = guard_held_tx.send(());
+                            },
+                        );
+                        coll.index_current(&ids)
+                    },
+                    || {
+                        while !writer_done.load(Ordering::Acquire)
+                            && coll.storage.vector_storage.try_read().is_some()
+                        {
+                            std::thread::yield_now();
+                        }
                         let read = coll.get(&[1]);
                         writer.join().expect("test: writer thread");
                         read
