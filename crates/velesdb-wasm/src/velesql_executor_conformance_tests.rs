@@ -185,8 +185,25 @@ fn load_fixture() -> Fixture {
 fn payload_literal(v: &Value) -> String {
     match v {
         Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        Value::Number(n) => number_literal(n),
         other => other.to_string(),
     }
+}
+
+/// A float as VelesQL parses it: decimal notation only — `1e-17`, which
+/// `Display` produces, is not a VelesQL literal, so a number in scientific
+/// notation is rewritten as the shortest `%.Nf` string that parses back to
+/// the same `f64`.
+fn number_literal(n: &serde_json::Number) -> String {
+    let text = n.to_string();
+    if !text.contains('e') && !text.contains('E') {
+        return text;
+    }
+    let Some(f) = n.as_f64() else { return text };
+    (1..=40)
+        .map(|p| format!("{f:.p$}"))
+        .find(|s| s.parse::<f64>() == Ok(f))
+        .unwrap_or(text)
 }
 
 /// Builds the dataset *through the WASM executor* by issuing one
