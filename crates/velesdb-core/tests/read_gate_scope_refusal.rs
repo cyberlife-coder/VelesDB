@@ -67,7 +67,7 @@ fn db_with(observer: impl DatabaseObserver + 'static) -> (TempDir, Database) {
         .upsert(vec![Point::new(
             1,
             vec![1.0, 0.0, 0.0, 0.0],
-            Some(serde_json::json!({"tenant": "a", "body": "keep me"})),
+            Some(serde_json::json!({"tenant": "a", "body": "keep me"}))),
         )])
         .expect("test: upsert");
     (dir, db)
@@ -97,8 +97,8 @@ fn a_contains_text_scope_still_applies() {
         .authorize_read("c", QueryOperationKind::Select, None, None)
         .expect("test: CONTAINS_TEXT lowers faithfully");
     let filter = outcome.expect("test: scope filter present");
-    assert!(filter.matches(&serde_json::json!({"body": "keep me"})));
-    assert!(!filter.matches(&serde_json::json!({"body": "drop me"})));
+    assert!(filter.matches_point(1, Some(&serde_json::json!({"body": "keep me"}))));
+    assert!(!filter.matches_point(1, Some(&serde_json::json!({"body": "drop me"}))));
 }
 
 /// GIVEN an observer that scopes reads by a `$param` placeholder
