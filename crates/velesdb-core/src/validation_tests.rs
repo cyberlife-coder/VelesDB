@@ -158,3 +158,34 @@ mod payload_depth {
         assert!(validate_payload_depth(1, &serde_json::json!("scalar")).is_ok());
     }
 }
+
+#[test]
+fn sparse_index_name_accepts_empty_and_plain_names() {
+    // "" selects the default, unprefixed sparse index.
+    validate_sparse_index_name("").unwrap();
+    for name in ["title", "idx-2", "A1_b2-C3"] {
+        validate_sparse_index_name(name).unwrap();
+    }
+}
+
+#[test]
+fn sparse_index_name_rejects_path_injection() {
+    for name in [
+        "/",
+        "a/b",
+        "a\\b",
+        ".",
+        "..",
+        "../x",
+        "x/../../y",
+        "x:y",
+        "-flag",
+    ] {
+        assert!(
+            validate_sparse_index_name(name).is_err(),
+            "{name:?} must be refused"
+        );
+    }
+    let over_long = "x".repeat(MAX_COLLECTION_NAME_LENGTH + 1);
+    assert!(validate_sparse_index_name(&over_long).is_err());
+}

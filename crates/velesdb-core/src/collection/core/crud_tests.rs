@@ -141,6 +141,42 @@ fn test_upsert_indexes_sparse_vectors() {
     assert_eq!(postings[0].doc_id, 1);
 }
 
+/// A sparse index name is request-controlled and reaches `sparse-{name}.*`
+/// filenames under the collection directory. `upsert` must refuse an unsafe
+/// name at the cold boundary — before the point is stored, before any index
+/// entry or file can carry it (issue #2593, CodeQL `rust/path-injection`).
+#[test]
+fn test_upsert_rejects_invalid_sparse_index_name() {
+    use crate::index::sparse::SparseVector;
+
+    let dir = tempfile::tempdir().unwrap();
+    let coll = Collection::create(dir.path().to_path_buf(), 4, DistanceMetric::Cosine).unwrap();
+
+    let mut sv_map = BTreeMap::new();
+    sv_map.insert(
+        "a/../../escape".to_string(),
+        SparseVector::new(vec![(1, 1.0)]),
+    );
+    let point = Point::with_sparse(7, vec![0.1, 0.2, 0.3, 0.4], None, Some(sv_map));
+
+    let err = coll.upsert(vec![point]).unwrap_err();
+    assert!(
+        matches!(err, crate::error::Error::SchemaValidation(_)),
+        "expected SchemaValidation, got {err:?}"
+    );
+
+    // Refused before any write: no index entry, no stored point, no stray file.
+    assert!(!coll.sparse_indexes().read().contains_key("a/../../escape"));
+    assert!(
+        coll.get(&[7]).iter().all(Option::is_none),
+        "a rejected batch must not store the point"
+    );
+    assert!(
+        !dir.path().join("sparse-a").exists(),
+        "no component of the hostile name may reach the filesystem"
+    );
+}
+
 #[test]
 #[expect(clippy::significant_drop_tightening)] // Reason: the guard under test is held to the assertion on purpose
 fn test_delete_removes_from_sparse_indexes() {
