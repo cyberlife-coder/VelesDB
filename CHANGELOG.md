@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `search.max_results` is now applied as the ceiling on the rows a single
+  caller-visible search or query returns (#2591). The key used to be parsed,
+  validated, and ignored: a `search(query, k)` above the ceiling, a filtered
+  search, a batch or multi-query search, `scroll_batch`, and every `VelesQL`
+  statement — `SELECT`, `MATCH` `RETURN` (which has no implicit LIMIT), and
+  compounds — could return more rows than configured. `k`/`LIMIT` values
+  below the ceiling still win, and a `Collection` opened directly (no
+  `Database` config) stays unbounded. `scroll_batch` pages are bounded by the
+  same ceiling, so callers paging with a larger `batch_size` receive smaller
+  pages — issue more `scroll_batch` calls to cover the same range.
+
 ## [8.0.0] - 2026-11-02
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

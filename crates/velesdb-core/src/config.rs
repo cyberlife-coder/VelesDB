@@ -125,16 +125,22 @@ impl SearchMode {
 
 /// Search configuration section.
 ///
-/// **Half applied.** `default_mode` and `ef_search` reach the engine since
+/// **Applied.** `default_mode` and `ef_search` reach the engine since
 /// #2087: an unqualified `search()` resolves through
 /// [`SearchConfig::resolved_quality`], with `ef_search` winning over
 /// `default_mode` when both are set.
 ///
-/// `max_results` and `query_timeout_ms` are still inert and still warned about
-/// by [`VelesConfig::validate`], field by field. They are not oversights:
-/// clamping a caller's `LIMIT` silently is a footgun and erroring is a breaking
-/// change under a *default* config, while a query timeout is a feature the
-/// engine does not have. Both need a decision, not plumbing.
+/// `max_results` is the deployment-wide ceiling on the rows a single
+/// caller-visible search or query hands back (#2591): every k-based search
+/// entry point clamps `k` to it, and every `VelesQL` query — `SELECT`, `MATCH`
+/// `RETURN`, compounds — truncates its final row set to it. The clamp sits at
+/// the outermost boundary (typed collection wrappers, `Database`), so engine
+/// internals — compound operands, MATCH candidate pools, union legs — keep
+/// their own fetch windows. A caller `k`/`LIMIT` below the ceiling still wins.
+///
+/// `query_timeout_ms` is still inert and still warned about by
+/// [`VelesConfig::validate`]: a query timeout is a feature the engine does
+/// not have. It needs a decision, not plumbing.
 ///
 /// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
 /// working mechanism and continue to win over anything here.
@@ -145,7 +151,8 @@ pub struct SearchConfig {
     pub default_mode: SearchMode,
     /// Override `ef_search` (if set, overrides mode).
     pub ef_search: Option<usize>,
-    /// Maximum results per query.
+    /// Maximum rows a single caller-visible search or query may return;
+    /// applied as a ceiling over `k`/`LIMIT` (#2591).
     pub max_results: usize,
     /// Query timeout in milliseconds.
     pub query_timeout_ms: u64,
