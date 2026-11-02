@@ -236,8 +236,9 @@ impl StoreDir {
     }
 
     /// Names present in the pinned directory — `Dir::read_from` on a clone
-    /// of the descriptor, so a swapped-in directory is never listed.
-    #[cfg(unix)]
+    /// of the descriptor, so a swapped-in directory is never listed. Only the
+    /// extraction job store's `pending()` scan lists a directory today.
+    #[cfg(all(unix, any(feature = "mcp", test)))]
     pub(crate) fn entries(&self) -> std::io::Result<Vec<String>> {
         let cloned = self.dir.try_clone()?;
         let mut dir = rustix::fs::Dir::read_from(cloned)?;
@@ -252,7 +253,7 @@ impl StoreDir {
         Ok(names)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(all(not(unix), any(feature = "mcp", test)))]
     pub(crate) fn entries(&self) -> std::io::Result<Vec<String>> {
         std::fs::read_dir(&self.path)?
             .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
