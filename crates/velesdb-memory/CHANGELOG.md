@@ -9,7 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> Targets velesdb-memory 0.17.0.
+## [0.17.0] - 2026-11-02
+
+> **BREAKING for Rust callers (0.x minor).** `velesdb-memory` now builds
+> against `velesdb-core` 8.0.0, where 0.16.0 built against 7.1.x. Two variants
+> of `MemoryError` carry core types: `Storage` holds a `velesdb_core::Error`
+> and `Memory` an `AgentMemoryError`. A crate that names or matches either has
+> to depend on `velesdb-core` 8 as well; the breaking changes of that major are
+> in [`docs/guides/MIGRATION_v8.0.0.md`](../../docs/guides/MIGRATION_v8.0.0.md).
+> The `migrate-embeddings` argument parsers return `MigrateUsageError` /
+> `StrategyError` instead of `String`, and a malformed
+> `VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS` is a typed `SettingError`;
+> each change is listed under *Changed* with the form a caller migrates to. The
+> anchor API introduced below settles on `AnchorSet` — `remember_anchored`
+> takes `Option<&AnchorSet>` and `AnchorProbe` gains a required `root()` — the
+> form listed under *Changed*, so a caller on a 0.17.0 draft build has the same
+> migration path.
+>
+> Nothing changes on disk: a store written by 0.16.0 opens unchanged — file
+> anchors are additive metadata a 0.16.0 store cannot carry — and the daemon,
+> the MCP tools and the bindings behave as before.
 
 ### Added
 
