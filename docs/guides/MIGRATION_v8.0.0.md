@@ -851,8 +851,8 @@ same `try`/catch applies.
 ## 10. TypeScript SDK (`@wiscale/velesdb-sdk`)
 
 The SDK's 8.0.0 refuses what velesdb-server would drop or refuse, instead of
-sending it. Each item is in the `[Unreleased]` section of the CHANGELOG until
-the npm package ships.
+sending it. Each item is in the `[8.0.0]` section of the
+[`CHANGELOG.md`](../../CHANGELOG.md).
 
 - **Filters must be core-shaped.** A `filter` is `{ condition: { type, ... } }`
   (`velesdb_core::filter::Filter`); build it with `f.*`. A flat field map such
