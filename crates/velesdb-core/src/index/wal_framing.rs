@@ -70,11 +70,19 @@ pub(crate) fn flush_wal(
     Ok(())
 }
 
-/// Truncates the WAL file to zero length. A missing file is a no-op.
+/// Truncates the WAL file to zero length and fsyncs the truncation.
+/// A missing file is a no-op.
+///
+/// The fsync matches [`crate::storage::mmap::wal_replay`]'s `truncate_wal`
+/// and compaction's WAL reclaim: without it a lost truncation can leave
+/// stale tail bytes past newly appended entries on disk — recoverable only
+/// because both replays happen to be idempotent, which this fsync stops
+/// relying on.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Index`] if the file exists but cannot be truncated.
+/// Returns [`Error::Index`] if the file exists but cannot be truncated
+/// or synced.
 pub(crate) fn wal_truncate(wal_path: &Path, context: &str) -> Result<()> {
     if !wal_path.exists() {
         return Ok(());
@@ -84,7 +92,12 @@ pub(crate) fn wal_truncate(wal_path: &Path, context: &str) -> Result<()> {
         .open(wal_path)
         .map_err(|e| Error::Index(format!("{context} truncate open: {e}")))?;
     file.set_len(0)
-        .map_err(|e| Error::Index(format!("{context} truncate: {e}")))
+        .map_err(|e| Error::Index(format!("{context} truncate: {e}")))?;
+    file.sync_all()
+        .map_err(|e| Error::Index(format!("{context} truncate fsync: {e}")))?;
+    #[cfg(test)]
+    io_counters::record_sync(wal_path, context);
+    Ok(())
 }
 
 /// Reads the 4-byte little-endian length prefix at `pos`, returning
@@ -127,8 +140,9 @@ pub(crate) fn read_entry_header(data: &[u8], pos: usize, context: &str) -> Optio
 ///
 /// Two further limits, stated rather than glossed:
 ///
-/// * [`wal_truncate`] opens the file through its own `OpenOptions`, so it is
-///   invisible here. These are counts of the APPEND path, not of every open.
+/// * [`wal_truncate`] opens the file through its own `OpenOptions`, so its
+///   open and set_len are invisible here; its fsync IS counted, because the
+///   truncation's durability barrier is the property under test.
 /// * The counters only observe the calling thread. That is sound for the bulk
 ///   payload path, which walks its points sequentially, and a future
 ///   parallelisation would make the assertion fail loudly rather than silently.

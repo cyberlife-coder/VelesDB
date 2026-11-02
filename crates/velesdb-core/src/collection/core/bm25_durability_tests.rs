@@ -558,3 +558,29 @@ fn bm25_batch_throughput_survives_reopen() {
         );
     }
 }
+
+/// The WAL truncation after a durable snapshot must itself be fsynced.
+///
+/// Audit #2590 found `wal_framing::wal_truncate` ran `set_len(0)` with no
+/// `sync_all`: the truncation was only safe because BM25 and edge WAL
+/// replays happen to be idempotent — a guard living in another module.
+/// A lost truncation can also interleave stale tail bytes with newer
+/// appends on disk. Counted at the syscall, not timed.
+#[test]
+fn wal_truncate_is_a_durability_barrier() {
+    use crate::index::bm25_persistence_wal::{wal_append_batch, wal_truncate, WalOp};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = wal_path(&dir);
+    wal_append_batch(&path, &[WalOp::Add { id: 1, text: "hello" }]).expect("append");
+
+    let ((), counts) = crate::index::wal_framing::io_counters::count_wal_io(&path, || {
+        wal_truncate(&path).expect("truncate");
+    });
+    assert_eq!(
+        counts.syncs, 1,
+        "WAL truncation ran {} fsyncs; a committed snapshot's truncate must \
+         be durable itself, not rely on replay idempotency living elsewhere",
+        counts.syncs
+    );
+}

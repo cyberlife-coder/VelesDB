@@ -29,7 +29,7 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::Path;
 
 use crate::storage::snapshot::crc32_hash;
@@ -250,7 +250,11 @@ fn read_section(
 
 /// Saves a snapshot to a file.
 ///
-/// Uses atomic write (temp file + rename) for safety.
+/// Uses the shared `write-tmp-fsync-rename-dirfsync` primitive
+/// ([`crate::storage::atomic_write`]) so a crash mid-write leaves the
+/// previous complete snapshot and a power loss cannot roll back a
+/// committed rename — the earlier hand-rolled version fsynced the temp
+/// file but never the directory entry (audit #2590).
 ///
 /// # Errors
 ///
@@ -259,17 +263,8 @@ pub fn save_snapshot_to_file<P: AsRef<Path>>(
     path: P,
     state: &MemoryState,
 ) -> Result<(), SnapshotError> {
-    let path = path.as_ref();
     let snapshot_data = create_snapshot(state);
-
-    let temp_path = path.with_extension("tmp");
-    let mut file = File::create(&temp_path)?;
-    file.write_all(&snapshot_data)?;
-    file.sync_all()?;
-    drop(file);
-
-    std::fs::rename(&temp_path, path)?;
-
+    crate::storage::atomic_write::atomic_write(path.as_ref(), &snapshot_data)?;
     Ok(())
 }
 
