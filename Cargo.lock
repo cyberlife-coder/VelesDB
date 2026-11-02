@@ -290,7 +290,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -574,7 +574,7 @@ dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -879,7 +879,7 @@ dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1217,7 +1217,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.2",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -1317,7 +1317,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "strsim",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1339,7 +1339,7 @@ checksum = "68f5792fa0d41cd2325ce0ffa64f0a340eaebd4971a3a0c5e1ffd2cc488a355e"
 dependencies = [
  "darling_core 0.24.0",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1735,6 +1735,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "fearless_simd"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "629c9d6b6f30b5604089e0980f4d924a013aacb1654a6cdf5d3d852224f68651"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "fearless_simd_macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e91d94c6885390b81782d7ee60fd6583b33907333a8b340de25ccf468353315"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1928,7 +1948,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -3326,7 +3346,7 @@ dependencies = [
  "napi-derive-backend",
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -3339,7 +3359,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "semver",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -3879,7 +3899,7 @@ dependencies = [
  "pest_meta",
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -4804,17 +4824,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
 name = "roaring"
-version = "0.11.5"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18bd8a37d17a58532776dcdf6041ce64929adca78e8489d5cacbafe99229d3e1"
+checksum = "eccfaa25083dbde9444486adda410c9cd23565d7f54a2df916c0bdf4bee44931"
 dependencies = [
  "bytemuck",
  "byteorder",
+ "fearless_simd",
+ "fearless_simd_macros",
  "serde",
 ]
 
@@ -5097,7 +5119,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals 0.30.0",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -5251,7 +5273,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -5273,7 +5295,7 @@ checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -5713,9 +5735,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.2"
+version = "3.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a207d6d6a2b7fc470b80443726053f18a2481b7e1eee970597051596567987a3"
+checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6100,7 +6122,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -6859,7 +6881,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "syn 3.0.2",
+ "syn 3.0.9",
 ]
 
 [[package]]
