@@ -26,7 +26,7 @@ python3 scripts/bump_version.py X.Y.Z
 # UPDATE_OPENAPI_SNAPSHOT=1 is what makes the test WRITE: without it the same
 # test only compares against the committed files and fails on the drift the
 # bump just created, leaving docs/openapi.{json,yaml} at the old version.
-UPDATE_OPENAPI_SNAPSHOT=1 cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --include-ignored --test-threads=1
+UPDATE_OPENAPI_SNAPSHOT=1 cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
 cargo build  # refresh Cargo.lock
 # Refresh the lockfiles of the standalone Rust projects that path-depend on the
 # workspace crates (fuzz/, the examples, the Tauri demo): `--locked` jobs such
