@@ -1,12 +1,9 @@
-use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::migration::capture;
-use crate::mutation::atomic_file::{
-    open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
-    validate_regular_file, validate_workspace,
-};
+use crate::mutation::atomic_file::StoreDir;
 use crate::mutation::catchup::CatchUpConfig;
 use crate::mutation::controller::{ControllerConfig, ConvergenceObservation};
 use crate::mutation::journal::EpochIdentity;
@@ -143,20 +140,19 @@ impl JobRecord {
 
 #[derive(Clone)]
 pub(crate) struct JobStore {
-    workspace: PathBuf,
+    /// The workspace, pinned by an open directory descriptor at open/create
+    /// (#2408): `load`/`save`/`recover_staging` resolve the job and staging
+    /// names against it, so a directory swapped in afterwards cannot be
+    /// followed. Shared through `Arc` so a `Clone`d store keeps the same pin.
+    dir: Arc<StoreDir>,
     path: PathBuf,
-    access: std::sync::Arc<parking_lot::Mutex<()>>,
+    access: Arc<parking_lot::Mutex<()>>,
 }
 
 impl JobStore {
     pub(crate) fn create(workspace: &Path, record: &JobRecord) -> Result<Self, MemoryError> {
-        validate_workspace(workspace, "online migration")?;
+        let store = Self::at(workspace)?;
         record.validate()?;
-        let store = Self {
-            workspace: workspace.to_owned(),
-            path: workspace.join(JOB_FILE),
-            access: std::sync::Arc::new(parking_lot::Mutex::new(())),
-        };
         store.recover_staging()?;
         ensure_replaceable(&store)?;
         store.save(record)?;
@@ -164,14 +160,9 @@ impl JobStore {
     }
 
     pub(crate) fn try_open(workspace: &Path) -> Result<Option<Self>, MemoryError> {
-        validate_workspace(workspace, "online migration")?;
-        let store = Self {
-            workspace: workspace.to_owned(),
-            path: workspace.join(JOB_FILE),
-            access: std::sync::Arc::new(parking_lot::Mutex::new(())),
-        };
+        let store = Self::at(workspace)?;
         store.recover_staging()?;
-        if !path_exists(&store.path)? {
+        if !store.dir.exists(JOB_FILE)? {
             return Ok(None);
         }
         store.load()?;
@@ -179,15 +170,18 @@ impl JobStore {
     }
 
     pub(crate) fn open(workspace: &Path) -> Result<Self, MemoryError> {
-        validate_workspace(workspace, "online migration")?;
-        let store = Self {
-            workspace: workspace.to_owned(),
-            path: workspace.join(JOB_FILE),
-            access: std::sync::Arc::new(parking_lot::Mutex::new(())),
-        };
+        let store = Self::at(workspace)?;
         store.recover_staging()?;
         store.load()?;
         Ok(store)
+    }
+
+    fn at(workspace: &Path) -> Result<Self, MemoryError> {
+        Ok(Self {
+            dir: Arc::new(StoreDir::open(workspace, "online migration")?),
+            path: workspace.join(JOB_FILE),
+            access: Arc::new(parking_lot::Mutex::new(())),
+        })
     }
 
     /// The record file's path, for tests that need to read it raw (a
@@ -203,7 +197,7 @@ impl JobStore {
     }
 
     fn load_unlocked(&self) -> Result<JobRecord, MemoryError> {
-        let bytes = read_limited(&self.path)?;
+        let bytes = self.read_limited()?;
         let record: JobRecord = serde_json::from_slice(&bytes)
             .map_err(|err| capture(format!("invalid online migration job state: {err}")))?;
         record.validate()?;
@@ -219,27 +213,56 @@ impl JobStore {
         if bytes.len() as u64 > MAX_JOB_BYTES {
             return Err(capture("online migration job exceeds 64 KiB safety limit"));
         }
-        let staging = self.workspace.join(STAGING_FILE);
-        write_synced(&staging, &bytes)?;
-        promote(&staging, &self.path)
+        self.write_synced(&bytes)?;
+        self.dir
+            .promote(STAGING_FILE, JOB_FILE)
             .map_err(|err| capture(format!("cannot publish online migration job: {err}")))?;
-        sync_directory(&self.workspace)
+        self.dir
+            .sync()
             .map_err(|err| capture(format!("cannot sync online migration job: {err}")))
     }
 
     fn recover_staging(&self) -> Result<(), MemoryError> {
-        let staging = self.workspace.join(STAGING_FILE);
-        if !path_exists(&staging)? {
+        if !self.dir.exists(STAGING_FILE)? {
             return Ok(());
         }
-        validate_regular_file(&staging, "online migration job")?;
-        std::fs::remove_file(&staging)
+        self.dir
+            .validate_regular(STAGING_FILE, "online migration job")?;
+        self.dir
+            .remove(STAGING_FILE)
             .map_err(|err| capture(format!("cannot remove job staging file: {err}")))
+    }
+
+    fn read_limited(&self) -> Result<Vec<u8>, MemoryError> {
+        let (mut file, metadata) = self
+            .dir
+            .open_regular_file_allow_hard_links(JOB_FILE, "online migration job")?;
+        let length = metadata.len();
+        if length > MAX_JOB_BYTES {
+            return Err(capture("online migration job exceeds 64 KiB safety limit"));
+        }
+        let capacity = usize::try_from(length)
+            .map_err(|_| capture("online migration job length does not fit memory"))?;
+        let mut bytes = Vec::with_capacity(capacity);
+        file.read_to_end(&mut bytes)
+            .map_err(|err| capture(format!("cannot read online migration job: {err}")))?;
+        Ok(bytes)
+    }
+
+    fn write_synced(&self, bytes: &[u8]) -> Result<(), MemoryError> {
+        let mut file = self
+            .dir
+            .create_new(STAGING_FILE, 0o666)
+            .map_err(|err| capture(format!("cannot create job staging file: {err}")))?;
+        file.write_all(bytes)
+            .and_then(|()| file.flush())
+            .and_then(|()| file.sync_all())
+            .map_err(|err| capture(format!("cannot sync online migration job: {err}")))
     }
 }
 
 fn ensure_replaceable(store: &JobStore) -> Result<(), MemoryError> {
-    if !path_exists(&store.path)? {
+    if !store.dir.exists(JOB_FILE)? {
         return Ok(());
     }
     let previous = store.load()?;
@@ -290,33 +313,4 @@ fn validate_terminal_state(record: &JobRecord) -> Result<(), MemoryError> {
         return Err(capture("terminal online migration job requests recovery"));
     }
     Ok(())
-}
-
-fn read_limited(path: &Path) -> Result<Vec<u8>, MemoryError> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    let (mut file, metadata) =
-        open_regular_file_allow_hard_links(path, "online migration job", options)?;
-    let length = metadata.len();
-    if length > MAX_JOB_BYTES {
-        return Err(capture("online migration job exceeds 64 KiB safety limit"));
-    }
-    let capacity = usize::try_from(length)
-        .map_err(|_| capture("online migration job length does not fit memory"))?;
-    let mut bytes = Vec::with_capacity(capacity);
-    file.read_to_end(&mut bytes)
-        .map_err(|err| capture(format!("cannot read online migration job: {err}")))?;
-    Ok(bytes)
-}
-
-fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), MemoryError> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|err| capture(format!("cannot create job staging file: {err}")))?;
-    file.write_all(bytes)
-        .and_then(|()| file.flush())
-        .and_then(|()| file.sync_all())
-        .map_err(|err| capture(format!("cannot sync online migration job: {err}")))
 }

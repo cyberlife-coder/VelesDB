@@ -6988,6 +6988,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rmcp",
+ "rustix 1.1.4",
  "rustls",
  "rustls-pemfile",
  "schemars 1.2.3",

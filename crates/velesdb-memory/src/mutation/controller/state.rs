@@ -1,16 +1,12 @@
-use std::fs::OpenOptions;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::{
     assess, phase_for, validate_sample, ControllerConfig, ControllerPhase, ConvergenceSample,
     RECOVER_CUTOVER, RESUME_CATCH_UP,
 };
 use crate::migration::capture;
-use crate::mutation::atomic_file::{
-    open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
-    validate_regular_file, validate_workspace,
-};
+use crate::mutation::atomic_file::StoreDir;
 use crate::MemoryError;
 
 const STATE_VERSION: u32 = 1;
@@ -33,8 +29,11 @@ pub(super) struct ControllerState {
 }
 
 pub(super) struct StateStore {
-    workspace: PathBuf,
-    path: PathBuf,
+    /// The workspace, pinned by an open directory descriptor at `open`
+    /// (#2408): `save`/`load`/`recover_staging` resolve the state and
+    /// staging names against it, so a directory swapped in afterwards
+    /// cannot be followed.
+    dir: StoreDir,
 }
 
 impl StateStore {
@@ -43,14 +42,11 @@ impl StateStore {
         epoch_id: &str,
         config: ControllerConfig,
     ) -> Result<(Self, ControllerState, bool), MemoryError> {
-        validate_workspace(workspace, "controller")?;
+        let dir = StoreDir::open(workspace, "controller")?;
         validate_epoch_id(epoch_id)?;
-        let store = Self {
-            workspace: workspace.to_owned(),
-            path: workspace.join(STATE_FILE),
-        };
+        let store = Self { dir };
         store.recover_staging()?;
-        let resumed = path_exists(&store.path)?;
+        let resumed = store.dir.exists(STATE_FILE)?;
         let state = if resumed {
             store.load(epoch_id, config)?
         } else {
@@ -78,11 +74,12 @@ impl StateStore {
         if bytes.len() as u64 > MAX_STATE_BYTES {
             return Err(capture("controller state exceeds 64 KiB safety limit"));
         }
-        let staging = self.workspace.join(STAGING_FILE);
-        write_synced(&staging, &bytes)?;
-        promote(&staging, &self.path)
+        self.write_synced(&bytes)?;
+        self.dir
+            .promote(STAGING_FILE, STATE_FILE)
             .map_err(|err| capture(format!("cannot publish controller state: {err}")))?;
-        sync_directory(&self.workspace)
+        self.dir
+            .sync()
             .map_err(|err| capture(format!("cannot sync controller directory: {err}")))
     }
 
@@ -91,7 +88,7 @@ impl StateStore {
         epoch_id: &str,
         config: ControllerConfig,
     ) -> Result<ControllerState, MemoryError> {
-        let bytes = read_state_bytes(&self.path)?;
+        let bytes = self.read_state_bytes()?;
         let state: ControllerState = serde_json::from_slice(&bytes)
             .map_err(|err| capture(format!("invalid controller state: {err}")))?;
         validate_loaded(&state, epoch_id, config)?;
@@ -99,30 +96,41 @@ impl StateStore {
     }
 
     fn recover_staging(&self) -> Result<(), MemoryError> {
-        let staging = self.workspace.join(STAGING_FILE);
-        if !path_exists(&staging)? {
+        if !self.dir.exists(STAGING_FILE)? {
             return Ok(());
         }
-        validate_regular_file(&staging, "controller")?;
-        std::fs::remove_file(&staging)
+        self.dir.validate_regular(STAGING_FILE, "controller")?;
+        self.dir
+            .remove(STAGING_FILE)
             .map_err(|err| capture(format!("cannot remove controller staging file: {err}")))
     }
-}
 
-fn read_state_bytes(path: &Path) -> Result<Vec<u8>, MemoryError> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    let (mut file, metadata) = open_regular_file_allow_hard_links(path, "controller", options)?;
-    let length = metadata.len();
-    if length > MAX_STATE_BYTES {
-        return Err(capture("controller state exceeds 64 KiB safety limit"));
+    fn read_state_bytes(&self) -> Result<Vec<u8>, MemoryError> {
+        let (mut file, metadata) = self
+            .dir
+            .open_regular_file_allow_hard_links(STATE_FILE, "controller")?;
+        let length = metadata.len();
+        if length > MAX_STATE_BYTES {
+            return Err(capture("controller state exceeds 64 KiB safety limit"));
+        }
+        let capacity = usize::try_from(length)
+            .map_err(|_| capture("controller state length does not fit memory"))?;
+        let mut bytes = Vec::with_capacity(capacity);
+        file.read_to_end(&mut bytes)
+            .map_err(|err| capture(format!("cannot read controller state: {err}")))?;
+        Ok(bytes)
     }
-    let capacity = usize::try_from(length)
-        .map_err(|_| capture("controller state length does not fit memory"))?;
-    let mut bytes = Vec::with_capacity(capacity);
-    file.read_to_end(&mut bytes)
-        .map_err(|err| capture(format!("cannot read controller state: {err}")))?;
-    Ok(bytes)
+
+    fn write_synced(&self, bytes: &[u8]) -> Result<(), MemoryError> {
+        let mut file = self
+            .dir
+            .create_new(STAGING_FILE, 0o666)
+            .map_err(|err| capture(format!("cannot create controller staging file: {err}")))?;
+        file.write_all(bytes)
+            .and_then(|()| file.flush())
+            .and_then(|()| file.sync_all())
+            .map_err(|err| capture(format!("cannot sync controller state: {err}")))
+    }
 }
 
 fn validate_loaded(
@@ -255,18 +263,6 @@ fn validate_recovery(state: &ControllerState, allowed: &[Option<&str>]) -> Resul
     } else {
         Err(capture("invalid durable controller recovery action"))
     }
-}
-
-fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), MemoryError> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|err| capture(format!("cannot create controller staging file: {err}")))?;
-    file.write_all(bytes)
-        .and_then(|()| file.flush())
-        .and_then(|()| file.sync_all())
-        .map_err(|err| capture(format!("cannot sync controller state: {err}")))
 }
 
 fn validate_epoch_id(epoch_id: &str) -> Result<(), MemoryError> {

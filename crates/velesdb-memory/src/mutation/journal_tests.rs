@@ -274,6 +274,126 @@ fn compaction_never_writes_through_a_path_swapped_in_after_the_directory_sync() 
     assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
 }
 
+/// #2408: after `DirtyJournal::open`, the workspace directory itself can be
+/// renamed away and replaced — here by a symlink to a different, equally
+/// valid store at the same path. Every later operation that re-resolved
+/// `workspace/<file>` by name would follow it: `records_after` would read the
+/// foreign journal and `compact_through` would publish into the foreign
+/// directory. The store instead pins the workspace by an open directory
+/// descriptor at `open`, so nothing afterwards resolves the directory by
+/// name again: reads and compaction keep landing in the original directory
+/// inode and the swapped-in store is never touched.
+#[cfg(unix)]
+#[test]
+fn a_workspace_swapped_after_open_is_never_followed() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).expect("workspace");
+    let identity = epoch(dir.path(), "00112233445566778899aabbccddeeff");
+    let journal = DirtyJournal::open(&workspace, &identity, CAPACITY).expect("open");
+    journal.before_mutation(DirtyKey::Fact(1)).expect("append");
+    journal.before_mutation(DirtyKey::Fact(2)).expect("append");
+
+    // A different, equally valid store elsewhere on the same filesystem.
+    let foreign = dir.path().join("foreign");
+    std::fs::create_dir(&foreign).expect("foreign");
+    {
+        let other = DirtyJournal::open(
+            &foreign,
+            &epoch(dir.path(), "ffffffffffffffffffffffffffffffff"),
+            CAPACITY,
+        )
+        .expect("foreign journal");
+        other
+            .before_mutation(DirtyKey::Fact(91))
+            .expect("foreign append");
+    }
+    let foreign_journal = foreign.join(JOURNAL_FILE);
+    let foreign_before = std::fs::read(&foreign_journal).expect("foreign journal bytes");
+
+    // The swap: the workspace path now resolves to the foreign store.
+    let moved = dir.path().join("moved");
+    std::fs::rename(&workspace, &moved).expect("move workspace aside");
+    symlink(&foreign, &workspace).expect("swap in symlinked store");
+
+    assert_eq!(
+        journal
+            .records_after(0, 8)
+            .expect("records come from the pinned workspace"),
+        vec![
+            JournalRecord::new(1, DirtyKey::Fact(1)),
+            JournalRecord::new(2, DirtyKey::Fact(2)),
+        ]
+    );
+    journal
+        .compact_through(1)
+        .expect("compact inside the pinned workspace");
+    journal.before_mutation(DirtyKey::Fact(3)).expect("append");
+
+    assert_eq!(
+        std::fs::read(&foreign_journal).expect("foreign journal"),
+        foreign_before,
+        "the swapped-in store must be byte-for-byte untouched"
+    );
+    assert_eq!(
+        journal.records_after(0, 8).expect("records"),
+        vec![
+            JournalRecord::new(2, DirtyKey::Fact(2)),
+            JournalRecord::new(3, DirtyKey::Fact(3)),
+        ]
+    );
+}
+
+/// #2407: a hard link planted at the journal path after `open` is, to any
+/// by-name reopen, indistinguishable from the journal itself but for an
+/// `nlink` count a strict open can only refuse after the fact. The journal
+/// resolves its file by name exactly once, at `open`: every later read and
+/// every compaction source goes through the handle it already holds, so a
+/// planted link is never even opened — the next append writes through the
+/// held handle, and the compaction's rename simply replaces the planted
+/// directory entry without following it.
+#[cfg(unix)]
+#[test]
+fn a_hard_link_planted_at_the_journal_path_intercepts_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let identity = epoch(dir.path(), "00112233445566778899aabbccddeeff");
+    let journal = DirtyJournal::open(dir.path(), &identity, CAPACITY).expect("open");
+    journal.before_mutation(DirtyKey::Fact(1)).expect("append");
+    journal.before_mutation(DirtyKey::Fact(2)).expect("append");
+
+    let victim = dir.path().join("victim");
+    std::fs::write(&victim, b"untouched").expect("victim");
+    let journal_path = dir.path().join(JOURNAL_FILE);
+    let parked = dir.path().join("journal.parked");
+    std::fs::rename(&journal_path, &parked).expect("park the real journal");
+    std::fs::hard_link(&victim, &journal_path).expect("plant hard link");
+
+    assert_eq!(
+        journal
+            .records_after(0, 8)
+            .expect("reads go through the held handle"),
+        vec![
+            JournalRecord::new(1, DirtyKey::Fact(1)),
+            JournalRecord::new(2, DirtyKey::Fact(2)),
+        ]
+    );
+    journal
+        .compact_through(1)
+        .expect("compact through the held handle");
+    journal.before_mutation(DirtyKey::Fact(3)).expect("append");
+
+    assert_eq!(std::fs::read(&victim).expect("victim"), b"untouched");
+    assert_eq!(
+        journal.records_after(0, 8).expect("records"),
+        vec![
+            JournalRecord::new(2, DirtyKey::Fact(2)),
+            JournalRecord::new(3, DirtyKey::Fact(3)),
+        ]
+    );
+}
+
 #[test]
 fn disk_cap_refuses_before_an_unjournalled_write() {
     let dir = tempfile::tempdir().expect("tempdir");
