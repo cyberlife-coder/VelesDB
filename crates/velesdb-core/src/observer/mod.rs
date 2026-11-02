@@ -110,12 +110,20 @@ pub trait DatabaseObserver: Send + Sync {
     ///
     /// A `VelesQL` statement asks once per collection it reads: its target,
     /// each set-operation operand, each JOIN's secondary collection, each
-    /// `MATCH` `@collection`, and each scalar subquery's collection. A scope
-    /// is AND-composed into the `WHERE` of the target and of each operand; on
-    /// a read with no row filter to compose it into (a traversal, a JOIN's
-    /// secondary side, `@collection` enrichment, `SELECT EDGES`) a scope
-    /// filter refuses the statement with [`Error::Config`](crate::Error::Config)
-    /// instead of running it unscoped.
+    /// `MATCH` `@collection`, and each scalar subquery's collection. The
+    /// consultation contract is **once per `(collection, operation)` per
+    /// statement** (issue #2588): however a statement fans out internally —
+    /// a self-JOIN, a set operation over one collection, a repeated
+    /// `@collection`, a subquery on the outer collection, or the plan read an
+    /// `EXPLAIN`/`EXPLAIN ANALYZE` makes before the row read — the first
+    /// answer is replayed for the statement's lifetime, so a logging or
+    /// metering observer never double-counts one logical query.
+    ///
+    /// A scope is AND-composed into the `WHERE` of the target and of each
+    /// operand; on a read with no row filter to compose it into (a traversal,
+    /// a JOIN's secondary side, `@collection` enrichment, `SELECT EDGES`) a
+    /// scope filter refuses the statement with
+    /// [`Error::Config`](crate::Error::Config) instead of running it unscoped.
     ///
     /// Premium extensions can implement this to enforce RBAC, tenant scoping,
     /// and row/collection filtering on the read path so that every consumer of

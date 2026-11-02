@@ -6,10 +6,16 @@
 use crate::velesql::IntrospectionStatement;
 use crate::{Error, Result, SearchResult};
 
+use super::read_authorization::GateDecisions;
 use super::Database;
 
 impl Database {
     /// Dispatches an introspection statement to the appropriate executor.
+    ///
+    /// `decisions` is the enclosing statement's gate memo (issue #2588): an
+    /// `EXPLAIN`'s inner query is decided at the gate like any read, so its
+    /// plan build here replays those answers rather than consulting the
+    /// observer a second time.
     ///
     /// # Errors
     ///
@@ -18,6 +24,8 @@ impl Database {
     pub(super) fn execute_introspection(
         &self,
         stmt: &IntrospectionStatement,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
     ) -> Result<Vec<SearchResult>> {
         match stmt {
             IntrospectionStatement::ShowCollections => self.execute_show_collections(),
@@ -25,7 +33,7 @@ impl Database {
                 self.execute_describe_collection(&desc.name)
             }
             IntrospectionStatement::Explain(inner_query) => {
-                self.execute_explain_introspection(inner_query)
+                self.execute_explain_introspection(inner_query, params, decisions)
             }
         }
     }
@@ -91,8 +99,10 @@ impl Database {
     fn execute_explain_introspection(
         &self,
         inner_query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
     ) -> Result<Vec<SearchResult>> {
-        let plan = self.explain_query(inner_query)?;
+        let plan = self.explain_query_ctx(inner_query, params, decisions)?;
         let plan_json = serde_json::to_value(&plan)
             .unwrap_or_else(|_| serde_json::json!({"error": "failed to serialize plan"}));
 
