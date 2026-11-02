@@ -14,6 +14,7 @@ import type { CrudTransport, RawBulkTransport } from './crud-backend';
 import { parseRestPointId, sparseVectorToRestFormat } from './crud-backend';
 import type { SearchTransport } from './search-backend';
 import type { AgentMemoryTransport } from './agent-memory-backend';
+import type { Filter } from '../filter';
 import type { QueryTransport } from './query-backend';
 import type { StreamingTransport } from './streaming-backend';
 import type { SearchResult } from '../types';
@@ -266,11 +267,11 @@ export function buildStreamingTransport(config: RestHttpConfig): StreamingTransp
 /** Build an AgentMemoryTransport adapter (requires a search function ref). */
 export function buildAgentMemoryTransport(
   config: RestHttpConfig,
-  searchFn: (c: string, e: number[], opts: { k: number; filter: Record<string, string> }) => Promise<SearchResult[]>
+  searchFn: (c: string, e: number[], opts: { k: number; filter: Filter }) => Promise<SearchResult[]>
 ): AgentMemoryTransport {
   return {
     requestJson: <T>(m: string, p: string, b?: unknown) => request<T>(config, m, p, b),
-    searchVectors: (c: string, e: number[], k: number, f: Record<string, string>) =>
-      searchFn(c, e, { k, filter: f }),
+    searchVectors: (c: string, e: number[], k: number, filter: Filter) =>
+      searchFn(c, e, { k, filter }),
   };
 }

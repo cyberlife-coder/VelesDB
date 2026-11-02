@@ -122,7 +122,7 @@ impl ParsedQuery {
     #[wasm_bindgen(getter)]
     pub fn columns(&self) -> JsValue {
         let cols = self.inner.select.columns.to_display_names();
-        serde_wasm_bindgen::to_value(&cols).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&cols).unwrap_or(JsValue::NULL)
     }
 
     /// Check if DISTINCT modifier is present.
@@ -197,7 +197,7 @@ impl ParsedQuery {
             .map_or_else(Vec::new, |items| {
                 items.iter().map(|item| item.to_display_pair()).collect()
             });
-        serde_wasm_bindgen::to_value(&pairs).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&pairs).unwrap_or(JsValue::NULL)
     }
 
     /// Get the GROUP BY columns as JSON array.
@@ -207,7 +207,7 @@ impl ParsedQuery {
             Some(gb) => gb.columns.clone(),
             None => Vec::new(),
         };
-        serde_wasm_bindgen::to_value(&group_by).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&group_by).unwrap_or(JsValue::NULL)
     }
 
     /// Get the number of JOIN clauses.
@@ -283,7 +283,7 @@ impl ParsedQuery {
                     .unwrap_or_default()
             })
             .unwrap_or_default();
-        serde_wasm_bindgen::to_value(&labels).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&labels).unwrap_or(JsValue::NULL)
     }
 
     /// Get relationship types from the MATCH clause as JSON array of arrays.
@@ -301,7 +301,7 @@ impl ParsedQuery {
                     .unwrap_or_default()
             })
             .unwrap_or_default();
-        serde_wasm_bindgen::to_value(&types).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&types).unwrap_or(JsValue::NULL)
     }
 
     /// Get RETURN items from the MATCH clause as JSON array.
@@ -319,7 +319,7 @@ impl ParsedQuery {
                     .collect()
             })
             .unwrap_or_default();
-        serde_wasm_bindgen::to_value(&items).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&items).unwrap_or(JsValue::NULL)
     }
 
     /// Get the LIMIT from the MATCH RETURN clause.

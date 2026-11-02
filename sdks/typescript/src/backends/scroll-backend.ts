@@ -7,6 +7,7 @@
 import type { ScrollRequest, ScrollResponse } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
+import { normalizeFilter } from '../filter';
 
 /** Minimal transport interface for scroll operations. */
 export type ScrollTransport = BaseTransport;
@@ -43,7 +44,7 @@ export async function scroll(
     body.batch_size = request.batchSize;
   }
   if (request?.filter !== undefined) {
-    body.filter = request.filter;
+    body.filter = normalizeFilter(request.filter);
   }
 
   const response = await transport.requestJson<ScrollApiResponse>(

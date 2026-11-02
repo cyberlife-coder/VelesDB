@@ -240,6 +240,55 @@ fn test_given_chunked_collection_when_group_by_order_by_limit_then_top_n_parents
 }
 
 // =========================================================================
+// Scenario 4b: ORDER BY repeats the aggregate the SELECT aliases
+// =========================================================================
+
+#[test]
+fn test_given_chunked_collection_when_order_by_aliased_max_score_expression_then_groups_follow_it()
+{
+    let (_dir, db) = create_test_db();
+    setup_chunked_collection(&db);
+
+    // Best chunk per parent: doc-1 1.0, doc-2 ~0.92, doc-3 ~0.55. Were
+    // MAX(score) ignored, the point-id tie-break would put doc-1 first.
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    let results = execute_sql_with_params(
+        &db,
+        "SELECT parent_id, MAX(score) AS relevance FROM chunks WHERE vector NEAR $v GROUP BY parent_id ORDER BY MAX(score) ASC LIMIT 1",
+        &params,
+    )
+    .expect("test: GROUP BY + ORDER BY MAX(score)");
+
+    let first_parent = results[0]
+        .point
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("parent_id"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        first_parent,
+        Some("doc-3"),
+        "doc-3 has the lowest MAX(score)"
+    );
+}
+
+#[test]
+fn test_given_chunked_collection_when_order_by_aggregate_missing_from_select_then_rejected() {
+    let (_dir, db) = create_test_db();
+    setup_chunked_collection(&db);
+
+    let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
+    let err = execute_sql_with_params(
+        &db,
+        "SELECT parent_id, MAX(score) AS relevance FROM chunks WHERE vector NEAR $v GROUP BY parent_id ORDER BY AVG(score) ASC LIMIT 1",
+        &params,
+    )
+    .expect_err("test: ORDER BY an aggregate the grouped rows do not carry must fail");
+
+    assert!(err.to_string().contains("V016"), "got: {err}");
+}
+
+// =========================================================================
 // Scenario 5: Edge — Single chunk per parent (passthrough)
 // =========================================================================
 
@@ -397,26 +446,30 @@ fn test_given_max_score_without_near_when_execute_then_error() {
 }
 
 // =========================================================================
-// Scenario 10: Negative — GROUP BY on nonexistent field → empty
+// Scenario 10: Edge — GROUP BY on a field no chunk has → one NULL group
 // =========================================================================
 
 #[test]
-fn test_given_nonexistent_group_field_when_group_by_then_empty() {
+fn test_given_nonexistent_group_field_when_group_by_then_one_null_group() {
     let (_dir, db) = create_test_db();
     setup_chunked_collection(&db);
 
     let params = vector_param(&[1.0, 0.0, 0.0, 0.0]);
     let results = execute_sql_with_params(
         &db,
-        "SELECT nonexistent_field, MAX(score) AS relevance FROM chunks WHERE vector NEAR $v GROUP BY nonexistent_field LIMIT 10",
+        "SELECT nonexistent_field, COUNT(*) AS n FROM chunks WHERE vector NEAR $v GROUP BY nonexistent_field LIMIT 10",
         &params,
     )
     .expect("test: nonexistent group field");
 
-    assert!(
-        results.is_empty(),
-        "GROUP BY on nonexistent field → empty result set"
+    // As in SQL GROUP BY, rows without the column form the NULL group.
+    assert_eq!(results.len(), 1, "every chunk falls in the NULL group");
+    let payload = results[0].point.payload.as_ref().expect("test: group row");
+    assert_eq!(
+        payload.get("nonexistent_field"),
+        Some(&serde_json::Value::Null)
     );
+    assert_eq!(payload.get("n"), Some(&serde_json::json!(9)));
 }
 
 // =========================================================================

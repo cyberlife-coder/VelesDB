@@ -209,6 +209,8 @@ merge moved the repo ahead of your installed skills.
   0.11.4`, which declares `rust-version = 1.90.0` — on 1.89 the workspace only
   builds when that dependency is already cached.
 - Docker (optional, for integration tests)
+- Node.js 22.12+ to work on the TypeScript SDK (`sdks/typescript`): its test
+  toolchain (vitest 5, eslint 10) requires it, and CI runs the SDK on Node 22.
 
 ### Building from Source
 
@@ -369,6 +371,18 @@ docs(readme): update quick start guide
 - Include code examples where appropriate
 - Keep README focused on getting started
 - Put detailed docs in the `/docs` folder
+- **A ```` ```sql ```` fence holds only VelesQL the engine accepts.**
+  `crates/velesdb-core/tests/velesql_doc_samples.rs` runs every statement of
+  every `sql` block in `README.md`, `crates/*/README.md` and the markdown under
+  `docs/`, `sdks/`, `integrations/`, `examples/`, `tutorials/` and `demos/`
+  (`CHANGELOG.md` excluded) through `Parser::parse` and
+  `QueryValidator::validate`. A statement ends at a `;` or at a blank line;
+  `--` comments are ignored, and a comment-only line does not end a statement.
+  Everything else takes another fence: ```` ```postgresql ```` (or the source's
+  own dialect) for foreign SQL, ```` ```text ```` for grammar notation and
+  fragments, and ```` ```velesql-error ```` for an example that is meant to be
+  rejected — the test checks that one in reverse, so it fails the day the
+  engine starts accepting it.
 
 ## Contributor License Agreement (CLA)
 

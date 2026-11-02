@@ -1,6 +1,6 @@
 {
-  "version": "2.1.0",
-  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows).",
+  "version": "2.6.0",
+  "description": "Executor-level VelesQL conformance: asserts result ROWS / COUNTS / ORDERING, not just that a query parses. Golden ids are derived from velesdb-core (the source of truth); other executors (WASM, CLI) must reproduce the same result set for the same dataset+query. Shared read-only dataset; ordering is on unique payload fields so results are deterministic. `cases` must pass; `known_bugs` carry the expected result for a former core bug that is now FIXED — the regression-lock test (test_velesql_executor_known_bugs) runs un-ignored and must keep passing. Since v2.0.0 (issue #1544) the fixture also carries `extra_collections` + `join_cases` (JOIN ON/USING, core+WASM only — the CLI harness is intentionally untouched, see below), `aggregate_cases` (GROUP BY/HAVING via `execute_aggregate`, core+WASM only), `setops_cases` (UNION/INTERSECT/EXCEPT, core+WASM only, membership/count only — see `documented_divergences` D003 for why ordering is NOT asserted), `match_cases` (1-2 hop MATCH, core+WASM only, per-executor query text — see D004 for why), and `documented_divergences` (informational: known, accepted core/WASM behavioural gaps, not pass/fail cases). `cases`/`dataset`/`known_bugs` are byte-for-byte compatible with v1.0.0 so the existing CLI conformance suite (which only reads those three keys) keeps running unmodified against the original 10 cases plus the new scalar-expression cases X011-X014, which use the same single-collection `docs` dataset and are safe for CLI's strict-order comparison. v2.1.0 adds LIKE/ILIKE/OFFSET (X015-X020) and NEAR under OR, alone and inside an AND (X021-X022), to `cases`, so the CLI runs them too, and, core+WASM only, the statement families the WASM executor implements on its own: `query_params` (the vectors every case below may bind), `near_cases` (NEAR ranking, hybrid NEAR + metadata, similarity() thresholds; ids in order plus `expect_scores`, compared within 1e-5), `fusion_cases` (NEAR_FUSED rrf/average/maximum and a trailing USING FUSION), `rejected_cases` (queries both engines must refuse), `dml_cases` (UPDATE/DELETE `statements` run on a fresh copy of the dataset, then `query` is asserted) and `projection_cases` (DISTINCT and named-column projection, compared as projected JSON rows). Also core+WASM only: `vector_group_cases` run a vector GROUP BY (NEAR + GROUP BY) and compare the order of its groups by `group_column`, and every `rejected_cases` entry names the `expected_code` both engines must refuse it with. v2.6.0 adds the `nums` extra collection and `number_cases` (plain SELECT, core+WASM, ids in order): numbers compare by exact value, `-0.0` equal to `0`, `0.3` not `0.30000000000000004`, an integer past 2^53 not the float it rounds to, an IN list the same at any length; core also runs them through a secondary index and the payload mirror. It adds G022-G025 (GROUP BY, MIN/MAX and HAVING over those numbers) and P006-P007 (DISTINCT `id`, PARTITION BY a number), and runs `projection_cases` over the extra collections too. v2.5.0 adds the `tickets` extra collection, whose payloads carry an `id` of their own, with O003 and G021 (`id` is the point id in WHERE, ORDER BY and aggregates). v2.4.0 adds G016-G020 (FIRST and tie order independent of scan order, `score` as a SQL GROUP BY alias, HAVING precedence) and R014-R015 (V018). v2.3.0 adds `null_order_cases` (plain SELECT over the extra collections, ids in order) and runs `aggregate_cases` over the extra collections too, pinning where a NULL sort key lands. v2.2.0 adds the Euclidean `docs_l2` extra collection and the `e` query vector for vector GROUP BY cases, which may also pin each group's row (`expect_rows`), id (`expect_ids`) and score (`expect_scores`, within 1e-5).",
   "dataset": {
     "collection": "docs",
     "dimension": 4,
@@ -157,6 +157,17 @@
   ],
   "extra_collections": [
     {
+      "collection": "docs_l2",
+      "dimension": 2,
+      "metric": "euclidean",
+      "points": [
+        { "id": 21, "vector": [1.0, 0.0], "payload": { "grp": "x" } },
+        { "id": 22, "vector": [3.0, 0.0], "payload": { "grp": "y" } },
+        { "id": 23, "vector": [2.0, 0.0], "payload": { "grp": "x" } },
+        { "id": 24, "vector": [0.5, 0.0], "payload": { "label": "no group" } }
+      ]
+    },
+    {
       "collection": "customers",
       "dimension": 2,
       "metric": "cosine",
@@ -193,6 +204,33 @@
         { "id": 10, "vector": [1.0, 0.0], "payload": { "amount": 100 } },
         { "id": 20, "vector": [0.0, 1.0], "payload": { "amount": 200 } },
         { "id": 99, "vector": [0.0, 1.0], "payload": { "amount": 300 } }
+      ]
+    },
+    {
+      "collection": "tickets",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 31, "vector": [1.0, 0.0], "payload": { "id": 3, "kind": "bug" } },
+        { "id": 32, "vector": [0.0, 1.0], "payload": { "id": 1, "kind": "bug" } },
+        { "id": 33, "vector": [1.0, 1.0], "payload": { "id": 2, "kind": "task" } }
+      ]
+    },
+    {
+      "collection": "nums",
+      "dimension": 2,
+      "metric": "cosine",
+      "points": [
+        { "id": 1, "vector": [1.0, 0.0], "payload": { "x": -0.0, "id": 7 } },
+        { "id": 2, "vector": [1.0, 0.0], "payload": { "x": 0, "id": 7 } },
+        { "id": 3, "vector": [1.0, 0.0], "payload": { "x": 1.0, "id": 7 } },
+        { "id": 4, "vector": [1.0, 0.0], "payload": { "x": 1, "id": 7 } },
+        { "id": 5, "vector": [1.0, 0.0], "payload": { "x": 0.30000000000000004 } },
+        { "id": 6, "vector": [1.0, 0.0], "payload": { "x": 9007199254740993 } },
+        { "id": 7, "vector": [1.0, 0.0], "payload": { "x": 9007199254740992 } },
+        { "id": 8, "vector": [1.0, 0.0], "payload": { "x": 3.5 } },
+        { "id": 9, "vector": [1.0, 0.0], "payload": { "x": 0.00000000000000001 } },
+        { "id": 10, "vector": [1.0, 0.0], "payload": { "x": 0.9999999999999999 } }
       ]
     }
   ],
@@ -236,7 +274,7 @@
         { "category": "other", "n": 2 },
         { "category": "tech", "n": 3 }
       ],
-      "note": "issue #1544: GROUP BY with COUNT(*), executed via Database::execute_aggregate (core) / the default WASM SELECT pipeline. Uses an explicit AS alias so both engines agree on the output field name — see documented_divergences D001 for the unaliased-name gap"
+      "note": "issue #1544: GROUP BY with COUNT(*), executed via Database::execute_aggregate (core) / the default WASM SELECT pipeline. Uses an explicit AS alias; G010 covers the default names"
     },
     {
       "id": "G002",
@@ -271,6 +309,185 @@
         { "category": "tech", "n": 3, "total_year": 6065.0 }
       ],
       "note": "issue #1556: LIMIT applies to the ordered group rows in both engines (was documented_divergences D006 — core returned every group)"
+    },
+    {
+      "id": "G006",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY COUNT(*) ASC, category DESC LIMIT 1",
+      "expect_groups": [
+        { "category": "other", "n": 2 }
+      ],
+      "note": "ORDER BY repeats an aggregate the SELECT stores under an alias: both engines sort by the aliased column. Both used to look the row up under the aggregate's default name, compare every group as equal and fall through to the tie-breaker, which alone puts tech first"
+    },
+    {
+      "id": "G007",
+      "query": "SELECT category, AVG(year) AS mean_year FROM docs GROUP BY category ORDER BY AVG(year) ASC, category DESC",
+      "expect_groups": [
+        { "category": "other", "mean_year": 2020.0 },
+        { "category": "tech", "mean_year": 2021.6666666666667 }
+      ],
+      "note": "same as G006 for AVG"
+    },
+    {
+      "id": "G008",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category HAVING SUM(year) > 5000 ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "HAVING tests an aggregate the SELECT does not list. Core used to accumulate only the SELECT's aggregates, read SUM(year) as absent and drop every group; WASM computed it"
+    },
+    {
+      "id": "G009",
+      "query": "SELECT category, COUNT(*) AS year FROM docs GROUP BY category ORDER BY year DESC",
+      "expect_groups": [
+        { "category": "tech", "year": 3 },
+        { "category": "other", "year": 2 }
+      ],
+      "note": "ORDER BY `year` names the count, the aggregate aliased `year`; the payload field `year` is not a column of the grouped rows"
+    },
+    {
+      "id": "G010",
+      "query": "SELECT category, COUNT(*), SUM(year), AVG(year) FROM docs GROUP BY category ORDER BY count DESC",
+      "expect_groups": [
+        { "category": "tech", "count": 3, "sum_year": 6065.0, "avg_year": 2021.6666666666667 },
+        { "category": "other", "count": 2, "sum_year": 4040.0, "avg_year": 2020.0 }
+      ],
+      "note": "unaliased aggregates carry the same default names in both engines (AggregateFunction::result_key), and ORDER BY can name them. WASM used to output count(*), sum(year) and avg(year) (formerly documented_divergences D001)"
+    },
+    {
+      "id": "G011",
+      "query": "SELECT category, COUNT(category) AS n FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "n": 2 },
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "COUNT(column) counts the non-null values of any type; core counted numeric values only and returned 0 for a string column"
+    },
+    {
+      "id": "G012",
+      "query": "SELECT category, year, COUNT(*) AS n FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "n": 2 },
+        { "category": "tech", "n": 3 }
+      ],
+      "note": "a grouped row carries its GROUP BY columns and aggregates only; WASM used to add a selected column outside GROUP BY from the group's first row"
+    },
+    {
+      "id": "G013",
+      "query": "SELECT id, COUNT(*) AS n FROM docs GROUP BY id ORDER BY id DESC LIMIT 2",
+      "expect_groups": [
+        { "id": 5, "n": 1 },
+        { "id": 4, "n": 1 }
+      ],
+      "note": "a GROUP BY column resolves as in WHERE: `id` is the point id (core read a payload field `id` and put every row in one NULL group)"
+    },
+    {
+      "id": "G014",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 GROUP BY grp ORDER BY grp ASC",
+      "expect_groups": [
+        { "grp": "x", "n": 2 },
+        { "grp": "y", "n": 1 },
+        { "grp": null, "n": 1 }
+      ],
+      "note": "ORDER BY puts NULL last in ASC (core sorted it first)"
+    },
+    {
+      "id": "G015",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 GROUP BY grp ORDER BY grp DESC",
+      "expect_groups": [
+        { "grp": null, "n": 1 },
+        { "grp": "y", "n": 1 },
+        { "grp": "x", "n": 2 }
+      ],
+      "note": "and first in DESC (core sorted it last)"
+    },
+    {
+      "id": "G016",
+      "query": "SELECT category, FIRST(year) AS y FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "y": 2021 },
+        { "category": "tech", "y": 2020 }
+      ],
+      "note": "outside a vector GROUP BY, FIRST reads the group's row with the smallest point id (other: id 3, tech: id 1), whatever order the engine scans in"
+    },
+    {
+      "id": "G017",
+      "query": "SELECT category, AVG(year) AS score FROM docs GROUP BY category ORDER BY category ASC",
+      "expect_groups": [
+        { "category": "other", "score": 2020.0 },
+        { "category": "tech", "score": 2021.6666666666667 }
+      ],
+      "note": "a SQL GROUP BY may name an aggregate `score` or `id`; only a vector GROUP BY, whose groups carry their own, refuses it (V017)"
+    },
+    {
+      "id": "G018",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 GROUP BY grp ORDER BY n DESC",
+      "expect_groups": [
+        { "grp": "x", "n": 2 },
+        { "grp": "y", "n": 1 },
+        { "grp": null, "n": 1 }
+      ],
+      "note": "groups equal on every ORDER BY key fall back to their GROUP BY key, ascending (y before NULL)"
+    },
+    {
+      "id": "G019",
+      "query": "SELECT year, COUNT(*) AS n FROM docs GROUP BY year",
+      "expect_groups": [
+        { "year": 2019, "n": 1 },
+        { "year": 2020, "n": 1 },
+        { "year": 2021, "n": 1 },
+        { "year": 2022, "n": 1 },
+        { "year": 2023, "n": 1 }
+      ],
+      "note": "without ORDER BY, SQL GROUP BY groups come by GROUP BY key ascending (core returned hash order, WASM scan order)"
+    },
+    {
+      "id": "G020",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category HAVING COUNT(*) = 2 OR COUNT(*) > 0 AND COUNT(*) > 5",
+      "expect_groups": [
+        { "category": "other", "n": 2 }
+      ],
+      "note": "HAVING AND binds tighter than OR, as in SQL: n = 2 OR (n > 0 AND n > 5). Read left to right, the condition kept no group"
+    },
+    {
+      "id": "G021",
+      "query": "SELECT kind, COUNT(id) AS n, MAX(id) AS top FROM tickets WHERE id >= 32 GROUP BY kind",
+      "expect_groups": [
+        { "kind": "bug", "n": 1, "top": 32 },
+        { "kind": "task", "n": 1, "top": 33 }
+      ],
+      "note": "the WHERE of an aggregate reads `id` as the point id, as its aggregates do, although every payload carries an `id` of its own"
+    },
+    {
+      "id": "G022",
+      "query": "SELECT x, COUNT(*) AS n FROM nums WHERE id <= 4 GROUP BY x",
+      "expect_groups": [
+        { "x": 0, "n": 2 },
+        { "x": 1, "n": 2 }
+      ],
+      "note": "`-0.0` and `0` are one group, `1.0` and `1` another, each keyed by its integer"
+    },
+    {
+      "id": "G023",
+      "query": "SELECT x, MIN(x) AS low, MAX(x) AS top FROM nums WHERE id <= 4 GROUP BY x",
+      "expect_groups": [
+        { "x": 0, "low": 0, "top": 0 },
+        { "x": 1, "low": 1, "top": 1 }
+      ],
+      "note": "MIN and MAX of values equal by value return the integer, whichever row comes first (`-0.0` and `1.0` come first here)"
+    },
+    {
+      "id": "G024",
+      "query": "SELECT x, MAX(x) AS top FROM nums GROUP BY x HAVING MAX(x) > 9007199254740992.0",
+      "expect_groups": [
+        { "x": 9007199254740993, "top": 9007199254740993 }
+      ],
+      "note": "HAVING compares an integer aggregate with a float threshold exactly, as WHERE does: 2^53 + 1 is greater than the float 2^53"
+    },
+    {
+      "id": "G025",
+      "query": "SELECT x, COUNT(*) AS n FROM nums GROUP BY x HAVING MAX(x) = 0.3",
+      "expect_groups": [],
+      "note": "no tolerance: `0.30000000000000004` is not `0.3`"
     }
   ],
   "setops_cases": [
@@ -317,7 +534,8 @@
   ],
   "query_params": {
     "a": [0.1, 0.2, 0.3, 0.4],
-    "b": [0.2, 0.4, 0.0, 0.1]
+    "b": [0.2, 0.4, 0.0, 0.1],
+    "e": [0.0, 0.0]
   },
   "near_cases": [
     {
@@ -452,23 +670,93 @@
   "rejected_cases": [
     {
       "id": "R001",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted' LIMIT 5",
       "note": "NEAR_FUSED accepts only rrf, average or maximum: weighted is ill-defined over homogeneous query vectors (V012). Was documented_divergences D010"
     },
     {
       "id": "R002",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rsf' LIMIT 5",
       "note": "NEAR_FUSED refuses rsf for the same reason (V012). Was documented_divergences D010"
     },
     {
       "id": "R003",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'rrf')",
       "note": "USING FUSION needs two fusable branches; a single NEAR plus a metadata filter has one (V012). Was documented_divergences D010"
     },
     {
       "id": "R004",
+      "expected_code": "V012",
       "query": "SELECT * FROM docs WHERE vector NEAR $a AND category = 'tech' LIMIT 5 USING FUSION (strategy = 'weighted')",
       "note": "same as R003 for a weight-sensitive strategy"
+    },
+    {
+      "id": "R005",
+      "expected_code": "V015",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY COUNT(*) DESC LIMIT 3",
+      "note": "a MATCH ORDER BY aggregate has no GROUP BY to rank (V015, refused at validation by both engines)"
+    },
+    {
+      "id": "R006",
+      "expected_code": "V015",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY MAX(year) LIMIT 3",
+      "note": "same as R005 for an aggregate over a property (V015)"
+    },
+    {
+      "id": "R007",
+      "expected_code": "V015",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY d LIMIT 3",
+      "note": "a bare pattern alias names a node, not a sortable value (V015)"
+    },
+    {
+      "id": "R008",
+      "expected_code": "V015",
+      "query": "MATCH (d:Doc) RETURN d.year AS y ORDER BY y LIMIT 3",
+      "note": "a RETURN alias is not a property path MATCH can sort by (V015)"
+    },
+    {
+      "id": "R009",
+      "expected_code": "V015",
+      "query": "MATCH (d:Doc) RETURN d.year ORDER BY year LIMIT 3",
+      "note": "an unqualified property is not a property path MATCH can sort by; qualify it as d.year (V015)"
+    },
+    {
+      "id": "R010",
+      "expected_code": "V016",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category ORDER BY SUM(year) DESC",
+      "note": "ORDER BY an aggregate the SELECT does not list names no column of the grouped rows (V016); both engines used to accept it and return the groups unsorted"
+    },
+    {
+      "id": "R011",
+      "expected_code": "V017",
+      "query": "SELECT category, COUNT(*) FROM docs GROUP BY category, count",
+      "note": "the GROUP BY column `count` and COUNT(*)'s default name share an output field; core used to keep the count and drop the column without a word"
+    },
+    {
+      "id": "R012",
+      "expected_code": "V017",
+      "query": "SELECT category, COUNT(*) AS n, SUM(year) AS n FROM docs GROUP BY category",
+      "note": "two aggregates aliased alike share an output field; one used to overwrite the other"
+    },
+    {
+      "id": "R013",
+      "expected_code": "V017",
+      "query": "SELECT category, COUNT(*) AS score FROM docs WHERE vector NEAR $a GROUP BY category",
+      "note": "in a vector GROUP BY an aggregate named `score` (or `id`) would shadow the group's own score (id) when sorting"
+    },
+    {
+      "id": "R014",
+      "expected_code": "V018",
+      "query": "SELECT category, COUNT(*) AS n FROM docs GROUP BY category HAVING COUNT(*) > 'many'",
+      "note": "a HAVING threshold must be a number: every group used to fail the comparison silently"
+    },
+    {
+      "id": "R015",
+      "expected_code": "V018",
+      "query": "SELECT COUNT(*) AS n FROM docs HAVING COUNT(*) > 1",
+      "note": "HAVING requires GROUP BY in both engines (WASM filtered the single implicit group)"
     }
   ],
   "dml_cases": [
@@ -561,17 +849,262 @@
       "query": "SELECT category, year FROM docs WHERE category LIKE 'o%' ORDER BY year DESC",
       "expect_rows": [{ "category": "other", "year": 2021 }, { "category": "other", "year": 2019 }],
       "note": "named-column projection keeps only the selected fields"
+    },
+    {
+      "id": "P006",
+      "query": "SELECT DISTINCT id FROM nums WHERE id <= 4 ORDER BY id",
+      "expect_rows": [{ "id": 1 }, { "id": 2 }, { "id": 3 }, { "id": 4 }],
+      "note": "DISTINCT `id` keys on the point id, although each payload carries the same `id` of its own"
+    },
+    {
+      "id": "P007",
+      "query": "SELECT id, ROW_NUMBER() OVER (PARTITION BY x ORDER BY id) AS rn FROM nums WHERE id <= 4 ORDER BY id",
+      "expect_rows": [{ "id": 1, "rn": 1 }, { "id": 2, "rn": 2 }, { "id": 3, "rn": 1 }, { "id": 4, "rn": 2 }],
+      "note": "PARTITION BY keys numbers as GROUP BY does: `-0.0` with `0`, `1.0` with `1`"
+    }
+  ],
+  "vector_group_cases": [
+    {
+      "id": "V001",
+      "query": "SELECT category, MAX(score) AS best FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY similarity() DESC",
+      "group_column": "category",
+      "expect_order": ["tech", "other"],
+      "note": "vector GROUP BY (NEAR + GROUP BY) orders groups by their score, the best row's: tech 0.730 (id 4), other 0.548 (id 3)"
+    },
+    {
+      "id": "V002",
+      "query": "SELECT category, MAX(score) AS best FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY similarity() ASC",
+      "group_column": "category",
+      "expect_order": ["other", "tech"],
+      "note": "same as V001 ascending, which first-seen ranking order alone does not give"
+    },
+    {
+      "id": "V003",
+      "query": "SELECT category, MAX(score) AS best FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY MAX(score) ASC",
+      "group_column": "category",
+      "expect_order": ["other", "tech"],
+      "note": "an ORDER BY aggregate of a vector GROUP BY sorts on the SELECT item it repeats"
+    },
+    {
+      "id": "V004",
+      "query": "SELECT category, COUNT(*) AS n, SUM(year) AS total, AVG(year) AS mean, MIN(year) AS lo, MAX(year) AS hi, FIRST(year) AS top FROM docs WHERE vector NEAR $a GROUP BY category ORDER BY COUNT(*) ASC",
+      "group_column": "category",
+      "expect_order": ["other", "tech"],
+      "expect_rows": [
+        { "category": "other", "n": 2, "total": 4040.0, "mean": 2020.0, "lo": 2019, "hi": 2021, "top": 2021 },
+        { "category": "tech", "n": 3, "total": 6065.0, "mean": 2021.6666666666667, "lo": 2020, "hi": 2023, "top": 2023 }
+      ],
+      "expect_ids": [3, 4],
+      "expect_scores": [0.547723, 0.730297],
+      "note": "every aggregate is computed per group (core returned null for all but MAX/AVG(score) and FIRST), FIRST reads the best row, and each group is its best row's id with the group score"
+    },
+    {
+      "id": "V005",
+      "query": "SELECT category, COUNT(*) AS n FROM docs WHERE vector NEAR $a GROUP BY category HAVING COUNT(*) > 2",
+      "group_column": "category",
+      "expect_order": ["tech"],
+      "note": "HAVING filters vector GROUP BY groups (core ignored it)"
+    },
+    {
+      "id": "V006",
+      "query": "SELECT year, COUNT(*) AS n FROM docs WHERE vector NEAR $a GROUP BY year",
+      "group_column": "year",
+      "expect_order": [2023, 2021, 2019, 2022, 2020],
+      "expect_ids": [4, 3, 5, 2, 1],
+      "note": "without ORDER BY, groups come best score first, ties by best-row id (core returned hash order)"
+    },
+    {
+      "id": "V007",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 WHERE vector NEAR $e GROUP BY grp ORDER BY similarity() DESC",
+      "group_column": "grp",
+      "expect_order": [null, "x", "y"],
+      "expect_ids": [24, 21, 22],
+      "note": "Euclidean: similarity() DESC puts the nearest group first (WASM sorted raw distances). A row without the group column forms the NULL group, as in SQL GROUP BY (core dropped it)"
+    },
+    {
+      "id": "V008",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 WHERE vector NEAR $e GROUP BY grp",
+      "group_column": "grp",
+      "expect_order": [null, "x", "y"],
+      "expect_ids": [24, 21, 22],
+      "note": "Euclidean default order: nearest group first, each group's best row being its nearest"
+    },
+    {
+      "id": "V009",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 WHERE vector NEAR $e GROUP BY grp ORDER BY grp ASC",
+      "group_column": "grp",
+      "expect_order": ["x", "y", null],
+      "note": "the NULL group sorts last in ASC, as in every ORDER BY"
+    },
+    {
+      "id": "V010",
+      "query": "SELECT grp, COUNT(*) AS n FROM docs_l2 WHERE vector NEAR $e GROUP BY grp ORDER BY grp DESC",
+      "group_column": "grp",
+      "expect_order": [null, "y", "x"],
+      "note": "and first in DESC"
+    }
+  ],
+  "null_order_cases": [
+    {
+      "id": "O001",
+      "query": "SELECT * FROM docs_l2 ORDER BY grp ASC",
+      "expect_ids": [21, 23, 22, 24],
+      "note": "a missing or null ORDER BY key sorts after every value in ASC (core sorted it first); ties keep ascending id"
+    },
+    {
+      "id": "O002",
+      "query": "SELECT * FROM docs_l2 ORDER BY grp DESC",
+      "expect_ids": [24, 22, 21, 23],
+      "note": "and before every value in DESC (core sorted it last)"
+    },
+    {
+      "id": "O003",
+      "query": "SELECT * FROM tickets WHERE id > 31 ORDER BY id DESC",
+      "expect_ids": [33, 32],
+      "note": "`id` is the point id in WHERE and ORDER BY, as in projection, GROUP BY and aggregates, although each payload carries an `id` of its own (3, 1, 2); core read the payload field and returned no row"
+    }
+  ],
+  "number_cases": [
+    {
+      "id": "N001",
+      "query": "SELECT * FROM nums WHERE x = 0 ORDER BY id",
+      "expect_ids": [1, 2],
+      "note": "`-0.0` equals `0`"
+    },
+    {
+      "id": "N002",
+      "query": "SELECT * FROM nums WHERE x = -0.0 ORDER BY id",
+      "expect_ids": [1, 2],
+      "note": "and `0` equals `-0.0`"
+    },
+    {
+      "id": "N003",
+      "query": "SELECT * FROM nums WHERE x <= 0 ORDER BY id",
+      "expect_ids": [1, 2],
+      "note": "`-0.0` is not below `0`"
+    },
+    {
+      "id": "N004",
+      "query": "SELECT * FROM nums WHERE x > 0 ORDER BY id",
+      "expect_ids": [3, 4, 5, 6, 7, 8, 9, 10],
+      "note": "nor `0` above `-0.0`"
+    },
+    {
+      "id": "N005",
+      "query": "SELECT * FROM nums WHERE x >= 0 ORDER BY id",
+      "expect_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      "note": "every value"
+    },
+    {
+      "id": "N006",
+      "query": "SELECT * FROM nums WHERE x = 1 ORDER BY id",
+      "expect_ids": [3, 4],
+      "note": "an integer literal equals the float of the same value"
+    },
+    {
+      "id": "N007",
+      "query": "SELECT * FROM nums WHERE x = 1.0 ORDER BY id",
+      "expect_ids": [3, 4],
+      "note": "and a float literal the integer"
+    },
+    {
+      "id": "N008",
+      "query": "SELECT * FROM nums WHERE x = 0.3 ORDER BY id",
+      "expect_ids": [],
+      "note": "no tolerance: `0.30000000000000004` is not `0.3`"
+    },
+    {
+      "id": "N009",
+      "query": "SELECT * FROM nums WHERE x = 0.30000000000000004 ORDER BY id",
+      "expect_ids": [5],
+      "note": "the exact value matches"
+    },
+    {
+      "id": "N010",
+      "query": "SELECT * FROM nums WHERE x BETWEEN 0.29999 AND 0.30001 ORDER BY id",
+      "expect_ids": [5],
+      "note": "a range gives the tolerance an equality no longer has"
+    },
+    {
+      "id": "N011",
+      "query": "SELECT * FROM nums WHERE x != 1 ORDER BY id",
+      "expect_ids": [1, 2, 5, 6, 7, 8, 9, 10],
+      "note": "`!=` is the complement of `=`, every path included"
+    },
+    {
+      "id": "N012",
+      "query": "SELECT * FROM nums WHERE x NOT IN (0, 1) ORDER BY id",
+      "expect_ids": [5, 6, 7, 8, 9, 10],
+      "note": "and `NOT IN` the complement of `IN`"
+    },
+    {
+      "id": "N013",
+      "query": "SELECT * FROM nums WHERE x IN (0.3, 1, 3.5) ORDER BY id",
+      "expect_ids": [3, 4, 8],
+      "note": "IN is `=` on each value"
+    },
+    {
+      "id": "N014",
+      "query": "SELECT * FROM nums WHERE x IN (0.3, 1, 3.5, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115) ORDER BY id",
+      "expect_ids": [3, 4, 8],
+      "note": "the same past 16 values, where IN switches to a binary search"
+    },
+    {
+      "id": "N015",
+      "query": "SELECT * FROM nums WHERE x IN (-0.00000000000000001, 0) ORDER BY id",
+      "expect_ids": [1, 2],
+      "note": "`0.00000000000000001` is neither `0` nor its negative"
+    },
+    {
+      "id": "N016",
+      "query": "SELECT * FROM nums WHERE x IN (-0.00000000000000001, 0, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115) ORDER BY id",
+      "expect_ids": [1, 2],
+      "note": "the same past 16 values"
+    },
+    {
+      "id": "N017",
+      "query": "SELECT * FROM nums WHERE x > 9007199254740992.0 ORDER BY id",
+      "expect_ids": [6],
+      "note": "2^53 + 1 is greater than the float 2^53"
+    },
+    {
+      "id": "N018",
+      "query": "SELECT * FROM nums WHERE x = 9007199254740992.0 ORDER BY id",
+      "expect_ids": [7],
+      "note": "and only 2^53 equals it"
+    },
+    {
+      "id": "N019",
+      "query": "SELECT * FROM nums WHERE x < 0.00000000000000002 ORDER BY id",
+      "expect_ids": [1, 2, 9],
+      "note": "an ordering on a float that tiny is exact too"
+    },
+    {
+      "id": "N020",
+      "query": "SELECT * FROM nums ORDER BY x ASC LIMIT 5",
+      "expect_ids": [1, 2, 9, 5, 10],
+      "note": "ORDER BY ties `-0.0` with `0` (ascending id) and orders every number exactly"
+    },
+    {
+      "id": "N021",
+      "query": "SELECT * FROM nums ORDER BY x DESC LIMIT 2",
+      "expect_ids": [6, 7],
+      "note": "2^53 + 1 before 2^53"
+    },
+    {
+      "id": "N022",
+      "query": "SELECT * FROM nums WHERE x != 0.00000000000000001 ORDER BY id",
+      "expect_ids": [1, 2, 3, 4, 5, 6, 7, 8, 10],
+      "note": "`0` and `-0.0` differ from `0.00000000000000001`, every path included"
+    },
+    {
+      "id": "N023",
+      "query": "SELECT * FROM nums WHERE x = 0.9999999999999999 ORDER BY id",
+      "expect_ids": [10],
+      "note": "`0.9999999999999999` is not `1`"
     }
   ],
   "documented_divergences": [
-    {
-      "id": "D001",
-      "area": "aggregate default field naming",
-      "core_behavior": "unaliased aggregates use short names: COUNT(*) -> \"count\", SUM(year) -> \"sum_year\" (Collection::aggregation_result_key)",
-      "wasm_behavior": "unaliased aggregates use function-call-shaped names: COUNT(*) -> \"count(*)\", SUM(year) -> \"sum(year)\" (aggregate_default_name in velesql_aggregate.rs)",
-      "status": "accepted — not a bug; both are internally consistent, but a client selecting an unaliased aggregate across both executors sees a different JSON key. Fixture G001-G004 sidestep this by always using an explicit AS alias, which both engines honor identically",
-      "evidence": "SELECT category, COUNT(*) FROM docs GROUP BY category ORDER BY category ASC -> core: [{\"category\":\"other\",\"count\":2},...]; wasm: [{\"category\":\"other\",\"count(*)\":2},...]"
-    },
     {
       "id": "D002",
       "area": "JOIN condition side order (WASM only)",

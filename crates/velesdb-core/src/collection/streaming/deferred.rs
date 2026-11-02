@@ -1,36 +1,38 @@
 //! Deferred indexer for high-throughput sequential vector inserts.
 //!
 //! The [`DeferredIndexer`] buffers incoming vectors in a single write buffer
-//! and exposes them to search via brute-force scan while they await insertion
-//! into the HNSW graph. This decouples the write path (fast, O(1) per point)
-//! from the index path (slower, O(log n) per point) and enables
-//! threshold-triggered merge.
+//! while they await insertion into the HNSW graph; every search reads the
+//! buffered ids (`DeferredIndexer::ids`) before its index search and scores
+//! those points on what storage holds for them
+//! (`collection/search/pending.rs`). This decouples the write path (fast,
+//! O(1) per point) from the index path (slower, O(log n) per point) and
+//! enables threshold-triggered merge.
 //!
 //! # Single-buffer with threshold-triggered merge
 //!
 //! The indexer holds one buffer that accepts writes. When the buffer reaches
-//! `merge_threshold`, [`swap_and_drain`](DeferredIndexer::swap_and_drain)
-//! drains it and returns the vectors for the caller to batch-insert into HNSW.
+//! `merge_threshold` (or on flush), the collection indexes what it holds from
+//! storage and then retires those entries (`DeferredMerge::finish`): an
+//! entry leaves the buffer only once indexed, so a search racing the merge
+//! finds each point in the index or here, and an entry written again since
+//! stays for the next merge.
 //!
-//! # Deleted IDs
+//! # Deletes
 //!
-//! When a point is deleted while buffered, its ID is recorded in a
-//! `deleted_ids` set. Search results are filtered against this set so that
-//! deleted vectors never surface. The set is cleared on drain (the HNSW
-//! tombstone system takes over after merge).
+//! A delete removes the point from the buffer. A search scores buffered ids
+//! on what storage holds, so a point deleted from storage is skipped there
+//! too, and a delete never outlives a later write of the same id.
 //!
 //! # Lock ordering
 //!
-//! `DeferredIndexer` is above `DeltaBuffer` (position 10) in the lock order.
-//! The `swap_lock` (position 10.1) must never be held while acquiring any
-//! lower-numbered lock.
+//! `DeferredIndexer` is at position 11 in the collection lock order; its
+//! buffer (a `DeltaBuffer`) ranks with it.
+//! A merge is serialized by an atomic flag, not a lock, so nothing is held
+//! while it takes the storage and index locks.
 
 use super::delta::DeltaBuffer;
-use crate::distance::DistanceMetric;
-use parking_lot::{Mutex, RwLock};
-use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -106,12 +108,8 @@ pub struct DeferredIndexer {
     /// Write buffer — accepts pushes and is drained on merge.
     buffer: Arc<DeltaBuffer>,
 
-    /// Serializes swap-and-drain operations so only one drain runs at a time.
-    swap_lock: Mutex<()>,
-
-    /// IDs deleted while in the buffer. Filtered out of search results.
-    /// Uses `FxHashSet` for faster integer hashing on the hot search path.
-    deleted_ids: RwLock<FxHashSet<u64>>,
+    /// Set while a merge runs, so only one merge indexes the buffer at once.
+    merging: AtomicBool,
 
     /// Configuration (immutable after construction).
     config: DeferredIndexerConfig,
@@ -137,8 +135,7 @@ impl DeferredIndexer {
     pub fn new(config: DeferredIndexerConfig) -> Self {
         Self {
             buffer: Arc::new(DeltaBuffer::new()),
-            swap_lock: Mutex::new(()),
-            deleted_ids: RwLock::new(FxHashSet::default()),
+            merging: AtomicBool::new(false),
             config,
             first_push_millis: AtomicU64::new(AGE_EMPTY),
             epoch: Instant::now(),
@@ -159,9 +156,7 @@ impl DeferredIndexer {
     #[inline]
     fn note_push_time(&self) {
         if self.first_push_millis.load(Ordering::Relaxed) == AGE_EMPTY {
-            #[allow(clippy::cast_possible_truncation)]
-            // Reason: millis since indexer creation; u64 covers 584M years.
-            let now = self.epoch.elapsed().as_millis() as u64;
+            let now = self.age_now();
             let _ = self.first_push_millis.compare_exchange(
                 AGE_EMPTY,
                 now,
@@ -169,6 +164,13 @@ impl DeferredIndexer {
                 Ordering::Relaxed,
             );
         }
+    }
+
+    /// Milliseconds since the indexer was created: the buffer age's clock.
+    #[allow(clippy::cast_possible_truncation)]
+    // Reason: millis since indexer creation; u64 covers 584M years.
+    fn age_now(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
     }
 
     /// Returns `true` if the oldest buffered entry has exceeded
@@ -179,10 +181,7 @@ impl DeferredIndexer {
         if first == AGE_EMPTY {
             return false;
         }
-        #[allow(clippy::cast_possible_truncation)]
-        // Reason: same clock domain as note_push_time.
-        let now = self.epoch.elapsed().as_millis() as u64;
-        now.saturating_sub(first) >= self.config.max_buffer_age_ms
+        self.age_now().saturating_sub(first) >= self.config.max_buffer_age_ms
     }
 
     /// Whether deferred indexing is enabled.
@@ -204,18 +203,12 @@ impl DeferredIndexer {
     /// The `enabled` check and `len() >= threshold` read are not atomic with
     /// the push. This is benign: a concurrent drain may reset the count
     /// between push and the threshold check, causing a missed merge signal.
-    /// The next push will re-trigger.
-    ///
-    /// A previous TOCTOU window existed where `swap_and_drain` could
-    /// deactivate the buffer between `ensure_buffer_active` and the
-    /// underlying `buffer.push`, causing the vector to be silently dropped.
-    /// This is fixed: `swap_and_drain` now re-activates the buffer after
-    /// draining so pushes between drain and the next merge succeed.
+    /// The next push will re-trigger. A push racing a merge is kept: a merge
+    /// retires only the entries it copied.
     pub fn push(&self, id: u64, vector: Vec<f32>) -> bool {
         if !self.config.enabled {
             return false;
         }
-        self.ensure_buffer_active();
         self.buffer.push(id, vector);
         self.note_push_time();
         self.buffer.len() >= self.config.merge_threshold || self.buffer_expired()
@@ -229,100 +222,35 @@ impl DeferredIndexer {
         if !self.config.enabled {
             return false;
         }
-        self.ensure_buffer_active();
         self.buffer.extend(entries);
         self.note_push_time();
         self.buffer.len() >= self.config.merge_threshold || self.buffer_expired()
     }
 
-    /// Marks `id` as deleted, removing it from the buffer.
-    ///
-    /// The ID is added to `deleted_ids` so that search results are filtered
-    /// even if the vector was already snapshot for a concurrent search.
+    /// Removes `id` from the buffer: the point was deleted.
     pub fn remove(&self, id: u64) {
         self.buffer.remove(id);
-        self.deleted_ids.write().insert(id);
     }
 
-    /// Brute-force searches the buffer, filtering deleted IDs.
-    ///
-    /// Results are sorted by the metric ordering and truncated to `k`.
-    ///
-    /// To compensate for post-filter attrition, the buffer is queried with
-    /// `k + deleted_ids.len()` candidates. This is bounded: `deleted_ids`
-    /// never exceeds `merge_threshold` entries (cleared on every drain).
-    ///
-    /// # TOCTOU note
-    ///
-    /// The `deleted_ids` snapshot is read under a separate lock from the
-    /// buffer search. A concurrent delete between the buffer snapshot and the
-    /// `deleted_ids` read is benign: the ID will be filtered on the next
-    /// search after the delete completes.
+    /// The buffered ids, each once, sorted; empty while disabled or empty.
     #[must_use]
-    pub fn search(&self, query: &[f32], k: usize, metric: DistanceMetric) -> Vec<(u64, f32)> {
-        let deleted = self.deleted_ids.read();
-        let overfetch = k.saturating_add(deleted.len());
-        let buffer_results = self.buffer.search(query, overfetch, metric);
-        let mut filtered = filter_deleted(buffer_results, &deleted);
-        drop(deleted);
-        metric.sort_results(&mut filtered);
-        filtered.truncate(k);
-        filtered
-    }
-
-    /// Merges HNSW results with deferred buffer results.
-    ///
-    /// Buffer is authoritative on duplicate IDs (more recent data): when a
-    /// point is upserted while deferred indexing is active, the new vector
-    /// goes to the buffer while HNSW still holds the stale vector. On ID
-    /// conflict the buffer score is kept, mirroring `merge_with_delta` in
-    /// `delta.rs`.
-    ///
-    /// Deleted IDs are filtered from buffer results but not from HNSW
-    /// results (HNSW has its own tombstone system).
-    #[must_use]
-    pub fn merge_with_hnsw(
-        &self,
-        hnsw_results: Vec<(u64, f32)>,
-        query: &[f32],
-        k: usize,
-        metric: DistanceMetric,
-    ) -> Vec<(u64, f32)> {
-        let buffer_results = self.search(query, k, metric);
-        if buffer_results.is_empty() {
-            return hnsw_results;
+    pub(crate) fn ids(&self) -> Vec<u64> {
+        if !self.is_searchable() {
+            return Vec::new();
         }
-        // Buffer holds more-recent data (upserts route through buffer, not HNSW).
-        // On ID conflict, keep the buffer score.
-        let buffer_ids: FxHashSet<u64> = buffer_results.iter().map(|(id, _)| *id).collect();
-        let mut combined: Vec<(u64, f32)> = hnsw_results
-            .into_iter()
-            .filter(|(id, _)| !buffer_ids.contains(id))
-            .collect();
-        combined.extend(buffer_results);
-        metric.sort_results(&mut combined);
-        combined.truncate(k);
-        combined
+        self.buffer.ids()
     }
 
-    /// Drains the buffer and returns vectors for HNSW insertion.
-    ///
-    /// After this call the buffer is empty but **re-activated** so that
-    /// pushes arriving between drain and the next merge are not silently
-    /// dropped. The `deleted_ids` set is cleared because the caller is
-    /// expected to apply deletions to HNSW after merge.
-    ///
-    /// Serialized by an internal mutex so concurrent calls are safe (the
-    /// second caller gets an empty drain).
-    pub fn swap_and_drain(&self) -> Vec<(u64, Vec<f32>)> {
-        let _guard = self.swap_lock.lock();
-        let drained = self.buffer.deactivate_and_drain();
-        self.first_push_millis.store(AGE_EMPTY, Ordering::Relaxed);
-        self.deleted_ids.write().clear();
-        // Re-activate the buffer so pushes between drain and next merge
-        // are not silently dropped (fixes TOCTOU race with concurrent push).
-        self.buffer.activate();
-        drained
+    /// Starts a merge: a copy of the buffered entries, held as a
+    /// [`DeferredMerge`], or `None` while another merge runs.
+    pub(crate) fn begin_merge(&self) -> Option<DeferredMerge<'_>> {
+        if self.merging.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        Some(DeferredMerge {
+            indexer: self,
+            entries: self.buffer.entries(),
+        })
     }
 
     /// Total number of pending (not yet indexed) vectors in the buffer.
@@ -341,45 +269,84 @@ impl DeferredIndexer {
     /// searchable data.
     #[must_use]
     pub fn is_searchable(&self) -> bool {
-        self.config.enabled && self.buffer.is_searchable()
+        self.config.enabled && !self.buffer.is_empty()
+    }
+}
+
+/// A merge of the deferred indexer's buffer into the index: the entries it
+/// copied when it began. It holds the indexer's `merging` flag until it is
+/// dropped — finished or not, a panic included — so no merge can leave every
+/// later one skipping.
+pub(crate) struct DeferredMerge<'a> {
+    indexer: &'a DeferredIndexer,
+    entries: Vec<(u64, Vec<f32>)>,
+}
+
+impl DeferredMerge<'_> {
+    /// The ids the merge copied, for the caller to index.
+    pub(crate) fn ids(&self) -> Vec<u64> {
+        self.entries.iter().map(|&(id, _)| id).collect()
     }
 
-    /// Drains all vectors from the buffer (for shutdown / flush).
+    /// Ends the merge, retiring the copied entries of the ids `settled`
+    /// names: those the merge indexed from storage, found indexed already,
+    /// or found deleted. An id it did not settle (its read or insert
+    /// failed) stays buffered, as does an entry written again since it was
+    /// copied, which holds a newer vector, for the next merge.
     ///
-    /// Clears `deleted_ids`. After this call the buffer is empty and
-    /// inactive.
-    pub fn drain_all(&self) -> Vec<(u64, Vec<f32>)> {
-        let _guard = self.swap_lock.lock();
-        let all = self.buffer.deactivate_and_drain();
-        self.first_push_millis.store(AGE_EMPTY, Ordering::Relaxed);
-        self.deleted_ids.write().clear();
-        all
+    /// Entries are compared by value: an id rewritten during the merge to
+    /// the very vector the merge copied (A, then B, then A again, with the
+    /// merge reading B in between) is retired although the index then holds
+    /// B. That takes two rewrites of one id inside one merge, the last back
+    /// to the copied vector; until the id's next write, a search reaches it
+    /// at B while storage holds A. A per-entry write sequence would close it;
+    /// it is not kept.
+    pub(crate) fn finish(self, settled: &[u64]) {
+        let settled: rustc_hash::FxHashSet<u64> = settled.iter().copied().collect();
+        let retired: Vec<(u64, &[f32])> = self
+            .entries
+            .iter()
+            .filter(|(id, _)| settled.contains(id))
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        self.indexer.buffer.retire(&retired);
     }
+}
 
-    /// Lazily activates the buffer if it is not already active.
+impl Drop for DeferredMerge<'_> {
+    /// Clears the merge flag, and restarts the buffer's age: empty, it has
+    /// none; holding entries the merge kept, they were just tried, so the
+    /// age-triggered merge waits a full `max_buffer_age_ms` again rather
+    /// than firing on the very next write.
     ///
-    /// Uses the compare-and-swap [`try_activate`](super::delta::DeltaBuffer::try_activate)
-    /// instead of a `is_active()` + `activate()` pair: the atomic transition
-    /// closes the TOCTOU window between the check and the store. An
-    /// `AlreadyActive` result is the expected idempotent case on the hot push
-    /// path (the buffer stays active across many pushes) and is ignored here.
-    fn ensure_buffer_active(&self) {
-        let _ = self.buffer.try_activate();
+    /// A push can land between the emptiness check and the store of
+    /// [`AGE_EMPTY`]: it found the stamp of the merge's own entries still
+    /// set and left it, and the store would then erase the only age its
+    /// entry has, so no age-triggered merge would fire for it until another
+    /// push. So the buffer is looked at again after the store, and an entry
+    /// found there gets an age by compare-and-swap — unless a push set one
+    /// first. The buffer's lock orders the two: a push it does not see takes
+    /// its lock after this store and finds `AGE_EMPTY`.
+    fn drop(&mut self) {
+        let first_push = &self.indexer.first_push_millis;
+        if self.indexer.buffer.is_empty() {
+            first_push.store(AGE_EMPTY, Ordering::Relaxed);
+            if !self.indexer.buffer.is_empty() {
+                let _ = first_push.compare_exchange(
+                    AGE_EMPTY,
+                    self.indexer.age_now(),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+            }
+        } else {
+            first_push.store(self.indexer.age_now(), Ordering::Relaxed);
+        }
+        self.indexer.merging.store(false, Ordering::Release);
     }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Filters out deleted IDs from a result set.
-fn filter_deleted(results: Vec<(u64, f32)>, deleted: &FxHashSet<u64>) -> Vec<(u64, f32)> {
-    if deleted.is_empty() {
-        return results;
-    }
-    results
-        .into_iter()
-        .filter(|(id, _)| !deleted.contains(id))
-        .collect()
-}
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -388,7 +355,6 @@ fn filter_deleted(results: Vec<(u64, f32)>, deleted: &FxHashSet<u64>) -> Vec<(u6
 #[allow(clippy::similar_names)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     /// Helper: builds an enabled config with a custom threshold.
     fn enabled_config(threshold: usize) -> DeferredIndexerConfig {
@@ -419,10 +385,12 @@ mod tests {
         // Far below the count threshold: only the age trigger can fire.
         assert!(indexer.push(1, vec![0.0; 4]));
         assert!(indexer.should_merge());
-        // Draining clears the age stamp; an empty buffer never reports
-        // expiry on its own.
-        let drained = indexer.swap_and_drain();
-        assert_eq!(drained.len(), 1);
+        // A merge that empties the buffer clears the age stamp; an empty
+        // buffer never reports expiry on its own.
+        let merge = indexer.begin_merge().expect("test: no merge running");
+        assert_eq!(merge.ids(), vec![1]);
+        let settled = all_of(&merge);
+        merge.finish(&settled);
         assert!(!indexer.should_merge());
     }
 
@@ -463,149 +431,107 @@ mod tests {
         assert!(idx.extend(entries), "batch should hit threshold");
     }
 
-    // ── Search tests ─────────────────────────────────────────────────────
-
-    #[test]
-    fn test_deferred_search_finds_buffered_vectors() {
-        let idx = DeferredIndexer::new(enabled_config(1024));
-        idx.push(1, vec![1.0, 0.0]);
-        idx.push(2, vec![0.0, 1.0]);
-
-        let results = idx.search(&[1.0, 0.0], 2, DistanceMetric::Cosine);
-        assert_eq!(results.len(), 2);
-        // Cosine: id=1 (identical to query) should be first
-        assert_eq!(results[0].0, 1);
+    /// The ids a merge settled, as `finish` takes them: every one it copied.
+    fn all_of(merge: &DeferredMerge<'_>) -> Vec<u64> {
+        merge.ids()
     }
 
+    // ── Ids ──────────────────────────────────────────────────────────────
+
     #[test]
-    fn test_deferred_search_filters_deleted_ids() {
+    fn ids_names_each_buffered_point_once_and_no_deleted_one() {
         let idx = DeferredIndexer::new(enabled_config(1024));
-        idx.push(1, vec![1.0, 0.0, 0.0]);
-        idx.push(2, vec![0.0, 1.0, 0.0]);
-        idx.push(3, vec![0.0, 0.0, 1.0]);
+        idx.push(3, vec![1.0]);
+        idx.push(1, vec![1.0]);
+        idx.push(3, vec![2.0]);
+        idx.push(2, vec![1.0]);
         idx.remove(2);
-
-        let results = idx.search(&[1.0, 0.0, 0.0], 10, DistanceMetric::Euclidean);
-        let ids: Vec<u64> = results.iter().map(|(id, _)| *id).collect();
-        assert!(!ids.contains(&2), "deleted ID 2 must not appear in results");
-        assert_eq!(ids.len(), 2);
+        assert_eq!(idx.ids(), vec![1, 3]);
     }
 
-    // ── Swap and drain tests ─────────────────────────────────────────────
+    #[test]
+    fn a_point_deleted_then_written_again_is_buffered() {
+        let idx = DeferredIndexer::new(enabled_config(1024));
+        idx.push(7, vec![1.0]);
+        idx.remove(7);
+        idx.push(7, vec![2.0]);
+        assert_eq!(idx.ids(), vec![7]);
+    }
+
+    // ── Merge tests ──────────────────────────────────────────────────────
 
     #[test]
-    fn test_deferred_swap_and_drain() {
+    fn a_merge_retires_what_it_indexed_and_keeps_newer_writes() {
         let idx = DeferredIndexer::new(enabled_config(1024));
         idx.push(1, vec![1.0]);
         idx.push(2, vec![2.0]);
+        let merge = idx.begin_merge().expect("test: no merge running");
+        assert!(idx.begin_merge().is_none(), "one merge at a time");
+        // Written again while the merge indexes the first copy.
+        idx.push(2, vec![9.0]);
+        let settled = all_of(&merge);
+        merge.finish(&settled);
 
-        let drained = idx.swap_and_drain();
-        assert_eq!(drained.len(), 2);
-        assert_eq!(idx.pending_count(), 0, "buffer should be empty after drain");
+        assert_eq!(idx.ids(), vec![2], "the newer write of 2 stays buffered");
+        assert!(idx.begin_merge().is_some(), "the merge flag is cleared");
     }
 
+    /// An id the merge did not settle (its read or insert failed) stays
+    /// buffered for the next merge.
     #[test]
-    fn test_deferred_swap_and_drain_clears_deleted_ids() {
-        let idx = DeferredIndexer::new(enabled_config(1024));
-        idx.push(1, vec![1.0]);
-        idx.remove(1);
-        let _drained = idx.swap_and_drain();
-        // After drain, deleted_ids should be cleared
-        assert!(idx.deleted_ids.read().is_empty());
-    }
-
-    #[test]
-    fn test_deferred_swap_and_drain_reactivates_buffer() {
-        // Regression: swap_and_drain must re-activate the buffer so that
-        // pushes between drain and the next merge are not silently dropped.
-        let idx = DeferredIndexer::new(enabled_config(1024));
-        idx.push(1, vec![1.0]);
-        let _ = idx.swap_and_drain();
-
-        // After drain, the buffer should be re-activated and accept pushes.
-        idx.push(2, vec![2.0]);
-        assert_eq!(idx.pending_count(), 1, "push after drain must succeed");
-        assert!(
-            idx.is_searchable(),
-            "buffer should be searchable after push"
-        );
-    }
-
-    #[test]
-    fn test_deferred_drain_all_leaves_buffer_inactive() {
-        // drain_all is for shutdown — buffer is left inactive (not
-        // re-activated like swap_and_drain). A subsequent push *will*
-        // re-activate via ensure_buffer_active, but there is a window
-        // where the buffer is inactive immediately after drain_all.
-        let idx = DeferredIndexer::new(enabled_config(1024));
-        idx.push(1, vec![1.0]);
-        let _ = idx.drain_all();
-
-        // Immediately after drain_all the buffer is inactive.
-        assert!(
-            !idx.is_searchable(),
-            "buffer must not be searchable immediately after drain_all"
-        );
-        assert_eq!(
-            idx.pending_count(),
-            0,
-            "buffer should be empty after drain_all"
-        );
-    }
-
-    // ── Merge with HNSW tests ────────────────────────────────────────────
-
-    #[test]
-    fn test_deferred_merge_with_hnsw() {
-        let idx = DeferredIndexer::new(enabled_config(1024));
-        idx.push(10, vec![0.9, 0.1]);
-        idx.push(30, vec![0.5, 0.5]);
-
-        // HNSW results: id=10 (also in buffer) and id=20 (only in HNSW)
-        let hnsw = vec![(10, 0.95_f32), (20, 0.80_f32)];
-        let merged = idx.merge_with_hnsw(hnsw, &[1.0, 0.0], 3, DistanceMetric::Cosine);
-
-        // No duplicate IDs
-        let ids: Vec<u64> = merged.iter().map(|(id, _)| *id).collect();
-        let unique: HashSet<u64> = ids.iter().copied().collect();
-        assert_eq!(ids.len(), unique.len(), "no duplicate IDs");
-
-        // All three IDs should be present (10 from buffer, 20 from HNSW, 30 from buffer)
-        assert_eq!(merged.len(), 3);
-        assert!(ids.contains(&10));
-        assert!(ids.contains(&20));
-        assert!(ids.contains(&30));
-
-        // Buffer score for id=10 should be kept (not the HNSW score of 0.95),
-        // because the buffer holds more-recent data (upserts route there).
-        let id10_score = merged.iter().find(|(id, _)| *id == 10).map(|(_, s)| *s);
-        assert!(
-            (id10_score.unwrap_or(0.0) - 0.95).abs() > f32::EPSILON,
-            "buffer score should be authoritative for id=10, not HNSW"
-        );
-    }
-
-    #[test]
-    fn test_deferred_merge_with_hnsw_empty_buffer() {
-        let idx = DeferredIndexer::new(enabled_config(1024));
-        // Buffer is empty — merge should return HNSW results unchanged
-        let hnsw = vec![(1, 0.9_f32), (2, 0.8_f32)];
-        let merged = idx.merge_with_hnsw(hnsw.clone(), &[1.0, 0.0], 5, DistanceMetric::Cosine);
-        assert_eq!(merged, hnsw);
-    }
-
-    // ── Drain-all test ───────────────────────────────────────────────────
-
-    #[test]
-    fn test_deferred_drain_all() {
+    fn a_merge_keeps_what_it_did_not_settle() {
         let idx = DeferredIndexer::new(enabled_config(1024));
         idx.push(1, vec![1.0]);
         idx.push(2, vec![2.0]);
+        let merge = idx.begin_merge().expect("test: no merge running");
+        merge.finish(&[1]);
+        assert_eq!(idx.ids(), vec![2]);
+    }
 
-        let all = idx.drain_all();
-        assert_eq!(all.len(), 2);
-        assert_eq!(idx.pending_count(), 0);
-        assert!(!idx.is_searchable(), "not searchable after drain_all");
+    /// A merge that leaves entries behind restarts the buffer's age: the
+    /// entries it kept were just tried, and an age-triggered merge must not
+    /// fire again on the very next write.
+    #[test]
+    fn a_merge_that_keeps_entries_restarts_the_buffer_age() {
+        let idx = DeferredIndexer::new(DeferredIndexerConfig {
+            enabled: true,
+            merge_threshold: 1_000,
+            max_buffer_age_ms: 50,
+        });
+        idx.push(1, vec![1.0]);
+        idx.push(2, vec![2.0]);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        assert!(idx.should_merge(), "premise: the buffer aged out");
+        let merge = idx.begin_merge().expect("test: no merge running");
+        merge.finish(&[1]);
+        assert!(!idx.should_merge(), "the kept entry's age restarted");
+    }
+
+    /// A merge that never finishes — dropped, as on a panic — still clears
+    /// the flag, so the next merge runs.
+    #[test]
+    fn a_dropped_merge_lets_the_next_one_run() {
+        let idx = DeferredIndexer::new(enabled_config(1024));
+        idx.push(1, vec![1.0]);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _merge = idx.begin_merge().expect("test: no merge running");
+            panic!("test: a merge that fails half-way");
+        }));
+        assert!(unwound.is_err(), "premise: the merge panicked");
+        assert!(idx.begin_merge().is_some(), "the merge flag was cleared");
+        assert_eq!(idx.ids(), vec![1], "nothing was retired");
+    }
+
+    #[test]
+    fn the_buffer_stays_writable_after_a_merge() {
+        let idx = DeferredIndexer::new(enabled_config(1024));
+        idx.push(1, vec![1.0]);
+        let merge = idx.begin_merge().expect("test: no merge running");
+        let settled = all_of(&merge);
+        merge.finish(&settled);
+        idx.push(2, vec![2.0]);
+        assert_eq!(idx.pending_count(), 1, "push after a merge must succeed");
+        assert!(idx.is_searchable());
     }
 
     // ── Config serde test ────────────────────────────────────────────────

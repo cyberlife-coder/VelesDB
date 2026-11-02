@@ -371,7 +371,7 @@ impl WasmDatabase {
     /// Lists all collection names as a JavaScript `Array<string>`.
     pub fn list_collections(&self) -> JsValue {
         let names = self.inner.collection_names();
-        serde_wasm_bindgen::to_value(&names).unwrap_or(JsValue::NULL)
+        crate::js_value::to_js_value(&names).unwrap_or(JsValue::NULL)
     }
 
     /// Returns a mutable handle to an existing collection.
@@ -408,7 +408,7 @@ impl WasmDatabase {
     /// COLLECTION), and admin (FLUSH as no-op). Unsupported surfaces such as
     /// MATCH, TRAIN QUANTIZER, FUSION clauses, compound queries and graph
     /// DML return a descriptive error instead of crashing. See the
-    /// [`velesql_exec`](crate::velesql_exec) module rustdoc for the full
+    /// `velesql_exec` module rustdoc for the full
     /// statement matrix.
     ///
     /// # Parameters
@@ -528,15 +528,32 @@ impl WasmCollectionHandle {
     }
 
     /// Returns the number of vectors in the collection.
+    ///
+    /// The count is a collection read: a registered observer's `Deny` aborts
+    /// the getter with its message, as on `search`.
+    ///
+    /// # Errors
+    /// Returns the observer's denial message.
     #[wasm_bindgen(getter)]
-    pub fn len(&self) -> usize {
-        self.inner.borrow().len()
+    pub fn len(&self) -> Result<usize, JsValue> {
+        gate(
+            self.observer.as_ref(),
+            &self.name,
+            WasmQueryOperationKind::Select,
+        )
+        .map_err(|e| JsValue::from_str(&e))?;
+        Ok(self.inner.borrow().len())
     }
 
     /// Returns `true` if the collection has no vectors.
+    ///
+    /// Emptiness derives from the count — gated like [`Self::len`].
+    ///
+    /// # Errors
+    /// Returns the observer's denial message.
     #[wasm_bindgen(getter)]
-    pub fn is_empty(&self) -> bool {
-        self.inner.borrow().is_empty()
+    pub fn is_empty(&self) -> Result<bool, JsValue> {
+        Ok(self.len()? == 0)
     }
 
     /// Returns the vector dimensionality.

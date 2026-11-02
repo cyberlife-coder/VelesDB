@@ -114,7 +114,7 @@ impl SemanticMemory {
             })
             .collect();
 
-        serde_wasm_bindgen::to_value(&semantic_results)
+        crate::js_value::to_js_value(&semantic_results)
             .map_err(|e| JsValue::from_str(&format!("Serialize error: {e}")))
     }
 

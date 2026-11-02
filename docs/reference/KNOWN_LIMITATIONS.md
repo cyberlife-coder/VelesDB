@@ -35,19 +35,17 @@ The jump between the two estimates is **not** a regression; it reflects that the
 `compute_cbo_strategy` in `collection/search/query/select_dispatch.rs` now routes SELECT queries through two calibrated planner entry points:
 
 - `QueryPlanner::choose_hybrid_strategy` for queries carrying `ORDER BY similarity()` — forces `VectorFirst` to preserve HNSW natural ordering regardless of cost estimates.
-- `QueryPlanner::choose_strategy_with_cbo_and_overfetch` for all other SELECT queries — calibrated I/O / CPU cost comparison across `VectorFirst` / `GraphFirst` / `Parallel`.
+- `QueryPlanner::choose_strategy_with_cbo_and_overfetch` for all other SELECT queries — calibrated I/O / CPU cost comparison between `VectorFirst` and `GraphFirst`.
 
 Both branches feed into the same `dispatch_vector_query` executor through the `(ExecutionStrategy, over_fetch: usize)` tuple.
 
 **What remains open**: the deeper `PlanGenerator::CandidatePlan` enumeration (SeqScan, IndexScan, VectorSearch, GraphTraversal, hybrid combinations) is still not consumed by `execute_query`. The current two-path routing covers the operationally common cases — full multi-candidate enumeration would only change the decision when the cost landscape is non-trivially multimodal.
 
-**Strategy realization on SELECT (audit F-2.15 — RESOLVED, #1390)**: on the NEAR + metadata-filter SELECT path (`execution_paths.rs`, `dispatch_vector_with_strategy`), the `ExecutionStrategy` the planner selects is executed as three **physically distinct** plans:
+**Strategy realization on SELECT (audit F-2.15 — RESOLVED, #1390)**: on the NEAR + metadata-filter SELECT path (`execution_paths.rs`, `dispatch_vector_with_strategy`), the `ExecutionStrategy` the planner selects is executed as two **physically distinct** plans:
 
 - `VectorFirst` — filtered HNSW search (`search_with_filter_and_opts`).
 - `GraphFirst` — a full metadata scan scored by vector similarity (`scan_and_score_by_vector`), physically distinct from the HNSW path.
-- `Parallel` — the GraphFirst scan and the VectorFirst HNSW branch run **concurrently** via `rayon::join`, then merge by best-score-per-id. On `MATCH` (`match_dispatch.rs`, `execute_match_parallel`), `Parallel` likewise runs its GraphFirst and VectorFirst legs concurrently via `rayon::join` and merges by `node_id`.
-
-The concurrent Parallel result set is identical to the former sequential one (both legs are read-only; the merge is order-insensitive); the shared EXPLAIN counters remain the sum of both legs (atomic `fetch_add`). The other SELECT arms (similarity() threshold, pure NEAR, metadata-only, SELECT *) each have a single sensible physical plan and deliberately ignore the strategy — see the `dispatch_vector_query` match arms for the per-arm rationale. SELECT graph predicates still use their own anchored pre-filter (`graph_prefilter.rs`) independently of `ExecutionStrategy`. Covered by `test_parallel_strategy_returns_best_score_union_of_both_branches`, the forced-`GraphFirst`/`VectorFirst` dispatch tests, and `parallel_counters_sum_both_legs`.
+There is no plan running both, on SELECT or on `MATCH`: GraphFirst's scan is exact over every row the filter admits, so the VectorFirst rows a union would add are rows it already returns, and such a plan would cost both. The other SELECT arms (similarity() threshold, pure NEAR, metadata-only, SELECT *) each have a single sensible physical plan and deliberately ignore the strategy — see the `dispatch_vector_query` match arms for the per-arm rationale. SELECT graph predicates still use their own anchored pre-filter (`graph_prefilter.rs`) independently of `ExecutionStrategy`. Covered by the forced-`GraphFirst`/`VectorFirst` dispatch tests and `test_two_strategies_yield_distinct_result_sets`.
 
 **User impact**: `MATCH` queries use the full CBO via `MatchQueryPlanner::plan`. SELECT queries (including ORDER BY similarity + filter) now use calibrated strategy and over-fetch selection. Covered by `test_cbo_forces_vector_first_for_order_by_similarity_with_selective_filter` + `test_cbo_calibrated_path_still_works_without_order_by_similarity` + `test_filter_strategy_switches_on_selectivity`.
 
@@ -418,7 +416,19 @@ scalar-expression ones below, which use the same single-collection dataset):
   `execute_query`, which only groups when combined with vector `NEAR`
   search) and via the default SELECT pipeline on WASM. G005 (issue #1556)
   locks `LIMIT` truncation on grouped results — formerly D006 below, now
-  resolved on both engines.
+  resolved on both engines. G006–G007 lock `ORDER BY COUNT(*)` /
+  `ORDER BY AVG(col)` when the SELECT stores that aggregate under an `AS`
+  alias, G008 a `HAVING` on an aggregate the SELECT does not list, G009
+  an ORDER BY name resolving to a SELECT alias before a payload field, and
+  G010 the default names of unaliased aggregates, the same in both engines;
+  G011 `COUNT(column)` over a string column, G012 a selected column outside
+  `GROUP BY` (not output), G013 `GROUP BY id` (the point id), G014–G015 the
+  `NULL` group last under `ASC` and first under `DESC`, G016 `FIRST(col)` in
+  a SQL `GROUP BY` (the row with the smallest point id), G017 an aggregate
+  named `score` in a SQL `GROUP BY`, G018 groups an ORDER BY ties ordered by
+  `GROUP BY` key, G019 the default order (`GROUP BY` key ascending), G020
+  HAVING's `AND` binding tighter than `OR` and G021 an aggregate whose WHERE
+  reads `id` as the point id.
 - `setops_cases` S001–S004: `UNION` / `INTERSECT` / `EXCEPT`, compared as a
   **sorted set of ids**, not an ordered list (see D003 below).
 - `match_cases` M001–M002: 1- and 2-hop `MATCH`, with per-executor query text
@@ -442,8 +452,25 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R004: queries both engines must refuse — `NEAR_FUSED`
-  with `weighted`/`rsf`, and `USING FUSION` over a single `NEAR`.
+- `rejected_cases` R001–R015: queries both engines must refuse, each with the
+  `expected_code` both must report — `NEAR_FUSED` with `weighted`/`rsf` and
+  `USING FUSION` over a single `NEAR` (V012), a MATCH `ORDER BY` of an
+  aggregate or a bare name (R005–R009, V015), a `GROUP BY` ordered by an
+  aggregate the SELECT does not list (R010, V016), output columns sharing
+  a name, an aggregate named `score` in a vector `GROUP BY` included
+  (R011–R013, V017), and a HAVING with a non-numeric threshold or without
+  `GROUP BY` (R014–R015, V018).
+- `null_order_cases` O001–O003: a plain SELECT whose ORDER BY key is missing
+  on a row, which sorts last under `ASC` and first under `DESC` (O001–O002),
+  and WHERE / ORDER BY `id` reading the point id over the `tickets`
+  collection, whose payloads carry an `id` of their own (O003).
+- `vector_group_cases` V001–V010: a vector `GROUP BY` (`NEAR` + `GROUP BY`)
+  ordered by `similarity()` (each group's best score) and by a SELECT
+  aggregate, every aggregate per group with each group's id and score
+  (V004), `HAVING` (V005), the default order (V006), and a Euclidean
+  collection (`docs_l2`, V007–V008) whose nearest group comes first and whose
+  rows without the `GROUP BY` field form the `NULL` group, ordered last
+  ascending and first descending (V009–V010).
 - `dml_cases` W001–W008: `UPDATE` / `DELETE` statements run on a fresh copy of
   the dataset, then a SELECT (or a `NEAR`) is asserted.
 - `projection_cases` P001–P005: `SELECT DISTINCT` with `ORDER BY`, `LIMIT`, a
@@ -455,9 +482,9 @@ pass/fail cases) record real, currently-existing core↔WASM behavioural gaps
 discovered while building this coverage, so they're visible instead of
 silently relied upon:
 
-- **D001** — unaliased aggregate output field names differ (`"count"` /
-  `"sum_year"` on core vs `"count(*)"` / `"sum(year)"` on WASM); sidestepped
-  in the fixture by always using an explicit `AS` alias.
+- ~~D001~~ — **fixed in 8.0.0**: WASM names an unaliased aggregate as core
+  does (`"count"`, `"sum_year"`, through `AggregateFunction::result_key`)
+  instead of `"count(*)"` / `"sum(year)"`. Locked by `aggregate_cases` G010.
 - ~~D002~~ — **fixed 2026-07-24** (issue #1555): WASM's `equality_keys` now
   orients the `ON` condition by which side names the joined table (alias or
   raw table name), mirroring core's `normalize_join_condition` — both

@@ -49,7 +49,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, COUNT(*) FROM products GROUP BY category',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -65,7 +64,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, COUNT(*), SUM(price), AVG(rating) FROM products GROUP BY category',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -80,7 +78,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, MIN(price), MAX(price) FROM products GROUP BY category',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -97,7 +94,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 5',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -112,7 +108,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, COUNT(*), AVG(price) FROM products GROUP BY category HAVING COUNT(*) > 5 AND AVG(price) > 50',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -127,7 +122,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 10 OR COUNT(*) < 2',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -144,7 +138,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT * FROM products ORDER BY price DESC',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -159,7 +152,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT * FROM products ORDER BY category ASC, price DESC',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -176,8 +168,7 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'docs',
         'SELECT * FROM docs ORDER BY similarity(vector, $v) DESC LIMIT 10',
-        { v: queryVector },
-        undefined
+        { v: queryVector }
       );
       expect(result.results).toBeDefined();
     });
@@ -193,7 +184,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'orders',
         'SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -208,7 +198,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'orders',
         'SELECT * FROM orders JOIN customers AS c ON orders.customer_id = c.id',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -224,8 +213,7 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'orders',
         'SELECT * FROM orders JOIN customers AS c ON orders.customer_id = c.id WHERE status = $status',
-        { status: 'active' },
-        undefined
+        { status: 'active' }
       );
       expect(result.results).toBeDefined();
     });
@@ -241,7 +229,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'users',
         'SELECT * FROM active_users UNION SELECT * FROM archived_users',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -256,7 +243,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'users',
         'SELECT * FROM active_users UNION ALL SELECT * FROM archived_users',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -271,7 +257,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'users',
         'SELECT id FROM premium_users INTERSECT SELECT id FROM active_users',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -286,7 +271,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'users',
         'SELECT id FROM all_users EXCEPT SELECT id FROM banned_users',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -303,7 +287,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, COUNT(*) FROM products WITH (max_groups = 100) GROUP BY category',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -318,7 +301,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'products',
         'SELECT category, COUNT(*) FROM products WITH (group_limit = 50) GROUP BY category',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -335,7 +317,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'docs',
         'SELECT * FROM docs USING FUSION LIMIT 20',
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -350,7 +331,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'docs',
         "SELECT * FROM docs USING FUSION(strategy = 'rrf', k = 60) LIMIT 20",
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -365,7 +345,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'docs',
         "SELECT * FROM docs USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3) LIMIT 20",
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -380,7 +359,6 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'docs',
         "SELECT * FROM docs USING FUSION(strategy = 'maximum') LIMIT 20",
-        undefined,
         undefined
       );
       expect(result.results).toBeDefined();
@@ -398,7 +376,7 @@ describe('VelesQL v2.0', () => {
          LIMIT 20`;
       const result = await db.query('orders', sql);
 
-      expect(mockQuery).toHaveBeenCalledWith('orders', sql, undefined, undefined);
+      expect(mockQuery).toHaveBeenCalledWith('orders', sql, undefined);
       expect(result.results).toBeDefined();
       expect(result.results.length).toBe(2);
     });
@@ -419,8 +397,7 @@ describe('VelesQL v2.0', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         'docs',
         expect.stringContaining('GROUP BY category'),
-        { v: queryVector },
-        undefined
+        { v: queryVector }
       );
       expect(result.results).toBeDefined();
     });

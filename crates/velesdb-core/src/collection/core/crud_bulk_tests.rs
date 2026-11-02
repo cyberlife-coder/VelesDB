@@ -216,8 +216,396 @@ fn a_bulk_load_into_an_index_with_exact_features_off_is_indexed_at_the_drain() {
 
     coll.upsert_bulk(&points(0..300))
         .expect("test: upsert_bulk");
+    assert_eq!(
+        first_hit(&coll, 150),
+        Some(150),
+        "a buffered point is searchable before the drain"
+    );
     coll.flush().expect("test: flush drains the builder");
     assert_eq!(coll.storage.index.mappings.len(), 300);
     assert_eq!(slots_and_nodes(&coll), (300, 300));
     assert_eq!(unlinked_slots(&coll), Vec::<usize>::new());
+}
+
+/// The id of `id`'s own vector's nearest neighbour, by graph search.
+fn first_hit(coll: &Collection, id: u64) -> Option<u64> {
+    coll.search(&vector(id), 1)
+        .expect("test: search")
+        .first()
+        .map(|hit| hit.point.id)
+}
+
+/// `upsert_bulk` returns before the builder links its points, and a graph
+/// walk cannot reach an unlinked slot: search merges what the builder holds.
+#[test]
+fn a_point_the_builder_holds_is_found_by_search() {
+    let (_dir, coll) = bulk_loaded(300);
+    assert_eq!(
+        unlinked_slots(&coll).len(),
+        300,
+        "premise: the builder holds every point, and the graph links none"
+    );
+    for id in [0, 150, 299] {
+        assert_eq!(first_hit(&coll, id), Some(id));
+    }
+}
+
+/// A point linked by a vacuum while still queued is reachable both ways at
+/// once — through the graph and through the builder — and is returned once.
+#[test]
+fn a_point_both_linked_and_queued_is_returned_once() {
+    let (_dir, coll) = bulk_loaded(300);
+    coll.vacuum_hnsw_index().expect("test: vacuum");
+    assert_eq!(
+        coll.async_index_builder()
+            .expect("premise: a V2 collection")
+            .pending_len(),
+        300,
+        "premise: the vacuum linked the points and the builder still holds them"
+    );
+    let hits = coll.search(&vector(7), 10).expect("test: search");
+    let mut ids: Vec<u64> = hits.iter().map(|hit| hit.point.id).collect();
+    assert_eq!(ids.first(), Some(&7));
+    let returned = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), returned, "an id was returned twice");
+}
+
+/// Concurrent `upsert_bulk` and `upsert` must never give one arena slot to
+/// two ids (#2246). With the builder holding every bulk id, each one is still
+/// mapped to the slot the direct writer gave it, and those slots are the
+/// ones the exhaustive search reads (`tests/concurrent_bulk_slots.rs` runs
+/// the same race with the builder draining as it goes).
+#[test]
+fn direct_written_slots_hold_their_own_vectors_while_the_builder_holds_them() {
+    const ROUNDS: u64 = 400;
+    const BATCH: u64 = 8;
+    const BULK_BASE: u64 = 30_000;
+    let batch = |base: u64, round: u64| points(base + round * BATCH..base + (round + 1) * BATCH);
+
+    let (_dir, coll) = {
+        let dir = tempfile::tempdir().expect("test: temp dir");
+        let coll = v2_collection(dir.path().join("v2"), HOLD_ALL);
+        (dir, coll)
+    };
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for round in 0..ROUNDS {
+                coll.upsert_bulk(&batch(BULK_BASE, round))
+                    .expect("test: upsert_bulk");
+            }
+        });
+        scope.spawn(|| {
+            for round in 0..ROUNDS {
+                coll.upsert(batch(0, round)).expect("test: upsert");
+            }
+        });
+    });
+
+    let bulk_ids = BULK_BASE..BULK_BASE + ROUNDS * BATCH;
+    let linked = linked_ids(&coll, bulk_ids.clone());
+    assert!(
+        linked.is_empty(),
+        "premise: the builder already linked {} bulk ids, e.g. {:?}",
+        linked.len(),
+        &linked[..linked.len().min(8)]
+    );
+    let lost = ids_not_finding_their_vector(&coll, (0..ROUNDS * BATCH).chain(bulk_ids));
+    assert!(
+        lost.is_empty(),
+        "{} ids no longer find their own vector before the drain, e.g. {:?}",
+        lost.len(),
+        &lost[..lost.len().min(8)]
+    );
+}
+
+/// The `ids` mapped to a slot the graph links.
+fn linked_ids(coll: &Collection, ids: impl Iterator<Item = u64>) -> Vec<u64> {
+    let unlinked = unlinked_slots(coll);
+    ids.filter(|&id| {
+        coll.storage
+            .index
+            .mappings
+            .get_idx(id)
+            .is_some_and(|slot| !unlinked.contains(&slot))
+    })
+    .collect()
+}
+
+/// The `ids` whose own vector's exhaustive search does not return them first.
+fn ids_not_finding_their_vector(coll: &Collection, ids: impl Iterator<Item = u64>) -> Vec<u64> {
+    ids.filter(|&id| {
+        let hits = coll
+            .search_with_quality(&vector(id), 1, crate::SearchQuality::Perfect)
+            .expect("test: exhaustive search");
+        hits.first().map(|hit| hit.point.id) != Some(id)
+    })
+    .collect()
+}
+
+/// A V2 collection whose index has its exact-distance features off, loaded
+/// from disk as a collection meets one: `upsert_bulk` then buffers vectors.
+fn fast_insert_v2_collection() -> (tempfile::TempDir, Collection) {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let path = dir.path().join("v2");
+    drop(v2_collection(path.clone(), HOLD_ALL));
+    crate::index::HnswIndex::new_fast_insert(DIM, DistanceMetric::Euclidean)
+        .expect("test: fast-insert index")
+        .save(&path)
+        .expect("test: save it over the collection's index");
+    let coll = Collection::open(path).expect("test: reopen the collection");
+    assert!(!coll.storage.index.has_vector_storage(), "premise");
+    (dir, coll)
+}
+
+/// A buffered point deleted or overwritten after its bulk load is scored on
+/// what storage holds now, not on the copy the builder queued.
+#[test]
+fn a_buffered_point_is_found_as_it_is_now() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+
+    coll.delete(&[150]).expect("test: delete");
+    assert_ne!(
+        first_hit(&coll, 150),
+        Some(150),
+        "a deleted point is returned"
+    );
+
+    coll.upsert([Point::without_payload(151, vector(10_000))])
+        .expect("test: upsert");
+    assert_ne!(
+        first_hit(&coll, 151),
+        Some(151),
+        "151 is found on the vector it was bulk-loaded with"
+    );
+    assert_eq!(first_hit(&coll, 10_000), Some(151), "151 on its new vector");
+}
+
+/// A flush inserts what storage holds for each buffered id, not the copy the
+/// builder queued: a point overwritten before the flush keeps its new vector
+/// after it, and a deleted one stays out of the index.
+#[test]
+fn a_flush_indexes_buffered_points_as_they_are_now() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    coll.upsert([Point::without_payload(151, vector(10_000))])
+        .expect("test: upsert");
+    coll.delete(&[150]).expect("test: delete");
+
+    coll.flush().expect("test: flush drains the builder");
+
+    assert_eq!(
+        indexed_vector(&coll, 151).as_deref(),
+        Some(vector(10_000).as_slice()),
+        "the flush gave 151 back the vector it was bulk-loaded with"
+    );
+    assert_eq!(
+        indexed_vector(&coll, 150),
+        None,
+        "the flush indexed deleted 150"
+    );
+    assert_eq!(
+        coll.storage.index.tombstone_count(),
+        0,
+        "151 already held its new vector in the graph: the flush left no node behind"
+    );
+    assert_eq!(first_hit(&coll, 10_000), Some(151));
+}
+
+/// Runs `write` on another thread once a flush has read the vectors it is
+/// about to index, and gives it up to 300 ms to land before the insert: a
+/// merge that has let go of storage by then lets the write in between.
+/// Returns the thread, to join once the flush is done.
+fn race_the_flush(
+    coll: &Collection,
+    write: impl FnOnce(Collection) + Send + 'static,
+) -> std::sync::Arc<std::sync::Mutex<Option<std::thread::JoinHandle<()>>>> {
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (coll, handle_slot) = (coll.clone(), std::sync::Arc::clone(&slot));
+    crate::collection::search::pending::merge_hooks::set_after_read(move || {
+        let writer = std::thread::spawn(move || write(coll));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+        while !writer.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        *handle_slot.lock().expect("test: slot") = Some(writer);
+    });
+    slot
+}
+
+fn join_racer(slot: &std::sync::Mutex<Option<std::thread::JoinHandle<()>>>) {
+    let writer = slot.lock().expect("test: slot").take();
+    writer
+        .expect("premise: the flush ran the hook")
+        .join()
+        .expect("test: writer");
+}
+
+/// A delete landing while a flush indexes the deleted point stays a delete:
+/// the flush must not put the point back in the graph.
+#[test]
+fn a_delete_racing_a_flush_is_not_undone_by_it() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    let racer = race_the_flush(&coll, |coll| {
+        coll.delete(&[150]).expect("test: delete");
+    });
+
+    coll.flush().expect("test: flush");
+    join_racer(&racer);
+
+    assert_eq!(
+        indexed_vector(&coll, 150),
+        None,
+        "the flush re-indexed deleted 150"
+    );
+}
+
+/// An upsert landing while a flush indexes the point keeps its vector: the
+/// flush must not overwrite it with the one it read before.
+#[test]
+fn an_upsert_racing_a_flush_is_not_overwritten_by_it() {
+    let (_dir, coll) = fast_insert_v2_collection();
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    let racer = race_the_flush(&coll, |coll| {
+        coll.upsert([Point::without_payload(151, vector(10_000))])
+            .expect("test: upsert");
+    });
+
+    coll.flush().expect("test: flush");
+    join_racer(&racer);
+
+    assert_eq!(
+        indexed_vector(&coll, 151).as_deref(),
+        Some(vector(10_000).as_slice()),
+        "the flush overwrote 151's newer vector with the one it read"
+    );
+}
+
+// =========================================================================
+// Ids a flush keeps are a state a later flush retries, not a failure
+// =========================================================================
+
+/// `fast_insert_v2_collection` with a builder that flushes every
+/// `merge_threshold` buffered ids.
+fn fast_insert_v2_collection_flushing_at(
+    merge_threshold: usize,
+) -> (tempfile::TempDir, Collection) {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let path = dir.path().join("v2");
+    drop(v2_collection(path.clone(), merge_threshold));
+    crate::index::HnswIndex::new_fast_insert(DIM, DistanceMetric::Euclidean)
+        .expect("test: fast-insert index")
+        .save(&path)
+        .expect("test: save it over the collection's index");
+    let coll = Collection::open(path).expect("test: reopen the collection");
+    (dir, coll)
+}
+
+fn builder_pending(coll: &Collection) -> Vec<u64> {
+    coll.streaming
+        .async_index_builder
+        .load()
+        .as_ref()
+        .expect("test: a V2 collection has a builder")
+        .pending_ids()
+}
+
+/// An `upsert_bulk` whose flush keeps an id it could not read succeeds, and
+/// does its bookkeeping: the point count, the sparse batch, the generation.
+/// The kept id stays queued and is found by search. It used to return the
+/// flush's error before any of that, so the call failed for points it had
+/// stored and left the sparse vectors of the whole batch unapplied.
+#[test]
+fn an_upsert_bulk_whose_flush_keeps_an_id_succeeds_and_finishes_its_bookkeeping() {
+    let (_dir, coll) = fast_insert_v2_collection_flushing_at(10);
+    crate::collection::search::pending::merge_hooks::set_unreadable(&[3]);
+    let generation = coll.write_generation();
+    let sparse = crate::index::sparse::SparseVector::new(vec![(1, 1.0)]);
+    let batch: Vec<Point> = points(0..20)
+        .into_iter()
+        .map(|mut p| {
+            p.sparse_vectors = Some([("title".to_string(), sparse.clone())].into());
+            p
+        })
+        .collect();
+
+    let stored = coll
+        .upsert_bulk(&batch)
+        .expect("test: kept ids do not fail it");
+
+    assert_eq!(stored, 20);
+    assert_eq!(coll.len(), 20, "the point count was refreshed");
+    assert!(
+        coll.query.sparse_indexes.read().contains_key("title"),
+        "the sparse batch was applied"
+    );
+    assert!(coll.write_generation() > generation, "the generation moved");
+    assert_eq!(
+        builder_pending(&coll),
+        vec![3],
+        "only the unread id is kept"
+    );
+    assert_eq!(first_hit(&coll, 3), Some(3), "and it is still found");
+}
+
+/// A flush, and a full one, whose drain keeps an id run every step and
+/// succeed: the kept id stays queued, and searchable, for the next flush.
+/// Both used to stop at the drain's error, before the HNSW save, the
+/// quantizers, the sparse, BM25 and secondary indexes and `vectors.idx`.
+#[test]
+fn a_flush_whose_drain_keeps_an_id_runs_every_step_and_succeeds() {
+    let (_dir, coll) = fast_insert_v2_collection_flushing_at(HOLD_ALL);
+    coll.upsert_bulk(&points(0..300))
+        .expect("test: upsert_bulk");
+    crate::collection::search::pending::merge_hooks::set_unreadable(&[7]);
+
+    coll.flush().expect("test: kept ids do not fail a flush");
+    assert_eq!(builder_pending(&coll), vec![7]);
+
+    coll.flush_full()
+        .expect("test: kept ids do not fail a full flush");
+    assert_eq!(
+        coll.generations
+            .inserts_since_last_hnsw_save
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "the full flush saved the HNSW index"
+    );
+    assert!(
+        coll.storage.path.join("vectors.idx").exists(),
+        "the full flush wrote vectors.idx, its last step"
+    );
+    assert_eq!(builder_pending(&coll), vec![7]);
+    assert_eq!(first_hit(&coll, 7), Some(7), "the kept id is still found");
+}
+
+/// A chunk the graph refuses is retried one id at a time, each read and
+/// inserted under a storage guard of its own: a writer waits for at most one
+/// vector's insert, not the whole chunk's retries.
+#[test]
+fn a_refused_chunk_is_retried_one_id_at_a_time_each_under_its_own_guard() {
+    use crate::collection::search::pending::merge_hooks;
+    let (_dir, coll) = fast_insert_v2_collection_flushing_at(HOLD_ALL);
+    coll.upsert_bulk(&points(0..5)).expect("test: upsert_bulk");
+    merge_hooks::set_refused_in_a_batch(&[2]);
+    let holds = merge_hooks::guard_holds();
+
+    coll.flush().expect("test: flush");
+
+    assert_eq!(
+        merge_hooks::guard_holds() - holds,
+        1 + 5,
+        "the chunk once, then each of its 5 ids under a guard of its own"
+    );
+    assert!(
+        builder_pending(&coll).is_empty(),
+        "each id was inserted alone"
+    );
 }

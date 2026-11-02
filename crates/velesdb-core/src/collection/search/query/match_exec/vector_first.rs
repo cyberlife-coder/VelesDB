@@ -108,8 +108,7 @@ impl Collection {
             if results.len() >= limit {
                 break;
             }
-            ctx.check_timeout()
-                .map_err(|e| Error::GuardRail(e.to_string()))?;
+            ctx.check_timeout().map_err(Error::from)?;
             examined += 1;
 
             if let Some(mr) =

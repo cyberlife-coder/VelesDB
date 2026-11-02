@@ -83,6 +83,17 @@ a v3 blob with `Unsupported version: 3`.
 | `rate_limit_qps = 0` or `circuit_failure_threshold = 0` in a guard-rail update | accepted, never applied | `400` / `VELES-009` (REST, Tauri), `ValueError` (Python), `VelesError` (mobile) |
 | `enable_streaming` with `buffer_size = 0`, a `buffer_size` past `tokio::sync::Semaphore::MAX_PERMITS`, or `flush_interval_ms = 0` | process aborted | `Error::Config` / `VELES-009` (Rust, Tauri, mobile), `400` (REST), `ValueError` (Python) |
 | Python: a payload or edge properties nested past 127 levels of lists and dicts, or containing themselves | segmentation fault | `ValueError` |
+| MATCH `ORDER BY` an aggregate (`COUNT(*)`, `MAX(year)`) or a bare name (a pattern alias, a `RETURN` alias, an unqualified property) | `VELES-018` after the traversal ran | `V015` before it: `VELES-010` (Rust, `/collections/{name}/match` `400`), `422 VELESQL_VALIDATION_ERROR` (`/query`), an error (WASM) |
+| `GROUP BY` ordered by a column outside `GROUP BY` (`... GROUP BY category ORDER BY category, year`) | that key ignored | `V016` |
+| `GROUP BY` ordered by an aggregate the SELECT does not list (a vector `GROUP BY` too), or by `similarity()` or arithmetic outside a vector `GROUP BY` (`NEAR` in WHERE) | groups left unsorted | `V016` |
+| WASM: `GROUP BY` ordered by a selected column outside `GROUP BY` (`SELECT category, title, COUNT(*) ... GROUP BY category ORDER BY title`) | sorted on each group's first `title` | `V016` |
+| A grouped or aggregate query whose output columns share a name: a `GROUP BY` column and an aggregate's alias or default name (`GROUP BY category, count` beside `COUNT(*)`), or two aggregates (`COUNT(*) AS n, SUM(year) AS n`) | one column silently overwritten | `V017` |
+| A vector `GROUP BY` (`NEAR` + `GROUP BY`) naming an aggregate `id` or `score` (`COUNT(*) AS score`); a SQL `GROUP BY` keeps accepting it | the group's own score or id shadowed under `ORDER BY` | `V017` |
+| A HAVING threshold that is neither a number nor `NULL` (`HAVING COUNT(*) > 'many'`, `> TRUE`) | no group matched | `V018` |
+| A HAVING parameter, or scalar subquery, whose value is neither a number nor `null` | no group matched | `V018` when the query runs |
+| `execute_aggregate` (Rust `Collection` / `Database`) over a vector `GROUP BY` (`NEAR` + `GROUP BY`) | grouped every point, unscored and uncapped | `Error::Query`: run it with `execute_query` |
+| `HAVING` without `GROUP BY` | core: unnumbered error; WASM: filtered the one implicit group | `V018` |
+| WASM: a SQL `GROUP BY` past `WITH (max_groups = N)` groups (10,000 by default) | grouped without bound | `Too many groups (limit: N)`, as in core |
 
 **Fix:**
 - Run one query per sparse vector and fuse the results.
@@ -93,11 +104,210 @@ a v3 blob with `Unsupported version: 3`.
   least 1.
 - Flatten a Python value nested past 127 levels. Core refuses past 124 levels
   anyway, with `VELES-017` (section 1).
+- Order a `GROUP BY` by a `GROUP BY` column or a SELECT aggregate: add the
+  column to `GROUP BY` (or drop it from ORDER BY), add the aggregate to the
+  SELECT list, and alias it (`COUNT(*) AS n ... ORDER BY n`) to name it the
+  same way in core and WASM. Core's grouped rows carry no other field, so
+  there the refused key was never applied.
+- Give each output column of an aggregate query its own name: alias the
+  aggregate whose default name or alias repeats another column.
+- Compare HAVING aggregates with numbers, and filter rows without `GROUP BY`
+  in WHERE.
+- Raise `WITH (max_groups = N)` (1,000,000 at most) for a WASM query that
+  needs more groups.
 
 The guard-rail limits are also applied now, where 7.1.0 returned them without
 applying them: `rate_limit_qps`, `circuit_failure_threshold` and
 `circuit_recovery_seconds`. A limit you configured can start rejecting
 requests.
+
+**Fix** a MATCH `ORDER BY`: qualify a property with its pattern alias
+(`ORDER BY d.year`), or order by `similarity()`, `similarity(field, $v)`,
+`depth` or arithmetic over a property (`year - 2000`).
+
+### Reads the access gate now decides
+
+This matters only with a `DatabaseObserver` attached
+(`Database::open_with_observer`, the server's and Tauri's observer
+injection). In 7.1.0 the reads below skipped its `on_query_request`, so a
+`Deny` did not stop them and an `AllowWithScope` filter did not narrow them.
+In 8.0.0 each one asks the observer about the collection it reads.
+
+| Read | 7.1.0 | 8.0.0 under `Deny` | 8.0.0 under a scope |
+|---|---|---|---|
+| An aggregate (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `GROUP BY`, `HAVING`): `Database::execute_aggregate`, REST `/aggregate` and `/query`, the CLI, the Tauri `query` command | every row | the denial | the scoped rows |
+| A scalar subquery reduced by an aggregate, in any statement | every row of its collection | the denial of its collection | its collection's scoped rows |
+| A `UNION` / `INTERSECT` / `EXCEPT` operand after the first | undecided, unscoped | the denial of its collection | its collection's scoped rows |
+| A JOIN's secondary collection | undecided | the denial | refused, `VELES-009` |
+| `MATCH` with its collection in `_collection` | decided on `""`, scope dropped | the denial | refused, `VELES-009` |
+| `MATCH` `@collection` enrichment | undecided | the denial | refused, `VELES-009` |
+| `SELECT EDGES` | undecided | the denial | refused, `VELES-009` |
+| Mobile `get(ids)`, `getById(id)` | undecided | throws the denial | (scopes are not bridged on mobile) |
+| REST `GET /collections/{name}/points/{id}` | undecided | the denial's status and code | a point outside the scope is `404` `VELES-003` |
+| REST `POST /collections/{name}/points/scroll` | undecided | the denial's status and code | the scoped points |
+| REST `GET /collections/{name}/points/{id}/relations` | undecided | the denial's status and code | refused, `400` `VELES-009` |
+| `DESCRIBE COLLECTION`, on any surface | undecided | the denial | refused, `VELES-009` |
+| A plan-only `EXPLAIN` (VelesQL, REST `/query/explain` with `analyze: false`, Python `explain()`) | undecided | the denial | refused, `VELES-009` |
+| Collection metadata — REST `GET /collections/{name}` `/empty` `/sanity` `/config` `/stats` `/diagnostics`, Python `count()`/`len()`/`info()`/`is_empty()`/`analyze()`, wasm `len`/`is_empty` | undecided | the denial | refused, `VELES-009` |
+| Mobile `count()`, `all_ids()`, `get_stats()`, `diagnostics()` | undecided | throws the denial | (scopes are not bridged on mobile) |
+| `GET /collections/{name}/graph/traverse/stream` (SSE) | never asked | the denial's status and code | refused, `400` `VELES-009` |
+| Every `AgentMemory` read — `query_semantic`/`query_episodic`/`query_procedural` and the native `query`/`recent`/`recall`/`list_all`/`serialize`/relation accessors — and the Tauri memory commands over them | undecided | the denial | refused, `VELES-009` |
+| Tauri `search`, `search_ids`, `batch_search`, `text_search`, `hybrid_search`, `multi_query_search`, `sparse_search`, `hybrid_sparse_search`, `get_points`, `scroll_collection`, `get_edges`, `traverse_graph`, `traverse_graph_parallel`, `get_node_degree`, `get_collection`, `list_collections`, `is_empty`, `list_indexes` | never asked | the command fails with the denial | the scope narrows the filterable reads; the others refuse |
+| `SemanticMemory::edge_count`/`count`/`is_empty`, `EpisodicMemory::get_with_embedding` | undecided | the denial | refused, `VELES-009` |
+| Every `PyGraphCollection` direct read (`get_edges`, `get_outgoing*`/`get_incoming*`, `has_edge`, `node_degree`, `get_node_payload`, `all_node_ids`, `traverse_*`, `edge_count`, `__len__`/`count`/`is_empty`, `get`, `__contains__`) | undecided | raises `PermissionError` | refused (`PermissionError`, no filterable leaf) |
+| Index and collection-config metadata — Python `has_*_index`/`list_indexes`/`indexes_memory_usage`/`dimension`/`metric`/`storage_mode`/`is_metadata_only`/`pending_reopen`/`guard_rails`/`is_delta_active`/`check_auto_reindex_divergence`, mobile `has_*_index`/`list_indexes`/`indexes_memory_usage`/`dimension`/`is_metadata_only`/`guard_rails`/`pending_reopen` | undecided | raises / throws the denial | refused |
+| `analyze()` on Python `Collection` and mobile `VelesCollection`, `Database.analyze_collection`/`get_collection_stats`/`collection_diagnostics` (Python), REST `POST /collections/{name}/analyze` | undecided | the denial | refused, `VELES-009` |
+| `Database::explain_query` and Python `Collection.explain()` (now also on the query's `FROM`, not only the bound collection) | undecided | the denial | refused, `VELES-009` |
+
+A read refused with `VELES-009` has no row filter to compose the scope into,
+so it is refused rather than run unscoped, as the server's graph and `/match`
+endpoints already answered. **Fix:** a policy that scopes a collection read by
+a JOIN or a traversal answers `Allow` for it, or the read moves to a
+filterable form — a `SELECT` with the scope's predicate on that collection.
+`QueryAccessContext::collection` now names the collection actually read: a
+`MATCH` sent with `_collection` reports that collection, where 7.1.0 reported
+an empty name.
+
+A scope filter must be a **self-contained row predicate** on the scoped
+collection's own payloads: no `similarity()`/vector/graph directives, no
+full-text `MATCH`, no `$param` placeholders or subquery values (they have no
+resolution context at the gate — they would bind to the *caller's* params),
+and no column qualified with a JOIN table (`other.col` would push down to the
+join side, where a `LEFT JOIN` leaks the base rows anyway). An inexpressible
+scope refuses the read with `VELES-009` on every surface — 7.1.0's
+`AllowWithScope` contract did not exist, and the first 8.0.0 builds lowered
+such a scope to a match-all tautology or a different predicate and ran
+unscoped. `CONTAINS_TEXT` stays legal (it already is a strict substring
+predicate).
+
+### REST statuses
+
+Every REST error built from a core error (`velesdb_core::Error`) takes its
+status from one mapping: `4xx` for the client's errors, `5xx` for the
+engine's, with the error's `VELES-NNN` code in the body. Two kinds of
+answer keep a status of their own: a request the server refuses while
+reading it, before core is called (a missing `label` parameter, a
+malformed filter, an unknown fusion strategy, …: `400`, no code), and
+`/query`, `/aggregate` and `/query/explain`, which answer a client's
+failure `422` with a `VELESQL_*` code (their contract).
+
+| Failure | Where | 7.1.0 | 8.0.0 |
+|---|---|---|---|
+| A depth, cardinality or capacity ceiling (`max_collections`, `max_dimensions`, `max_vectors_per_collection`, `max_payload_size`, `max_perfect_mode_vectors`) | `/collections/{name}/match`, collection, point and graph routes | `503` | `400` |
+| The rate limit | `/collections/{name}/match` | `503` | `429` |
+| An engine fault or a guard rail the engine could not carry, during the search | `/search`, `/search/ids`, `/search/hybrid`, `/search/batch`, `/search/multi`, `/search/multi/ids` | `400` | `500`, `503` |
+| The collection deleted while the search ran | the same | `400` | `404` |
+| The client's own error during the search | `/search/text` | `500` | `400` (`404` for a collection deleted while it ran) |
+| A read the access gate denied | `/search`, `/search/ids`, `/search/hybrid` | `400` | the denial error's status |
+| A read the access gate denied | `/search/text` | `500` | the denial error's status |
+| A read the access gate denied | `/search/batch`, `/search/multi`, `/search/multi/ids`, every graph read (`/graph/edges`, `/graph/edges/count`, `/graph/nodes`, `/graph/nodes/{id}/edges`, `/graph/nodes/{id}/payload`, `/graph/nodes/{id}/degree`, `/graph/traverse`, `/graph/traverse/parallel`, `/graph/search`) | `403`, no code | the denial error's status and code |
+| A scope narrowing the endpoint cannot apply | the same | `403` | `400` `VELES-009` |
+| A read the access gate denied | `GET /points/{id}`, `/points/scroll`, `GET /points/{id}/relations` | not asked (section above) | the denial error's status and code |
+| A read the access gate denied | `/aggregate`, an aggregate on `/query` | not asked (section above) | `422` for a client error (a `VELESQL_*` code), the canonical `5xx` for an engine error |
+| Any core error | `/graph/search`, `GET`/`PUT /graph/nodes/{id}/payload` | `500`, no code | its canonical status and code (a query vector of the wrong dimension: `400` `VELES-004`) |
+| An invalid edge | `POST /graph/edges`, `/graph/edges/batch`, `/relations` | `400`, no code | `400` with its code |
+| A core error setting a point's TTL | `/points/{id}/ttl` | `500`, no code | its canonical status and code |
+| A worker that panicked | every endpoint running core work on a blocking worker | `500`, no code (`VELES-INTERNAL-WORKER-FAILURE` on search) | `500` `VELES-013`; on a search, counted by the circuit breaker |
+| A search's `timeout_ms` at or above the server's `timeout_ms`, run out | `/search`, `/search/ids` | `408` | `503` |
+| A search's `timeout_ms` of `0` | `/search`, `/search/ids` | `408` at once | runs under the server's limit |
+| A storage, I/O or internal fault | `/query`, `/aggregate`, `/query/explain` | `422` | `500` |
+| A timeout under the server's limit, the memory budget, an open breaker, a locked database | `/query`, `/aggregate`, `/query/explain` | `422` | `503` |
+
+Unchanged: a missing collection (`404`) and an open breaker (`503`) found
+before a search starts; an open breaker, the memory budget, a timeout under
+the server's limit and a locked database stay `503` on the routes that
+already used the mapping; a search's `timeout_ms` strictly tighter than the
+server's limit stays `408`; a client's own failure on `/query`,
+`/aggregate` and `/query/explain` stays `422`, its `WITH (timeout_ms)`
+running out included.
+
+**Retry** a `5xx`; a `429` after a backoff; a `408` with a larger budget or a
+simpler query. A `400` `VELES-009` scope narrowing is refused until the
+access policy changes, or the read moves to an endpoint that can apply the
+narrowed scope (`/search`, `/search/ids`, `/search/text`, `/search/hybrid`).
+Any other `4xx` is refused the same way until the request changes.
+
+The circuit breaker counts only the engine's failures. A client's own
+error — a `4xx` above, its own `timeout_ms` or `WITH (timeout_ms = N)`, a read
+the access gate denied — no longer opens it for every caller.
+
+### A request's own `timeout_ms` cannot lengthen the server's limit
+
+`VelesQL` `WITH (timeout_ms = N)` and a REST search's `timeout_ms` resolve
+the same way (`QueryLimits::client_timeout_ms`): the budget is the tighter
+of `N` and the server's `timeout_ms`, and `0` keeps the server's limit.
+7.1.0 let `WITH (timeout_ms = N)` replace the limit — longer, or `0` to
+disable it — and let a REST search's `timeout_ms` run longer than the limit,
+or time out at once with `0`. **Fix:** a query that needs longer than the
+server's limit needs the limit raised (`PUT /guardrails`,
+`Database::update_guardrails`); a client that sent `timeout_ms: 0` to fail
+fast sends no search instead.
+
+### `velesdb-server` configuration and browser security
+
+- **CORS is off unless configured.** 7.1.0 answered CORS for every origin by
+  default; 8.0.0 sends no CORS header until origins are listed, so a browser
+  page served from another origin can no longer read the server's responses.
+  **Fix:** list the front end's exact origins in `[server] cors_origins` (or
+  `[cors] allowed_origins`), or write `cors_origins = ["*"]` to restore
+  allow-all. Clients outside a browser are unaffected
+  ([SERVER_SECURITY.md](SERVER_SECURITY.md#6-cors-origins-and-hosts)).
+- **`POST .../points/stream` and `POST .../points/raw` check `Content-Type`.**
+  Anything but `application/x-ndjson` (stream) or `application/octet-stream`
+  (raw) is refused with `415`; 7.1.0 accepted any type, including the
+  `text/plain` a page on another site can send without a preflight. The
+  TypeScript SDK already sends both. **Fix:** set the header in a hand-written
+  client.
+- **A browser page on another origin cannot change state.** A `POST`, `PUT`,
+  `PATCH` or `DELETE` whose `Origin` is neither the server's own nor in
+  `cors_origins` is refused with `403`; 7.1.0 ran it. Requests without an
+  `Origin` header (curl, the SDKs, backends) are unaffected. **Fix:** list the
+  front end's origin in `cors_origins`.
+- **BREAKING: a request with an unlisted `Host` is refused with `421`.** The
+  server answers only `localhost`, `127.0.0.0/8`, `[::1]`, its bind host
+  (unless `0.0.0.0`/`::`) and `[server] allowed_hosts`; 7.1.0 answered any
+  `Host`, which let a DNS-rebinding page read and write a loopback server.
+  `/health` and `/ready` are exempt. A server bound to `0.0.0.0` (the Docker
+  image) and reached under a DNS name or a LAN address now refuses those
+  clients — and so does a container reached by its Compose or Kubernetes
+  service name (`http://velesdb:8080` → `421`). **Fix:** list every name clients use in `allowed_hosts` (or
+  `VELESDB_ALLOWED_HOSTS=a,b`); a container reached by its service name needs
+  that name, e.g. `VELESDB_ALLOWED_HOSTS: velesdb` in the server's compose
+  `environment`; behind a reverse proxy, forward the original `Host` and list
+  the public name. `X-Forwarded-Host` is not read.
+- **Engine variables apply with no config file** (server and CLI). 7.1.0
+  ignored every `VELESDB_LIMITS_*`, `VELESDB_HNSW_*`, `VELESDB_SEARCH_*`, ...
+  variable unless a config file was loaded; now a stray one changes the
+  engine's limits or index parameters, and an invalid one stops startup (or
+  the CLI command) with the variable named. **Fix:** unset the variables you
+  did not mean to apply (`env | grep VELESDB_`), or correct the value the
+  error names.
+- **`[server]` and `[logging]` keys 7.1.0 ignored now take effect.**
+  `[server] workers`, `max_body_size`, `cors_enabled`, `cors_origins` and
+  `[logging] level` / `format` / `file` (and `VELESDB_LOGGING_LEVEL`) were
+  documented but never read; a file that sets them now changes the worker
+  count, the body limit, CORS and the logs. Two combinations from the full
+  example `velesdb.toml` that 7.1.0's CONFIGURATION.md shipped need a look:
+  - `cors_enabled = false` with `cors_origins = ["*"]` (that template's
+    values) now turns CORS **off**: 7.1.0 ignored both lines and allowed every
+    origin. **Fix:** keep it if no browser page on another origin calls the
+    server; otherwise set `cors_enabled = true` and list the page's origins in
+    `cors_origins`.
+  - That template's `[server] cors_origins = ["*"]` next to a `[cors]
+    allowed_origins = [...]` table now **refuses to start** ("both [server]
+    cors_origins and [cors] allowed_origins are set"): 7.1.0 read only the
+    second. **Fix:** delete the `cors_origins` line and keep
+    `[cors] allowed_origins`.
+  A key the server still does not read, or an unknown top-level table, is
+  named in a startup warning.
+- **Configuration the server used to drop now stops it at startup:** a CORS
+  origin that cannot match a browser's `Origin` (a path, a trailing `/`, no
+  scheme), `"*"` inside an origin list, an unparseable CORS method or header,
+  both `[server] cors_origins` and `[cors] allowed_origins`, and a `[logging]`
+  `level` / `format` or `VELESDB_LOGGING_LEVEL` outside the documented values,
+  and `cors_origins = ["*"]` next to a `[cors]` setting the permissive policy
+  would ignore (`allow_credentials = true`, methods, headers, `max_age_secs`).
+  **Fix:** correct the value the error names.
 
 ## 3. Rust API
 
@@ -114,6 +324,17 @@ requests.
 | `TraversalMetrics` (crate root and `metrics::`) | `GraphCollection::metrics()`, `Database::graph_metrics_prometheus()` |
 | `velesdb-migrate` `PineconeConfig::environment` | drop the field |
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
+| `velesql::AggregateResult::to_json` | the `count`, `counts`, `sums`, `avgs`, `mins`, `maxs` fields, or `Database::execute_aggregate` |
+| `Filter::matches(payload)`, `filter::Condition::matches(payload)` | `matches_point(id, Some(payload))`: a filter is tested against a point, its id included |
+| `velesql::match_clause` (`parse_match_clause`, `parse_node_pattern`, `parse_relationship_pattern`) | `velesql::Parser::parse` on the whole `MATCH` statement, then `Query::match_clause` |
+| `AsyncIndexBuilder::{search_buffer, drain_buffer, buffer_len, is_building, trigger_build_async}` | search the collection; `VectorCollection::flush` indexes what the builder holds |
+| `velesql::ExecutionStrategy::Parallel`, `velesql::match_planner::MatchExecutionStrategy::Parallel` | none: the planners pick `GraphFirst` where they picked `Parallel`; a `match` on either enum drops that arm. On `MATCH`, a row the removed band returned carried the vector leg's similarity score; a `GraphFirst` row carries none (its `score` is the depth-derived value every graph-reached row gets) |
+| `velesql::QueryPlanner::with_thresholds(graph_first, vector_first)` | `QueryPlanner::with_vector_first_threshold(vector_first)`: at or below it the planner picks `GraphFirst` |
+| `DeltaBuffer::search`, `DeferredIndexer::search` | search the collection: it merges what the deferred indexer holds |
+| `DeferredIndexer::{merge_with_hnsw, swap_and_drain, drain_all}` | `VectorCollection::flush` indexes what the deferred indexer holds |
+| `collection::streaming::{merge_with_delta, merge_with_delta_scored}` | search the collection |
+| `VectorCollection::{push_to_delta_if_active, is_delta_active}` | none: no rebuild ever activated the buffer they fed and reported on |
+| `DeltaBuffer::{activate, try_activate, deactivate_and_drain, is_active, is_searchable, stats}`, `streaming::delta::ActivateError` | none: a `DeltaBuffer` accepts every write; `len`/`is_empty` give its size |
 
 - **`resolved_quality`** returns the `SearchQuality` to search at, not a
   `usize`. The removed helper returned `usize::MAX` for `perfect`. Without the
@@ -134,15 +355,84 @@ requests.
 
 ### Changed
 
+- **`Error::GuardRail` is `GuardRail { kind, message }`**, where it was
+  `GuardRail(String)`. `kind` is a `GuardRailKind` (`Timeout(TimeoutBudget)`,
+  `Depth`, `Cardinality`, `Memory`, `Capacity`, `RateLimit`, `CircuitOpen`),
+  and `Error::is_caller_error()` reads it. Match `Error::GuardRail { .. }`
+  where you matched `Error::GuardRail(_)`, and read `message` where you read
+  the string. `GuardRailViolation::Timeout` gains a `budget` field.
 - **`Collection::enable_streaming` and `VectorCollection::enable_streaming`
   return `Result<()>`.** They refuse a config the pipeline cannot run with
   (section 2) with `Error::Config`, and leave the current ingester running.
   Handle the result or `?` it.
+- **`AggregateResult::counts`, `Aggregator::process_value` and
+  `Aggregator::process_batch` count non-null values of any type** for
+  `COUNT(column)`, where they counted numeric values only. `sums`, `avgs`,
+  `mins` and `maxs` still hold numeric values only.
+- **`AggregateResult` gains `min_values` and `max_values`**
+  (`HashMap<String, serde_json::Number>`), each column's exact `MIN` and
+  `MAX`: an integer stays an integer, past 2^53 included. A struct literal
+  of `AggregateResult` must set them, or end with `..Default::default()`; a
+  result serialized by 7.1.0 deserializes with both empty, and its `MIN` /
+  `MAX` read from `mins` / `maxs` as before. `Aggregator::process_batch`
+  keeps an infinite extreme in `mins` / `maxs` (7.1.0 reported `0`), with
+  no entry in `min_values` / `max_values`, and skips a NaN: it is no value,
+  counted nowhere.
+- **`Condition::In`'s `values` is an `InValues`, not a
+  `Vec<serde_json::Value>`**: the member list sorts and de-duplicates at
+  construction, so the >16-element binary search in `matches_point` can
+  never see an unsorted or duplicated list — `Condition::is_in`,
+  `Deserialize` and `Condition::In` literals included. The serialized
+  shape is unchanged (`"values": [...]`). Build it with
+  `values: vec.into()`; read it through the `[Value]` deref (`.iter()`,
+  `.len()`, indexing unchanged).
+- **`all_ids()` lists every point, ascending**: `Collection`,
+  `VectorCollection` and `MetadataCollection::all_ids`,
+  `GraphCollection::all_node_ids`, and the Python and mobile `all_ids()`.
+  7.1.0 listed only the points with a payload, in storage order, so a point
+  upserted without a payload was missing. Code that wanted the payload
+  holders filters on `get()`'s payload. Note the set is the storage set:
+  in a vector collection it is a superset of what a `SELECT`, an aggregate
+  or `get()` sees — a payload-only id (a graph node) is listed yet is not
+  a `SELECT` row.
+- **A MATCH `WHERE x.prop != v` keeps a node whose property is missing or
+  of another type**, agreeing with SELECT's `!=` (and the WASM demo scope
+  documents the opposite convention — unchanged). Before, such a node was
+  dropped: `MATCH (n) WHERE n.x != 5` over a node with no `x` returned
+  nothing; it now returns the node.
+- **`range_index.bin` files written before `OrderedValue` took the exact
+  number order are discarded on open** (`RANGE_INDEX_VERSION` 2): the stale
+  key order is not adopted — the index rebuilds empty, as it always did
+  for an absent file.
+- **`AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a callback
+  that indexes them.** `enqueue(ids)` takes any `IntoIterator<Item = u64>`
+  instead of a `Vec<(u64, Vec<f32>)>`, and `flush_sync(index,
+  index_current)` calls `index_current(&ids)` with each buffered id once.
+  It inserts what your storage holds for those ids into the index and
+  returns the ids it settled: inserted, already held by the graph as
+  storage holds them, or no longer stored. The builder keeps any other id
+  queued for the next flush. `flush_sync` returns a `FlushOutcome`
+  (`indexed`, `kept`) rather than a count: read `outcome.indexed` where the
+  count was used. Kept ids are not an error; a failed link is. A flush
+  indexes what storage holds when it runs, not a copy taken at enqueue.
 
 ### Added
 
 `velesdb_core::MAX_JSON_NESTING` (127) and `MAX_VALUE_DEPTH` (124), also
-under `validation`.
+under `validation`. `GuardRailKind`, `TimeoutBudget`, `Error::is_caller_error`,
+`CircuitBreaker::record_error`, `QueryValidator::validate_match_clause`,
+`Database::gated_search_outcome`, `QueryLimits::client_timeout_ms` and
+`QueryLimits::timeout_budget`. For VelesQL grouping: `velesql::Grouper`,
+`GroupInput` (built with `GroupInput::new`) and `GroupOutput`, both
+`#[non_exhaustive]`; `velesql::compare_json_values` and `velesql::row_field`;
+`SelectOrderBy::directed`; `SelectStatement::grouped_sort_keys`,
+`order_by_aggregates_as_fields` and `is_vector_group_by`; and
+`ValidationErrorKind::{OrderByNotInResult, DuplicateOutputColumn,
+InvalidHaving}` (`V016`–`V018`). `Filter::matches_point` and
+`filter::Condition::matches_point` evaluate a filter against a point, its id
+included (a filter built from VelesQL reads `id` as the point id), and
+`explain::IndexType::PointId` reports a point-id lookup. Deserializing a
+`Filter` that names the internal field `@velesql.point_id` fails.
 
 ## 4. Python and the integrations
 
@@ -157,6 +447,13 @@ under `validation`.
 - **`Collection.get_graph_store()` is removed.** Use
   `Database.get_graph_collection()` for a persistent graph, or
   `velesdb.GraphStore()` for an in-memory one.
+- **`velesdb.SearchResult` is removed.** No call ever returned one: every
+  search returns dicts (`result["id"]`, `result["score"]`,
+  `result["payload"]`). Drop the import; to annotate, the stub's
+  `SearchResultDict` is importable under `typing.TYPE_CHECKING`.
+- **`Collection.is_delta_active()` is removed.** It returned `False` on
+  every collection: the buffer it reported on was never activated. Drop the
+  call.
 - **`GraphStore.traverse_dfs` runs core's DFS.**
   - It returns one result per node reached, in depth-first order.
   - An empty `relationship_types` list now follows every edge; it followed none
@@ -184,6 +481,36 @@ under `validation`.
   - on `jaccard` stores.
 
   Those scores now pass through as core returns them.
+
+- **LlamaIndex `GraphLoader` with a `graph_collection_name`** writes its nodes
+  into that graph collection, at `stable_hash_id(node.node_id)` (the id
+  `VelesDBVectorStore` stores the node under), labelled through `_labels`; a
+  vector is dropped when the graph collection has no embeddings. The 7.1.0
+  loader wrote them into the vector store's collection as metadata-only points
+  at `stable_hash_id(f"{node_label}:{node.node_id}")` (or at the id given to
+  `add_node`). Nothing reads those points any more; they stay stored and
+  counted until deleted:
+
+  ```python
+  from velesdb_common.ids import stable_hash_id
+
+  node_label = "DOCUMENT"  # the node_label passed to load_from_nodes
+  collection = vector_store.client.get_collection(vector_store.collection_name)
+  collection.delete([stable_hash_id(f"{node_label}:{n.node_id}") for n in nodes])
+  ```
+
+  Without a graph collection the loader is unchanged, and those points are
+  still its nodes: do not delete them.
+- **LangChain and LlamaIndex `GraphRetriever` search `seed_k` seeds**
+  (default 3), not `expand_k` (default 10), then fill up to `expand_k` with
+  graph neighbours. A query whose seeds have no neighbour returns at most
+  `seed_k` documents: raise `seed_k` for more vector hits.
+- **LlamaIndex `GraphRetriever`:**
+  - a graph-reached node has `score=None` instead of `0.5`; a postprocessor
+    that compares scores must handle `None`;
+  - a seed expands from `stable_hash_id(node.node_id)` only, never from an
+    `id`/`doc_id`/`node_id` metadata key or `int()` of a numeric node id;
+    edges added by hand must use that id as `source` / `target`.
 
 ## 5. Tauri plugin
 
@@ -231,6 +558,20 @@ Rejections carry core's codes and a new `recoverable` field:
 **Migration:** an app holding a graph saved by the old `save(path)` calls
 `importSnapshot(path)` once on the new store.
 
+### Point lookup throws
+
+`VelesCollection.get(ids)` and `getById(id)` now pass the read gate, like
+every other mobile read, so they throw when a `MobileObserver` denies the
+read; 7.1.0 returned the points. A Swift call needs `try`, and Kotlin code
+that must not fail on a denial catches `VelesException`.
+
+### Metadata reads throw
+
+`count()`, `allIds()`, `getStats()` and `diagnostics()` now pass the same
+gate — a `point_count` is a collection read — so they return `Result` and
+throw the `MobileObserver`'s denial where 7.1.0 returned the value. The
+same `try`/catch applies.
+
 ### Errors
 
 - **The `Collection` and `DimensionMismatch` variants gain `code` and
@@ -244,7 +585,20 @@ Rejections carry core's codes and a new `recoverable` field:
 - **`updateGuardrails` throws `VelesError`** for limits core refuses.
 - **`SearchQuality.Adaptive` with `min_ef > max_ef`** is refused.
 
-## 7. `velesdb-wasm` storage modes
+## 7. `velesdb-wasm`
+
+### Values returned to JavaScript
+
+- **Records are plain objects**, no longer ES2015 `Map`s: read `hit.id` and
+  `hit.payload.title`, not `hit.get('id')` (#2332).
+- **An absent value is `null`, where 7.1.0 gave `undefined`:** a missing
+  `payload`, `query()`'s `graphScore` and `columnData`, `GraphNode.to_json()`'s
+  `vector`, an alias missing from `ParsedQuery.matchReturnItems`. Test with `== null`, which
+  matches both.
+- **`text_search` records carry `score: null`.** The match is an unranked
+  substring match; sort or threshold on something else.
+
+### Storage modes
 
 - **Every mode keeps f32 vectors** and returns core's top-k and scores for that
   mode.
@@ -254,6 +608,54 @@ Rejections carry core's codes and a new `recoverable` field:
 - **Trained PQ collections differ from core:** once a PQ collection has
   trained, core's default `search()` returns ADC-approximated scores. The
   browser returns exact ones.
+
+### Metadata filters
+
+- **`VectorStore.search_with_filter` parses and evaluates the filter with
+  core**, so every core condition kind selects what REST selects. In 7.1.0,
+  `in`, `contains`, `is_null`, `like`, the `array_contains*` and the geo
+  conditions matched nothing.
+- **A filter core cannot parse throws core's message**
+  (`Invalid filter: missing field \`condition\``, for one). In 7.1.0 a flat
+  `{ category: 'tech' }` matched every point and `null` searched unfiltered;
+  call `search` for an unfiltered search.
+
+### Aggregate field names
+
+- **BREAKING (behavior) — an unaliased aggregate comes back under core's
+  name.** WASM used to name it after the call; it now uses core's name, the
+  one the server and every other binding return:
+
+  | Aggregate | 7.1.0 (WASM) | 8.0.0 |
+  |---|---|---|
+  | `COUNT(*)` | `count(*)` | `count` |
+  | `COUNT(col)` | `count(col)` | `count_col` |
+  | `SUM(col)` | `sum(col)` | `sum_col` |
+  | `AVG(col)` | `avg(col)` | `avg_col` |
+  | `MIN(col)` | `min(col)` | `min_col` |
+  | `MAX(col)` | `max(col)` | `max_col` |
+  | `FIRST(col)` | `first(col)` | `first_col` |
+  | `MAX(score)`, `AVG(score)` | `max(score)`, `avg(score)` | `max_score`, `avg_score` |
+
+  A dotted column keeps its dots (`SUM(a.b)` → `sum_a.b`). **Fix:** read the
+  new key, or alias the aggregate (`COUNT(*) AS n`): an alias is the key in
+  every version and engine.
+- **BREAKING (behavior) — GROUP BY and aggregates run through core's
+  grouping**, so they return what core returns:
+  - a selected column outside `GROUP BY` is no longer added to each group
+    row: add it to `GROUP BY`;
+  - `MIN` and `MAX` read numeric values and return `null` for a group of
+    strings, like `SUM` and `AVG`; `SUM` over no numeric value is `null`, not
+    `0`;
+  - `score` as an aggregate argument is the search score only in a vector
+    `GROUP BY` (`NEAR` + `GROUP BY`); elsewhere it reads a payload field
+    named `score`;
+  - a vector `GROUP BY` without `LIMIT` returns 10 groups, the SELECT
+    default, where it returned every group; each group row carries its best
+    row's id and the group score instead of `0` and `0.0`;
+  - a SQL `GROUP BY` holds at most `WITH (max_groups = N)` groups, 10,000
+    by default, and `HAVING` without `GROUP BY` fails with `V018` (section
+    2).
 
 ## 8. Observability
 
@@ -268,6 +670,96 @@ Rejections carry core's codes and a new `recoverable` field:
   `label == "secondary"` or `"btree"`.
 
 ## 9. Results that change (not breaking)
+
+- **ORDER BY puts `null` last under `ASC`, first under `DESC`.** 7.1.0 core
+  sorted a `null` or missing key first under `ASC` (WASM already sorted it
+  last), on rows, groups and `MATCH` results alike. Every engine now uses
+  one order (`velesql::compare_json_values`): `null` last ascending, then
+  booleans, numbers, strings, arrays, objects. A query that read the rows
+  without a value first under `ASC` reads them last; sort `DESC`, or filter
+  `IS NULL`, to get them first.
+
+- **SQL `GROUP BY` results no longer depend on scan order, in every
+  engine.** 7.1.0 core grouped in hash order, WASM in scan order:
+  - without ORDER BY, groups come by `GROUP BY` key, ascending, `NULL` last;
+  - groups an ORDER BY ties come by `GROUP BY` key, so a LIMIT keeps the
+    same groups everywhere;
+  - `FIRST(col)` reads the group's row with the smallest point id (core
+    returned `null`); in a vector `GROUP BY`, the most similar row, the
+    smallest id among equally similar ones;
+  - numbers equal by exact value are one group (`1` and `1.0`, `0.0` and
+    `-0.0`, `2^53` as an integer and as a float);
+  - groups whose keys compare equal (two arrays) come by best row id, and
+    rows are aggregated in id order, so a float `SUM` is the same on every
+    run (above 10,000 rows, core's aggregate without `GROUP BY` sums per
+    chunk, so its last digits can differ from WASM's).
+
+  Add an ORDER BY to pin another order.
+
+- **BREAKING (behavior) — `id` is the point id in every VelesQL clause, in
+  core.** 7.1.0 core read a payload field named `id` in a SELECT's WHERE,
+  ORDER BY, GROUP BY and aggregates, and in a MATCH `WHERE n.id`; its
+  projection, `UPDATE` / `DELETE` and JOIN filters, and WASM, read the point
+  id. What changes, for a point whose payload carries its own `id`:
+
+  | Query | 7.1.0 core reads | 8.0.0 reads |
+  |---|---|---|
+  | `WHERE id = 3`, `WHERE id IN (...)`, `WHERE id < 100` | payload `id` | point id |
+  | `ORDER BY id` | payload `id` | point id |
+  | `GROUP BY id`, `COUNT(id)`, `MAX(id)` | payload `id` | point id |
+  | `ROW_NUMBER() OVER (PARTITION BY id ORDER BY id)` | payload `id` | point id |
+  | `ORDER BY 0 - id`, a `LET` reading `id` | payload `id` | point id |
+  | `JOIN ... ON a.x = b.id` (the left key `id`) | payload `id`, else point id | point id |
+  | MATCH `WHERE n.id = 3`, `n.id IN (...)`, `ORDER BY n.id`, `RETURN n.id` (`r.id` on a relationship) | node (relationship) property `id` | node (relationship) id |
+  | MATCH `RETURN n` | payload `id` under `n.id`, none without one | node id under `n.id` |
+
+  Without such a payload field, 7.1.0 `GROUP BY id` put every row in one
+  `NULL` group and `WHERE id < 100` matched nothing. VelesQL cannot reach a
+  payload field named `id` (`SELECT *` returns the point id under that
+  name): rename it (`doc_id`) to filter or sort on it, or use a JSON filter
+  on a REST search or scroll,
+  `{"condition": {"type": "eq", "field": "id", "value": 3}}`, which still
+  reads the payload field.
+
+- **ORDER BY compares an integer and a float exactly**, a total order: 7.1.0
+  compared them as `f64`, so `2^53 + 1` tied the float `2^53` and a sort
+  over both could come out inconsistent.
+
+- **Aggregates count and read columns as SQL does, in core.** `COUNT(col)`
+  counts non-null values of any type (7.1.0 counted numbers only, so
+  `COUNT(category)` was `0`). `HAVING COUNT(col)` over a column a group never
+  holds compares `0`, and `HAVING AVG(score)` in a SQL `GROUP BY` averages
+  the payload field `score`; 7.1.0 dropped those groups.
+
+- **A `NULL` HAVING threshold matches no group**, as SQL's UNKNOWN: `=
+  NULL`, a parameter bound to `null`, a scalar subquery returning no row.
+  It is no error (`V018` is for a threshold that is neither a number nor
+  `NULL`).
+
+- **`HAVING a OR b AND c` reads as `a OR (b AND c)`**, SQL's precedence, in
+  every engine; 7.1.0 read it left to right. HAVING takes no parentheses:
+  write the old reading `(a OR b) AND c` as `a AND c OR b AND c`.
+
+- **Vector `GROUP BY` (`NEAR` + `GROUP BY`) computes every aggregate, on the
+  server, in Python, Node and every binding.** 7.1.0 core computed only
+  `MAX(score)`, `AVG(score)` and `FIRST(col)` there; every other aggregate
+  came back `null`, under a key of its own that changes now:
+
+  | Aggregate | 7.1.0 key (value `null`) | 8.0.0 key |
+  |---|---|---|
+  | `COUNT(*)` | `Count_*` | `count` |
+  | `COUNT(score)` | `agg_score` | `count_score` |
+  | `SUM(score)` | `agg_score` | `sum_score` |
+  | `MIN(score)` | `agg_score` | `min_score` |
+  | `FIRST(score)` | `agg_score` | `first_score` |
+
+  `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` keep their
+  `<function>_<column>` key and now carry a value. The groups change too:
+  `HAVING` applies; without ORDER BY they come best score first, ties by id,
+  instead of in hash order; a chunk without the `GROUP BY` field joins the
+  `NULL` group instead of being dropped; and under a distance metric a
+  group's best chunk and score are its nearest, not its farthest. Alias an
+  aggregate (`COUNT(*) AS n`) to fix its key across versions.
 
 - **`MATCH` range predicates return every matching node.** The
   `label.property` range index used to miss two kinds of nodes:
@@ -303,6 +795,50 @@ Rejections carry core's codes and a new `recoverable` field:
     measured cost and the benchmark that reproduces it.
   - An `f32` is parsed directly, so a vector component can differ from 7.1.0
     by one `f32` ULP, toward the exact value.
+- **A point without payload is tested with a `null` payload on every filtered
+  path**: REST search and scroll filters, text, hybrid and batch search, and
+  MATCH used to drop it, so `{"type": "is_null", ...}` or `neq` now match it
+  there as in a SELECT. An `UPDATE` and a JOIN now visit it too (`UPDATE
+  ... WHERE kind IS NULL` skipped it).
+
+- **A payload index stays exact past 2^53.** It keys numbers by `f64`, so an
+  indexed ORDER BY tied `2^53` with `2^53 + 1` and an indexed JOIN on `id`
+  paired them. Such keys and literals now take the exact path. Creating an
+  index named `@velesql.point_id` fails with `Error::Config`: drop such an
+  index from a 7.1.0 store, since `id` never reads it.
+
+- **`MIN` and `MAX` of integers return integers** (`33`, not `33.0`), exact
+  past 2^53. Read the value as a number, not as a float literal. Among
+  values equal by value the integer wins (`3` over `3.0`, `0` over `-0.0`),
+  whichever row comes first. Rust callers: see section 3 for the new
+  `AggregateResult` fields.
+
+- **BREAKING (behavior) — numbers compare by exact value, with no
+  tolerance**, in every clause (WHERE, a MATCH WHERE, HAVING, ORDER BY,
+  GROUP BY, DISTINCT, PARTITION BY, `MIN` / `MAX`, JOIN keys), on every path
+  (scan, secondary index, payload mirror, `IN` of any length), in core, WASM
+  and every binding's filters:
+
+  | Comparison | 7.1.0 | 8.0.0 |
+  |---|---|---|
+  | `x = 0.3` over `0.30000000000000004` (`0.1 + 0.2`) | true (WHERE, JSON filter, WASM: within `f64::EPSILON`) | false |
+  | MATCH `d.x = 3.0005` over `3.0` | true (within `0.001`) | false |
+  | MATCH `d.x > 3` over `3.5` | false (an integer literal read only integer properties) | true |
+  | `n > 9007199254740992.0` over `9007199254740993` | false (compared as `f64`) | true |
+  | `id = 9007199254740993` over `9007199254740992` | true | false |
+  | `x = 0` over `-0.0` | true | true |
+  | `x != 1` once an index or the payload mirror serves it | could differ from a scan | the scan's rows |
+  | `SELECT DISTINCT x` / `PARTITION BY x` over `1` and `1.0` | two values | one, as `GROUP BY` |
+
+  Migration: where you relied on the tolerance to match a computed float,
+  compare with a range, `x BETWEEN 0.29999 AND 0.30001`, or round the value
+  before you store it. A JSON filter takes the same range as a `gte` and an
+  `lte` condition under `and`.
+
+- **Python: an observer scope on `id` narrows every read.** Post-filtered
+  reads (`get`, batch, sparse, hybrid-sparse and graph embedding search)
+  tested a scope against the payload alone, so `id != 2` matched every row.
+
 - **Caller-chosen sizes no longer abort the process.** A huge scroll
   `batch_size`, streaming `batch_size` or HNSW `max_elements` reserved that
   much memory up front. They are now capacity hints: an HNSW index reserves
@@ -311,3 +847,50 @@ Rejections carry core's codes and a new `recoverable` field:
 - **WASM `SELECT DISTINCT`** applies `ORDER BY` and the default `LIMIT`.
 - **Error messages:** REST and WASM report core's wording for an unknown fusion
   strategy or search mode.
+
+## 10. TypeScript SDK (`@wiscale/velesdb-sdk`)
+
+The SDK's 8.0.0 refuses what velesdb-server would drop or refuse, instead of
+sending it. Each item is in the `[8.0.0]` section of the
+[`CHANGELOG.md`](../../CHANGELOG.md).
+
+- **Filters must be core-shaped.** A `filter` is `{ condition: { type, ... } }`
+  (`velesdb_core::filter::Filter`); build it with `f.*`. A flat field map such
+  as `{ category: 'tech' }` throws `ValidationError` on both backends. Over
+  REST the server already answered it with a `400`; on WASM it used to match
+  every point. `normalizeFilter` performs the check and is exported.
+- **`CollectionConfig.description` is removed.** Core has no collection
+  description; the REST server dropped the field. On WASM, an untyped caller
+  that still passes it gets `NOT_SUPPORTED`.
+- **`HnswParams.storageMode` is removed.** Nothing read it. Set the top-level
+  `CollectionConfig.storageMode`.
+- **`SearchOptions.includeVectors` and `SearchResult.vector` are removed.** No
+  search, on either backend, returns vectors (core's `SearchResultResponse` is
+  id, score, payload). Read a vector with `get()`.
+- **`query()` loses its `options` argument and `QueryOptions` is removed**
+  (`timeoutMs`, `stream`): core's `QueryRequest` takes neither. The server's
+  timeout is its guard-rails `timeoutMs` (`updateGuardRails`).
+- **`capabilities()` drops the `includeVectors` and `queryOptions` keys**,
+  which described those fields.
+- **`TraverseRequest.cursor` and `TraverseResponse.nextCursor` are removed.**
+  Core has no traversal cursor; `hasMore` says the traversal stopped at
+  `limit`. Raise `limit` to reach further.
+- **`recallRecent(collection, since)` is exclusive:** it returns events with
+  `timestamp > since`, as core's `episodic.recent()` does (it was `>=`).
+  Pass `since - 1` to keep an event stamped exactly `since`.
+  `recallOlderThan` was already strict (`<`), as core's `older_than()` is.
+- **`createGraphCollection({ schemaMode: 'strict' })` now takes effect.** The
+  SDK sent `schema_mode`, which the server never read, so every graph
+  collection was schemaless. It now sends core's `graph_schema`, with the
+  node and edge types declared in the new `nodeTypes` / `edgeTypes` options
+  (core's `NodeType` / `EdgeType`). A strict graph checks node `_labels` and
+  edge label/endpoint types against them;
+  declare them, or drop `schemaMode: 'strict'` to keep the old schemaless
+  behaviour. Types on a schemaless graph throw `ValidationError`.
+- **`textSearch` returns `TextSearchResult[]`, whose `score` is
+  `number | null`.** On WASM it is always `null` (an unranked substring
+  match); REST still returns the BM25 score. Handle `null` before sorting or
+  thresholding on it. On WASM, 7.1.0's `textSearch` threw on any match, and
+  every record now arrives as a plain object (see [§7](#7-velesdb-wasm)).
+- **Node.js 22 or later** (`engines.node`). CI builds and tests the SDK on 22;
+  18 and 20 are end-of-life.

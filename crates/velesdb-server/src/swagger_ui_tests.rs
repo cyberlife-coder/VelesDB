@@ -4,7 +4,7 @@
 //! utoipa/utoipa-swagger-ui version bump (#2429) changed the asset-embedding
 //! mechanism the bundle uses, and nothing else covered the route itself.
 
-use super::{build_router, init_app_state, AuthState, CorsConfig};
+use super::{build_router, init_app_state, AuthState, ServerConfig};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
@@ -16,7 +16,7 @@ fn test_router() -> axum::Router {
         velesdb_core::config::VelesConfig::default(),
     )
     .expect("test: init app state");
-    build_router(state, AuthState::new(Vec::new()), 0, &CorsConfig::default())
+    build_router(state, AuthState::new(Vec::new()), &ServerConfig::default())
         .expect("test: build router")
 }
 

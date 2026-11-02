@@ -44,13 +44,13 @@ describe('scroll', () => {
     await scroll(transport, 'docs', {
       cursor: 'abc',
       batchSize: 50,
-      filter: { category: 'tech' },
+      filter: { condition: { type: 'eq', field: 'category', value: 'tech' } },
     });
 
     expect(transport.requestJson).toHaveBeenCalledWith(
       'POST',
       '/collections/docs/points/scroll',
-      { cursor: 'abc', batch_size: 50, filter: { category: 'tech' } }
+      { cursor: 'abc', batch_size: 50, filter: { condition: { type: 'eq', field: 'category', value: 'tech' } } }
     );
   });
 
@@ -97,12 +97,12 @@ describe('scroll', () => {
     const transport = buildTransport();
     mockSuccess(transport, { points: [], next_cursor: null });
 
-    await scroll(transport, 'docs', { filter: { active: true } });
+    await scroll(transport, 'docs', { filter: { condition: { type: 'eq', field: 'active', value: true } } });
 
     expect(transport.requestJson).toHaveBeenCalledWith(
       'POST',
       '/collections/docs/points/scroll',
-      { filter: { active: true } }
+      { filter: { condition: { type: 'eq', field: 'active', value: true } } }
     );
   });
 

@@ -36,7 +36,7 @@ the cases where it cannot.
 | Requirement | Minimum version | Note |
 |---|---|---|
 | Browser | Any with WebAssembly + ES modules + `BigInt` | IndexedDB is additionally required for `save()` / `load()`. |
-| Node.js | 20+ | Only to install the package and serve files. Verified on Node 26.3.0. |
+| Node.js | 18+ | Only to install the package and serve files, or to run it under Node. The binary uses WebAssembly SIMD, bulk memory, non-trapping float-to-int (`wasm-opt` flags in `Cargo.toml`) and reference types (on by default for `wasm32-unknown-unknown` since Rust 1.82), all enabled by default from Node 18. Verified on Node 26.3.0; 18 and 20 are end-of-life and untested. The TypeScript SDK that wraps this package requires Node 22+. |
 | Rust | 1.90 | Only to build from source (`rust-toolchain.toml`). |
 | wasm-pack | 0.12+ | Only to build from source. |
 
@@ -146,8 +146,10 @@ Signatures and the fusion parameters are in
 One rule to internalize before writing any code: **ids go in as `BigInt`
 (`1n`) and come back from `search()` as plain numbers**. The input side is a
 `wasm-bindgen` `u64` parameter; the output side goes through
-`serde-wasm-bindgen`, which emits `u64` as a JS number by default. Keep ids
-below `Number.MAX_SAFE_INTEGER`.
+`serde-wasm-bindgen`, whose JSON-compatible serializer emits `u64` as a JS
+number. Keep ids below `Number.MAX_SAFE_INTEGER`. Records come back as plain
+objects (`hit.id`, `hit.payload.title`), with `null` for an absent value;
+before 8.0.0, records carrying a payload were ES2015 `Map`s (#2332).
 
 ## Known limits
 
@@ -194,7 +196,7 @@ The full list of rejected VelesQL shapes, with their exact messages, is in the
 | Firefox | Supported | |
 | Safari / iOS WebKit | Supported | Needs a version with WebAssembly SIMD; older WebKit may reject the binary. |
 | Electron / Tauri | Supported | Same engine as the browser target. |
-| Node.js 20+ | Supported with one adjustment | The `--target web` build resolves the `.wasm` via `fetch`, which has no `file://` support. Pass the bytes yourself — see [Loading the module](../../docs/guides/WASM_API.md#loading-the-module) — or build with `--target nodejs`. Verified on Node 26.3.0. |
+| Node.js 18+ | Supported with one adjustment | The `--target web` build resolves the `.wasm` via `fetch`, which has no `file://` support. Pass the bytes yourself — see [Loading the module](../../docs/guides/WASM_API.md#loading-the-module) — or build with `--target nodejs`. Verified on Node 26.3.0. |
 | Vite / webpack / Rollup | Supported | The React example uses `vite-plugin-wasm` + top-level-await; see [`examples/react-wasm-search/vite.config.ts`](../../examples/react-wasm-search/vite.config.ts). |
 | Web Worker | Supported | Import and `init()` inside the worker; a `VectorStore` cannot be transferred across the worker boundary. |
 | Deno / Bun | Untested | No CI coverage. |

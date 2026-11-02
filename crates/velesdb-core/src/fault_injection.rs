@@ -33,6 +33,11 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Skews every query's clock so a time budget runs out deterministically;
+/// see [`QueryClockSkewGuard`].
+#[cfg(feature = "persistence")]
+pub use crate::guardrails::QueryClockSkewGuard;
+
 /// Sentinel value meaning "no fault injection scheduled".
 /// `save_config` never reaches this call count in any realistic
 /// scenario so the comparison is effectively disabled at rest.

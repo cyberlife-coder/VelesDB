@@ -310,7 +310,41 @@ impl CircuitBreaker {
         }
     }
 
-    /// Records a failed request.
+    /// Records a request that failed with `error`, counting it only when the
+    /// error says the engine is unhealthy.
+    ///
+    /// The breaker exists to shed load from a collection that keeps failing,
+    /// so a caller's mistake ([`Error::is_caller_error`]: an unsupported
+    /// query, a missing parameter, a wrong dimension, the client's own
+    /// timeout budget, a cardinality ceiling, …) is not counted — otherwise
+    /// a client repeating one typo would open the breaker and refuse every
+    /// caller for the recovery window. Nor is the breaker's own refusal
+    /// ([`GuardRailKind::CircuitOpen`]): it is the breaker's answer, not a
+    /// failure. Neither is a success, so the failure count and the state are
+    /// left where they are. Every execution path that records a failure goes
+    /// through here.
+    ///
+    /// [`Error`]: crate::error::Error
+    /// [`Error::is_caller_error`]: crate::error::Error::is_caller_error
+    /// [`GuardRailKind::CircuitOpen`]: crate::error::GuardRailKind::CircuitOpen
+    pub fn record_error(&self, error: &crate::error::Error) {
+        let refused_by_this_breaker = matches!(
+            error,
+            crate::error::Error::GuardRail {
+                kind: crate::error::GuardRailKind::CircuitOpen,
+                ..
+            }
+        );
+        if !error.is_caller_error() && !refused_by_this_breaker {
+            self.record_failure();
+        }
+    }
+
+    /// Records a failed request unconditionally.
+    ///
+    /// Prefer [`record_error`](Self::record_error) wherever the failure is an
+    /// [`Error`](crate::error::Error): this method cannot tell a caller's
+    /// mistake from an unhealthy engine.
     pub fn record_failure(&self) {
         // Acquire the state write-lock BEFORE incrementing the counter to close the TOCTOU
         // window. Without this, a thread could compute count >= threshold, be preempted, and
@@ -330,5 +364,11 @@ impl CircuitBreaker {
     #[must_use]
     pub fn state(&self) -> CircuitState {
         self.core.read().state
+    }
+
+    /// Consecutive failures counted so far (test observation only).
+    #[cfg(test)]
+    pub(super) fn failure_count(&self) -> u64 {
+        self.failure_count.load(Ordering::Relaxed)
     }
 }

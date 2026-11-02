@@ -379,7 +379,6 @@ impl SnapshotBuilder {
 
     /// Creates an empty `CsrSnapshot` (no nodes, no edges).
     #[must_use]
-    #[allow(dead_code)] // Used by tests and ConcurrentEdgeStore (Task 5)
     pub fn empty() -> CsrSnapshot {
         CsrSnapshot {
             offsets: vec![0],

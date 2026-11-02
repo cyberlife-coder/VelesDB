@@ -6,6 +6,7 @@
 
 use super::native_inner::NativeHnswInner;
 use super::sharded_mappings::ShardedMappings;
+use crate::scored_result::ScoredResult;
 
 /// Where an upsert placed an id: the slot now holding its vector, and the
 /// slot it held before, if it was already mapped.
@@ -41,3 +42,87 @@ pub(crate) struct UpsertResult {
 pub(crate) fn soft_delete(mappings: &ShardedMappings, id: u64, _graph: &NativeHnswInner) -> bool {
     mappings.remove(id).is_some()
 }
+
+/// The widest `ef` a walk widened past nodes no id maps is given: the cap
+/// the bitmap search's retry uses too.
+const WIDEST_EF: usize = 10_000;
+
+/// A graph search's first `fetch` results whose node an id still maps to.
+///
+/// A delete or an upsert leaves the point's old node in the graph, mapped
+/// to no id, until `vacuum`. A walk ranks those nodes with the rest, so
+/// mapping its nodes and dropping the unmapped ones can leave too few — none
+/// at all for `k = 1` at a deleted or moved point's old vector.
+///
+/// `walk(k, ef)` is the graph search, nearest first; `live(nodes, fetch)`
+/// maps up to `fetch` of `nodes`, skipping unmapped ones. `fetch` is how many
+/// results the caller asks the walk for (a reranked search asks for more
+/// candidates than it keeps); `needed` is how many it cannot do without.
+/// The walk runs as asked first: its `k` steers the walk itself (multi-entry
+/// probing, a quantized backend's oversampling), so it is never widened up
+/// front. Only when that leaves fewer than `needed` results *and* the walk
+/// returned a node no id maps does it run again, at most twice:
+///
+/// 1. asked for its whole `ef` pool (when that is more than `fetch`), from
+///    which the first `fetch` mapped nodes are kept;
+/// 2. if every node of that pool was used and still too few are mapped — a
+///    neighbourhood dense with deleted points — once more at twice the `ef`
+///    (at most [`WIDEST_EF`]). Past that, `vacuum` is the remedy.
+///
+/// A search near no deleted or moved point runs one walk, as before.
+pub(crate) fn search_past_unmapped(
+    fetch: usize,
+    needed: usize,
+    ef: usize,
+    walk: impl Fn(usize, usize) -> Vec<(usize, f32)>,
+    live: impl Fn(&[(usize, f32)], usize) -> Vec<ScoredResult>,
+) -> Vec<ScoredResult> {
+    let walked = walk(fetch, ef);
+    search_past_unmapped_from(&walked, fetch, needed, ef, walk, live)
+}
+
+/// [`search_past_unmapped`] from a first walk (at `fetch` and `ef`) the
+/// caller has already run: it is mapped, not run again.
+pub(crate) fn search_past_unmapped_from(
+    walked: &[(usize, f32)],
+    fetch: usize,
+    needed: usize,
+    ef: usize,
+    walk: impl Fn(usize, usize) -> Vec<(usize, f32)>,
+    live: impl Fn(&[(usize, f32)], usize) -> Vec<ScoredResult>,
+) -> Vec<ScoredResult> {
+    let needed = needed.min(fetch);
+    let results = live(walked, fetch);
+    if !cut_short(walked, &results, needed) {
+        return results;
+    }
+    let (results, pool_used) = if ef > fetch {
+        let walked = walk(ef, ef);
+        let results = live(&walked, fetch);
+        if !cut_short(&walked, &results, needed) {
+            return results;
+        }
+        (results, walked.len() >= ef)
+    } else {
+        // `ef <= fetch`: the first walk was `walk(fetch, ef)`, and `ef`
+        // bounds what a walk can return — `ef` nodes mean its pool was
+        // spent, `fetch` could never be reached.
+        (results, walked.len() >= ef)
+    };
+    let wide = ef.saturating_mul(2).min(WIDEST_EF);
+    if !pool_used || wide <= ef {
+        return results;
+    }
+    let walked = walk(fetch.max(wide), wide);
+    live(&walked, fetch)
+}
+
+/// Whether mapping `walked` left fewer than `needed` results because some of
+/// its nodes map to no id.
+fn cut_short(walked: &[(usize, f32)], results: &[ScoredResult], needed: usize) -> bool {
+    results.len() < needed && walked.len() > results.len()
+}
+
+#[cfg(test)]
+#[path = "upsert_tests.rs"]
+mod tests;

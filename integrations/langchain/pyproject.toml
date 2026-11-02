@@ -30,7 +30,7 @@ requires-python = ">=3.10"
 dependencies = [
     "langchain-core>=0.1.0,<2.0.0",
     "velesdb>=5.1.0",
-    "velesdb-common>=4.0.0",
+    "velesdb-common>=8.0.0",
 ]
 
 [project.optional-dependencies]

@@ -142,7 +142,6 @@ impl WasmGraphStore {
     }
 
     /// Deletes all edges that satisfy `predicate`. Returns the count.
-    #[allow(dead_code)] // Retained for future DELETE EDGE WHERE syntax.
     pub(crate) fn delete_edges_where<F>(&mut self, predicate: F) -> u64
     where
         F: Fn(&WasmEdge) -> bool,

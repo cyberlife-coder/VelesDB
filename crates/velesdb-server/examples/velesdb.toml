@@ -25,6 +25,14 @@ host = "0.0.0.0"
 # Listening port. CLI override: --port / -p. Env: VELESDB_PORT.
 port = 8080
 
+# Host names (the HTTP Host header) the server answers to besides localhost,
+# 127.0.0.0/8, [::1] and `host` when it is not 0.0.0.0/::. Any other Host gets
+# 421 (DNS-rebinding protection). Bound to 0.0.0.0, list every name or address
+# clients use; behind a reverse proxy, forward the original Host and list the
+# public name. X-Forwarded-Host is never read. ["*"] disables the check.
+# CLI override: --allowed-hosts. Env: VELESDB_ALLOWED_HOSTS (comma-separated).
+allowed_hosts = ["velesdb.example.com"]
+
 # Data directory (WAL + mmap). Created on first start, reusable as-is across
 # restarts. CLI override: --data-dir / -d. Env: VELESDB_DATA_DIR.
 data_dir = "/var/lib/velesdb"
@@ -58,8 +66,9 @@ cert = "/etc/velesdb/cert.pem"
 key  = "/etc/velesdb/key.pem"
 
 [cors]
-# CORS is permissive by default (allowed_origins = ["*"]) and the server warns
-# about it at startup. Restrict it before exposing a browser-facing deployment.
+# No CORS header is sent unless origins are listed (same-origin only, the
+# default since 8.0.0). List each browser front end's exact origin;
+# ["*"] allows every origin and the server warns about it at startup.
 allowed_origins = ["https://app.example.com"]
 allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 allowed_headers = ["authorization", "content-type"]

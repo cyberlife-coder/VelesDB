@@ -1144,7 +1144,7 @@ const procId = await memory.learnProcedure('procedures', {
 await memory.deleteMemory('procedures', procId);
 ```
 
-Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
+Each recall returns `SearchResult[]` = `{ id, score, payload? }`:
 
 - **`score`** is cosine similarity in `[0, 1]` for a `cosine` collection;
   higher is more similar.
@@ -1159,6 +1159,15 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
   and `memory.recallOlderThan(collection, before)` return
   `EpisodicRecord[]` (`{ id, timestamp, payload }`) most-recent-first,
   mirroring the embedded `episodic.recent()` / `episodic.older_than()`.
+- **Each memory type is selected on the server** with a core filter on the
+  reserved `_memory_type` payload key (`{ condition: { type: 'eq', field:
+  '_memory_type', value: 'semantic' } }`, and so on); `recallRecent` and
+  `recallOlderThan` AND that with a `gt` / `lt` bound on `timestamp` — both
+  exclusive, as core's `episodic.recent()` / `episodic.older_than()` are. The
+  exact JSON is pinned by `conformance/filter_wire_cases.json`, which
+  velesdb-core parses as its own `Filter` in
+  `tests/filter_wire_conformance.rs`. (Before 8.0.0 the SDK sent a flat
+  `{ _memory_type: ... }` map, which the server refused with a `400`.)
 - **Durable per-point TTL is available over REST** via
   `db.setTtlDurable(collection, pointId, ttlSeconds)` (TTL in **seconds**,
   persisted as `_veles_expires_at`). The subsystem-namespaced TTL helpers
@@ -1177,15 +1186,16 @@ Each recall returns `SearchResult[]` = `{ id, score, payload?, vector? }`:
 
 Wiring an MCP server gives an agent the *tools*; it does not make the agent
 call them. [`integrations/agent-hooks/`](../../integrations/agent-hooks/README.md)
-ships five real Claude Code hooks:
+ships six real Claude Code hooks:
 
 | Hook | What it does | Mechanism |
 |---|---|---|
 | `SessionStart` | tells the model to call `load_working_context` as its first action | `hookSpecificOutput.additionalContext` — advisory |
-| `Stop` | in an opted-in repository, blocks on the first Stop and after each later covered edit batch with the four-step checklist and `save_working_context`; otherwise keeps the legacy first-Stop save reminder | `{"decision":"block","reason":…}` plus repository/session first-Stop markers, independent session-wide records for every edited repository, and an atomic pending/delivered manifest that preserves the complete batch across an interrupted hook |
+| `Stop` | in an opted-in repository, blocks on the first Stop and after each later covered edit batch with the four-step checklist (naming the memories recalled and the outcomes observed) and `save_working_context`; otherwise keeps the legacy first-Stop save reminder | `{"decision":"block","reason":…}` plus repository/session first-Stop markers, independent session-wide records for every edited repository, and an atomic pending/delivered manifest that preserves the complete batch across an interrupted hook |
 | `PreCompact` | blocks the **first** compaction per session with a reason: `compile_transcript` + `save_working_context` first | `decision` + `reason` — advisory |
 | `PreToolUse` | refuses `Edit`/`Write` in an opted-in repository until a successful recall has been observed | exit 2 with an actionable reason — binding for the covered edit path |
 | `PostToolUse` | compiles an oversized tool result and **replaces** it | `hookSpecificOutput.updatedToolOutput` |
+| `PostToolUseFailure` | records a failed test, build or lint command; with the recall ids and check successes `PostToolUse` records, the `Stop` checklist names the exact recalled memories and the verified outcomes `feedback` must cite | private per-session records — evidence only, it never sends `feedback` itself |
 
 ### `PostToolUse` — the only hook that replaces content
 

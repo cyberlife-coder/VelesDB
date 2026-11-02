@@ -154,7 +154,7 @@ impl SparseIndex {
         let results = self
             .search_scored(query_indices, query_values, k)
             .map_err(|e| JsValue::from_str(&e))?;
-        serde_wasm_bindgen::to_value(&results)
+        crate::js_value::to_js_value(&results)
             .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
     }
 
@@ -238,7 +238,7 @@ pub fn hybrid_search_fuse(
         .collect();
     results.truncate(k);
 
-    serde_wasm_bindgen::to_value(&results)
+    crate::js_value::to_js_value(&results)
         .map_err(|e| JsValue::from_str(&format!("Serialization error: {e}")))
 }
 

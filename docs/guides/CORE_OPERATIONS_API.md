@@ -29,7 +29,7 @@ a single `Option` check per hook.
 |------|---------------|------------|
 | `on_ddl_request(operation, collection)` | before a VelesQL DDL statement: `CREATE`, `DROP`, `CREATE_INDEX`, `DROP_INDEX`, `ANALYZE`, `TRUNCATE`, `ALTER` | yes, by returning `Err` |
 | `on_dml_mutation_request(operation, collection)` | before a VelesQL `INSERT_EDGE`, `INSERT_NODE`, `DELETE` or `DELETE_EDGE` | yes, by returning `Err` |
-| `on_query_request(&QueryAccessContext)` | before every VelesQL `SELECT` / `MATCH` read, and every `gated_search` / `authorize_read` call | yes, through `AccessDecision` |
+| `on_query_request(&QueryAccessContext)` | before a VelesQL `SELECT`, aggregate, `MATCH` or `SELECT EDGES` reads anything — once for each collection it reads — and on every `gated_search` / `authorize_read` call | yes, through `AccessDecision` |
 | `on_collection_created`, `on_collection_deleted` | after a collection is created or deleted, through VelesQL or the Rust API | no (telemetry) |
 | `on_upsert(collection, count)` | after a VelesQL `INSERT` / `UPSERT` | no (telemetry) |
 | `on_query(collection, duration_us)` | after a VelesQL read through `Database::execute_query` | no (telemetry) |
@@ -49,6 +49,17 @@ and deletion fire for it; a `gated_search` (below) consults
   `Condition`, AND-composed into the query's own filter, so a scope can only
   narrow a result set. `scope.tenant` is forwarded for audit and routing; core
   does not turn it into a filter.
+
+A VelesQL statement can read several collections, and each is decided on its
+own: the collection it targets (its `FROM`, or the `_collection` parameter a
+`MATCH` or an aggregate can be sent with), every `UNION` / `INTERSECT` /
+`EXCEPT` operand, every JOIN's secondary collection, every `@collection` a
+`MATCH` node is enriched from, and every scalar subquery's collection. A scope
+on the target or on an operand joins that select's `WHERE`, so `COUNT`,
+`SUM`, `GROUP BY` and `HAVING` see only the scoped rows. A traversal, a JOIN's
+secondary side, `@collection` enrichment and `SELECT EDGES` have no row filter
+to compose a scope into: a scope with a filter on one of them refuses the
+statement with `Error::Config` (`VELES-009`) rather than run it unscoped.
 
 Its `Err` channel is for a failure of the observer itself; a refusal is a
 `Deny`. `QueryAccessContext` carries the `collection`, the `operation`
@@ -190,7 +201,14 @@ assert_eq!(docs.guard_rails().limits().max_depth, 5);
 
 `QueryLimits::default()` is depth 10, 100 000 intermediate results, 100 MiB,
 30 s, a rate limit of 100 000 queries per second per client, and a breaker
-opening after 5 consecutive failures for 30 s. `Database::update_guardrails`
+opening after 5 consecutive failures for 30 s. Only engine failures count:
+query execution records a failed query with `CircuitBreaker::record_error`,
+which skips every error `Error::is_caller_error()` classifies as the caller's
+(a bad query, a missing parameter, a wrong dimension, the query's own
+`WITH (timeout_ms)` budget, a depth, cardinality or capacity ceiling) and the
+breaker's own refusal, so a client repeating its own mistake never opens the
+breaker for everyone. `Error::GuardRail` carries a `GuardRailKind` saying
+which limit was crossed. `Database::update_guardrails`
 replaces all seven fields, and every one of them reaches every collection:
 
 - `max_depth`, `max_cardinality`, `memory_limit_bytes` and `timeout_ms` apply
@@ -422,9 +440,9 @@ threshold decides, as
 records.
 
 `velesql::QueryPlanner` makes the analogous choice for hybrid `MATCH` +
-`NEAR` queries — `GraphFirst` below 1% estimated selectivity, `VectorFirst`
-above 50%, `Parallel` between (`QueryPlanner::with_thresholds` moves both
-bounds). The engine runs its own planner instance; a planner you construct
+`NEAR` queries — `VectorFirst` above 50% estimated selectivity, `GraphFirst`
+at or below it (`QueryPlanner::with_vector_first_threshold` moves the
+bound). The engine runs its own planner instance; a planner you construct
 answers the question but does not steer a query, which `EXPLAIN` shows.
 
 ## Column store
@@ -575,4 +593,4 @@ None of these truncates to `k`: they score exactly the slices they are given.
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0

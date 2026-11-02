@@ -14,9 +14,8 @@ use wasm_bindgen::JsValue;
 
 // --- Output DTOs ---------------------------------------------------------
 //
-// Plain `Serialize` structs converted via `serde_wasm_bindgen::to_value`
-// (this crate's established pattern for JS-facing output, e.g. `agent.rs`'s
-// `SemanticResult`) — not `#[wasm_bindgen(object)]`, since these are one-shot
+// Plain `Serialize` structs converted via [`to_js`], over the crate's one
+// JS serializer `crate::js_value::to_js_value` — not `#[wasm_bindgen(object)]`, since these are one-shot
 // output values, not stateful classes. `id`/`from`/`to` are strings: a plain
 // `u64` field would serialize as a JS `number` and lose precision above 2^53.
 
@@ -243,22 +242,15 @@ pub(super) struct CompileTranscriptOut {
 }
 
 pub(super) fn to_js(value: &impl Serialize) -> Result<JsValue, JsValue> {
-    // `serialize_maps_as_objects`: `RecollectionOut.metadata` is a
-    // `serde_json::Value::Object`, which the DEFAULT serializer turns into an
-    // ES2015 `Map` — property access and `JSON.stringify` on it silently
-    // yield nothing, breaking the documented `Record<string, unknown>` shape
-    // and Node-binding parity.
-    //
-    // `serialize_missing_as_null`: a `Value::Null` INSIDE metadata (a caller
-    // stored `{flag: null}`) must marshal as JS `null`, exactly like the
-    // Node binding — the default (`undefined`) makes `JSON.stringify` drop
-    // the key on WASM only. Absent metadata still reads as `undefined`:
-    // that field is `skip_serializing_if`-omitted, never serialized as a
-    // `None` this setting could turn into `null`.
-    let serializer = serde_wasm_bindgen::Serializer::new()
-        .serialize_maps_as_objects(true)
-        .serialize_missing_as_null(true);
-    value
-        .serialize(&serializer)
+    // `crate::js_value::to_js_value` emits plain objects and `null`:
+    // `RecollectionOut.metadata` is a `serde_json::Value::Object`, which the
+    // DEFAULT serializer turns into an ES2015 `Map` — property access and
+    // `JSON.stringify` on it silently yield nothing, breaking the documented
+    // `Record<string, unknown>` shape and Node-binding parity. A
+    // `Value::Null` INSIDE metadata (a caller stored `{flag: null}`) marshals
+    // as JS `null`, exactly like the Node binding. Absent metadata still
+    // reads as `undefined`: that field is `skip_serializing_if`-omitted,
+    // never serialized as a `None` this setting could turn into `null`.
+    crate::js_value::to_js_value(value)
         .map_err(|e| structured_js_error(CODE_INTERNAL, &e.to_string()))
 }

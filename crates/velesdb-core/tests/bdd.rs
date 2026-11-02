@@ -39,6 +39,8 @@ mod ddl_lifecycle;
 mod default_limit;
 #[path = "bdd/dml_enhanced.rs"]
 mod dml_enhanced;
+#[path = "bdd/exact_numbers.rs"]
+mod exact_numbers;
 #[path = "bdd/explain_analyze.rs"]
 mod explain_analyze;
 #[path = "bdd/explain_configurable_threshold.rs"]
@@ -65,6 +67,8 @@ mod helpers;
 mod hybrid_compositions;
 #[path = "bdd/hybrid_vector_first_exact.rs"]
 mod hybrid_vector_first_exact;
+#[path = "bdd/id_semantics.rs"]
+mod id_semantics;
 #[path = "bdd/index_management.rs"]
 mod index_management;
 #[path = "bdd/introspection.rs"]
@@ -73,6 +77,8 @@ mod introspection;
 mod join_exact_conformance;
 #[path = "bdd/match_graph_first.rs"]
 mod match_graph_first;
+#[path = "bdd/match_id_semantics.rs"]
+mod match_id_semantics;
 #[path = "bdd/match_order_by_core.rs"]
 mod match_order_by_core;
 #[path = "bdd/match_order_by_exact.rs"]
@@ -91,6 +97,8 @@ mod near_exact_ranking;
 mod near_fused_parse_only;
 #[path = "bdd/not_filters_exact.rs"]
 mod not_filters_exact;
+#[path = "bdd/numeric_index_exactness.rs"]
+mod numeric_index_exactness;
 #[path = "bdd/operators.rs"]
 mod operators;
 #[path = "bdd/recall_contract.rs"]

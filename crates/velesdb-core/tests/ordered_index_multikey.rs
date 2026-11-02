@@ -152,8 +152,8 @@ fn k_greater_than_n_matches_exhaustive() {
 #[test]
 fn uncovered_lead_falls_back_and_matches_exhaustive() {
     // id 9 lacks the lead field `cat` → coverage breaks → the multi-key route
-    // declines and the exhaustive sort runs (placing the missing-cat row first
-    // for ASC). Both paths must agree.
+    // declines and the exhaustive sort runs (placing the missing-cat row last
+    // for ASC, NULLS LAST). Both paths must agree.
     let mut points = cat_year_rows();
     points.push(Point::new(9, vec![1.0, 0.0], Some(json!({ "year": 2099 }))));
     let (exhaustive, indexed) = run_both(
@@ -162,8 +162,8 @@ fn uncovered_lead_falls_back_and_matches_exhaustive() {
         "SELECT * FROM docs ORDER BY cat ASC, year DESC LIMIT 6",
     );
     assert_eq!(exhaustive, indexed);
-    // Missing cat sorts first (None < any): 9, then a-group [3,5,1], then b [2,4].
-    assert_eq!(indexed, vec![9, 3, 5, 1, 2, 4]);
+    // a-group [3,5,1], then b [2,4], then the missing cat last (NULLS LAST): 9.
+    assert_eq!(indexed, vec![3, 5, 1, 2, 4, 9]);
 }
 
 #[test]

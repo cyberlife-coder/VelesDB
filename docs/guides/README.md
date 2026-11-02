@@ -26,7 +26,7 @@ each guide links back.
 | [Core: collections and metrics](./CORE_COLLECTIONS_AND_METRICS.md) | The collection model: distance metrics, payloads, storage modes and their memory trade-offs |
 | [Core: VelesQL reference](./CORE_VELESQL_REFERENCE.md) | The SQL-like language across the vector, graph and columnar engines |
 | [Core: sparse vectors and fusion](./CORE_SPARSE_AND_FUSION.md) | Named sparse vectors (SPLADE, BM25, tag sets) beside dense embeddings, and result fusion |
-| [Core: streaming inserts](./CORE_STREAMING_INSERTS.md) | Bounded-channel ingestion, backpressure and the delta buffer for continuously arriving data |
+| [Core: streaming inserts](./CORE_STREAMING_INSERTS.md) | Bounded-channel ingestion and backpressure for continuously arriving data |
 | [Core: query plan cache](./CORE_QUERY_PLAN_CACHE.md) | The two-tier LRU plan cache that lets repeated queries skip parsing and planning |
 | [Core: operations API](./CORE_OPERATIONS_API.md) | Observer port and governed reads, guard-rails, validation and stable ids, index introspection, the column store, metrics and their Prometheus export |
 | [Core: Agent Memory SDK (Rust)](./AGENT_MEMORY.md#rust-api) | The `velesdb_core::agent` memory subsystems for chatbots, RAG and autonomous agents — the Rust API section of the Agent Memory guide |

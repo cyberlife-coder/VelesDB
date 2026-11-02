@@ -59,11 +59,15 @@ impl Condition {
     }
 
     /// Creates an IN condition (field value must be in the list).
+    ///
+    /// `values` is normalized at construction
+    /// ([`InValues`](crate::filter::InValues)): sorted by `json_value_cmp`
+    /// and de-duplicated, so the order the caller passes does not matter.
     #[must_use]
     pub fn is_in(field: impl Into<String>, values: Vec<Value>) -> Self {
         Self::In {
             field: field.into(),
-            values,
+            values: values.into(),
         }
     }
 

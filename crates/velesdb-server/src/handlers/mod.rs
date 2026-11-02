@@ -13,6 +13,7 @@
 
 pub mod admin;
 pub mod collections;
+mod content_type;
 pub mod graph;
 pub mod health;
 pub mod helpers;

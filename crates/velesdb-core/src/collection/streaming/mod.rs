@@ -11,20 +11,15 @@ pub mod async_index_builder;
 pub mod delta;
 
 #[cfg(feature = "persistence")]
-mod delta_merge;
-
-#[cfg(feature = "persistence")]
 pub mod deferred;
 
 #[cfg(feature = "persistence")]
 mod ingester;
 
-pub use async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig};
+pub use async_index_builder::{AsyncIndexBuilder, AsyncIndexBuilderConfig, FlushOutcome};
 
 #[cfg(feature = "persistence")]
 pub use deferred::{DeferredIndexer, DeferredIndexerConfig};
-#[cfg(feature = "persistence")]
-pub use delta_merge::{merge_with_delta, merge_with_delta_scored};
 #[cfg(feature = "persistence")]
 pub use ingester::{BackpressureError, StreamIngester, StreamingConfig};
 
@@ -62,7 +57,5 @@ impl PendingReopen {
 
 #[cfg(test)]
 mod async_index_builder_tests;
-#[cfg(all(test, feature = "persistence"))]
-mod delta_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod ingester_tests;

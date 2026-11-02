@@ -4,9 +4,7 @@
 //! optional per-request timeout support. Extracted from `pipeline.rs`
 //! (Extract Module — Fowler) to keep file NLOC under the 500-line limit.
 
-use axum::{http::StatusCode, response::IntoResponse, Json};
-
-use crate::types::ErrorResponse;
+use crate::handlers::helpers::worker_failure;
 
 /// Marker error returned when a per-request timeout elapses before the
 /// blocking worker finishes.
@@ -20,8 +18,10 @@ pub(crate) type SearchOutcome =
 pub(crate) type TimedSearchOutcome = Result<SearchOutcome, TimeoutElapsed>;
 
 /// Runs the sync search pipeline on a `spawn_blocking` worker with an optional
-/// timeout. On expiry returns `Err(TimeoutElapsed)`; the blocking task keeps
-/// running (Tokio cannot cancel sync code) and its result is discarded.
+/// timeout, already resolved against the server's limit
+/// ([`request_timeout_ms`](super::outcome::request_timeout_ms)). On expiry
+/// returns `Err(TimeoutElapsed)`; the blocking task keeps running (Tokio
+/// cannot cancel sync code) and its result is discarded.
 #[allow(clippy::result_large_err)]
 pub(crate) async fn run_search_with_optional_timeout<F>(
     timeout_ms: Option<u64>,
@@ -30,9 +30,6 @@ pub(crate) async fn run_search_with_optional_timeout<F>(
 where
     F: FnOnce() -> SearchOutcome + Send + 'static,
 {
-    if matches!(timeout_ms, Some(0)) {
-        return Err(TimeoutElapsed);
-    }
     let handle = tokio::task::spawn_blocking(work);
     match timeout_ms {
         Some(ms) => await_with_timeout(handle, ms).await,
@@ -70,19 +67,19 @@ where
 }
 
 /// Converts a `JoinHandle` result into the same shape expected by
-/// callers of the synchronous search pipeline. A panic or cancellation
-/// of the blocking task is reported as a 500 Internal Server Error.
+/// callers of the synchronous search pipeline. A panic or cancellation of
+/// the blocking task is the engine's fault: it comes back as the core
+/// outcome [`worker_failure`] (`VELES-013`, `500`), which the handlers record
+/// with the circuit breaker like any other engine failure — never on the
+/// `Err` side, which carries only refusals made before any search ran.
 #[allow(clippy::result_large_err)]
 fn unwrap_join(join_result: Result<SearchOutcome, tokio::task::JoinError>) -> SearchOutcome {
     match join_result {
         Ok(inner) => inner,
-        Err(join_err) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Search worker task failed: {join_err}"),
-                code: Some("VELES-INTERNAL-WORKER-FAILURE".to_string()),
-            }),
-        )
-            .into_response()),
+        Err(join_err) => Ok(Err(worker_failure("search", &join_err))),
     }
 }
+
+#[cfg(test)]
+#[path = "workers_tests.rs"]
+mod workers_tests;

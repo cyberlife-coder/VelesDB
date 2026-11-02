@@ -44,10 +44,13 @@ impl Database {
             + self.metadata_colls.read().len();
         let cap = self.config.limits.max_collections;
         if total_collections >= cap {
-            return Err(Error::GuardRail(format!(
-                "max_collections limit reached ({total_collections} / {cap}); \
+            return Err(Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                message: format!(
+                    "max_collections limit reached ({total_collections} / {cap}); \
                  raise `limits.max_collections` in VelesConfig to create more"
-            )));
+                ),
+            });
         }
 
         Ok(())
@@ -116,10 +119,13 @@ impl Database {
         }
         let cap = self.config.limits.max_dimensions;
         if dimension > cap {
-            return Err(Error::GuardRail(format!(
-                "vector dimension {dimension} exceeds configured max_dimensions cap of {cap}; \
+            return Err(Error::GuardRail {
+                kind: crate::error::GuardRailKind::Capacity,
+                message: format!(
+                    "vector dimension {dimension} exceeds configured max_dimensions cap of {cap}; \
                  raise `limits.max_dimensions` in VelesConfig to allow larger vectors"
-            )));
+                ),
+            });
         }
         Ok(())
     }
@@ -530,13 +536,24 @@ impl Database {
 
     /// Returns diagnostics for a named collection.
     ///
+    /// Diagnostics carry the point count and index health — a collection read
+    /// the gate decides in-core so every surface inherits it: a denial
+    /// refuses it and a scope, with no rows to narrow, refuses it too
+    /// (`VELES-009`).
+    ///
     /// # Errors
     ///
-    /// Returns `Error::CollectionNotFound` if the collection does not exist.
+    /// Returns `Error::CollectionNotFound` if the collection does not exist,
+    /// or the read gate's refusal.
     pub fn collection_diagnostics(
         &self,
         name: &str,
     ) -> Result<crate::collection::CollectionDiagnostics> {
+        self.require_unscoped(
+            name,
+            crate::observer::QueryOperationKind::Select,
+            "collection diagnostics",
+        )?;
         if let Some(c) = self.get_vector_collection(name) {
             return Ok(c.diagnostics());
         }

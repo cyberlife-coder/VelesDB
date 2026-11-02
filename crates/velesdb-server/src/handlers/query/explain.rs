@@ -10,8 +10,9 @@ use crate::types::{
 };
 use crate::AppState;
 
-use super::velesql_helpers::{parse_and_validate, velesql_collection_not_found, velesql_error};
-use axum::http::StatusCode;
+use super::velesql_helpers::{
+    parse_and_validate, velesql_collection_not_found, velesql_execution_error,
+};
 use velesdb_core::Error as CoreError;
 
 /// Explain a VelesQL query, optionally executing it with instrumentation.
@@ -25,6 +26,8 @@ use velesdb_core::Error as CoreError;
     request_body = ExplainRequest,
     responses(
         (status = 200, description = "Query plan", body = ExplainResponse),
+        (status = 500, description = "An engine fault during execution (storage, I/O, internal)", body = crate::types::VelesqlErrorResponse),
+        (status = 503, description = "The circuit breaker is open, the database is locked, or a guard rail the engine could not carry (the server's time limit, the memory budget) stopped the statement", body = crate::types::VelesqlErrorResponse),
         (status = 400, description = "Query syntax error", body = crate::types::QueryErrorResponse),
         (status = 422, description = "Query validation/execution error", body = crate::types::VelesqlErrorResponse),
         (status = 404, description = "Collection not found", body = crate::types::VelesqlErrorResponse)
@@ -90,6 +93,23 @@ fn explain_plan_only(
     parsed: &velesdb_core::velesql::Query,
 ) -> axum::response::Response {
     let select = &parsed.select;
+    // Plan-only EXPLAIN leaks the collection's calibrated statistics, so the
+    // read gate decides it like a metadata read: a denial refuses it, and a
+    // scope — no rows to narrow — refuses it too rather than leak the stats.
+    if !select.from.is_empty() {
+        if let Err(refusal) = crate::handlers::helpers::authorize_unscoped_read(
+            state,
+            &select.from,
+            velesdb_core::observer::QueryOperationKind::Select,
+            "plan-only EXPLAIN",
+        ) {
+            return super::velesql_helpers::velesql_execution_error(
+                &refusal,
+                "VELESQL_EXPLAIN_ERROR",
+                "The read gate refused the plan",
+            );
+        }
+    }
     let (features, estimated_cost, query_type) = explain_preamble(parsed);
 
     // Single-sourced from core: the plan steps come from the canonical
@@ -166,12 +186,10 @@ fn run_analyze_query(
         Err(CoreError::CollectionNotFound(name)) => {
             Err(Box::new(velesql_collection_not_found(&name)))
         }
-        Err(e) => Err(Box::new(velesql_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
+        Err(e) => Err(Box::new(velesql_execution_error(
+            &e,
             "VELESQL_EXPLAIN_ANALYZE_ERROR",
-            &e.to_string(),
             "Validate query semantics and parameter types against the target collection",
-            None,
         ))),
     }
 }

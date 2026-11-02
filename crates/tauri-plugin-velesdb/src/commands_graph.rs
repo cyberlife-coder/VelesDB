@@ -157,6 +157,12 @@ pub async fn get_edges<R: Runtime>(
 ) -> std::result::Result<Vec<EdgeOutput>, CommandError> {
     state
         .run_db(move |db| {
+            crate::helpers::require_unscoped_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::GraphTraversal,
+                "graph reads",
+            )?;
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let edges = if let Some(label) = &request.label {
@@ -193,6 +199,12 @@ pub async fn traverse_graph<R: Runtime>(
 ) -> std::result::Result<Vec<TraversalOutput>, CommandError> {
     state
         .run_db(move |db| {
+            crate::helpers::require_unscoped_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::GraphTraversal,
+                "graph reads",
+            )?;
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let config =
@@ -219,6 +231,12 @@ pub async fn get_node_degree<R: Runtime>(
 ) -> std::result::Result<NodeDegreeOutput, CommandError> {
     state
         .run_db(move |db| {
+            crate::helpers::require_unscoped_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::GraphTraversal,
+                "graph reads",
+            )?;
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let (in_degree, out_degree) = coll.node_degree(request.node_id);
@@ -242,6 +260,12 @@ pub async fn traverse_graph_parallel<R: Runtime>(
 ) -> std::result::Result<Vec<TraversalOutput>, CommandError> {
     state
         .run_db(move |db| {
+            crate::helpers::require_unscoped_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::GraphTraversal,
+                "graph reads",
+            )?;
             let coll = require_graph_collection(&db, &request.collection)?;
 
             let config =

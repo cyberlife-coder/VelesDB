@@ -22,6 +22,23 @@ import {
 } from '../src/backends/graph-backend';
 import type { TransportResponse } from '../src/backends/shared';
 import { CollectionNotFoundError } from '../src/errors';
+import { ValidationError } from '../src/types';
+import type { GraphCollectionConfig } from '../src/types';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const graphSchemaFixture = JSON.parse(
+  readFileSync(
+    path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../../conformance/graph_schema_wire_cases.json'
+    ),
+    'utf8'
+  )
+) as {
+  cases: Array<{ id: string; sdk_config: GraphCollectionConfig; graph_schema: unknown }>;
+};
 
 function buildTransport(
   overrides: Partial<GraphTransport> = {}
@@ -225,7 +242,6 @@ describe('traverseGraph', () => {
   const baseReply = {
     data: {
       results: [{ target_id: 20, depth: 1, path: [10, 20] }],
-      next_cursor: 'cur',
       has_more: true,
       stats: { visited: 5, depth_reached: 1 },
     },
@@ -247,13 +263,12 @@ describe('traverseGraph', () => {
         strategy: 'bfs',
         max_depth: 3,
         limit: 100,
-        cursor: undefined,
         rel_types: [],
       }
     );
   });
 
-  it('forwards explicit strategy / maxDepth / limit / relTypes / cursor', async () => {
+  it('forwards explicit strategy / maxDepth / limit / relTypes', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       baseReply
@@ -265,7 +280,6 @@ describe('traverseGraph', () => {
       maxDepth: 5,
       limit: 50,
       relTypes: ['KNOWS'],
-      cursor: 'abc',
     });
 
     const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock
@@ -275,17 +289,17 @@ describe('traverseGraph', () => {
       strategy: 'dfs',
       max_depth: 5,
       limit: 50,
-      cursor: 'abc',
       rel_types: ['KNOWS'],
     });
+    // The server's TraverseRequest has no cursor; the SDK no longer sends one.
+    expect(call[2]).not.toHaveProperty('cursor');
   });
 
-  it('maps the response (targetId, depthReached) and nextCursor=undefined when null', async () => {
+  it('maps the response (targetId, depthReached), which carries no cursor', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: {
         results: [{ target_id: 20, depth: 1, path: [10, 20] }],
-        next_cursor: null,
         has_more: false,
         stats: { visited: 1, depth_reached: 1 },
       },
@@ -294,7 +308,6 @@ describe('traverseGraph', () => {
     const result = await traverseGraph(transport, 'kg', { source: 10 });
     expect(result).toEqual({
       results: [{ targetId: 20, depth: 1, path: [10, 20] }],
-      nextCursor: undefined,
       hasMore: false,
       stats: { visited: 1, depthReached: 1 },
     });
@@ -355,7 +368,44 @@ describe('getNodeDegree', () => {
 describe('createGraphCollection', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('POSTs with default metric=cosine and schema_mode=schemaless', async () => {
+  // velesdb-server reads `graph_schema` (a core GraphSchema); the values are
+  // pinned by conformance/graph_schema_wire_cases.json, which velesdb-core's
+  // tests/graph_schema_wire_conformance.rs parses as GraphSchema.
+  it.each(graphSchemaFixture.cases.map((c) => [c.id, c] as const))(
+    'sends the fixture graph_schema for case %s',
+    async (_id, c) => {
+      const transport = buildTransport();
+      (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        data: {},
+      });
+
+      await createGraphCollection(transport, 'kg', c.sdk_config);
+
+      const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[0]).toBe('POST');
+      expect(call[1]).toBe('/collections');
+      expect((call[2] as Record<string, unknown>).graph_schema).toEqual(c.graph_schema);
+    }
+  );
+
+  it('forwards name / collection_type / dimension / metric', async () => {
+    const transport = buildTransport();
+    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      data: {},
+    });
+
+    await createGraphCollection(transport, 'kg', { dimension: 128, metric: 'euclidean' });
+
+    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[2]).toMatchObject({
+      name: 'kg',
+      collection_type: 'graph',
+      dimension: 128,
+      metric: 'euclidean',
+    });
+  });
+
+  it('defaults metric to cosine', async () => {
     const transport = buildTransport();
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: {},
@@ -363,37 +413,24 @@ describe('createGraphCollection', () => {
 
     await createGraphCollection(transport, 'kg');
 
-    expect(transport.requestJson).toHaveBeenCalledWith('POST', '/collections', {
-      name: 'kg',
-      collection_type: 'graph',
-      dimension: undefined,
-      metric: 'cosine',
-      schema_mode: 'schemaless',
-    });
+    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[2]).toMatchObject({ metric: 'cosine' });
   });
 
-  it('forwards dimension / metric / schemaMode from the config', async () => {
-    const transport = buildTransport();
-    (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      data: {},
-    });
+  it.each([
+    ['nodeTypes', { nodeTypes: [{ name: 'Person' }] }],
+    ['edgeTypes', { edgeTypes: [{ name: 'KNOWS', fromType: 'Person', toType: 'Person' }] }],
+  ] as const)(
+    'refuses %s on a schemaless graph, where core would ignore them',
+    async (_name, config) => {
+      const transport = buildTransport();
 
-    await createGraphCollection(transport, 'kg', {
-      dimension: 128,
-      metric: 'euclidean',
-      schemaMode: 'strict',
-    });
-
-    const call = (transport.requestJson as ReturnType<typeof vi.fn>).mock
-      .calls[0]!;
-    expect(call[2]).toEqual({
-      name: 'kg',
-      collection_type: 'graph',
-      dimension: 128,
-      metric: 'euclidean',
-      schema_mode: 'strict',
-    });
-  });
+      await expect(createGraphCollection(transport, 'kg', config)).rejects.toBeInstanceOf(
+        ValidationError
+      );
+      expect(transport.requestJson).not.toHaveBeenCalled();
+    }
+  );
 
   it('throws on error response (no resourceLabel → typed VelesError)', async () => {
     const transport = buildTransport();
@@ -415,7 +452,6 @@ describe('traverseParallel', () => {
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: {
         results: [],
-        next_cursor: null,
         has_more: false,
         stats: { visited: 0, depth_reached: 0 },
       },
@@ -440,7 +476,6 @@ describe('traverseParallel', () => {
     (transport.requestJson as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       data: {
         results: [{ target_id: 5, depth: 2, path: [1, 5] }],
-        next_cursor: 'cur2',
         has_more: true,
         stats: { visited: 10, depth_reached: 2 },
       },
@@ -464,7 +499,7 @@ describe('traverseParallel', () => {
     expect(result.results).toEqual([
       { targetId: 5, depth: 2, path: [1, 5] },
     ]);
-    expect(result.nextCursor).toBe('cur2');
+    expect(result).not.toHaveProperty('nextCursor');
     expect(result.stats.depthReached).toBe(2);
   });
 

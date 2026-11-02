@@ -234,3 +234,42 @@ fn register_observer_replaces_previous() {
         .check_query_access("docs", WasmQueryOperationKind::Select)
         .is_err());
 }
+
+// --- JOIN secondary collections --------------------------------------------
+
+/// Observer that denies every read of one named collection.
+struct DenyCollection(&'static str);
+
+impl WasmObserver for DenyCollection {
+    fn on_query_request(&self, ctx: &WasmQueryAccessContext<'_>) -> WasmAccessDecision {
+        if ctx.collection == self.0 {
+            WasmAccessDecision::Deny(format!("denied reads of '{}'", self.0))
+        } else {
+            WasmAccessDecision::Allow
+        }
+    }
+}
+
+#[test]
+fn join_secondary_collection_is_gated() {
+    // GIVEN `docs` (allowed) and `secret` (denied), joinable on id
+    let mut inner = seeded_metadata_db();
+    inner
+        .create_metadata_collection("secret")
+        .expect("test: create secret");
+    crate::velesql_exec::execute(
+        &mut inner,
+        "INSERT INTO secret (id, pin) VALUES (1, 1234)",
+        None,
+    )
+    .expect("test: seed secret");
+    let join = "SELECT * FROM docs JOIN secret ON docs.id = secret.id";
+    let allowed = crate::velesql_exec::execute(&mut inner, join, None).expect("test: join runs");
+    assert_eq!(allowed.row_count(), 1, "the join reads secret's row");
+
+    // WHEN the observer denies `secret` THEN the JOIN that merges it is refused
+    inner.register_observer(Rc::new(DenyCollection("secret")));
+    let err = crate::velesql_exec::execute(&mut inner, join, None)
+        .expect_err("test: a JOIN on a denied collection must be refused");
+    assert!(err.contains("secret"), "carries the denial: {err}");
+}

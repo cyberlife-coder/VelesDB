@@ -142,10 +142,16 @@ pub enum Error {
 
     /// Guard-rail violation (VELES-027).
     ///
-    /// A query exceeded a configured limit (timeout, depth, cardinality,
-    /// memory, rate limit, or circuit breaker).
-    #[error("[VELES-027] Guard-rail violation: {0}")]
-    GuardRail(String),
+    /// A request crossed a configured limit. `kind` says which one, and so
+    /// whether the failure is the caller's or the engine's
+    /// ([`GuardRailKind::is_caller_error`]).
+    #[error("[VELES-027] Guard-rail violation: {message}")]
+    GuardRail {
+        /// The limit the request crossed.
+        kind: GuardRailKind,
+        /// Human-readable description of the violation.
+        message: String,
+    },
 
     /// Invalid quantizer configuration (VELES-028).
     ///
@@ -254,7 +260,7 @@ impl Error {
             Self::ColumnStoreError(_) => "VELES-024",
             Self::GpuError(_) => "VELES-025",
             Self::EpochMismatch(_) => "VELES-026",
-            Self::GuardRail(_) => "VELES-027",
+            Self::GuardRail { .. } => "VELES-027",
             Self::InvalidQuantizerConfig(_) => "VELES-028",
             Self::TrainingFailed(_) => "VELES-029",
             Self::SparseIndexError(_) => "VELES-030",
@@ -281,6 +287,69 @@ impl Error {
                 | Self::IncompatibleSchemaVersion { .. }
         )
     }
+
+    /// Returns true if the caller caused this error, not the engine.
+    ///
+    /// A caller error — a malformed or unsupported query, a missing bind
+    /// parameter, a vector of the wrong dimension, a name that does not
+    /// exist or already does — is answered the same way however healthy the
+    /// collection is, so it says nothing about that health: retrying it
+    /// unchanged fails again. A guard-rail stop is classified by its
+    /// [`GuardRailKind`]: a limit the request itself crossed (the client's
+    /// own timeout budget, a depth, cardinality or capacity ceiling, the
+    /// client's rate limit) is the caller's. Every other error comes from the
+    /// engine or its environment (storage, I/O, corruption, an internal
+    /// fault, a timeout under the server's own limit, the memory budget): load
+    /// the engine could not carry, which is what the circuit breaker sheds.
+    ///
+    /// This is the one classification of that question. The circuit breaker
+    /// counts only errors for which it is `false`
+    /// (`CircuitBreaker::record_error`), and the server answers a caller error
+    /// with a `4xx` status, every other error with a `5xx`.
+    ///
+    /// The matches are exhaustive on purpose: a new variant or kind does not
+    /// compile until someone decides which side it is on.
+    #[must_use]
+    pub const fn is_caller_error(&self) -> bool {
+        match self {
+            Self::CollectionExists(_)
+            | Self::CollectionNotFound(_)
+            | Self::PointNotFound(_)
+            | Self::DimensionMismatch { .. }
+            | Self::InvalidVector(_)
+            | Self::Config(_)
+            | Self::Query(_)
+            | Self::VectorNotAllowed(_)
+            | Self::SearchNotSupported(_)
+            | Self::VectorRequired(_)
+            | Self::SchemaValidation(_)
+            | Self::GraphNotSupported(_)
+            | Self::EdgeExists(_)
+            | Self::EdgeNotFound(_)
+            | Self::InvalidEdgeLabel(_)
+            | Self::NodeNotFound(_)
+            | Self::Overflow(_)
+            | Self::InvalidQuantizerConfig(_)
+            | Self::InvalidDimension { .. }
+            | Self::InvalidCollectionName { .. } => true,
+            Self::GuardRail { kind, .. } => kind.is_caller_error(),
+            Self::Storage(_)
+            | Self::Index(_)
+            | Self::IndexCorrupted(_)
+            | Self::Io(_)
+            | Self::Serialization(_)
+            | Self::Internal(_)
+            | Self::ColumnStoreError(_)
+            | Self::GpuError(_)
+            | Self::EpochMismatch(_)
+            | Self::TrainingFailed(_)
+            | Self::SparseIndexError(_)
+            | Self::DatabaseLocked(_)
+            | Self::AllocationFailed(_)
+            | Self::SnapshotBuildFailed(_)
+            | Self::IncompatibleSchemaVersion { .. } => false,
+        }
+    }
 }
 
 /// Conversion from `VelesQL` `ParseError`.
@@ -290,10 +359,76 @@ impl From<crate::velesql::ParseError> for Error {
     }
 }
 
-/// Conversion from `GuardRailViolation` — surfaces limit violations as query errors.
+/// Conversion from `GuardRailViolation` — surfaces limit violations as
+/// [`Error::GuardRail`], keeping which limit was crossed.
 #[cfg(feature = "persistence")]
 impl From<crate::guardrails::GuardRailViolation> for Error {
     fn from(v: crate::guardrails::GuardRailViolation) -> Self {
-        Self::GuardRail(v.to_string())
+        Self::GuardRail {
+            kind: v.kind(),
+            message: v.to_string(),
+        }
+    }
+}
+
+/// The limit a request crossed, carried by [`Error::GuardRail`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GuardRailKind {
+    /// The query ran past its time budget.
+    Timeout(TimeoutBudget),
+    /// A graph traversal went deeper than `max_depth`.
+    Depth,
+    /// A query produced more intermediate results than `max_cardinality`.
+    Cardinality,
+    /// A query used more memory than `memory_limit_bytes`.
+    Memory,
+    /// A request would cross a configured capacity: `max_collections`,
+    /// `max_dimensions`, `max_vectors_per_collection`, `max_payload_size` or
+    /// `max_perfect_mode_vectors`.
+    Capacity,
+    /// The client sent more queries per second than `rate_limit_qps`.
+    RateLimit,
+    /// The collection's circuit breaker is open and refused the request.
+    CircuitOpen,
+}
+
+/// Whose time budget a [`GuardRailKind::Timeout`] ran out of.
+///
+/// One classification decides it for every surface:
+/// `QueryLimits::timeout_budget`, shared by `VelesQL` `WITH (timeout_ms = N)`
+/// and the REST search's `timeout_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TimeoutBudget {
+    /// A budget the request chose strictly tighter than the server's limit
+    /// (`QueryLimits::timeout_ms`), or chose with no server limit set.
+    /// Running out of it says the client asked for too little time, not that
+    /// the engine is slow.
+    Client,
+    /// The server's limit, or a request budget at or above it: a query that
+    /// runs that long is load the engine could not carry.
+    Configured,
+}
+
+impl GuardRailKind {
+    /// Returns true if crossing this limit is the caller's error rather than
+    /// a sign of an unhealthy engine (see [`Error::is_caller_error`]).
+    ///
+    /// The client's own timeout budget, a depth, cardinality or capacity
+    /// ceiling its request crossed, and its rate limit are the caller's: the
+    /// same request is refused however healthy the collection is. A timeout
+    /// under the server's limit and the memory budget are load. An open
+    /// circuit breaker is the breaker's own answer, neither.
+    #[must_use]
+    pub const fn is_caller_error(self) -> bool {
+        match self {
+            Self::Timeout(TimeoutBudget::Client)
+            | Self::Depth
+            | Self::Cardinality
+            | Self::Capacity
+            | Self::RateLimit => true,
+            Self::Timeout(TimeoutBudget::Configured) | Self::Memory | Self::CircuitOpen => false,
+        }
     }
 }

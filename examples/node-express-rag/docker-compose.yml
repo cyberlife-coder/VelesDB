@@ -8,6 +8,9 @@ services:
       VELESDB_HOST: 0.0.0.0
       VELESDB_PORT: "8080"
       VELESDB_DATA_DIR: /data
+      # The app reaches the server as `velesdb:8080`; the server answers only
+      # host names it is told about (DNS-rebinding protection), so name it.
+      VELESDB_ALLOWED_HOSTS: velesdb
     ports:
       - "8080:8080"
     volumes:

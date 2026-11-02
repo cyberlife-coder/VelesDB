@@ -5,8 +5,10 @@
 //! through the same key: one DISTINCT contract for both engines (conformance
 //! `projection_cases` in `conformance/velesql_executor_cases.json`).
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
+use super::group_key::normalise;
 use crate::point::SearchResult;
 use crate::velesql::SelectColumns;
 use rustc_hash::FxHashSet;
@@ -96,13 +98,22 @@ pub(crate) fn compute_distinct_key(
         // SELECT * or SELECT DISTINCT *: use full payload as key
         payload.map_or_else(|| "null".to_string(), canonical_json_string)
     } else {
-        // SELECT DISTINCT col1, col2: use specific columns
+        // SELECT DISTINCT col1, col2: use specific columns. `id` is the
+        // point id, as in every clause, not a payload field of that name;
+        // numbers key as `GROUP BY` keys them (`group_key::normalise`), so
+        // `1` and `1.0`, or `0` and `-0.0`, are one value.
         columns
             .iter()
             .map(|col| {
-                payload
-                    .and_then(|p| p.get(col))
-                    .map_or_else(|| "null".to_string(), canonical_json_string)
+                let value = if col == "id" {
+                    Some(Cow::Owned(serde_json::Value::from(result.point.id)))
+                } else {
+                    payload.and_then(|p| p.get(col)).map(Cow::Borrowed)
+                };
+                value.map_or_else(
+                    || "null".to_string(),
+                    |v| canonical_json_string(&normalise(v)),
+                )
             })
             .collect::<Vec<_>>()
             .join("\x1F") // ASCII Unit Separator

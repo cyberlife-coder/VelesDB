@@ -18,6 +18,7 @@ import type {
 import type {
   SearchOptions,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
   SparseSearchNamedOptions,
 } from './search';
@@ -42,7 +43,6 @@ import type {
   ScrollResponse,
   CollectionStatsResponse,
   CollectionConfigResponse,
-  QueryOptions,
   QueryApiResponse,
   ExplainResponse,
   CollectionSanityResponse,
@@ -148,12 +148,12 @@ export interface IVelesDBBackend {
     }>
   ): Promise<SearchResult[][]>;
 
-  /** Full-text search using BM25 */
+  /** Full-text search: BM25 on REST, unranked substring match on WASM */
   textSearch(
     collection: string,
     query: string,
     options?: { k?: number; filter?: FilterInput }
-  ): Promise<SearchResult[]>;
+  ): Promise<TextSearchResult[]>;
 
   /** Hybrid search combining vector and text */
   hybridSearch(
@@ -167,8 +167,7 @@ export interface IVelesDBBackend {
   query(
     collection: string,
     queryString: string,
-    params?: Record<string, unknown>,
-    options?: QueryOptions
+    params?: Record<string, unknown>
   ): Promise<QueryApiResponse>;
 
   /** Explain a VelesQL query without executing it */
@@ -327,7 +326,7 @@ export interface IVelesDBBackend {
 
   /**
    * Recall episodic events most-recent-first, optionally bounded below by
-   * `since` (inclusive unix-seconds). Mirrors core `episodic.recent(since)`.
+   * `since` (exclusive unix-seconds: strictly newer). Mirrors core `episodic.recent(since)`.
    */
   recallRecentEvents(collection: string, since?: number): Promise<EpisodicRecord[]>;
 

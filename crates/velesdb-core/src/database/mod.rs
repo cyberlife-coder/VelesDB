@@ -38,6 +38,7 @@ mod query_engine;
 mod query_engine_agg;
 mod query_engine_dml;
 mod query_join;
+mod read_authorization;
 mod stats;
 mod subquery_resolver;
 mod training;
@@ -46,6 +47,8 @@ mod vector_ops;
 #[cfg(feature = "persistence")]
 mod database_helpers;
 
+#[cfg(all(test, feature = "persistence"))]
+mod circuit_breaker_contract_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod collection_ops_tests;
 #[cfg(all(test, feature = "persistence"))]

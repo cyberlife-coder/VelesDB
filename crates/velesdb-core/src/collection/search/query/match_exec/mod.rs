@@ -83,15 +83,16 @@ impl WhereFilterMemo {
     pub(in crate::collection::search::query) fn matches_with(
         &self,
         key: (usize, u8),
-        payload: &serde_json::Value,
+        id: u64,
+        payload: Option<&serde_json::Value>,
         build: impl FnOnce() -> crate::error::Result<crate::filter::Condition>,
     ) -> crate::error::Result<bool> {
         let mut cache = self.cache.borrow_mut();
         if let Some((_, cond)) = cache.iter().find(|(k, _)| *k == key) {
-            return Ok(cond.matches(payload));
+            return Ok(cond.matches_point(id, payload));
         }
         let cond = build()?;
-        let result = cond.matches(payload);
+        let result = cond.matches_point(id, payload);
         cache.push((key, cond));
         Ok(result)
     }
@@ -345,6 +346,7 @@ impl Collection {
         match_clause: &MatchClause,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
+        super::match_dispatch::validate_match_clause(match_clause)?;
         let mut results = self.execute_match_with_context(match_clause, params, None)?;
         self.apply_match_order_by(&mut results, match_clause, params)?;
         if let Some(limit) = super::match_dispatch::match_return_limit(match_clause) {
@@ -578,12 +580,10 @@ impl Collection {
             return Ok(());
         }
         let Some(ctx) = ctx else { return Ok(()) };
-        ctx.check_timeout()
-            .map_err(|e| Error::GuardRail(e.to_string()))?;
+        ctx.check_timeout().map_err(Error::from)?;
         let new_results = all_results.len().saturating_sub(*reported_cardinality);
         if new_results > 0 {
-            ctx.check_cardinality(new_results)
-                .map_err(|e| Error::GuardRail(e.to_string()))?;
+            ctx.check_cardinality(new_results).map_err(Error::from)?;
             *reported_cardinality = all_results.len();
         }
         Ok(())

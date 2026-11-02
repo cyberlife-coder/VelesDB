@@ -16,7 +16,8 @@ use crate::types::{
 use crate::AppState;
 
 use super::helpers::{
-    auto_core_error_response, error_response, get_collection_or_404, get_vector_collection_or_404,
+    authorize_unscoped_read, auto_core_error_response, error_response, get_collection_or_404,
+    get_vector_collection_or_404, worker_failure,
 };
 
 /// Get detailed collection configuration (HNSW params, storage mode, schema, etc.).
@@ -40,6 +41,14 @@ pub async fn get_collection_config(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
 
     let config = collection.config();
     let graph_schema = config
@@ -125,10 +134,7 @@ pub async fn rebuild_index(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("rebuild_index task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("rebuild_index", &join_err)),
     }
 }
 
@@ -174,10 +180,7 @@ pub async fn vacuum_collection(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("vacuum task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("vacuum", &join_err)),
     }
 }
 
@@ -220,10 +223,7 @@ pub async fn compact_collection(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("compact task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("compact", &join_err)),
     }
 }
 
@@ -267,10 +267,7 @@ pub async fn reorder_for_locality(
         )
             .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("reorder task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("reorder", &join_err)),
     }
 }
 
@@ -284,8 +281,9 @@ pub async fn reorder_for_locality(
     ),
     responses(
         (status = 200, description = "Collection analyzed", body = CollectionStatsResponse),
+        (status = 400, description = "A read the access gate denied with a client error, or a scope narrowing this read cannot apply (VELES-009)", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
-        (status = 500, description = "Analysis failed", body = ErrorResponse)
+        (status = 500, description = "Analysis failed, or a read the access gate denied with an engine error (its own code)", body = ErrorResponse)
     )
 )]
 pub async fn analyze_collection(
@@ -302,10 +300,7 @@ pub async fn analyze_collection(
             (StatusCode::OK, Json(response)).into_response()
         }
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("analyze_collection task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("analyze_collection", &join_err)),
     }
 }
 
@@ -327,6 +322,14 @@ pub async fn get_collection_stats(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
     match state.db.get_collection_stats(&name) {
         Ok(Some(stats)) => {
             let response = map_stats_to_response(&stats);
@@ -357,6 +360,14 @@ pub async fn collection_diagnostics(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
     match state.db.collection_diagnostics(&name) {
         Ok(diag) => (StatusCode::OK, Json(diagnostics_to_response(&diag))).into_response(),
         Err(e) => auto_core_error_response(&e),

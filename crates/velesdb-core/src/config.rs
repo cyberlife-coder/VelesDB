@@ -336,6 +336,18 @@ pub mod server {
 // Backward-compatible re-exports at module level.
 pub use server::{LoggingConfig, ServerConfig, StorageConfig};
 
+/// Ceiling for `server.workers`. `0` means "auto" (one per CPU) and is
+/// allowed; a positive value above this is refused, so a typo cannot ask for
+/// an absurd thread count. Public so a hosting shell that sizes a runtime
+/// from its own `workers` setting (`velesdb-server`) applies this rule
+/// rather than a copy of it.
+pub const WORKERS_CAP: usize = 4_096;
+
+/// The values `logging.level` accepts, exactly as spelt here (lower case).
+/// Public for the same reason as [`WORKERS_CAP`]: `velesdb-server` validates
+/// its `[logging] level` and `VELESDB_LOGGING_LEVEL` against this list.
+pub const LOG_LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
+
 /// Limits configuration section.
 ///
 /// `#[non_exhaustive]`: build from [`LimitsConfig::default`] and adjust fields
@@ -554,11 +566,15 @@ impl VelesConfig {
     /// As with [`Self::load_from_path`], `VELESDB_*` environment variables
     /// are layered on top of the (filtered) file and can still override an
     /// engine value — e.g. `VELESDB_LIMITS_MAX_COLLECTIONS=5` overrides a
-    /// `[limits] max_collections` from the file. Env vars for non-engine
-    /// sections (`VELESDB_SERVER_*`, `VELESDB_LOGGING_*`, ...) are
-    /// harmless here: they don't match any field once those sections are
-    /// filtered out of the base document, so they're ignored the same way
-    /// an unrecognised key always is.
+    /// `[limits] max_collections` from the file. The environment is filtered
+    /// the same way the file is, by the engine-table filter ([`Self::is_engine_table`]): a variable for
+    /// a non-engine section (`VELESDB_SERVER_*`, `VELESDB_LOGGING_*`) is not
+    /// read here at all. It used to be — `server` and `logging` are fields of
+    /// this struct, so such a variable reached them and was validated against
+    /// rules for values this loader never applies: `VELESDB_SERVER_PORT=80`
+    /// stopped `velesdb-server` (which binds `VELESDB_PORT`) with
+    /// `server.port must be >= 1024`. Those sections belong to the hosting
+    /// shell, which reads and validates them once, itself.
     ///
     /// # Errors
     ///
@@ -571,9 +587,53 @@ impl VelesConfig {
         let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
             .merge(Toml::string(&filtered))
-            .merge(Self::env_provider());
+            .merge(Self::engine_env_provider());
 
         Self::finish(&figment)
+    }
+
+    /// [`Self::load_from_path_engine_only`] with no file: the defaults, with
+    /// the engine sections' `VELESDB_*` variables on top. What a hosting
+    /// shell loads when it was given no config file and finds no
+    /// `./velesdb.toml` — the environment still applies, as
+    /// `docs/guides/CONFIGURATION.md` says it does.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a variable does not parse or fails validation.
+    pub fn load_engine_only_from_env() -> Result<Self, ConfigError> {
+        let figment = Figment::new()
+            .merge(Serialized::defaults(Self::default()))
+            .merge(Self::engine_env_provider());
+        Self::finish(&figment)
+    }
+
+    /// The `VELESDB_*` layer of the engine-only loaders: only the variables
+    /// [`Self::is_engine_path`] accepts.
+    fn engine_env_provider() -> Env {
+        Self::env_provider().filter(|path| Self::is_engine_path(path.as_str()))
+    }
+
+    /// Whether a top-level TOML table belongs to the engine: one of the
+    /// engine sections the engine-only loaders read, or a table a release
+    /// removed, which they keep so its removal warning fires. A hosting shell
+    /// sharing the file uses this to tell the engine's tables from the ones
+    /// nobody reads.
+    #[must_use]
+    pub fn is_engine_table(name: &str) -> bool {
+        Self::ENGINE_SECTIONS.contains(&name)
+            || crate::config_removed::removed_sections().any(|removed| removed == name)
+    }
+
+    /// Whether a mapped config path (`section.field`, as
+    /// [`Self::env_key_to_config_path`] produces it) belongs to an engine
+    /// section, or to a section a release removed — kept, as in
+    /// [`Self::filter_to_engine_sections`], so its removal warning still
+    /// fires. Everything else, including a name that maps to no section at
+    /// all, is the hosting shell's.
+    pub(crate) fn is_engine_path(path: &str) -> bool {
+        path.split_once('.')
+            .is_some_and(|(section, _)| Self::is_engine_table(section))
     }
 
     /// Extracts a [`Self`] from an assembled [`Figment`] and validates it.

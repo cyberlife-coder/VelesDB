@@ -10,6 +10,8 @@ use crate::helpers::{
 #[cfg(feature = "persistence")]
 use crate::helpers::{parse_search_quality, require_vector_collection};
 use crate::state::VelesDbState;
+#[path = "commands_batch.rs"]
+mod batch;
 pub use crate::types::{
     default_fusion, default_metric, default_storage_mode, default_top_k, default_vector_weight,
 };
@@ -21,6 +23,7 @@ use crate::types::{
 };
 #[cfg(feature = "persistence")]
 use crate::types::{EnableStreamingRequest, StreamInsertRequest};
+pub use batch::*;
 use tauri::{command, AppHandle, Runtime, State};
 
 /// Builds [`velesdb_core::HnswParams`] from optional request fields, falling
@@ -149,15 +152,25 @@ pub async fn list_collections<R: Runtime>(
             let names = db.list_collections();
             let mut collections = Vec::new();
             for name in names {
-                if let Some(coll) = db.get_any_collection(&name) {
-                    let config = coll.config();
-                    collections.push(CollectionInfo {
-                        name,
-                        dimension: config.dimension,
-                        metric: metric_to_string(config.metric).to_string(),
-                        count: config.point_count,
-                        storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
-                    });
+                // Each entry carries the collection's count — a read the gate
+                // decides per collection. A denied (or scoped, which a count
+                // cannot honour) collection contributes no entry.
+                let decided = crate::helpers::authorize_collection_read(
+                    &db,
+                    &name,
+                    velesdb_core::observer::QueryOperationKind::Select,
+                );
+                if decided.map(|scope| scope.is_none()).unwrap_or(false) {
+                    if let Some(coll) = db.get_any_collection(&name) {
+                        let config = coll.config();
+                        collections.push(CollectionInfo {
+                            name,
+                            dimension: config.dimension,
+                            metric: metric_to_string(config.metric).to_string(),
+                            count: config.point_count,
+                            storage_mode: storage_mode_to_string(config.storage_mode).to_string(),
+                        });
+                    }
                 }
             }
             Ok(collections)
@@ -175,6 +188,12 @@ pub async fn get_collection<R: Runtime>(
 ) -> std::result::Result<CollectionInfo, CommandError> {
     state
         .run_db(move |db| {
+            crate::helpers::require_unscoped_read(
+                &db,
+                &name,
+                velesdb_core::observer::QueryOperationKind::Select,
+                "collection metadata reads",
+            )?;
             let coll = require_collection(&db, &name)?;
             let config = coll.config();
             Ok(CollectionInfo {
@@ -293,11 +312,21 @@ pub async fn get_points<R: Runtime>(
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
 
+            let scope = crate::helpers::authorize_collection_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::Select,
+            )?;
             let points = coll.get(&request.ids);
             Ok(points
                 .into_iter()
                 .map(|opt| {
-                    opt.map(|p| PointOutput {
+                    opt.filter(|p| {
+                        scope
+                            .as_ref()
+                            .is_none_or(|f| f.matches_point(p.id, p.payload.as_ref()))
+                    })
+                    .map(|p| PointOutput {
                         id: p.id,
                         vector: p.vector,
                         payload: p.payload,
@@ -397,17 +426,24 @@ pub async fn search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     #[cfg(feature = "persistence")]
     let parsed_quality = parse_search_quality(&request.quality).map_err(CommandError::from)?;
-    #[cfg(not(feature = "persistence"))]
-    let parsed_quality: Option<()> = None;
 
     let results = state
         .run_db(move |db| {
-            let coll = require_collection(&db, &request.collection)?;
-            let search_results = search_full(
-                &coll,
-                &request,
-                parsed_filter.as_ref(),
-                parsed_quality.as_ref(),
+            require_collection(&db, &request.collection)?;
+            let search_results = db.gated_search(
+                &request.collection,
+                None,
+                None,
+                velesdb_core::GatedRead::Dense {
+                    query: &request.vector,
+                    k: request.top_k,
+                    ef: None,
+                    #[cfg(feature = "persistence")]
+                    quality: parsed_quality,
+                    #[cfg(not(feature = "persistence"))]
+                    quality: None,
+                    filter: parsed_filter.as_ref(),
+                },
             )?;
             Ok(map_core_results(search_results))
         })
@@ -450,6 +486,12 @@ pub async fn search_ids<R: Runtime>(
     state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
+            let scope = crate::helpers::authorize_collection_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::VectorSearch,
+            )?;
+            let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
             // Optimized id-only path only when no filter and no quality; both
             // require the full search that hydrates results before projecting.
             let scored: Vec<IdScoreOutput> = if parsed_filter.is_none() && parsed_quality.is_none()
@@ -475,144 +517,6 @@ pub async fn search_ids<R: Runtime>(
         .map_err(CommandError::from)
 }
 
-/// Batch search for multiple query vectors.
-///
-/// When any individual search specifies a `quality` mode, each search is
-/// dispatched individually (per-search quality). Otherwise the optimized
-/// `search_batch_with_filters` batch API is used.
-#[command]
-pub async fn batch_search<R: Runtime>(
-    _app: AppHandle<R>,
-    state: State<'_, VelesDbState>,
-    request: BatchSearchRequest,
-) -> std::result::Result<Vec<SearchResponse>, CommandError> {
-    let start = std::time::Instant::now();
-    let has_quality = request.searches.iter().any(|s| s.quality.is_some());
-
-    let batch_results = if has_quality {
-        batch_search_per_query(&state, request).await?
-    } else {
-        batch_search_bulk(&state, request).await?
-    };
-
-    let timing_ms = start.elapsed().as_secs_f64() * 1000.0;
-    Ok(batch_results
-        .into_iter()
-        .map(|results| SearchResponse { results, timing_ms })
-        .collect())
-}
-
-/// Per-query batch search with per-search quality dispatch.
-async fn batch_search_per_query(
-    state: &VelesDbState,
-    request: BatchSearchRequest,
-) -> std::result::Result<Vec<Vec<crate::types::SearchResult>>, CommandError> {
-    state
-        .run_db(move |db| {
-            let coll = require_collection(&db, &request.collection)?;
-            let mut all_results = Vec::with_capacity(request.searches.len());
-            for s in &request.searches {
-                let filter = parse_filter(&s.filter)?;
-                #[cfg(feature = "persistence")]
-                let quality = parse_search_quality(&s.quality)
-                    .map_err(|e| crate::error::Error::InvalidConfig(e.to_string()))?;
-                #[cfg(not(feature = "persistence"))]
-                let quality: Option<()> = None;
-
-                let search_results = if let Some(ref f) = filter {
-                    coll.search_with_filter(&s.vector, s.top_k, f)?
-                } else {
-                    dispatch_quality_search(&coll, &s.vector, s.top_k, quality.as_ref())?
-                };
-                all_results.push(
-                    search_results
-                        .into_iter()
-                        .map(crate::helpers::map_core_result)
-                        .collect(),
-                );
-            }
-            Ok(all_results)
-        })
-        .await
-        .map_err(CommandError::from)
-}
-
-/// Optimized bulk batch search (no per-query quality).
-async fn batch_search_bulk(
-    state: &VelesDbState,
-    request: BatchSearchRequest,
-) -> std::result::Result<Vec<Vec<crate::types::SearchResult>>, CommandError> {
-    state
-        .run_db(move |db| {
-            let coll = require_collection(&db, &request.collection)?;
-
-            let query_refs: Vec<&[f32]> = request
-                .searches
-                .iter()
-                .map(|s| s.vector.as_slice())
-                .collect();
-            let filters: Vec<Option<velesdb_core::Filter>> = request
-                .searches
-                .iter()
-                .map(|s| parse_filter(&s.filter))
-                .collect::<crate::error::Result<_>>()?;
-
-            // Use the maximum top_k across all searches so that every individual
-            // query retrieves enough candidates before per-query truncation.
-            let top_k = request.searches.iter().map(|s| s.top_k).max().unwrap_or(10);
-            let results = coll.search_batch_with_filters(&query_refs, top_k, &filters)?;
-
-            Ok(results
-                .into_iter()
-                .zip(request.searches.iter().map(|s| s.top_k))
-                .map(|(search_results, k)| {
-                    search_results
-                        .into_iter()
-                        .take(k)
-                        .map(crate::helpers::map_core_result)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>())
-        })
-        .await
-        .map_err(CommandError::from)
-}
-
-/// Runs a filter-aware search on `collection` and wraps the mapped results in a
-/// timed [`SearchResponse`].
-///
-/// Shared skeleton of [`text_search`] and [`hybrid_search`]: `search` receives
-/// the collection plus the parsed filter (if any) and dispatches to the
-/// matching core call. The whole search runs on the blocking pool via
-/// [`VelesDbState::run_db`].
-async fn run_filtered_search<F>(
-    state: &State<'_, VelesDbState>,
-    collection: String,
-    parsed_filter: Option<velesdb_core::Filter>,
-    search: F,
-) -> std::result::Result<SearchResponse, CommandError>
-where
-    F: FnOnce(
-            &velesdb_core::VectorCollection,
-            Option<&velesdb_core::Filter>,
-        ) -> crate::error::Result<Vec<velesdb_core::SearchResult>>
-        + Send
-        + 'static,
-{
-    let start = std::time::Instant::now();
-    let results = state
-        .run_db(move |db| {
-            let coll = require_collection(&db, &collection)?;
-            let search_results = search(&coll, parsed_filter.as_ref())?;
-            Ok(map_core_results(search_results))
-        })
-        .await
-        .map_err(CommandError::from)?;
-
-    Ok(timed_search_response(results, start))
-}
-
-/// Searches by text using BM25.
 #[command]
 pub async fn text_search<R: Runtime>(
     _app: AppHandle<R>,
@@ -622,7 +526,7 @@ pub async fn text_search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     let collection = request.collection.clone();
 
-    run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
+    batch::run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
         match filter {
             Some(f) => coll.text_search_with_filter(&request.query, request.top_k, f),
             None => coll.text_search(&request.query, request.top_k),
@@ -642,7 +546,7 @@ pub async fn hybrid_search<R: Runtime>(
     let parsed_filter = parse_filter(&request.filter).map_err(CommandError::from)?;
     let collection = request.collection.clone();
 
-    run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
+    batch::run_filtered_search(&state, collection, parsed_filter, move |coll, filter| {
         match filter {
             Some(f) => coll.hybrid_search_with_filter(
                 &request.vector,
@@ -675,6 +579,12 @@ pub async fn is_empty<R: Runtime>(
 ) -> std::result::Result<bool, CommandError> {
     state
         .run_db(move |db| {
+            crate::helpers::require_unscoped_read(
+                &db,
+                &name,
+                velesdb_core::observer::QueryOperationKind::Select,
+                "is_empty",
+            )?;
             let coll = require_collection(&db, &name)?;
             Ok(coll.is_empty())
         })
@@ -767,6 +677,12 @@ pub async fn scroll_collection<R: Runtime>(
     state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
+            let scope = crate::helpers::authorize_collection_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::Select,
+            )?;
+            let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
             let batch =
                 coll.scroll_batch(request.cursor, request.batch_size, parsed_filter.as_ref())?;
             Ok(ScrollResponse {
@@ -801,6 +717,12 @@ pub async fn multi_query_search<R: Runtime>(
     let results = state
         .run_db(move |db| {
             let coll = require_collection(&db, &request.collection)?;
+            let scope = crate::helpers::authorize_collection_read(
+                &db,
+                &request.collection,
+                velesdb_core::observer::QueryOperationKind::VectorSearch,
+            )?;
+            let parsed_filter = crate::helpers::and_scope(parsed_filter, scope);
 
             let vector_refs: Vec<&[f32]> = request.vectors.iter().map(Vec::as_slice).collect();
 
@@ -872,7 +794,7 @@ pub async fn train_pq<R: Runtime>(
 // Streaming Insert Command
 // ============================================================================
 
-/// Stream-inserts points into a collection's delta buffer.
+/// Stream-inserts points into a collection through its streaming pipeline.
 ///
 /// Uses the streaming ingestion pipeline for low-latency writes.
 /// Requires the `persistence` feature and an active stream ingester.

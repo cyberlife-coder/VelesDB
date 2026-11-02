@@ -8,8 +8,8 @@
 import type {
   SearchOptions,
   SearchResult,
+  TextSearchResult,
   MultiQuerySearchOptions,
-  QueryOptions,
   QueryApiResponse,
   FusionParams,
   FusionParamName,
@@ -17,6 +17,7 @@ import type {
   SearchQuality,
 } from '../types';
 import type { FilterInput } from '../filter';
+import { normalizeFilter } from '../filter';
 import { NotFoundError, VelesDBError } from '../types';
 import { wasmNotSupported } from './shared';
 import {
@@ -34,7 +35,7 @@ import type {
   WasmSparseResult,
   WasmFilteredResult,
   WasmHybridResult,
-  WasmSearchResultItem,
+  WasmTextResult,
 } from './wasm-types';
 
 // ---------------------------------------------------------------------------
@@ -92,8 +93,11 @@ function searchWithFilter(
   k: number,
   filter: FilterInput
 ): SearchResult[] {
+  // normalizeFilter refuses a filter without a `condition` key before the
+  // binding sees it, with the SDK's ValidationError; velesdb-wasm would
+  // refuse it too, with core's parse error, as the server does over REST.
   const results: WasmFilteredResult[] = collection!.store.search_with_filter(
-    queryVector, k, filter
+    queryVector, k, normalizeFilter(filter)
   );
 
   return results.map(r => ({
@@ -179,9 +183,6 @@ function requireParsableQuality(ctx: WasmContext, quality: unknown): void {
  * preset is refused here as the REST server refuses it.
  */
 function refuseUnhonouredSearchOptions(options: SearchOptions | undefined): void {
-  if (options?.includeVectors === true) {
-    requireWasmCapability('includeVectors', 'search with includeVectors: true');
-  }
   if (isSet(options?.sparseIndexName)) {
     requireWasmCapability('namedSparseIndexes', 'search with a sparseIndexName');
   }
@@ -361,6 +362,7 @@ export async function wasmSearchBatch(
   for (const s of searches) {
     validateSearchInputs(collection, [s.vector], s.k ?? 10);
     requireWasmFilterSupport('searchBatch', s.filter);
+    normalizeFilter(s.filter);
     requireParsableQuality(ctx, s.quality);
   }
   const results: SearchResult[][] = [];
@@ -380,18 +382,13 @@ export async function wasmSearchBatch(
 // Text / Hybrid search
 // ---------------------------------------------------------------------------
 
-/** Map a WASM search result (tuple or object) to a SearchResult. */
+/** Map a WASM `[id, score]` tuple to a SearchResult with its stored payload. */
 function mapWasmResult(
   ctx: WasmContext,
   collection: ReturnType<WasmContext['getCollection']>,
-  r: WasmSearchResultItem
+  [id, score]: WasmDenseResult
 ): SearchResult {
-  if (Array.isArray(r)) {
-    const key = ctx.canonicalPayloadKeyFromResultId(r[0]);
-    return { id: String(r[0]), score: r[1], payload: collection!.payloads.get(key) };
-  }
-  const key = ctx.canonicalPayloadKeyFromResultId(r.id);
-  return { id: String(r.id), score: r.score, payload: r.payload ?? collection!.payloads.get(key) };
+  return { id: String(id), score, payload: collection!.payloads.get(ctx.canonicalPayloadKeyFromResultId(id)) };
 }
 
 export async function wasmTextSearch(
@@ -399,7 +396,7 @@ export async function wasmTextSearch(
   collectionName: string,
   query: string,
   options?: { k?: number; filter?: FilterInput }
-): Promise<SearchResult[]> {
+): Promise<TextSearchResult[]> {
   const collection = ctx.getCollection(collectionName);
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
@@ -411,8 +408,10 @@ export async function wasmTextSearch(
   }
   // The binding's third argument names one payload field to match. It is
   // not a filter, which is why a filter is refused above.
-  const raw: WasmSearchResultItem[] = collection.store.text_search(query, k, null);
-  return raw.map(r => mapWasmResult(ctx, collection, r));
+  // A substring match ranks nothing: the binding's `score` is null, and it
+  // is passed on as null rather than replaced by a number (#2332).
+  const raw: WasmTextResult[] = collection.store.text_search(query, k, null);
+  return raw.map(r => ({ id: String(r.id), score: r.score, payload: r.payload }));
 }
 
 export async function wasmHybridSearch(
@@ -615,7 +614,7 @@ export async function wasmMultiQuerySearch(
     flat.set(src, idx * dimension);
   });
 
-  const raw: WasmSearchResultItem[] = collection.store.multi_query_search(
+  const raw: WasmDenseResult[] = collection.store.multi_query_search(
     flat,
     numVectors,
     k,
@@ -710,14 +709,12 @@ export async function wasmQuery(
   ctx: WasmContext,
   collectionName: string,
   queryString: string,
-  params?: Record<string, unknown>,
-  options?: QueryOptions
+  params?: Record<string, unknown>
 ): Promise<QueryApiResponse> {
   const collection = ctx.getCollection(collectionName);
   if (!collection) {
     throw new NotFoundError(`Collection '${collectionName}'`);
   }
-  requireWasmFieldsListed('queryOptions', 'query', options);
   const parsed = parsePureNearQuery(queryString);
   if (parsed.from !== collectionName) {
     throw new VelesDBError(

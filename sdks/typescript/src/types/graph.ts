@@ -59,8 +59,6 @@ export interface TraverseRequest {
   maxDepth?: number;
   /** Maximum number of results to return */
   limit?: number;
-  /** Optional cursor for pagination */
-  cursor?: string;
   /** Filter by relationship types (empty = all types) */
   relTypes?: string[];
 }
@@ -99,9 +97,10 @@ export interface TraversalStats {
 export interface TraverseResponse {
   /** List of traversal results */
   results: TraversalResultItem[];
-  /** Cursor for next page (if applicable) */
-  nextCursor?: string;
-  /** Whether more results are available */
+  /**
+   * Whether the traversal stopped at `limit` (more nodes may be reachable).
+   * There is no traversal cursor: raise `limit` to see further.
+   */
   hasMore: boolean;
   /** Traversal statistics */
   stats: TraversalStats;
@@ -166,12 +165,48 @@ export interface RelationsResponse {
 /** Schema mode for graph collections */
 export type GraphSchemaMode = 'schemaless' | 'strict';
 
+/** Property value type in a graph schema (`velesdb_core::ValueType`, serialized lowercase). */
+export type GraphValueType = 'string' | 'integer' | 'float' | 'boolean' | 'vector';
+
+/** A node type a strict graph accepts (`velesdb_core::NodeType`). */
+export interface GraphNodeType {
+  /** Node label. */
+  name: string;
+  /** Declared properties and their types (default: none). */
+  properties?: Record<string, GraphValueType>;
+}
+
+/** An edge type a strict graph accepts (`velesdb_core::EdgeType`). */
+export interface GraphEdgeType {
+  /** Edge label. */
+  name: string;
+  /** Node type the edge leaves; must be one of `nodeTypes`. */
+  fromType: string;
+  /** Node type the edge reaches; must be one of `nodeTypes`. */
+  toType: string;
+  /** Declared properties and their types (default: none). */
+  properties?: Record<string, GraphValueType>;
+}
+
 /** Graph collection configuration */
 export interface GraphCollectionConfig {
   /** Optional embedding dimension for node vectors */
   dimension?: number;
   /** Distance metric for embeddings (default: 'cosine') */
   metric?: DistanceMetric;
-  /** Schema mode (default: 'schemaless') */
+  /**
+   * Schema mode (default: 'schemaless'). Sent with `nodeTypes` and
+   * `edgeTypes` as core's `graph_schema`. In a `'strict'` graph core checks
+   * every label in a node payload's `_labels` against `nodeTypes` (a node
+   * with no `_labels` is not checked), and refuses an edge unless both
+   * endpoints exist and carry a label, and its label and endpoint types
+   * (each endpoint's first `_labels` entry) match a declared `edgeTypes`
+   * entry whose endpoint types are declared (`velesdb_core::GraphSchema::
+   * validate_node_type` / `validate_edge_type`).
+   */
   schemaMode?: GraphSchemaMode;
+  /** Node types a `'strict'` graph accepts. Refused on a schemaless graph, which ignores them. */
+  nodeTypes?: GraphNodeType[];
+  /** Edge types a `'strict'` graph accepts. Refused on a schemaless graph, which ignores them. */
+  edgeTypes?: GraphEdgeType[];
 }

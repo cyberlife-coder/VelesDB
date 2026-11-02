@@ -115,3 +115,101 @@ fn test_guard_rails_update_preserves_circuit_breaker_state() {
     gr.update_limits(&QueryLimits::default().with_timeout_ms(1_000));
     assert_eq!(gr.circuit_breaker.state(), CircuitState::Open);
 }
+
+// ─── The request's own time budget: clamp and classification ────────────────
+
+use crate::error::TimeoutBudget;
+
+#[test]
+fn test_client_timeout_never_lengthens_or_disables_the_server_limit() {
+    let limits = QueryLimits::default().with_timeout_ms(1_000);
+    assert_eq!(
+        limits.client_timeout_ms(0),
+        1_000,
+        "0 keeps the server's limit"
+    );
+    assert_eq!(
+        limits.client_timeout_ms(100),
+        100,
+        "a tighter budget applies"
+    );
+    assert_eq!(
+        limits.client_timeout_ms(1_000),
+        1_000,
+        "an equal budget is the limit"
+    );
+    assert_eq!(
+        limits.client_timeout_ms(90_000),
+        1_000,
+        "a longer budget is clamped"
+    );
+}
+
+#[test]
+fn test_client_timeout_without_a_server_limit_is_the_requests_own() {
+    let limits = QueryLimits::default().with_timeout_ms(0);
+    assert_eq!(limits.client_timeout_ms(0), 0, "no limit anywhere");
+    assert_eq!(limits.client_timeout_ms(100), 100);
+}
+
+#[test]
+fn test_a_timeout_is_the_clients_only_when_strictly_tighter_than_the_limit() {
+    let limits = QueryLimits::default().with_timeout_ms(1_000);
+    assert_eq!(limits.timeout_budget(0), TimeoutBudget::Client);
+    assert_eq!(limits.timeout_budget(999), TimeoutBudget::Client);
+    assert_eq!(limits.timeout_budget(1_000), TimeoutBudget::Configured);
+    assert_eq!(limits.timeout_budget(90_000), TimeoutBudget::Configured);
+    let unlimited = QueryLimits::default().with_timeout_ms(0);
+    assert_eq!(unlimited.timeout_budget(5_000), TimeoutBudget::Client);
+}
+
+/// The budget a context times out under, and whose it is, for a request
+/// asking for `requested_ms` against a server limit of 1 000 ms; the clock is
+/// skewed past any budget so the timeout fires deterministically.
+fn timeout_under(requested_ms: u64) -> GuardRailViolation {
+    let rails = GuardRails::with_limits(QueryLimits::default().with_timeout_ms(1_000));
+    let _skew = QueryClockSkewGuard::activate(&rails, 10_000_000);
+    let mut ctx = rails.create_context();
+    ctx.set_client_timeout_ms(requested_ms);
+    ctx.check_timeout()
+        .expect_err("the skewed clock is past every budget")
+}
+
+#[test]
+fn test_set_client_timeout_ms_applies_the_clamp_and_the_classification() {
+    for (requested, max_ms, budget) in [
+        (0, 1_000, TimeoutBudget::Configured),
+        (100, 100, TimeoutBudget::Client),
+        (1_000, 1_000, TimeoutBudget::Configured),
+        (90_000, 1_000, TimeoutBudget::Configured),
+    ] {
+        match timeout_under(requested) {
+            GuardRailViolation::Timeout {
+                max_ms: got_max,
+                budget: got_budget,
+                ..
+            } => {
+                assert_eq!(got_max, max_ms, "requested {requested}");
+                assert_eq!(got_budget, budget, "requested {requested}");
+            }
+            other => panic!("requested {requested}: expected a timeout, got {other:?}"),
+        }
+    }
+}
+
+/// The skew is the one `GuardRails`' own: another collection's contexts keep
+/// the wall clock, so parallel tests cannot cross-contaminate.
+#[test]
+fn test_clock_skew_is_scoped_to_its_guard_rails() {
+    let skewed = GuardRails::with_limits(QueryLimits::default().with_timeout_ms(1_000));
+    let other = GuardRails::with_limits(QueryLimits::default().with_timeout_ms(1_000));
+    {
+        let _skew = QueryClockSkewGuard::activate(&skewed, 10_000_000);
+        assert!(skewed.create_context().check_timeout().is_err());
+        assert!(other.create_context().check_timeout().is_ok());
+    }
+    assert!(
+        skewed.create_context().check_timeout().is_ok(),
+        "drop resets it"
+    );
+}

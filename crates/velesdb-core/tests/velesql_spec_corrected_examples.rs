@@ -1,9 +1,9 @@
 //! Anti-drift guard for the `docs/VELESQL_SPEC.md` examples corrected during
 //! the 2026-06 documentation alignment sweep.
 //!
-//! `velesql_cheatsheet_docs.rs` parses the cheat sheet wholesale; the spec is
-//! too large and contains deliberate pseudo-grammar fragments, so this guard
-//! pins the *corrected* statements verbatim instead. If the grammar regresses
+//! `velesql_doc_samples.rs` checks every `sql` block of the docs, the spec
+//! included; this guard additionally pins the *corrected* statements verbatim,
+//! so they survive even if their spec block is reworded. If the grammar regresses
 //! on one of them — or starts accepting a form the spec documents as invalid —
 //! the spec must be revisited.
 

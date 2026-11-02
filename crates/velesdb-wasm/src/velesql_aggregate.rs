@@ -1,8 +1,10 @@
 //! Aggregation execution for the WASM VelesQL executor (S4-13).
 //!
-//! Implements COUNT / SUM / AVG / MIN / MAX over a scanned row set, with
-//! optional GROUP BY and HAVING clauses. When GROUP BY is absent, all
-//! matching rows collapse into a single group (implicit global group).
+//! Groups a scanned row set with core's engine-shared
+//! [`Grouper`] — the same group set, group
+//! rows, aggregates and HAVING verdicts as core — then orders the groups.
+//! When GROUP BY is absent, all matching rows collapse into a single group
+//! (implicit global group).
 //!
 //! A DISTINCT without aggregates is not handled here: it runs in the plain
 //! SELECT pipeline through core's `apply_distinct`, which honours ORDER BY and
@@ -12,24 +14,14 @@
 //!
 //! The caller hands us the full scanned row set (after WHERE), then this
 //! module groups it. Vector / similarity / fusion concerns live outside.
-//!
-//! # NLOC budget
-//!
-//! Measured NLOC is 395 (via lizard) — well under the 500-line ceiling.
-//! If this file grows past 450 NLOC, split the projection-building
-//! helpers (`write_plain_columns`, `write_aggregates`, `write_group_keys`)
-//! into a sibling `velesql_aggregate_project.rs`. See Devin Review
-//! Finding R.
-
-use std::collections::BTreeMap;
 
 use velesdb_core::velesql::{
-    AggregateArg, AggregateFunction, AggregateType, CompareOp, HavingClause, HavingCondition,
-    LogicalOp, OrderByExpr, SelectColumns, SelectOrderBy, SelectStatement, Value,
+    GroupInput, GroupOutput, Grouper, HavingClause, HavingCondition, SelectColumns,
+    SelectStatement, Value,
 };
 
 use crate::velesql_result::QueryResultRow;
-use crate::velesql_value::{json_values_cmp, json_values_equal, resolve_value, Params};
+use crate::velesql_value::{resolve_value, Params};
 
 /// A scanned row as seen by the aggregator: `(id, score, payload_object)`.
 ///
@@ -52,51 +44,35 @@ pub(crate) fn has_aggregate_columns(cols: &SelectColumns) -> bool {
     }
 }
 
-/// Applies the aggregation / grouping pipeline to a scanned row set,
-/// returning the final row list to surface through [`QueryResult`].
+/// Groups `rows`, applies HAVING, then orders the groups: a vector GROUP BY
+/// as core orders its search results (`velesql_vector_group`), any other
+/// GROUP BY by the row fields its ORDER BY names. `higher_is_better` is the
+/// collection metric's direction.
 ///
-/// [`QueryResult`]: crate::velesql_result::QueryResult
+/// # Errors
+///
+/// Returns an error for an unbound HAVING parameter, a HAVING threshold that
+/// is not a number (`V018`), more groups than `WITH (max_groups = N)` allows,
+/// or an ORDER BY the grouped rows cannot be sorted by.
 pub(crate) fn apply(
     stmt: &SelectStatement,
     rows: &[ScannedRow<'_>],
     params: &Params,
+    higher_is_better: bool,
 ) -> Result<Vec<QueryResultRow>, String> {
-    aggregate(stmt, rows, params)
-}
-
-// --- Aggregation ----------------------------------------------------------
-
-/// Full aggregation pipeline: group rows, compute aggregates, apply HAVING,
-/// apply ORDER BY, serialize each group to a synthetic row.
-fn aggregate(
-    stmt: &SelectStatement,
-    rows: &[ScannedRow<'_>],
-    params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
-    let group_cols = stmt
-        .group_by
-        .as_ref()
-        .map(|g| g.columns.clone())
-        .unwrap_or_default();
-    let groups = materialize_groups(&group_cols, rows, &stmt.columns);
-    let aggregates = extract_aggregates(&stmt.columns);
-    let plain_cols = extract_plain_columns(&stmt.columns);
-    let mut json_rows: Vec<serde_json::Value> = Vec::with_capacity(groups.len());
-    for (key, group_rows) in groups {
-        if let Some(row) = finalize_group(
-            stmt,
-            &group_cols,
-            &key,
-            &plain_cols,
-            &aggregates,
-            &group_rows,
-            params,
-        )? {
-            json_rows.push(row);
-        }
+    let groups = group_rows(stmt, rows, params, higher_is_better)?;
+    if stmt.is_vector_group_by() {
+        return crate::velesql_vector_group::order_groups(stmt, groups, higher_is_better);
     }
-    if let Some(order_by) = stmt.order_by.as_deref() {
-        sort_aggregate_rows(&mut json_rows, order_by);
+    let mut json_rows: Vec<serde_json::Value> = groups
+        .into_iter()
+        .map(|group: GroupOutput| group.row)
+        .collect();
+    // Without GROUP BY the aggregates collapse into one row: there is nothing
+    // to order, and core ignores that ORDER BY too. Without ORDER BY the
+    // grouper's order (GROUP BY key ascending) stands.
+    if stmt.group_by.is_some() && stmt.order_by.is_some() {
+        sort_aggregate_rows(&mut json_rows, stmt)?;
     }
     json_rows
         .into_iter()
@@ -104,396 +80,117 @@ fn aggregate(
         .collect()
 }
 
-/// Sorts grouped aggregate rows by the SELECT's ORDER BY, mirroring core's
-/// `Collection::sort_aggregation_results`: each ORDER BY key resolves to a
-/// JSON field on the group row (a group-key column or an aggregate output
-/// column), compared with the same total JSON ordering. Multi-key sort is
-/// stable so equal leading keys preserve earlier-key order. Similarity /
-/// arithmetic ORDER BY forms are not applicable to grouped rows and are
-/// skipped, matching core.
-fn sort_aggregate_rows(rows: &mut [serde_json::Value], order_by: &[SelectOrderBy]) {
-    let keys: Vec<(String, bool)> = order_by
-        .iter()
-        .filter_map(|clause| aggregate_order_key(&clause.expr).map(|k| (k, clause.descending)))
-        .collect();
-    if keys.is_empty() {
-        return;
+/// The groups of `rows`, HAVING (its parameters bound from `params`)
+/// applied, in the grouper's order.
+fn group_rows(
+    stmt: &SelectStatement,
+    rows: &[ScannedRow<'_>],
+    params: &Params,
+    higher_is_better: bool,
+) -> Result<Vec<GroupOutput>, String> {
+    let having = stmt
+        .having
+        .as_ref()
+        .map(|having| bind_having(having, params))
+        .transpose()?;
+    let mut grouper =
+        Grouper::new(stmt, having.as_ref(), higher_is_better).map_err(|e| e.to_string())?;
+    // Id order, as core feeds its grouper: a float SUM or AVG then adds its
+    // values in the same order in both engines.
+    let mut ordered: Vec<&ScannedRow<'_>> = rows.iter().collect();
+    ordered.sort_unstable_by_key(|row| row.0);
+    for &&(id, score, payload) in &ordered {
+        grouper
+            .push(GroupInput::new(id, score, payload))
+            .map_err(|e| e.to_string())?;
     }
-    rows.sort_by(|a, b| compare_aggregate_rows(a, b, &keys));
+    Ok(grouper.finish())
 }
 
-/// Resolves an ORDER BY expression to the JSON field name used by the
-/// aggregate output row, or `None` for forms that do not apply to grouped
-/// rows (similarity / arithmetic), matching core's `sort_aggregation_results`.
-fn aggregate_order_key(expr: &OrderByExpr) -> Option<String> {
-    match expr {
-        OrderByExpr::Field(name) => Some(name.clone()),
-        OrderByExpr::Aggregate(agg) => Some(
-            agg.alias
-                .clone()
-                .unwrap_or_else(|| aggregate_default_name(agg)),
-        ),
-        _ => None,
+/// `having` with each threshold parameter bound from `params`.
+fn bind_having(having: &HavingClause, params: &Params) -> Result<HavingClause, String> {
+    let conditions = having
+        .conditions
+        .iter()
+        .map(|condition| {
+            Ok(HavingCondition {
+                aggregate: condition.aggregate.clone(),
+                operator: condition.operator,
+                value: threshold(&condition.value, params)?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(HavingClause {
+        conditions,
+        operators: having.operators.clone(),
+    })
+}
+
+/// A HAVING threshold with a parameter bound to the literal its JSON value
+/// is, as core binds it: the [`Grouper`] then refuses (`V018`) one that is
+/// not a number, in both engines. A literal threshold is kept: validation
+/// already refused a non-numeric one.
+fn threshold(value: &Value, params: &Params) -> Result<Value, String> {
+    if !matches!(value, Value::Parameter(_)) {
+        return Ok(value.clone());
     }
+    Ok(match resolve_value(value, params)? {
+        serde_json::Value::Number(n) => number_literal(&n),
+        serde_json::Value::String(s) => Value::String(s),
+        serde_json::Value::Bool(b) => Value::Boolean(b),
+        serde_json::Value::Null => Value::Null,
+        other => return Err(format!("Unsupported parameter type for HAVING: {other}")),
+    })
+}
+
+/// A JSON number as the `VelesQL` literal core binds it to.
+fn number_literal(n: &serde_json::Number) -> Value {
+    if let Some(i) = n.as_i64() {
+        Value::Integer(i)
+    } else if let Some(u) = n.as_u64() {
+        Value::UnsignedInteger(u)
+    } else {
+        Value::Float(n.as_f64().unwrap_or(f64::NAN))
+    }
+}
+
+/// Sorts grouped aggregate rows by the SELECT's ORDER BY, resolved to row
+/// fields by core's `SelectStatement::grouped_sort_keys` — the resolution
+/// core's own aggregate executor sorts through, GROUP BY columns last. The
+/// sort is stable: groups tied on every key (two array keys) keep the
+/// grouper's order, by best row id, as in core.
+///
+/// # Errors
+///
+/// Returns core's `V016` message for an ORDER BY item that names no field of
+/// the grouped rows, rather than leaving them in scan order.
+fn sort_aggregate_rows(
+    rows: &mut [serde_json::Value],
+    stmt: &SelectStatement,
+) -> Result<(), String> {
+    let keys = stmt.grouped_sort_keys().map_err(|e| e.to_string())?;
+    if !keys.is_empty() {
+        rows.sort_by(|a, b| compare_aggregate_rows(a, b, &keys));
+    }
+    Ok(())
 }
 
 /// Total order over two aggregate rows for the resolved `(field, descending)`
-/// keys, using the same NULL-aware JSON comparator as the plain SELECT and
-/// MATCH ORDER BY paths (`compare_json_with_nulls`) for consistent ordering.
+/// keys, in core's ORDER BY value order (`velesql::compare_json_values`), the
+/// one every ORDER BY path uses in both engines.
 fn compare_aggregate_rows(
     a: &serde_json::Value,
     b: &serde_json::Value,
     keys: &[(String, bool)],
 ) -> std::cmp::Ordering {
     for (field, descending) in keys {
-        let ord = crate::velesql_orderby::compare_json_with_nulls(a.get(field), b.get(field));
+        let ord = velesdb_core::velesql::compare_json_values(a.get(field), b.get(field));
         let ord = if *descending { ord.reverse() } else { ord };
         if ord != std::cmp::Ordering::Equal {
             return ord;
         }
     }
     std::cmp::Ordering::Equal
-}
-
-/// Returns the final row set after partitioning, adding the implicit global
-/// group row when GROUP BY is absent and the SELECT contains aggregates.
-fn materialize_groups<'a>(
-    group_cols: &[String],
-    rows: &[ScannedRow<'a>],
-    columns: &SelectColumns,
-) -> Vec<(Vec<serde_json::Value>, Vec<ScannedRow<'a>>)> {
-    let mut groups = partition_into_groups(group_cols, rows);
-    if groups.is_empty() && group_cols.is_empty() && has_aggregate_columns(columns) {
-        groups.push((Vec::new(), Vec::new()));
-    }
-    groups
-}
-
-/// Builds the JSON row for a single group, applying HAVING last.
-fn finalize_group(
-    stmt: &SelectStatement,
-    group_cols: &[String],
-    key: &[serde_json::Value],
-    plain_cols: &[String],
-    aggregates: &[AggregateFunction],
-    group_rows: &[ScannedRow<'_>],
-    params: &Params,
-) -> Result<Option<serde_json::Value>, String> {
-    let mut payload = serde_json::Map::new();
-    write_group_keys(&mut payload, group_cols, key);
-    write_plain_columns(&mut payload, plain_cols, group_rows);
-    write_aggregates(&mut payload, aggregates, group_rows)?;
-    if !passes_having(aggregates, stmt.having.as_ref(), group_rows, params)? {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::Value::Object(payload)))
-}
-
-/// Partitions the row set into groups keyed by the GROUP BY columns.
-///
-/// When `group_cols` is empty, every row ends up in the single implicit
-/// group keyed by `[]`. Preserves first-seen ordering of groups for
-/// deterministic output.
-fn partition_into_groups<'a>(
-    group_cols: &[String],
-    rows: &[ScannedRow<'a>],
-) -> Vec<(Vec<serde_json::Value>, Vec<ScannedRow<'a>>)> {
-    let mut ordered_keys: Vec<Vec<serde_json::Value>> = Vec::new();
-    let mut buckets: BTreeMap<String, Vec<ScannedRow<'a>>> = BTreeMap::new();
-    let mut dedup_keys: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
-    for &(id, score, payload) in rows {
-        let key = group_key(group_cols, id, payload);
-        let key_str = serde_json::to_string(&key).unwrap_or_default();
-        if !dedup_keys.contains_key(&key_str) {
-            ordered_keys.push(key.clone());
-            dedup_keys.insert(key_str.clone(), key);
-        }
-        buckets
-            .entry(key_str)
-            .or_default()
-            .push((id, score, payload));
-    }
-    ordered_keys
-        .into_iter()
-        .map(|k| {
-            let key_str = serde_json::to_string(&k).unwrap_or_default();
-            let bucket = buckets.remove(&key_str).unwrap_or_default();
-            (k, bucket)
-        })
-        .collect()
-}
-
-/// Returns the vector of column values that forms the grouping key.
-fn group_key(
-    group_cols: &[String],
-    id: u64,
-    payload: Option<&serde_json::Value>,
-) -> Vec<serde_json::Value> {
-    group_cols
-        .iter()
-        .map(|c| extract_column(c, id, payload))
-        .collect()
-}
-
-/// Reads a column from either the `id` pseudo-field or the payload JSON.
-fn extract_column(column: &str, id: u64, payload: Option<&serde_json::Value>) -> serde_json::Value {
-    if column == "id" {
-        return serde_json::json!(id);
-    }
-    payload
-        .and_then(|p| crate::filter::get_nested_field(p, column).cloned())
-        .unwrap_or(serde_json::Value::Null)
-}
-
-// --- Selection-list utilities --------------------------------------------
-
-fn extract_aggregates(cols: &SelectColumns) -> Vec<AggregateFunction> {
-    match cols {
-        SelectColumns::Aggregations(a) => a.clone(),
-        SelectColumns::Mixed { aggregations, .. } => aggregations.clone(),
-        _ => Vec::new(),
-    }
-}
-
-fn extract_plain_columns(cols: &SelectColumns) -> Vec<String> {
-    match cols {
-        SelectColumns::Columns(c) => c.iter().map(|col| col.name.clone()).collect(),
-        SelectColumns::Mixed { columns, .. } => {
-            columns.iter().map(|col| col.name.clone()).collect()
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn write_group_keys(
-    out: &mut serde_json::Map<String, serde_json::Value>,
-    group_cols: &[String],
-    key: &[serde_json::Value],
-) {
-    for (col, val) in group_cols.iter().zip(key.iter()) {
-        out.insert(col.clone(), val.clone());
-    }
-}
-
-fn write_plain_columns(
-    out: &mut serde_json::Map<String, serde_json::Value>,
-    plain: &[String],
-    rows: &[ScannedRow<'_>],
-) {
-    if plain.is_empty() || rows.is_empty() {
-        return;
-    }
-    // Non-aggregated columns use the first row's value. This matches SQL's
-    // "any-value" behaviour when a column is not in GROUP BY (undefined by
-    // spec but stable for a deterministic single-row sample).
-    let &(id, _, payload) = &rows[0];
-    for col in plain {
-        if !out.contains_key(col) {
-            out.insert(col.clone(), extract_column(col, id, payload));
-        }
-    }
-}
-
-fn write_aggregates(
-    out: &mut serde_json::Map<String, serde_json::Value>,
-    aggregates: &[AggregateFunction],
-    rows: &[ScannedRow<'_>],
-) -> Result<(), String> {
-    for agg in aggregates {
-        let value = compute_aggregate(agg, rows)?;
-        let name = agg
-            .alias
-            .clone()
-            .unwrap_or_else(|| aggregate_default_name(agg));
-        out.insert(name, value);
-    }
-    Ok(())
-}
-
-fn aggregate_default_name(agg: &AggregateFunction) -> String {
-    let fn_name = match agg.function_type {
-        AggregateType::Count => "count",
-        AggregateType::Sum => "sum",
-        AggregateType::Avg => "avg",
-        AggregateType::Min => "min",
-        AggregateType::Max => "max",
-        AggregateType::First => "first",
-        _ => "agg", // forward-compat for #[non_exhaustive]
-    };
-    let arg_name = match &agg.argument {
-        AggregateArg::Wildcard => "*".to_string(),
-        AggregateArg::Column(c) => c.clone(),
-        AggregateArg::Score => "score".to_string(),
-        _ => "value".to_string(),
-    };
-    format!("{fn_name}({arg_name})")
-}
-
-pub(crate) fn compute_aggregate(
-    agg: &AggregateFunction,
-    rows: &[ScannedRow<'_>],
-) -> Result<serde_json::Value, String> {
-    match agg.function_type {
-        AggregateType::Count => Ok(serde_json::json!(count(&agg.argument, rows))),
-        AggregateType::Sum => Ok(serde_json::json!(sum(&agg.argument, rows))),
-        AggregateType::Avg => Ok(avg_to_json(&agg.argument, rows)),
-        AggregateType::Min => Ok(min_max(&agg.argument, rows, true)),
-        AggregateType::Max => Ok(min_max(&agg.argument, rows, false)),
-        AggregateType::First => Ok(first_value(&agg.argument, rows)),
-        _ => Err(format!(
-            "Unsupported aggregate function in WASM: {:?}",
-            agg.function_type
-        )),
-    }
-}
-
-fn count(arg: &AggregateArg, rows: &[ScannedRow<'_>]) -> u64 {
-    match arg {
-        AggregateArg::Wildcard => rows.len() as u64,
-        AggregateArg::Column(c) => rows
-            .iter()
-            .filter(|(id, _, p)| {
-                let v = extract_column(c, *id, *p);
-                !v.is_null()
-            })
-            .count() as u64,
-        AggregateArg::Score => rows.iter().filter(|(_, s, _)| !s.is_nan()).count() as u64,
-        // Forward-compat: unknown argument counts as 0 rather than panicking.
-        _ => 0,
-    }
-}
-
-fn sum(arg: &AggregateArg, rows: &[ScannedRow<'_>]) -> f64 {
-    numeric_values(arg, rows).into_iter().sum()
-}
-
-fn avg_to_json(arg: &AggregateArg, rows: &[ScannedRow<'_>]) -> serde_json::Value {
-    let values = numeric_values(arg, rows);
-    if values.is_empty() {
-        return serde_json::Value::Null;
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let avg = values.iter().sum::<f64>() / values.len() as f64;
-    serde_json::json!(avg)
-}
-
-fn min_max(arg: &AggregateArg, rows: &[ScannedRow<'_>], pick_min: bool) -> serde_json::Value {
-    let values: Vec<serde_json::Value> = collect_values(arg, rows);
-    if values.is_empty() {
-        return serde_json::Value::Null;
-    }
-    let mut best = values[0].clone();
-    for v in values.iter().skip(1) {
-        let cmp = json_values_cmp(v, &best);
-        match (cmp, pick_min) {
-            (Some(std::cmp::Ordering::Less), true) | (Some(std::cmp::Ordering::Greater), false) => {
-                best = v.clone();
-            }
-            _ => {}
-        }
-    }
-    best
-}
-
-fn first_value(arg: &AggregateArg, rows: &[ScannedRow<'_>]) -> serde_json::Value {
-    collect_values(arg, rows)
-        .into_iter()
-        .next()
-        .unwrap_or(serde_json::Value::Null)
-}
-
-fn collect_values(arg: &AggregateArg, rows: &[ScannedRow<'_>]) -> Vec<serde_json::Value> {
-    rows.iter()
-        .filter_map(|(id, score, payload)| match arg {
-            AggregateArg::Column(c) => {
-                let v = extract_column(c, *id, *payload);
-                (!v.is_null()).then_some(v)
-            }
-            AggregateArg::Score => Some(serde_json::json!(*score)),
-            AggregateArg::Wildcard => Some(serde_json::json!(*id)),
-            _ => None,
-        })
-        .collect()
-}
-
-fn numeric_values(arg: &AggregateArg, rows: &[ScannedRow<'_>]) -> Vec<f64> {
-    collect_values(arg, rows)
-        .into_iter()
-        .filter_map(|v| v.as_f64())
-        .collect()
-}
-
-// --- HAVING ---------------------------------------------------------------
-
-fn passes_having(
-    aggregates: &[AggregateFunction],
-    having: Option<&HavingClause>,
-    rows: &[ScannedRow<'_>],
-    params: &Params,
-) -> Result<bool, String> {
-    let Some(having) = having else {
-        return Ok(true);
-    };
-    if having.conditions.is_empty() {
-        return Ok(true);
-    }
-
-    let mut accumulator: Option<bool> = None;
-    for (i, cond) in having.conditions.iter().enumerate() {
-        let outcome = evaluate_having_condition(cond, aggregates, rows, params)?;
-        accumulator = Some(combine_having(accumulator, outcome, &having.operators, i));
-    }
-    Ok(accumulator.unwrap_or(true))
-}
-
-fn combine_having(acc: Option<bool>, outcome: bool, ops: &[LogicalOp], idx: usize) -> bool {
-    let Some(prev) = acc else {
-        return outcome;
-    };
-    let op = ops
-        .get(idx.saturating_sub(1))
-        .copied()
-        .unwrap_or(LogicalOp::And);
-    match op {
-        LogicalOp::And => prev && outcome,
-        LogicalOp::Or => prev || outcome,
-        // Forward-compat: LogicalOp is #[non_exhaustive]; default to AND.
-        _ => prev && outcome,
-    }
-}
-
-fn evaluate_having_condition(
-    cond: &HavingCondition,
-    _aggregates: &[AggregateFunction],
-    rows: &[ScannedRow<'_>],
-    params: &Params,
-) -> Result<bool, String> {
-    let left = compute_aggregate(&cond.aggregate, rows)?;
-    let right = resolve_value_from_ast(&cond.value, params)?;
-    let op = cond.operator;
-    Ok(apply_compare(op, &left, &right))
-}
-
-fn resolve_value_from_ast(v: &Value, params: &Params) -> Result<serde_json::Value, String> {
-    resolve_value(v, params)
-}
-
-fn apply_compare(op: CompareOp, left: &serde_json::Value, right: &serde_json::Value) -> bool {
-    match op {
-        CompareOp::Eq => json_values_equal(left, right),
-        CompareOp::NotEq => !json_values_equal(left, right),
-        CompareOp::Gt => json_values_cmp(left, right) == Some(std::cmp::Ordering::Greater),
-        CompareOp::Gte => matches!(
-            json_values_cmp(left, right),
-            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
-        ),
-        CompareOp::Lt => json_values_cmp(left, right) == Some(std::cmp::Ordering::Less),
-        CompareOp::Lte => matches!(
-            json_values_cmp(left, right),
-            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
-        ),
-        _ => false,
-    }
 }
 
 #[cfg(test)]

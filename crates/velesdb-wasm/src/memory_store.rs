@@ -1,4 +1,4 @@
-//! In-memory [`MemoryStore`] backend for the browser: no filesystem, no
+//! In-memory [`MemoryStore`](velesdb_memory::MemoryStore) backend for the browser: no filesystem, no
 //! `persistence` feature, no network. This is what lets `velesdb-memory`'s
 //! agent-memory wedge (`remember`/`recall`/`recall_fused`/`relate`/`forget`/
 //! `why`) run entirely client-side.
@@ -8,7 +8,7 @@
 //! this store only holds state in the WASM heap.
 //!
 //! Reuses the crate's existing similarity math ([`vector_ops::compute_scores`])
-//! and edge storage ([`WasmGraphStore`]) rather than duplicating them — this
+//! and edge storage ([`WasmGraphStore`](crate::graph_store::WasmGraphStore)) rather than duplicating them — this
 //! module is the glue that makes those primitives satisfy `MemoryStore`, not
 //! a second implementation of either.
 
@@ -127,7 +127,7 @@ impl Inner {
     }
 }
 
-/// The in-memory [`MemoryStore`] backend `velesdb-wasm` supplies to
+/// The in-memory [`MemoryStore`](velesdb_memory::MemoryStore) backend `velesdb-wasm` supplies to
 /// `MemoryService`, so the agent-memory wedge runs entirely in the browser.
 pub struct WasmStore {
     inner: RefCell<Inner>,

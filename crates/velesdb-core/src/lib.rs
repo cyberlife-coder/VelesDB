@@ -152,6 +152,8 @@ pub mod index;
 pub mod internal_bench;
 #[cfg(all(test, feature = "internal-bench"))]
 mod internal_bench_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod lock_audit;
 pub mod lock_rank;
 pub mod metrics;
 #[cfg(test)]
@@ -162,6 +164,8 @@ mod perf_optimizations_tests;
 pub mod point;
 #[cfg(test)]
 mod point_tests;
+#[cfg(feature = "persistence")]
+pub(crate) mod pools;
 pub mod quantization;
 #[cfg(test)]
 mod quantization_tests;
@@ -246,8 +250,8 @@ pub use collection::{
 };
 pub use contiguous_ops::pad_to_simd_width;
 pub use distance::{DistanceMetric, CONDITION_TYPE_NAMES, DISTANCE_METRIC_NAMES};
-pub use error::{Error, Result};
-pub use filter::{Condition, Filter};
+pub use error::{Error, GuardRailKind, Result, TimeoutBudget};
+pub use filter::{Condition, Filter, InValues};
 pub use lock_rank::{assert_lock_order, LockRank};
 pub use point::{ComponentScores, Point, SearchResult};
 pub use quantization::{

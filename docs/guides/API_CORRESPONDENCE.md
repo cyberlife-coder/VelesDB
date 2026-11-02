@@ -15,11 +15,11 @@ memory are interchangeable.
 | Recall | `velesdb_memory::MemoryService::recall(query, k, filter)` | `MemoryService(...).recall(query, k=10)` | `memory.recall(query, 10)` | `recall({ query, k: 10 })` |
 
 `k` is the canonical result-count name for the modern search and recall
-surfaces. Python `SearchOptions.top_k` and the MCP recall-family `limit` field
-remain accepted as deprecated aliases for one compatibility version. The
-legacy Python `Collection.search(..., top_k=...)` method also remains available,
-but that whole method has been deprecated since v1.15; new code should use
-`search_request(SearchOptions(...))`.
+surfaces. Python `SearchOptions` takes `k` only: its `top_k` alias was removed
+in 8.0.0. The MCP recall-family `limit` field stays accepted as a deprecated
+alias of `k`. The pure-Python shorthand `velesdb.Collection.search(vector,
+top_k=...)` stays as well, without a warning; `search_request(SearchOptions(...))`
+reaches every search option.
 
 ## Deliberate differences
 

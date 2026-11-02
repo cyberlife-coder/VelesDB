@@ -98,32 +98,35 @@ pub(crate) fn json_to_f32_vec(value: &serde_json::Value, name: &str) -> Result<V
 
 /// Compares two JSON values as "equal" according to VelesQL semantics.
 ///
-/// Numeric values compare by numeric equality across integer / float.
+/// Numbers compare by exact value — core's order
+/// (`velesql::compare_json_values`): `1.0` is `1`, `-0.0` is `0`, an integer
+/// past 2^53 is not the float it rounds to, and no tolerance applies.
 /// Strings, booleans, and null are compared by structural equality.
 pub(crate) fn json_values_equal(left: &serde_json::Value, right: &serde_json::Value) -> bool {
-    if let (Some(a), Some(b)) = (left.as_f64(), right.as_f64()) {
-        return (a - b).abs() < f64::EPSILON;
+    match (left, right) {
+        (serde_json::Value::Number(_), serde_json::Value::Number(_)) => {
+            velesdb_core::velesql::compare_json_values(Some(left), Some(right)).is_eq()
+        }
+        _ => left == right,
     }
-    left == right
 }
 
-/// Compares two JSON values numerically, when both can be interpreted as numbers.
+/// Compares two JSON values in core's ORDER BY order, when they are of the
+/// same ordered type (both numbers, or both strings).
 ///
-/// Returns `None` when either value is not numeric (caller decides what "false"
-/// means for non-numeric operands on a `>`/`<` comparison).
+/// Returns `None` when either value is not ordered against the other —
+/// the caller decides what "false" means for such operands on a `>`/`<`
+/// comparison.
 pub(crate) fn json_values_cmp(
     left: &serde_json::Value,
     right: &serde_json::Value,
 ) -> Option<std::cmp::Ordering> {
-    match (left.as_f64(), right.as_f64()) {
-        (Some(a), Some(b)) => a.partial_cmp(&b),
-        _ => {
-            // Fall back to lexicographic compare for strings.
-            match (left.as_str(), right.as_str()) {
-                (Some(a), Some(b)) => Some(a.cmp(b)),
-                _ => None,
-            }
-        }
+    match (left, right) {
+        (serde_json::Value::Number(_), serde_json::Value::Number(_))
+        | (serde_json::Value::String(_), serde_json::Value::String(_)) => Some(
+            velesdb_core::velesql::compare_json_values(Some(left), Some(right)),
+        ),
+        _ => None,
     }
 }
 

@@ -5,7 +5,6 @@
 
 use super::native_index::NativeHnswIndex;
 use super::native_inner::NativeHnswInner;
-use super::params::HnswParams;
 use super::persistence::{self, HnswMeta};
 use crate::distance::DistanceMetric;
 use parking_lot::RwLock;
@@ -101,7 +100,6 @@ impl NativeHnswIndex {
             inner: RwLock::new(inner),
             mappings,
             enable_vector_storage: meta.enable_vector_storage,
-            params: HnswParams::auto(meta.dimension),
             saving: parking_lot::Mutex::new(()),
         })
     }

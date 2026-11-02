@@ -72,7 +72,7 @@
     "@wiscale/velesdb-wasm": "^6.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "overrides": {
     "esbuild": ">=0.28.1"

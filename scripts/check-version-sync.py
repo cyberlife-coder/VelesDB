@@ -24,6 +24,13 @@ TARGETS: "list[tuple[str, str]]" = [
     ("integrations/llamaindex/pyproject.toml", "toml"),
     ("integrations/haystack/pyproject.toml", "toml"),
     ("integrations/langgraph/pyproject.toml", "toml"),
+    # Each integration imports `velesdb_common` modules added in the release it
+    # ships with (`scores` came in 8.0.0), and the packages publish in lock-step.
+    # A floor left at an older release let pip keep a velesdb-common without the
+    # module, and the integration failed at import: 8.0.0 shipped `>=4.0.0`.
+    ("integrations/langchain/pyproject.toml", "pip_common_floor"),
+    ("integrations/llamaindex/pyproject.toml", "pip_common_floor"),
+    ("integrations/haystack/pyproject.toml", "pip_common_floor"),
     # Haystack `__init__.py` carries its own `__version__` constant exposed
     # to users at runtime (`haystack_velesdb.__version__`); must track
     # pyproject.toml. Devin found this drifting at "1.0.0" while pyproject
@@ -482,6 +489,15 @@ def _read_cargo_dep_pin(path: Path) -> str:
     return match.group(1)
 
 
+def _read_pip_common_floor(path: Path) -> str:
+    """Read the `velesdb-common>=X.Y.Z` floor an integration pyproject declares."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'"velesdb-common>=(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f"No velesdb-common floor in {path}")
+    return match.group(1)
+
+
 def _read_deb_download_path(path: Path) -> str:
     """Read the `releases/download/vX.Y.Z/` tag segment of the DEB wget URL."""
     text = path.read_text(encoding="utf-8")
@@ -644,6 +660,7 @@ _READERS = {
     "deb_release_tag": _read_deb_release_tag,
     "npm_lock_pkg": _read_npm_lock_pkg_version,
     "cargo_dep_pin": _read_cargo_dep_pin,
+    "pip_common_floor": _read_pip_common_floor,
     "cargo_lock_core": _read_cargo_lock_core,
     "deb_download_path": _read_deb_download_path,
     "md_version_label": _read_md_version_label,

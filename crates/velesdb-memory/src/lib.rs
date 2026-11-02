@@ -59,6 +59,10 @@
 //! The storage facets refine the unit that rule applies to: an adapter picks
 //! which *facets* it serves, but each facet it implements is forwarded whole.
 
+/// File anchors: tie a lesson to the files it concerns, so recall can mark
+/// it stale when they change (`remember_anchored` / `recall_anchored`).
+#[cfg(feature = "persistence")]
+pub mod anchor;
 /// The refusals the binary's hand-rolled subcommand parsers share: a flag
 /// with no value, a flag the subcommand does not know.
 pub mod cli_flags;

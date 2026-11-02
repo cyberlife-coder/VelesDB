@@ -179,7 +179,7 @@ fn test_e2e_guardrails_circuit_breaker_state() {
     let (_dir, mut col) = make_collection();
 
     col.runtime.guard_rails = Arc::new(GuardRails::with_limits(QueryLimits {
-        max_cardinality: 1, // forces failures
+        max_cardinality: 1, // forces guard-rail stops
         circuit_failure_threshold: 2,
         circuit_recovery_seconds: 60,
         ..QueryLimits::default()
@@ -187,14 +187,18 @@ fn test_e2e_guardrails_circuit_breaker_state() {
 
     let params = HashMap::new();
     let sql = "SELECT * FROM col LIMIT 10;";
-    let _ = col.execute_query_str(sql, &params); // failure 1
-    let _ = col.execute_query_str(sql, &params); // failure 2
+    for _ in 0..2 {
+        let err = col.execute_query_str(sql, &params).unwrap_err();
+        assert_eq!(err.code(), "VELES-027", "{err}");
+    }
 
+    // A cardinality stop is the caller's error, so it leaves the breaker
+    // closed; engine failures open it (database/circuit_breaker_contract_tests.rs).
     let state = col.runtime.guard_rails.circuit_breaker.state();
     assert_eq!(
         state,
-        crate::guardrails::CircuitState::Open,
-        "Circuit breaker should open after 2 failures"
+        crate::guardrails::CircuitState::Closed,
+        "cardinality stops must not open the circuit breaker"
     );
 }
 

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::extraction_jobs::ExtractionJobState;
+use crate::anchor::{AnchoredRecollection, Freshness};
 use crate::model::{
     deserialize_id, ColumnFilter, EntityProfile, EntityRelation, Explanation, Link, MemoryEdge,
     MemoryNode, Recollection,
@@ -43,6 +44,18 @@ pub(super) struct RememberParams {
     /// `VELESDB_MEMORY_DEFAULT_TTL`.
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) ttl_seconds: Option<u64>,
+    /// Optional repository-relative paths of the files this fact is about
+    /// (at most 8, e.g. `["src/parser.rs"]`). The server reads each one
+    /// under `anchor_root` and records its SHA-256, so a later `recall` with
+    /// the same root can mark the fact stale once a file changes. Requires
+    /// `anchor_root`.
+    #[serde(default, deserialize_with = "super::wire::lenient")]
+    pub(super) anchors: Vec<String>,
+    /// Absolute path of the checkout `anchors` are relative to. It must lie
+    /// inside the server's ingest roots (`VELESDB_MEMORY_INGEST_ROOTS`);
+    /// without them anchoring is refused.
+    #[serde(default)]
+    pub(super) anchor_root: Option<String>,
 }
 
 /// Result of the `remember` tool.
@@ -76,6 +89,11 @@ pub(super) struct RecallParams {
     /// `{"project": "veles", "status": "resolved"}`).
     #[serde(default, deserialize_with = "super::wire::lenient")]
     pub(super) filter: Option<Metadata>,
+    /// Optional absolute path of the checkout to check anchored facts
+    /// against (inside the ingest roots). Each fact remembered with `anchors`
+    /// then carries `freshness`; a stale one is ranked lower.
+    #[serde(default)]
+    pub(super) anchor_root: Option<String>,
 }
 
 /// Wire shape of one recalled memory: [`Recollection`] plus the `id_str`
@@ -99,6 +117,11 @@ pub(super) struct RecollectionDto {
     /// carries, forwarded unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) metadata: Option<Map<String, Value>>,
+    /// Present only on `recall` with `anchor_root`, for a fact remembered
+    /// with `anchors`: whether its anchored files still hold the bytes it was
+    /// written against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) freshness: Option<FreshnessDto>,
 }
 
 impl From<Recollection> for RecollectionDto {
@@ -109,7 +132,58 @@ impl From<Recollection> for RecollectionDto {
             score: memory.score,
             content: memory.content,
             metadata: memory.metadata,
+            freshness: None,
         }
+    }
+}
+
+impl From<AnchoredRecollection> for RecollectionDto {
+    fn from(anchored: AnchoredRecollection) -> Self {
+        Self {
+            freshness: FreshnessDto::from_verdict(&anchored.freshness),
+            ..Self::from(anchored.recollection)
+        }
+    }
+}
+
+/// A fact's freshness against its anchored files.
+#[derive(Serialize, JsonSchema)]
+pub(super) struct FreshnessDto {
+    /// `fresh`: every anchored file is unchanged. `stale`: at least one
+    /// changed or was deleted — re-verify the fact before relying on it; it is
+    /// ranked lower. `unverified`: a file could not be checked (outside the
+    /// root, too large, budget spent), which says nothing either way.
+    pub(super) state: FreshnessState,
+    /// The anchored paths that changed or disappeared (stale only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) changed: Vec<String>,
+}
+
+/// The three verdicts a recalled anchored fact can carry.
+#[derive(Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum FreshnessState {
+    /// Every anchored file is unchanged.
+    Fresh,
+    /// An anchored file changed or disappeared.
+    Stale,
+    /// An anchored file could not be checked.
+    Unverified,
+}
+
+impl FreshnessDto {
+    /// The wire form of `verdict`; `None` for an unanchored fact.
+    fn from_verdict(verdict: &Freshness) -> Option<Self> {
+        let (state, changed) = match verdict {
+            Freshness::Unanchored => return None,
+            Freshness::Fresh => (FreshnessState::Fresh, Vec::new()),
+            Freshness::Stale { changed } => (
+                FreshnessState::Stale,
+                changed.iter().map(ToString::to_string).collect(),
+            ),
+            Freshness::Unverified => (FreshnessState::Unverified, Vec::new()),
+        };
+        Some(Self { state, changed })
     }
 }
 
@@ -125,6 +199,13 @@ pub(super) struct RecallResult {
 impl RecallResult {
     /// Wrap recalled domain memories into their wire shape.
     pub(super) fn new(memories: Vec<Recollection>) -> Self {
+        Self {
+            memories: memories.into_iter().map(RecollectionDto::from).collect(),
+        }
+    }
+
+    /// Wrap anchored recollections, each with its freshness.
+    pub(super) fn anchored(memories: Vec<AnchoredRecollection>) -> Self {
         Self {
             memories: memories.into_iter().map(RecollectionDto::from).collect(),
         }

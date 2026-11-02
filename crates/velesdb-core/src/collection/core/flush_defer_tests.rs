@@ -182,3 +182,33 @@ fn test_upsert_increments_hnsw_save_counter() {
         .load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(count, 8, "counter should be 8 after inserting 3 more");
 }
+
+/// A full flush whose vector storage flush failed does not write
+/// `vectors.idx`: it would record offsets over data that never reached disk
+/// (`MmapStorage::flush_full`'s warning), and the next open refuses such an
+/// index before replaying the WAL. The steps that recovery reconciles still
+/// run, and the collection reopens with every point.
+#[test]
+fn a_full_flush_whose_storage_flush_failed_leaves_vectors_idx_alone() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let path = dir.path().join("c");
+    let coll = Collection::create(path.clone(), 4, DistanceMetric::Cosine).expect("test: create");
+    coll.upsert(make_points(0, 10)).expect("test: upsert");
+    coll.flush_full().expect("test: first full flush");
+    let index_file = path.join("vectors.idx");
+    let before = std::fs::read(&index_file).expect("premise: vectors.idx written");
+
+    coll.upsert(make_points(10, 10)).expect("test: upsert more");
+    super::flush::flush_hooks::fail_vector_flush();
+    coll.flush_full()
+        .expect_err("the vector storage step failed");
+
+    assert_eq!(
+        std::fs::read(&index_file).expect("test: read vectors.idx"),
+        before,
+        "vectors.idx was rewritten over a failed storage flush"
+    );
+    drop(coll);
+    let reopened = Collection::open(path).expect("the collection reopens");
+    assert_eq!(reopened.len(), 20, "every point is back");
+}

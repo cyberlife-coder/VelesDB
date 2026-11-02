@@ -20,7 +20,7 @@ import {
   wasmMultiQuerySearch,
   wasmQuery,
 } from '../src/backends/wasm-search';
-import { NotFoundError, VelesDBError } from '../src/types';
+import { NotFoundError, ValidationError, VelesDBError } from '../src/types';
 import type { SearchQuality } from '../src/types';
 import { newSparseIds, sparseHits } from '../src/backends/wasm-sparse';
 import type {
@@ -245,7 +245,7 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
   // refuses. The fake only refuses; the grammar stays in velesdb-wasm.
   it.each([
     ['dense', {}],
-    ['filtered', { filter: { tenant: 'a' } }],
+    ['filtered', { filter: { condition: { type: 'eq', field: 'tenant', value: 'a' } } }],
     ['sparse-only', { sparseVector: { 1: 0.5 } }],
     ['k <= 0', { k: 0 }],
   ] as const)(
@@ -324,6 +324,18 @@ describe('wasmSearchBatch — an unparseable preset stops the batch before it st
 describe('wasmSearch — filter / sparse / hybrid branches', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // velesdb-wasm reads a filter without `condition` as "no filter" and would
+  // return unfiltered neighbours; the server answers the same body with 400.
+  it('refuses a flat filter map before velesdb-wasm can ignore it', async () => {
+    const store = buildStore({ search_with_filter: vi.fn(() => []) });
+    const ctx = buildCtx('docs', store);
+
+    await expect(
+      wasmSearch(ctx, 'docs', [0.1, 0.2], { filter: { category: 'x' } })
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(store.search_with_filter).not.toHaveBeenCalled();
+  });
+
   it('filter branch uses search_with_filter and preserves r.payload', async () => {
     const payloads = new Map<string, Record<string, unknown>>([
       ['9', { fallback: true }],
@@ -337,7 +349,7 @@ describe('wasmSearch — filter / sparse / hybrid branches', () => {
     const ctx = buildCtx('docs', store, { payloads });
 
     const result = await wasmSearch(ctx, 'docs', [0.1, 0.2], {
-      filter: { category: 'x' },
+      filter: { condition: { type: 'eq', field: 'category', value: 'x' } },
     });
 
     expect(store.search_with_filter).toHaveBeenCalled();
@@ -428,26 +440,23 @@ describe('wasmTextSearch', () => {
     );
   });
 
-  it('maps tuple results and object results via mapWasmResult', async () => {
-    const payloads = new Map<string, Record<string, unknown>>([
-      ['1', { from: 'map' }],
-    ]);
+  it('passes the binding records on with their null score, never a number', async () => {
+    // velesdb-wasm 8.0.0's text_search is an unranked substring match: its
+    // records are {id, score: null, payload}, in insertion order.
     const store = buildStore({
       text_search: vi.fn(() => [
-        [1n, 0.9], // tuple shape
-        { id: 2n, score: 0.5, payload: { inline: true } }, // object shape
+        { id: 2, score: null, payload: { inline: true } },
+        { id: 1, score: null, payload: { title: 'b' } },
       ]),
     });
-    const ctx = buildCtx('docs', store, { payloads });
+    const ctx = buildCtx('docs', store);
 
     const result = await wasmTextSearch(ctx, 'docs', 'hello', { k: 5 });
 
-    expect(result[0]).toEqual({ id: '1', score: 0.9, payload: { from: 'map' } });
-    expect(result[1]).toEqual({
-      id: '2',
-      score: 0.5,
-      payload: { inline: true },
-    });
+    expect(result).toEqual([
+      { id: '2', score: null, payload: { inline: true } },
+      { id: '1', score: null, payload: { title: 'b' } },
+    ]);
   });
 });
 
@@ -858,26 +867,6 @@ describe('WASM search — options it has no way to honour are refused (#2095)', 
 
     expectRefusal(outcome, 'namedSparseIndexes');
     expect(sparse_search).not.toHaveBeenCalled();
-  });
-
-  it('search refuses includeVectors: true, since its results carry no vector', async () => {
-    const search = vi.fn(() => [[1n, 0.9]]);
-    const ctx = buildCtx('docs', buildStore({ search }));
-
-    const outcome = await settle(
-      wasmSearch(ctx, 'docs', [0.1, 0.2], { includeVectors: true })
-    );
-
-    expectRefusal(outcome, 'includeVectors');
-  });
-
-  it('search accepts includeVectors: false, which asks for nothing', async () => {
-    const search = vi.fn(() => [[1n, 0.9]]);
-    const ctx = buildCtx('docs', buildStore({ search }));
-
-    const rows = await wasmSearch(ctx, 'docs', [0.1, 0.2], { includeVectors: false });
-
-    expect(rows).toEqual([{ id: '1', score: 0.9 }]);
   });
 });
 

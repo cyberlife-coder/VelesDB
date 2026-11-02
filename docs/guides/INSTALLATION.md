@@ -217,8 +217,11 @@ services:
     volumes:
       - velesdb_data:/data
     environment:
-      - RUST_LOG=info
       - VELESDB_DATA_DIR=/data
+      # Reached from the host as localhost:8080, the server needs nothing more.
+      # Another container calling it as `velesdb:8080` (or a client using a DNS
+      # name / LAN address) must be listed, or it gets 421:
+      # - VELESDB_ALLOWED_HOSTS=velesdb
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -239,7 +242,8 @@ volumes:
 | `VELESDB_DATA_DIR` | `/data` | Data storage directory |
 | `VELESDB_HOST` | `0.0.0.0` | Bind address |
 | `VELESDB_PORT` | `8080` | HTTP port |
-| `RUST_LOG` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
+| `VELESDB_LOGGING_LEVEL` | unset (`info`, plus per-request `tower_http` debug lines) | Log level: `error`, `warn`, `info`, `debug`, `trace`; overrides `[logging] level` |
+| `RUST_LOG` | unset | Full `tracing` filter; when set, overrides `VELESDB_LOGGING_LEVEL` and `[logging] level` |
 
 ---
 
@@ -358,7 +362,7 @@ Options:
 - `VELESDB_DATA_DIR` - Data directory path
 - `VELESDB_HOST` - Bind address
 - `VELESDB_PORT` - Port number
-- `RUST_LOG` - Logging level (debug, info, warn, error)
+- `VELESDB_LOGGING_LEVEL` - Log level (error, warn, info, debug, trace); `RUST_LOG`, if set, overrides it
 
 ### Data Persistence
 

@@ -103,6 +103,8 @@ impl GpuAccelerator {
     /// [`super::pq_gpu::PqGpuContext::new`] delegates to [`Self::global`], which
     /// calls this method once via [`OnceLock`].
     fn init_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        // no collection lock: the thread only probes the GPU, so joining it
+        // can wait on nothing a collection guard protects.
         std::thread::spawn(Self::init_device_sync)
             .join()
             .ok()

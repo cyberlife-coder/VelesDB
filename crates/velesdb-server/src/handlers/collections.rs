@@ -14,7 +14,8 @@ use velesdb_core::index::HnswParams;
 use velesdb_core::{DistanceMetric, StorageMode};
 
 use super::helpers::{
-    auto_core_error_response, error_response, get_collection_or_404, run_blocking,
+    authorize_unscoped_read, auto_core_error_response, error_response, get_collection_or_404,
+    run_blocking, worker_failure,
 };
 
 /// List all collections.
@@ -166,7 +167,7 @@ fn create_vector_collection(
         // before any collection is created on disk.
         hnsw_params
             .validate()
-            .map_err(|e| error_response(StatusCode::BAD_REQUEST, e.to_string()))?;
+            .map_err(|e| auto_core_error_response(&e))?;
         state.db.create_vector_collection_with_params(
             &req.name,
             dimension,
@@ -341,7 +342,15 @@ fn dispatch_create(
         }
         "graph" | "knowledge_graph" | "kg" => {
             let schema = parse_graph_schema(req)?;
-            Ok(state.db.create_graph_collection(&req.name, schema))
+            // `dimension` gives the nodes embeddings, indexed and searched
+            // with `metric`; without it the graph has none, and `metric`
+            // has nothing to apply to.
+            Ok(match req.dimension {
+                Some(dimension) => state
+                    .db
+                    .create_graph_collection_with_embeddings(&req.name, schema, dimension, metric),
+                None => state.db.create_graph_collection(&req.name, schema),
+            })
         }
         "vector" | "" => create_vector_collection(state, req, metric, storage_mode),
         _ => Err(error_response(
@@ -397,6 +406,15 @@ pub async fn get_collection(
         Err(resp) => return resp,
     };
 
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
+
     let config = collection.config();
     Json(CollectionResponse {
         name: config.name,
@@ -429,6 +447,15 @@ pub async fn collection_sanity(
         Ok(c) => c,
         Err(resp) => return resp,
     };
+
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
 
     let config = collection.config();
     build_sanity_response(&state, &config, &collection)
@@ -526,6 +553,15 @@ pub async fn is_empty(
         Err(resp) => return resp,
     };
 
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
+        &name,
+        velesdb_core::observer::QueryOperationKind::Select,
+        "collection metadata reads",
+    ) {
+        return auto_core_error_response(&refusal);
+    }
+
     Json(serde_json::json!({
         "is_empty": collection.is_empty()
     }))
@@ -563,9 +599,6 @@ pub async fn flush_collection(
         }))
         .into_response(),
         Ok(Err(e)) => auto_core_error_response(&e),
-        Err(join_err) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("flush task panicked: {join_err}"),
-        ),
+        Err(join_err) => auto_core_error_response(&worker_failure("flush", &join_err)),
     }
 }

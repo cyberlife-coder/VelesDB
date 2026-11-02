@@ -2,7 +2,7 @@
 //!
 //! # Why a wasm-dedicated trait (not core's `DatabaseObserver`)
 //!
-//! `velesdb-core`'s [`DatabaseObserver`](velesdb_core::DatabaseObserver) is
+//! `velesdb-core`'s `DatabaseObserver` (`persistence`-gated, so not linkable here) is
 //! bound by `Send + Sync` because the core `Database` is a multi-threaded
 //! server component. The WASM store graph is single-threaded and built on
 //! `Rc<RefCell<VectorStore>>` (see [`crate::database::DatabaseInner`]), which

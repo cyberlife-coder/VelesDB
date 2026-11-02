@@ -373,3 +373,112 @@ fn test_unwired_set_keys_are_flagged() {
         "max_results IS wired and must not warn"
     );
 }
+
+/// An observer that scopes every read of `orders` to category `a`, or denies
+/// it, so the REPL's aggregate route can be checked against the read gate.
+struct OrdersPolicy {
+    deny: bool,
+}
+
+impl velesdb_core::DatabaseObserver for OrdersPolicy {
+    fn on_query_request(
+        &self,
+        ctx: &velesdb_core::QueryAccessContext,
+    ) -> velesdb_core::Result<velesdb_core::AccessDecision> {
+        if ctx.collection != "orders" {
+            return Ok(velesdb_core::AccessDecision::Allow);
+        }
+        if self.deny {
+            return Ok(velesdb_core::AccessDecision::Deny(
+                velesdb_core::Error::Query("orders are off limits".to_string()),
+            ));
+        }
+        #[allow(clippy::field_reassign_with_default)] // `AccessScope` is non_exhaustive
+        let mut scope = velesdb_core::AccessScope::default();
+        scope.filter =
+            velesdb_core::velesql::Parser::parse("SELECT * FROM orders WHERE category = 'a'")
+                .expect("scope predicate parses")
+                .select
+                .where_clause;
+        Ok(velesdb_core::AccessDecision::AllowWithScope(scope))
+    }
+}
+
+/// Opens a database under `policy` holding `orders`: two rows in category
+/// `a`, one in `b`.
+fn orders_under(policy: OrdersPolicy) -> (TempDir, Database) {
+    let dir = TempDir::new().expect("temp dir");
+    let db =
+        Database::open_with_observer(dir.path(), std::sync::Arc::new(policy)).expect("open db");
+    db.create_collection("orders", 2, DistanceMetric::Cosine)
+        .expect("create collection");
+    let coll = db
+        .get_vector_collection("orders")
+        .expect("vector collection");
+    coll.upsert(vec![
+        Point::new(
+            1,
+            vec![1.0, 0.0],
+            Some(serde_json::json!({"category": "a"})),
+        ),
+        Point::new(
+            2,
+            vec![0.0, 1.0],
+            Some(serde_json::json!({"category": "a"})),
+        ),
+        Point::new(
+            3,
+            vec![1.0, 1.0],
+            Some(serde_json::json!({"category": "b"})),
+        ),
+    ])
+    .expect("upsert");
+    (dir, db)
+}
+
+/// GIVEN a database whose observer scopes `orders` to category `a`
+/// WHEN the REPL runs `COUNT(*)` and a `GROUP BY` on `orders`
+/// THEN both see only the scoped rows: 2, and the `a` group alone.
+#[test]
+fn test_execute_query_aggregation_honours_the_read_scope() {
+    let (_dir, db) = orders_under(OrdersPolicy { deny: false });
+
+    let count = execute_query(&db, "SELECT COUNT(*) AS n FROM orders", None, None)
+        .expect("scoped COUNT runs");
+    assert_eq!(
+        count.rows[0].get("n").and_then(serde_json::Value::as_u64),
+        Some(2),
+        "COUNT(*) under the scope; rows={:?}",
+        count.rows
+    );
+
+    let groups = execute_query(
+        &db,
+        "SELECT category, COUNT(*) AS n FROM orders GROUP BY category",
+        None,
+        None,
+    )
+    .expect("scoped GROUP BY runs");
+    assert_eq!(
+        groups.rows.len(),
+        1,
+        "only the scoped group; rows={:?}",
+        groups.rows
+    );
+}
+
+/// GIVEN a database whose observer denies `orders`
+/// WHEN the REPL runs an aggregate on `orders`
+/// THEN it fails with the observer's message.
+#[test]
+fn test_execute_query_aggregation_refuses_a_denied_read() {
+    let (_dir, db) = orders_under(OrdersPolicy { deny: true });
+
+    let err = execute_query(&db, "SELECT COUNT(*) AS n FROM orders", None, None)
+        .expect_err("a denied aggregate must fail");
+
+    assert!(
+        err.to_string().contains("orders are off limits"),
+        "the observer's denial reaches the REPL: {err}"
+    );
+}

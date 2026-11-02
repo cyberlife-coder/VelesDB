@@ -36,9 +36,7 @@ const MAX_PERFECT_MODE_VECTORS_CAP: usize = 100_000_000;
 const QUERY_TIMEOUT_MS_CAP: u64 = 86_400_000;
 /// Hard ceiling for `hnsw.max_layers`. `0` means "auto".
 const MAX_LAYERS_CAP: usize = 64;
-/// Hard ceiling for `server.workers`. `0` means "auto" (derive from CPU
-/// count), so it is allowed; any positive value is capped to a sane ceiling.
-const WORKERS_CAP: usize = 4_096;
+use crate::config::{LOG_LEVELS, WORKERS_CAP};
 
 /// Rejects `0` and any value above `cap` for a capacity/size field.
 fn range_check_capacity(key: &str, value: usize, cap: usize) -> Result<(), ConfigError> {
@@ -298,13 +296,12 @@ impl VelesConfig {
     }
 
     fn validate_logging(&self) -> Result<(), ConfigError> {
-        let valid_levels = ["error", "warn", "info", "debug", "trace"];
-        if !valid_levels.contains(&self.logging.level.as_str()) {
+        if !LOG_LEVELS.contains(&self.logging.level.as_str()) {
             return Err(ConfigError::InvalidValue {
                 key: "logging.level".to_string(),
                 message: format!(
                     "value '{}' is invalid, expected one of: {:?}",
-                    self.logging.level, valid_levels
+                    self.logging.level, LOG_LEVELS
                 ),
             });
         }

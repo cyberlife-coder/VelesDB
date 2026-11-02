@@ -274,15 +274,13 @@ impl Collection {
 
         match (velesql_value, json_value) {
             (Value::String(s), serde_json::Value::String(js)) => s == js,
-            (Value::Integer(i), serde_json::Value::Number(n)) => {
-                n.as_i64().is_some_and(|ni| *i == ni)
-            }
-            (Value::UnsignedInteger(u), serde_json::Value::Number(n)) => {
-                n.as_u64().is_some_and(|nu| *u == nu)
-            }
-            (Value::Float(f), serde_json::Value::Number(n)) => {
-                n.as_f64().is_some_and(|nf| (*f - nf).abs() < 0.001)
-            }
+            // Numbers match by exact value, as a WHERE `=` decides: `1.0`
+            // is `1`, `-0.0` is `0`, `2^53 + 1` is not `2^53.0`.
+            (
+                literal @ (Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_)),
+                serde_json::Value::Number(n),
+            ) => crate::velesql::compare_number_literal(n, literal)
+                .is_some_and(std::cmp::Ordering::is_eq),
             (Value::Boolean(b), serde_json::Value::Bool(jb)) => b == jb,
             (Value::Null, serde_json::Value::Null) => true,
             _ => false,

@@ -430,8 +430,10 @@ WHERE status = 'active'
 -- Set operations
 SELECT * FROM active_users UNION SELECT * FROM archived_users
 
--- Hybrid fusion search (USING FUSION is a trailing clause: after LIMIT)
-SELECT * FROM documents 
+-- Hybrid fusion search (USING FUSION is a trailing clause: after LIMIT,
+-- and needs at least two branches to fuse, or a NEAR_FUSED predicate)
+SELECT * FROM documents
+WHERE vector NEAR $v AND content MATCH 'rust'
 LIMIT 20 USING FUSION(strategy='rrf', k=60)
 ```
 

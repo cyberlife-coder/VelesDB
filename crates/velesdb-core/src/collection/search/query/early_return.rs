@@ -161,7 +161,7 @@ impl Collection {
         graph_cache: &mut super::where_eval::GraphMatchEvalCache,
     ) -> Result<Vec<SearchResult>> {
         let mut results = execute_fn(self)
-            .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+            .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         if early.has_graph_predicates {
             results = self
                 .apply_where_condition_to_results_with_cache(
@@ -171,7 +171,7 @@ impl Collection {
                     &early.stmt.from_alias,
                     graph_cache,
                 )
-                .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         }
         self.finalize_early_results(results, early)
     }
@@ -189,7 +189,7 @@ impl Collection {
         }
         if let Some(ref order_by) = early.stmt.order_by {
             self.apply_order_by(&mut results, order_by, early.params)
-                .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())?;
+                .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))?;
         }
         // SQL-standard: OFFSET applied after ORDER BY, before LIMIT.
         if let Some(offset) = early.stmt.offset {

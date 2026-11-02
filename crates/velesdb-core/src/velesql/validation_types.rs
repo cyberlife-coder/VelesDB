@@ -138,6 +138,22 @@ pub enum ValidationErrorKind {
     /// `WITH (ef_search = ...)` is not an integer, or is outside the
     /// documented `[16, 4096]` range (#2274).
     InvalidEfSearch,
+    /// MATCH `RETURN ... ORDER BY` names an expression the MATCH executor
+    /// cannot sort by: an aggregate, or a bare name (a pattern alias, a
+    /// `RETURN` alias, an unqualified property) other than `depth`.
+    UnsupportedMatchOrderBy,
+    /// ORDER BY of a GROUP BY aggregation names no column of its grouped
+    /// rows: an aggregate the SELECT does not list, a column outside GROUP BY,
+    /// `similarity()` or an arithmetic expression.
+    OrderByNotInResult,
+    /// Two output columns of an aggregate query share a name: a GROUP BY or
+    /// selected column and an aggregate's alias or default name, or two
+    /// aggregates. One would overwrite the other in the result row.
+    DuplicateOutputColumn,
+    /// HAVING the query cannot evaluate: HAVING without GROUP BY, or a
+    /// threshold that is not a number (`HAVING COUNT(*) > 'many'`), which no
+    /// aggregate can compare with.
+    InvalidHaving,
 }
 
 impl ValidationErrorKind {
@@ -159,6 +175,10 @@ impl ValidationErrorKind {
             Self::FusionMisconfigured => "V012",
             Self::InvalidSearchMode => "V013",
             Self::InvalidEfSearch => "V014",
+            Self::UnsupportedMatchOrderBy => "V015",
+            Self::OrderByNotInResult => "V016",
+            Self::DuplicateOutputColumn => "V017",
+            Self::InvalidHaving => "V018",
         }
     }
 
@@ -187,6 +207,10 @@ impl ValidationErrorKind {
             Self::FusionMisconfigured => "USING FUSION clause is misconfigured",
             Self::InvalidSearchMode => "Invalid search mode",
             Self::InvalidEfSearch => "Invalid ef_search value",
+            Self::UnsupportedMatchOrderBy => "Unsupported MATCH ORDER BY expression",
+            Self::OrderByNotInResult => "ORDER BY names no column of the grouped rows",
+            Self::DuplicateOutputColumn => "Two output columns share a name",
+            Self::InvalidHaving => "Invalid HAVING clause",
         }
     }
 }

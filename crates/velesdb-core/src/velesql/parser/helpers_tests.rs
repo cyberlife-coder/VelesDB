@@ -17,43 +17,6 @@ fn test_compare_op_from_str_invalid() {
 }
 
 #[test]
-fn test_parse_value_from_str_integer() {
-    assert_eq!(parse_value_from_str("42").unwrap(), Value::Integer(42));
-}
-
-#[test]
-fn test_parse_value_from_str_float() {
-    assert_eq!(parse_value_from_str("2.72").unwrap(), Value::Float(2.72));
-}
-
-#[test]
-fn test_parse_value_from_str_string() {
-    assert_eq!(
-        parse_value_from_str("'hello'").unwrap(),
-        Value::String("hello".to_string())
-    );
-}
-
-#[test]
-fn test_parse_value_from_str_boolean() {
-    assert_eq!(parse_value_from_str("true").unwrap(), Value::Boolean(true));
-    assert_eq!(
-        parse_value_from_str("FALSE").unwrap(),
-        Value::Boolean(false)
-    );
-}
-
-#[test]
-fn test_parse_value_from_str_null() {
-    assert_eq!(parse_value_from_str("null").unwrap(), Value::Null);
-}
-
-#[test]
-fn test_parse_value_from_str_invalid() {
-    assert!(parse_value_from_str("not_a_value").is_err());
-}
-
-#[test]
 fn test_parse_u64_clause_error_message() {
     // Verify the error message includes the clause name.
     // We cannot construct a real pest pair without the grammar,
@@ -115,27 +78,27 @@ fn test_unescape_string_literal_empty() {
 #[test]
 fn test_parse_integer_i64_max() {
     // i64::MAX should still parse as Value::Integer
-    let result = parse_value_from_str("9223372036854775807").unwrap();
+    let result = parse_integer_literal("9223372036854775807").unwrap();
     assert_eq!(result, Value::Integer(i64::MAX));
 }
 
 #[test]
 fn test_parse_integer_u64_value() {
     // i64::MAX + 1 should parse as Value::UnsignedInteger
-    let result = parse_value_from_str("9223372036854775808").unwrap();
+    let result = parse_integer_literal("9223372036854775808").unwrap();
     assert_eq!(result, Value::UnsignedInteger(9_223_372_036_854_775_808));
 }
 
 #[test]
 fn test_parse_integer_u64_max() {
     // u64::MAX should parse as Value::UnsignedInteger
-    let result = parse_value_from_str("18446744073709551615").unwrap();
+    let result = parse_integer_literal("18446744073709551615").unwrap();
     assert_eq!(result, Value::UnsignedInteger(u64::MAX));
 }
 
 #[test]
 fn test_parse_integer_overflow_to_float() {
     // u64::MAX + 1 should fall through to float parsing
-    let result = parse_value_from_str("18446744073709551616").unwrap();
+    let result = parse_integer_literal("18446744073709551616").unwrap();
     assert!(matches!(result, Value::Float(_)));
 }

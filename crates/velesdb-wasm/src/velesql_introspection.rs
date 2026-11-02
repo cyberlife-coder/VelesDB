@@ -47,6 +47,9 @@ fn describe_collection(
     db: &DatabaseInner,
     stmt: &DescribeCollectionStatement,
 ) -> Result<Vec<QueryResultRow>, String> {
+    // DESCRIBE exposes the collection's metadata (count, metric) — a read the
+    // gate decides like any other.
+    db.check_query_access(&stmt.name, crate::observer::WasmQueryOperationKind::Select)?;
     let store = db.get_shared_store(&stmt.name)?;
     let borrowed = store.borrow();
     let kind = if borrowed.dimension() == 0 {

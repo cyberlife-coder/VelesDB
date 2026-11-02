@@ -14,6 +14,7 @@ use std::sync::Arc;
 use velesdb_core::wire::vrb1;
 
 use super::{upsert_result_to_response, MAX_UPSERT_BATCH_SIZE};
+use crate::handlers::content_type::{OctetStream, RequireContentType};
 use crate::handlers::helpers::{error_response, get_vector_collection_or_404};
 use crate::types::ErrorResponse;
 use crate::AppState;
@@ -22,7 +23,8 @@ use crate::AppState;
 ///
 /// Accepts an `application/octet-stream` body in the VRB1 raw-bulk format
 /// (a 16-byte header — magic, count, dim, id_width — followed by tightly-packed
-/// `u64` ids and `f32` vectors). The vectors are forwarded to
+/// `u64` ids and `f32` vectors); any other `Content-Type` is refused with
+/// `415`. The vectors are forwarded to
 /// `Collection::upsert_bulk_from_raw` (zero per-point `Point` allocation).
 /// Payloads are not supported on this path.
 #[utoipa::path(
@@ -36,12 +38,14 @@ use crate::AppState;
     responses(
         (status = 200, description = "Points upserted", body = Object),
         (status = 400, description = "Malformed body or dimension mismatch", body = ErrorResponse),
-        (status = 404, description = "Collection not found", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 415, description = "Content-Type is not application/octet-stream", body = ErrorResponse)
     )
 )]
 pub async fn upsert_points_raw(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    _content_type: RequireContentType<OctetStream>,
     body: Bytes,
 ) -> impl IntoResponse {
     let collection = match get_vector_collection_or_404(&state, &name) {

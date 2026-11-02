@@ -128,7 +128,7 @@ impl Collection {
 
     /// Bitmap-filtered HNSW search over a large anchor set (adaptive retry
     /// in `search_with_quality_and_bitmap` compensates the post-hoc filter).
-    fn search_anchors_bitmap(
+    pub(in crate::collection::search) fn search_anchors_bitmap(
         &self,
         vector: &[f32],
         anchor_ids: &HashSet<u64>,
@@ -161,13 +161,20 @@ impl Collection {
                 )
             })
             .min(super::MAX_LIMIT);
-        let index_results = self.storage.index.search_with_quality_and_bitmap(
-            vector,
-            candidates_k,
-            self.runtime_search_quality(),
-            &bitmap,
-        )?;
-        let index_results = self.merge_delta(index_results, vector, candidates_k, metric);
+        // The pending points get the same restriction as the index: the
+        // anchors (narrowed by the indexed metadata), and the residual
+        // metadata filter `filter_and_hydrate` applies below.
+        let restriction = crate::collection::search::pending::PendingRestriction::within(&bitmap)
+            .post_filtered_if(metadata_filter.is_some());
+        let index_results =
+            self.search_merging_pending(vector, candidates_k, metric, restriction, |n| {
+                self.storage.index.search_with_quality_and_bitmap(
+                    vector,
+                    n,
+                    self.runtime_search_quality(),
+                    &bitmap,
+                )
+            })?;
 
         let pass_all =
             crate::filter::Filter::new(crate::filter::Condition::And { conditions: vec![] });
@@ -192,8 +199,9 @@ impl Collection {
         let mut scored = Vec::new();
         for chunk in ids.chunks(ANCHOR_HYDRATION_CHUNK) {
             for point in self.get(chunk).into_iter().flatten() {
-                let payload = point.payload.clone().unwrap_or(serde_json::Value::Null);
-                if metadata_filter.is_some_and(|f| !f.matches(&payload)) {
+                if metadata_filter
+                    .is_some_and(|f| !f.matches_point(point.id, point.payload.as_ref()))
+                {
                     continue;
                 }
                 // A length-mismatched vector can't be scored against `query`;

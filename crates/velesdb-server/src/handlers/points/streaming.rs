@@ -15,6 +15,7 @@ use crate::types::{EnableStreamingRequest, ErrorResponse, StreamInsertRequest};
 use crate::AppState;
 use velesdb_core::{BackpressureError, Point, VectorCollection};
 
+use crate::handlers::content_type::{Ndjson, RequireContentType};
 use crate::handlers::helpers::{
     auto_core_error_response, error_response, get_vector_collection_or_404,
 };
@@ -64,9 +65,8 @@ fn parse_ndjson_line(
     }
 }
 
-/// Flushes a batch and -- if the collection's delta buffer is active -- also
-/// pushes the entries into the buffer for immediate searchability.
-async fn flush_point_batch_with_delta(
+/// Flushes a batch through `upsert_bulk` on the blocking thread pool.
+async fn flush_point_batch(
     collection: &VectorCollection,
     batch: &mut Vec<Point>,
     stats: &mut StreamUpsertStats,
@@ -78,26 +78,10 @@ async fn flush_point_batch_with_delta(
     let points = std::mem::take(batch);
     let batch_size = points.len();
 
-    // Snapshot (id, vector) pairs for delta before moving `points` into spawn_blocking.
-    // Only allocate when delta is active to keep the hot path allocation-free.
-    #[cfg(feature = "persistence")]
-    let delta_entries: Vec<(u64, Vec<f32>)> = if collection.is_delta_active() {
-        points.iter().map(|p| (p.id, p.vector.clone())).collect()
-    } else {
-        Vec::new()
-    };
-
     let coll = collection.clone();
     match tokio::task::spawn_blocking(move || coll.upsert_bulk(&points)).await {
         Ok(Ok(inserted)) => {
             stats.inserted += inserted;
-
-            // C-3: push into the delta buffer after a successful upsert so that
-            // search can find these points before HNSW is rebuilt.
-            #[cfg(feature = "persistence")]
-            if !delta_entries.is_empty() {
-                collection.push_to_delta_if_active(&delta_entries);
-            }
         }
         Ok(Err(error)) => {
             stats.failed_upserts += batch_size;
@@ -120,7 +104,8 @@ async fn flush_point_batch_with_delta(
 
 /// Stream upsert points using NDJSON.
 ///
-/// Accepts a `application/x-ndjson` body. Each line is one JSON-encoded point,
+/// Accepts an `application/x-ndjson` body, and refuses any other
+/// `Content-Type` with `415`. Each line is one JSON-encoded point,
 /// whose `id` is an unsigned 64-bit integer: a line that is not blank and does
 /// not parse as one, a string `id` included, is counted in the response's
 /// `malformed` field.
@@ -139,12 +124,14 @@ async fn flush_point_batch_with_delta(
     request_body(content = String, content_type = "application/x-ndjson", description = "NDJSON stream with one point per line"),
     responses(
         (status = 200, description = "Stream processed", body = Object),
-        (status = 404, description = "Collection not found", body = ErrorResponse)
+        (status = 404, description = "Collection not found", body = ErrorResponse),
+        (status = 415, description = "Content-Type is not application/x-ndjson", body = ErrorResponse)
     )
 )]
 pub async fn stream_upsert_points(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    _content_type: RequireContentType<Ndjson>,
     body: Body,
 ) -> impl IntoResponse {
     let collection = match get_vector_collection_or_404(&state, &name) {
@@ -194,7 +181,7 @@ async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> Str
                 buffer.extend_from_slice(&chunk);
                 process_buffer_lines(&mut buffer, &mut batch, &mut stats);
                 if should_flush(&batch, last_flush) {
-                    flush_point_batch_with_delta(collection, &mut batch, &mut stats).await;
+                    flush_point_batch(collection, &mut batch, &mut stats).await;
                     last_flush = Instant::now();
                 }
             }
@@ -212,7 +199,7 @@ async fn process_ndjson_stream(collection: &VectorCollection, body: Body) -> Str
         parse_ndjson_line(line.trim(), &mut batch, &mut stats, id_hint);
     }
 
-    flush_point_batch_with_delta(collection, &mut batch, &mut stats).await;
+    flush_point_batch(collection, &mut batch, &mut stats).await;
     stats
 }
 

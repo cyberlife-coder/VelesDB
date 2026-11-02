@@ -231,16 +231,56 @@ fn a_strict_bound_on_an_integer_is_looked_up_inclusive() {
 }
 
 #[test]
-fn a_float_equality_is_looked_up_as_twice_the_where_tolerance() {
-    let kind = predicate_kind(CompareOp::Eq, &Value::Float(0.5));
-    let Some(PredicateKind::Range(low, high)) = kind else {
-        panic!("a float equality maps to {kind:?}");
-    };
-    let width = 2.0 * FLOAT_EQ_TOLERANCE;
-    assert_eq!(low.as_f64(), Some(0.5 - width));
-    assert_eq!(high.as_f64(), Some(0.5 + width));
-    assert!(matches!(
-        predicate_kind(CompareOp::Eq, &Value::Integer(5)),
-        Some(PredicateKind::Exact(_))
-    ));
+fn an_equality_is_looked_up_exactly_whatever_the_literal() {
+    // WHERE has no tolerance: the index lookup needs none either.
+    for literal in [Value::Float(0.5), Value::Integer(5)] {
+        assert!(
+            matches!(
+                predicate_kind(CompareOp::Eq, &literal),
+                Some(PredicateKind::Exact(_))
+            ),
+            "{literal:?}"
+        );
+    }
+}
+
+#[test]
+fn a_strict_bound_on_a_float_past_2_pow_53_is_looked_up_inclusive() {
+    // The index keys `2^53 + 1` as the float `2^53`, which WHERE orders
+    // below it: a strict bound there must keep the key itself.
+    let kind = predicate_kind(CompareOp::Gt, &Value::Float(9_007_199_254_740_992.0));
+    assert!(matches!(kind, Some(PredicateKind::Gte(_))), "{kind:?}");
+}
+
+/// A predicate no index covers narrows nothing, so the pre-filter keeps what
+/// the indexed predicates found instead of giving up on all of them: WHERE
+/// re-checks every candidate it lets through.
+#[cfg(feature = "persistence")]
+#[test]
+fn a_predicate_no_index_covers_is_skipped_not_fatal() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = crate::collection::Collection::create(
+        dir.path().join("g"),
+        2,
+        crate::distance::DistanceMetric::Cosine,
+    )
+    .expect("test: create");
+    let points: Vec<crate::point::Point> = (1..=3_u64)
+        .map(|id| {
+            let payload = serde_json::json!({ "_labels": ["Person"], "age": id * 10 });
+            crate::point::Point::new(id, vec![1.0, 0.0], Some(payload))
+        })
+        .collect();
+    coll.upsert(points).expect("test: upsert");
+
+    // `nickname` is on no node, so no index covers it.
+    let query = crate::velesql::Parser::parse(
+        "MATCH (p:Person) WHERE p.age > 15 AND p.nickname = 'x' RETURN p",
+    )
+    .expect("test: parse");
+    let mc = query.match_clause.expect("test: a MATCH query");
+    let where_clause = mc.where_clause.expect("test: a WHERE clause");
+
+    let set = compute_index_prefilter(&coll, &mc.patterns[0], &where_clause, &HashMap::new());
+    assert_eq!(set, Some(HashSet::from([2, 3])));
 }

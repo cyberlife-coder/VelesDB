@@ -85,10 +85,10 @@ describe("wasmSearchBatch — a filter is refused under searchBatch's own name",
     const { ctx } = buildCtx();
 
     await expect(
-      wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], filter: { tenant: 'a' } }])
+      wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], filter: { condition: { type: 'eq', field: 'tenant', value: 'a' } } }])
     ).rejects.toBeInstanceOf(VelesDBError);
     await expect(
-      wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], filter: { tenant: 'a' } }])
+      wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], filter: { condition: { type: 'eq', field: 'tenant', value: 'a' } } }])
     ).rejects.toThrow(/searchBatch with a filter/);
   });
 
@@ -98,7 +98,7 @@ describe("wasmSearchBatch — a filter is refused under searchBatch's own name",
     await expect(
       wasmSearchBatch(ctx, 'docs', [
         { vector: [0.1, 0.2] },
-        { vector: [0.3, 0.4], filter: { tenant: 'a' } },
+        { vector: [0.3, 0.4], filter: { condition: { type: 'eq', field: 'tenant', value: 'a' } } },
       ])
     ).rejects.toThrow(/searchBatch with a filter/);
 

@@ -44,7 +44,7 @@ fn comparison_variants() -> Vec<Condition> {
         cmp(|field, value| Condition::Lte { field, value }),
         Condition::In {
             field: f(),
-            values: vec![],
+            values: vec![].into(),
         },
         Condition::Contains {
             field: f(),

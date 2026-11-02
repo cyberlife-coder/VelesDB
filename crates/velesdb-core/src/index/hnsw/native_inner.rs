@@ -12,7 +12,7 @@
 
 use super::native::rabitq_precision::RaBitQPrecisionHnsw;
 use super::native::sq8_precision::Sq8PrecisionHnsw;
-use super::native::{CachedSimdDistance, NativeHnsw, NativeNeighbour, ResumableSearch};
+use super::native::{CachedSimdDistance, NativeHnsw, ResumableSearch};
 use crate::distance::DistanceMetric;
 use std::path::Path;
 
@@ -59,7 +59,6 @@ pub struct NativeHnswInner {
     /// The underlying HNSW backend (Standard, `RaBitQ`, or SQ8).
     backend: HnswBackend,
     /// The distance metric used.
-    #[allow(dead_code)] // Reason: Exposed via `metric()` accessor — API surface for callers
     metric: DistanceMetric,
 }
 
@@ -443,6 +442,8 @@ impl NativeHnswInner {
     /// is not yet implemented).
     #[must_use]
     pub fn search_auto(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<(usize, f32)> {
+        #[cfg(test)]
+        AUTO_WALKS.with(|walks| walks.set(walks.get() + 1));
         if let Some(results) = self.try_gpu_route(query, k, ef_search) {
             return results;
         }
@@ -553,29 +554,6 @@ impl NativeHnswInner {
         };
 
         hnsw.search_gpu(query, k, ef_search, self.metric)
-    }
-
-    /// Searches the HNSW graph and returns results as `NativeNeighbour` structs.
-    #[allow(dead_code)] // Reason: API surface — used by callers needing typed neighbour results
-    #[inline]
-    #[must_use]
-    pub fn search_neighbours(
-        &self,
-        query: &[f32],
-        k: usize,
-        ef_search: usize,
-    ) -> Vec<NativeNeighbour> {
-        match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.search_neighbours(query, k, ef_search),
-            HnswBackend::RaBitQ(_) | HnswBackend::Sq8(_) => self
-                .search(query, k, ef_search)
-                .into_iter()
-                .map(|(id, dist)| NativeNeighbour {
-                    d_id: id,
-                    distance: dist,
-                })
-                .collect(),
-        }
     }
 }
 
@@ -759,26 +737,6 @@ impl NativeHnswInner {
         }
     }
 
-    /// Returns true if the index is empty.
-    #[allow(dead_code)] // Reason: API surface — emptiness check paired with `len()`
-    #[inline]
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        match &self.backend {
-            HnswBackend::Standard(hnsw) => hnsw.is_empty(),
-            HnswBackend::RaBitQ(rabitq) => rabitq.is_empty(),
-            HnswBackend::Sq8(sq8) => sq8.is_empty(),
-        }
-    }
-
-    /// Returns the distance metric used by this index.
-    #[allow(dead_code)] // Reason: API surface — metric accessor for callers
-    #[inline]
-    #[must_use]
-    pub fn metric(&self) -> DistanceMetric {
-        self.metric
-    }
-
     /// Computes the raw distance between two vectors.
     #[inline]
     #[must_use]
@@ -957,3 +915,16 @@ const _: fn() = || {
 
 // ============================================================================
 // Tests moved to native_inner_tests.rs per project rules
+
+#[cfg(test)]
+thread_local! {
+    static AUTO_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The walks [`NativeHnswInner::search_auto`] has run on this thread: a
+/// test's count of the walks a search ran past its first, under the
+/// qualities whose first walk is [`NativeHnswInner::search_resumable`].
+#[cfg(test)]
+pub(crate) fn auto_walks() -> usize {
+    AUTO_WALKS.with(std::cell::Cell::get)
+}

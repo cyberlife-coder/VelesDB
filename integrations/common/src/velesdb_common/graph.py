@@ -2,14 +2,37 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, List, Tuple
+
+
+def parse_graph_traverse_results(response: Any) -> List[Tuple[int, int]]:
+    """Parse a VelesDB REST graph traversal response into ``(target_id, depth)`` pairs.
+
+    The body is the server's ``TraverseResponse``: ``results`` items carry
+    ``target_id`` (a ``u64`` serialised as a string, so JavaScript clients do
+    not lose precision), ``depth`` (hops from the source) and ``path``.
+    Pairs keep the server's order.
+
+    Args:
+        response: The ``requests.Response`` object returned by the
+            ``/graph/traverse`` endpoint.
+
+    Returns:
+        ``(target_id, depth)`` integer pairs from a successful response, or
+        an empty list when the server returns any non-200 status.
+    """
+    if response.status_code != 200:
+        return []
+    return [
+        (int(r["target_id"]), int(r["depth"]))
+        for r in response.json().get("results", [])
+    ]
 
 
 def parse_graph_traverse_response(response: Any) -> List[int]:
     """Parse a VelesDB REST graph traversal HTTP response into neighbour IDs.
 
-    Centralises the response-inspection logic shared by the LangChain and
-    LlamaIndex ``_traverse_graph_rest`` implementations.
+    The ids of :func:`parse_graph_traverse_results`, without their depth.
 
     Args:
         response: The ``requests.Response`` object returned by the
@@ -19,10 +42,7 @@ def parse_graph_traverse_response(response: Any) -> List[int]:
         List of integer ``target_id`` values from successful responses,
         or an empty list when the server returns any non-200 status.
     """
-    if response.status_code == 200:
-        data = response.json()
-        return [r["target_id"] for r in data.get("results", [])]
-    return []
+    return [target_id for target_id, _depth in parse_graph_traverse_results(response)]
 
 
 def build_graph_rest_payload(

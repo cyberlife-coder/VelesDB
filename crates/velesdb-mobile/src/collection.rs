@@ -179,18 +179,45 @@ impl VelesCollection {
     }
 
     /// Returns the number of points in the collection.
+    ///
+    /// The count is a collection read, so it passes the read gate like every
+    /// other read: a denial fails it, and a scope — there are no rows to
+    /// narrow — refuses it rather than leak the unscoped count.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
     #[allow(clippy::cast_possible_truncation)]
-    pub fn count(&self) -> u64 {
-        self.inner.config().point_count as u64
+    pub fn count(&self) -> Result<u64, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "count")?;
+        Ok(self.inner.config().point_count as u64)
     }
 
     /// Returns the vector dimension.
+    ///
+    /// Collection config is a collection read — the same data gated
+    /// `get_stats` returns — so it passes the read gate too.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
     #[allow(clippy::cast_possible_truncation)]
-    pub fn dimension(&self) -> u32 {
-        self.inner.config().dimension as u32
+    pub fn dimension(&self) -> Result<u32, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "dimension")?;
+        Ok(self.inner.config().dimension as u32)
     }
 
     /// Gets points by their IDs.
+    ///
+    /// The lookup passes the database's read gate, as every other read does:
+    /// a denial fails it, and a point outside a scope the gate returns is
+    /// skipped like a missing one.
     ///
     /// # Arguments
     ///
@@ -199,20 +226,33 @@ impl VelesCollection {
     /// # Returns
     ///
     /// Vector of points found. Missing IDs are silently skipped.
-    pub fn get(&self, ids: Vec<u64>) -> Vec<VelesPoint> {
-        self.inner
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's denial.
+    pub fn get(&self, ids: Vec<u64>) -> Result<Vec<VelesPoint>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        Ok(self
+            .inner
             .get(&ids)
             .into_iter()
             .flatten()
+            .filter(|p| {
+                scope
+                    .as_ref()
+                    .is_none_or(|f| f.matches_point(p.id, p.payload.as_ref()))
+            })
             .map(|p| VelesPoint {
                 id: p.id,
                 vector: p.vector,
                 payload: p.payload.map(|v| v.to_string()),
             })
-            .collect()
+            .collect())
     }
 
-    /// Gets a single point by ID.
+    /// Gets a single point by ID, through the read gate like [`Self::get`].
     ///
     /// # Arguments
     ///
@@ -221,22 +261,26 @@ impl VelesCollection {
     /// # Returns
     ///
     /// The point if found, None otherwise.
-    pub fn get_by_id(&self, id: u64) -> Option<VelesPoint> {
-        self.inner
-            .get(&[id])
-            .into_iter()
-            .flatten()
-            .next()
-            .map(|p| VelesPoint {
-                id: p.id,
-                vector: p.vector,
-                payload: p.payload.map(|v| v.to_string()),
-            })
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's denial.
+    pub fn get_by_id(&self, id: u64) -> Result<Option<VelesPoint>, VelesError> {
+        Ok(self.get(vec![id])?.into_iter().next())
     }
 
-    /// Checks if this is a metadata-only collection.
-    pub fn is_metadata_only(&self) -> bool {
-        self.inner.config().metadata_only
+    /// Checks if this is a metadata-only collection, through the same
+    /// gate as `dimension`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn is_metadata_only(&self) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "is_metadata_only")?;
+        Ok(self.inner.config().metadata_only)
     }
 
     /// Performs full-text search using BM25.
@@ -580,9 +624,18 @@ impl VelesCollection {
         Ok(u64::try_from(self.inner.compact_storage()?).unwrap_or(u64::MAX))
     }
 
-    /// Returns the current query guardrail limits for this collection.
-    pub fn guard_rails(&self) -> MobileQueryLimits {
-        self.inner.guard_rails().limits().into()
+    /// Returns the current query guardrail limits for this collection,
+    /// through the read gate (collection config is a collection read).
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn guard_rails(&self) -> Result<MobileQueryLimits, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "guard_rails")?;
+        Ok(self.inner.guard_rails().limits().into())
     }
 
     /// Applies post-creation overrides to advanced configuration fields
@@ -605,17 +658,36 @@ impl VelesCollection {
     /// Streaming settings persisted by `apply_advanced_config` that are not in
     /// force yet and will be after the next open, by config field name
     /// (`deferred_indexing`, `async_index_builder`). Empty when all are live.
-    pub fn pending_reopen(&self) -> Vec<String> {
-        self.inner
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal (collection config is a collection read).
+    pub fn pending_reopen(&self) -> Result<Vec<String>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "pending_reopen")?;
+        Ok(self
+            .inner
             .pending_reopen()
             .into_iter()
             .map(|setting| setting.field_name().to_string())
-            .collect()
+            .collect())
     }
 
     /// Returns all point IDs currently present in the collection.
-    pub fn all_ids(&self) -> Vec<u64> {
-        self.inner.all_ids()
+    ///
+    /// A listing of the collection's rows — a read the gate decides: a denial
+    /// fails it, and a scope, which ids cannot be filtered by, refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn all_ids(&self) -> Result<Vec<u64>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "all_ids")?;
+        Ok(self.inner.all_ids())
     }
 
     /// Creates a secondary metadata index for a payload field.
@@ -625,8 +697,19 @@ impl VelesCollection {
     }
 
     /// Checks whether a secondary metadata index exists for a field.
-    pub fn has_secondary_index(&self, field_name: String) -> bool {
-        self.inner.has_secondary_index(&field_name)
+    ///
+    /// Index metadata is a collection read — gated like `list_indexes`
+    /// (Tauri's precedent for index getters).
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn has_secondary_index(&self, field_name: String) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_secondary_index")?;
+        Ok(self.inner.has_secondary_index(&field_name))
     }
 
     /// Creates a graph/property index for equality lookups.
@@ -641,23 +724,49 @@ impl VelesCollection {
         Ok(())
     }
 
-    /// Checks if a property index exists.
-    pub fn has_property_index(&self, label: String, property: String) -> bool {
-        self.inner.has_property_index(&label, &property)
+    /// Checks if a property index exists, gated like `list_indexes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn has_property_index(&self, label: String, property: String) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_property_index")?;
+        Ok(self.inner.has_property_index(&label, &property))
     }
 
-    /// Checks if a range index exists.
-    pub fn has_range_index(&self, label: String, property: String) -> bool {
-        self.inner.has_range_index(&label, &property)
+    /// Checks if a range index exists, gated like `list_indexes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn has_range_index(&self, label: String, property: String) -> Result<bool, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "has_range_index")?;
+        Ok(self.inner.has_range_index(&label, &property))
     }
 
-    /// Lists all index definitions on this collection.
-    pub fn list_indexes(&self) -> Vec<MobileIndexInfo> {
-        self.inner
+    /// Lists all index definitions on this collection — index metadata is a
+    /// collection read (Tauri gates `list_indexes` the same way).
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn list_indexes(&self) -> Result<Vec<MobileIndexInfo>, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "list_indexes")?;
+        Ok(self
+            .inner
             .list_indexes()
             .into_iter()
             .map(MobileIndexInfo::from)
-            .collect()
+            .collect())
     }
 
     /// Drops an index and returns true when something was removed.
@@ -667,23 +776,64 @@ impl VelesCollection {
 
     /// Estimated heap bytes of every index `list_indexes` lists (secondary,
     /// graph property and range); the HNSW graph is not counted.
-    pub fn indexes_memory_usage(&self) -> u64 {
-        u64::try_from(self.inner.indexes_memory_usage()).unwrap_or(u64::MAX)
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn indexes_memory_usage(&self) -> Result<u64, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "indexes_memory_usage")?;
+        Ok(u64::try_from(self.inner.indexes_memory_usage()).unwrap_or(u64::MAX))
     }
 
     /// Runs ANALYZE and returns fresh statistics for this collection.
+    ///
+    /// Statistics are a collection read, decided exactly as `get_stats`:
+    /// a denial fails the call and a scope refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal, or the analysis failure.
     pub fn analyze(&self) -> Result<MobileCollectionStats, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "analyze")?;
         Ok(self.inner.analyze()?.into())
     }
 
     /// Returns the latest known collection statistics snapshot.
-    pub fn get_stats(&self) -> MobileCollectionStats {
-        self.inner.get_stats().into()
+    ///
+    /// Statistics are a collection read: a denial fails the call, and a scope
+    /// — there are no rows to narrow — refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn get_stats(&self) -> Result<MobileCollectionStats, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "get_stats")?;
+        Ok(self.inner.get_stats().into())
     }
 
     /// Returns a health/readiness diagnostics snapshot for this collection.
-    pub fn diagnostics(&self) -> MobileCollectionDiagnostics {
-        self.inner.diagnostics().into()
+    ///
+    /// Diagnostics carry the point count — a read the gate decides: a denial
+    /// fails it, and a scope refuses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read gate's refusal.
+    pub fn diagnostics(&self) -> Result<MobileCollectionDiagnostics, VelesError> {
+        let scope = self
+            .db
+            .authorize_read(&self.name, QueryOperationKind::Select, None, None)?;
+        deny_if_scoped(scope, "diagnostics")?;
+        Ok(self.inner.diagnostics().into())
     }
 }
 

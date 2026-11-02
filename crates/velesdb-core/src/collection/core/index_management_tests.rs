@@ -841,7 +841,7 @@ mod tests {
 
         let filter = crate::filter::Filter::new(crate::filter::Condition::In {
             field: "category".to_string(),
-            values: vec![],
+            values: vec![].into(),
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
         assert!(bitmap.is_some(), "empty IN list should return Some(empty)");
@@ -855,7 +855,7 @@ mod tests {
         // No index on "category"
         let filter = crate::filter::Filter::new(crate::filter::Condition::In {
             field: "category".to_string(),
-            values: vec![serde_json::Value::String("tech".to_string())],
+            values: vec![serde_json::Value::String("tech".to_string())].into(),
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
         assert!(bitmap.is_none(), "no secondary index => None");
@@ -875,7 +875,8 @@ mod tests {
             values: vec![
                 serde_json::Value::String("nonexistent".to_string()),
                 serde_json::Value::String("also_missing".to_string()),
-            ],
+            ]
+            .into(),
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
         assert!(
@@ -899,7 +900,7 @@ mod tests {
         // IN with single value should match Eq bitmap
         let in_filter = crate::filter::Filter::new(crate::filter::Condition::In {
             field: "category".to_string(),
-            values: vec![serde_json::Value::String("tech".to_string())],
+            values: vec![serde_json::Value::String("tech".to_string())].into(),
         });
         let eq_filter = crate::filter::Filter::new(crate::filter::Condition::Eq {
             field: "category".to_string(),
@@ -925,7 +926,8 @@ mod tests {
             values: vec![
                 serde_json::Value::String("tech".to_string()),
                 serde_json::Value::String("science".to_string()),
-            ],
+            ]
+            .into(),
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
         assert!(
@@ -956,7 +958,8 @@ mod tests {
                 serde_json::Value::String("tech".to_string()),
                 serde_json::Value::String("nonexistent".to_string()),
                 serde_json::Value::String("art".to_string()),
-            ],
+            ]
+            .into(),
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
         assert!(bitmap.is_some());
@@ -989,7 +992,7 @@ mod tests {
 
         let filter = crate::filter::Filter::new(crate::filter::Condition::In {
             field: "category".to_string(),
-            values: vec![serde_json::Value::String("tech".to_string())],
+            values: vec![serde_json::Value::String("tech".to_string())].into(),
         });
         // An ID above u32::MAX cannot live in the bitmap. Rather than silently
         // skip it (a bitmap-only caller would drop a real match), the builder
@@ -1020,7 +1023,8 @@ mod tests {
                 values: vec![
                     serde_json::Value::String("tech".to_string()),
                     serde_json::Value::String("science".to_string()),
-                ],
+                ]
+                .into(),
             }),
         });
 
@@ -1041,7 +1045,7 @@ mod tests {
         let filter = crate::filter::Filter::new(crate::filter::Condition::Not {
             condition: Box::new(crate::filter::Condition::In {
                 field: "category".to_string(),
-                values: vec![serde_json::Value::String("tech".to_string())],
+                values: vec![serde_json::Value::String("tech".to_string())].into(),
             }),
         });
         let bitmap = collection.build_prefilter_bitmap(&filter);
@@ -1065,7 +1069,8 @@ mod tests {
                     serde_json::Value::String("tech".to_string()),
                     serde_json::Value::String("science".to_string()),
                     serde_json::Value::String("art".to_string()),
-                ],
+                ]
+                .into(),
             }),
         });
 
@@ -1119,7 +1124,8 @@ mod tests {
                     values: vec![
                         serde_json::Value::String("tech".to_string()),
                         serde_json::Value::String("science".to_string()),
-                    ],
+                    ]
+                    .into(),
                 },
                 crate::filter::Condition::Eq {
                     field: "category".to_string(),
@@ -1162,7 +1168,8 @@ mod tests {
                     values: vec![
                         serde_json::Value::String("tech".to_string()),
                         serde_json::Value::String("science".to_string()),
-                    ],
+                    ]
+                    .into(),
                 },
                 crate::filter::Condition::Gte {
                     field: "price".to_string(),
@@ -1198,7 +1205,7 @@ mod tests {
             conditions: vec![
                 crate::filter::Condition::In {
                     field: "category".to_string(),
-                    values: vec![serde_json::Value::String("tech".to_string())],
+                    values: vec![serde_json::Value::String("tech".to_string())].into(),
                 },
                 crate::filter::Condition::Eq {
                     field: "category".to_string(),
@@ -1235,11 +1242,11 @@ mod tests {
             conditions: vec![
                 crate::filter::Condition::In {
                     field: "category".to_string(),
-                    values: vec![serde_json::Value::String("tech".to_string())],
+                    values: vec![serde_json::Value::String("tech".to_string())].into(),
                 },
                 crate::filter::Condition::In {
                     field: "tags".to_string(),
-                    values: vec![serde_json::Value::String("rust".to_string())],
+                    values: vec![serde_json::Value::String("rust".to_string())].into(),
                 },
             ],
         });

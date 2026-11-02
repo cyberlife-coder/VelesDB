@@ -9,7 +9,7 @@ use velesdb_core::velesql::{
     Value,
 };
 
-use crate::velesql_aggregate::{apply, compute_aggregate, needs_aggregation_pipeline, ScannedRow};
+use crate::velesql_aggregate::{apply, needs_aggregation_pipeline, ScannedRow};
 use crate::velesql_value::Params;
 
 fn row(id: u64, score: f32, payload: &serde_json::Value) -> (u64, f32, serde_json::Value) {
@@ -64,7 +64,7 @@ fn test_count_star_global() {
         argument: AggregateArg::Wildcard,
         alias: Some("total".to_string()),
     }]);
-    let out = apply(&s, &rows, &Params::new()).expect("test: agg");
+    let out = apply(&s, &rows, &Params::new(), true).expect("test: agg");
     assert_eq!(out.len(), 1);
     assert!(out[0].data_json_ref().contains("\"total\":3"));
 }
@@ -86,7 +86,7 @@ fn test_group_by_count() {
     s.group_by = Some(GroupByClause {
         columns: vec!["cat".to_string()],
     });
-    let out = apply(&s, &rows, &Params::new()).expect("test: agg");
+    let out = apply(&s, &rows, &Params::new(), true).expect("test: agg");
     assert_eq!(out.len(), 2);
     let json: Vec<&str> = out.iter().map(|r| r.data_json_ref()).collect();
     // cat "a" appears twice -> n:2 ; cat "b" once -> n:1
@@ -136,11 +136,70 @@ fn test_group_by_order_by_count_desc() {
         expr: OrderByExpr::Aggregate(count_star),
         descending: true,
     }]);
-    let out = apply(&s, &rows, &Params::new()).expect("test: agg order by");
+    let out = apply(&s, &rows, &Params::new(), true).expect("test: agg order by");
     assert_eq!(out.len(), 3);
     // Count-descending: a (3) before c (2) before b (1).
     assert!(pos(&out, "\"cat\":\"a\"") < pos(&out, "\"cat\":\"c\""));
     assert!(pos(&out, "\"cat\":\"c\"") < pos(&out, "\"cat\":\"b\""));
+}
+
+/// `SELECT cat, COUNT(*) AS n ... GROUP BY cat` over rows where cat "a" has 3
+/// rows, "b" 1 and "c" 2, in first-seen order a, b, c.
+fn aliased_count_by_cat() -> (Vec<(u64, f32, serde_json::Value)>, SelectStatement) {
+    let raw = ["a", "b", "a", "c", "a", "c"]
+        .iter()
+        .zip(1..)
+        .map(|(cat, id)| row(id, 0.0, &serde_json::json!({"cat": cat, "x": id})))
+        .collect();
+    let mut s = base_select();
+    s.columns = SelectColumns::Aggregations(vec![AggregateFunction {
+        function_type: AggregateType::Count,
+        argument: AggregateArg::Wildcard,
+        alias: Some("n".to_string()),
+    }]);
+    s.group_by = Some(GroupByClause {
+        columns: vec!["cat".to_string()],
+    });
+    (raw, s)
+}
+
+fn order_by_aggregate(function_type: AggregateType, argument: AggregateArg) -> SelectOrderBy {
+    SelectOrderBy {
+        expr: OrderByExpr::Aggregate(AggregateFunction {
+            function_type,
+            argument,
+            alias: None,
+        }),
+        descending: true,
+    }
+}
+
+#[test]
+fn test_group_by_order_by_count_expression_sorts_groups_selected_under_an_alias() {
+    // The parser gives `ORDER BY COUNT(*)` no alias, while the SELECT stores
+    // the count under `n`: the sort must still find it there.
+    let (raw, mut s) = aliased_count_by_cat();
+    let rows = scanned(&raw);
+    s.order_by = Some(vec![order_by_aggregate(
+        AggregateType::Count,
+        AggregateArg::Wildcard,
+    )]);
+    let out = apply(&s, &rows, &Params::new(), true).expect("test: aliased agg order by");
+    assert!(pos(&out, "\"cat\":\"a\"") < pos(&out, "\"cat\":\"c\""));
+    assert!(pos(&out, "\"cat\":\"c\"") < pos(&out, "\"cat\":\"b\""));
+}
+
+#[test]
+fn test_group_by_order_by_aggregate_missing_from_select_is_rejected() {
+    let (raw, mut s) = aliased_count_by_cat();
+    let rows = scanned(&raw);
+    s.order_by = Some(vec![order_by_aggregate(
+        AggregateType::Sum,
+        AggregateArg::Column("x".to_string()),
+    )]);
+    let err = apply(&s, &rows, &Params::new(), true)
+        .expect_err("test: ORDER BY an aggregate the rows do not carry must fail");
+    assert!(err.contains("V016"), "got: {err}");
 }
 
 #[test]
@@ -165,7 +224,7 @@ fn test_group_by_order_by_group_key_asc() {
         expr: OrderByExpr::Field("cat".to_string()),
         descending: false,
     }]);
-    let out = apply(&s, &rows, &Params::new()).expect("test: agg order by key");
+    let out = apply(&s, &rows, &Params::new(), true).expect("test: agg order by key");
     assert_eq!(out.len(), 3);
     assert!(pos(&out, "\"cat\":\"a\"") < pos(&out, "\"cat\":\"b\""));
     assert!(pos(&out, "\"cat\":\"b\"") < pos(&out, "\"cat\":\"c\""));
@@ -185,8 +244,27 @@ fn test_avg_numeric() {
         argument: AggregateArg::Column("price".to_string()),
         alias: Some("avg_p".to_string()),
     }]);
-    let out = apply(&s, &rows, &Params::new()).expect("test: avg");
+    let out = apply(&s, &rows, &Params::new(), true).expect("test: avg");
     assert!(out[0].data_json_ref().contains("\"avg_p\":20"));
+}
+
+/// The single row of `SELECT <sql aggregates> FROM t` over `raw`.
+fn global_row(
+    columns: Vec<AggregateFunction>,
+    raw: &[(u64, f32, serde_json::Value)],
+) -> serde_json::Value {
+    let mut s = base_select();
+    s.columns = SelectColumns::Aggregations(columns);
+    let out = apply(&s, &scanned(raw), &Params::new(), true).expect("test: aggregate");
+    serde_json::from_str(out[0].data_json_ref()).expect("test: row JSON")
+}
+
+fn agg(function_type: AggregateType, column: &str) -> AggregateFunction {
+    AggregateFunction {
+        function_type,
+        argument: AggregateArg::Column(column.to_string()),
+        alias: None,
+    }
 }
 
 #[test]
@@ -196,27 +274,12 @@ fn test_min_max() {
         row(2, 0.0, &serde_json::json!({"p": 1})),
         row(3, 0.0, &serde_json::json!({"p": 9})),
     ];
-    let rows = scanned(&raw);
-    let min_v = compute_aggregate(
-        &AggregateFunction {
-            function_type: AggregateType::Min,
-            argument: AggregateArg::Column("p".to_string()),
-            alias: None,
-        },
-        &rows,
-    )
-    .expect("test: min");
-    let max_v = compute_aggregate(
-        &AggregateFunction {
-            function_type: AggregateType::Max,
-            argument: AggregateArg::Column("p".to_string()),
-            alias: None,
-        },
-        &rows,
-    )
-    .expect("test: max");
-    assert_eq!(min_v.as_f64().expect("min num"), 1.0);
-    assert_eq!(max_v.as_f64().expect("max num"), 9.0);
+    let out = global_row(
+        vec![agg(AggregateType::Min, "p"), agg(AggregateType::Max, "p")],
+        &raw,
+    );
+    assert_eq!(out["min_p"].as_f64(), Some(1.0));
+    assert_eq!(out["max_p"].as_f64(), Some(9.0));
 }
 
 #[test]
@@ -226,17 +289,8 @@ fn test_count_ignores_null_column() {
         row(2, 0.0, &serde_json::json!({"x": serde_json::Value::Null})),
         row(3, 0.0, &serde_json::json!({"other": 1})),
     ];
-    let rows = scanned(&raw);
-    let v = compute_aggregate(
-        &AggregateFunction {
-            function_type: AggregateType::Count,
-            argument: AggregateArg::Column("x".to_string()),
-            alias: None,
-        },
-        &rows,
-    )
-    .expect("test: count");
-    assert_eq!(v.as_u64().expect("int"), 1);
+    let out = global_row(vec![agg(AggregateType::Count, "x")], &raw);
+    assert_eq!(out["count_x"].as_u64(), Some(1));
 }
 
 #[test]
@@ -268,7 +322,66 @@ fn test_having_filters_groups() {
         }],
         operators: Vec::new(),
     });
-    let out = apply(&s, &rows, &Params::new()).expect("test: having");
+    let out = apply(&s, &rows, &Params::new(), true).expect("test: having");
     assert_eq!(out.len(), 1);
     assert!(out[0].data_json_ref().contains("\"cat\":\"a\""));
+}
+
+/// Parses `sql` into its SELECT statement.
+fn select(sql: &str) -> SelectStatement {
+    velesdb_core::velesql::Parser::parse(sql)
+        .expect("test: parse")
+        .select
+}
+
+/// Group names of `out`, in row order, read from field `column`.
+fn column_values(out: &[crate::velesql_result::QueryResultRow], column: &str) -> Vec<String> {
+    out.iter()
+        .map(|r| {
+            let row: serde_json::Value =
+                serde_json::from_str(r.data_json_ref()).expect("test: row JSON");
+            row[column].to_string()
+        })
+        .collect()
+}
+
+/// Rows of a vector search, best first: cat "a" scores 0.9 and 0.2, "c" 0.7
+/// and 0.6, "b" 0.5.
+fn ranked_rows() -> Vec<(u64, f32, serde_json::Value)> {
+    [
+        (1, 0.9, "a"),
+        (2, 0.7, "c"),
+        (3, 0.6, "c"),
+        (4, 0.5, "b"),
+        (5, 0.2, "a"),
+    ]
+    .iter()
+    .map(|&(id, score, cat)| row(id, score, &serde_json::json!({ "cat": cat })))
+    .collect()
+}
+
+#[test]
+fn test_vector_group_by_order_by_similarity_sorts_groups_by_their_best_score() {
+    // A vector GROUP BY orders groups by score, as core does, instead of
+    // refusing ORDER BY similarity() like a plain GROUP BY.
+    let raw = ranked_rows();
+    let s = select(
+        "SELECT cat, MAX(score) AS best FROM t WHERE vector NEAR $v \
+         GROUP BY cat ORDER BY similarity() ASC",
+    );
+    let out = apply(&s, &scanned(&raw), &Params::new(), true).expect("test: vector group by");
+    assert_eq!(column_values(&out, "cat"), ["\"b\"", "\"c\"", "\"a\""]);
+}
+
+#[test]
+fn test_vector_group_by_order_by_similarity_uses_the_average_when_only_avg_score_is_selected() {
+    // Core scores a group by its average when the SELECT asks for AVG(score)
+    // and not MAX(score): a averages 0.55, c 0.65, b 0.5.
+    let raw = ranked_rows();
+    let s = select(
+        "SELECT cat, AVG(score) AS mean FROM t WHERE vector NEAR $v \
+         GROUP BY cat ORDER BY similarity() DESC",
+    );
+    let out = apply(&s, &scanned(&raw), &Params::new(), true).expect("test: vector group by avg");
+    assert_eq!(column_values(&out, "cat"), ["\"c\"", "\"a\"", "\"b\""]);
 }

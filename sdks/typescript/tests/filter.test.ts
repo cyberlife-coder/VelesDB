@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Filter, CompareOp, JsonValue } from '../src/filter';
 import { f, isTypedFilter, normalizeFilter } from '../src/filter';
+import { ValidationError } from '../src/types';
 
 // ============================================================================
 // Nominal: each builder produces the exact wire shape
@@ -366,13 +367,24 @@ describe('normalizeFilter', () => {
     expect(normalizeFilter(typed)).toBe(typed);
   });
 
-  it('passes legacy Record<string, unknown> through unchanged', () => {
-    const legacy: Record<string, unknown> = { custom: 'schema' };
+  it('passes a core-shaped raw Record<string, unknown> through unchanged', () => {
+    const legacy: Record<string, unknown> = {
+      condition: { type: 'eq', field: 'category', value: 'tech' },
+    };
     expect(normalizeFilter(legacy)).toBe(legacy);
+  });
+
+  it('refuses a flat field map, which core cannot parse as a Filter', () => {
+    expect(() => normalizeFilter({ category: 'tech' })).toThrow(ValidationError);
+    expect(() => normalizeFilter({ category: 'tech' })).toThrow(/condition/);
   });
 
   it('handles undefined by returning undefined (backend skips filter)', () => {
     expect(normalizeFilter(undefined)).toBeUndefined();
+  });
+
+  it('reads null from untyped callers as no filter', () => {
+    expect(normalizeFilter(null as unknown as undefined)).toBeUndefined();
   });
 });
 

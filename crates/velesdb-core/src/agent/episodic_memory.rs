@@ -335,6 +335,12 @@ impl EpisodicMemory {
         limit: usize,
         since_timestamp: Option<i64>,
     ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
+        memory_helpers::authorize_memory_read(
+            &self.db,
+            &self.collection_name,
+            crate::observer::QueryOperationKind::Select,
+            "episodic memory recent",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         Ok(self.fetch_temporal_events(
@@ -357,6 +363,12 @@ impl EpisodicMemory {
         timestamp: i64,
         limit: usize,
     ) -> Result<Vec<(u64, String, i64)>, AgentMemoryError> {
+        memory_helpers::authorize_memory_read(
+            &self.db,
+            &self.collection_name,
+            crate::observer::QueryOperationKind::Select,
+            "episodic memory older_than",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         Ok(self.fetch_temporal_events(
@@ -403,11 +415,18 @@ impl EpisodicMemory {
     ///
     /// # Errors
     ///
-    /// Returns an error when the collection is unavailable.
+    /// Returns an error when the collection is unavailable or the read gate
+    /// denies the read (or returns a scope a point lookup cannot honour).
     pub fn get_with_embedding(
         &self,
         id: u64,
     ) -> Result<Option<(String, i64, Vec<f32>)>, AgentMemoryError> {
+        memory_helpers::authorize_memory_read(
+            &self.db,
+            &self.collection_name,
+            crate::observer::QueryOperationKind::Select,
+            "episodic memory get_with_embedding",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
 
         let points = collection.get(&[id]);
@@ -456,6 +475,12 @@ impl EpisodicMemory {
     ///
     /// Returns an error when the collection is unavailable or JSON encoding fails.
     pub fn serialize(&self) -> Result<Vec<u8>, AgentMemoryError> {
+        memory_helpers::authorize_memory_read(
+            &self.db,
+            &self.collection_name,
+            crate::observer::QueryOperationKind::Select,
+            "episodic memory serialization",
+        )?;
         let collection = memory_helpers::get_collection(&self.db, &self.collection_name)?;
         let all_ids = self.temporal_index.all_ids();
         memory_helpers::serialize_points(&collection, &all_ids)

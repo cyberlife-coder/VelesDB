@@ -4,7 +4,7 @@
 //! when the target is a vector collection. The similarity is computed on
 //! the fly against the row's current vector; non-matching rows are skipped.
 //!
-//! This module only decides "is this row's similarity <op> threshold?" —
+//! This module only decides `is this row's similarity <op> threshold?` —
 //! the actual vector NEAR ranking stays in `velesql_select::vector_path`.
 //!
 //! # Limitations (WASM pre-seed scope)
@@ -53,7 +53,7 @@ pub(crate) fn find_similarity(cond: Option<&Condition>) -> Option<SimilarityCond
 /// Same as [`find_similarity`] but skips the internal [`push_not_inward`]
 /// call — caller has already normalized the condition.
 ///
-/// Used by [`crate::velesql_select::WhereFilters::build`] to avoid a
+/// Used by `velesql_select`'s `WhereFilters::build` to avoid a
 /// redundant tree walk + clone when both `find_similarity` and
 /// `strip_similarity` would otherwise normalize the same tree twice
 /// (Devin Review Finding P). The public [`find_similarity`] keeps its
@@ -205,7 +205,7 @@ where
 
 /// Flips a comparison operator to its logical complement.
 ///
-/// Used by [`push_not_inward`](crate::velesql_logic::push_not_inward)
+/// Used by [`push_not_inward`]
 /// and the similarity-specific rewrites to negate a `similarity()`
 /// predicate without rebuilding its surrounding AST. `CompareOp` is
 /// `#[non_exhaustive]`; unknown variants fall back to the input

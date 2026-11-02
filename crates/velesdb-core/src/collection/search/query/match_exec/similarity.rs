@@ -161,10 +161,12 @@ impl Collection {
         let Some(edge) = self.graph.edge_store.get_edge(edge_id) else {
             return;
         };
-        let Some(value) = super::where_eval::edge_property_path(&edge, property) else {
+        let Some(value) = super::where_eval::element_property(edge_id, property, |path| {
+            super::where_eval::edge_property_path(&edge, path)
+        }) else {
             return;
         };
-        projected.insert(projection_key(item), value.clone());
+        projected.insert(projection_key(item), value.into_owned());
     }
 
     /// Projects a dotted property across a variable-length alias's edge list
@@ -184,7 +186,12 @@ impl Collection {
                     .edge_store
                     .get_edge(edge_id)
                     .as_ref()
-                    .and_then(|edge| super::where_eval::edge_property_path(edge, property).cloned())
+                    .and_then(|edge| {
+                        super::where_eval::element_property(edge_id, property, |path| {
+                            super::where_eval::edge_property_path(edge, path)
+                        })
+                        .map(std::borrow::Cow::into_owned)
+                    })
                     .unwrap_or(serde_json::Value::Null)
             })
             .collect();
@@ -203,21 +210,21 @@ impl Collection {
     }
 
     /// Inserts all payload properties of a single node into `projected`,
-    /// prefixed with `alias.` (shared by `project_wildcard` and `project_bare_alias`).
+    /// prefixed with `alias.` (shared by `project_wildcard` and `project_bare_alias`),
+    /// and the node id under `alias.id`, as everywhere in a MATCH, whatever
+    /// the payload holds.
     fn project_all_node_properties(
         alias: &str,
         node_id: u64,
         memo: &super::PayloadMemo<'_>,
         projected: &mut HashMap<String, serde_json::Value>,
     ) {
-        let Some(payload) = memo.get(node_id) else {
-            return;
-        };
-        if let Some(map) = payload.as_object() {
-            for (key, value) in map {
+        if let Some(map) = memo.get(node_id).as_deref().and_then(|p| p.as_object()) {
+            for (key, value) in map.iter().filter(|(key, _)| key.as_str() != "id") {
                 projected.insert(format!("{alias}.{key}"), value.clone());
             }
         }
+        projected.insert(format!("{alias}.id"), serde_json::Value::from(node_id));
     }
 
     /// Projects a single dotted property (e.g., `n.name`) from a bound node.
@@ -232,14 +239,12 @@ impl Collection {
         let Some(&node_id) = bindings.get(alias) else {
             return;
         };
-        let Some(payload) = memo.get(node_id) else {
-            return;
-        };
-        let Some(payload_map) = payload.as_object() else {
-            return;
-        };
-        if let Some(value) = Self::get_nested_property(payload_map, property) {
-            projected.insert(projection_key(item), value.clone());
+        let payload = memo.get(node_id);
+        let value = super::where_eval::element_property(node_id, property, |path| {
+            Self::get_nested_property(payload.as_deref()?.as_object()?, path)
+        });
+        if let Some(value) = value {
+            projected.insert(projection_key(item), value.into_owned());
         }
     }
 
@@ -308,6 +313,7 @@ impl Collection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
+        super::super::match_dispatch::validate_match_clause(match_clause)?;
         // Raw traversal results (no ORDER BY/LIMIT yet): the similarity score is
         // computed below, then the shared finalize step applies ORDER BY + LIMIT.
         let results = self.execute_match_with_context(match_clause, params, None)?;
@@ -462,9 +468,11 @@ impl Collection {
         results.sort_by(|a, b| {
             let get_value = |r: &MatchResult| -> Option<serde_json::Value> {
                 let node_id = *r.bindings.get(alias)?;
-                let payload = payload_storage.retrieve(node_id).ok().flatten()?;
-                let object = payload.as_object()?;
-                Self::get_nested_property(object, property).cloned()
+                let payload = payload_storage.retrieve(node_id).ok().flatten();
+                super::where_eval::element_property(node_id, property, |path| {
+                    Self::get_nested_property(payload.as_ref()?.as_object()?, path)
+                })
+                .map(std::borrow::Cow::into_owned)
             };
 
             let a_value = get_value(a);

@@ -29,51 +29,12 @@ pub(crate) fn compare_op_from_str(op: &str) -> Result<CompareOp, ParseError> {
     }
 }
 
-/// Parses a raw string literal into a [`Value`].
-///
-/// Handles integer, float, boolean, null, and single-quoted string literals.
-/// This is the string-based counterpart to the pest rule-based [`parse_scalar_from_rule`].
-///
-/// # Errors
-///
-/// Returns [`ParseError`] if the input cannot be recognized as any value type.
-pub(crate) fn parse_value_from_str(input: &str) -> Result<Value, ParseError> {
-    if input.len() >= 2 && input.starts_with('\'') && input.ends_with('\'') {
-        return Ok(Value::String(unescape_string_literal(input)));
-    }
-    if input.eq_ignore_ascii_case("true") {
-        return Ok(Value::Boolean(true));
-    }
-    if input.eq_ignore_ascii_case("false") {
-        return Ok(Value::Boolean(false));
-    }
-    if input.eq_ignore_ascii_case("null") {
-        return Ok(Value::Null);
-    }
-    parse_numeric_value(input)
-}
-
 /// Tries to parse a string as `i64` then `u64` (issue #486).
 fn try_parse_integer(s: &str) -> Option<Value> {
     s.parse::<i64>()
         .map(Value::Integer)
         .ok()
         .or_else(|| s.parse::<u64>().map(Value::UnsignedInteger).ok())
-}
-
-/// Attempts to parse a string as an integer (i64 or u64) or float value.
-fn parse_numeric_value(input: &str) -> Result<Value, ParseError> {
-    if let Some(int_val) = try_parse_integer(input) {
-        return Ok(int_val);
-    }
-    if let Ok(f) = input.parse::<f64>() {
-        return Ok(Value::Float(f));
-    }
-    Err(ParseError::syntax(
-        0,
-        input,
-        format!("Invalid value: {input}"),
-    ))
 }
 
 /// Parses a pest pair representing a scalar literal into a [`Value`].
@@ -107,8 +68,7 @@ fn parse_parameter_value(raw: &str) -> Value {
 ///
 /// Tries `i64` first (covers most integers). Falls back to `u64` for values
 /// in the range `(i64::MAX, u64::MAX]` (issue #486), then to `f64` past
-/// `u64::MAX`, mirroring [`parse_numeric_value`]'s fallback for the same
-/// literal read as a string. Without this, a `WITH (ef_search = ...)` value
+/// `u64::MAX`. Without this, a `WITH (ef_search = ...)` value
 /// this large reached its caller as a generic "Invalid integer" parse error
 /// instead of the V014 out-of-range message every other bad `ef_search`
 /// gets, since the range check never runs on a value that fails to parse at

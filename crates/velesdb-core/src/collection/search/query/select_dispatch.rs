@@ -24,7 +24,7 @@ impl Collection {
     ///   [`QueryPlanner::choose_hybrid_strategy`], which additionally computes
     ///   a selectivity-aware over-fetch factor clamped to `[2.0, 10.0]` when
     ///   a filter is present. A pure-cost comparison would occasionally pick
-    ///   `GraphFirst`/`Parallel` and lose the natural ordering — observable
+    ///   `GraphFirst` and lose the natural ordering — observable
     ///   as scrambled top-k for `ORDER BY similarity() DESC LIMIT k` queries.
     /// - **All other queries** use the calibrated
     ///   [`QueryPlanner::choose_strategy_with_cbo_and_overfetch`] path, which
@@ -297,7 +297,7 @@ impl Collection {
             cbo_strategy,
             cbo_over_fetch,
         )
-        .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
+        .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Applies the exact WHERE post-filter when graph predicates are present,
@@ -319,7 +319,7 @@ impl Collection {
             &stmt.from_alias,
             graph_cache,
         )
-        .inspect_err(|_| self.runtime.guard_rails.circuit_breaker.record_failure())
+        .inspect_err(|e| self.runtime.guard_rails.circuit_breaker.record_error(e))
     }
 
     /// Attempts the GraphFirst anchored fetch for the main SELECT path.
@@ -549,6 +549,7 @@ impl Collection {
                     r.score,
                     r.point.payload.as_ref(),
                     r.component_scores.as_deref(),
+                    Some(r.point.id),
                 )
             })
             .collect()

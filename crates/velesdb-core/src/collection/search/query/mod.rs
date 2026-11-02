@@ -57,6 +57,8 @@ mod match_exec_tests;
 pub mod match_metrics;
 #[cfg(test)]
 mod match_metrics_tests;
+#[cfg(test)]
+mod match_order_by_validation_parity_tests;
 mod metadata_query;
 mod multi_vector;
 #[cfg(test)]
@@ -285,7 +287,7 @@ impl Collection {
 
         // When vector GROUP BY is active, fetch more results from vector search
         // so grouping has enough chunks to work with.
-        let is_vgb = vector_group_by::is_vector_group_by_query(stmt);
+        let is_vgb = stmt.is_vector_group_by();
         let effective_fetch_limit = if is_vgb { MAX_LIMIT } else { fetch_limit };
 
         // Early-return paths or LET-binding guard for special query shapes.
@@ -329,15 +331,20 @@ impl Collection {
             self.dispatch_main_select(stmt, params, args.extracted, args.fetch_limit, args.ctx)?;
 
         // Vector GROUP BY post-processing: group results by parent field
-        // before ORDER BY / LIMIT / OFFSET are applied.
-        if args.is_vgb {
-            results = self.apply_vector_group_by(stmt, &results);
-        }
+        // before ORDER BY / LIMIT / OFFSET are applied, which then sort the
+        // groups on the payload fields their aggregates landed in.
+        let stmt = if args.is_vgb {
+            results = self.apply_vector_group_by(stmt, &results, params)?;
+            stmt.order_by_aggregates_as_fields()
+                .map_err(|e| crate::error::Error::Query(e.to_string()))?
+        } else {
+            std::borrow::Cow::Borrowed(stmt)
+        };
 
         self.finalize_query_results(
             &mut results,
             &QueryFinalizationContext {
-                stmt,
+                stmt: &stmt,
                 params,
                 limit: args.limit,
                 extracted: args.extracted,
@@ -376,7 +383,7 @@ impl Collection {
 
     // NOTE: try_dispatch_match, compute_fetch_limit, try_early_return_or_guard_let,
     // validate_let_binding_support, prepare_query_context, finalize_query_results,
-    // extract_query_components, apply_vector_group_by, extract_aggregations,
+    // extract_query_components, apply_vector_group_by,
     // check_guardrails_and_record, explain_analyze_query
     // → moved to query_pipeline.rs (NLOC/file reduction)
 

@@ -50,8 +50,6 @@ export interface HnswParams {
   efConstruction?: number;
   /** Maximum number of elements in the index */
   maxElements?: number;
-  /** Storage mode for vector quantization */
-  storageMode?: StorageMode;
   /** Alpha parameter for HNSW construction */
   alpha?: number;
 }
@@ -76,15 +74,15 @@ export interface DeferredIndexerOptions {
 /**
  * Async index builder configuration (`velesdb_core::collection::streaming::AsyncIndexBuilderConfig`).
  *
- * Enables the parallel segment-based `AsyncIndexBuilder` for bulk inserts
- * (Issue #488 -- Bulk Insert V2). Used when the collection is known to
- * receive large bulk loads where the extra segment coordination cost is
- * amortised over millions of inserts.
+ * Enables the `AsyncIndexBuilder` for bulk inserts (Issue #488 -- Bulk
+ * Insert V2): `upsert_bulk` defers linking its points into the HNSW graph
+ * until `mergeThreshold` of them are pending or a flush runs, and searches
+ * find them meanwhile.
  */
 export interface AsyncIndexBuilderOptions {
-  /** Buffered vector count that triggers a build (default: 10_000). */
+  /** Pending point count at which `upsert_bulk` links them (default: 10_000). */
   mergeThreshold?: number;
-  /** Number of segments for parallel construction (default: num_cpus). */
+  /** Reserved: core parses it and reads it nowhere; it changes nothing. */
   segmentCount?: number;
 }
 
@@ -104,8 +102,6 @@ export interface CollectionConfig {
   storageMode?: StorageMode;
   /** Collection type: 'vector' (default) or 'metadata_only' */
   collectionType?: CollectionType;
-  /** Optional collection description */
-  description?: string;
   /** Optional HNSW parameters for index tuning */
   hnsw?: HnswParams;
   /**

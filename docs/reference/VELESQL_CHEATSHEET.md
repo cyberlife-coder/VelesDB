@@ -4,9 +4,10 @@
 > **VelesDB version:** 8.0.0
 > See the full specification in [`docs/VELESQL_SPEC.md`](../VELESQL_SPEC.md).
 
-> Every `sql` block below is **parsed** against the real grammar by an automated
-> test (`crates/velesdb-core/tests/velesql_cheatsheet_docs.rs`) — if an example
-> stops parsing, CI fails. (The test guards syntax, not runtime execution.)
+> Every `sql` block below is **parsed and validated** against the real grammar
+> by an automated test (`crates/velesdb-core/tests/velesql_doc_samples.rs`, which
+> covers every `sql` block of the user-facing docs) — if an example is rejected,
+> CI fails. (The test guards syntax and validation, not runtime execution.)
 > Vectors are passed as bind parameters (`$v`); inline vector literals like
 > `[0.1, 0.2, 0.3]` are also accepted in `WHERE ... NEAR`.
 
@@ -129,12 +130,12 @@ SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rrf' LIMIT
 ```sql
 -- 1-hop neighbours
 MATCH (a:Author)-[:WROTE]->(p:Post)
-WHERE a.id = 'auth-42'
+WHERE a.id = 42  -- `id` is the node id
 RETURN p LIMIT 20;
 
 -- Variable-depth traversal (1 to 3 hops)
 MATCH (src)-[:LINKS*1..3]->(dst)
-WHERE src.id = 'node-1'
+WHERE src.id = 1
 RETURN dst LIMIT 100;
 
 -- Graph predicate inside a SELECT

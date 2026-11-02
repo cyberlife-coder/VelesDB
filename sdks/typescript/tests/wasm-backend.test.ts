@@ -26,7 +26,8 @@ class MockVectorStore {
     vector: [1, 0, 0, 0],
     payload: { title: 'Stored' },
   }));
-  text_search = vi.fn(() => [{ id: BigInt(1), score: 0.88, payload: { title: 'Text' } }]);
+  // velesdb-wasm 8.0.0's text_search ranks nothing: `score` is null.
+  text_search = vi.fn(() => [{ id: 1, score: null, payload: { title: 'Text' } }]);
   hybrid_search = vi.fn(() => [{ id: BigInt(1), score: 0.91, payload: { title: 'Hybrid' } }]);
   query = vi.fn(() => [
     { id: 1, a: 1 },
@@ -397,8 +398,7 @@ describe('WasmBackend', () => {
 
     it('supports text search', async () => {
       const results = await backend.textSearch('vectors', 'query', { k: 2 });
-      expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.88);
+      expect(results).toEqual([{ id: '1', score: null, payload: { title: 'Text' } }]);
     });
 
     it('supports hybrid search', async () => {
@@ -717,30 +717,3 @@ describe('WasmBackend — createCollection applies or refuses each option (#2095
   });
 });
 
-describe('WasmBackend — query refuses the QueryOptions it cannot apply (#2095)', () => {
-  let backend: WasmBackend;
-  const NEAR = 'SELECT * FROM vectors WHERE vector NEAR $v LIMIT 5';
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    backend = new WasmBackend();
-    await backend.init();
-    await backend.createCollection('vectors', { dimension: 4 });
-  });
-
-  it.each([
-    ['timeoutMs', { timeoutMs: 500 }],
-    ['stream', { stream: true }],
-  ] as const)('refuses %s', async (_name, options) => {
-    expectRefusal(
-      await settle(backend.query('vectors', NEAR, { v: [1, 0, 0, 0] }, options)),
-      'queryOptions'
-    );
-  });
-
-  it('accepts stream: false, which asks for nothing', async () => {
-    const response = await backend.query('vectors', NEAR, { v: [1, 0, 0, 0] }, { stream: false });
-
-    expect(response.results).toHaveLength(1);
-  });
-});

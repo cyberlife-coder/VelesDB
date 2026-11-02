@@ -4608,3 +4608,169 @@ fn reorder_waits_for_the_maintenance_lock() {
         );
     });
 }
+
+// =========================================================================
+// insert_batch_unless_indexed: an id the graph holds as it is stays put
+// =========================================================================
+
+/// For every metric, an id already mapped to a linked node holding the
+/// vector storage gives is not inserted again — whatever form the graph
+/// keeps it in (Cosine stores it normalized). Inserting it again would only
+/// leave its node behind, unmapped.
+#[test]
+fn an_id_the_graph_holds_as_it_is_is_not_inserted_again() {
+    for metric in [
+        DistanceMetric::Cosine,
+        DistanceMetric::Euclidean,
+        DistanceMetric::DotProduct,
+    ] {
+        let index = HnswIndex::new_fast_insert(8, metric).expect("test: index");
+        let points: Vec<(u64, Vec<f32>)> = (0..20_u64)
+            .map(|id| {
+                (
+                    id,
+                    (0..8).map(|d| 1.0 + (id * 8 + d) as f32 * 0.37).collect(),
+                )
+            })
+            .collect();
+        for (id, v) in &points {
+            VectorIndex::insert(&index, *id, v);
+        }
+        let before = index.tombstone_count();
+
+        let outcome = index.insert_batch_unless_indexed(&points);
+
+        assert_eq!(outcome.settled.len(), 20, "{metric:?}: every id settled");
+        assert!(outcome.refused.is_empty(), "{metric:?}: nothing refused");
+        assert_eq!(
+            index.tombstone_count(),
+            before,
+            "{metric:?}: no node left behind"
+        );
+    }
+}
+
+/// A batch holding one pair the graph refuses (here, of the wrong
+/// dimension) is refused whole: every pair the graph lacked comes back as
+/// refused, with the reason, for the caller to retry one by one — under its
+/// own lock, held per pair rather than across all of them.
+#[test]
+fn a_refused_batch_names_every_pair_it_did_not_insert() {
+    let index = HnswIndex::new_fast_insert(8, DistanceMetric::Euclidean).expect("test: index");
+    let mut pairs: Vec<(u64, Vec<f32>)> = (0..10_u64)
+        .map(|id| (id, (0..8).map(|d| (id * 8 + d) as f32).collect()))
+        .collect();
+    pairs.push((99, vec![1.0; 3]));
+
+    let outcome = index.insert_batch_unless_indexed(&pairs);
+
+    assert!(outcome.settled.is_empty());
+    let mut refused = outcome.refused;
+    refused.sort_unstable();
+    assert_eq!(refused, (0..10).chain([99]).collect::<Vec<u64>>());
+    assert!(outcome.error.is_some(), "the reason comes back");
+    assert_eq!(index.len(), 0);
+}
+
+// =========================================================================
+// Adaptive and AutoTune walk again only for what the caller needs
+// =========================================================================
+
+/// 300 points, with the 5 nearest to the query removed: their nodes stay in
+/// the graph, unmapped, among the first 30 a walk returns.
+fn index_with_unmapped_nearest() -> (HnswIndex, Vec<f32>) {
+    let index = HnswIndex::new(16, DistanceMetric::Euclidean).expect("test: index");
+    let vector = |id: u64| -> Vec<f32> {
+        (0..16_u64)
+            .map(|d| ((id * 16 + d) as f32 * 0.618_034).sin())
+            .collect()
+    };
+    for id in 0..300 {
+        VectorIndex::insert(&index, id, &vector(id));
+    }
+    let query = vector(0);
+    let mut nearest: Vec<(u64, f32)> = (0..300)
+        .map(|id| {
+            let d: f32 = vector(id)
+                .iter()
+                .zip(&query)
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum();
+            (id, d)
+        })
+        .collect();
+    nearest.sort_by(|a, b| a.1.total_cmp(&b.1));
+    for &(id, _) in &nearest[..5] {
+        assert!(index.remove(id), "test: remove {id}");
+    }
+    (index, query)
+}
+
+/// The walks past the first a search under `quality` runs for `fetch`
+/// candidates of which it needs `needed`.
+fn rewalks(
+    index: &HnswIndex,
+    query: &[f32],
+    fetch: usize,
+    needed: usize,
+    quality: SearchQuality,
+) -> usize {
+    let before = super::auto_walks();
+    let results = index
+        .search_with_quality_needing(query, fetch, needed, quality)
+        .expect("test: search");
+    assert!(
+        results.len() >= needed,
+        "{quality:?}: {} results",
+        results.len()
+    );
+    super::auto_walks() - before
+}
+
+/// Under Adaptive and AutoTune, a search over-fetching candidates (to rerank
+/// or rescore them) walks again only when the nodes a delete left behind
+/// leave fewer than it keeps — as every other quality does. Both ignored
+/// `needed` and walked again for the whole fetch.
+#[test]
+fn adaptive_and_autotune_walk_again_only_for_what_the_search_needs() {
+    let (index, query) = index_with_unmapped_nearest();
+    for quality in [
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 128,
+        },
+        SearchQuality::AutoTune,
+    ] {
+        assert!(
+            rewalks(&index, &query, 30, 30, quality) > 0,
+            "{quality:?}: premise, removed nodes are among the first 30"
+        );
+        assert_eq!(
+            rewalks(&index, &query, 30, 10, quality),
+            0,
+            "{quality:?}: 25 live candidates are enough for a search keeping 10"
+        );
+    }
+}
+
+/// The forced rerank (`search_with_rerank_quality`) fetches `rerank_k`
+/// candidates and keeps `k`: under Adaptive and AutoTune it walks no more
+/// than the 25 live ones of its first 30 need.
+#[test]
+fn a_forced_rerank_under_adaptive_quality_walks_once() {
+    let (index, query) = index_with_unmapped_nearest();
+    for quality in [
+        SearchQuality::Adaptive {
+            min_ef: 32,
+            max_ef: 128,
+        },
+        SearchQuality::AutoTune,
+    ] {
+        let before = super::auto_walks();
+        let results = index
+            .search_with_rerank_quality(&query, 10, 30, quality)
+            .expect("test: rerank");
+        assert_eq!(results.len(), 10);
+        assert_eq!(super::auto_walks() - before, 0, "{quality:?}");
+    }
+}

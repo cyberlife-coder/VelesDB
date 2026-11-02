@@ -18,7 +18,12 @@ impl Collection {
     /// Supported: `similarity()` (search score), `depth`, a valid
     /// `alias.property` path, explicit `similarity(field, $v)`, and arithmetic
     /// over a property (e.g. `year - 2000`). Aggregates (no GROUP BY) and bare
-    /// aliases are rejected.
+    /// aliases are rejected. `QueryValidator` refuses the same forms first, as
+    /// V015 (`velesql/validation_match_order.rs`, kept equal to this set by
+    /// `collection/search/query/match_order_by_validation_parity_tests.rs`),
+    /// and every public MATCH entry point validates before it traverses
+    /// (`match_dispatch::validate_match_clause`), so this refusal is the
+    /// exhaustive fallback of the match below, not what a caller sees.
     ///
     /// # Errors
     ///
@@ -123,7 +128,7 @@ impl Collection {
 
     /// Sorts by an arithmetic expression over each result node's payload,
     /// reusing the SELECT-side [`evaluate_arithmetic`] (a property variable like
-    /// `year` resolves against the bound node's payload).
+    /// `year` resolves against the bound node's payload, `id` to its id).
     fn sort_match_by_arithmetic(
         &self,
         results: &mut [MatchResult],
@@ -134,7 +139,8 @@ impl Collection {
         results.sort_by(|a, b| {
             let score = |r: &MatchResult| -> f32 {
                 let payload = payload_storage.retrieve(r.node_id).ok().flatten();
-                let ctx = ScoreContext::new(r.score.unwrap_or(0.0), payload.as_ref());
+                let ctx = ScoreContext::new(r.score.unwrap_or(0.0), payload.as_ref())
+                    .for_point(r.node_id);
                 evaluate_arithmetic(arith, &ctx)
             };
             Self::apply_direction(score(a).total_cmp(&score(b)), descending)

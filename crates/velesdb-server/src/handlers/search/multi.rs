@@ -11,11 +11,10 @@ use std::sync::Arc;
 use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchIdsResponse, SearchResponse};
 use crate::AppState;
 
-use super::pipeline::{
-    finish_search_ids_with_cb, finish_search_with_cb, id_score_results, parse_filter_or_400,
-    validate_query_dimension,
-};
+use super::outcome::{finish_search_ids_with_cb, finish_search_with_cb, read_refused};
+use super::pipeline::{id_score_results, parse_filter_or_400, validate_query_dimension};
 use super::workers::run_blocking_search;
+use crate::handlers::helpers::authorize_unscoped_read;
 use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_collection_or_404};
 
 /// Build the `FusionStrategy` a multi-query request asks for, or the message
@@ -137,6 +136,9 @@ fn prepare_multi_query(
     request_body = MultiQuerySearchRequest,
     responses(
         (status = 200, description = "Multi-query search results", body = SearchResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 429, description = "The client's rate limit", body = ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
@@ -175,24 +177,14 @@ pub async fn multi_query_search(
     // Gate the read (CORE-2) before the off-thread fusion. A denied decision —
     // or a scope narrowing, which the multi-query fusion kernel has no channel
     // to apply — refuses the query (fail closed).
-    match state.db.authorize_read(
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
         &name,
         velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
+        "multi-query search",
     ) {
-        Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
-            state.operational_metrics.inc_errors();
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Read denied by governance policy".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
-        }
+        state.operational_metrics.inc_errors();
+        return read_refused(&refusal);
     }
 
     let start = std::time::Instant::now();
@@ -238,6 +230,9 @@ pub async fn multi_query_search(
     request_body = MultiQuerySearchRequest,
     responses(
         (status = 200, description = "Multi-query ids-only results", body = SearchIdsResponse),
+        (status = 429, description = "The client's rate limit", body = ErrorResponse),
+        (status = 500, description = "An engine fault (storage, I/O, internal)", body = ErrorResponse),
+        (status = 503, description = "The circuit breaker is open, or a guard rail the engine could not carry stopped the search", body = ErrorResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
         (status = 404, description = "Collection not found", body = ErrorResponse),
         (status = 422, response = crate::types::MalformedBody)
@@ -272,24 +267,14 @@ pub async fn multi_query_search_ids(
     }
 
     // Gate the read (CORE-2) before the off-thread ids-only fusion.
-    match state.db.authorize_read(
+    if let Err(refusal) = authorize_unscoped_read(
+        &state,
         &name,
         velesdb_core::observer::QueryOperationKind::VectorSearch,
-        None,
-        None,
+        "multi-query search",
     ) {
-        Ok(None) => {}
-        Ok(Some(_)) | Err(_) => {
-            state.operational_metrics.inc_errors();
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Read denied by governance policy".to_string(),
-                    code: None,
-                }),
-            )
-                .into_response();
-        }
+        state.operational_metrics.inc_errors();
+        return read_refused(&refusal);
     }
 
     let start = std::time::Instant::now();

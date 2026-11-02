@@ -329,3 +329,141 @@ class TestNativeModeNegative:
                 mode="native",
                 graph_collection_name="some_graph",
             )
+
+
+# ---------------------------------------------------------------------------
+# invoke(): seed_k seeds, then graph neighbours, at most expand_k documents
+# ---------------------------------------------------------------------------
+
+# Cosine to the query vector (all ones): 1.0, 0.87, 0.71, 0.5.
+_RANKED = {
+    "near": [1.0, 1.0, 1.0, 1.0],
+    "mid": [1.0, 1.0, 1.0, 0.0],
+    "low": [1.0, 1.0, 0.0, 0.0],
+    "far": [1.0, 0.0, 0.0, 0.0],
+}
+
+
+class RankedEmbeddings:
+    """Embeds the four ranked texts as listed; any other text is the query."""
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [self.embed_query(t) for t in texts]
+
+    def embed_query(self, text: str) -> List[float]:
+        return _RANKED.get(text, [1.0, 1.0, 1.0, 1.0])
+
+
+def _ranked_retriever(db_dir: str, edges: List[tuple], **kwargs) -> GraphRetriever:
+    """Store the ranked texts, link them by ``edges`` (source, target), return a retriever."""
+    store = VelesDBVectorStore(
+        embedding=RankedEmbeddings(), path=db_dir, collection_name="ranked", metric="cosine"
+    )
+    store.add_texts(list(_RANKED))
+    ids = {
+        doc.page_content: doc.metadata["_int_id"]
+        for doc, _ in store.similarity_search_with_score("query", k=len(_RANKED))
+    }
+    _ensure_graph_collection(store, "kg")
+    graph = store._get_db().get_graph_collection("kg")
+    for point_id in ids.values():
+        graph.upsert_node_payload(point_id, {})
+    for edge_id, (source, target) in enumerate(edges, start=1):
+        graph.add_edge(
+            {"id": edge_id, "source": ids[source], "target": ids[target], "label": "NEXT"}
+        )
+    return GraphRetriever(
+        vector_store=store, mode="native", graph_collection_name="kg", **kwargs
+    )
+
+
+class TestSeedAndExpand:
+    """``seed_k`` vector hits, then their graph neighbours, at most ``expand_k``."""
+
+    def test_given_store_larger_than_expand_k_when_invoked_then_neighbour_returned(
+        self, db_dir: str
+    ) -> None:
+        """The far document is never a vector hit, so only the graph can return it."""
+        retriever = _ranked_retriever(db_dir, [("near", "far")], seed_k=1, expand_k=2)
+
+        docs = retriever.invoke("query")
+
+        assert [d.page_content for d in docs] == ["near", "far"]
+        assert [d.metadata["graph_depth"] for d in docs] == [0, 1]
+        assert docs[1].metadata["retrieval_mode"] == "graph_expanded"
+
+    def test_given_seeds_and_chain_when_invoked_then_seeds_by_score_then_bfs_order(
+        self, db_dir: str
+    ) -> None:
+        """Seeds first, best score first; neighbours in traversal order, a
+        document already returned is not repeated, and the list stops at expand_k."""
+        retriever = _ranked_retriever(
+            db_dir,
+            [("near", "far"), ("far", "low"), ("mid", "near")],
+            seed_k=2, expand_k=3, max_depth=2,
+        )
+
+        docs = retriever.invoke("query")
+
+        assert [d.page_content for d in docs] == ["near", "mid", "far"]
+        assert docs[0].metadata["relevance_score"] > docs[1].metadata["relevance_score"]
+        assert "relevance_score" not in docs[2].metadata
+
+    def test_given_room_when_invoked_then_deeper_neighbour_follows_nearer_one(
+        self, db_dir: str
+    ) -> None:
+        retriever = _ranked_retriever(
+            db_dir, [("near", "far"), ("far", "low")], seed_k=1, expand_k=5, max_depth=2
+        )
+
+        docs = retriever.invoke("query")
+
+        assert [d.page_content for d in docs] == ["near", "far", "low"]
+        assert [d.metadata["graph_depth"] for d in docs] == [0, 1, 2]
+
+    def test_given_seed_k_above_expand_k_when_invoked_then_capped_at_expand_k(
+        self, db_dir: str
+    ) -> None:
+        retriever = _ranked_retriever(db_dir, [("near", "far")], seed_k=3, expand_k=2)
+
+        docs = retriever.invoke("query")
+
+        assert [d.page_content for d in docs] == ["near", "mid"]
+
+
+class TestRestDepth:
+    """REST mode reads each neighbour's depth from the server's response."""
+
+    def test_given_server_response_when_invoked_then_real_depth_and_int_ids(
+        self, monkeypatch
+    ) -> None:
+        from unittest.mock import MagicMock
+
+        import requests
+        from langchain_core.documents import Document
+
+        body = {  # the server's TraverseResponse: ids serialised as strings
+            "results": [
+                {"target_id": "42", "depth": 1, "path": ["7"]},
+                {"target_id": "43", "depth": 2, "path": ["7", "8"]},
+            ],
+            "has_more": False,
+            "stats": {"visited": 3, "depth_reached": 2},
+        }
+        response = MagicMock(status_code=200)
+        response.json.return_value = body
+        monkeypatch.setattr(requests, "post", MagicMock(return_value=response))
+
+        store = MagicMock()
+        store.similarity_search_with_relevance_scores.return_value = [
+            (Document(page_content="seed", metadata={"_int_id": 1}), 0.9)
+        ]
+        store.get_by_ids.side_effect = lambda ids: (
+            [Document(page_content=f"doc {ids[0]}")] if isinstance(ids[0], int) else []
+        )
+        retriever = GraphRetriever(vector_store=store, mode="rest", seed_k=1, expand_k=5)
+
+        docs = retriever.invoke("query")
+
+        assert [d.page_content for d in docs] == ["seed", "doc 42", "doc 43"]
+        assert [d.metadata["graph_depth"] for d in docs] == [0, 1, 2]

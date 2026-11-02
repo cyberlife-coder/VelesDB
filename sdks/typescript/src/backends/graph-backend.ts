@@ -23,6 +23,7 @@ import type {
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath } from './shared';
 import { parseVelesError, EdgeNotFoundError } from '../errors';
+import { ValidationError } from '../types';
 
 /** Minimal transport interface for graph operations. */
 export type GraphTransport = BaseTransport;
@@ -82,7 +83,6 @@ function toGraphEdge(e: EdgeWire): GraphEdge {
  */
 interface TraverseWire {
   results: Array<{ target_id: number | string; depth: number; path: Array<number | string> }>;
-  next_cursor: string | null;
   has_more: boolean;
   stats: { visited: number; depth_reached: number };
 }
@@ -95,7 +95,6 @@ function toTraverseResponse(data: TraverseWire): TraverseResponse {
       depth: r.depth,
       path: r.path,
     })),
-    nextCursor: data.next_cursor ?? undefined,
     hasMore: data.has_more,
     stats: {
       visited: data.stats.visited,
@@ -134,7 +133,6 @@ export async function traverseGraph(
       strategy: request.strategy ?? 'bfs',
       max_depth: request.maxDepth ?? 3,
       limit: request.limit ?? 100,
-      cursor: request.cursor,
       rel_types: request.relTypes ?? [],
     }
   );
@@ -162,6 +160,33 @@ export async function getNodeDegree(
   };
 }
 
+/**
+ * The `graph_schema` velesdb-server deserializes as `velesdb_core::GraphSchema`
+ * (pinned by `conformance/graph_schema_wire_cases.json`). Core keeps the types
+ * of a schemaless schema but never checks them, so declaring any there is
+ * refused rather than sent to be ignored.
+ */
+function graphSchemaWire(config: GraphCollectionConfig | undefined): Record<string, unknown> {
+  const nodeTypes = config?.nodeTypes ?? [];
+  const edgeTypes = config?.edgeTypes ?? [];
+  const schemaless = (config?.schemaMode ?? 'schemaless') === 'schemaless';
+  if (schemaless && (nodeTypes.length > 0 || edgeTypes.length > 0)) {
+    throw new ValidationError(
+      "nodeTypes and edgeTypes apply to a strict graph only: set schemaMode: 'strict'"
+    );
+  }
+  return {
+    schemaless,
+    node_types: nodeTypes.map((t) => ({ name: t.name, properties: t.properties ?? {} })),
+    edge_types: edgeTypes.map((t) => ({
+      name: t.name,
+      from_type: t.fromType,
+      to_type: t.toType,
+      properties: t.properties ?? {},
+    })),
+  };
+}
+
 export async function createGraphCollection(
   transport: GraphTransport,
   name: string,
@@ -172,7 +197,7 @@ export async function createGraphCollection(
     collection_type: 'graph',
     dimension: config?.dimension,
     metric: config?.metric ?? 'cosine',
-    schema_mode: config?.schemaMode ?? 'schemaless',
+    graph_schema: graphSchemaWire(config),
   });
 
   throwOnError(response);

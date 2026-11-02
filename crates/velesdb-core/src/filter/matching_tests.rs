@@ -343,3 +343,111 @@ fn string_ordering_same_type() {
     }
     .matches(&p));
 }
+
+#[test]
+fn test_two_integers_compare_exactly_beyond_f64_precision() {
+    // 2^53 and 2^53 + 1 are one f64: compared as floats they are equal.
+    let payload = json!({"n": 9_007_199_254_740_992_u64});
+    let eq = Condition::eq("n", json!(9_007_199_254_740_993_u64));
+    let lt = Condition::Lt {
+        field: "n".to_string(),
+        value: json!(9_007_199_254_740_993_u64),
+    };
+    assert!(!eq.matches(&payload));
+    assert!(lt.matches(&payload));
+    let floats = Condition::eq("n", json!(9_007_199_254_740_992.0_f64));
+    assert!(floats.matches(&payload), "an integer equals its float");
+}
+
+#[test]
+fn test_an_integer_and_a_float_order_exactly() {
+    // 2^53 + 1 > 2^53.0, though both are the same f64.
+    let payload = json!({"n": 9_007_199_254_740_993_u64});
+    let gt = Condition::Gt {
+        field: "n".to_string(),
+        value: json!(9_007_199_254_740_992.0_f64),
+    };
+    assert!(gt.matches(&payload));
+}
+
+#[test]
+fn test_an_integer_equals_a_float_only_at_its_exact_value() {
+    // As `>` holds between them, `=` cannot: 2^53 + 1 is not 2^53.0.
+    let eq = |n: serde_json::Value, value: serde_json::Value| {
+        Condition::Eq {
+            field: "n".to_string(),
+            value,
+        }
+        .matches(&json!({ "n": n }))
+    };
+    assert!(!eq(
+        json!(9_007_199_254_740_993_u64),
+        json!(9_007_199_254_740_992.0_f64)
+    ));
+    assert!(eq(
+        json!(9_007_199_254_740_992_u64),
+        json!(9_007_199_254_740_992.0_f64)
+    ));
+    assert!(eq(json!(3), json!(3.0)));
+}
+
+#[test]
+fn test_in_binary_search_finds_an_array_member() {
+    // Adversarial review probe: over the binary-search threshold, every array
+    // in the list is `json_value_cmp`-equal to every other (arrays order by
+    // type rank only), so the sorted list keeps them adjacent but the lower
+    // bound is position 0 whatever the probe is. A member past position 0 is
+    // reported absent — the comment's claim that "a hit can only sit at the
+    // lower bound" is false for array/object members.
+    let values: Vec<serde_json::Value> = (0..17).map(|i| json!([i])).collect();
+    let cond = Condition::In {
+        field: "arr".to_string(),
+        values: values.into(),
+    };
+    for i in 0..17 {
+        assert!(
+            cond.matches(&json!({ "arr": [i] })),
+            "member [{i}] of the IN list must match"
+        );
+    }
+}
+
+#[test]
+fn test_in_binary_search_over_a_public_unsorted_list() {
+    // `Condition::is_in` and `Deserialize` both build `Condition::In` without
+    // the `convert_in` sort the binary search's doc cites as the guarantee —
+    // a publicly constructible >16 list violates the partition precondition.
+    // In a debug build this trips the sortedness debug_assert; in release it
+    // silently answers wrong. Either way the public path cannot reach the
+    // member.
+    let values: Vec<serde_json::Value> = (0..17).rev().map(serde_json::Value::from).collect();
+    let cond = Condition::is_in("n", values);
+    assert!(
+        cond.matches(&json!({ "n": 0 })),
+        "member 0 of the IN list must match"
+    );
+}
+
+#[test]
+fn test_point_ids_accepts_an_integer_valued_float() {
+    // `id = 5.0` names point 5 — `values_equal` calls 5 and 5.0 equal, so
+    // the point-id lookup must resolve it rather than fall back to a scan.
+    let eq = Condition::Eq {
+        field: crate::filter::POINT_ID_FIELD.to_string(),
+        value: json!(5.0),
+    };
+    assert_eq!(eq.point_ids(), Some(vec![5]));
+
+    let in_list = Condition::is_in(crate::filter::POINT_ID_FIELD, vec![json!(5.0), json!(7)]);
+    assert_eq!(in_list.point_ids(), Some(vec![5, 7]));
+
+    // A fraction, or a magnitude at 2^53 whose f64 stands for several
+    // integers, names no exact id — the filter itself must decide.
+    for value in [json!(5.5), json!(9_007_199_254_740_992.0_f64)] {
+        let cond = Condition::Eq {
+            field: crate::filter::POINT_ID_FIELD.to_string(),
+            value,
+        };
+        assert_eq!(cond.point_ids(), None);
+    }
+}

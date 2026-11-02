@@ -167,8 +167,10 @@ locks.
 
 - Writes acquire a **write lock** on the affected subsystems
 - A write blocks other writes to the same collection, but only briefly
-- Writes do **not** block reads on the HNSW index (index rebuild is
-  deferred via a delta buffer)
+- Writes do **not** stop searches of the HNSW index: an insert takes the
+  index's lock shared, as a search does, and a write the deferred indexer
+  or the async index builder holds back is scored exactly by every search
+  until it is indexed
 - Payload writes are append-only (WAL), minimizing lock duration
 
 ### Mixed Workloads
@@ -337,15 +339,22 @@ fit naturally:
 - **Ingest phase:** bulk load embeddings (write-heavy, but one-time)
 - **Query phase:** many concurrent similarity searches (read-heavy)
 
-### 4. Use Appropriate Durability
+### 4. Batch Writes Instead of Lowering Durability
 
-For embeddings that can be re-computed from source documents:
+A collection's storage is opened with `DurabilityMode::Fsync`: no collection
+or `VelesConfig` setting lowers it. Every write call syncs its WAL before it
+returns, once per storage per call, so the cost is per call, not per point:
+`upsert_bulk` and `upsert_bulk_from_raw` write a whole batch for the price of
+one sync.
 
 ```rust
-// Faster writes for re-derivable data
-let config = CollectionConfig::new(384, DistanceMetric::Cosine)
-    .with_durability(DurabilityMode::FlushOnly);
+// One WAL sync per storage for the whole batch, instead of one per point
+collection.upsert_bulk(&points)?;
 ```
+
+The lower-level `velesdb_core::storage::MmapStorage::new_with_durability`
+and `LogPayloadStorage::new_with_durability` take a `DurabilityMode` for code
+that builds directly on the storage layer.
 
 ### 5. Size Graph Shards Appropriately
 
@@ -404,8 +413,8 @@ for details.
 
 Yes. VelesDB uses `RwLock` which allows multiple concurrent readers.
 A write briefly blocks other writers on the same collection, but reads
-continue unimpeded on the HNSW index (writes go through a delta buffer
-first).
+continue on the HNSW index (a write held back for indexing is scored
+exactly by every search until it is indexed).
 
 ### How do I avoid deadlocks?
 

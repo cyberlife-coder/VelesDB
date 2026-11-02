@@ -81,7 +81,10 @@ async function initVelesDB() {
 1. **Use Web Workers** for heavy traversals (see `graph_worker` module)
 2. **Batch inserts** with `insert_batch()` instead of individual `insert()`
 3. **Reuse VectorStore** instances instead of creating new ones
-4. **Use SQ8 storage mode** for 4x memory reduction with minimal accuracy loss
+4. **Pick the storage mode for its results, not its memory**: since 8.0.0 every
+   mode keeps f32 vectors and returns core's results for that mode, so `sq8` and
+   `binary` no longer save memory in the browser (see the
+   [velesdb-wasm README](../../crates/velesdb-wasm/README.md))
 
 ## Measuring Bundle Size
 

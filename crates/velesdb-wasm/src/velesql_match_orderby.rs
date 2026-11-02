@@ -107,7 +107,7 @@ fn sort_by_property(
     sort_stable(candidates, descending, |a, b| {
         let va = crate::filter::get_nested_field(&a.value, path);
         let vb = crate::filter::get_nested_field(&b.value, path);
-        crate::velesql_orderby::compare_json_with_nulls(va, vb)
+        velesdb_core::velesql::compare_json_values(va, vb)
     });
     Ok(())
 }

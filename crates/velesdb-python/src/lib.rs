@@ -63,17 +63,6 @@ pub use streaming_config::StreamingIngestConfig;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-/// Search result from a vector query.
-#[pyclass(frozen)]
-pub struct SearchResult {
-    #[pyo3(get)]
-    id: u64,
-    #[pyo3(get)]
-    score: f32,
-    #[pyo3(get)]
-    payload: Py<PyAny>,
-}
-
 /// VelesDB - A high-performance vector database for AI applications.
 ///
 /// Example:
@@ -86,7 +75,6 @@ pub struct SearchResult {
 fn velesdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Database>()?;
     m.add_class::<Collection>()?;
-    m.add_class::<SearchResult>()?;
     m.add_class::<FusionStrategy>()?;
 
     // SearchOptions builder (issue #717 v1.15 additive path)

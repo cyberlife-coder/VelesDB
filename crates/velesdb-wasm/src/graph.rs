@@ -87,7 +87,7 @@ impl GraphNode {
     /// Converts to JSON for JavaScript interop.
     #[wasm_bindgen]
     pub fn to_json(&self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(self).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js_value::to_js_value(self).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 
@@ -174,7 +174,7 @@ impl GraphEdge {
     /// Converts to JSON for JavaScript interop.
     #[wasm_bindgen]
     pub fn to_json(&self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(self).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js_value::to_js_value(self).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 
@@ -345,7 +345,7 @@ impl GraphStore {
             }
         }
 
-        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js_value::to_js_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Removes a node and all connected edges.
@@ -448,7 +448,7 @@ impl GraphStore {
             }
         }
 
-        serde_wasm_bindgen::to_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js_value::to_js_value(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Gets all nodes with a specific label.

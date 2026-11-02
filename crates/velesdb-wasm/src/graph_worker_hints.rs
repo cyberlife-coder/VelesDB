@@ -132,7 +132,7 @@ impl TraversalProgress {
     /// Converts to JSON for postMessage.
     #[wasm_bindgen]
     pub fn to_json(&self) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(self).map_err(|e| JsValue::from_str(&e.to_string()))
+        crate::js_value::to_js_value(self).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 

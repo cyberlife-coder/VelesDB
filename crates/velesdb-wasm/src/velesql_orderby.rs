@@ -1,8 +1,8 @@
 //! ORDER BY execution for the WASM VelesQL executor (S4-13, #8).
 //!
 //! Supports ordering on any payload column (not just `id` / `score`),
-//! multi-key sort, ASC/DESC per key, explicit null handling (nulls sort last
-//! in ASC and first in DESC, matching Postgres default), and arithmetic
+//! multi-key sort, ASC/DESC per key, core's value order
+//! (`velesql::compare_json_values`: nulls last in ASC, first in DESC), and arithmetic
 //! expressions over the per-row score + payload.
 //!
 //! Sorting operates on core [`SearchResult`] values so the same rows can be
@@ -24,8 +24,6 @@ use velesdb_core::velesql::{
     ArithmeticExpr, ArithmeticOp, OrderByExpr, SelectOrderBy, SelectStatement,
 };
 
-use crate::velesql_value::json_values_cmp;
-
 /// Maximum recursion depth for arithmetic evaluation (mirrors core's
 /// `MAX_ARITHMETIC_DEPTH`).
 const MAX_ARITHMETIC_DEPTH: u8 = 64;
@@ -35,7 +33,14 @@ const MAX_ARITHMETIC_DEPTH: u8 = 64;
 /// Returns `Err` for ORDER BY shapes WASM cannot evaluate (named-vector
 /// `similarity(field, $v)` or aggregate expressions outside aggregation), so
 /// the executor fails loud instead of returning scan order (#8a).
-pub(crate) fn sort_rows(stmt: &SelectStatement, rows: &mut [SearchResult]) -> Result<(), String> {
+/// `higher_is_better` is the collection metric's direction: `similarity()`
+/// sorts most similar first under `DESC` whatever the metric, as in core
+/// (`SelectOrderBy::directed`).
+pub(crate) fn sort_rows(
+    stmt: &SelectStatement,
+    rows: &mut [SearchResult],
+    higher_is_better: bool,
+) -> Result<(), String> {
     let Some(specs) = stmt.order_by.as_ref() else {
         return Ok(());
     };
@@ -43,7 +48,7 @@ pub(crate) fn sort_rows(stmt: &SelectStatement, rows: &mut [SearchResult]) -> Re
         return Ok(());
     }
     validate_order_by(specs)?;
-    rows.sort_by(|a, b| compare_rows(a, b, specs));
+    rows.sort_by(|a, b| compare_rows(a, b, specs, higher_is_better));
     Ok(())
 }
 
@@ -75,9 +80,14 @@ fn validate_order_by(specs: &[SelectOrderBy]) -> Result<(), String> {
 }
 
 /// Strict total order used by `sort_by` over a multi-key ORDER BY.
-fn compare_rows(a: &SearchResult, b: &SearchResult, specs: &[SelectOrderBy]) -> Ordering {
+fn compare_rows(
+    a: &SearchResult,
+    b: &SearchResult,
+    specs: &[SelectOrderBy],
+    higher_is_better: bool,
+) -> Ordering {
     for spec in specs {
-        let ord = compare_with_spec(a, b, spec);
+        let ord = spec.directed(compare_with_spec(a, b, spec), higher_is_better);
         if ord != Ordering::Equal {
             return ord;
         }
@@ -86,8 +96,9 @@ fn compare_rows(a: &SearchResult, b: &SearchResult, specs: &[SelectOrderBy]) -> 
     a.point.id.cmp(&b.point.id)
 }
 
+/// Compares two rows on one ORDER BY item, ascending.
 fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -> Ordering {
-    let ord = match &spec.expr {
+    match &spec.expr {
         OrderByExpr::Field(name) => compare_field(a, b, name),
         OrderByExpr::SimilarityBare => compare_scores(a, b),
         OrderByExpr::Arithmetic(expr) => {
@@ -98,11 +109,6 @@ fn compare_with_spec(a: &SearchResult, b: &SearchResult, spec: &SelectOrderBy) -
         // Similarity / Aggregate were rejected by `validate_order_by`; treat
         // as equal defensively (the non_exhaustive enum may add variants).
         _ => Ordering::Equal,
-    };
-    if spec.descending {
-        ord.reverse()
-    } else {
-        ord
     }
 }
 
@@ -117,7 +123,7 @@ fn compare_field(a: &SearchResult, b: &SearchResult, name: &str) -> Ordering {
     }
     let va = extract_payload_field(a, name);
     let vb = extract_payload_field(b, name);
-    compare_json_with_nulls(va.as_ref(), vb.as_ref())
+    velesdb_core::velesql::compare_json_values(va.as_ref(), vb.as_ref())
 }
 
 /// Compares two rows by search score (NaN-safe, NaN sorts last in ASC).
@@ -135,13 +141,14 @@ fn compare_f32(a: f32, b: f32) -> Ordering {
     }
 }
 
-/// Pulls a column from the payload (supports dot-nested paths).
+/// Pulls a column from the payload: the key itself first (a group row stores
+/// `first_meta.title` flat), then the dot-nested path — core's `row_field`.
 fn extract_payload_field(result: &SearchResult, column: &str) -> Option<serde_json::Value> {
     result
         .point
         .payload
         .as_ref()
-        .and_then(|p| crate::filter::get_nested_field(p, column).cloned())
+        .and_then(|p| velesdb_core::velesql::row_field(p, column).cloned())
 }
 
 /// Evaluates an arithmetic ORDER BY expression for a single row, mirroring
@@ -210,30 +217,6 @@ fn resolve_variable(name: &str, result: &SearchResult) -> f32 {
                     v as f32
                 }
             }),
-    }
-}
-
-/// Postgres-style NULL ordering: null sorts AFTER non-null in ASC. Since we
-/// always compute ASC first and reverse for DESC via `compare_with_spec`,
-/// producing "null > non-null" here gives "NULLS LAST in ASC" / "NULLS FIRST
-/// in DESC".
-///
-/// Shared with the MATCH `ORDER BY` path (`velesql_match_orderby`) so node and
-/// row ordering apply identical NULL semantics.
-pub(crate) fn compare_json_with_nulls(
-    left: Option<&serde_json::Value>,
-    right: Option<&serde_json::Value>,
-) -> Ordering {
-    let left_null = left.is_none_or(serde_json::Value::is_null);
-    let right_null = right.is_none_or(serde_json::Value::is_null);
-    match (left_null, right_null) {
-        (true, true) => Ordering::Equal,
-        (true, false) => Ordering::Greater,
-        (false, true) => Ordering::Less,
-        (false, false) => match (left, right) {
-            (Some(l), Some(r)) => json_values_cmp(l, r).unwrap_or(Ordering::Equal),
-            _ => Ordering::Equal,
-        },
     }
 }
 

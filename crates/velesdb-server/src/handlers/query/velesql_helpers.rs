@@ -65,6 +65,38 @@ pub(crate) fn velesql_error(
         .into_response()
 }
 
+/// The status `/query` answers a statement that failed during execution
+/// with: `422` for the client's errors, as the VelesQL contract has it, and
+/// the canonical status of the engine's (`5xx`, from
+/// [`http_status_for_error`](crate::handlers::helpers::http_status_for_error)),
+/// so a storage fault or an internal error is no longer reported as the
+/// client's. Which errors are the client's is core's
+/// [`velesdb_core::Error::is_caller_error`].
+pub(crate) fn velesql_execution_status(error: &velesdb_core::Error) -> StatusCode {
+    if error.is_caller_error() {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else {
+        crate::handlers::helpers::http_status_for_error(error)
+    }
+}
+
+/// Build the VelesQL error response for a statement that failed during
+/// execution, keeping the endpoint's `VELESQL_*` `code` and taking the status
+/// from [`velesql_execution_status`].
+pub(crate) fn velesql_execution_error(
+    error: &velesdb_core::Error,
+    code: &str,
+    hint: &str,
+) -> axum::response::Response {
+    velesql_error(
+        velesql_execution_status(error),
+        code,
+        &error.to_string(),
+        hint,
+        None,
+    )
+}
+
 /// Build a 404 "collection not found" VelesQL error response.
 pub(crate) fn velesql_collection_not_found(name: &str) -> axum::response::Response {
     velesql_error(

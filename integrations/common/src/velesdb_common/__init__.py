@@ -57,6 +57,7 @@ from velesdb_common.graph import (
     is_timeout_exception,
     open_native_graph,
     parse_graph_traverse_response,
+    parse_graph_traverse_results,
 )
 
 __all__ = [
@@ -113,4 +114,5 @@ __all__ = [
     "is_timeout_exception",
     "open_native_graph",
     "parse_graph_traverse_response",
+    "parse_graph_traverse_results",
 ]

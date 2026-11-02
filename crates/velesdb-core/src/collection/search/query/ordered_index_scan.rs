@@ -219,11 +219,10 @@ impl Collection {
         if limit == 0 {
             return out;
         }
-        let null = serde_json::Value::Null;
         let mut skipped = 0usize;
         for chunk in ids.chunks(FILTER_HYDRATION_CHUNK) {
             for point in self.get(chunk).into_iter().flatten() {
-                if !predicate.matches(point.payload.as_ref().unwrap_or(&null)) {
+                if !predicate.matches_point(point.id, point.payload.as_ref()) {
                     continue;
                 }
                 if skipped < offset {
@@ -285,7 +284,11 @@ fn ordered_index_scan_applies<'a>(
         crate::velesql::OrderByExpr::Field(ref name) => name.as_str(),
         _ => return None,
     };
-    if !plain_query_shape(stmt) {
+    // `id` is the point id, which no payload index orders.
+    let orders_by_id = keys
+        .iter()
+        .any(|k| matches!(&k.expr, crate::velesql::OrderByExpr::Field(name) if name == "id"));
+    if orders_by_id || !plain_query_shape(stmt) {
         return None;
     }
     let filter = route_metadata_filter(stmt, extracted);

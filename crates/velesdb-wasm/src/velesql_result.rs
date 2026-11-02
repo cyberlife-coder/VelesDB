@@ -120,9 +120,9 @@ impl QueryResultRow {
     /// columns in `data_json`.
     ///
     /// Used by the plain-SELECT pipeline after
-    /// [`velesdb_core::collection::search::query::projection::project_results`]
+    /// core's `project_results` (`collection::search::query::projection`)
     /// has reduced the payload to exactly the requested columns (#3b). Unlike
-    /// [`build`](Self::build), this does NOT re-merge the full payload — the
+    /// the test-only `build` constructor, this does NOT re-merge the full payload — the
     /// projected object is the authoritative row body.
     pub(crate) fn from_projected(
         id: u64,

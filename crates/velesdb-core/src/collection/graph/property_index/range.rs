@@ -1,14 +1,10 @@
-//! Range indexes and edge property indexes (EPIC-047 US-002, US-003).
+//! Range indexes on node properties (EPIC-047 US-002).
 //!
-//! Provides B-tree based range indexes for ordered queries on node and edge properties.
-//!
-//! `CompositeRangeIndex` and `EdgePropertyIndex` share the same underlying
-//! B-tree storage via [`BTreeOrderedIndex`], differing only in their metadata
-//! (label vs relationship-type) and public API surface.
+//! Provides B-tree based range indexes for ordered queries on node properties.
+//! `CompositeRangeIndex` keeps its entries in a [`BTreeOrderedIndex`].
 
-// EPIC-047 US-002/US-003 — range indexes and edge property indexes.
 // Index population is wired via graph_property_index_wiring.rs;
-// node lookups serve the MATCH prefilter (search/query/match_exec/index_prefilter.rs).
+// lookups serve the MATCH prefilter (search/query/match_exec/index_prefilter.rs).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,10 +16,11 @@ use std::ops::Bound;
 
 /// Wrapper for total ordering on JSON values.
 ///
-/// Numbers are ordered by their `f64` value with `-0.0 == 0.0`, as a MATCH
-/// WHERE compares them, so an index lookup on a bound never leaves out a
-/// value WHERE accepts. Equality is the ordering's: two numbers with the same
-/// `f64` value are one key.
+/// Numbers are ordered by exact value, as a MATCH WHERE compares them
+/// (`velesql::compare_numbers`): `-0.0` is `0`, and an integer past 2^53 is
+/// itself, not the `f64` it rounds to — so an index lookup on a bound never
+/// leaves out a value WHERE accepts. Equality is the ordering's: two numbers
+/// equal by value are one key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderedValue(pub(crate) Value);
 
@@ -48,13 +45,7 @@ impl Ord for OrderedValue {
             (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
             (Value::Null, _) => std::cmp::Ordering::Less,
             (_, Value::Null) => std::cmp::Ordering::Greater,
-            (Value::Number(a), Value::Number(b)) => {
-                let a_f = a.as_f64().unwrap_or(0.0);
-                let b_f = b.as_f64().unwrap_or(0.0);
-                // A JSON number is never NaN, so `partial_cmp` is total here;
-                // unlike `total_cmp` it puts `-0.0` and `0.0` level.
-                a_f.partial_cmp(&b_f).unwrap_or(std::cmp::Ordering::Equal)
-            }
+            (Value::Number(a), Value::Number(b)) => crate::velesql::compare_numbers(a, b),
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
             _ => serde_json::to_string(&self.0)
@@ -65,14 +56,11 @@ impl Ord for OrderedValue {
 }
 
 // =============================================================================
-// BTreeOrderedIndex: shared B-tree storage backing both index types
+// BTreeOrderedIndex: B-tree storage backing CompositeRangeIndex
 // =============================================================================
 
-/// Shared B-tree storage for ordered property indexes.
-///
-/// Both [`CompositeRangeIndex`] (node properties) and [`EdgePropertyIndex`]
-/// (edge properties) delegate to this type for all insert/remove/lookup
-/// operations, eliminating code duplication.
+/// B-tree storage for an ordered property index: [`CompositeRangeIndex`]
+/// delegates every insert, remove and lookup to it.
 #[derive(Debug, Serialize, Deserialize)]
 struct BTreeOrderedIndex {
     entries: std::collections::BTreeMap<OrderedValue, Vec<u64>>,
@@ -174,14 +162,14 @@ impl CompositeRangeIndex {
 
     /// Returns the label.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn label(&self) -> &str {
         &self.label
     }
 
     /// Returns the property.
     #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
+    #[cfg(test)]
     pub fn property(&self) -> &str {
         &self.property
     }
@@ -215,70 +203,5 @@ impl CompositeRangeIndex {
     /// Less than lookup.
     pub fn lookup_lt(&self, value: &Value) -> Vec<u64> {
         self.index.lookup_lt(value)
-    }
-}
-
-// =============================================================================
-// EPIC-047 US-003: Edge Property Index
-// =============================================================================
-
-/// Index for edge/relationship properties.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EdgePropertyIndex {
-    /// Relationship type this index covers
-    rel_type: String,
-    /// Property name
-    property: String,
-    /// Shared B-tree storage
-    index: BTreeOrderedIndex,
-}
-
-impl EdgePropertyIndex {
-    /// Creates a new edge property index.
-    #[must_use]
-    pub fn new(rel_type: impl Into<String>, property: impl Into<String>) -> Self {
-        Self {
-            rel_type: rel_type.into(),
-            property: property.into(),
-            index: BTreeOrderedIndex::new(),
-        }
-    }
-
-    /// Returns the relationship type.
-    #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
-    pub fn rel_type(&self) -> &str {
-        &self.rel_type
-    }
-
-    /// Returns the property.
-    #[must_use]
-    #[allow(dead_code)] // Reason: Public API accessor — used by tests and future query planner integration
-    pub fn property(&self) -> &str {
-        &self.property
-    }
-
-    /// Inserts an edge into the index.
-    pub fn insert(&mut self, edge_id: u64, value: &Value) {
-        self.index.insert(edge_id, value);
-    }
-
-    /// Removes an edge from the index.
-    #[allow(dead_code)] // Reason: Public API — used by tests and future edge removal wiring
-    pub fn remove(&mut self, edge_id: u64, value: &Value) -> bool {
-        self.index.remove(edge_id, value)
-    }
-
-    /// Looks up edges by exact value.
-    #[must_use]
-    #[allow(dead_code)] // Reason: Public API — used by tests and future query planner integration
-    pub fn lookup_exact(&self, value: &Value) -> &[u64] {
-        self.index.lookup_exact(value)
-    }
-
-    /// Range lookup for edges.
-    #[allow(dead_code)] // Reason: Public API — used by tests and future query planner integration
-    pub fn lookup_range(&self, lower: Option<&Value>, upper: Option<&Value>) -> Vec<u64> {
-        self.index.lookup_range(lower, upper)
     }
 }

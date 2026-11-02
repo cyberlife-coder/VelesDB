@@ -244,13 +244,22 @@ readers cannot starve a writer. That fairness is what closes the cycle of
 Nobody advances, and no ordering discipline would have prevented it: only one
 lock is involved.
 
-Both operations that hold the guard and join on rayon therefore submit to a
-dedicated pool, `graph_pool` in `index/hnsw/index/batch.rs`:
-`HnswIndex::insert_batch_parallel`'s place phase and `HnswIndex::link_placed`'s
-connect phase. Their jobs reach the graph's arena, layers and entry point and
-never `HnswIndex` itself, so no job on that pool can take `inner`; rayon does
-not steal work across pools, so the isolation is structural rather than a
-timing assumption.
+Every operation that holds the guard and joins on rayon therefore submits to
+a dedicated pool, the graph pool in `crates/velesdb-core/src/pools.rs`
+(`pools::on_graph_pool`): `HnswIndex::insert_batch_parallel`'s place phase,
+`HnswIndex::link_placed`'s connect phase and a vacuum's settle. Their jobs
+reach the graph's arena, layers and entry point and never `HnswIndex` itself,
+so no job on that pool can take `inner`; rayon does not steal work across
+pools, so the isolation is structural rather than a timing assumption.
+
+That holds only for a caller that is not itself a rayon worker: a worker
+waiting on another pool keeps running its own pool's jobs meanwhile
+(`rayon-core`'s `Registry::in_worker_cross`), and one of them taking `inner`
+behind the pending writer closes the cycle again, by stealing instead of by
+starvation. `pools::on_graph_pool` therefore gives a rayon worker the
+sequential form of the work, every time: the batch is placed, or linked, in
+slices under `PARALLEL_BATCH_MIN`, node by node, on the worker's own thread.
+It is slower there, and never refused.
 
 Two checks hold the rule, because neither is sufficient alone:
 
@@ -261,7 +270,7 @@ Two checks hold the rule, because neither is sufficient alone:
   both holders finish in 0.05 s.
 - `scripts/check_hnsw_rayon_pool.py` (CI job `lint`) refuses a *new* rayon
   submission in any non-test file under `index/hnsw/` that is neither inside an
-  `.install(` closure — on any dedicated pool, not only `graph_pool` — nor
+  `.install(` or `pools::on_graph_pool(` closure — on any dedicated pool — nor
   listed with the reason it cannot close the cycle. It cannot decide by
   itself whether a submission runs under a held guard — the one that deadlocked
   reached `par_iter` three calls down, in another file — so it requires the
@@ -408,6 +417,175 @@ it read the old payloads and wrote the new ones under — `upsert`,
 two writers to the same id cannot interleave and leave the indexes describing
 a payload storage no longer holds. BM25, the secondary indexes and the
 histograms are still updated after that guard is released.
+
+**Pending points: async index builder, deferred indexer.** Their locks
+(the async index builder's `buffer` and `placed`, and the deferred
+indexer's buffer, all at position 11) are taken on the search path as well
+as the write path: every vector search merges the points they hold but the
+index does not yet reach with the index's results
+(`collection/search/pending.rs`), so a point is found from the moment its
+write returns. A search takes each lock only to copy the ids out, with no
+other lock held. It then scores each id on what vector storage holds for it
+now — read under the `vector_storage` (2) read guard 256 ids at a time, the
+guard released between chunks and before the merge, no position-11 lock
+held — so a point overwritten or deleted since it was queued is scored on
+its new vector or skipped, never on the copy its source took. An index
+result whose id is pending is dropped before the merge: the index may still
+hold an older vector for it, and storage is the one place a search reads a
+pending point's vector from. When the dropped results leave fewer than the
+search's `k`, the index is searched again for more, at least twice as many
+each time and never more than `k` plus the pending count, so the next point
+it ranks is not left out; that is at most `log2((k + pending) / k)` more
+index searches, none when no pending id is among the results. The search's restriction (a filter's bitmap, a
+graph anchor set) applies to the pending ids before they compete for its
+`k`, and a search that post-filters keeps every admitted one. A batch
+search scores them on its own thread, before it takes the storage guards it
+resolves results under (see "Collection locks and rayon" below).
+
+The ids are copied **before** the index search, and each source drops an id
+only after indexing it — insert, then remove:
+
+- the async index builder hands its buffered ids to the merge below and
+  drops only the ids it settled, or links its placed ids and drops them
+  once linked (only a flush removes from its queues, and one flush runs at
+  a time);
+- the deferred indexer copies its entries, has the merge below index their
+  ids, then retires only the copied entries of the ids it settled, so an
+  entry written again meanwhile, or whose insert failed, stays for the next
+  merge.
+
+Every point the walk can miss is therefore in the copy: if a source's drop
+came before the copy, the insert came before the walk, and the walk can
+reach the point; otherwise the copy holds it. Copied after the walk
+instead, a source could have lost a point the walk had already missed. A
+point found both ways is returned once, scored from storage.
+
+**The merge into the index** (`Collection::index_current`) reads the ids'
+vectors from storage and inserts them 256 at a time, holding the
+`vector_storage` (2) read guard across each chunk's read **and** its index
+insert. A delete or an upsert writes storage under the write guard before
+it touches the index — `delete_vector_core_stores` holds that guard across
+its index removal — so it lands wholly before a chunk is read, and the
+merge indexes what it left, or after the chunk is inserted, and its own
+index write comes last. A merge therefore never puts a deleted point back
+in the graph nor overwrites a newer write with the vector it read; a writer
+waits for one chunk's read and insert, measured at 529 ms on average (Criterion mean, 95% CI 511–548 ms)
+for 256 distinct 768-d vectors merged back into a 10 000-point Cosine
+collection, timed inside
+`Collection::index_current` from taking the guard to releasing it
+(`merge_chunk_hold_benchmark`'s `chunk_guard_hold_256_of_10k_768d`,
+2026-10-31, 10 samples on a shared 4-vCPU cloud sandbox other jobs were
+using, not the reference machine). It is a mean on that machine, not a
+bound: the hold grows with the dimension and the graph, and that graph also
+carried the unmapped nodes each of the run's merges left behind (256 per
+merge, about 4 000 by the last). The index's own locks
+(`HnswIndex::publishing`, `inner`, the graph's) rank after `vector_storage`
+(2): a delete removes from the index under the storage write guard, a
+merge inserts under the read guard, and no path takes `vector_storage`
+while holding an index lock. An id the graph already holds as storage
+does (compared normalized for Cosine, as the graph keeps it) is not
+inserted again. The merge settles an id it inserted, found held already,
+found deleted, or found holding a vector of the wrong dimension (logged and
+left out of the index: no merge could insert it). One it could not read or
+insert stays queued, for the next merge. A chunk the graph refuses (its
+insert is all-or-nothing) is retried one id at a time, each read and
+inserted under a read guard of its own, so only the refused ones stay and
+the retries hold a writer for one vector's insert at a time; the merge logs
+one warning counting what it kept. Kept ids are a state the next flush
+retries, not a failure: a builder flush returns them in its `FlushOutcome`,
+and `upsert_bulk`, `flush` and `flush_full` succeed. Only a failed link of
+placed ids is an error, and then `flush` and `flush_full` skip the HNSW save
+(it would persist mappings for nodes the graph has not linked) but run
+every other step before returning it. A deferred merge that keeps entries
+restarts the buffer's age; one that empties the buffer clears it, then
+looks again and stamps an entry a racing push left unaged. The flags that
+keep one flush and one deferred merge running at a time are held by guards
+that clear them when dropped, so a merge that panics does not leave every
+later one skipping.
+
+The deferred indexer retires an entry by value: an id rewritten during a
+merge back to the very vector the merge copied (A, then B, then A again,
+with the merge reading B in between) is retired although the index then
+holds B. That takes two rewrites of one id inside one merge, the last back
+to the copied vector; until the id's next write, a search reaches it at B
+while storage holds A. A per-entry write sequence would close it; it is
+not kept.
+
+### Collection locks and rayon
+
+The collection's own locks — every `RwLock` and `Mutex` field of
+`Collection` (positions 1–12 above) and the async index builder's and
+deferred indexer's queues (11) — follow one rule with respect to rayon:
+
+> **No job on one of core's rayon pools takes a collection lock, and no
+> thread holding one waits on a pool — except a thread that is no rayon
+> worker, waiting on one of core's dedicated pools.**
+
+Breaking it closes the cycle of #2343 one lock lower. A thread holds, say,
+the `vector_storage` (2) read guard and waits for jobs on a pool; a writer
+queues behind the guard; `parking_lot` then parks every new reader, so a job
+that takes the guard parks too, and the holder waits for it forever. Two
+shapes reach that wait:
+
+- **Joining the pool one belongs to.** A thread waiting on a join executes
+  that pool's other jobs meanwhile — the global pool's, or an application's,
+  whose own jobs may call into a collection.
+- **A rayon worker waiting on another pool.** `install` from a worker keeps
+  running the worker's own pool's jobs while it waits (`rayon-core`'s
+  `Registry::in_worker_cross`), so even a dedicated pool whose jobs take no
+  lock does not protect a caller that is itself a worker: an application
+  that merges, flushes or bulk-loads from its own rayon job would park its
+  worker under the merge's guard.
+
+`crates/velesdb-core/src/pools.rs` is the only module that names rayon, and
+every submission in core goes through it:
+
+- **Its parallel helpers** (`pools::map` and the others) run on the calling
+  thread's pool — the global pool from any other thread — and each one first
+  asserts that the thread holds no collection guard. Legs that each take
+  collection locks therefore run one after the other on the calling thread:
+  the dense and sparse legs of a hybrid search, and `upsert_bulk`'s vector
+  and payload stores.
+- **Its dedicated pools** run parallel work their caller holds a guard
+  across: `pools::on_guarded_pool` for a batch search's resolve and an
+  aggregation's chunked scan under the storage guards and the lazy PQ
+  training under the quantizer guards, and `pools::on_graph_pool` for the
+  HNSW place, link and settle phases a merge into the index reaches under
+  `vector_storage`'s read guard. Their jobs read through the guards their
+  caller holds and take none, so a caller holding a guard always gets its
+  workers back. A caller that is a rayon worker gets the sequential form of
+  the work on its own thread instead — the graph pool places in slices under
+  `PARALLEL_BATCH_MIN`, node by node — every time: no caller chooses. The
+  same form answers a dedicated pool that cannot be built (the failure is
+  logged): the work still makes progress on the calling thread.
+
+`crate::lock_audit` checks the rule in every unit test. The collection's
+locks are its `RwLock` and `Mutex` wrappers, so every accessor goes through
+them: under `cfg(test)` an acquisition on a rayon worker panics — except on
+a test's stand-in for an application's pool, whose jobs may call into a
+collection — and each guard counts itself in a thread-local while it lives,
+which the helpers' assert reads. `no_module_but_pools_names_rayon` refuses
+any other module that names rayon, a thread pool, a parallel iterator or a
+pool's `install`; its fixtures pin each way around it found so far. The
+same rule holds one level down, where no pool is needed for the cycle:
+`no_unjustified_thread_fanout` refuses every `std::thread` fan-out —
+`thread::spawn`, `thread::scope`, a `JoinHandle`'s `join` — unless the site
+carries `no collection lock`, the marker naming why it cannot close a cycle
+(`scripts/check_hnsw_rayon_pool.py` holds `index/hnsw/` to the same rule,
+keyed by ALLOWED reason instead of a marker).
+`rayon_caller_tests` merges 256 ids from a one-worker application pool while
+that pool's other job reads the collection behind a queued writer, and
+requires the merge to finish.
+
+Outside `cfg(test)` the wrappers are the `parking_lot` types with nothing
+added, and an application calling a collection from its own rayon jobs is
+served: from a worker, the merge, the flush and the bulk load run without
+waiting on a pool. What the audit cannot see: a path no unit test reaches,
+and integration tests, which link the library built without `cfg(test)`.
+Locks nested inside a field's value — `Bm25Index`'s, `PayloadMirror`'s,
+`SecondaryIndex::BTree`'s, `QueryCache`'s and the edge store's shards — are
+their types' own and outside the audit; no path holds one across a wait on
+a pool.
 
 ## Quantized-Precision Backend Interior Mutability (RaBitQ, SQ8)
 
@@ -812,7 +990,6 @@ ensure no data is lost.
 │     restore_secondary_indexes_from_config()                            │
 │                                                                        │
 │  9. run_post_open_hooks()                                              │
-│     ├─ reindex edge properties from edge_store.bin                     │
 │     ├─ replay edges.wal over edge_store.bin                            │
 │     └─ restore_persisted_quantizers(): trained quantizer artifacts     │
 └────────────────────────────────────────────────────────────────────────┘
@@ -908,15 +1085,14 @@ also truncates the WAL) re-saves the HNSW index after compaction.
 
 ### Gap Sources
 
-Three distinct write paths can leave vectors in storage but absent from HNSW:
+Two distinct write paths can leave vectors in storage but absent from HNSW:
 
 | Gap Source | Mechanism | Typical Window |
 |-----------|-----------|---------------|
 | **Normal insert gap** | `batch_store_all` writes vectors before `bulk_index_or_defer` inserts into HNSW. Crash between Phase 1 and Phase 3 of the 3-phase upsert pipeline. | Duration of Phase 2 (secondary indexes, quantization, text indexing) |
 | **Deferred indexer gap** | `DeferredIndexer` buffers vectors in memory (up to `merge_threshold`, default 1 024) before batch-merging into HNSW. Crash before merge loses the buffer. | Up to `merge_threshold` vectors (memory-only, not WAL-protected) |
-| **Delta buffer gap** | `DeltaBuffer` accumulates vectors during background HNSW rebuild. Crash before `deactivate_and_drain` loses the buffer. | Duration of the rebuild operation |
 
-All three gaps are recovered by the same `recover_hnsw_gap` mechanism
+Both gaps are recovered by the same `recover_hnsw_gap` mechanism
 because the recovery compares the final storage state against the HNSW
 mappings, regardless of how the gap originated.
 

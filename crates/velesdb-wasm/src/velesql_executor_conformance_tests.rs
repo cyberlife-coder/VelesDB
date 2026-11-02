@@ -67,6 +67,12 @@ struct Fixture {
     dml_cases: Vec<DmlCase>,
     #[serde(default)]
     projection_cases: Vec<ProjectionCase>,
+    #[serde(default)]
+    vector_group_cases: Vec<VectorGroupCase>,
+    #[serde(default)]
+    null_order_cases: Vec<Case>,
+    #[serde(default)]
+    number_cases: Vec<Case>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +105,27 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
+    /// The validation code (`V0xx`) the refusal must carry, as `[V0xx]`.
+    expected_code: String,
+}
+
+/// A vector GROUP BY (`NEAR` + GROUP BY), compared on the order of its
+/// groups: the `group_column` value of each row, in order.
+#[derive(Deserialize)]
+struct VectorGroupCase {
+    id: String,
+    query: String,
+    group_column: String,
+    expect_order: Vec<Value>,
+    /// Each group's row, in order, when the case pins it.
+    #[serde(default)]
+    expect_rows: Option<Vec<Value>>,
+    /// Each group's id (its best row's), in order.
+    #[serde(default)]
+    expect_ids: Option<Vec<u64>>,
+    /// Each group's score, in order, compared within 1e-5.
+    #[serde(default)]
+    expect_scores: Option<Vec<f32>>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -158,8 +185,25 @@ fn load_fixture() -> Fixture {
 fn payload_literal(v: &Value) -> String {
     match v {
         Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        Value::Number(n) => number_literal(n),
         other => other.to_string(),
     }
+}
+
+/// A float as VelesQL parses it: decimal notation only — `1e-17`, which
+/// `Display` produces, is not a VelesQL literal, so a number in scientific
+/// notation is rewritten as the shortest `%.Nf` string that parses back to
+/// the same `f64`.
+fn number_literal(n: &serde_json::Number) -> String {
+    let text = n.to_string();
+    if !text.contains('e') && !text.contains('E') {
+        return text;
+    }
+    let Some(f) = n.as_f64() else { return text };
+    (1..=40)
+        .map(|p| format!("{f:.p$}"))
+        .find(|s| s.parse::<f64>() == Ok(f))
+        .unwrap_or(text)
 }
 
 /// Builds the dataset *through the WASM executor* by issuing one
@@ -344,14 +388,15 @@ fn test_wasm_velesql_executor_join_cases() {
 /// GROUP BY / HAVING conformance against the WASM executor (issue #1544).
 ///
 /// Compared as JSON values (a group has no natural point id), mirroring the
-/// core aggregate test. Every case uses an explicit `AS` alias so the output
-/// field names agree with core's `execute_aggregate` naming — see
-/// `documented_divergences` D001 for the (deliberately unexercised) unaliased
-/// naming gap.
+/// core aggregate test. Both engines name an unaliased aggregate through
+/// `AggregateFunction::result_key`, so the rows match field for field (G010).
 #[test]
 fn test_wasm_velesql_executor_aggregate_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     for case in &fixture.aggregate_cases {
         let result = execute(&mut db, &case.query, None)
             .unwrap_or_else(|e| panic!("aggregate case {} failed to execute: {e}", case.id));
@@ -446,12 +491,87 @@ fn test_wasm_velesql_executor_rejected_cases() {
     let mut db = build_dataset(&fixture.dataset);
     let params = params_json(&fixture);
     for case in &fixture.rejected_cases {
+        let Err(err) = execute(&mut db, &case.query, Some(&params)) else {
+            panic!(
+                "WASM accepted rejected case {}: query={:?}",
+                case.id, case.query
+            );
+        };
         assert!(
-            execute(&mut db, &case.query, Some(&params)).is_err(),
-            "WASM accepted rejected case {}: query={:?}",
+            err.contains(&format!("[{}]", case.expected_code)),
+            "WASM refused case {} without {}: {err}",
             case.id,
-            case.query
+            case.expected_code
         );
+    }
+}
+
+/// Where a NULL or missing ORDER BY key lands: after every value in ASC,
+/// before every value in DESC, as in core.
+#[test]
+fn test_wasm_velesql_executor_null_order_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.null_order_cases, Some(&params));
+}
+
+/// Numbers compare by exact value in WHERE and ORDER BY, as in core.
+#[test]
+fn test_wasm_velesql_executor_number_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
+    let params = params_json(&fixture);
+    assert_cases_with(&mut db, &fixture.number_cases, Some(&params));
+}
+
+/// Vector GROUP BY: WASM orders the groups as core does (by score, by a
+/// SELECT aggregate).
+#[test]
+fn test_wasm_velesql_executor_vector_group_cases() {
+    let fixture = load_fixture();
+    let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
+    let params = params_json(&fixture);
+    for case in &fixture.vector_group_cases {
+        let result = execute(&mut db, &case.query, Some(&params))
+            .unwrap_or_else(|e| panic!("vector group case {} failed to execute: {e}", case.id));
+        let rows: Vec<Value> = result
+            .rows_ref()
+            .iter()
+            .map(|row| serde_json::from_str(&row.data_json()).expect("test: parse row JSON"))
+            .collect();
+        let order: Vec<Value> = rows
+            .iter()
+            .map(|row: &Value| row.get(&case.group_column).cloned().unwrap_or(Value::Null))
+            .collect();
+        let context = format!("WASM case {}: query={:?}", case.id, case.query);
+        assert_eq!(order, case.expect_order, "vector GROUP BY order, {context}");
+        if let Some(expected) = &case.expect_rows {
+            assert_eq!(&rows, expected, "vector GROUP BY rows, {context}");
+        }
+        if let Some(expected) = &case.expect_ids {
+            let ids: Vec<u64> = result.rows_ref().iter().map(|r| r.id()).collect();
+            assert_eq!(&ids, expected, "vector GROUP BY ids, {context}");
+        }
+        if let Some(expected) = &case.expect_scores {
+            let scores: Vec<f32> = result.rows_ref().iter().map(|r| r.score()).collect();
+            assert_eq!(scores.len(), expected.len(), "score count, {context}");
+            for (got, want) in scores.iter().zip(expected) {
+                assert!(
+                    (got - want).abs() <= 1e-5,
+                    "scores {scores:?}, expected {expected:?}, {context}"
+                );
+            }
+        }
     }
 }
 
@@ -477,6 +597,9 @@ fn test_wasm_velesql_executor_dml_cases() {
 fn test_wasm_velesql_executor_projection_cases() {
     let fixture = load_fixture();
     let mut db = build_dataset(&fixture.dataset);
+    for extra in &fixture.extra_collections {
+        seed_dataset(&mut db, extra);
+    }
     let params = params_json(&fixture);
     for case in &fixture.projection_cases {
         let result = execute(&mut db, &case.query, Some(&params))

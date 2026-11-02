@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 
 from llama_index.core.schema import BaseNode
 
-from velesdb_common.ids import stable_hash_id as _stable_hash_id
+from llamaindex_velesdb._common import point_id
 
 
 def validate_all_embeddings(nodes: List[BaseNode]) -> None:
@@ -81,7 +81,7 @@ def build_points_with_ids(
         node_id = node.node_id
         ids.append(node_id)
         point: dict = {
-            "id": _stable_hash_id(node_id),
+            "id": point_id(node_id),
             "vector": embedding,
             "payload": build_node_payload(node),
         }
@@ -132,7 +132,7 @@ def build_stream_points(
                 f"All nodes passed to stream_insert must have embeddings."
             )
         point: dict = {
-            "id": _stable_hash_id(node.node_id),
+            "id": point_id(node.node_id),
             "vector": embedding,
             "payload": build_node_payload(node),
         }

@@ -292,3 +292,20 @@ fn test_range_index_corrupted_data() {
     let result = RangeIndex::from_bytes(&corrupted);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_range_index_version_mismatch_rejected() {
+    // `version` is the first postcard field. A file written under a
+    // previous version's key order must be refused, not adopted — its
+    // B-tree layout is not today's.
+    let mut bytes = RangeIndex::new().to_bytes().expect("serialize");
+    bytes[0] = 1; // a version-1 file
+    assert!(RangeIndex::from_bytes(&bytes).is_err());
+}
+
+#[test]
+fn test_range_index_current_version_round_trips() {
+    let index = RangeIndex::new();
+    let bytes = index.to_bytes().expect("serialize");
+    assert!(RangeIndex::from_bytes(&bytes).is_ok());
+}

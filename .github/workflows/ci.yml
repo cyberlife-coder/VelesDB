@@ -249,6 +249,16 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p velesdb-core --no-deps --all-features --document-private-items
 
+      # Same gate for velesdb-wasm. It ships on npm, not crates.io, but its
+      # rustdoc is the reference for the code behind every JS export, and 22
+      # broken links had accumulated there unseen — most pointing at core
+      # items that only exist under `persistence`, which the wasm build never
+      # enables, so they can only ever be code spans, never links.
+      - name: Rustdoc intra-doc links (velesdb-wasm)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p velesdb-wasm --no-deps --document-private-items
+
       # The extraction backend's unit tests are pure parsing and prompt
       # building: none opens a socket. Run them under the canonical role name
       # and its compatibility alias so neither path can silently stop enabling
@@ -1141,6 +1151,28 @@ jobs:
       - name: Run wasm-bindgen tests (Node)
         run: python3 scripts/run-wasm-bindgen-tests.py --root .
 
+      # The TypeScript SDK's WASM backend over the binding THIS tree builds,
+      # not a fake store and not the npm release the SDK's lockfile pins.
+      # Every other SDK test stubs the binding with plain-object records, so
+      # none saw velesdb-wasm hand back ES2015 Maps, on which the SDK threw
+      # (#2332). The suite skips itself without VELESDB_WASM_PKG, which is
+      # why it runs here, where wasm-pack can build the package, and why it
+      # is named explicitly: vitest fails on a file that no longer exists.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: sdks/typescript/package-lock.json
+
+      - name: TypeScript SDK over the real velesdb-wasm build
+        env:
+          VELESDB_WASM_PKG: ${{ runner.temp }}/velesdb-wasm-pkg
+        run: |
+          wasm-pack build crates/velesdb-wasm --target web --dev --out-dir "$VELESDB_WASM_PKG"
+          cd sdks/typescript
+          npm ci
+          npx vitest run tests/wasm-real-binding.test.ts
+
   # ===========================================================================
   # OpenAPI Drift Check
   # Regenerates the committed docs/openapi.{json,yaml} snapshots from the
@@ -1605,6 +1637,11 @@ jobs:
       - name: Run velesdb-python functional tests
         working-directory: crates/velesdb-python
         run: python -m pytest tests/ -m "not slow" -p no:cacheprovider -q -W ignore::DeprecationWarning
+
+      # The examples were only compiled, so the root README's quickstart shipped
+      # calling an argument the wheel had removed. Run them against this wheel.
+      - name: Run the Python examples against the built wheel
+        run: python scripts/run-python-examples.py
 
   # Builds the napi addon and runs its Node test suite on PRs (gates CI Success)
   # so binding regressions are caught before merge. velesdb-node is a cdylib

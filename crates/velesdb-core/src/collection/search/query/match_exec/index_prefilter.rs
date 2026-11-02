@@ -1,11 +1,10 @@
-//! Index pre-filter for MATCH WHERE evaluation (S4-08, S4-09).
+//! Index pre-filter for MATCH WHERE evaluation (S4-08).
 //!
 //! Extracts simple predicates from a WHERE clause and resolves them
 //! against graph property indexes. When an index covers a predicate,
 //! the result set is used as a pre-filter to avoid per-node brute-force
 //! evaluation. Falls back gracefully when no index exists.
 
-use super::where_eval::FLOAT_EQ_TOLERANCE;
 use crate::collection::types::Collection;
 use crate::velesql::{CompareOp, Condition, GraphPattern, Value};
 use std::collections::{HashMap, HashSet};
@@ -48,10 +47,6 @@ enum PredicateKind {
 /// indexed predicates (intersection). Returns `None` when no predicate
 /// could be accelerated by an index, signalling the caller to fall back
 /// to brute-force per-node evaluation.
-///
-/// **S4-09**: When multiple equality predicates target the same label,
-/// `composite_index_lookup` is attempted first. Individual single-property
-/// lookups are used as fallback.
 pub(super) fn compute_index_prefilter(
     collection: &Collection,
     pattern: &GraphPattern,
@@ -65,19 +60,18 @@ pub(super) fn compute_index_prefilter(
 
     let alias_to_labels = build_alias_label_map(pattern);
 
-    // S4-09: group equality predicates by (alias, label) for composite lookup.
-    let composite_result = try_composite_lookup(collection, &predicates, &alias_to_labels);
+    let mut result_set: Option<HashSet<u64>> = None;
 
-    let mut result_set: Option<HashSet<u64>> = composite_result;
-
+    // A predicate no index covers narrows nothing here: WHERE re-checks every
+    // candidate, so it is skipped rather than discarding what the indexed
+    // predicates found.
     for pred in &predicates {
-        // Skip equality predicates already covered by composite lookup.
-        if matches!(pred.kind, PredicateKind::Exact(_)) && result_set.is_some() {
+        let Some(label) = resolve_label(&pred.alias, &alias_to_labels) else {
             continue;
-        }
-
-        let label = resolve_label(&pred.alias, &alias_to_labels)?;
-        let ids = execute_single_lookup(collection, label, &pred.property, &pred.kind)?;
+        };
+        let Some(ids) = predicate_candidates(collection, label, pred) else {
+            continue;
+        };
         let id_set: HashSet<u64> = ids.into_iter().collect();
         result_set = Some(intersect_sets(result_set, id_set));
     }
@@ -118,39 +112,27 @@ fn intersect_sets(acc: Option<HashSet<u64>>, new: HashSet<u64>) -> HashSet<u64> 
     }
 }
 
-/// S4-09: attempts a composite index lookup for multiple equality predicates
-/// on the same label. Returns `Some(set)` if a composite index exists and
-/// covers all equality predicates for at least one label.
-fn try_composite_lookup(
+/// The nodes a predicate keeps: for `alias.id`, the node id names its node,
+/// which no property index answers for; for any other property, an index
+/// lookup.
+fn predicate_candidates(
     collection: &Collection,
-    predicates: &[ExtractedPredicate],
-    alias_to_labels: &HashMap<String, Vec<String>>,
-) -> Option<HashSet<u64>> {
-    // Group equality predicates by alias.
-    let mut eq_by_alias: HashMap<&str, Vec<(&str, &serde_json::Value)>> = HashMap::new();
-    for pred in predicates {
-        if let PredicateKind::Exact(ref val) = pred.kind {
-            eq_by_alias
-                .entry(&pred.alias)
-                .or_default()
-                .push((&pred.property, val));
-        }
+    label: &str,
+    pred: &ExtractedPredicate,
+) -> Option<Vec<u64>> {
+    if pred.property == "id" {
+        return node_id_candidates(&pred.kind);
     }
+    execute_single_lookup(collection, label, &pred.property, &pred.kind)
+}
 
-    // Only attempt composite lookup when 2+ equality predicates share an alias.
-    for (alias, props) in &eq_by_alias {
-        if props.len() < 2 {
-            continue;
-        }
-        let label = resolve_label(alias, alias_to_labels)?;
-        let prop_names: Vec<&str> = props.iter().map(|(name, _)| *name).collect();
-        let values: Vec<serde_json::Value> = props.iter().map(|(_, v)| (*v).clone()).collect();
-
-        if let Some(ids) = collection.composite_index_lookup(label, &prop_names, &values) {
-            return Some(ids.into_iter().collect());
-        }
+/// The node an `alias.id = n` predicate names. Only an exact, non-negative
+/// integer names one; any other `id` predicate is never extracted.
+fn node_id_candidates(kind: &PredicateKind) -> Option<Vec<u64>> {
+    match kind {
+        PredicateKind::Exact(value) => Some(vec![value.as_u64()?]),
+        _ => None,
     }
-    None
 }
 
 /// Executes a single-property index lookup.
@@ -234,6 +216,10 @@ fn comparison_to_predicate(
     let (alias, property) = split_alias_property(&cmp.column)?;
     let resolved = Collection::resolve_where_param(&cmp.value, params).ok()?;
     let kind = predicate_kind(cmp.operator, &resolved)?;
+    // `alias.id` is the node id: only an exact integer narrows to one node.
+    if property == "id" && node_id_candidates(&kind).is_none() {
+        return None;
+    }
 
     Some(ExtractedPredicate {
         alias: alias.to_string(),
@@ -244,26 +230,20 @@ fn comparison_to_predicate(
 
 /// Maps a WHERE comparison to the index lookup that keeps every node WHERE
 /// accepts — the prefilter only rejects, so the lookup may return more nodes
-/// than WHERE keeps, never fewer. Two comparisons need a wider lookup than
-/// their operator suggests:
+/// than WHERE keeps, never fewer. One comparison needs a wider lookup than
+/// its operator suggests:
 ///
-/// - **Float equality.** WHERE accepts any value within
-///   [`FLOAT_EQ_TOLERANCE`] of a float literal, where the index matches one
-///   value exactly. The lookup is the inclusive range of twice the tolerance
-///   around it: a WHERE match is less than the tolerance away even after the
-///   rounding of WHERE's subtraction, and rounding the range bounds cannot
-///   move them past a value that close.
-/// - **Strict bounds on an integer.** WHERE compares integers exactly, the
-///   index orders every number as an `f64`, and above 2^53 a larger integer
-///   can round onto the bound itself (`2^53 + 1` becomes `2^53`). The lookup
-///   includes the bound.
+/// - **A strict bound an `f64` cannot single out.** The index keys every
+///   number by its `f64` value; at or past 2^53 a bound can share its key
+///   with a neighbour WHERE orders apart (`2^53 + 1` becomes `2^53`). A
+///   strict bound there is looked up inclusive, keeping the shared key.
 ///
 /// `!=` cannot be answered by an index lookup and maps to `None`.
 fn predicate_kind(operator: CompareOp, literal: &Value) -> Option<PredicateKind> {
     let json = literal.to_json();
-    let inclusive = is_integer(literal);
+    let inclusive = !crate::filter::exact_as_f64(&json);
     Some(match operator {
-        CompareOp::Eq => equality_kind(literal, json),
+        CompareOp::Eq => PredicateKind::Exact(json),
         CompareOp::Gt if !inclusive => PredicateKind::Gt(json),
         CompareOp::Lt if !inclusive => PredicateKind::Lt(json),
         CompareOp::Gt | CompareOp::Gte => PredicateKind::Gte(json),
@@ -272,31 +252,15 @@ fn predicate_kind(operator: CompareOp, literal: &Value) -> Option<PredicateKind>
     })
 }
 
-/// Whether WHERE compares this literal as an exact integer.
-const fn is_integer(literal: &Value) -> bool {
-    matches!(literal, Value::Integer(_) | Value::UnsignedInteger(_))
-}
-
-/// The lookup for `= literal`: exact, except for a float, which is looked up
-/// as the inclusive range of twice [`FLOAT_EQ_TOLERANCE`] around it; see
-/// [`predicate_kind`].
-fn equality_kind(literal: &Value, json: serde_json::Value) -> PredicateKind {
-    let Value::Float(center) = *literal else {
-        return PredicateKind::Exact(json);
-    };
-    let half_width = 2.0 * FLOAT_EQ_TOLERANCE;
-    PredicateKind::Range(
-        serde_json::json!(center - half_width),
-        serde_json::json!(center + half_width),
-    )
-}
-
 /// Converts a `BetweenCondition` to a range predicate.
 fn between_to_predicate(
     btw: &crate::velesql::BetweenCondition,
     params: &HashMap<String, serde_json::Value>,
 ) -> Option<ExtractedPredicate> {
     let (alias, property) = split_alias_property(&btw.column)?;
+    if property == "id" {
+        return None; // the node id, which no range index orders
+    }
     let low_resolved = Collection::resolve_where_param(&btw.low, params).ok()?;
     let high_resolved = Collection::resolve_where_param(&btw.high, params).ok()?;
 

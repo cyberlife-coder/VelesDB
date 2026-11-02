@@ -37,8 +37,12 @@ type StoreParams<M extends keyof BindingVectorStore> = AllParams<BindingVectorSt
 // WASM result types — mirror the shapes returned by velesdb-wasm
 // ---------------------------------------------------------------------------
 
-/** Dense search result: [id, score] tuple returned by VectorStore.search(). */
-export type WasmDenseResult = [bigint, number];
+/**
+ * Dense search result: [id, score] tuple returned by VectorStore.search() and
+ * multi_query_search(). Ids go into the binding as BigInt and come back as
+ * plain numbers.
+ */
+export type WasmDenseResult = [number, number];
 
 /** Sparse/hybrid search result returned by sparse_search / hybrid_search_fuse. */
 export interface WasmSparseResult {
@@ -48,16 +52,30 @@ export interface WasmSparseResult {
 
 /** Filtered search result returned by VectorStore.search_with_filter(). */
 export interface WasmFilteredResult {
-  id: bigint;
+  id: number;
   score: number;
   payload?: Record<string, unknown> | null;
 }
 
-/** Hybrid search result returned by VectorStore.hybrid_search(). */
+/**
+ * Record returned by VectorStore.hybrid_search(): a plain object since
+ * velesdb-wasm 8.0.0 (#2332), `payload` null when the point has none.
+ */
 export interface WasmHybridResult {
   id: bigint | number;
   score: number;
-  payload?: Record<string, unknown>;
+  payload?: Record<string, unknown> | null;
+}
+
+/**
+ * Record returned by VectorStore.text_search() since velesdb-wasm 8.0.0: a
+ * case-insensitive substring match selects records and ranks none, so
+ * `score` is always null.
+ */
+export interface WasmTextResult {
+  id: number;
+  score: null;
+  payload: Record<string, unknown>;
 }
 
 /** Point returned by VectorStore.get(). */
@@ -66,11 +84,6 @@ export interface WasmPoint {
   vector: number[] | Float32Array;
   payload?: Record<string, unknown> | null;
 }
-
-/** Generic search result (tuple or object) returned by text_search / multi_query_search. */
-export type WasmSearchResultItem =
-  | WasmDenseResult
-  | WasmHybridResult;
 
 // ---------------------------------------------------------------------------
 // VectorStore — typed interface for the WASM VectorStore class
@@ -133,7 +146,7 @@ export interface WasmVectorStore {
    * Text search on payload fields. The third argument names one payload
    * field to match; this method takes no filter.
    */
-  text_search(...args: StoreParams<'text_search'>): WasmSearchResultItem[];
+  text_search(...args: StoreParams<'text_search'>): WasmTextResult[];
 
   /** Hybrid vector + text search. Returns array of {id, score, payload}. */
   hybrid_search(...args: StoreParams<'hybrid_search'>): WasmHybridResult[];
@@ -141,9 +154,9 @@ export interface WasmVectorStore {
   /**
    * Multi-query search with fusion: `(vectors, num_vectors, k, strategy,
    * rrf_k, weights)`, `weights` being the weighted strategy's
-   * `[avg, max, hit]`. Returns mixed result items.
+   * `[avg, max, hit]`. Returns `[id, score]` tuples.
    */
-  multi_query_search(...args: StoreParams<'multi_query_search'>): WasmSearchResultItem[];
+  multi_query_search(...args: StoreParams<'multi_query_search'>): WasmDenseResult[];
 
   /** VelesQL-style query returning multi-model results. */
   query(...args: StoreParams<'query'>): Record<string, unknown>[];

@@ -10,6 +10,35 @@ use crate::collection::types::Collection;
 use crate::error::{Error, Result};
 use crate::storage::{PayloadStorage, VectorStorage};
 
+/// The steps of one flush: each runs whatever an earlier one did, and the
+/// flush returns the first error once all have run.
+///
+/// A flush is how a collection reaches disk — on shutdown it is the last
+/// chance to — so one step failing must not leave every later one undone.
+#[derive(Default)]
+struct FlushSteps {
+    first_error: Option<Error>,
+}
+
+impl FlushSteps {
+    /// Records `result` of the step `name`; returns whether it succeeded.
+    fn run(&mut self, name: &str, result: Result<()>) -> bool {
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!("flush: {name} failed: {e}");
+                self.first_error.get_or_insert(e);
+                false
+            }
+        }
+    }
+
+    /// The first error any step returned.
+    fn finish(self) -> Result<()> {
+        self.first_error.map_or(Ok(()), Err)
+    }
+}
+
 impl Collection {
     /// Issue #423 Component 3: Threshold for periodic HNSW save in `flush()`.
     ///
@@ -25,31 +54,40 @@ impl Collection {
     ///
     /// Use [`flush_full()`](Self::flush_full) for shutdown or compaction.
     ///
+    /// Every step runs, whatever an earlier one did; the first error is
+    /// returned once they all have. Ids the async index builder could not
+    /// index stay queued, and searchable, for the next flush: they are
+    /// logged, and do not fail it.
+    ///
     /// # Errors
     ///
-    /// Returns an error if storage operations fail.
+    /// Returns the first error a step returned: a storage write, a link the
+    /// async index builder could not make, an index save.
     pub fn flush(&self) -> Result<()> {
-        self.save_config()?;
+        let mut steps = FlushSteps::default();
+        steps.run("config", self.save_config());
         // Issue #423: vector_storage.flush() is now a fast path (WAL + mmap
         // only, no vectors.idx serialization). The WAL provides crash recovery
         // even with a stale index file.
-        self.storage.vector_storage.write().flush()?;
-        self.storage.payload_storage.write().flush()?;
-        // Drain delta buffer into HNSW before persisting the index.
-        // Lock order: delta_buffer(10) is acquired after vector_storage(2)
-        // and payload_storage(3) — both already released above.
-        self.drain_delta_into_index();
-        // Drain deferred indexer into HNSW (position 11, after delta at 10).
+        let vectors = self.storage.vector_storage.write().flush();
+        steps.run("vector storage", vectors.map_err(Error::from));
+        let payloads = self.storage.payload_storage.write().flush();
+        steps.run("payload storage", payloads.map_err(Error::from));
+        // Drain deferred indexer into HNSW (position 11). vector_storage(2)
+        // and payload_storage(3) are both released above.
         self.drain_deferred_into_index();
         // Drain async index builder buffer (V2 bulk insert path) into HNSW.
-        // Without this, sub-threshold batches from upsert_bulk would remain
-        // invisible to search until the buffer reaches merge_threshold.
-        self.drain_async_index_builder()?;
-        // Issue #423 Component 3: Save HNSW only when insert threshold
-        // exceeded. Otherwise defer to flush_full() (shutdown/compaction).
-        self.save_hnsw_if_threshold_exceeded()?;
-        self.flush_secondary_indexes()?;
-        self.flush_sparse_indexes()
+        // Without this, sub-threshold batches from upsert_bulk would stay out
+        // of the graph, scored exactly on every search, until the buffer
+        // reaches merge_threshold.
+        if steps.run("async index builder", self.drain_async_index_builder()) {
+            // Issue #423 Component 3: Save HNSW only when insert threshold
+            // exceeded. Otherwise defer to flush_full() (shutdown/compaction).
+            steps.run("HNSW index", self.save_hnsw_if_threshold_exceeded());
+        }
+        steps.run("secondary indexes", self.flush_secondary_indexes());
+        steps.run("sparse indexes", self.flush_sparse_indexes());
+        steps.finish()
     }
 
     /// Full durability flush including HNSW save and `vectors.idx`.
@@ -59,48 +97,76 @@ impl Collection {
     /// graph and vector index file are up-to-date, avoiding gap recovery
     /// and WAL replay on the next startup.
     ///
+    /// Every step runs, whatever an earlier one did, as in
+    /// [`flush`](Self::flush): the HNSW save, the quantizers and the sparse,
+    /// BM25 and secondary indexes reach disk even when one of them, or the
+    /// builder's drain, fails. Only `vectors.idx` waits on the vector storage
+    /// flush: written after a failed one, it would record offsets over data
+    /// that never reached disk, and the next open would refuse it before
+    /// replaying the WAL. An HNSW index saved then is reconciled by the open's
+    /// orphan pass.
+    ///
     /// # Errors
     ///
-    /// Returns an error if storage operations fail.
+    /// Returns the first error a step returned.
     pub fn flush_full(&self) -> Result<()> {
-        self.flush_core_storage()?;
-        self.flush_derived_indexes()?;
-        // Write the deferred vectors.idx AFTER all other flush steps.
-        self.storage.vector_storage.read().flush_index()?;
-        Ok(())
+        let mut steps = FlushSteps::default();
+        let vectors_durable = self.flush_core_storage(&mut steps);
+        self.flush_derived_indexes(&mut steps);
+        // Write the deferred vectors.idx AFTER all other flush steps, and only
+        // over vectors that reached disk (`MmapStorage::flush_full`).
+        if vectors_durable {
+            let index_file = self.storage.vector_storage.read().flush_index();
+            steps.run("vectors.idx", index_file.map_err(Error::from));
+        }
+        steps.finish()
     }
 
-    /// Flushes config + vector/payload storage + drains + HNSW save.
+    /// Flushes config + vector/payload storage + drains + HNSW save, and
+    /// returns whether the vector storage flush succeeded.
     ///
     /// Extracted from `flush_full` to keep its CC under the Codacy limit
     /// after adding the BM25 snapshot/WAL step (#389).
-    fn flush_core_storage(&self) -> Result<()> {
-        self.save_config()?;
-        self.storage.vector_storage.write().flush()?;
-        self.storage.payload_storage.write().flush()?;
-        self.drain_delta_into_index();
+    fn flush_core_storage(&self, steps: &mut FlushSteps) -> bool {
+        steps.run("config", self.save_config());
+        let vectors = self.storage.vector_storage.write().flush();
+        #[cfg(test)]
+        let vectors = flush_hooks::vector_flush(vectors);
+        let vectors_durable = steps.run("vector storage", vectors.map_err(Error::from));
+        let payloads = self.storage.payload_storage.write().flush();
+        steps.run("payload storage", payloads.map_err(Error::from));
         self.drain_deferred_into_index();
-        self.drain_async_index_builder()?;
-        // Always save HNSW on full flush and reset the counter.
-        self.storage.index.save(&self.storage.path)?;
-        self.generations
-            .inserts_since_last_hnsw_save
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        self.flush_pq_codebook()?;
-        self.flush_rabitq_quantizer()?;
-        self.flush_sq8_quantizer()?;
-        Ok(())
+        // A drain whose link failed leaves placed ids mapped to nodes the
+        // graph has not linked: a save now would persist those mappings, and
+        // recovery, which re-indexes only unmapped ids, would leave the
+        // points unreachable (#2246). The save waits for a drain that links.
+        if steps.run("async index builder", self.drain_async_index_builder()) {
+            // Always save HNSW on full flush and reset the counter.
+            let saved = self
+                .storage
+                .index
+                .save(&self.storage.path)
+                .map_err(Error::from);
+            if steps.run("HNSW index", saved) {
+                self.generations
+                    .inserts_since_last_hnsw_save
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        steps.run("PQ codebook", self.flush_pq_codebook());
+        steps.run("RaBitQ quantizer", self.flush_rabitq_quantizer());
+        steps.run("SQ8 quantizer", self.flush_sq8_quantizer());
+        vectors_durable
     }
 
     /// Persists all derived indexes (secondary, sparse, BM25) in order.
     ///
     /// BM25 (issue #389) is ordered AFTER sparse so the collection-level
     /// flush semantics remain "durable → truncate WAL" uniformly for both.
-    fn flush_derived_indexes(&self) -> Result<()> {
-        self.flush_secondary_indexes()?;
-        self.flush_sparse_indexes()?;
-        self.flush_bm25_index()?;
-        Ok(())
+    fn flush_derived_indexes(&self, steps: &mut FlushSteps) {
+        steps.run("secondary indexes", self.flush_secondary_indexes());
+        steps.run("sparse indexes", self.flush_sparse_indexes());
+        steps.run("BM25 index", self.flush_bm25_index());
     }
 
     /// Persists the BM25 index as an atomic snapshot and truncates its
@@ -208,27 +274,11 @@ impl Collection {
         Ok(())
     }
 
-    /// Drains the delta buffer into the HNSW index (if active).
-    ///
-    /// No-op when the delta buffer is inactive (no rebuild in progress).
-    #[cfg(feature = "persistence")]
-    fn drain_delta_into_index(&self) {
-        let drained = self.streaming.delta_buffer.deactivate_and_drain();
-        self.filter_and_insert_valid(&drained);
-    }
-
-    /// No-op stub when persistence is disabled.
-    #[cfg(not(feature = "persistence"))]
-    fn drain_delta_into_index(&self) {}
-
-    /// Drains the deferred indexer into the HNSW index (if configured).
-    ///
-    /// No-op when deferred indexing is not configured.
+    /// Indexes what the deferred indexer holds (if configured).
     #[cfg(feature = "persistence")]
     fn drain_deferred_into_index(&self) {
         if let Some(di) = self.streaming.deferred_indexer.load().as_ref() {
-            let drained = di.drain_all();
-            self.filter_and_insert_valid(&drained);
+            self.merge_deferred_batch(di);
         }
     }
 
@@ -236,59 +286,30 @@ impl Collection {
     #[cfg(not(feature = "persistence"))]
     fn drain_deferred_into_index(&self) {}
 
-    /// Filters `drained` to live vectors and batch-inserts them into HNSW.
-    ///
-    /// Shared by `drain_delta_into_index` and `drain_deferred_into_index`.
-    ///
-    /// # Lock ordering
-    ///
-    /// Acquires `vector_storage` (position 2) briefly, releases it before
-    /// calling `insert_batch_parallel` (no index lock held during the
-    /// storage read). Callers must drain their respective buffer lock
-    /// (position 10 or 11) before calling this method.
-    #[cfg(feature = "persistence")]
-    fn filter_and_insert_valid(&self, drained: &[(u64, Vec<f32>)]) {
-        if drained.is_empty() {
-            return;
-        }
-        let storage = self.storage.vector_storage.read();
-        let valid: Vec<(u64, &[f32])> = drained
-            .iter()
-            .filter(|(id, _)| storage.retrieve(*id).ok().flatten().is_some())
-            .map(|(id, v)| (*id, v.as_slice()))
-            .collect();
-        drop(storage);
-        if !valid.is_empty() {
-            self.storage.index.insert_batch_parallel(valid);
-        }
-    }
-
     /// Drains the async index builder buffer into the HNSW index.
     ///
-    /// Ensures sub-threshold batches from the V2 `upsert_bulk` path are
-    /// indexed into HNSW, making them visible to search. Without this,
-    /// vectors written via `DirectVectorWriter` but not yet flushed by
-    /// `AsyncIndexBuilder` would be stored but invisible to ANN search.
+    /// Links sub-threshold batches from the V2 `upsert_bulk` path into
+    /// HNSW. Search finds them before this too, but by scoring every one
+    /// the builder holds on each query (`collection/search/pending.rs`);
+    /// once linked, a graph walk reaches them, and a save persists a graph
+    /// that has them.
     ///
-    /// No-op when the async index builder is not configured.
+    /// No-op when the async index builder is not configured. Ids the drain
+    /// could not index stay queued, and searchable, for the next one: the
+    /// builder logs a warning counting them, and the drain succeeds.
     ///
     /// # Errors
     ///
-    /// Returns an error if the async index builder flush fails (e.g. lock
-    /// contention or internal batch-insert error). The error is logged at
-    /// `warn` level before propagation so that operational dashboards can
-    /// alert on repeated failures.
+    /// Returns an error if the builder could not link the ids its direct
+    /// writer placed; they stay queued too.
     pub(super) fn drain_async_index_builder(&self) -> Result<()> {
         if let Some(aib) = self.streaming.async_index_builder.load().as_ref() {
-            match aib.flush_sync(&self.storage.index) {
-                Ok(count) if count > 0 => {
-                    tracing::debug!("flush: drained {count} vectors from async index builder");
-                }
-                Err(e) => {
-                    tracing::warn!("flush: async index builder drain failed: {e}");
-                    return Err(e);
-                }
-                _ => {}
+            let outcome = aib.flush_sync(&self.storage.index, &|ids| self.index_current(ids))?;
+            if outcome.indexed > 0 {
+                tracing::debug!(
+                    "flush: drained {} vectors from async index builder",
+                    outcome.indexed
+                );
             }
         }
         Ok(())
@@ -514,3 +535,8 @@ impl Collection {
         Ok(reclaimed)
     }
 }
+
+/// A test's hook into a flush's vector storage step.
+#[cfg(test)]
+#[path = "flush_hooks.rs"]
+pub(crate) mod flush_hooks;

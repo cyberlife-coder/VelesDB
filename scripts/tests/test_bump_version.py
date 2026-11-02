@@ -239,5 +239,77 @@ class GuardedClaimParityTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "workspace 7.0.0\n")
 
 
+
+
+class IntegrationCommonFloorTests(unittest.TestCase):
+    """The integrations import `velesdb_common` modules of their own release,
+    so their `velesdb-common` floor moves with the workspace version."""
+
+    INTEGRATIONS = {
+        "integrations/langchain/pyproject.toml",
+        "integrations/llamaindex/pyproject.toml",
+        "integrations/haystack/pyproject.toml",
+    }
+    PYPROJECT = (
+        '[project]\nname = "langchain-velesdb"\nversion = "8.0.0"\n'
+        'dependencies = [\n    "velesdb>=5.1.0",\n    "velesdb-common>=4.0.0",\n]\n'
+    )
+
+    def test_every_floor_the_guard_reads_is_one_the_bumper_writes(self) -> None:
+        guarded = {path for path, fmt in guard.TARGETS if fmt == "pip_common_floor"}
+        bumped = {path for path, fmt in bump.TARGETS if fmt == "pip_common_floor"}
+        self.assertEqual(guarded, bumped)
+        self.assertEqual(guarded, self.INTEGRATIONS)
+
+    def test_each_integration_importing_velesdb_common_is_policed(self) -> None:
+        importing = {
+            f"integrations/{p.parent.name}/pyproject.toml"
+            for p in (SCRIPTS.parent / "integrations").glob("*/pyproject.toml")
+            if p.parent.name != "common"
+            and any(
+                "velesdb_common" in src.read_text(encoding="utf-8")
+                for src in (p.parent / "src").rglob("*.py")
+            )
+        }
+        self.assertEqual(importing, self.INTEGRATIONS)
+
+    def test_moves_the_common_floor_and_leaves_the_core_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pyproject.toml"
+            path.write_text(self.PYPROJECT, encoding="utf-8")
+            n = bump.bump_file(path, "pip_common_floor", "8.0.1", datetime.date(2026, 10, 30))
+            out = path.read_text(encoding="utf-8")
+        self.assertEqual(n, 1)
+        self.assertIn('"velesdb-common>=8.0.1"', out)
+        self.assertIn('"velesdb>=5.1.0"', out)
+        self.assertIn('version = "8.0.0"', out)
+
+    def test_the_guard_reads_the_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pyproject.toml"
+            path.write_text(self.PYPROJECT, encoding="utf-8")
+            self.assertEqual(guard._read_pip_common_floor(path), "4.0.0")
+
+
+class SiblingCratePinTests(unittest.TestCase):
+    def test_moves_every_workspace_crate_pin_and_no_other_crate(self) -> None:
+        snippet = (
+            'tauri-plugin-velesdb = "4.3.0"\n'
+            'velesdb-core = { version = "4.3.0", features = ["persistence"] }\n'
+            'velesdb-memory = "0.16.0"\n'
+            'serde = "1.0.200"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "README.md"
+            path.write_text(snippet, encoding="utf-8")
+            n = bump.bump_file(path, "cargo_dep_pin", "8.0.0", datetime.date(2026, 10, 30))
+            out = path.read_text(encoding="utf-8")
+        self.assertEqual(n, 2)
+        self.assertIn('tauri-plugin-velesdb = "8.0.0"', out)
+        self.assertIn('velesdb-core = { version = "8.0.0"', out)
+        self.assertIn('velesdb-memory = "0.16.0"', out)
+        self.assertIn('serde = "1.0.200"', out)
+
+
 if __name__ == "__main__":
     unittest.main()

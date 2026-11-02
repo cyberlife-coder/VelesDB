@@ -470,16 +470,6 @@ fn test_edge_properties_survive_a_flushed_snapshot_and_reopen() {
         .expect("the edge with properties is back");
     assert_eq!(edge.properties(), &properties);
     assert!(reopened.get_edge(8).is_some());
-    let reindexed = reopened
-        .inner
-        .graph
-        .edge_range_indexes
-        .read()
-        .contains_key("KNOWS.since");
-    assert!(
-        reindexed,
-        "edge properties are re-indexed from the snapshot"
-    );
 }
 
 /// The files of `dir` that an open moved aside as unreadable edge snapshots.
@@ -873,7 +863,9 @@ fn labelled(properties: serde_json::Value) -> serde_json::Value {
 }
 
 #[test]
-fn a_float_equality_finds_every_value_within_the_where_tolerance() {
+fn a_float_equality_finds_only_the_exact_value() {
+    // 8.0.0 removed the `0.001` tolerance a MATCH WHERE float equality had:
+    // `0.5004` is not `0.5`.
     let (_dir, col) = make_test_collection(None);
     col.upsert_node_payload(1, &labelled(serde_json::json!({ "w": 0.5004 })))
         .unwrap();
@@ -882,7 +874,8 @@ fn a_float_equality_finds_every_value_within_the_where_tolerance() {
     col.upsert_node_payload(3, &labelled(serde_json::json!({ "w": 0.7 })))
         .unwrap();
 
-    assert_eq!(matched_where(&col.inner, Some("n.w = 0.5")), vec![1, 2]);
+    assert_eq!(matched_where(&col.inner, Some("n.w = 0.5")), vec![2]);
+    assert_eq!(matched_where(&col.inner, Some("n.w = 0.5004")), vec![1]);
 }
 
 #[test]

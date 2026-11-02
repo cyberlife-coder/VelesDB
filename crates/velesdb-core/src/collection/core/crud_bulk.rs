@@ -1,13 +1,15 @@
 //! Bulk CRUD operations for Collection (`upsert_bulk`).
 //!
 //! Extracted from `crud.rs` (Issue #425) to keep each file under 500 NLOC.
-//! These methods are optimized for high-throughput import with parallel I/O.
+//! These methods are optimized for high-throughput import: one durability barrier per store per batch.
 //! Raw import path (`upsert_bulk_from_raw`) is in `bulk_import.rs`.
 //!
 //! When `async_index_builder` is configured, `upsert_bulk` uses an optimized
 //! V2 path: `DirectVectorWriter` places each vector in the graph's
 //! `ContiguousVectors`, and `AsyncIndexBuilder` defers linking it into the
-//! graph for higher throughput.
+//! graph for higher throughput. Until it is linked, every vector search finds
+//! the point among the builder's pending ids, scored on what storage holds
+//! for it (`collection/search/pending.rs`).
 
 use crate::collection::types::Collection;
 use crate::error::Result;
@@ -24,7 +26,7 @@ impl Collection {
     ///
     /// This method is optimized for bulk loading:
     /// - Uses parallel HNSW insertion (rayon)
-    /// - Parallel payload + vector I/O via `rayon::join` (Issue #424)
+    /// - Vector then payload I/O, each with one durability barrier per batch
     /// - Single flush at the end (not per-point)
     /// - No HNSW index save (deferred for performance)
     /// - Faster than the previous sequential approach on large batches (5000+)
@@ -91,18 +93,22 @@ impl Collection {
 
         // Place each vector in the graph's ContiguousVectors, where rerank and
         // brute force see it at once, and queue its id for the builder to link
-        // that slot. An index with its exact-distance features off gives the
-        // writer no slot to fill: the builder then places the vectors itself.
+        // that slot; until then every search scores it through the builder.
+        // An index with its exact-distance features off gives the writer no
+        // slot to fill: the builder then places the vectors itself.
         let writer = DirectVectorWriter::new(&self.storage.index);
         let needs_flush = match writer.write_batch_direct(vector_refs)? {
             Some(_) => aib.enqueue_placed(vector_refs.iter().map(|&(id, _)| id)),
-            None => aib.enqueue(points.iter().map(|p| (p.id, p.vector.clone())).collect()),
+            None => aib.enqueue(points.iter().map(|p| p.id)),
         };
 
-        if needs_flush {
-            // Buffer reached merge_threshold — flush synchronously.
-            aib.flush_sync(&self.storage.index)?;
-        }
+        // Buffer reached merge_threshold — flush synchronously. Its ids the
+        // flush keeps stay queued, and searchable, for the next one: the
+        // builder logs them, and the write still succeeds. A failed link
+        // still fails it — after the bookkeeping below, which the stored
+        // points need whatever the index did with them.
+        let flushed = needs_flush
+            .then(|| aib.flush_sync(&self.storage.index, &|ids| self.index_current(ids)));
 
         let count = vector_refs.len();
         self.finalize_bulk_upsert(points, entries.len(), sparse_batch)?;
@@ -117,6 +123,7 @@ impl Collection {
             "upsert_bulk V2 path: inserted {count} vectors via DirectVectorWriter + AsyncIndexBuilder"
         );
 
+        flushed.transpose()?;
         Ok(count)
     }
 
@@ -168,12 +175,17 @@ impl Collection {
     /// for the whole batch, then brings every index derived from the payloads
     /// in line with them. Shared by `upsert_bulk` and `upsert_bulk_from_raw`.
     ///
-    /// The two stores run in parallel and both complete even when one fails.
+    /// The two stores run one after the other, on this thread, and both
+    /// complete even when one fails. Each holds its storage's write guard
+    /// while it writes, and no job on a rayon pool may take a collection lock
+    /// (`docs/CONCURRENCY_MODEL.md`, "Collection locks and rayon"): they ran
+    /// as the two halves of a global-pool `rayon::join` once, the shape
+    /// `upsert` reverted for deadlocking.
     /// Stored payloads are readable whatever happened to the vectors, so the
     /// secondary indexes, the histograms and BM25 follow them before a vector
     /// error is returned; returning it first left stored payloads unindexed.
     ///
-    /// LOCK ORDER: vector_storage(2) ‖ payload_storage(3) → label_index(7),
+    /// LOCK ORDER: vector_storage(2), released; then payload_storage(3) → label_index(7),
     /// released → graph_range_indexes(7); then, with both storage locks
     /// released, secondary_indexes(6), stats_io_mutex(12), the BM25 WAL.
     pub(super) fn store_vectors_and_payloads(
@@ -181,16 +193,8 @@ impl Collection {
         vector_refs: &[(u64, &[f32])],
         entries: &[(u64, &serde_json::Value)],
     ) -> Result<()> {
-        #[cfg(feature = "persistence")]
-        let (vectors_stored, old_payloads) = rayon::join(
-            || self.bulk_store_vectors(vector_refs),
-            || self.store_payload_entries(entries),
-        );
-        #[cfg(not(feature = "persistence"))]
-        let (vectors_stored, old_payloads) = (
-            self.bulk_store_vectors(vector_refs),
-            self.store_payload_entries(entries),
-        );
+        let vectors_stored = self.bulk_store_vectors(vector_refs);
+        let old_payloads = self.store_payload_entries(entries);
 
         let old_payloads = old_payloads?;
         // The raw bulk path always maintained the secondary indexes; this one
