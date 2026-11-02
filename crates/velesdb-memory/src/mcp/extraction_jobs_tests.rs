@@ -337,6 +337,40 @@ fn a_job_record_hard_linked_from_outside_is_loaded_not_refused() {
     );
 }
 
+/// #2408: the `extraction-jobs` directory swapped for another directory after
+/// `open` must not be followed — the store resolves record names and its
+/// startup scan through the directory descriptor it pinned at open, so a
+/// load and a scan keep landing in the original directory inode.
+#[cfg(unix)]
+#[test]
+fn a_jobs_directory_swapped_after_open_is_never_followed() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().expect("create durable job store");
+    let (store, record, _record_path) = seed_saved_record(&directory);
+    let jobs_directory = directory.path().join("extraction-jobs");
+    let foreign = directory.path().join("foreign");
+    std::fs::create_dir(&foreign).expect("foreign");
+    let moved = directory.path().join("moved");
+    std::fs::rename(&jobs_directory, &moved).expect("move jobs directory aside");
+    symlink(&foreign, &jobs_directory).expect("swap in a foreign directory");
+
+    let loaded = store
+        .load(&record.request_id)
+        .expect("load from the pinned directory")
+        .expect("record still found");
+    assert_eq!(loaded.request_id, record.request_id);
+    assert_eq!(
+        store.pending().expect("scan the pinned directory"),
+        vec![record.request_id.clone()]
+    );
+    assert_eq!(
+        std::fs::read_dir(&foreign).expect("foreign").count(),
+        0,
+        "nothing may be written into or removed from the swapped-in directory"
+    );
+}
+
 fn persist_interrupted_job(
     directory: &Path,
     service: &MemoryService<DynEmbedder>,

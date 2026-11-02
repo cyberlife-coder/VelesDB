@@ -161,6 +161,17 @@ optional = true
 version = "0.2.186"
 optional = true
 
+[target.'cfg(unix)'.dependencies.rustix]
+# Descriptor-relative filesystem ops (`openat`, `renameat`, `unlinkat`,
+# `fstatat`, `Dir`) for `mutation::atomic_file::StoreDir`, which pins each
+# store's workspace inode once at open so a directory swapped in afterwards
+# cannot be followed (#2408). The safe `*at` wrappers keep this crate's own
+# code free of unsafe; `std` alone exposes none of them.
+default-features = false
+features = ["fs", "std"]
+version = "1"
+optional = true
+
 [features]
 # The MCP server transport + binary, the native file-backed store, and both
 # HTTP-client roles (embedding + extraction) are on by default so `cargo
@@ -222,6 +233,7 @@ persistence = [
     "dep:tempfile",
     "dep:atomicwrites",
     "dep:libc",
+    "dep:rustix",
 ]
 # Real on-device semantic recall via a local Ollama or OpenAI-compatible
 # embeddings endpoint. On by default — see the `default` comment; nothing is

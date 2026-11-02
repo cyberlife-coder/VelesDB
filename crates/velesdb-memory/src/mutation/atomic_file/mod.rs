@@ -10,6 +10,10 @@ use std::path::Path;
 use crate::migration::capture;
 use crate::MemoryError;
 
+mod store_dir;
+
+pub(crate) use store_dir::StoreDir;
+
 /// A deliberate refusal — the path opened or inspected is not usable as a
 /// lone regular file (a symlink, a hard link, a directory, a socket, ...) —
 /// kept distinct from [`capture`]'s generic internal-failure wording so a
@@ -22,6 +26,11 @@ fn not_a_regular_file(entity: &str) -> MemoryError {
     }
 }
 
+/// Path-based workspace check, still used by [`StoreDir::open`]'s non-unix
+/// fallback and by this module's own tests. On unix the stores pin the
+/// workspace by descriptor instead (`StoreDir`), so nothing production-side
+/// resolves it by path anymore (#2408).
+#[cfg(any(not(unix), test))]
 pub(crate) fn validate_workspace(path: &Path, entity: &str) -> Result<(), MemoryError> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|err| capture(format!("cannot inspect {entity} workspace: {err}")))?;
@@ -33,6 +42,7 @@ pub(crate) fn validate_workspace(path: &Path, entity: &str) -> Result<(), Memory
     Ok(())
 }
 
+#[cfg(any(not(unix), test))]
 pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), MemoryError> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|err| capture(format!("cannot inspect {entity} file: {err}")))?;
@@ -73,6 +83,11 @@ pub(crate) fn validate_regular_file(path: &Path, entity: &str) -> Result<(), Mem
 /// helper only ever *reads* from someone else's tree, where a hard-link
 /// based backup (`cp -al`, `rsync --link-dest`) routinely produces
 /// `nlink > 1` on perfectly ordinary files.
+///
+/// On unix every production caller resolves through a pinned [`StoreDir`]
+/// instead, so this by-path form serves the non-unix fallback and the
+/// module's tests only (#2408).
+#[cfg(any(not(unix), test))]
 pub(crate) fn open_regular_file(
     path: &Path,
     entity: &str,
@@ -102,7 +117,7 @@ pub(crate) fn open_regular_file(
     Ok(file)
 }
 
-/// As [`open_regular_file`], but accepts a hard-linked target. Fits a path
+/// As `open_regular_file`, but accepts a hard-linked target. Fits a path
 /// this helper only reads from a tree it does not own (a diagnostic source
 /// directory), and a path this store owns but never reopens to write into:
 /// an extraction job record, the controller state or an online-migration job
@@ -201,6 +216,7 @@ fn open_error(err: &std::io::Error, path: &Path, entity: &str) -> MemoryError {
     ))
 }
 
+#[cfg(any(not(unix), test))]
 pub(crate) fn path_exists(path: &Path) -> Result<bool, MemoryError> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -212,7 +228,7 @@ pub(crate) fn path_exists(path: &Path) -> Result<bool, MemoryError> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 pub(crate) fn promote(staging: &Path, final_path: &Path) -> std::io::Result<()> {
     std::fs::rename(staging, final_path)
 }
@@ -230,7 +246,7 @@ pub(crate) fn promote(_staging: &Path, _final_path: &Path) -> std::io::Result<()
     ))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 pub(crate) fn sync_directory(workspace: &Path) -> std::io::Result<()> {
     std::fs::File::open(workspace)?.sync_all()
 }
@@ -241,5 +257,9 @@ pub(crate) fn sync_directory(_workspace: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-#[path = "atomic_file_tests.rs"]
+#[path = "../atomic_file_tests.rs"]
 mod atomic_file_tests;
+
+#[cfg(all(test, unix))]
+#[path = "../store_dir_tests.rs"]
+mod store_dir_tests;
