@@ -138,7 +138,7 @@ fn hydrate_accepted_copies_only_the_vectors_it_returns() {
     let vectors = CountingVectors::default();
     let pairs = (0..100_u64).map(|id| (id, 1.0));
 
-    let results = hydrate_accepted(pairs, 3, 0, &vectors, &ParityPayloads, |payload| {
+    let results = hydrate_accepted(pairs, 3, 0, &vectors, &ParityPayloads, |_id, payload| {
         payload.and_then(|p| p.get("even")) == Some(&serde_json::Value::Bool(true))
     });
 

@@ -5,16 +5,6 @@
 //! Supports HAVING for filtering groups (US-006).
 //! Supports parallel aggregation with rayon (EPIC-018 US-001).
 
-// Reason: Numeric casts in aggregation are intentional:
-// - All casts are for computing aggregate statistics (sum, avg, count)
-// - f64/u64 casts for maintaining precision in intermediate calculations
-// - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
-// - Values bounded by result set size and field cardinality
-// - Precision loss acceptable for aggregation results
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
-
 mod grouped;
 mod having;
 #[cfg(test)]
@@ -25,76 +15,9 @@ use super::where_eval::GraphMatchEvalCache;
 use crate::collection::types::Collection;
 use crate::error::Result;
 use crate::storage::{PayloadStorage, VectorStorage};
-use crate::velesql::{AggregateFunction, Aggregator, Query, SelectColumns};
-use rustc_hash::FxHasher;
+use crate::velesql::grouping::AggregateColumns;
+use crate::velesql::{AggregateFunction, Aggregator, GroupInput, Query, SelectColumns};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-
-/// Group key for GROUP BY operations with pre-computed hash.
-/// Avoids JSON serialization overhead by using direct value hashing.
-#[derive(Clone)]
-pub(crate) struct GroupKey {
-    /// Original values for result construction
-    pub(crate) values: Vec<serde_json::Value>,
-    /// Pre-computed hash for fast HashMap lookup
-    hash: u64,
-}
-
-impl GroupKey {
-    pub(crate) fn new(values: Vec<serde_json::Value>) -> Self {
-        let hash = Self::compute_hash(&values);
-        Self { values, hash }
-    }
-
-    fn compute_hash(values: &[serde_json::Value]) -> u64 {
-        let mut hasher = FxHasher::default();
-        for v in values {
-            Self::hash_value(v, &mut hasher);
-        }
-        hasher.finish()
-    }
-
-    fn hash_value(value: &serde_json::Value, hasher: &mut FxHasher) {
-        match value {
-            serde_json::Value::Null => 0u8.hash(hasher),
-            serde_json::Value::Bool(b) => {
-                1u8.hash(hasher);
-                b.hash(hasher);
-            }
-            serde_json::Value::Number(n) => {
-                2u8.hash(hasher);
-                // Use bits for consistent hashing of floats
-                if let Some(f) = n.as_f64() {
-                    f.to_bits().hash(hasher);
-                }
-            }
-            serde_json::Value::String(s) => {
-                3u8.hash(hasher);
-                s.hash(hasher);
-            }
-            _ => {
-                // Arrays and objects: fallback to string representation
-                4u8.hash(hasher);
-                value.to_string().hash(hasher);
-            }
-        }
-    }
-}
-
-impl Hash for GroupKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.hash.hash(state);
-    }
-}
-
-impl PartialEq for GroupKey {
-    fn eq(&self, other: &Self) -> bool {
-        // Fast path: different hash means definitely different
-        self.hash == other.hash && self.values == other.values
-    }
-}
-
-impl Eq for GroupKey {}
 
 /// Context for runtime WHERE evaluation during aggregation.
 pub(super) struct RuntimeWhereCtx<'a> {
@@ -117,8 +40,7 @@ struct SequentialAggCtx<'a> {
     stmt: &'a crate::velesql::SelectStatement,
     params: &'a HashMap<String, serde_json::Value>,
     filter: Option<&'a crate::filter::Filter>,
-    columns_to_aggregate: &'a [String],
-    has_count_star: bool,
+    columns: &'a AggregateColumns,
     use_runtime_where_eval: bool,
     /// See [`RuntimeWhereCtx::match_guards`].
     match_guards: &'a MatchStorageGuards<'a>,
@@ -151,9 +73,11 @@ impl Collection {
     ///
     /// # Errors
     ///
-    /// Returns an error when the query fails validation, when SELECT does not
-    /// contain aggregations, when HAVING is used without GROUP BY, or when
-    /// underlying scan/filter/aggregation operations fail.
+    /// Returns an error when the query fails validation (`V018` for HAVING
+    /// without GROUP BY among them), when SELECT does not contain
+    /// aggregations, for a vector GROUP BY (`NEAR` + `GROUP BY`, a search
+    /// that `execute_query` runs), or when underlying scan/filter/aggregation
+    /// operations fail.
     pub fn execute_aggregate(
         &self,
         query: &Query,
@@ -181,7 +105,18 @@ impl Collection {
             }
         };
 
-        if let Some(ref group_by) = stmt.group_by {
+        // A vector GROUP BY groups the results of its search, which its
+        // LIMIT bounds; run here it would group every point, with no score
+        // and no group budget.
+        if stmt.is_vector_group_by() {
+            return Err(crate::error::Error::Query(
+                "a vector GROUP BY (NEAR + GROUP BY) groups search results: run it \
+                 with execute_query"
+                    .to_string(),
+            ));
+        }
+
+        if stmt.group_by.is_some() {
             // HAVING thresholds are not part of the WHERE condition tree, so
             // they need their own resolution pass (same loud-failure guard).
             let having = stmt
@@ -189,22 +124,10 @@ impl Collection {
                 .as_ref()
                 .map(|h| Self::resolve_having_params(h, params))
                 .transpose()?;
-            return self.execute_grouped_aggregate(
-                query,
-                aggregations,
-                &group_by.columns,
-                having.as_ref(),
-                params,
-            );
+            return self.execute_grouped_aggregate(query, having.as_ref(), params);
         }
 
-        if stmt.having.is_some() {
-            return Err(crate::error::Error::Query(
-                "HAVING clause requires GROUP BY clause".to_string(),
-            ));
-        }
-
-        let agg_result = self.run_ungrouped_aggregation(stmt, aggregations, params)?;
+        let agg_result = self.run_ungrouped_aggregation(stmt, params)?;
         Ok(Self::build_aggregate_result(aggregations, &agg_result))
     }
 
@@ -216,7 +139,6 @@ impl Collection {
     fn run_ungrouped_aggregation(
         &self,
         stmt: &crate::velesql::SelectStatement,
-        aggregations: &[AggregateFunction],
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<crate::velesql::AggregateResult> {
         let where_clause = stmt.where_clause.as_ref();
@@ -225,12 +147,13 @@ impl Collection {
         });
 
         let filter = Self::build_static_filter(where_clause, use_runtime_where_eval, params)?;
-        let (columns_vec, has_count_star) = Self::prepare_agg_columns(aggregations);
+        // The same columns, read the same way, as a GROUP BY's groups.
+        let columns = AggregateColumns::new(stmt, None);
 
         // LOCK ORDER: metric snapshot (config, rank 1) first, then
         // vector_storage(2) before payload_storage(3) — the pair was
         // reversed here. See .investigation/http-deadlock-2026-07-22/. This
-        // site also feeds `run_parallel_path`, which scans under these guards
+        // site also feeds `aggregate_parallel`, which scans under these guards
         // on `pools::on_guarded_pool`, never the global rayon pool.
         let metric = self.storage.config.read().metric;
         let vector_storage = self.storage.vector_storage.read();
@@ -244,15 +167,17 @@ impl Collection {
             ),
             where_filters: crate::collection::search::query::match_exec::WhereFilterMemo::default(),
         };
-        let ids: Vec<u64> = vector_storage.ids();
+        // Id order, so a float SUM or AVG is the same on every run, whatever
+        // the storage order: the parallel path sums fixed chunks of this
+        // order and merges them in order.
+        let ids = Self::aggregate_scan_ids(&*vector_storage, &*payload_storage, filter.as_ref());
 
         if ids.len() >= PARALLEL_THRESHOLD && !use_runtime_where_eval {
-            Ok(Self::run_parallel_path(
+            Ok(Self::aggregate_parallel(
                 &ids,
                 &*payload_storage,
                 filter.as_ref(),
-                &columns_vec,
-                has_count_star,
+                &columns,
             ))
         } else {
             let ctx = SequentialAggCtx {
@@ -261,8 +186,7 @@ impl Collection {
                 stmt,
                 params,
                 filter: filter.as_ref(),
-                columns_to_aggregate: &columns_vec,
-                has_count_star,
+                columns: &columns,
                 use_runtime_where_eval,
                 match_guards: &match_guards,
             };
@@ -270,56 +194,30 @@ impl Collection {
         }
     }
 
-    /// Runs parallel aggregation, streaming payloads per chunk.
-    ///
-    /// #901: previously this pre-collected **every** payload into one
-    /// `Vec<Option<Value>>` before aggregating — O(n) peak memory for the
-    /// whole collection. Now each rayon chunk retrieves only its own slice of
-    /// payloads on the fly, so peak memory is bounded to `O(CHUNK_SIZE ×
-    /// rayon_threads)`. Aggregation results are unchanged.
-    fn run_parallel_path(
-        ids: &[u64],
+    /// The points an aggregate scans, in id order (so a float SUM or AVG is
+    /// the same on every run): the existing points `id = n` / `id IN (...)`
+    /// names when the static WHERE does — the lookup EXPLAIN reports — else
+    /// every point of the scan universe (`Self::scan_universe_ids`), so a
+    /// metadata collection's payload-only points count too.
+    pub(super) fn aggregate_scan_ids(
+        vector_storage: &dyn VectorStorage,
         payload_storage: &dyn PayloadStorage,
         filter: Option<&crate::filter::Filter>,
-        columns_vec: &[String],
-        has_count_star: bool,
-    ) -> crate::velesql::AggregateResult {
-        Self::aggregate_parallel(ids, payload_storage, filter, columns_vec, has_count_star)
-    }
-
-    /// Returns true if the payload passes the static filter.
-    pub(super) fn payload_passes_filter(
-        filter: &crate::filter::Filter,
-        payload: Option<&serde_json::Value>,
-    ) -> bool {
-        match payload {
-            Some(p) => filter.matches(p),
-            None => filter.matches(&serde_json::Value::Null),
-        }
-    }
-
-    /// Feeds one record into an aggregator (count-star + per-column values).
-    pub(super) fn accumulate_record(
-        aggregator: &mut Aggregator,
-        payload: Option<&serde_json::Value>,
-        columns_to_aggregate: &[String],
-        has_count_star: bool,
-    ) {
-        if has_count_star {
-            aggregator.process_count();
-        }
-        if let Some(p) = payload {
-            for col in columns_to_aggregate {
-                if let Some(value) = Self::get_nested_value(p, col) {
-                    aggregator.process_value(col, value);
-                }
-            }
-        }
+    ) -> Vec<u64> {
+        let Some(named) = filter.and_then(|f| f.condition.point_ids()) else {
+            let mut ids = Self::scan_universe_ids(vector_storage, payload_storage);
+            ids.sort_unstable();
+            return ids;
+        };
+        named
+            .into_iter()
+            .filter(|&id| Self::in_scan_universe(vector_storage, payload_storage, id))
+            .collect()
     }
 
     /// Parallel aggregation that streams payloads per chunk (#901).
     ///
-    /// Each chunk of IDs retrieves its own payloads inside the rayon closure,
+    /// Each chunk of IDs retrieves its own payloads inside the closure,
     /// so the full payload set is never materialized at once. The chunks run
     /// on `pools::on_guarded_pool`: the caller holds the storage guards
     /// `payload_storage` borrows from.
@@ -327,24 +225,18 @@ impl Collection {
         ids: &[u64],
         payload_storage: &dyn PayloadStorage,
         filter: Option<&crate::filter::Filter>,
-        columns_to_aggregate: &[String],
-        has_count_star: bool,
+        columns: &AggregateColumns,
     ) -> crate::velesql::AggregateResult {
         let aggregate_chunk = |chunk: &[u64]| {
             let mut chunk_agg = Aggregator::new();
             for &id in chunk {
                 let payload = payload_storage.retrieve(id).ok().flatten();
                 if let Some(f) = filter {
-                    if !Self::payload_passes_filter(f, payload.as_ref()) {
+                    if !f.matches_point(id, payload.as_ref()) {
                         continue;
                     }
                 }
-                Self::accumulate_record(
-                    &mut chunk_agg,
-                    payload.as_ref(),
-                    columns_to_aggregate,
-                    has_count_star,
-                );
+                columns.accumulate(&mut chunk_agg, &GroupInput::new(id, 0.0, payload.as_ref()));
             }
             chunk_agg
         };
@@ -409,7 +301,7 @@ impl Collection {
             };
             self.runtime_where_passes(id, payload, &mut where_ctx)
         } else if let Some(f) = ctx.filter {
-            Ok(Self::payload_passes_filter(f, payload))
+            Ok(f.matches_point(id, payload))
         } else {
             Ok(true)
         }
@@ -440,12 +332,8 @@ impl Collection {
             )? {
                 continue;
             }
-            Self::accumulate_record(
-                &mut aggregator,
-                payload.as_ref(),
-                ctx.columns_to_aggregate,
-                ctx.has_count_star,
-            );
+            ctx.columns
+                .accumulate(&mut aggregator, &GroupInput::new(id, 0.0, payload.as_ref()));
         }
         Ok(aggregator.finalize())
     }
@@ -458,34 +346,9 @@ impl Collection {
         let mut result = serde_json::Map::new();
 
         for agg in aggregations {
-            let key = Self::aggregation_result_key(agg);
-            let value = Self::aggregation_result_value(agg, agg_result);
-            result.insert(key, value);
+            result.insert(agg.result_key(), agg_result.value_of(agg));
         }
 
         serde_json::Value::Object(result)
-    }
-
-    // NOTE: aggregation_result_key and aggregation_result_value are in grouped.rs
-    // and shared by both grouped and ungrouped aggregation paths.
-
-    /// Get a nested value from JSON payload using dot notation.
-    pub(crate) fn get_nested_value<'a>(
-        payload: &'a serde_json::Value,
-        path: &str,
-    ) -> Option<&'a serde_json::Value> {
-        let parts: Vec<&str> = path.split('.').collect();
-        let mut current = payload;
-
-        for part in parts {
-            match current {
-                serde_json::Value::Object(map) => {
-                    current = map.get(part)?;
-                }
-                _ => return None,
-            }
-        }
-
-        Some(current)
     }
 }

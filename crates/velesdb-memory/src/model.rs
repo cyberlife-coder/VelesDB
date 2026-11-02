@@ -168,8 +168,19 @@ pub fn column_value_matches(stored: &Value, op: ColumnOp, target: &Value) -> boo
     if stored.is_null() {
         return false;
     }
-    if let (Some(left), Some(right)) = (stored.as_f64(), target.as_f64()) {
-        return compare_f64(op, left, right);
+    if let (Value::Number(_), Value::Number(_)) = (stored, target) {
+        // Exact-by-value order, the same `VelesQL` comparison a translated
+        // filter runs: `1.0` is `1`, `-0.0` is `0`, an integer past 2^53 is
+        // not the float it rounds to, and no tolerance applies.
+        let ordering = velesdb_core::velesql::compare_json_values(Some(stored), Some(target));
+        return match op {
+            ColumnOp::Eq => ordering.is_eq(),
+            ColumnOp::Ne => ordering.is_ne(),
+            ColumnOp::Lt => ordering.is_lt(),
+            ColumnOp::Le => ordering.is_le(),
+            ColumnOp::Gt => ordering.is_gt(),
+            ColumnOp::Ge => ordering.is_ge(),
+        };
     }
     if let (Some(left), Some(right)) = (stored.as_str(), target.as_str()) {
         return compare_ordered(op, &left, &right);
@@ -178,21 +189,6 @@ pub fn column_value_matches(stored: &Value, op: ColumnOp, target: &Value) -> boo
         ColumnOp::Eq => stored == target,
         ColumnOp::Ne => stored != target,
         ColumnOp::Lt | ColumnOp::Le | ColumnOp::Gt | ColumnOp::Ge => false,
-    }
-}
-
-/// The numeric arm of [`column_value_matches`], split out for its one real
-/// difference from the ordered arm: equality is epsilon-based, so `Eq`/`Ne`
-/// cannot be expressed through `PartialOrd` without changing what a
-/// float-rounded stored value matches.
-fn compare_f64(op: ColumnOp, left: f64, right: f64) -> bool {
-    match op {
-        ColumnOp::Eq => (left - right).abs() < f64::EPSILON,
-        ColumnOp::Ne => (left - right).abs() >= f64::EPSILON,
-        ColumnOp::Lt => left < right,
-        ColumnOp::Le => left <= right,
-        ColumnOp::Gt => left > right,
-        ColumnOp::Ge => left >= right,
     }
 }
 

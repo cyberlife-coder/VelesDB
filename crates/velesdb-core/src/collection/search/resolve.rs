@@ -42,8 +42,9 @@ pub(crate) fn hydrate_point(
 }
 
 /// Hydrates, in `pairs` order, the first `limit` points that exist, are not
-/// TTL-expired at `now_secs` and whose payload `accept` takes (`None` when
-/// the point has none).
+/// TTL-expired at `now_secs` and that `accept` takes. `accept` sees the
+/// point's id and its payload (`None` when the point has none), so a filter
+/// built from `VelesQL` can read its `id` column.
 ///
 /// A point's payload is read and judged before its vector is copied, so a
 /// filtered search copies the vectors of the `limit` points it returns, not
@@ -54,7 +55,7 @@ pub(crate) fn hydrate_accepted(
     now_secs: u64,
     vector_storage: &dyn VectorStorage,
     payload_storage: &dyn PayloadStorage,
-    accept: impl Fn(Option<&serde_json::Value>) -> bool,
+    accept: impl Fn(u64, Option<&serde_json::Value>) -> bool,
 ) -> Vec<SearchResult> {
     let mut results = Vec::new();
     for (id, score) in pairs {
@@ -62,7 +63,7 @@ pub(crate) fn hydrate_accepted(
             break;
         }
         let payload = payload_storage.retrieve(id).ok().flatten();
-        if is_payload_expired(payload.as_ref(), now_secs) || !accept(payload.as_ref()) {
+        if is_payload_expired(payload.as_ref(), now_secs) || !accept(id, payload.as_ref()) {
             continue;
         }
         let Some(vector) = vector_storage.retrieve(id).ok().flatten() else {

@@ -16,10 +16,11 @@ use std::ops::Bound;
 
 /// Wrapper for total ordering on JSON values.
 ///
-/// Numbers are ordered by their `f64` value with `-0.0 == 0.0`, as a MATCH
-/// WHERE compares them, so an index lookup on a bound never leaves out a
-/// value WHERE accepts. Equality is the ordering's: two numbers with the same
-/// `f64` value are one key.
+/// Numbers are ordered by exact value, as a MATCH WHERE compares them
+/// (`velesql::compare_numbers`): `-0.0` is `0`, and an integer past 2^53 is
+/// itself, not the `f64` it rounds to — so an index lookup on a bound never
+/// leaves out a value WHERE accepts. Equality is the ordering's: two numbers
+/// equal by value are one key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderedValue(pub(crate) Value);
 
@@ -44,13 +45,7 @@ impl Ord for OrderedValue {
             (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
             (Value::Null, _) => std::cmp::Ordering::Less,
             (_, Value::Null) => std::cmp::Ordering::Greater,
-            (Value::Number(a), Value::Number(b)) => {
-                let a_f = a.as_f64().unwrap_or(0.0);
-                let b_f = b.as_f64().unwrap_or(0.0);
-                // A JSON number is never NaN, so `partial_cmp` is total here;
-                // unlike `total_cmp` it puts `-0.0` and `0.0` level.
-                a_f.partial_cmp(&b_f).unwrap_or(std::cmp::Ordering::Equal)
-            }
+            (Value::Number(a), Value::Number(b)) => crate::velesql::compare_numbers(a, b),
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
             _ => serde_json::to_string(&self.0)

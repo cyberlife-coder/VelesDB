@@ -5,7 +5,6 @@
 //! the result set is used as a pre-filter to avoid per-node brute-force
 //! evaluation. Falls back gracefully when no index exists.
 
-use super::where_eval::FLOAT_EQ_TOLERANCE;
 use crate::collection::types::Collection;
 use crate::velesql::{CompareOp, Condition, GraphPattern, Value};
 use std::collections::{HashMap, HashSet};
@@ -70,7 +69,7 @@ pub(super) fn compute_index_prefilter(
         let Some(label) = resolve_label(&pred.alias, &alias_to_labels) else {
             continue;
         };
-        let Some(ids) = execute_single_lookup(collection, label, &pred.property, &pred.kind) else {
+        let Some(ids) = predicate_candidates(collection, label, pred) else {
             continue;
         };
         let id_set: HashSet<u64> = ids.into_iter().collect();
@@ -110,6 +109,29 @@ fn intersect_sets(acc: Option<HashSet<u64>>, new: HashSet<u64>) -> HashSet<u64> 
     match acc {
         Some(existing) => existing.intersection(&new).copied().collect(),
         None => new,
+    }
+}
+
+/// The nodes a predicate keeps: for `alias.id`, the node id names its node,
+/// which no property index answers for; for any other property, an index
+/// lookup.
+fn predicate_candidates(
+    collection: &Collection,
+    label: &str,
+    pred: &ExtractedPredicate,
+) -> Option<Vec<u64>> {
+    if pred.property == "id" {
+        return node_id_candidates(&pred.kind);
+    }
+    execute_single_lookup(collection, label, &pred.property, &pred.kind)
+}
+
+/// The node an `alias.id = n` predicate names. Only an exact, non-negative
+/// integer names one; any other `id` predicate is never extracted.
+fn node_id_candidates(kind: &PredicateKind) -> Option<Vec<u64>> {
+    match kind {
+        PredicateKind::Exact(value) => Some(vec![value.as_u64()?]),
+        _ => None,
     }
 }
 
@@ -194,6 +216,10 @@ fn comparison_to_predicate(
     let (alias, property) = split_alias_property(&cmp.column)?;
     let resolved = Collection::resolve_where_param(&cmp.value, params).ok()?;
     let kind = predicate_kind(cmp.operator, &resolved)?;
+    // `alias.id` is the node id: only an exact integer narrows to one node.
+    if property == "id" && node_id_candidates(&kind).is_none() {
+        return None;
+    }
 
     Some(ExtractedPredicate {
         alias: alias.to_string(),
@@ -204,26 +230,20 @@ fn comparison_to_predicate(
 
 /// Maps a WHERE comparison to the index lookup that keeps every node WHERE
 /// accepts — the prefilter only rejects, so the lookup may return more nodes
-/// than WHERE keeps, never fewer. Two comparisons need a wider lookup than
-/// their operator suggests:
+/// than WHERE keeps, never fewer. One comparison needs a wider lookup than
+/// its operator suggests:
 ///
-/// - **Float equality.** WHERE accepts any value within
-///   [`FLOAT_EQ_TOLERANCE`] of a float literal, where the index matches one
-///   value exactly. The lookup is the inclusive range of twice the tolerance
-///   around it: a WHERE match is less than the tolerance away even after the
-///   rounding of WHERE's subtraction, and rounding the range bounds cannot
-///   move them past a value that close.
-/// - **Strict bounds on an integer.** WHERE compares integers exactly, the
-///   index orders every number as an `f64`, and above 2^53 a larger integer
-///   can round onto the bound itself (`2^53 + 1` becomes `2^53`). The lookup
-///   includes the bound.
+/// - **A strict bound an `f64` cannot single out.** The index keys every
+///   number by its `f64` value; at or past 2^53 a bound can share its key
+///   with a neighbour WHERE orders apart (`2^53 + 1` becomes `2^53`). A
+///   strict bound there is looked up inclusive, keeping the shared key.
 ///
 /// `!=` cannot be answered by an index lookup and maps to `None`.
 fn predicate_kind(operator: CompareOp, literal: &Value) -> Option<PredicateKind> {
     let json = literal.to_json();
-    let inclusive = is_integer(literal);
+    let inclusive = !crate::filter::exact_as_f64(&json);
     Some(match operator {
-        CompareOp::Eq => equality_kind(literal, json),
+        CompareOp::Eq => PredicateKind::Exact(json),
         CompareOp::Gt if !inclusive => PredicateKind::Gt(json),
         CompareOp::Lt if !inclusive => PredicateKind::Lt(json),
         CompareOp::Gt | CompareOp::Gte => PredicateKind::Gte(json),
@@ -232,31 +252,15 @@ fn predicate_kind(operator: CompareOp, literal: &Value) -> Option<PredicateKind>
     })
 }
 
-/// Whether WHERE compares this literal as an exact integer.
-const fn is_integer(literal: &Value) -> bool {
-    matches!(literal, Value::Integer(_) | Value::UnsignedInteger(_))
-}
-
-/// The lookup for `= literal`: exact, except for a float, which is looked up
-/// as the inclusive range of twice [`FLOAT_EQ_TOLERANCE`] around it; see
-/// [`predicate_kind`].
-fn equality_kind(literal: &Value, json: serde_json::Value) -> PredicateKind {
-    let Value::Float(center) = *literal else {
-        return PredicateKind::Exact(json);
-    };
-    let half_width = 2.0 * FLOAT_EQ_TOLERANCE;
-    PredicateKind::Range(
-        serde_json::json!(center - half_width),
-        serde_json::json!(center + half_width),
-    )
-}
-
 /// Converts a `BetweenCondition` to a range predicate.
 fn between_to_predicate(
     btw: &crate::velesql::BetweenCondition,
     params: &HashMap<String, serde_json::Value>,
 ) -> Option<ExtractedPredicate> {
     let (alias, property) = split_alias_property(&btw.column)?;
+    if property == "id" {
+        return None; // the node id, which no range index orders
+    }
     let low_resolved = Collection::resolve_where_param(&btw.low, params).ok()?;
     let high_resolved = Collection::resolve_where_param(&btw.high, params).ok()?;
 

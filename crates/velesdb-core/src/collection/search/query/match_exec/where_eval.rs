@@ -24,19 +24,17 @@ fn apply_ord_op<T: PartialOrd>(op: crate::velesql::CompareOp, a: &T, b: &T) -> b
     }
 }
 
-/// How far apart two floats may be and still compare equal in a MATCH WHERE.
-///
-/// The index prefilter (`index_prefilter.rs`) widens a float equality by this
-/// same constant, so the candidates it keeps always cover what WHERE accepts.
-pub(super) const FLOAT_EQ_TOLERANCE: f64 = 0.001;
-
-/// Compares two floats with [`FLOAT_EQ_TOLERANCE`] for equality.
-fn compare_floats(op: crate::velesql::CompareOp, actual: f64, expected: f64) -> bool {
+/// Whether an `Ordering` of an actual value against a literal satisfies
+/// `op` — the numeric and comparison leaf of a MATCH WHERE.
+fn ordering_holds(op: crate::velesql::CompareOp, ordering: std::cmp::Ordering) -> bool {
     use crate::velesql::CompareOp;
     match op {
-        CompareOp::Eq => (actual - expected).abs() < FLOAT_EQ_TOLERANCE,
-        CompareOp::NotEq => (actual - expected).abs() >= FLOAT_EQ_TOLERANCE,
-        _ => apply_ord_op(op, &actual, &expected),
+        CompareOp::Eq => ordering.is_eq(),
+        CompareOp::NotEq => ordering.is_ne(),
+        CompareOp::Lt => ordering.is_lt(),
+        CompareOp::Gt => ordering.is_gt(),
+        CompareOp::Lte => ordering.is_le(),
+        CompareOp::Gte => ordering.is_ge(),
     }
 }
 
@@ -293,18 +291,21 @@ impl Collection {
         }
 
         let target_id = resolve_target_id(&cmp.column, ctx.bindings, ctx.node_id);
-
-        let Some(target_payload) = ctx.guards.payload_memo.get(target_id) else {
-            return Ok(false);
-        };
-
+        let target_payload = ctx.guards.payload_memo.get(target_id);
         let column_path = strip_alias(&cmp.column, &alias_in(ctx.bindings));
-        let Some(actual) = Self::json_get_path(&target_payload, column_path) else {
-            return Ok(false);
+        let Some(actual) = element_property(target_id, column_path, |path| {
+            Self::json_get_path(target_payload.as_deref()?, path)
+        }) else {
+            // A property the node does not carry is "not equal" to any
+            // literal — the truth value a SELECT's filter `Neq` gives a
+            // missing field, so `WHERE n.prop != x` keeps the same rows in
+            // MATCH as in SELECT. Every other operator still fails: `=`,
+            // `>` and friends on nothing are UNKNOWN, excluded.
+            return Ok(matches!(cmp.operator, crate::velesql::CompareOp::NotEq));
         };
 
         let resolved_value = Self::resolve_where_param(&cmp.value, ctx.params)?;
-        Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
+        Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
     }
 
     /// Evaluates a comparison whose column refers to a bound relationship
@@ -319,11 +320,15 @@ impl Collection {
             return Ok(false);
         };
         let property = cmp.column.split_once('.').map_or("", |(_, rest)| rest);
-        let Some(actual) = edge_property_path(&edge, property) else {
-            return Ok(false);
+        let Some(actual) =
+            element_property(edge_id, property, |path| edge_property_path(&edge, path))
+        else {
+            // Same rule as the node path: an absent edge property is "not
+            // equal" to any literal, as a missing field is for `Neq`.
+            return Ok(matches!(cmp.operator, crate::velesql::CompareOp::NotEq));
         };
         let resolved_value = Self::resolve_where_param(&cmp.value, params)?;
-        Self::evaluate_comparison(cmp.operator, actual, &resolved_value)
+        Self::evaluate_comparison(cmp.operator, &actual, &resolved_value)
     }
 
     /// Evaluates a metadata condition (IN, BETWEEN, LIKE, IS NULL, MATCH)
@@ -357,9 +362,9 @@ impl Collection {
             resolve_target_id(col, ctx.bindings, ctx.node_id)
         });
 
-        let Some(payload) = ctx.guards.payload_memo.get(target_id) else {
-            return Ok(false);
-        };
+        // A node without payload is tested with a `null` payload, as on
+        // every path: `n.id` still reads its id.
+        let payload = ctx.guards.payload_memo.get(target_id);
 
         // Compile-once per (leaf, strip-decision): the rewrite depends only
         // on whether the leaf column's alias prefix is bound — a bit, not a
@@ -369,13 +374,16 @@ impl Collection {
             .and_then(column_alias)
             .is_some_and(|a| alias_in(ctx.bindings)(a));
         let key = (std::ptr::from_ref(condition) as usize, u8::from(stripped));
-        ctx.guards.where_filters.matches_with(key, &payload, || {
-            let rewritten = rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
-            // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
-            // filter conversion, which would otherwise turn them into NULL.
-            let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
-            Ok(resolved.into())
-        })
+        ctx.guards
+            .where_filters
+            .matches_with(key, target_id, payload.as_deref(), || {
+                let rewritten =
+                    rewrite_condition_aliases(condition.clone(), &alias_in(ctx.bindings));
+                // Resolve parameter placeholders (e.g. `IN ($a, $b)`) before the
+                // filter conversion, which would otherwise turn them into NULL.
+                let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+                Ok(resolved.into())
+            })
     }
 
     /// ANY-element fold over a resolved edge-id list: true when at least one
@@ -422,21 +430,23 @@ impl Collection {
             std::ptr::from_ref(condition) as usize,
             2 | u8::from(stripped),
         );
-        ctx.guards.where_filters.matches_with(key, &payload, || {
-            // Strip the alias against the FULL edge-alias namespace (scalar
-            // AND variable-length). Using only the scalar map here left
-            // var-length columns like `r.w` unstripped, so the filter engine
-            // resolved them as nested paths and every IN/BETWEEN/LIKE/IS
-            // NULL on a var-length alias silently matched nothing (review
-            // 2026-06-11 finding 1).
-            let rewritten =
-                rewrite_condition_aliases(condition.clone(), &|alias| ctx.is_edge_alias(alias));
-            // Resolve parameter placeholders before the filter conversion,
-            // which would otherwise turn them into NULL (same hardening as
-            // the node path).
-            let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
-            Ok(resolved.into())
-        })
+        ctx.guards
+            .where_filters
+            .matches_with(key, edge_id, Some(&payload), || {
+                // Strip the alias against the FULL edge-alias namespace (scalar
+                // AND variable-length). Using only the scalar map here left
+                // var-length columns like `r.w` unstripped, so the filter engine
+                // resolved them as nested paths and every IN/BETWEEN/LIKE/IS
+                // NULL on a var-length alias silently matched nothing (review
+                // 2026-06-11 finding 1).
+                let rewritten =
+                    rewrite_condition_aliases(condition.clone(), &|alias| ctx.is_edge_alias(alias));
+                // Resolve parameter placeholders before the filter conversion,
+                // which would otherwise turn them into NULL (same hardening as
+                // the node path).
+                let resolved = Self::resolve_condition_params(&rewritten, ctx.params)?;
+                Ok(resolved.into())
+            })
     }
 
     /// Evaluates a similarity condition against a node's vector (EPIC-052 US-007).
@@ -537,15 +547,14 @@ impl Collection {
         use crate::velesql::Value;
 
         Ok(match (actual, expected) {
-            (serde_json::Value::Number(n), Value::Integer(i)) => n
-                .as_i64()
-                .is_some_and(|actual_i| apply_ord_op(operator, &actual_i, i)),
-            (serde_json::Value::Number(n), Value::UnsignedInteger(u)) => n
-                .as_u64()
-                .is_some_and(|actual_u| apply_ord_op(operator, &actual_u, u)),
-            (serde_json::Value::Number(n), Value::Float(f)) => n
-                .as_f64()
-                .is_some_and(|actual_f| compare_floats(operator, actual_f, *f)),
+            // Numbers compare by exact value on every path — a float
+            // property and an integer literal included (`3.5 > 3`,
+            // `2^53 + 1 > 9007199254740992.0`), with no tolerance.
+            (
+                serde_json::Value::Number(n),
+                literal @ (Value::Integer(_) | Value::UnsignedInteger(_) | Value::Float(_)),
+            ) => crate::velesql::compare_number_literal(n, literal)
+                .is_some_and(|ordering| ordering_holds(operator, ordering)),
             (serde_json::Value::String(s), Value::String(expected_s)) => {
                 apply_ord_op(operator, &s.as_str(), &expected_s.as_str())
             }
@@ -559,8 +568,12 @@ impl Collection {
             (serde_json::Value::Null, Value::Null) => {
                 matches!(operator, crate::velesql::CompareOp::Eq)
             }
-            (_, Value::Null) => matches!(operator, crate::velesql::CompareOp::NotEq),
-            _ => false,
+            // Any pair the typed arms above does not cover — a cross-type
+            // comparison or a JSON `null` against a non-null literal — is
+            // never equal, so `!=` holds for it, exactly as the SELECT
+            // filter's `Neq` treats two values `values_equal` calls
+            // different. `=` and every ordering stay false (UNKNOWN).
+            _ => matches!(operator, crate::velesql::CompareOp::NotEq),
         })
     }
 
@@ -609,6 +622,21 @@ pub(super) fn edge_property_path<'a>(
 ) -> Option<&'a serde_json::Value> {
     let (first, rest) = path.split_once('.').map_or((path, ""), |(f, r)| (f, r));
     Collection::json_get_path(edge.property(first)?, rest)
+}
+
+/// The value a MATCH reads for `property` of a bound element, node or
+/// relationship: its id for `id` — as `id` reads in every clause, whatever
+/// property of that name the element carries — else the property path,
+/// read by `lookup`. WHERE, RETURN and ORDER BY all read through it.
+pub(super) fn element_property<'a>(
+    id: u64,
+    property: &str,
+    lookup: impl FnOnce(&str) -> Option<&'a serde_json::Value>,
+) -> Option<std::borrow::Cow<'a, serde_json::Value>> {
+    if property == "id" {
+        return Some(std::borrow::Cow::Owned(serde_json::Value::from(id)));
+    }
+    lookup(property).map(std::borrow::Cow::Borrowed)
 }
 
 /// Strips the alias prefix from a column path when `is_alias` accepts it.

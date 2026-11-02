@@ -50,8 +50,17 @@ impl Collection {
     ///
     /// Returns an error if persisting the updated `config.json` fails — a
     /// `CREATE INDEX` whose authority cannot be persisted is surfaced rather
-    /// than silently lost on restart.
+    /// than silently lost on restart — and [`Error::Config`] for the field
+    /// name `@velesql.point_id`, reserved for `VelesQL`'s point id: an index
+    /// under it would answer `id` predicates from payloads.
+    ///
+    /// [`Error::Config`]: crate::error::Error::Config
     pub fn create_index(&self, field_name: &str) -> Result<()> {
+        if field_name == crate::filter::POINT_ID_FIELD {
+            return Err(crate::error::Error::Config(format!(
+                "index field `{field_name}` is reserved for VelesQL's point id"
+            )));
+        }
         self.build_and_backfill_secondary_index(field_name);
         // Record the field in the persisted authority. `BTreeSet::insert`
         // returns `false` when the field is already tracked, so a no-op CREATE
@@ -404,12 +413,27 @@ impl Collection {
         }
     }
 
+    /// The exact bitmap of `id = n` / `id IN (...)`: the points `values`
+    /// name, none of which needs an index. `None` (full scan) for an id a
+    /// bitmap cannot hold, above `u32::MAX`, or a value that names no point
+    /// id exactly (a fraction, a negative, an integer-valued float past
+    /// 2^53 — see `value_as_point_id`).
+    fn bitmap_for_point_ids(values: &[serde_json::Value]) -> Option<roaring::RoaringBitmap> {
+        values
+            .iter()
+            .map(|value| u32::try_from(crate::filter::value_as_point_id(value)?).ok())
+            .collect()
+    }
+
     /// Looks up a single equality field in the secondary indexes.
     fn bitmap_for_eq_field(
         indexes: &SecondaryIndexMap,
         field: &str,
         value: &serde_json::Value,
     ) -> Option<roaring::RoaringBitmap> {
+        if field == crate::filter::POINT_ID_FIELD {
+            return Self::bitmap_for_point_ids(std::slice::from_ref(value));
+        }
         let key = JsonValue::from_json(value)?;
         let guard = indexes.read();
         let index = guard.get(field)?;
@@ -434,6 +458,9 @@ impl Collection {
         field: &str,
         values: &[serde_json::Value],
     ) -> Option<roaring::RoaringBitmap> {
+        if field == crate::filter::POINT_ID_FIELD {
+            return Self::bitmap_for_point_ids(values);
+        }
         if values.is_empty() {
             return Some(roaring::RoaringBitmap::new());
         }
@@ -465,6 +492,14 @@ impl Collection {
         None
     }
 
+    /// Whether a payload index may answer a range on `field` bounded by
+    /// `value`. The index keys numbers by `f64`: past 2^53 a bound can share
+    /// its key with a neighbour the filter orders exactly, and a range would
+    /// drop it. And `id` is the point id, which no payload index holds.
+    fn range_indexable(field: &str, value: &serde_json::Value) -> bool {
+        field != crate::filter::POINT_ID_FIELD && crate::filter::exact_as_f64(value)
+    }
+
     /// Builds a range bitmap for Gt/Gte/Lt/Lte using `SecondaryIndex::range_bitmap`.
     fn bitmap_for_range_field(
         indexes: &SecondaryIndexMap,
@@ -473,6 +508,9 @@ impl Collection {
         cond: &crate::filter::Condition,
     ) -> Option<roaring::RoaringBitmap> {
         use std::ops::Bound;
+        if !Self::range_indexable(field, value) {
+            return None;
+        }
 
         let key = JsonValue::from_json(value)?;
         let guard = indexes.read();

@@ -176,9 +176,9 @@ impl Collection {
                     return None;
                 }
 
-                // Apply filter - if no payload, filter fails
-                let payload_ref = payload.as_ref()?;
-                if !filter.matches(payload_ref) {
+                // A point without payload is tested with a `null` payload, as
+                // on every path.
+                if !filter.matches_point(id, payload.as_ref()) {
                     return None;
                 }
 
@@ -256,7 +256,7 @@ impl Collection {
         Ok(self.resolve_scored_ids_with_components(
             &scored_ids,
             &component_map,
-            |_| true,
+            |_, _| true,
             usize::MAX,
         ))
     }
@@ -340,14 +340,14 @@ impl Collection {
     }
 
     /// Resolves scored IDs to `SearchResult` with per-component score
-    /// breakdown, keeping the first `limit` points whose payload `accept`
-    /// takes, in `scored_ids` order; a rejected point's vector is never
-    /// copied ([`resolve::hydrate_accepted`]).
+    /// breakdown, keeping the first `limit` points `accept` takes (it sees
+    /// the point's id and payload), in `scored_ids` order; a rejected
+    /// point's vector is never copied ([`resolve::hydrate_accepted`]).
     fn resolve_scored_ids_with_components(
         &self,
         scored_ids: &[(u64, f32)],
         component_map: &rustc_hash::FxHashMap<u64, (f32, f32)>,
-        accept: impl Fn(Option<&serde_json::Value>) -> bool,
+        accept: impl Fn(u64, Option<&serde_json::Value>) -> bool,
         limit: usize,
     ) -> Vec<SearchResult> {
         let vector_storage = self.storage.vector_storage.read();
@@ -415,11 +415,12 @@ impl Collection {
         let mut scored_ids: Vec<_> = fused_scores.into_iter().collect();
         crate::fusion::sort_fused_results(&mut scored_ids);
 
-        // A point without a payload matches no filter.
+        // A point without a payload is judged with a `null` payload, as on
+        // every path.
         Ok(self.resolve_scored_ids_with_components(
             &scored_ids,
             &component_map,
-            |payload| payload.is_some_and(|payload| filter.matches(payload)),
+            |id, payload| filter.matches_point(id, payload),
             k,
         ))
     }
@@ -459,7 +460,7 @@ impl Collection {
         Ok(self.resolve_scored_ids_with_components(
             &scored_ids,
             &component_map,
-            |_| true,
+            |_, _| true,
             usize::MAX,
         ))
     }

@@ -34,8 +34,10 @@
 //!    a partition key rather than a sort key. Fixed by snapshotting partition
 //!    keys alongside ORDER BY values, up-front.
 
+use super::group_key::normalise;
 use crate::velesql::{WindowFunction, WindowFunctionType, WindowOrderBy};
 use crate::SearchResult;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 /// Pre-computed per-row snapshot of the inputs a single window function
@@ -322,8 +324,12 @@ fn extract_sort_value(result: &SearchResult, column: &str) -> serde_json::Value 
     extract_nested_value(result, column)
 }
 
-/// Extracts a potentially nested payload value (e.g., `"metadata.source"`).
+/// Extracts a potentially nested payload value (e.g., `"metadata.source"`);
+/// `id` is the point id, as in every clause, for ORDER BY and PARTITION BY.
 fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Value {
+    if column == "id" {
+        return serde_json::Value::from(result.point.id);
+    }
     let Some(payload) = result.point.payload.as_ref() else {
         return serde_json::Value::Null;
     };
@@ -350,11 +356,11 @@ fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Valu
 /// Extracts a canonical-JSON string representation of a payload value for
 /// partition keys.
 ///
-/// Uses `serde_json`'s `Display` (`value.to_string()`) rather than extracting
-/// the inner string for `Value::String`. This preserves the JSON type
-/// discriminator (quotes around strings, bare digits for numbers, `null`
-/// literal for NULL) so rows with different types cannot collide into the
-/// same partition.
+/// Numbers key as `GROUP BY` keys them (`group_key::normalise`): `1` and
+/// `1.0`, or `0` and `-0.0`, share a partition. `serde_json`'s `Display`
+/// (`value.to_string()`) then preserves the JSON type discriminator (quotes
+/// around strings, bare digits for numbers, `null` literal for NULL) so
+/// rows with different types cannot collide into the same partition.
 ///
 /// Examples of collisions that this prevents:
 /// - `Value::Null` vs `Value::String("null")` → `null` vs `"null"` (distinct)
@@ -364,23 +370,13 @@ fn extract_nested_value(result: &SearchResult, column: &str) -> serde_json::Valu
 /// Consistent with `distinct_evaluator::canonical_json_string` which applies the same
 /// rule for DISTINCT deduplication keys.
 fn extract_payload_value(result: &SearchResult, column: &str) -> String {
-    extract_nested_value(result, column).to_string()
+    normalise(Cow::Owned(extract_nested_value(result, column))).to_string()
 }
 
-/// Compares two JSON values for sorting.
-///
-/// Numeric values are compared numerically; everything else is compared
-/// as strings. `Null` sorts last (after all non-null values).
+/// Compares two window ORDER BY values in the order every ORDER BY uses
+/// ([`super::compare_json_values`]): `null` last in ascending order.
 fn compare_json_values(a: &serde_json::Value, b: &serde_json::Value) -> std::cmp::Ordering {
-    match (a, b) {
-        (serde_json::Value::Null, serde_json::Value::Null) => std::cmp::Ordering::Equal,
-        (serde_json::Value::Null, _) => std::cmp::Ordering::Greater, // NULLs sort last
-        (_, serde_json::Value::Null) => std::cmp::Ordering::Less,
-        _ => match (a.as_f64(), b.as_f64()) {
-            (Some(fa), Some(fb)) => fa.total_cmp(&fb),
-            _ => a.to_string().cmp(&b.to_string()),
-        },
-    }
+    super::compare_json_values(Some(a), Some(b))
 }
 
 /// Injects a ranking value into the result's payload as a new JSON field.

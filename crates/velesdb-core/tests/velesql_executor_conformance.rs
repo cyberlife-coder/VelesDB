@@ -57,6 +57,12 @@ struct Fixture {
     dml_cases: Vec<DmlCase>,
     #[serde(default)]
     projection_cases: Vec<ProjectionCase>,
+    #[serde(default)]
+    vector_group_cases: Vec<VectorGroupCase>,
+    #[serde(default)]
+    null_order_cases: Vec<Case>,
+    #[serde(default)]
+    number_cases: Vec<Case>,
 }
 
 #[derive(Deserialize)]
@@ -89,10 +95,28 @@ struct Case {
 struct RejectedCase {
     id: String,
     query: String,
-    /// A substring the refusal must carry (e.g. a validation code), when the
-    /// case pins why the query is refused and not only that it is.
+    /// The validation code (`V0xx`) the refusal must carry, as `[V0xx]`.
+    expected_code: String,
+}
+
+/// A vector GROUP BY (`NEAR` + GROUP BY), run through
+/// [`Database::execute_query`], compared on the order of its groups: the
+/// `group_column` value of each result row, in order.
+#[derive(Deserialize)]
+struct VectorGroupCase {
+    id: String,
+    query: String,
+    group_column: String,
+    expect_order: Vec<Value>,
+    /// Each group's row (its payload), in order, when the case pins it.
     #[serde(default)]
-    expect_error: Option<String>,
+    expect_rows: Option<Vec<Value>>,
+    /// Each group's id (its best row's), in order.
+    #[serde(default)]
+    expect_ids: Option<Vec<u64>>,
+    /// Each group's score, in order, compared within [`SCORE_TOLERANCE`].
+    #[serde(default)]
+    expect_scores: Option<Vec<f32>>,
 }
 
 /// UPDATE / DELETE `statements` run in order on a fresh copy of the dataset,
@@ -256,19 +280,131 @@ fn test_velesql_executor_conformance_rejected_cases() {
                 db.execute_query(&q, &fixture.query_params)
                     .map_err(|e| e.to_string())
             });
-        let Err(error) = outcome else {
-            panic!(
-                "rejected case {} was accepted: query={:?}",
+        let err = outcome.expect_err(&format!(
+            "rejected case {} was accepted: query={:?}",
+            case.id, case.query
+        ));
+        assert!(
+            err.contains(&format!("[{}]", case.expected_code)),
+            "rejected case {} refused without {}: {err}",
+            case.id,
+            case.expected_code
+        );
+    }
+}
+
+/// Where a NULL or missing ORDER BY key lands: after every value in ASC,
+/// before every value in DESC, in both engines.
+#[test]
+fn test_velesql_executor_conformance_null_order_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
+    assert_cases_with(&db, &fixture.null_order_cases, &fixture.query_params);
+}
+
+/// Numbers compare by exact value in WHERE and ORDER BY, in both engines.
+#[test]
+fn test_velesql_executor_conformance_number_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
+    assert_cases_with(&db, &fixture.number_cases, &fixture.query_params);
+}
+
+/// The number cases hold on every physical path core may take: a scan, a
+/// secondary index on `x`, and the columnar payload mirror a scan debt
+/// builds. 300 more rows (`x = 5.5`, ids from 1000) give the mirror rows to
+/// build from; the cases' own rows come first under `ORDER BY id`, and the
+/// filler rows are left out of the comparison.
+#[test]
+fn test_velesql_executor_conformance_number_cases_hold_on_every_path() {
+    let fixture = load_fixture();
+    let nums = fixture
+        .extra_collections
+        .iter()
+        .find(|c| c.collection == "nums")
+        .expect("test: the nums collection");
+    for path in ["scan", "secondary index", "payload mirror"] {
+        let (_dir, db) = open_loaded_db_multi(&fixture.dataset, std::slice::from_ref(nums));
+        let filler: Vec<Point> = (1000..1300)
+            .map(|id| Point::new(id, vec![1.0, 0.0], Some(serde_json::json!({ "x": 5.5 }))))
+            .collect();
+        db.get_vector_collection("nums")
+            .expect("test: nums")
+            .upsert(filler)
+            .expect("test: filler");
+        let setup: &[&str] = match path {
+            "secondary index" => &["CREATE INDEX ON nums (x)"],
+            "payload mirror" => &["SELECT * FROM nums WHERE x = 7.25 LIMIT 5000"; 3],
+            _ => &[],
+        };
+        for sql in setup {
+            let query = Parser::parse(sql).expect("test: parse setup");
+            db.execute_query(&query, &HashMap::new())
+                .expect("test: run setup");
+        }
+        for case in &fixture.number_cases {
+            let query = Parser::parse(&case.query)
+                .unwrap_or_else(|e| panic!("case {} failed to parse: {e}", case.id));
+            let ids: Vec<u64> = db
+                .execute_query(&query, &fixture.query_params)
+                .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id))
+                .iter()
+                .map(|r| r.point.id)
+                .filter(|id| *id < 1000)
+                .collect();
+            assert_eq!(
+                ids, case.expect_ids,
+                "number case {} through the {path}: query={:?}",
                 case.id, case.query
             );
-        };
-        if let Some(expected) = &case.expect_error {
-            assert!(
-                error.contains(expected.as_str()),
-                "rejected case {} must be refused with {expected}, got: {error}",
-                case.id
-            );
         }
+    }
+}
+
+/// Vector GROUP BY: ORDER BY sorts the groups (by score, by a SELECT
+/// aggregate), and both engines agree on the order.
+#[test]
+fn test_velesql_executor_conformance_vector_group_cases() {
+    let fixture = load_fixture();
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
+    for case in &fixture.vector_group_cases {
+        let query = Parser::parse(&case.query)
+            .unwrap_or_else(|e| panic!("case {} failed to parse: {e}", case.id));
+        let results = db
+            .execute_query(&query, &fixture.query_params)
+            .unwrap_or_else(|e| panic!("case {} failed to execute: {e}", case.id));
+        let rows: Vec<Value> = results
+            .iter()
+            .map(|r| r.point.payload.clone().unwrap_or(Value::Null))
+            .collect();
+        let order: Vec<Value> = rows
+            .iter()
+            .map(|row| row.get(&case.group_column).cloned().unwrap_or(Value::Null))
+            .collect();
+        let context = format!("case {}: query={:?}", case.id, case.query);
+        assert_eq!(order, case.expect_order, "vector GROUP BY order, {context}");
+        if let Some(expected) = &case.expect_rows {
+            assert_eq!(&rows, expected, "vector GROUP BY rows, {context}");
+        }
+        if let Some(expected) = &case.expect_ids {
+            let ids: Vec<u64> = results.iter().map(|r| r.point.id).collect();
+            assert_eq!(&ids, expected, "vector GROUP BY ids, {context}");
+        }
+        if let Some(expected) = &case.expect_scores {
+            let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+            assert_scores_close(&scores, expected, &context);
+        }
+    }
+}
+
+/// Asserts `got` matches `expected` element-wise within [`SCORE_TOLERANCE`].
+fn assert_scores_close(got: &[f32], expected: &[f32], context: &str) {
+    assert_eq!(got.len(), expected.len(), "score count, {context}");
+    for (g, e) in got.iter().zip(expected) {
+        assert!(
+            (g - e).abs() <= SCORE_TOLERANCE,
+            "scores {got:?}, expected {expected:?}, {context}"
+        );
     }
 }
 
@@ -290,7 +426,7 @@ fn test_velesql_executor_conformance_dml_cases() {
 #[test]
 fn test_velesql_executor_conformance_projection_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     for case in &fixture.projection_cases {
         let query = Parser::parse(&case.query)
             .unwrap_or_else(|e| panic!("case {} failed to parse: {e}", case.id));
@@ -364,7 +500,7 @@ fn test_velesql_executor_conformance_join_cases() {
 #[test]
 fn test_velesql_executor_conformance_aggregate_cases() {
     let fixture = load_fixture();
-    let (_dir, db) = open_loaded_db(&fixture.dataset);
+    let (_dir, db) = open_loaded_db_multi(&fixture.dataset, &fixture.extra_collections);
     let params = HashMap::new();
     for case in &fixture.aggregate_cases {
         let query = Parser::parse(&case.query)

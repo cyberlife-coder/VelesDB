@@ -1,15 +1,26 @@
 //! Condition matching logic and helper functions.
 
-use super::Condition;
+use std::borrow::Cow;
+
+use super::{Condition, InValues, POINT_ID_FIELD};
 use crate::metrics::global_guardrails_metrics;
 use serde_json::Value;
+
+/// What a condition reads: a point's payload and, when the caller knows it,
+/// its id, which [`POINT_ID_FIELD`] names.
+#[derive(Clone, Copy)]
+struct Record<'a> {
+    id: Option<u64>,
+    payload: &'a Value,
+}
 
 const LIKE_MAX_PATTERN_BYTES: usize = 4096;
 const LIKE_MAX_DYN_OPS: usize = 2_000_000;
 
 /// List length above which IN matching switches from O(n) linear scan to
-/// O(log n) binary search. Values must be pre-sorted by [`json_value_cmp`]
-/// at `Condition::In` construction time (done in `conversion.rs::convert_in`).
+/// O(log n) binary search. [`InValues`] sorts by [`json_value_cmp`] at
+/// `Condition::In` construction time, so the sortedness the search needs is
+/// a property of the type, not of the caller.
 const IN_BINARY_SEARCH_THRESHOLD: usize = 16;
 
 /// Assigns a numeric rank to a JSON value type for consistent total ordering.
@@ -29,10 +40,12 @@ fn json_type_rank(v: &Value) -> u8 {
 /// Total ordering over `serde_json::Value` used for sorting IN-list values
 /// and binary-searching them at match time (issue #512).
 ///
-/// Within each type: Null = Null, Bool by value, Number by `f64::total_cmp`
-/// (NaN sorts after +∞, giving a deterministic total order), String
-/// lexicographic, Arrays and Objects by type rank only (equal among themselves,
-/// which is acceptable since they are not used in IN conditions in practice).
+/// Within each type: Null = Null, Bool by value, Number by exact value
+/// ([`compare_numbers`](crate::velesql::compare_numbers), which a JSON
+/// number's finiteness makes total), String
+/// lexicographic, Arrays and Objects by type rank only (equal among
+/// themselves — [`in_list_matches`] scans them linearly, as no lower bound
+/// could pick a member out of the equal run).
 pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let rank = json_type_rank(a).cmp(&json_type_rank(b));
@@ -41,10 +54,9 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
     match (a, b) {
         (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-        (Value::Number(a), Value::Number(b)) => a
-            .as_f64()
-            .zip(b.as_f64())
-            .map_or(Ordering::Equal, |(fa, fb)| fa.total_cmp(&fb)),
+        // The same order `values_equal` calls equal: the binary search below
+        // must not tie 2^53 with 2^53 + 1, nor split `-0.0` from `0`.
+        (Value::Number(a), Value::Number(b)) => crate::velesql::compare_numbers(a, b),
         (Value::String(a), Value::String(b)) => a.cmp(b),
         _ => Ordering::Equal,
     }
@@ -52,35 +64,38 @@ pub(super) fn json_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
 
 /// Returns whether `field_val` appears in `values`.
 ///
-/// Switches strategy based on list length:
+/// Switches strategy on list length and probe type:
 /// - `values.len() <= IN_BINARY_SEARCH_THRESHOLD`: O(n) linear scan via
-///   `values_equal` (epsilon-tolerant float equality).
-/// - `values.len() > IN_BINARY_SEARCH_THRESHOLD`: O(log n) lower-bound via
-///   `json_value_cmp` to narrow position, then `values_equal` for the final
-///   check — preserving epsilon semantics on both paths and requiring
-///   `values` to be pre-sorted (`conversion.rs::convert_in` guarantees this).
-fn in_list_matches(field_val: &Value, values: &[Value]) -> bool {
-    if values.len() > IN_BINARY_SEARCH_THRESHOLD {
-        debug_assert!(
-            values
-                .windows(2)
-                .all(|w| json_value_cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater),
-            "Condition::In values must be pre-sorted by json_value_cmp"
-        );
+///   `values_equal` (exact value equality).
+/// - Longer list, scalar probe (null, bool, number, string): O(log n)
+///   lower-bound via `json_value_cmp` to narrow position, then
+///   `values_equal` for the final check — within a scalar rank
+///   `json_value_cmp` levels exactly the values `values_equal` calls equal,
+///   so a hit can only sit at the lower bound. Requires `values` sorted,
+///   which [`InValues`] guarantees at construction.
+/// - Array or object probe: `json_value_cmp` levels all arrays (all
+///   objects) to Equal, so no lower bound picks the member — a linear
+///   `values_equal` scan instead.
+fn in_list_matches(field_val: &Value, values: &InValues) -> bool {
+    let scalar_probe = !matches!(field_val, Value::Array(_) | Value::Object(_));
+    if values.len() > IN_BINARY_SEARCH_THRESHOLD && scalar_probe {
         // Lower-bound: first position where probe is NOT less than field_val.
         let pos = values
             .partition_point(|probe| json_value_cmp(probe, field_val) == std::cmp::Ordering::Less);
-        // Check the candidate at pos and its predecessor for epsilon-equal floats.
-        let check = |i: usize| values.get(i).is_some_and(|v| values_equal(v, field_val));
-        check(pos) || pos > 0 && check(pos - 1)
+        values.get(pos).is_some_and(|v| values_equal(v, field_val))
     } else {
         values.iter().any(|val| values_equal(field_val, val))
     }
 }
 
 /// Evaluates array-level conditions (single, any, all).
-fn match_array_condition(payload: &Value, field: &str, values: &[Value], mode: ArrayMode) -> bool {
-    get_field(payload, field).is_some_and(|v| match v {
+fn match_array_condition(
+    record: Record<'_>,
+    field: &str,
+    values: &[Value],
+    mode: ArrayMode,
+) -> bool {
+    get_field(record, field).is_some_and(|v| match v.as_ref() {
         Value::Array(arr) => match mode {
             ArrayMode::Single => values
                 .first()
@@ -106,15 +121,15 @@ enum ArrayMode {
 
 /// Evaluates geospatial conditions (distance, bounding box).
 fn match_geo_distance(
-    payload: &Value,
+    record: Record<'_>,
     field: &str,
     lat: f64,
     lng: f64,
     operator: crate::velesql::CompareOp,
     threshold: f64,
 ) -> bool {
-    get_field(payload, field).is_some_and(|v| {
-        extract_geo_point(v).is_some_and(|(plat, plng)| {
+    get_field(record, field).is_some_and(|v| {
+        extract_geo_point(&v).is_some_and(|(plat, plng)| {
             let dist = crate::geo_distance::great_circle_distance_m(plat, plng, lat, lng);
             crate::geo_distance::distance_satisfies(dist, operator.into(), threshold)
         })
@@ -123,15 +138,15 @@ fn match_geo_distance(
 
 /// Evaluates a geospatial bounding box check.
 fn match_geo_bbox(
-    payload: &Value,
+    record: Record<'_>,
     field: &str,
     lat_min: f64,
     lng_min: f64,
     lat_max: f64,
     lng_max: f64,
 ) -> bool {
-    get_field(payload, field).is_some_and(|v| {
-        extract_geo_point(v).is_some_and(|(plat, plng)| {
+    get_field(record, field).is_some_and(|v| {
+        extract_geo_point(&v).is_some_and(|(plat, plng)| {
             plat >= lat_min && plat <= lat_max && plng >= lng_min && plng <= lng_max
         })
     })
@@ -145,88 +160,156 @@ fn extract_geo_point(v: &Value) -> Option<(f64, f64)> {
 }
 
 impl Condition {
-    /// Evaluates the condition against a payload.
+    /// Evaluates the condition against a payload alone: a `VelesQL` `id`
+    /// column reads nothing here, no point id being known. Crate tests only:
+    /// every other caller supplies the point id ([`Self::matches_point`]).
+    #[cfg(test)]
     #[must_use]
-    pub fn matches(&self, payload: &Value) -> bool {
+    pub(crate) fn matches(&self, payload: &Value) -> bool {
+        self.matches_record(Record { id: None, payload })
+    }
+
+    /// Evaluates the condition against a point: its payload (`None` reads
+    /// as `null`) and its id, which a `VelesQL` `id` column reads.
+    #[must_use]
+    pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
+        self.matches_record(Record {
+            id: Some(id),
+            payload: payload.unwrap_or(&Value::Null),
+        })
+    }
+
+    fn matches_record(&self, record: Record<'_>) -> bool {
+        match self {
+            Self::And { conditions } => conditions.iter().all(|c| c.matches_record(record)),
+            Self::Or { conditions } => conditions.iter().any(|c| c.matches_record(record)),
+            Self::Not { condition } => !condition.matches_record(record),
+            Self::Eq { .. }
+            | Self::Neq { .. }
+            | Self::Gt { .. }
+            | Self::Gte { .. }
+            | Self::Lt { .. }
+            | Self::Lte { .. }
+            | Self::In { .. }
+            | Self::IsNull { .. }
+            | Self::IsNotNull { .. } => self.matches_scalar(record),
+            _ => self.matches_text_array_geo(record),
+        }
+    }
+
+    /// Comparison, `IN` and null leaves.
+    fn matches_scalar(&self, record: Record<'_>) -> bool {
         match self {
             Self::Eq { field, value } => {
-                get_field(payload, field).is_some_and(|v| values_equal(v, value))
+                get_field(record, field).is_some_and(|v| values_equal(&v, value))
             }
             Self::Neq { field, value } => {
-                get_field(payload, field).is_none_or(|v| !values_equal(v, value))
+                get_field(record, field).is_none_or(|v| !values_equal(&v, value))
             }
-            Self::Gt { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_gt)),
-            Self::Gte { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_ge)),
-            Self::Lt { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_lt)),
-            Self::Lte { field, value } => get_field(payload, field)
-                .is_some_and(|v| compare_values(v, value).is_some_and(std::cmp::Ordering::is_le)),
+            Self::Gt { .. } | Self::Gte { .. } | Self::Lt { .. } | Self::Lte { .. } => {
+                self.matches_ordering(record)
+            }
             Self::In { field, values } => {
-                get_field(payload, field).is_some_and(|v| in_list_matches(v, values))
+                get_field(record, field).is_some_and(|v| in_list_matches(&v, values))
             }
-            Self::Contains { field, value } => get_field(payload, field)
+            Self::IsNull { field } => get_field(record, field).is_none_or(|v| v.is_null()),
+            Self::IsNotNull { field } => get_field(record, field).is_some_and(|v| !v.is_null()),
+            _ => false,
+        }
+    }
+
+    /// `>`, `>=`, `<` and `<=` leaves.
+    fn matches_ordering(&self, record: Record<'_>) -> bool {
+        use std::cmp::Ordering;
+        let (field, value, holds): (&str, &Value, fn(Ordering) -> bool) = match self {
+            Self::Gt { field, value } => (field, value, Ordering::is_gt),
+            Self::Gte { field, value } => (field, value, Ordering::is_ge),
+            Self::Lt { field, value } => (field, value, Ordering::is_lt),
+            Self::Lte { field, value } => (field, value, Ordering::is_le),
+            _ => return false,
+        };
+        get_field(record, field).is_some_and(|v| compare_values(&v, value).is_some_and(holds))
+    }
+
+    /// Text, array and geospatial leaves.
+    fn matches_text_array_geo(&self, record: Record<'_>) -> bool {
+        match self {
+            Self::Contains { field, value } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| s.contains(value.as_str()))),
-            Self::IsNull { field } => get_field(payload, field).is_none_or(Value::is_null),
-            Self::IsNotNull { field } => get_field(payload, field).is_some_and(|v| !v.is_null()),
-            Self::And { conditions } => conditions.iter().all(|c| c.matches(payload)),
-            Self::Or { conditions } => conditions.iter().any(|c| c.matches(payload)),
-            Self::Not { condition } => !condition.matches(payload),
-            Self::Like { field, pattern } => get_field(payload, field)
+            Self::Like { field, pattern } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, false))),
-            Self::ILike { field, pattern } => get_field(payload, field)
+            Self::ILike { field, pattern } => get_field(record, field)
                 .is_some_and(|v| v.as_str().is_some_and(|s| like_match(s, pattern, true))),
+            Self::ArrayContains { .. }
+            | Self::ArrayContainsAny { .. }
+            | Self::ArrayContainsAll { .. } => self.matches_array(record),
+            _ => self.matches_geo(record),
+        }
+    }
+
+    /// Array leaves.
+    fn matches_array(&self, record: Record<'_>) -> bool {
+        match self {
             Self::ArrayContains { field, value } => match_array_condition(
-                payload,
+                record,
                 field,
                 std::slice::from_ref(value),
                 ArrayMode::Single,
             ),
             Self::ArrayContainsAny { field, values } => {
-                match_array_condition(payload, field, values, ArrayMode::Any)
+                match_array_condition(record, field, values, ArrayMode::Any)
             }
             Self::ArrayContainsAll { field, values } => {
-                match_array_condition(payload, field, values, ArrayMode::All)
+                match_array_condition(record, field, values, ArrayMode::All)
             }
+            _ => false,
+        }
+    }
+
+    /// Geospatial leaves.
+    fn matches_geo(&self, record: Record<'_>) -> bool {
+        match self {
             Self::GeoDistance {
                 field,
                 lat,
                 lng,
                 operator,
                 threshold,
-            } => match_geo_distance(payload, field, *lat, *lng, *operator, *threshold),
+            } => match_geo_distance(record, field, *lat, *lng, *operator, *threshold),
             Self::GeoBbox {
                 field,
                 lat_min,
                 lng_min,
                 lat_max,
                 lng_max,
-            } => match_geo_bbox(payload, field, *lat_min, *lng_min, *lat_max, *lng_max),
+            } => match_geo_bbox(record, field, *lat_min, *lng_min, *lat_max, *lng_max),
+            _ => false,
         }
     }
 }
 
-/// Gets a field from a JSON payload, supporting dot notation for nested fields.
-fn get_field<'a>(payload: &'a Value, field: &str) -> Option<&'a Value> {
-    let mut current = payload;
+/// Gets a field of a record: the point id for [`POINT_ID_FIELD`], else a
+/// payload field, supporting dot notation for nested fields.
+fn get_field<'a>(record: Record<'a>, field: &str) -> Option<Cow<'a, Value>> {
+    if field == POINT_ID_FIELD {
+        return record.id.map(|id| Cow::Owned(Value::from(id)));
+    }
+    let mut current = record.payload;
     for part in field.split('.') {
         current = current.get(part)?;
     }
-    Some(current)
+    Some(Cow::Borrowed(current))
 }
 
-/// Compares two JSON values for equality.
+/// Compares two JSON values for equality; numbers by exact value, as
+/// [`crate::velesql::compare_numbers`] orders them (`-0.0` is `0`, an
+/// integer beyond 2^53 is not the float it rounds to, and no tolerance
+/// makes two different values equal).
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Number(a), Value::Number(b)) => {
-            // Compare as f64 for numeric comparison
-            a.as_f64()
-                .zip(b.as_f64())
-                .is_some_and(|(a, b)| (a - b).abs() < f64::EPSILON)
-        }
+        (Value::Number(a), Value::Number(b)) => crate::velesql::compare_numbers(a, b).is_eq(),
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Array(a), Value::Array(b)) => a == b,
         (Value::Object(a), Value::Object(b)) => a == b,
@@ -242,10 +325,8 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 /// matches SQL three-valued logic where `NULL op X` yields `UNKNOWN` (false).
 fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
-        (Value::Number(a), Value::Number(b)) => a
-            .as_f64()
-            .zip(b.as_f64())
-            .and_then(|(fa, fb)| fa.partial_cmp(&fb)),
+        // Exactly, an integer and a float included (`2^53 + 1 > 2^53.0`).
+        (Value::Number(a), Value::Number(b)) => Some(crate::velesql::compare_numbers(a, b)),
         (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
         _ => None,
     }

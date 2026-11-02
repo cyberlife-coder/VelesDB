@@ -224,6 +224,28 @@ pub struct SelectOrderBy {
 }
 
 impl SelectOrderBy {
+    /// Applies this item's direction to `ascending`, the comparison of two
+    /// rows' values in ascending order. `similarity()` reads as similarity
+    /// whatever the metric: under a distance metric (`higher_is_better`
+    /// false) a smaller score is more similar, so `similarity() DESC` puts
+    /// the nearest row first. Every other expression sorts its raw value.
+    #[must_use]
+    pub fn directed(
+        &self,
+        ascending: std::cmp::Ordering,
+        higher_is_better: bool,
+    ) -> std::cmp::Ordering {
+        let is_similarity = matches!(
+            self.expr,
+            OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
+        );
+        if self.descending == (is_similarity && !higher_is_better) {
+            ascending
+        } else {
+            ascending.reverse()
+        }
+    }
+
     /// Returns a `(column_name, direction)` pair for display.
     #[must_use]
     pub fn to_display_pair(&self) -> (String, String) {
@@ -405,16 +427,25 @@ impl SelectStatement {
             SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
             _ => false,
         };
-        let is_agg_query = has_aggs || self.group_by.is_some();
-        if is_agg_query && self.group_by.is_some() {
-            let has_vector_near = self
+        if self.is_vector_group_by() {
+            return false;
+        }
+        has_aggs || self.group_by.is_some()
+    }
+
+    /// Returns `true` for a vector `GROUP BY`: `GROUP BY` over the results of
+    /// a vector `NEAR` search, which groups search results (one per group,
+    /// scored) rather than aggregating rows. The single test every surface
+    /// routes and validates such a query by — core's query pipeline, its
+    /// ORDER BY validation, and the WASM aggregate pipeline.
+    #[must_use]
+    pub fn is_vector_group_by(&self) -> bool {
+        self.group_by
+            .as_ref()
+            .is_some_and(|group_by| !group_by.columns.is_empty())
+            && self
                 .where_clause
                 .as_ref()
-                .is_some_and(Condition::has_vector_search);
-            if has_vector_near {
-                return false;
-            }
-        }
-        is_agg_query
+                .is_some_and(Condition::has_vector_search)
     }
 }

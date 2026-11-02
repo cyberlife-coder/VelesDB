@@ -16,7 +16,7 @@ fn by_field(name: &str, desc: bool) -> Vec<SelectOrderBy> {
 fn sort(stmt_order: Vec<SelectOrderBy>, rows: &mut [SearchResult]) {
     let mut stmt = SelectStatement::empty();
     stmt.order_by = Some(stmt_order);
-    sort_rows(&stmt, rows).expect("test: sort");
+    sort_rows(&stmt, rows, true).expect("test: sort");
 }
 
 #[test]
@@ -114,11 +114,29 @@ fn test_sort_named_similarity_is_rejected() {
         }),
         descending: true,
     }]);
-    let err = sort_rows(&stmt, &mut rows);
+    let err = sort_rows(&stmt, &mut rows, true);
     assert!(err.is_err());
 }
 
 #[test]
 fn test_division_by_zero_yields_zero() {
     assert_eq!(apply_op(ArithmeticOp::Div, 5.0, 0.0), 0.0);
+}
+
+#[test]
+fn test_similarity_desc_puts_the_nearest_row_first_under_a_distance_metric() {
+    // Euclidean scores are distances: the smallest is the most similar.
+    let mut rows = vec![
+        mk(1, 3.0, serde_json::json!({})),
+        mk(2, 1.0, serde_json::json!({})),
+        mk(3, 2.0, serde_json::json!({})),
+    ];
+    let mut stmt = SelectStatement::empty();
+    stmt.order_by = Some(vec![SelectOrderBy {
+        expr: OrderByExpr::SimilarityBare,
+        descending: true,
+    }]);
+    sort_rows(&stmt, &mut rows, false).expect("test: sort");
+    let ids: Vec<u64> = rows.iter().map(|r| r.point.id).collect();
+    assert_eq!(ids, [2, 3, 1]);
 }

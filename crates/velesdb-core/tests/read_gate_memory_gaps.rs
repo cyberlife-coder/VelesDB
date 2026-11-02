@@ -127,7 +127,7 @@ fn raw_gate_refuses_a_scope_it_cannot_express() {
         Ok(None) => panic!("an inexpressible scope must not read as an unscoped allow"),
         Ok(Some(filter)) => {
             assert!(
-                !filter.matches(&serde_json::json!({"tenant": "someone-else"})),
+                !filter.matches_point(1, Some(&serde_json::json!({"tenant": "someone-else"}))),
                 "a scope the leaf cannot express was lowered to a match-all \
                  tautology instead of being refused"
             );

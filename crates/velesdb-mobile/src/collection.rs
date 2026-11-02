@@ -242,7 +242,7 @@ impl VelesCollection {
             .filter(|p| {
                 scope
                     .as_ref()
-                    .is_none_or(|f| p.payload.as_ref().is_some_and(|pl| f.matches(pl)))
+                    .is_none_or(|f| f.matches_point(p.id, p.payload.as_ref()))
             })
             .map(|p| VelesPoint {
                 id: p.id,

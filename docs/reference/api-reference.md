@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-10-30 (VelesDB v8.0.0). The machine-readable source of
+> **Last updated**: 2026-10-31 (VelesDB v8.0.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -616,7 +616,14 @@ The `filter` uses the canonical VelesDB filter shape:
 Operators: `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `like`, `ilike`,
 `is_null`, `is_not_null`, `array_contains`, `array_contains_any`, `array_contains_all`,
 `geo_distance`, `geo_bbox`, and `and`/`or`/`not` for composition. A malformed filter
-returns `400`.
+returns `400`. Numbers compare by exact value, an integer and a float
+included (`3` equals `3.0`, `-0.0` equals `0`), with no tolerance: to match a
+computed float, combine `gte` and `lte` under `and`.
+
+A `field` is a payload path: `"field": "id"` reads a payload field named `id`,
+never the point id (VelesQL's `id` is the point id; filter on it with a VelesQL
+`WHERE id = ...` through `/query`). The name `@velesql.point_id` is reserved
+for VelesQL and refused with `400`.
 
 ```json
 {

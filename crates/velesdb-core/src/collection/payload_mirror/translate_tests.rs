@@ -187,14 +187,14 @@ fn in_list_on_strings_and_numbers() {
     let state = sample_state();
     let cond = Condition::In {
         field: "category".into(),
-        values: vec![json!("bio"), json!("nope")],
+        values: vec![json!("bio"), json!("nope")].into(),
     };
     let eval = condition_bitmap(&state, &cond).expect("supported");
     assert_eq!(rows(&eval), vec![1]);
 
     let cond = Condition::In {
         field: "price".into(),
-        values: vec![json!(10), json!(30)],
+        values: vec![json!(10), json!(30)].into(),
     };
     let eval = condition_bitmap(&state, &cond).expect("supported");
     assert_eq!(rows(&eval), vec![0, 2]);
@@ -206,7 +206,7 @@ fn in_list_with_mixed_types_falls_back() {
     let state = sample_state();
     let cond = Condition::In {
         field: "price".into(),
-        values: vec![json!(10), json!("not-a-number")],
+        values: vec![json!(10), json!("not-a-number")].into(),
     };
     assert!(condition_bitmap(&state, &cond).is_none());
 }
@@ -216,7 +216,7 @@ fn empty_in_list_is_exact_empty() {
     let state = sample_state();
     let cond = Condition::In {
         field: "category".into(),
-        values: vec![],
+        values: vec![].into(),
     };
     let eval = condition_bitmap(&state, &cond).expect("supported");
     assert!(eval.bits.is_empty());
@@ -316,7 +316,7 @@ fn not_over_exact_complements() {
     let cond = Condition::Not {
         condition: Box::new(Condition::In {
             field: "category".into(),
-            values: vec![json!("tech")],
+            values: vec![json!("tech")].into(),
         }),
     };
     let eval = condition_bitmap(&state, &cond).expect("supported");

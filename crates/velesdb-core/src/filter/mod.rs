@@ -23,6 +23,7 @@ mod conversion;
 #[cfg(test)]
 mod conversion_tests;
 mod matching;
+mod point_ids;
 
 // Only `database::query_engine` consults this helper, and the whole `database`
 // module is `#[cfg(feature = "persistence")]` — gate the re-export the same
@@ -33,11 +34,43 @@ pub(crate) use conversion::inexpressible_scope_construct;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+// Re-exported for the bitmap prefilter in `collection::core`, a
+// `persistence`-gated module — outside it only `point_ids.rs` itself reads
+// these, so an ungated import is an unused one without the feature.
+#[cfg(feature = "persistence")]
+pub(crate) use point_ids::{exact_as_f64, value_as_point_id};
+
 /// A filter for metadata-based search refinement.
+///
+/// A filter is evaluated against a point — [`Filter::matches_point`] — so a
+/// condition converted from a `VelesQL` `id` column reads the point id. A
+/// JSON filter names payload fields only: deserializing one that names the
+/// internal point-id field fails.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "FilterRepr")]
 pub struct Filter {
     /// The root condition of the filter.
     pub condition: Condition,
+}
+
+/// The wire shape of a [`Filter`], checked before it becomes one.
+#[derive(Deserialize)]
+struct FilterRepr {
+    condition: Condition,
+}
+
+impl TryFrom<FilterRepr> for Filter {
+    type Error = String;
+
+    fn try_from(repr: FilterRepr) -> Result<Self, Self::Error> {
+        if repr.condition.names_field(POINT_ID_FIELD) {
+            return Err(format!(
+                "field `{POINT_ID_FIELD}` is reserved for VelesQL's point id; \
+                 a JSON filter's fields are payload paths"
+            ));
+        }
+        Ok(Self::new(repr.condition))
+    }
 }
 
 impl Filter {
@@ -57,14 +90,31 @@ impl Filter {
         serde_json::from_value(value).map_err(|e| format!("Invalid filter: {e}"))
     }
 
-    /// Evaluates the filter against a payload.
-    ///
-    /// Returns `true` if the payload matches the filter conditions.
+    /// Evaluates the filter against a point: its payload (`None` reads as
+    /// `null`, the same on every path) and its id, which a `VelesQL` `id`
+    /// column reads. There is no payload-only evaluation outside the crate:
+    /// a scope or WHERE built from `VelesQL` and tested without the id could
+    /// let `id != x` match every row.
     #[must_use]
-    pub fn matches(&self, payload: &Value) -> bool {
+    pub fn matches_point(&self, id: u64, payload: Option<&Value>) -> bool {
+        self.condition.matches_point(id, payload)
+    }
+
+    /// Evaluates the filter against a payload alone; a `VelesQL` `id`
+    /// column reads nothing. Crate tests only.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn matches(&self, payload: &Value) -> bool {
         self.condition.matches(payload)
     }
 }
+
+/// The field a `VelesQL` `id` column becomes in a filter: the point id, as
+/// `id` reads in every clause of a query, never a payload field named `id`.
+/// A JSON filter's `"id"` field stays a payload field, and a JSON filter
+/// cannot name this one. The name is dotted, so a payload path never reaches
+/// it and the payload mirror, which mirrors no dotted path, never answers it.
+pub(crate) const POINT_ID_FIELD: &str = "@velesql.point_id";
 
 /// A condition for filtering metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,8 +167,11 @@ pub enum Condition {
     In {
         /// Field name
         field: String,
-        /// List of values to check against
-        values: Vec<Value>,
+        /// List of values to check against, sorted by `json_value_cmp` at
+        /// construction — [`InValues`] makes the sortedness a property of
+        /// the type, so the binary search in `matching.rs` needs no
+        /// caller-side guarantee.
+        values: InValues,
     },
     /// Check if field contains a substring (for strings)
     Contains {
@@ -222,6 +275,53 @@ pub enum Condition {
         /// Maximum longitude
         lng_max: f64,
     },
+}
+
+/// The member list of [`Condition::In`].
+///
+/// Values are sorted by `json_value_cmp` and
+/// de-duplicated at construction so `matching::in_list_matches` can
+/// binary-search a long list. The invariant lives in the type rather than
+/// in each caller's discipline: [`Condition::is_in`], the `VelesQL`
+/// conversion, `Deserialize`, and a `Condition::In { .. }` literal all
+/// funnel through `From<Vec<Value>>`, which sorts and de-duplicates.
+#[derive(Debug, Clone, Default)]
+pub struct InValues(Vec<Value>);
+
+impl InValues {
+    /// The members as a slice, in `json_value_cmp` order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Value] {
+        &self.0
+    }
+}
+
+impl From<Vec<Value>> for InValues {
+    fn from(mut values: Vec<Value>) -> Self {
+        values.sort_by(matching::json_value_cmp);
+        values.dedup_by(|a, b| a == b);
+        Self(values)
+    }
+}
+
+impl std::ops::Deref for InValues {
+    type Target = [Value];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Serialize for InValues {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InValues {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<Value>::deserialize(deserializer).map(Self::from)
+    }
 }
 
 #[cfg(test)]

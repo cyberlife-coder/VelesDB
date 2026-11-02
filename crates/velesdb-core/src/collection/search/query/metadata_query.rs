@@ -1,13 +1,29 @@
 use super::{Collection, SearchResult};
 
 impl Collection {
-    /// Attempts to resolve a metadata-only query using secondary indexes.
+    /// Attempts to resolve a metadata-only query without a full scan: by the
+    /// points `id = n` / `id IN (...)` name (alone or in an AND), visited in
+    /// id order, else by a secondary index. Returns `None` when neither
+    /// covers the condition, signaling the caller to fall back to a
+    /// sequential scan.
+    pub(super) fn execute_indexed_metadata_query(
+        &self,
+        cond: &crate::velesql::Condition,
+        execution_limit: usize,
+    ) -> Option<Vec<SearchResult>> {
+        let filter = crate::filter::Filter::new(crate::filter::Condition::from(cond.clone()));
+        match filter.condition.point_ids() {
+            Some(ids) => Some(self.scan_ids_with_filter(&ids, &filter, execution_limit)),
+            None => self.execute_secondary_index_query(cond, execution_limit),
+        }
+    }
+
+    /// Resolves a metadata-only query using secondary indexes.
     ///
     /// Tries an Eq lookup on the first matching indexed field (fastest path).
     /// For AND conditions, flattens the tree and probes each leaf for an indexed Eq.
-    /// Returns `None` when no index covers the condition, signaling the caller
-    /// to fall back to a sequential scan.
-    pub(super) fn execute_indexed_metadata_query(
+    /// Returns `None` when no index covers the condition.
+    fn execute_secondary_index_query(
         &self,
         cond: &crate::velesql::Condition,
         execution_limit: usize,
@@ -94,9 +110,9 @@ impl Collection {
         // work, never the dominant hydration cost.
         'chunks: for chunk in ids.chunks(SCAN_CHUNK) {
             for point in self.get(chunk).into_iter().flatten() {
-                // `matches` only borrows the payload; a missing payload is
-                // treated as `Null` (unchanged semantics).
-                if filter.matches(point.payload.as_ref().unwrap_or(&serde_json::Value::Null)) {
+                // `matches_point` only borrows the payload; a missing payload
+                // is treated as `Null` (unchanged semantics).
+                if filter.matches_point(point.id, point.payload.as_ref()) {
                     results.push(SearchResult::new(point, 1.0));
                     if results.len() >= execution_limit {
                         break 'chunks;
@@ -109,13 +125,14 @@ impl Collection {
 
     /// Extracts an `(field_name, value)` pair from an `Eq` comparison condition.
     ///
-    /// Returns `None` for non-Eq operators or when the value cannot be converted
-    /// to a `JsonValue` suitable for index lookup.
+    /// Returns `None` for non-Eq operators, for `id` (the point id, which no
+    /// payload index holds) or when the value cannot be converted to a
+    /// `JsonValue` suitable for index lookup.
     pub(super) fn extract_index_lookup_condition(
         cond: &crate::velesql::Condition,
     ) -> Option<(String, crate::index::JsonValue)> {
         if let crate::velesql::Condition::Comparison(cmp) = cond {
-            if cmp.operator == crate::velesql::CompareOp::Eq {
+            if cmp.operator == crate::velesql::CompareOp::Eq && cmp.column != "id" {
                 return crate::index::JsonValue::from_ast_value(&cmp.value)
                     .map(|v| (cmp.column.clone(), v));
             }

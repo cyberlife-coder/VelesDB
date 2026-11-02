@@ -23,11 +23,19 @@ pub(crate) enum JsonValue {
 }
 
 /// Wrapper type that provides total ordering for f64 values.
+///
+/// `-0.0` is `0` in the engine's numeric order, so the key normalises it to
+/// `0.0`'s bits: an equality lookup for either zero finds the other's
+/// bucket (the bitmap is a pre-filter — it must cover the filter's matches,
+/// and `x = -0.0` matches a stored `0`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct F64Key(u64);
 
 impl From<f64> for F64Key {
     fn from(value: f64) -> Self {
+        if value == 0.0 {
+            return Self(0.0f64.to_bits());
+        }
         Self(value.to_bits())
     }
 }
@@ -307,7 +315,7 @@ impl SecondaryIndex {
         let Self::BTree(tree) = self;
         let guard = tree.read();
         let covered: usize = guard.values().map(IdSet::len).sum();
-        if covered != point_count {
+        if covered != point_count || !numbers_exact(&guard) {
             return None;
         }
         let ordered = walk_ordered(&guard, descending, limit);
@@ -337,13 +345,32 @@ impl SecondaryIndex {
         let Self::BTree(tree) = self;
         let guard = tree.read();
         let covered: usize = guard.values().map(IdSet::len).sum();
-        if covered != point_count {
+        if covered != point_count || !numbers_exact(&guard) {
             return None;
         }
         let buckets = walk_whole_buckets(&guard, descending, min_rows);
         drop(guard);
         Some(buckets)
     }
+}
+
+/// Whether the index orders every number it holds as the engine does. Keys
+/// are `f64`: an integer at or past 2^53 shares its key with a neighbour the
+/// engine orders apart, so a walk would tie them — the caller then sorts
+/// exactly instead. Number keys are contiguous in key order, so the smallest
+/// and the largest tell.
+fn numbers_exact(tree: &BTreeMap<JsonValue, IdSet>) -> bool {
+    /// 2^53: every key strictly within ±2^53 is one integer or a float.
+    const LIMIT: f64 = 9_007_199_254_740_992.0;
+    // The extremes of `f64::total_cmp`: negative and positive NaN.
+    let lowest = JsonValue::Number(F64Key(u64::MAX));
+    let highest = JsonValue::Number(F64Key(0x7FFF_FFFF_FFFF_FFFF));
+    let exact = |key: &JsonValue| match key {
+        JsonValue::Number(F64Key(bits)) => f64::from_bits(*bits).abs() < LIMIT,
+        _ => true,
+    };
+    let mut numbers = tree.range(lowest..=highest).map(|(key, _)| key);
+    numbers.next().is_none_or(exact) && numbers.next_back().is_none_or(exact)
 }
 
 /// Walks the B-tree in key order (ascending, or descending when `descending`)

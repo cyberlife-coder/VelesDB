@@ -145,34 +145,29 @@ impl Database {
     ///
     /// When the pushed-down `filter` references secondary-indexed fields,
     /// `build_prefilter_bitmap` resolves it to a Roaring bitmap of candidate IDs,
-    /// avoiding the O(N) `all_ids()` scan. The bitmap is a guaranteed SUPERSET of
+    /// avoiding the O(N) `all_point_ids()` scan. The bitmap is a guaranteed SUPERSET of
     /// the matches — `point_matches_filter` re-checks every returned point, so
     /// results are identical to the scan path. The superset guarantee holds
-    /// because `build_prefilter_bitmap` returns `None` (forcing the `all_ids()`
-    /// fallback) for any predicate it cannot resolve completely: `!=` / `NOT IN`
+    /// because `build_prefilter_bitmap` returns `None` (forcing the
+    /// `all_point_ids()` fallback) for any predicate it cannot resolve completely: `!=` / `NOT IN`
     /// (whose matches include field-absent points the index does not store) and
     /// any field carrying an ID above `u32::MAX` (unrepresentable in the bitmap).
-    /// Falls back to `all_ids()` whenever no index can resolve the predicate.
+    /// Falls back to `all_point_ids()` — every point, with or without a
+    /// payload — whenever no index can resolve the predicate.
     fn join_candidate_ids(
         collection: &crate::collection::Collection,
         filter: &crate::Filter,
     ) -> Vec<u64> {
         match collection.build_prefilter_bitmap(filter) {
             Some(bitmap) => bitmap.iter().map(u64::from).collect(),
-            None => collection.all_ids(),
+            None => collection.all_point_ids(),
         }
     }
 
-    /// Evaluates a filter against a point's payload with `id` injected.
+    /// Evaluates a filter against a point: a `VelesQL` `id` column reads its
+    /// id, as in every clause.
     fn point_matches_filter(point: &crate::Point, filter: &crate::Filter) -> bool {
-        let mut obj = point
-            .payload
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        obj.insert("id".to_string(), serde_json::json!(point.id));
-        filter.matches(&serde_json::Value::Object(obj))
+        filter.matches_point(point.id, point.payload.as_ref())
     }
 
     /// Combines multiple `velesql::Condition`s into a single AND tree.
@@ -191,7 +186,7 @@ impl Database {
     /// Strips table prefixes from all column references in a `velesql::Condition`.
     ///
     /// Converts qualified names like `inventory.price` to `price` so that
-    /// `Filter::matches` can evaluate them against unqualified payload keys.
+    /// `Filter::matches_point` can evaluate them against unqualified payload keys.
     pub(super) fn strip_table_prefix_from_condition(
         condition: crate::velesql::Condition,
     ) -> crate::velesql::Condition {
@@ -307,7 +302,7 @@ impl Database {
     pub(super) fn fetch_join_points(
         collection: &crate::collection::Collection,
     ) -> Vec<crate::Point> {
-        let ids = collection.all_ids();
+        let ids = collection.all_point_ids();
         collection.get(&ids).into_iter().flatten().collect()
     }
 

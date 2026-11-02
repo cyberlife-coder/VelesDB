@@ -1,0 +1,118 @@
+//! What a filter says about point ids, and about numbers an `f64` index
+//! cannot tell apart.
+//!
+//! A `VelesQL` `id` column converts to [`POINT_ID_FIELD`]. `id = 5` and
+//! `id IN (1, 2)` name their points exactly, so a scan can visit those ids
+//! instead of every point, and a bitmap prefilter can hold exactly them.
+
+use serde_json::Value;
+
+use super::{Condition, POINT_ID_FIELD};
+
+/// 2^53: an integer at or past it may share its `f64` with a neighbour.
+const F64_EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// The point id a JSON value names, when it names one exactly: a
+/// non-negative integer, an integer-valued float included (`id = 5.0`
+/// names point 5 — `values_equal` calls `5` and `5.0` equal, so the
+/// point-id lookup must find what the filter matches). `None` for a
+/// fraction, a negative, or a magnitude at or past 2^53 whose `f64`
+/// stands for several integers — that literal falls back to the filter.
+pub(crate) fn value_as_point_id(value: &Value) -> Option<u64> {
+    let number = value.as_number()?;
+    number
+        .as_u64()
+        .or_else(|| number.as_f64().and_then(float_as_point_id))
+}
+
+/// The point id an `f64` names when it is a non-negative integer below
+/// 2^53, where the cast is exact by construction — past it one `f64`
+/// stands for several integers.
+fn float_as_point_id(f: f64) -> Option<u64> {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // Reason: `f` is checked non-negative, integral and below 2^53, so the
+    // float->u64 conversion cannot truncate or flip a sign.
+    ((0.0..F64_EXACT_INTEGER_LIMIT).contains(&f) && f.fract() == 0.0).then_some(f as u64)
+}
+
+/// Whether a payload index or mirror keyed on `f64` answers for `value`
+/// exactly: anything but a number of magnitude 2^53 or more, integer or
+/// float. Past 2^53 an `f64` key stands for several integers the filter
+/// tells apart (`2^53 + 1 > 2^53.0`), so such a literal must fall back to
+/// the filter itself. This is the one test every `f64`-keyed path asks —
+/// all of them `persistence`-gated.
+#[cfg(feature = "persistence")]
+pub(crate) fn exact_as_f64(value: &Value) -> bool {
+    match value {
+        Value::Number(n) => n
+            .as_f64()
+            .is_some_and(|f| f.abs() < F64_EXACT_INTEGER_LIMIT),
+        _ => true,
+    }
+}
+
+impl Condition {
+    /// Whether any leaf of this condition reads `field`.
+    pub(crate) fn names_field(&self, field: &str) -> bool {
+        match self {
+            Self::And { conditions } | Self::Or { conditions } => {
+                conditions.iter().any(|c| c.names_field(field))
+            }
+            Self::Not { condition } => condition.names_field(field),
+            leaf => leaf.field() == Some(field),
+        }
+    }
+
+    /// The points this condition can match, when it names them: `id = n`
+    /// and `id IN (...)` with values naming an exact point id
+    /// ([`value_as_point_id`]: a non-negative integer, an integer-valued
+    /// float below 2^53 included), sorted and deduplicated, or the smallest
+    /// such set among the members of an `AND`. `None` when any point may
+    /// match.
+    pub(crate) fn point_ids(&self) -> Option<Vec<u64>> {
+        let ids = match self {
+            Self::Eq { field, value } if field == POINT_ID_FIELD => {
+                vec![value_as_point_id(value)?]
+            }
+            Self::In { field, values } if field == POINT_ID_FIELD => values
+                .iter()
+                .map(value_as_point_id)
+                .collect::<Option<Vec<u64>>>()?,
+            Self::And { conditions } => {
+                return conditions
+                    .iter()
+                    .filter_map(Self::point_ids)
+                    .min_by_key(Vec::len);
+            }
+            _ => return None,
+        };
+        let mut ids = ids;
+        ids.sort_unstable();
+        ids.dedup();
+        Some(ids)
+    }
+
+    /// The field a leaf reads; `None` for `AND`, `OR` and `NOT`.
+    fn field(&self) -> Option<&str> {
+        match self {
+            Self::Eq { field, .. }
+            | Self::Neq { field, .. }
+            | Self::Gt { field, .. }
+            | Self::Gte { field, .. }
+            | Self::Lt { field, .. }
+            | Self::Lte { field, .. }
+            | Self::In { field, .. }
+            | Self::Contains { field, .. }
+            | Self::IsNull { field }
+            | Self::IsNotNull { field }
+            | Self::Like { field, .. }
+            | Self::ILike { field, .. }
+            | Self::ArrayContains { field, .. }
+            | Self::ArrayContainsAny { field, .. }
+            | Self::ArrayContainsAll { field, .. }
+            | Self::GeoDistance { field, .. }
+            | Self::GeoBbox { field, .. } => Some(field),
+            Self::And { .. } | Self::Or { .. } | Self::Not { .. } => None,
+        }
+    }
+}

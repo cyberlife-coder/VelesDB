@@ -2,11 +2,6 @@
 //!
 //! Provides O(log n) range queries (>, <, >=, <=, BETWEEN) instead of O(n) scans.
 
-// Reason: Numeric casts in range index are intentional:
-// - i64->f64 for mixed-type comparisons: precision loss acceptable for ordering
-// - Values represent property values, exact precision not required for comparisons
-#![allow(clippy::cast_precision_loss)]
-
 use super::helpers::{make_label_prop_key, safe_bitmap_id, PostcardPersistence};
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
@@ -65,10 +60,42 @@ impl Ord for OrderedValue {
                 std::cmp::Ordering::Greater
             }
             (Self::Integer(a), Self::Integer(b)) => a.cmp(b),
-            (Self::Float(a), Self::Float(b)) => a.cmp(b),
-            (Self::Integer(a), Self::Float(b)) => OrderedFloat(*a as f64).cmp(b),
-            (Self::Float(a), Self::Integer(b)) => a.cmp(&OrderedFloat(*b as f64)),
+            (Self::Float(a), Self::Float(b)) => float_order(a.0, b.0),
+            (Self::Integer(a), Self::Float(b)) => int_float_order(*a, b.0),
+            (Self::Float(a), Self::Integer(b)) => int_float_order(*b, a.0).reverse(),
             (Self::String(a), Self::String(b)) => a.cmp(b),
+        }
+    }
+}
+
+/// Two float keys in the engine's number order: `-0.0` is `0` (one key),
+/// where `total_cmp` would split them, and no tolerance applies.
+fn float_order(a: f64, b: f64) -> std::cmp::Ordering {
+    match (
+        serde_json::Number::from_f64(a),
+        serde_json::Number::from_f64(b),
+    ) {
+        (Some(a), Some(b)) => crate::velesql::compare_numbers(&a, &b),
+        // NaN / ±∞, unreachable from a JSON value; a total order regardless.
+        _ => a.total_cmp(&b),
+    }
+}
+
+/// The exact order of an integer key against a float key, as
+/// [`crate::velesql::compare_numbers`] orders a JSON integer against a JSON
+/// float: `2^53 + 1` is above `2^53.0`, where an `f64` cast would level
+/// them — and a range bound would then drop it.
+fn int_float_order(integer: i64, float: f64) -> std::cmp::Ordering {
+    match serde_json::Number::from_f64(float) {
+        Some(float) => crate::velesql::compare_numbers(&serde_json::Number::from(integer), &float),
+        // A float key is only ever a JSON number (never NaN, never ±∞), so
+        // this arm is defensive: an integer sits below +∞ and NaN, above -∞.
+        None => {
+            if float.is_nan() || float.is_sign_positive() {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
         }
     }
 }
@@ -93,8 +120,15 @@ impl OrderedValue {
 }
 
 /// Current schema version for RangeIndex serialization.
-/// Increment this when making breaking changes to the index format.
-pub const RANGE_INDEX_VERSION: u32 = 1;
+/// Increment this when making breaking changes to the index format —
+/// including the key `Ord`, which is part of the persisted B-tree layout.
+///
+/// Version 2 orders `OrderedValue` numbers by exact value (an integer past
+/// 2^53 is not the `f64` it rounds to; `-0.0` is `0`), where version 1
+/// ordered them as `f64`. A v1 file's keys that v2 folds together would
+/// lose one side's bitmap on load, so [`RangeIndex::from_bytes`] refuses a
+/// mismatched version instead of adopting a stale tree.
+pub const RANGE_INDEX_VERSION: u32 = 2;
 
 /// Range index for ordered property lookups.
 ///
@@ -111,13 +145,24 @@ pub const RANGE_INDEX_VERSION: u32 = 1;
 /// // Range query: timestamp > 1704067200
 /// let nodes = index.range_greater_than("Event", "timestamp", &json!(1704067200));
 /// ```
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RangeIndex {
     /// Schema version for forward compatibility.
     #[serde(default = "default_range_version")]
     version: u32,
     /// (label, property_name) -> (ordered_value -> node_ids)
     indexes: HashMap<(String, String), BTreeMap<OrderedValue, RoaringBitmap>>,
+}
+
+/// A derived `Default` would leave `version` at 0 — a version the same
+/// build's [`RangeIndex::from_bytes`] then refuses.
+impl Default for RangeIndex {
+    fn default() -> Self {
+        Self {
+            version: RANGE_INDEX_VERSION,
+            indexes: HashMap::default(),
+        }
+    }
 }
 
 fn default_range_version() -> u32 {
@@ -400,9 +445,16 @@ impl RangeIndex {
     /// Deserialize an index from bytes.
     ///
     /// # Errors
-    /// Returns an error if deserialization fails (corrupted data).
+    /// Returns an error if deserialization fails (corrupted data), or when
+    /// the stored `version` predates `RANGE_INDEX_VERSION`: a stale
+    /// file's key order is not today's, so it is discarded — callers fall
+    /// back to an empty index — never adopted.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, postcard::Error> {
-        <Self as PostcardPersistence>::from_bytes(bytes)
+        let index: Self = <Self as PostcardPersistence>::from_bytes(bytes)?;
+        if index.version != RANGE_INDEX_VERSION {
+            return Err(postcard::Error::SerdeDeCustom);
+        }
+        Ok(index)
     }
 
     /// Save the index to a file.

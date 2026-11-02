@@ -162,10 +162,7 @@ impl Collection {
                 // Correctness-bearing re-match (see dispatch above): candidates
                 // may come from an over-approximate bitmap or be pending points
                 // a post-filtered search merged unfiltered.
-                let matches = match payload.as_ref() {
-                    Some(p) => filter.matches(p),
-                    None => filter.matches(&serde_json::Value::Null),
-                };
+                let matches = filter.matches_point(sr.id, payload.as_ref());
                 matches.then_some((sr.id, sr.score, payload))
             })
             .collect();

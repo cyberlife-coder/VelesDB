@@ -22,6 +22,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (behavior) — an unaliased aggregate is named as in core.**
+  `COUNT(*)` comes back as `count` (was `count(*)`), `SUM(price)` as
+  `sum_price` (was `sum(price)`), and every other aggregate as
+  `<function>_<column>` (`max_score` for `MAX(score)`). Alias an aggregate
+  (`COUNT(*) AS n`) to name it the same in every version.
+- **BREAKING (behavior) — GROUP BY and aggregates group as core does**,
+  through core's `velesql::Grouper`: a selected column outside `GROUP BY` is
+  no longer added to each group row; `MIN`/`MAX` read numeric values and
+  return `null` for a group of strings, and `SUM` over no numeric value is
+  `null` (was `0`); `score` as an aggregate argument
+  outside a vector `GROUP BY` reads a payload field named `score`. A vector
+  `GROUP BY` (`NEAR` + `GROUP BY`) returns each group with its best row's id
+  and the group score (was `0` and `0.0`), best score first without ORDER BY,
+  and 10 groups without LIMIT (was every group).
+- **BREAKING (behavior) — a `GROUP BY` ORDER BY that names no column of the
+  grouped rows fails with `V016`**, where it was ignored (or, for a selected
+  column outside `GROUP BY`, sorted by each group's first value). **An
+  aggregate query whose output columns share a name fails with `V017`**,
+  where one column overwrote the other: a `GROUP BY` or selected column and
+  an aggregate's name, two aggregates, or an aggregate named `id` or `score`
+  in a vector `GROUP BY` query.
+- **BREAKING (behavior) — HAVING fails with `V018` where it cannot be
+  evaluated**: without `GROUP BY` (it filtered the single implicit group),
+  or with a threshold that is neither a number nor `NULL` (it matched no
+  group). A `NULL` threshold, a parameter bound to `null` included, matches
+  no group and is no error. `HAVING a
+  OR b AND c` reads as `a OR (b AND c)`, as in SQL.
+- **BREAKING (behavior) — SQL `GROUP BY` results no longer depend on scan
+  order**, as in core: without ORDER BY groups come by `GROUP BY` key
+  ascending (was first-seen order), groups an ORDER BY ties come by key,
+  `FIRST(col)` reads the row with the smallest point id (the most similar
+  row, smallest id on a tie, in a vector `GROUP BY`), `1` and `1.0` are
+  one group, and rows are aggregated in id order, so a `GROUP BY`'s float
+  `SUM` matches core's (an aggregate without `GROUP BY` over more than
+  10,000 rows sums per chunk in core and can differ in its last digits).
+- **BREAKING (behavior) — a SQL `GROUP BY` holds at most `WITH (max_groups =
+  N)` groups, 10,000 by default**, as in core; past it the query fails with
+  `Too many groups (limit: N)`.
+- **BREAKING (behavior) — `MIN` and `MAX` of integers return integers**, as
+  in core: `MAX(id)` is `33`, not `33.0`, exact past 2^53, and `HAVING
+  MAX(n) = 9007199254740992` compares exactly.
+- **BREAKING (behavior) — numbers compare by exact value, with no
+  tolerance**, as in core: WHERE's `=`, `!=`, `IN` and a JOIN key took two
+  numbers less than `f64::EPSILON` apart for equal and compared an integer
+  as an `f64`, so `x = 0.3` matched `0.30000000000000004` and `n >
+  9007199254740992.0` missed `9007199254740993`. An integer and a float now
+  compare exactly, `-0.0` equals `0`, and `0.30000000000000004` is not `0.3`;
+  compare a computed float with a range (`x BETWEEN 0.29999 AND 0.30001`).
+- **`SELECT DISTINCT id` reads the point id**, not a payload field named
+  `id`, and `DISTINCT x` and `PARTITION BY x` key `1` and `1.0`, or `0` and
+  `-0.0`, as one value, as `GROUP BY` does.
+- **A window function's `PARTITION BY id` and `ORDER BY id` read the point
+  id**, as every other clause does, not a payload field named `id`.
+- **`search_with_filter` tests a point without payload**, with a `null`
+  payload, as core does: `{"type": "is_null", ...}` or `neq` now match it,
+  where it was dropped before the filter ran.
+- **`ORDER BY similarity()` follows the metric's direction**: under a
+  distance metric `DESC` puts the nearest row first, as in core.
+- **ORDER BY compares values as core does** (`velesql::compare_json_values`):
+  `null` stays last under `ASC`, and values of different types sort by type
+  (booleans, numbers, strings, arrays, objects) where a number and a string,
+  or two booleans, compared equal.
 - **BREAKING (behavior) — VelesQL queries go through `velesdb-core`'s
   `QueryValidator`.** A query core refuses is refused here too. `USING FUSION`
   over a single `NEAR` now fails with V012 for every strategy (`rrf`, `maximum`

@@ -162,7 +162,8 @@ impl Collection {
 
     /// Resolves the first `k` fused points whose payload `filter` matches,
     /// in fused order, reading each candidate's payload before copying its
-    /// vector: a point without a payload matches no filter.
+    /// vector: a point without a payload is judged with a `null` payload, as
+    /// on every path.
     fn resolve_fused_matching(
         &self,
         fused: &[(u64, f32)],
@@ -177,7 +178,7 @@ impl Collection {
             crate::collection::expiry::now_unix_secs(),
             &*vector_storage,
             &*payload_storage,
-            |payload| payload.is_some_and(|payload| filter.matches(payload)),
+            |id, payload| filter.matches_point(id, payload),
         )
     }
 

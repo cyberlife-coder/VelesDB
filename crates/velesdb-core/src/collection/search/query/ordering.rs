@@ -12,78 +12,9 @@ use crate::point::SearchResult;
 use crate::velesql::{ArithmeticExpr, ArithmeticOp};
 use std::cmp::Ordering;
 
-/// Looks up a (possibly dotted) field path inside a JSON payload.
-///
-/// A bare name (`"source"`) is a top-level lookup; a dotted path
-/// (`"meta.source"`) walks nested objects segment by segment. Returns `None`
-/// when any segment is missing or a non-object is traversed. Shared by ORDER BY
-/// field comparison and score-variable payload resolution so both honor the same
-/// nested-path semantics as projection/filter/aggregation.
-fn get_nested_payload<'a>(
-    payload: &'a serde_json::Value,
-    path: &str,
-) -> Option<&'a serde_json::Value> {
-    let mut current = payload;
-    for segment in path.split('.') {
-        match current {
-            serde_json::Value::Object(map) => current = map.get(segment)?,
-            _ => return None,
-        }
-    }
-    Some(current)
-}
-
-/// Compare two JSON values for sorting with total ordering.
-///
-/// Ordering priority (ascending): Null < Bool < Number < String < Array < Object
-/// This ensures deterministic sorting even with mixed types.
-#[must_use]
-pub fn compare_json_values(
-    a: Option<&serde_json::Value>,
-    b: Option<&serde_json::Value>,
-) -> Ordering {
-    match (a, b) {
-        (None, None) => Ordering::Equal,
-        (None, Some(_)) => Ordering::Less,
-        (Some(_), None) => Ordering::Greater,
-        (Some(va), Some(vb)) => {
-            // BUG FIX: Define total ordering for mixed JSON types
-            // Type priority: Null(0) < Bool(1) < Number(2) < String(3) < Array(4) < Object(5)
-            let type_rank = |v: &serde_json::Value| -> u8 {
-                match v {
-                    serde_json::Value::Null => 0,
-                    serde_json::Value::Bool(_) => 1,
-                    serde_json::Value::Number(_) => 2,
-                    serde_json::Value::String(_) => 3,
-                    serde_json::Value::Array(_) => 4,
-                    serde_json::Value::Object(_) => 5,
-                }
-            };
-
-            let rank_a = type_rank(va);
-            let rank_b = type_rank(vb);
-
-            // First compare by type rank
-            if rank_a != rank_b {
-                return rank_a.cmp(&rank_b);
-            }
-
-            // Same type: compare values
-            match (va, vb) {
-                (serde_json::Value::Number(na), serde_json::Value::Number(nb)) => {
-                    let fa = na.as_f64().unwrap_or(0.0);
-                    let fb = nb.as_f64().unwrap_or(0.0);
-                    fa.total_cmp(&fb) // Use total_cmp for NaN safety
-                }
-                (serde_json::Value::String(sa), serde_json::Value::String(sb)) => sa.cmp(sb),
-                (serde_json::Value::Bool(ba), serde_json::Value::Bool(bb)) => ba.cmp(bb),
-                // Null vs Null, Array vs Array, Object vs Object: treat as equal
-                // (comparing array/object contents would be complex and rarely needed)
-                _ => Ordering::Equal,
-            }
-        }
-    }
-}
+/// The engine-shared ORDER BY value order (`NULLS LAST` ascending), kept at
+/// this path for callers that import it from here.
+pub use crate::velesql::compare_json_values;
 
 impl Collection {
     /// Apply ORDER BY clause to results.
@@ -135,7 +66,7 @@ impl Collection {
             .iter()
             .map(|ob| match &ob.expr {
                 crate::velesql::OrderByExpr::Field(field_name)
-                    if per_result_let.is_empty() && !is_builtin_score_variable(field_name) =>
+                    if per_result_let.is_empty() && is_payload_field(field_name) =>
                 {
                     Some(
                         results
@@ -144,7 +75,7 @@ impl Collection {
                                 r.point
                                     .payload
                                     .as_ref()
-                                    .and_then(|p| get_nested_payload(p, field_name))
+                                    .and_then(|p| crate::velesql::row_field(p, field_name))
                             })
                             .collect(),
                     )
@@ -292,12 +223,7 @@ impl Collection {
                 }
             };
 
-            let is_similarity = matches!(
-                &ob.expr,
-                OrderByExpr::Similarity(_) | OrderByExpr::SimilarityBare
-            );
-            let directed_cmp =
-                Self::apply_sort_direction(cmp, ob.descending, is_similarity, higher_is_better);
+            let directed_cmp = ob.directed(cmp, higher_is_better);
             if directed_cmp != Ordering::Equal {
                 return directed_cmp;
             }
@@ -305,23 +231,27 @@ impl Collection {
         Ordering::Equal
     }
 
-    /// Compares a payload field value between two results.
+    /// Compares a payload field value between two results; `id` is the point
+    /// id, as in every clause.
     fn compare_payload_field(
         field_name: &str,
         i: usize,
         j: usize,
         results: &[SearchResult],
     ) -> Ordering {
+        if field_name == "id" {
+            return results[i].point.id.cmp(&results[j].point.id);
+        }
         let val_i = results[i]
             .point
             .payload
             .as_ref()
-            .and_then(|p| get_nested_payload(p, field_name));
+            .and_then(|p| crate::velesql::row_field(p, field_name));
         let val_j = results[j]
             .point
             .payload
             .as_ref()
-            .and_then(|p| get_nested_payload(p, field_name));
+            .and_then(|p| crate::velesql::row_field(p, field_name));
         compare_json_values(val_i, val_j)
     }
 
@@ -407,35 +337,23 @@ impl Collection {
             results[i].point.payload.as_ref(),
             results[i].component_scores.as_deref(),
             per_result_let.get(i).map(Vec::as_slice),
-        );
+        )
+        .for_point(results[i].point.id);
         let ctx_j = ScoreContext::with_let_bindings(
             results[j].score,
             results[j].point.payload.as_ref(),
             results[j].component_scores.as_deref(),
             per_result_let.get(j).map(Vec::as_slice),
-        );
+        )
+        .for_point(results[j].point.id);
         (ctx_i, ctx_j)
     }
+}
 
-    /// Applies ASC/DESC direction, accounting for distance metric inversion.
-    fn apply_sort_direction(
-        cmp: Ordering,
-        descending: bool,
-        is_similarity: bool,
-        higher_is_better: bool,
-    ) -> Ordering {
-        if descending {
-            if is_similarity && !higher_is_better {
-                cmp
-            } else {
-                cmp.reverse()
-            }
-        } else if is_similarity && !higher_is_better {
-            cmp.reverse()
-        } else {
-            cmp
-        }
-    }
+/// Whether an ORDER BY `name` reads a payload field: neither a built-in
+/// score variable nor `id`, the point id.
+fn is_payload_field(name: &str) -> bool {
+    name != "id" && !is_builtin_score_variable(name)
 }
 
 /// Whether `name` is a built-in score variable resolved from the component-score
@@ -515,6 +433,9 @@ pub(crate) struct ScoreContext<'a> {
     ///
     /// Resolution priority: LET bindings > component_scores > search_score > payload.
     let_bindings: Option<&'a [(String, f32)]>,
+    /// The point id, which `id` reads, as in every clause; `None` where the
+    /// caller has no point (tests), and `id` then reads the payload.
+    point_id: Option<u64>,
 }
 
 impl<'a> ScoreContext<'a> {
@@ -527,6 +448,7 @@ impl<'a> ScoreContext<'a> {
             payload,
             component_scores: None,
             let_bindings: None,
+            point_id: None,
         }
     }
 
@@ -542,6 +464,7 @@ impl<'a> ScoreContext<'a> {
             payload,
             component_scores,
             let_bindings: None,
+            point_id: None,
         }
     }
 
@@ -557,7 +480,15 @@ impl<'a> ScoreContext<'a> {
             payload,
             component_scores,
             let_bindings,
+            point_id: None,
         }
+    }
+
+    /// This context for the point `id`, which the variable `id` reads.
+    #[must_use]
+    pub(crate) const fn for_point(mut self, id: u64) -> Self {
+        self.point_id = Some(id);
+        self
     }
 
     /// Resolves a variable name to a numeric value.
@@ -621,10 +552,15 @@ impl<'a> ScoreContext<'a> {
             .map(|(_, v)| *v)
     }
 
-    /// Resolves a variable name from the payload.
+    /// Resolves a variable name from the payload; `id` is the point id.
     fn resolve_payload_variable(&self, name: &str) -> f32 {
+        if let (Some(id), "id") = (self.point_id, name) {
+            // Reason: an arithmetic score is an f32, ids included.
+            #[allow(clippy::cast_precision_loss)]
+            return id as f32;
+        }
         self.payload
-            .and_then(|p| get_nested_payload(p, name))
+            .and_then(|p| crate::velesql::row_field(p, name))
             .and_then(serde_json::Value::as_f64)
             .map_or(0.0, |v| {
                 #[allow(clippy::cast_possible_truncation)]
@@ -645,15 +581,19 @@ pub(crate) fn evaluate_let_bindings(
     search_score: f32,
     payload: Option<&serde_json::Value>,
     component_scores: Option<&[(&'static str, f32)]>,
+    point_id: Option<u64>,
 ) -> Vec<(String, f32)> {
     let mut evaluated: Vec<(String, f32)> = Vec::with_capacity(bindings.len());
     for binding in bindings {
-        let ctx = ScoreContext::with_let_bindings(
+        let mut ctx = ScoreContext::with_let_bindings(
             search_score,
             payload,
             component_scores,
             Some(&evaluated),
         );
+        if let Some(id) = point_id {
+            ctx = ctx.for_point(id);
+        }
         let value = evaluate_arithmetic(&binding.expr, &ctx);
         evaluated.push((binding.name.clone(), value));
     }

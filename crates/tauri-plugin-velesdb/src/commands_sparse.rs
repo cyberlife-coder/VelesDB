@@ -39,7 +39,7 @@ pub async fn sparse_search<R: Runtime>(
             let mut search_results = coll.sparse_search(&core_sv, request.top_k, &idx_name)?;
             if let Some(scope) = scope {
                 search_results
-                    .retain(|r| r.point.payload.as_ref().is_some_and(|p| scope.matches(p)));
+                    .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
             }
             Ok(map_core_results(search_results))
         })
@@ -74,7 +74,7 @@ pub async fn hybrid_sparse_search<R: Runtime>(
                 coll.hybrid_sparse_search(&request.vector, &core_sv, request.top_k, "", &strategy)?;
             if let Some(scope) = scope {
                 search_results
-                    .retain(|r| r.point.payload.as_ref().is_some_and(|p| scope.matches(p)));
+                    .retain(|r| scope.matches_point(r.point.id, r.point.payload.as_ref()));
             }
             Ok(map_core_results(search_results))
         })

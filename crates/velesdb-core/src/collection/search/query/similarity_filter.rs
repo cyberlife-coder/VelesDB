@@ -419,12 +419,7 @@ impl Collection {
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
 
-        let vector_ids = vector_storage.ids();
-        let ids: Vec<u64> = if vector_ids.is_empty() {
-            payload_storage.ids()
-        } else {
-            vector_ids
-        };
+        let ids = Self::scan_universe_ids(&*vector_storage, &*payload_storage);
         let total_ids = ids.len();
 
         // Record rows actually visited as payload-mirror scan debt: once the
@@ -449,6 +444,41 @@ impl Collection {
         }
     }
 
+    /// The ids a full scan visits, in storage order: every point of the
+    /// vector storage, or — a metadata collection stores no vectors — every
+    /// point of the payload storage. This is also the universe an
+    /// `execute_aggregate` scans (`aggregate_scan_ids`): a point no SELECT
+    /// can reach counts in no aggregate either. It is a subset of the
+    /// storage-level set `all_point_ids` lists: a payload-only id in a
+    /// mixed collection is stored (and scrollable) yet is not a row here —
+    /// `collect_filtered_scan` drops candidate ids that violate the same
+    /// rule, so an `id IN` list or a bitmap superset cannot smuggle one in.
+    pub(super) fn scan_universe_ids(
+        vector_storage: &dyn VectorStorage,
+        payload_storage: &dyn PayloadStorage,
+    ) -> Vec<u64> {
+        let vector_ids = vector_storage.ids();
+        if vector_ids.is_empty() {
+            payload_storage.ids()
+        } else {
+            vector_ids
+        }
+    }
+
+    /// Whether `id` is in the scan universe ([`Self::scan_universe_ids`])
+    /// without listing it: vector-backed where any point carries a vector,
+    /// payload-backed where none does. A payload-only id in a vector
+    /// collection hydrates to nothing — `get` requires the vector — so it
+    /// is as invisible to a scan as a missing one.
+    pub(super) fn in_scan_universe(
+        vector_storage: &dyn VectorStorage,
+        payload_storage: &dyn PayloadStorage,
+        id: u64,
+    ) -> bool {
+        vector_storage.retrieve(id).ok().flatten().is_some()
+            || (vector_storage.is_empty() && payload_storage.retrieve(id).ok().flatten().is_some())
+    }
+
     /// Shared scan body: iterates `ids`, hydrates each matching point, and
     /// stops once `limit` results are collected. Extracted to keep the full
     /// scan and the candidate-id scan from duplicating the hydration loop.
@@ -460,26 +490,33 @@ impl Collection {
         limit: usize,
     ) -> Vec<SearchResult> {
         let now_secs = now_unix_secs();
+        // One discriminator for the whole scan, shared with
+        // `scan_universe_ids`/`in_scan_universe`: the collection is
+        // payload-backed when it stores no vector at all.
+        let payload_backed = vector_storage.is_empty();
         let mut results = Vec::new();
         for id in ids {
             let payload = payload_storage.retrieve(id).ok().flatten();
             if is_payload_expired(payload.as_ref(), now_secs) {
                 continue;
             }
-            let matches = match payload {
-                Some(ref p) => filter.matches(p),
-                None => filter.matches(&serde_json::Value::Null),
-            };
+            let matches = filter.matches_point(id, payload.as_ref());
             if matches {
-                let vector = vector_storage
-                    .retrieve(id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
+                let vector = vector_storage.retrieve(id).ok().flatten();
+                // Candidate lists can name ids outside the scan universe
+                // (`id IN (...)` literals, bitmap supersets): an id with no
+                // stored vector is a SELECT row only in a payload-backed
+                // collection — a payload-only id in a mixed collection (a
+                // graph node, the residue of a torn delete) is not, and an
+                // id naming nothing at all is not either.
+                let in_universe = vector.is_some() || (payload_backed && payload.is_some());
+                if !in_universe {
+                    continue;
+                }
                 results.push(SearchResult::new(
                     Point {
                         id,
-                        vector,
+                        vector: vector.unwrap_or_default(),
                         payload,
                         sparse_vectors: None,
                     },
@@ -509,27 +546,22 @@ impl Collection {
     ) -> Option<Vec<u64>> {
         use crate::filter::Condition;
         match condition {
-            Condition::Eq { field, value } => {
-                if let Some(jv) = crate::index::JsonValue::from_json(value) {
-                    return self.secondary_index_lookup(field, &jv);
-                }
-                None
-            }
-            Condition::And { conditions } => {
-                // Find the smallest indexed candidate set among AND children.
-                let mut best: Option<Vec<u64>> = None;
-                for sub in conditions {
-                    if let Some(ids) = self.extract_bitmap_ids_from_filter(sub) {
-                        best = Some(match best {
-                            Some(prev) if prev.len() <= ids.len() => prev,
-                            _ => ids,
-                        });
-                    }
-                }
-                best
-            }
-            _ => None,
+            Condition::And { conditions } => conditions
+                .iter()
+                .filter_map(|sub| self.extract_bitmap_ids_from_filter(sub))
+                .min_by_key(Vec::len),
+            // `id = n` / `id IN (...)` name their points: no index needed.
+            leaf => leaf.point_ids().or_else(|| self.indexed_eq_ids(leaf)),
         }
+    }
+
+    /// The ids a secondary index holds for an `Eq` leaf on an indexed field.
+    fn indexed_eq_ids(&self, condition: &crate::filter::Condition) -> Option<Vec<u64>> {
+        let crate::filter::Condition::Eq { field, value } = condition else {
+            return None;
+        };
+        let key = crate::index::JsonValue::from_json(value)?;
+        self.secondary_index_lookup(field, &key)
     }
 
     /// Scans a pre-filtered set of candidate IDs with the full filter,

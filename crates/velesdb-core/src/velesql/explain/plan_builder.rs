@@ -218,7 +218,7 @@ impl QueryPlan {
     fn build_scan_node(
         stmt: &SelectStatement,
         has_vector_search: bool,
-        index_lookup: Option<(String, String)>,
+        index_lookup: Option<(String, String, IndexType)>,
     ) -> (Vec<PlanNode>, Option<IndexType>) {
         let mut nodes = Vec::new();
         let index_used;
@@ -233,8 +233,8 @@ impl QueryPlan {
                 ef_search,
                 candidates,
             }));
-        } else if let Some((property, value)) = index_lookup {
-            index_used = Some(IndexType::Property);
+        } else if let Some((property, value, index)) = index_lookup {
+            index_used = Some(index);
             nodes.push(PlanNode::IndexLookup(IndexLookupPlan {
                 label: stmt.from.clone(),
                 property,
@@ -517,23 +517,50 @@ impl QueryPlan {
         Some(desc)
     }
 
+    /// The lookup a WHERE runs instead of a scan: a point-id lookup for
+    /// `id = n` / `id IN (...)`, alone or in an `AND` (`id` is the point id,
+    /// which a payload index named `id` never answers), else an equality or
+    /// `IN` on an indexed payload field.
     fn extract_index_lookup(
         condition: &Condition,
         indexed_fields: &HashSet<String>,
-    ) -> Option<(String, String)> {
-        if let Condition::Comparison(cmp) = condition {
-            if cmp.operator == crate::velesql::CompareOp::Eq && indexed_fields.contains(&cmp.column)
-            {
-                return Some((cmp.column.clone(), format!("{:?}", cmp.value)));
-            }
+    ) -> Option<(String, String, IndexType)> {
+        match Self::point_id_lookup(condition) {
+            Some(value) => Some(("id".to_string(), value, IndexType::PointId)),
+            None => Self::payload_index_lookup(condition, indexed_fields),
         }
-        if let Condition::In(inc) = condition {
-            if indexed_fields.contains(&inc.column) {
+    }
+
+    /// An equality or `IN` on an indexed payload field (never `id`, the
+    /// point id, whatever index carries that name).
+    fn payload_index_lookup(
+        condition: &Condition,
+        indexed_fields: &HashSet<String>,
+    ) -> Option<(String, String, IndexType)> {
+        let (column, value) = match condition {
+            Condition::Comparison(cmp) if cmp.operator == crate::velesql::CompareOp::Eq => {
+                (&cmp.column, format!("{:?}", cmp.value))
+            }
+            Condition::In(inc) => {
                 let op = if inc.negated { "NOT IN" } else { "IN" };
-                return Some((inc.column.clone(), format!("{op} (...)")));
+                (&inc.column, format!("{op} (...)"))
             }
-        }
-        None
+            _ => return None,
+        };
+        (column != "id" && indexed_fields.contains(column))
+            .then(|| (column.clone(), value, IndexType::Property))
+    }
+
+    /// The value of a point-id lookup the WHERE names, as the executor finds
+    /// it ([`crate::filter::Condition::point_ids`]): `id = n` or `id IN (...)`
+    /// with non-negative integers, alone or under `AND`.
+    fn point_id_lookup(condition: &Condition) -> Option<String> {
+        let filter = crate::filter::Condition::from(condition.clone());
+        let ids = filter.point_ids()?;
+        Some(match ids.as_slice() {
+            [id] => id.to_string(),
+            _ => format!("IN ({} ids)", ids.len()),
+        })
     }
 
     /// Estimates selectivity (placeholder - would need statistics in production).

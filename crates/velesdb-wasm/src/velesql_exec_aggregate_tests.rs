@@ -31,7 +31,7 @@ fn test_count_star_returns_total_rows() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT COUNT(*) FROM products", None).expect("test: count");
     assert_eq!(r.row_count(), 1);
-    assert!(r.rows_json().contains("\"count(*)\":5"));
+    assert!(r.rows_json().contains("\"count\":5"));
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn test_sum_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT SUM(price) FROM products", None).expect("test: sum");
     // 100 + 50 + 10 + 30 + 200 = 390
-    assert!(r.rows_json().contains("\"sum(price)\":390"));
+    assert!(r.rows_json().contains("\"sum_price\":390"));
 }
 
 #[test]
@@ -47,21 +47,21 @@ fn test_avg_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT AVG(price) FROM products", None).expect("test: avg");
     // 390 / 5 = 78
-    assert!(r.rows_json().contains("\"avg(price)\":78"));
+    assert!(r.rows_json().contains("\"avg_price\":78"));
 }
 
 #[test]
 fn test_min_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT MIN(price) FROM products", None).expect("test: min");
-    assert!(r.rows_json().contains("\"min(price)\":10"));
+    assert!(r.rows_json().contains("\"min_price\":10"));
 }
 
 #[test]
 fn test_max_over_column() {
     let mut db = db_with_seed();
     let r = execute(&mut db, "SELECT MAX(price) FROM products", None).expect("test: max");
-    assert!(r.rows_json().contains("\"max(price)\":200"));
+    assert!(r.rows_json().contains("\"max_price\":200"));
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn test_count_on_empty_collection_returns_zero() {
         .expect("test: create");
     let r = execute(&mut db, "SELECT COUNT(*) FROM empty", None).expect("test: count");
     assert_eq!(r.row_count(), 1);
-    assert!(r.rows_json().contains("\"count(*)\":0"));
+    assert!(r.rows_json().contains("\"count\":0"));
 }
 
 #[test]
@@ -309,15 +309,78 @@ fn test_distinct_with_param_unbound_errors() {
 }
 
 #[test]
-fn test_sum_of_non_numeric_is_zero() {
+fn test_sum_of_non_numeric_is_null() {
     let mut db = db_with_seed();
-    // category is a string — summing it yields 0 (no numeric values).
+    // category is a string: no numeric value to sum, so SUM is null, as in
+    // core and SQL.
     let r = execute(&mut db, "SELECT SUM(category) AS s FROM products", None)
         .expect("test: sum strings");
-    // serde_json may encode f64 as "0.0" or "-0.0"; accept any zero encoding.
     let body = r.rows_json();
+    assert!(body.contains("\"s\":null"), "got: {body}");
+}
+
+// =========================================================================
+// Vector GROUP BY — the SELECT default LIMIT, as in core
+// =========================================================================
+
+#[test]
+fn test_vector_group_by_without_limit_returns_the_default_ten_groups() {
+    let mut db = DatabaseInner::new();
+    db.create_collection("chunks", 2, "cosine")
+        .expect("test: create");
+    for id in 1..=12_u64 {
+        let sql = format!("INSERT INTO chunks (id, vector, doc) VALUES ({id}, $v, 'd{id}')");
+        execute(&mut db, &sql, Some(r#"{"v": [1.0, 0.5]}"#)).expect("test: insert");
+    }
+    let r = execute(
+        &mut db,
+        "SELECT doc, COUNT(*) AS n FROM chunks WHERE vector NEAR $q GROUP BY doc",
+        Some(r#"{"q": [1.0, 0.0]}"#),
+    )
+    .expect("test: vector group by");
+    assert_eq!(
+        r.row_count(),
+        10,
+        "a vector GROUP BY is a search: LIMIT defaults to 10"
+    );
+}
+
+#[test]
+fn test_group_by_honours_with_max_groups_as_core_does() {
+    let mut db = db_with_seed();
+    // products has three categories: a budget of two groups is exceeded.
+    let err = execute(
+        &mut db,
+        "SELECT category, COUNT(*) AS n FROM products GROUP BY category WITH (max_groups = 2)",
+        None,
+    )
+    .expect_err("test: too many groups");
+    assert!(err.contains("Too many groups"), "got: {err}");
+}
+
+#[test]
+fn test_having_parameter_bound_to_null_keeps_no_group_as_core_does() {
+    let mut db = db_with_seed();
+    let r = execute(
+        &mut db,
+        "SELECT category, COUNT(*) AS n FROM products GROUP BY category HAVING COUNT(*) > $n",
+        Some(r#"{"n": null}"#),
+    )
+    .expect("test: a NULL threshold is SQL's UNKNOWN, not an error");
+    assert_eq!(r.row_count(), 0);
+}
+
+#[test]
+fn test_having_parameter_bound_to_a_string_is_refused_with_v018() {
+    let mut db = db_with_seed();
+    let err = execute(
+        &mut db,
+        "SELECT category, COUNT(*) AS n FROM products GROUP BY category HAVING COUNT(*) > $n",
+        Some(r#"{"n": "many"}"#),
+    )
+    .expect_err("test: a string threshold");
     assert!(
-        body.contains("\"s\":0") || body.contains("\"s\":-0.0") || body.contains("\"s\":0.0"),
-        "got: {body}"
+        err.contains("[V018]") && err.contains("\"many\""),
+        "got: {err}"
     );
 }

@@ -114,9 +114,14 @@ impl Collection {
         payload_storage: &dyn PayloadStorage,
     ) -> Vec<SearchResult> {
         let pairs = candidates.iter().map(|sr| (sr.id, sr.score));
-        resolve::hydrate_accepted(pairs, k, now_secs, vector_storage, payload_storage, |p| {
-            filter.is_none_or(|f| f.matches(p.unwrap_or(&serde_json::Value::Null)))
-        })
+        resolve::hydrate_accepted(
+            pairs,
+            k,
+            now_secs,
+            vector_storage,
+            payload_storage,
+            |id, payload| filter.is_none_or(|f| f.matches_point(id, payload)),
+        )
     }
 
     /// Performs batch search for multiple query vectors in parallel.
@@ -350,11 +355,8 @@ impl Collection {
                 query_results
                     .into_iter()
                     .filter(|(id, _score)| {
-                        if let Ok(Some(payload)) = payload_storage.retrieve(*id) {
-                            f.matches(&payload)
-                        } else {
-                            false
-                        }
+                        let payload = payload_storage.retrieve(*id).ok().flatten();
+                        f.matches_point(*id, payload.as_ref())
                     })
                     .collect()
             })

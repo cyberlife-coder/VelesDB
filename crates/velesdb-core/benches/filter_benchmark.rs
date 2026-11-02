@@ -39,7 +39,7 @@ fn bench_filter_equality(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter.matches(black_box(p)))
+                .filter(|p| filter.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });
@@ -58,7 +58,7 @@ fn bench_filter_range(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter.matches(black_box(p)))
+                .filter(|p| filter.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });
@@ -77,7 +77,7 @@ fn bench_filter_in(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter.matches(black_box(p)))
+                .filter(|p| filter.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });
@@ -93,7 +93,7 @@ fn bench_filter_nested(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter.matches(black_box(p)))
+                .filter(|p| filter.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });
@@ -109,7 +109,7 @@ fn bench_filter_contains(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter.matches(black_box(p)))
+                .filter(|p| filter.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });
@@ -136,7 +136,7 @@ fn bench_filter_complex(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter.matches(black_box(p)))
+                .filter(|p| filter.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });
@@ -159,7 +159,7 @@ fn bench_filter_throughput(c: &mut Criterion) {
                 b.iter(|| {
                     let count: usize = payloads
                         .iter()
-                        .filter(|p| filter.matches(black_box(p)))
+                        .filter(|p| filter.matches_point(0, Some(black_box(p))))
                         .count();
                     black_box(count)
                 });
@@ -188,7 +188,7 @@ fn bench_filter_selectivity(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter_high.matches(black_box(p)))
+                .filter(|p| filter_high.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });
@@ -198,7 +198,7 @@ fn bench_filter_selectivity(c: &mut Criterion) {
         b.iter(|| {
             let count: usize = payloads
                 .iter()
-                .filter(|p| filter_low.matches(black_box(p)))
+                .filter(|p| filter_low.matches_point(0, Some(black_box(p))))
                 .count();
             black_box(count)
         });

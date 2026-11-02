@@ -64,22 +64,15 @@ fn test_aggregator_multiple_columns() {
 }
 
 #[test]
-fn test_result_to_json() {
+fn test_count_column_counts_non_null_values_of_any_type() {
     let mut agg = Aggregator::new();
-    agg.process_count();
-    agg.process_value("price", &serde_json::json!(50));
+    agg.process_value("status", &serde_json::json!("open"));
+    agg.process_value("status", &serde_json::json!(null));
+    agg.process_value("status", &serde_json::json!(3));
 
     let result = agg.finalize();
-    let json = result.to_json();
-
-    assert_eq!(
-        json.get("count").and_then(serde_json::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        json.get("sum_price").and_then(serde_json::Value::as_f64),
-        Some(50.0)
-    );
+    assert_eq!(result.counts.get("status"), Some(&2));
+    assert_eq!(result.sums.get("status"), Some(&3.0), "sums stay numeric");
 }
 
 #[test]
@@ -148,4 +141,95 @@ fn test_process_batch_equivalence_with_process_value() {
         batch_result.maxs.get("price"),
         value_result.maxs.get("price")
     );
+}
+
+#[test]
+fn test_process_batch_keeps_an_infinite_extreme() {
+    let mut agg = Aggregator::new();
+    agg.process_batch("x", &[f64::INFINITY, 1.0, f64::NEG_INFINITY]);
+    let result = agg.finalize();
+    assert_eq!(result.maxs.get("x"), Some(&f64::INFINITY));
+    assert_eq!(result.mins.get("x"), Some(&f64::NEG_INFINITY));
+    // No JSON number holds an infinity, so there is no exact extreme.
+    assert!(!result.max_values.contains_key("x"));
+    assert!(!result.min_values.contains_key("x"));
+}
+
+#[test]
+fn test_process_batch_skips_a_nan_as_no_value() {
+    let mut agg = Aggregator::new();
+    agg.process_batch("x", &[f64::NAN, 2.0, 5.0]);
+    agg.process_batch("y", &[f64::NAN, f64::NAN]);
+    let result = agg.finalize();
+    assert_eq!(result.counts.get("x"), Some(&2));
+    assert_eq!(result.sums.get("x"), Some(&7.0));
+    assert_eq!(result.mins.get("x"), Some(&2.0));
+    assert_eq!(result.maxs.get("x"), Some(&5.0));
+    // A column of NaNs has no value at all: no count, no extreme.
+    assert!(!result.counts.contains_key("y"));
+    assert!(!result.maxs.contains_key("y"));
+}
+
+#[test]
+fn test_min_and_max_prefer_the_integer_among_equal_values() {
+    // Whatever comes first, `3` and `3.0` give the integer, `-0.0` and `0`
+    // too, and `-0.0` and `0.0` give `0.0`.
+    for values in [
+        [serde_json::json!(3.0), serde_json::json!(3)],
+        [serde_json::json!(3), serde_json::json!(3.0)],
+    ] {
+        let mut agg = Aggregator::new();
+        for value in &values {
+            agg.process_value("x", value);
+        }
+        let result = agg.finalize();
+        assert_eq!(
+            result.max_values.get("x"),
+            Some(&serde_json::Number::from(3))
+        );
+        assert_eq!(
+            result.min_values.get("x"),
+            Some(&serde_json::Number::from(3))
+        );
+    }
+    for (first, second, expected) in [
+        (
+            serde_json::json!(-0.0),
+            serde_json::json!(0),
+            serde_json::json!(0),
+        ),
+        (
+            serde_json::json!(0),
+            serde_json::json!(-0.0),
+            serde_json::json!(0),
+        ),
+        (
+            serde_json::json!(-0.0),
+            serde_json::json!(0.0),
+            serde_json::json!(0.0),
+        ),
+        (
+            serde_json::json!(0.0),
+            serde_json::json!(-0.0),
+            serde_json::json!(0.0),
+        ),
+    ] {
+        let mut agg = Aggregator::new();
+        agg.process_value("x", &first);
+        agg.process_value("x", &second);
+        let result = agg.finalize();
+        // As text: `Number` equality takes `-0.0` for `0.0`.
+        let text = |n: Option<&serde_json::Number>| n.map(ToString::to_string);
+        let expected = Some(expected.to_string());
+        assert_eq!(
+            text(result.max_values.get("x")),
+            expected,
+            "{first}, {second}"
+        );
+        assert_eq!(
+            text(result.min_values.get("x")),
+            expected,
+            "{first}, {second}"
+        );
+    }
 }

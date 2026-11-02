@@ -130,12 +130,12 @@ SELECT * FROM products WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'rrf' LIMIT
 ```sql
 -- 1-hop neighbours
 MATCH (a:Author)-[:WROTE]->(p:Post)
-WHERE a.id = 'auth-42'
+WHERE a.id = 42  -- `id` is the node id
 RETURN p LIMIT 20;
 
 -- Variable-depth traversal (1 to 3 hops)
 MATCH (src)-[:LINKS*1..3]->(dst)
-WHERE src.id = 'node-1'
+WHERE src.id = 1
 RETURN dst LIMIT 100;
 
 -- Graph predicate inside a SELECT

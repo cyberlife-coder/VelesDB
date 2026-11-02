@@ -1,62 +1,31 @@
-//! HAVING clause evaluation and aggregation result sorting.
+//! Grouped-row ordering and HAVING parameter binding.
 //!
 //! Extracted from `grouped.rs` for single-responsibility:
-//! - HAVING filter evaluation against aggregation results
-//! - Sorting grouped results by ORDER BY clause
-//! - JSON value comparison utilities for aggregation ordering
-//! - Parameter resolution for condition placeholders
-
-// Reason: Numeric casts in aggregation are intentional:
-// - All casts are for computing aggregate statistics (sum, avg, count)
-// - i64->usize for group limits: limits bounded by MAX_GROUPS (1M)
-// - Values bounded by result set size and field cardinality
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
+//! - Sorting grouped rows by the keys their ORDER BY resolved to
+//! - Parameter resolution for HAVING and WHERE placeholders
+//!
+//! HAVING itself — its verdict and its group budget — is evaluated by the
+//! engine-shared [`crate::velesql::Grouper`].
 
 use crate::collection::types::Collection;
-use crate::velesql::{
-    AggregateArg, AggregateFunction, AggregateResult, AggregateType, CompareOp, HavingClause, Value,
-};
+use crate::velesql::{HavingClause, Value};
 use std::collections::HashMap;
 
-/// Default maximum number of groups allowed when the query does not specify one
-/// (memory protection).
-pub(super) const DEFAULT_MAX_GROUPS: usize = 10_000;
-
-/// Server-side hard ceiling on the number of GROUP BY groups (#903).
-///
-/// This is a SERVER-controlled constant. A query may use `WITH (max_groups=N)`
-/// to *lower* its group budget, but `N` is always clamped down to this ceiling
-/// so an untrusted query cannot inflate the per-query memory bound. Bounding
-/// distinct groups is the DoS guard for GROUP BY aggregation.
-pub(super) const SERVER_MAX_GROUPS_CEILING: usize = 1_000_000;
-
 impl Collection {
-    /// BUG-3 FIX: Sort aggregation results by ORDER BY clause.
+    /// Sorts grouped rows by `(field, descending)` keys, in order — the row
+    /// fields [`crate::velesql::SelectStatement::grouped_sort_keys`] resolved
+    /// the ORDER BY to, GROUP BY columns last. The sort is stable: groups
+    /// tied on every key (two array keys) keep the grouper's order, by best
+    /// row id.
     pub(crate) fn sort_aggregation_results(
         results: &mut [serde_json::Value],
-        order_by: &[crate::velesql::SelectOrderBy],
+        sort_columns: &[(String, bool)],
     ) {
-        use crate::velesql::OrderByExpr;
-
-        let sort_columns: Vec<(String, bool)> = order_by
-            .iter()
-            .filter_map(|clause| {
-                let column = match &clause.expr {
-                    OrderByExpr::Field(name) => name.clone(),
-                    OrderByExpr::Aggregate(agg) => Self::aggregation_result_key(agg),
-                    // Similarity/Arithmetic ordering not applicable to grouped aggregate rows.
-                    OrderByExpr::Similarity(_)
-                    | OrderByExpr::SimilarityBare
-                    | OrderByExpr::Arithmetic(_) => return None,
-                };
-                Some((column, clause.descending))
-            })
-            .collect();
-
-        results.sort_unstable_by(|a, b| {
-            for (column, descending) in &sort_columns {
+        if sort_columns.is_empty() {
+            return;
+        }
+        results.sort_by(|a, b| {
+            for (column, descending) in sort_columns {
                 let val_a = a.get(column);
                 let val_b = b.get(column);
 
@@ -77,143 +46,6 @@ impl Collection {
         });
     }
 
-    /// Extract group key from payload with pre-computed hash (optimized).
-    /// Avoids JSON serialization overhead by using direct value hashing.
-    pub(super) fn extract_group_key_fast(
-        payload: Option<&serde_json::Value>,
-        group_by_columns: &[String],
-    ) -> super::GroupKey {
-        let values: Vec<serde_json::Value> = group_by_columns
-            .iter()
-            .map(|col| {
-                payload
-                    .and_then(|p| Self::get_nested_value(p, col).cloned())
-                    .unwrap_or(serde_json::Value::Null)
-            })
-            .collect();
-        super::GroupKey::new(values)
-    }
-
-    /// Evaluate HAVING clause against aggregation result.
-    /// Supports both AND and OR logical operators between conditions.
-    pub(super) fn evaluate_having(having: &HavingClause, agg_result: &AggregateResult) -> bool {
-        if having.conditions.is_empty() {
-            return true;
-        }
-
-        // Evaluate first condition
-        let mut result = {
-            let cond = &having.conditions[0];
-            let agg_value = Self::get_aggregate_value(&cond.aggregate, agg_result);
-            Self::compare_values(agg_value, cond.operator, &cond.value)
-        };
-
-        // Apply remaining conditions with their operators
-        for (i, cond) in having.conditions.iter().enumerate().skip(1) {
-            let cond_result = {
-                let agg_value = Self::get_aggregate_value(&cond.aggregate, agg_result);
-                Self::compare_values(agg_value, cond.operator, &cond.value)
-            };
-
-            // Get operator (default to AND if not specified - backward compatible)
-            let op = having
-                .operators
-                .get(i - 1)
-                .copied()
-                .unwrap_or(crate::velesql::LogicalOp::And);
-
-            match op {
-                crate::velesql::LogicalOp::And => result = result && cond_result,
-                crate::velesql::LogicalOp::Or => result = result || cond_result,
-            }
-        }
-
-        result
-    }
-
-    /// Get aggregate value from result based on function type.
-    fn get_aggregate_value(agg: &AggregateFunction, result: &AggregateResult) -> Option<f64> {
-        match (&agg.function_type, &agg.argument) {
-            (AggregateType::Count, AggregateArg::Wildcard) => Some(result.count as f64),
-            (AggregateType::Count, AggregateArg::Column(col)) => {
-                // COUNT(column) = number of non-null values for this column
-                result.counts.get(col.as_str()).map(|&c| c as f64)
-            }
-            (AggregateType::Sum, AggregateArg::Column(col)) => {
-                result.sums.get(col.as_str()).copied()
-            }
-            (AggregateType::Avg, AggregateArg::Column(col)) => {
-                result.avgs.get(col.as_str()).copied()
-            }
-            (AggregateType::Min, AggregateArg::Column(col)) => {
-                result.mins.get(col.as_str()).copied()
-            }
-            (AggregateType::Max, AggregateArg::Column(col)) => {
-                result.maxs.get(col.as_str()).copied()
-            }
-            _ => None,
-        }
-    }
-
-    /// Compare aggregate value against threshold using operator.
-    fn compare_values(agg_value: Option<f64>, op: CompareOp, threshold: &Value) -> bool {
-        let Some(agg) = agg_value else {
-            return false;
-        };
-
-        let thresh = match threshold {
-            Value::Integer(i) => *i as f64,
-            #[allow(clippy::cast_precision_loss)]
-            // Reason: aggregate comparison converts to f64; precision loss is
-            // acceptable for large u64 values in HAVING threshold context.
-            Value::UnsignedInteger(u) => *u as f64,
-            Value::Float(f) => *f,
-            _ => return false,
-        };
-
-        // Use relative epsilon for large values (precision loss in sums)
-        // Scale epsilon by max magnitude, with floor of 1.0 for small values
-        let relative_epsilon = f64::EPSILON * agg.abs().max(thresh.abs()).max(1.0);
-
-        match op {
-            CompareOp::Eq => (agg - thresh).abs() < relative_epsilon,
-            CompareOp::NotEq => (agg - thresh).abs() >= relative_epsilon,
-            CompareOp::Gt => agg > thresh,
-            CompareOp::Gte => agg >= thresh,
-            CompareOp::Lt => agg < thresh,
-            CompareOp::Lte => agg <= thresh,
-        }
-    }
-
-    /// Extract max_groups limit from WITH clause (EPIC-040 US-004).
-    /// Supports both `max_groups` and `group_limit` option names.
-    /// Returns `DEFAULT_MAX_GROUPS` if not specified.
-    ///
-    /// #903 (DoS hardening): the value supplied by the (untrusted) query is
-    /// **clamped down** to [`SERVER_MAX_GROUPS_CEILING`]. The query can lower
-    /// the limit but can never raise the server-side memory ceiling above it.
-    pub(super) fn extract_max_groups_limit(
-        with_clause: Option<&crate::velesql::WithClause>,
-    ) -> usize {
-        let Some(with) = with_clause else {
-            return DEFAULT_MAX_GROUPS;
-        };
-
-        for opt in &with.options {
-            if opt.key == "max_groups" || opt.key == "group_limit" {
-                // Try to parse value as integer
-                if let crate::velesql::WithValue::Integer(n) = &opt.value {
-                    // Ensure positive, then clamp to the server-side ceiling.
-                    // The query CANNOT raise the limit above SERVER_MAX_GROUPS_CEILING.
-                    let limit = (*n).max(1) as usize;
-                    return limit.min(SERVER_MAX_GROUPS_CEILING);
-                }
-            }
-        }
-
-        DEFAULT_MAX_GROUPS
-    }
-
     /// Resolves parameter placeholders in HAVING threshold values.
     ///
     /// HAVING thresholds live in [`HavingCondition.value`], outside the WHERE
@@ -228,7 +60,7 @@ impl Collection {
     ///
     /// Returns an error when a referenced parameter is missing from `params`
     /// or has an unsupported type (array/object).
-    pub(super) fn resolve_having_params(
+    pub(crate) fn resolve_having_params(
         having: &HavingClause,
         params: &HashMap<String, serde_json::Value>,
     ) -> crate::error::Result<HavingClause> {

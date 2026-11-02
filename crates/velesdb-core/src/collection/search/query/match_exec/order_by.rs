@@ -128,7 +128,7 @@ impl Collection {
 
     /// Sorts by an arithmetic expression over each result node's payload,
     /// reusing the SELECT-side [`evaluate_arithmetic`] (a property variable like
-    /// `year` resolves against the bound node's payload).
+    /// `year` resolves against the bound node's payload, `id` to its id).
     fn sort_match_by_arithmetic(
         &self,
         results: &mut [MatchResult],
@@ -139,7 +139,8 @@ impl Collection {
         results.sort_by(|a, b| {
             let score = |r: &MatchResult| -> f32 {
                 let payload = payload_storage.retrieve(r.node_id).ok().flatten();
-                let ctx = ScoreContext::new(r.score.unwrap_or(0.0), payload.as_ref());
+                let ctx = ScoreContext::new(r.score.unwrap_or(0.0), payload.as_ref())
+                    .for_point(r.node_id);
                 evaluate_arithmetic(arith, &ctx)
             };
             Self::apply_direction(score(a).total_cmp(&score(b)), descending)

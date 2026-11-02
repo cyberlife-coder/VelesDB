@@ -66,3 +66,33 @@ fn bench_at_an_untouched_session_prints_the_configured_default() {
         (Some(SearchQuality::Custom(64)), "custom:64".to_string())
     );
 }
+
+#[test]
+fn export_writes_every_point_of_a_vector_collection_payload_or_not() {
+    let dir = TempDir::new().expect("test: temp dir");
+    let db = velesdb_core::Database::open(dir.path()).expect("test: open");
+    db.create_vector_collection("docs", 2, velesdb_core::DistanceMetric::Cosine)
+        .expect("test: create");
+    db.get_vector_collection("docs")
+        .expect("test: docs")
+        .upsert(vec![
+            velesdb_core::Point::new(1, vec![1.0, 0.0], Some(serde_json::json!({"k": "a"}))),
+            velesdb_core::Point::new(2, vec![0.0, 1.0], None),
+        ])
+        .expect("test: seed");
+    let file = dir.path().join("docs.json");
+    let file = file.to_str().expect("test: utf-8 path");
+
+    let result = super::cmd_export(&db, &[".export", "docs", file]);
+
+    assert!(matches!(result, CommandResult::Continue));
+    let records: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(file).expect("test: read export"))
+            .expect("test: parse export");
+    let mut ids: Vec<u64> = records
+        .iter()
+        .filter_map(|r| r.get("id").and_then(serde_json::Value::as_u64))
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![1, 2], "the point without payload was left out");
+}

@@ -55,8 +55,9 @@ pub fn adaptive_batch_size(key_count: usize) -> usize {
 
 /// Extracts join keys from search results based on the join condition.
 ///
-/// The join key is extracted from the search result's payload using
-/// the right side of the join condition (e.g., `products.id`).
+/// The join key is the search result's point id for `id` — as `id` reads in
+/// every clause — else its payload field named by the right side of the join
+/// condition (e.g., `products.price_id`).
 ///
 /// # Note
 /// Point IDs > i64::MAX are filtered out to prevent overflow issues.
@@ -68,34 +69,17 @@ pub fn extract_join_keys(results: &[SearchResult], condition: &JoinCondition) ->
         .iter()
         .enumerate()
         .filter_map(|(idx, r)| {
-            // Try to extract the join key from payload
-            r.point
-                .payload
-                .as_ref()
-                .and_then(|payload| {
-                    payload.get(key_column).and_then(|v| {
-                        // Support both integer and point ID
-                        v.as_i64().or_else(|| {
-                            // Fallback: use point.id if key_column is "id"
-                            // Use try_from to safely convert u64 -> i64 without overflow
-                            if key_column == "id" {
-                                i64::try_from(r.point.id).ok()
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                })
-                .or_else(|| {
-                    // If no payload, use point.id for "id" column
-                    // Use try_from to safely convert u64 -> i64 without overflow
-                    if key_column == "id" {
-                        i64::try_from(r.point.id).ok()
-                    } else {
-                        None
-                    }
-                })
-                .map(|key| (idx, key))
+            let key = if key_column == "id" {
+                // try_from: an id past i64::MAX has no key, as documented.
+                i64::try_from(r.point.id).ok()
+            } else {
+                r.point
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.get(key_column))
+                    .and_then(serde_json::Value::as_i64)
+            };
+            key.map(|key| (idx, key))
         })
         .collect()
 }

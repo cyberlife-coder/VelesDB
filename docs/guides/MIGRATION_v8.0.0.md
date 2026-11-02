@@ -84,6 +84,16 @@ a v3 blob with `Unsupported version: 3`.
 | `enable_streaming` with `buffer_size = 0`, a `buffer_size` past `tokio::sync::Semaphore::MAX_PERMITS`, or `flush_interval_ms = 0` | process aborted | `Error::Config` / `VELES-009` (Rust, Tauri, mobile), `400` (REST), `ValueError` (Python) |
 | Python: a payload or edge properties nested past 127 levels of lists and dicts, or containing themselves | segmentation fault | `ValueError` |
 | MATCH `ORDER BY` an aggregate (`COUNT(*)`, `MAX(year)`) or a bare name (a pattern alias, a `RETURN` alias, an unqualified property) | `VELES-018` after the traversal ran | `V015` before it: `VELES-010` (Rust, `/collections/{name}/match` `400`), `422 VELESQL_VALIDATION_ERROR` (`/query`), an error (WASM) |
+| `GROUP BY` ordered by a column outside `GROUP BY` (`... GROUP BY category ORDER BY category, year`) | that key ignored | `V016` |
+| `GROUP BY` ordered by an aggregate the SELECT does not list (a vector `GROUP BY` too), or by `similarity()` or arithmetic outside a vector `GROUP BY` (`NEAR` in WHERE) | groups left unsorted | `V016` |
+| WASM: `GROUP BY` ordered by a selected column outside `GROUP BY` (`SELECT category, title, COUNT(*) ... GROUP BY category ORDER BY title`) | sorted on each group's first `title` | `V016` |
+| A grouped or aggregate query whose output columns share a name: a `GROUP BY` column and an aggregate's alias or default name (`GROUP BY category, count` beside `COUNT(*)`), or two aggregates (`COUNT(*) AS n, SUM(year) AS n`) | one column silently overwritten | `V017` |
+| A vector `GROUP BY` (`NEAR` + `GROUP BY`) naming an aggregate `id` or `score` (`COUNT(*) AS score`); a SQL `GROUP BY` keeps accepting it | the group's own score or id shadowed under `ORDER BY` | `V017` |
+| A HAVING threshold that is neither a number nor `NULL` (`HAVING COUNT(*) > 'many'`, `> TRUE`) | no group matched | `V018` |
+| A HAVING parameter, or scalar subquery, whose value is neither a number nor `null` | no group matched | `V018` when the query runs |
+| `execute_aggregate` (Rust `Collection` / `Database`) over a vector `GROUP BY` (`NEAR` + `GROUP BY`) | grouped every point, unscored and uncapped | `Error::Query`: run it with `execute_query` |
+| `HAVING` without `GROUP BY` | core: unnumbered error; WASM: filtered the one implicit group | `V018` |
+| WASM: a SQL `GROUP BY` past `WITH (max_groups = N)` groups (10,000 by default) | grouped without bound | `Too many groups (limit: N)`, as in core |
 
 **Fix:**
 - Run one query per sparse vector and fuse the results.
@@ -94,6 +104,17 @@ a v3 blob with `Unsupported version: 3`.
   least 1.
 - Flatten a Python value nested past 127 levels. Core refuses past 124 levels
   anyway, with `VELES-017` (section 1).
+- Order a `GROUP BY` by a `GROUP BY` column or a SELECT aggregate: add the
+  column to `GROUP BY` (or drop it from ORDER BY), add the aggregate to the
+  SELECT list, and alias it (`COUNT(*) AS n ... ORDER BY n`) to name it the
+  same way in core and WASM. Core's grouped rows carry no other field, so
+  there the refused key was never applied.
+- Give each output column of an aggregate query its own name: alias the
+  aggregate whose default name or alias repeats another column.
+- Compare HAVING aggregates with numbers, and filter rows without `GROUP BY`
+  in WHERE.
+- Raise `WITH (max_groups = N)` (1,000,000 at most) for a WASM query that
+  needs more groups.
 
 The guard-rail limits are also applied now, where 7.1.0 returned them without
 applying them: `rate_limit_qps`, `circuit_failure_threshold` and
@@ -303,6 +324,8 @@ fast sends no search instead.
 | `TraversalMetrics` (crate root and `metrics::`) | `GraphCollection::metrics()`, `Database::graph_metrics_prometheus()` |
 | `velesdb-migrate` `PineconeConfig::environment` | drop the field |
 | `velesdb-server` `AppState::{traversal_metrics, query_limits}` | the limits live in the `Database` |
+| `velesql::AggregateResult::to_json` | the `count`, `counts`, `sums`, `avgs`, `mins`, `maxs` fields, or `Database::execute_aggregate` |
+| `Filter::matches(payload)`, `filter::Condition::matches(payload)` | `matches_point(id, Some(payload))`: a filter is tested against a point, its id included |
 | `velesql::match_clause` (`parse_match_clause`, `parse_node_pattern`, `parse_relationship_pattern`) | `velesql::Parser::parse` on the whole `MATCH` statement, then `Query::match_clause` |
 | `AsyncIndexBuilder::{search_buffer, drain_buffer, buffer_len, is_building, trigger_build_async}` | search the collection; `VectorCollection::flush` indexes what the builder holds |
 | `velesql::ExecutionStrategy::Parallel`, `velesql::match_planner::MatchExecutionStrategy::Parallel` | none: the planners pick `GraphFirst` where they picked `Parallel`; a `match` on either enum drops that arm. On `MATCH`, a row the removed band returned carried the vector leg's similarity score; a `GraphFirst` row carries none (its `score` is the depth-derived value every graph-reached row gets) |
@@ -342,6 +365,45 @@ fast sends no search instead.
   return `Result<()>`.** They refuse a config the pipeline cannot run with
   (section 2) with `Error::Config`, and leave the current ingester running.
   Handle the result or `?` it.
+- **`AggregateResult::counts`, `Aggregator::process_value` and
+  `Aggregator::process_batch` count non-null values of any type** for
+  `COUNT(column)`, where they counted numeric values only. `sums`, `avgs`,
+  `mins` and `maxs` still hold numeric values only.
+- **`AggregateResult` gains `min_values` and `max_values`**
+  (`HashMap<String, serde_json::Number>`), each column's exact `MIN` and
+  `MAX`: an integer stays an integer, past 2^53 included. A struct literal
+  of `AggregateResult` must set them, or end with `..Default::default()`; a
+  result serialized by 7.1.0 deserializes with both empty, and its `MIN` /
+  `MAX` read from `mins` / `maxs` as before. `Aggregator::process_batch`
+  keeps an infinite extreme in `mins` / `maxs` (7.1.0 reported `0`), with
+  no entry in `min_values` / `max_values`, and skips a NaN: it is no value,
+  counted nowhere.
+- **`Condition::In`'s `values` is an `InValues`, not a
+  `Vec<serde_json::Value>`**: the member list sorts and de-duplicates at
+  construction, so the >16-element binary search in `matches_point` can
+  never see an unsorted or duplicated list — `Condition::is_in`,
+  `Deserialize` and `Condition::In` literals included. The serialized
+  shape is unchanged (`"values": [...]`). Build it with
+  `values: vec.into()`; read it through the `[Value]` deref (`.iter()`,
+  `.len()`, indexing unchanged).
+- **`all_ids()` lists every point, ascending**: `Collection`,
+  `VectorCollection` and `MetadataCollection::all_ids`,
+  `GraphCollection::all_node_ids`, and the Python and mobile `all_ids()`.
+  7.1.0 listed only the points with a payload, in storage order, so a point
+  upserted without a payload was missing. Code that wanted the payload
+  holders filters on `get()`'s payload. Note the set is the storage set:
+  in a vector collection it is a superset of what a `SELECT`, an aggregate
+  or `get()` sees — a payload-only id (a graph node) is listed yet is not
+  a `SELECT` row.
+- **A MATCH `WHERE x.prop != v` keeps a node whose property is missing or
+  of another type**, agreeing with SELECT's `!=` (and the WASM demo scope
+  documents the opposite convention — unchanged). Before, such a node was
+  dropped: `MATCH (n) WHERE n.x != 5` over a node with no `x` returned
+  nothing; it now returns the node.
+- **`range_index.bin` files written before `OrderedValue` took the exact
+  number order are discarded on open** (`RANGE_INDEX_VERSION` 2): the stale
+  key order is not adopted — the index rebuilds empty, as it always did
+  for an absent file.
 - **`AsyncIndexBuilder::enqueue` takes ids, and `flush_sync` a callback
   that indexes them.** `enqueue(ids)` takes any `IntoIterator<Item = u64>`
   instead of a `Vec<(u64, Vec<f32>)>`, and `flush_sync(index,
@@ -360,7 +422,17 @@ fast sends no search instead.
 under `validation`. `GuardRailKind`, `TimeoutBudget`, `Error::is_caller_error`,
 `CircuitBreaker::record_error`, `QueryValidator::validate_match_clause`,
 `Database::gated_search_outcome`, `QueryLimits::client_timeout_ms` and
-`QueryLimits::timeout_budget`.
+`QueryLimits::timeout_budget`. For VelesQL grouping: `velesql::Grouper`,
+`GroupInput` (built with `GroupInput::new`) and `GroupOutput`, both
+`#[non_exhaustive]`; `velesql::compare_json_values` and `velesql::row_field`;
+`SelectOrderBy::directed`; `SelectStatement::grouped_sort_keys`,
+`order_by_aggregates_as_fields` and `is_vector_group_by`; and
+`ValidationErrorKind::{OrderByNotInResult, DuplicateOutputColumn,
+InvalidHaving}` (`V016`–`V018`). `Filter::matches_point` and
+`filter::Condition::matches_point` evaluate a filter against a point, its id
+included (a filter built from VelesQL reads `id` as the point id), and
+`explain::IndexType::PointId` reports a point-id lookup. Deserializing a
+`Filter` that names the internal field `@velesql.point_id` fails.
 
 ## 4. Python and the integrations
 
@@ -548,6 +620,43 @@ same `try`/catch applies.
   `{ category: 'tech' }` matched every point and `null` searched unfiltered;
   call `search` for an unfiltered search.
 
+### Aggregate field names
+
+- **BREAKING (behavior) — an unaliased aggregate comes back under core's
+  name.** WASM used to name it after the call; it now uses core's name, the
+  one the server and every other binding return:
+
+  | Aggregate | 7.1.0 (WASM) | 8.0.0 |
+  |---|---|---|
+  | `COUNT(*)` | `count(*)` | `count` |
+  | `COUNT(col)` | `count(col)` | `count_col` |
+  | `SUM(col)` | `sum(col)` | `sum_col` |
+  | `AVG(col)` | `avg(col)` | `avg_col` |
+  | `MIN(col)` | `min(col)` | `min_col` |
+  | `MAX(col)` | `max(col)` | `max_col` |
+  | `FIRST(col)` | `first(col)` | `first_col` |
+  | `MAX(score)`, `AVG(score)` | `max(score)`, `avg(score)` | `max_score`, `avg_score` |
+
+  A dotted column keeps its dots (`SUM(a.b)` → `sum_a.b`). **Fix:** read the
+  new key, or alias the aggregate (`COUNT(*) AS n`): an alias is the key in
+  every version and engine.
+- **BREAKING (behavior) — GROUP BY and aggregates run through core's
+  grouping**, so they return what core returns:
+  - a selected column outside `GROUP BY` is no longer added to each group
+    row: add it to `GROUP BY`;
+  - `MIN` and `MAX` read numeric values and return `null` for a group of
+    strings, like `SUM` and `AVG`; `SUM` over no numeric value is `null`, not
+    `0`;
+  - `score` as an aggregate argument is the search score only in a vector
+    `GROUP BY` (`NEAR` + `GROUP BY`); elsewhere it reads a payload field
+    named `score`;
+  - a vector `GROUP BY` without `LIMIT` returns 10 groups, the SELECT
+    default, where it returned every group; each group row carries its best
+    row's id and the group score instead of `0` and `0.0`;
+  - a SQL `GROUP BY` holds at most `WITH (max_groups = N)` groups, 10,000
+    by default, and `HAVING` without `GROUP BY` fails with `V018` (section
+    2).
+
 ## 8. Observability
 
 - **`/metrics` no longer writes three families:**
@@ -561,6 +670,96 @@ same `try`/catch applies.
   `label == "secondary"` or `"btree"`.
 
 ## 9. Results that change (not breaking)
+
+- **ORDER BY puts `null` last under `ASC`, first under `DESC`.** 7.1.0 core
+  sorted a `null` or missing key first under `ASC` (WASM already sorted it
+  last), on rows, groups and `MATCH` results alike. Every engine now uses
+  one order (`velesql::compare_json_values`): `null` last ascending, then
+  booleans, numbers, strings, arrays, objects. A query that read the rows
+  without a value first under `ASC` reads them last; sort `DESC`, or filter
+  `IS NULL`, to get them first.
+
+- **SQL `GROUP BY` results no longer depend on scan order, in every
+  engine.** 7.1.0 core grouped in hash order, WASM in scan order:
+  - without ORDER BY, groups come by `GROUP BY` key, ascending, `NULL` last;
+  - groups an ORDER BY ties come by `GROUP BY` key, so a LIMIT keeps the
+    same groups everywhere;
+  - `FIRST(col)` reads the group's row with the smallest point id (core
+    returned `null`); in a vector `GROUP BY`, the most similar row, the
+    smallest id among equally similar ones;
+  - numbers equal by exact value are one group (`1` and `1.0`, `0.0` and
+    `-0.0`, `2^53` as an integer and as a float);
+  - groups whose keys compare equal (two arrays) come by best row id, and
+    rows are aggregated in id order, so a float `SUM` is the same on every
+    run (above 10,000 rows, core's aggregate without `GROUP BY` sums per
+    chunk, so its last digits can differ from WASM's).
+
+  Add an ORDER BY to pin another order.
+
+- **BREAKING (behavior) — `id` is the point id in every VelesQL clause, in
+  core.** 7.1.0 core read a payload field named `id` in a SELECT's WHERE,
+  ORDER BY, GROUP BY and aggregates, and in a MATCH `WHERE n.id`; its
+  projection, `UPDATE` / `DELETE` and JOIN filters, and WASM, read the point
+  id. What changes, for a point whose payload carries its own `id`:
+
+  | Query | 7.1.0 core reads | 8.0.0 reads |
+  |---|---|---|
+  | `WHERE id = 3`, `WHERE id IN (...)`, `WHERE id < 100` | payload `id` | point id |
+  | `ORDER BY id` | payload `id` | point id |
+  | `GROUP BY id`, `COUNT(id)`, `MAX(id)` | payload `id` | point id |
+  | `ROW_NUMBER() OVER (PARTITION BY id ORDER BY id)` | payload `id` | point id |
+  | `ORDER BY 0 - id`, a `LET` reading `id` | payload `id` | point id |
+  | `JOIN ... ON a.x = b.id` (the left key `id`) | payload `id`, else point id | point id |
+  | MATCH `WHERE n.id = 3`, `n.id IN (...)`, `ORDER BY n.id`, `RETURN n.id` (`r.id` on a relationship) | node (relationship) property `id` | node (relationship) id |
+  | MATCH `RETURN n` | payload `id` under `n.id`, none without one | node id under `n.id` |
+
+  Without such a payload field, 7.1.0 `GROUP BY id` put every row in one
+  `NULL` group and `WHERE id < 100` matched nothing. VelesQL cannot reach a
+  payload field named `id` (`SELECT *` returns the point id under that
+  name): rename it (`doc_id`) to filter or sort on it, or use a JSON filter
+  on a REST search or scroll,
+  `{"condition": {"type": "eq", "field": "id", "value": 3}}`, which still
+  reads the payload field.
+
+- **ORDER BY compares an integer and a float exactly**, a total order: 7.1.0
+  compared them as `f64`, so `2^53 + 1` tied the float `2^53` and a sort
+  over both could come out inconsistent.
+
+- **Aggregates count and read columns as SQL does, in core.** `COUNT(col)`
+  counts non-null values of any type (7.1.0 counted numbers only, so
+  `COUNT(category)` was `0`). `HAVING COUNT(col)` over a column a group never
+  holds compares `0`, and `HAVING AVG(score)` in a SQL `GROUP BY` averages
+  the payload field `score`; 7.1.0 dropped those groups.
+
+- **A `NULL` HAVING threshold matches no group**, as SQL's UNKNOWN: `=
+  NULL`, a parameter bound to `null`, a scalar subquery returning no row.
+  It is no error (`V018` is for a threshold that is neither a number nor
+  `NULL`).
+
+- **`HAVING a OR b AND c` reads as `a OR (b AND c)`**, SQL's precedence, in
+  every engine; 7.1.0 read it left to right. HAVING takes no parentheses:
+  write the old reading `(a OR b) AND c` as `a AND c OR b AND c`.
+
+- **Vector `GROUP BY` (`NEAR` + `GROUP BY`) computes every aggregate, on the
+  server, in Python, Node and every binding.** 7.1.0 core computed only
+  `MAX(score)`, `AVG(score)` and `FIRST(col)` there; every other aggregate
+  came back `null`, under a key of its own that changes now:
+
+  | Aggregate | 7.1.0 key (value `null`) | 8.0.0 key |
+  |---|---|---|
+  | `COUNT(*)` | `Count_*` | `count` |
+  | `COUNT(score)` | `agg_score` | `count_score` |
+  | `SUM(score)` | `agg_score` | `sum_score` |
+  | `MIN(score)` | `agg_score` | `min_score` |
+  | `FIRST(score)` | `agg_score` | `first_score` |
+
+  `COUNT(col)`, `SUM(col)`, `AVG(col)`, `MIN(col)`, `MAX(col)` keep their
+  `<function>_<column>` key and now carry a value. The groups change too:
+  `HAVING` applies; without ORDER BY they come best score first, ties by id,
+  instead of in hash order; a chunk without the `GROUP BY` field joins the
+  `NULL` group instead of being dropped; and under a distance metric a
+  group's best chunk and score are its nearest, not its farthest. Alias an
+  aggregate (`COUNT(*) AS n`) to fix its key across versions.
 
 - **`MATCH` range predicates return every matching node.** The
   `label.property` range index used to miss two kinds of nodes:
@@ -596,6 +795,50 @@ same `try`/catch applies.
     measured cost and the benchmark that reproduces it.
   - An `f32` is parsed directly, so a vector component can differ from 7.1.0
     by one `f32` ULP, toward the exact value.
+- **A point without payload is tested with a `null` payload on every filtered
+  path**: REST search and scroll filters, text, hybrid and batch search, and
+  MATCH used to drop it, so `{"type": "is_null", ...}` or `neq` now match it
+  there as in a SELECT. An `UPDATE` and a JOIN now visit it too (`UPDATE
+  ... WHERE kind IS NULL` skipped it).
+
+- **A payload index stays exact past 2^53.** It keys numbers by `f64`, so an
+  indexed ORDER BY tied `2^53` with `2^53 + 1` and an indexed JOIN on `id`
+  paired them. Such keys and literals now take the exact path. Creating an
+  index named `@velesql.point_id` fails with `Error::Config`: drop such an
+  index from a 7.1.0 store, since `id` never reads it.
+
+- **`MIN` and `MAX` of integers return integers** (`33`, not `33.0`), exact
+  past 2^53. Read the value as a number, not as a float literal. Among
+  values equal by value the integer wins (`3` over `3.0`, `0` over `-0.0`),
+  whichever row comes first. Rust callers: see section 3 for the new
+  `AggregateResult` fields.
+
+- **BREAKING (behavior) — numbers compare by exact value, with no
+  tolerance**, in every clause (WHERE, a MATCH WHERE, HAVING, ORDER BY,
+  GROUP BY, DISTINCT, PARTITION BY, `MIN` / `MAX`, JOIN keys), on every path
+  (scan, secondary index, payload mirror, `IN` of any length), in core, WASM
+  and every binding's filters:
+
+  | Comparison | 7.1.0 | 8.0.0 |
+  |---|---|---|
+  | `x = 0.3` over `0.30000000000000004` (`0.1 + 0.2`) | true (WHERE, JSON filter, WASM: within `f64::EPSILON`) | false |
+  | MATCH `d.x = 3.0005` over `3.0` | true (within `0.001`) | false |
+  | MATCH `d.x > 3` over `3.5` | false (an integer literal read only integer properties) | true |
+  | `n > 9007199254740992.0` over `9007199254740993` | false (compared as `f64`) | true |
+  | `id = 9007199254740993` over `9007199254740992` | true | false |
+  | `x = 0` over `-0.0` | true | true |
+  | `x != 1` once an index or the payload mirror serves it | could differ from a scan | the scan's rows |
+  | `SELECT DISTINCT x` / `PARTITION BY x` over `1` and `1.0` | two values | one, as `GROUP BY` |
+
+  Migration: where you relied on the tolerance to match a computed float,
+  compare with a range, `x BETWEEN 0.29999 AND 0.30001`, or round the value
+  before you store it. A JSON filter takes the same range as a `gte` and an
+  `lte` condition under `and`.
+
+- **Python: an observer scope on `id` narrows every read.** Post-filtered
+  reads (`get`, batch, sparse, hybrid-sparse and graph embedding search)
+  tested a scope against the payload alone, so `id != 2` matched every row.
+
 - **Caller-chosen sizes no longer abort the process.** A huge scroll
   `batch_size`, streaming `batch_size` or HNSW `max_elements` reserved that
   much memory up front. They are now capacity hints: an HNSW index reserves
