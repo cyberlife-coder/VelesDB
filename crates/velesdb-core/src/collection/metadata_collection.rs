@@ -163,7 +163,11 @@ impl MetadataCollection {
         batch_size: usize,
         filter: Option<&crate::filter::Filter>,
     ) -> Result<crate::collection::ScrollBatch> {
-        self.inner.scroll_batch(cursor, batch_size, filter)
+        self.inner.scroll_batch(
+            cursor,
+            batch_size.min(self.inner.runtime_max_results()),
+            filter,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -214,7 +218,10 @@ impl MetadataCollection {
     ///
     /// Returns an error if storage retrieval fails.
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
-        self.inner.text_search(query, k)
+        // `search.max_results` bounds the caller-visible row count (#2591);
+        // `usize::MAX` when no `Database` pushed a cap at open.
+        self.inner
+            .text_search(query, k.min(self.inner.runtime_max_results()))
     }
 
     /// Performs vector similarity search.
@@ -226,7 +233,8 @@ impl MetadataCollection {
     ///
     /// Returns an error if the search fails.
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        self.inner.search(query, k)
+        self.inner
+            .search(query, k.min(self.inner.runtime_max_results()))
     }
 
     // -------------------------------------------------------------------------
@@ -243,7 +251,9 @@ impl MetadataCollection {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query(query, params)
+        let mut results = self.inner.execute_query(query, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a raw VelesQL string.
@@ -256,6 +266,8 @@ impl MetadataCollection {
         sql: &str,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query_str(sql, params)
+        let mut results = self.inner.execute_query_str(sql, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 }
