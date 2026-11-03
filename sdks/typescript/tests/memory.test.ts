@@ -8,7 +8,12 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryService } from '../src/memory';
-import type { CompileContextFragment, MemoryMetadata } from '../src/memory';
+import type {
+  CompileContextFragment,
+  ContextSource,
+  LoadedWorkingContext,
+  MemoryMetadata,
+} from '../src/memory';
 import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from '../src/types';
 
 // Captures the most recently constructed mock instance so a test can
@@ -114,7 +119,7 @@ class MockWasmMemoryService {
     suggested_budget: 199000,
     source: 'static table as of 2026-01-01',
   }));
-  retrieveContextSource = vi.fn(() => ({
+  retrieveContextSource = vi.fn((): ContextSource => ({
     handle: 'ctx://source/123',
     content: 'the original fragment text',
   }));
@@ -122,7 +127,7 @@ class MockWasmMemoryService {
   // The mock returns the THREE-field envelope the wasm binding now serves,
   // not the bare working context — a mock that keeps the old shape would let
   // this suite stay green over a binding it no longer describes.
-  loadWorkingContext = vi.fn(() => ({
+  loadWorkingContext = vi.fn((): LoadedWorkingContext => ({
     found: true,
     working: {
       goal: 'ship the canary fix',
@@ -387,7 +392,7 @@ describe('MemoryService', () => {
       expect(compiled.risk).toBe('low');
       expect(compiled.content).toBe('compiled');
       const decisions = compiled.decisions as Array<{ fragment_id: string }>;
-      expect(decisions[0].fragment_id).toBe('18446744073709551615');
+      expect(decisions[0]!.fragment_id).toBe('18446744073709551615');
     });
 
     it('compileContext() passes a media fragment through untouched (US-009)', async () => {
@@ -413,7 +418,7 @@ describe('MemoryService', () => {
       // Type-level check: CompileContextFragment must accept `media` without
       // a cast — this line fails to *compile* (not just run) if the field is
       // ever removed from the interface.
-      const fragment: CompileContextFragment = request.fragments[0];
+      const fragment: CompileContextFragment = request.fragments[0]!;
       expect(fragment.media?.bytes_b64).toBe('aGVsbG8=');
     });
 
@@ -428,7 +433,7 @@ describe('MemoryService', () => {
       expect(result.context.content).toBe('compiled from transcript');
       expect(result.segmentation.format_detected).toBe('plain');
       expect(result.segmentation.segments).toHaveLength(1);
-      expect(result.segmentation.segments[0].fragment_id).toBe('18446744073709551615');
+      expect(result.segmentation.segments[0]!.fragment_id).toBe('18446744073709551615');
     });
 
     it('explainCompilation() delegates request/fragmentId/fragmentIndex and returns the decision', async () => {
@@ -568,7 +573,7 @@ describe('MemoryService', () => {
       expect(loaded.found).toBe(true);
       expect(loaded.working?.goal).toBe('ship the canary fix');
       const decisions = loaded.working?.decisions as Array<{ fragment_id: string }>;
-      expect(decisions[0].fragment_id).toBe('18446744073709551615');
+      expect(decisions[0]!.fragment_id).toBe('18446744073709551615');
     });
 
     it('loadWorkingContext() surfaces other_sessions on a hit, so a typo is detectable', async () => {
@@ -601,7 +606,10 @@ describe('MemoryService', () => {
     // silent loss this envelope exists to prevent, reintroduced by a version
     // skew rather than by a missing field. Presence is not shape.
     it('loadWorkingContext() rejects when the resolved wasm build returns the BARE working context', async () => {
-      const bare = { goal: 'ship the canary fix', decisions: [] };
+      const bare = {
+        goal: 'ship the canary fix',
+        decisions: [],
+      } as unknown as LoadedWorkingContext;
       lastMockInstance!.loadWorkingContext.mockReturnValueOnce(bare);
       await expect(memory.loadWorkingContext('veles', 'session-a')).rejects.toThrow(
         ConnectionError
@@ -617,7 +625,9 @@ describe('MemoryService', () => {
     it('loadWorkingContext() rejects when the resolved wasm build returns bare null', async () => {
       // The pre-envelope MISS: `null`, which a cast turns into a crash on the
       // caller's first property read instead of an actionable error.
-      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(null);
+      lastMockInstance!.loadWorkingContext.mockReturnValueOnce(
+        null as unknown as LoadedWorkingContext
+      );
       await expect(memory.loadWorkingContext('veles', 'never-saved-session')).rejects.toThrow(
         ConnectionError
       );
@@ -627,7 +637,7 @@ describe('MemoryService', () => {
       const result = await memory.listWorkingContexts('veles');
       expect(lastMockInstance!.listWorkingContexts).toHaveBeenCalledWith('veles');
       expect(result.sessions).toHaveLength(1);
-      expect(result.sessions[0].session).toBe('session-a');
+      expect(result.sessions[0]!.session).toBe('session-a');
     });
 
     it('why() returns the explanation subgraph', async () => {

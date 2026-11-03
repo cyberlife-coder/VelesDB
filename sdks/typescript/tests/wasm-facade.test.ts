@@ -23,7 +23,7 @@ class MockVectorStore {
   remove = vi.fn(() => true);
   get = vi.fn(() => null);
   free = vi.fn();
-  search = vi.fn(() => []);
+  search = vi.fn((_q: Float32Array, _k: number) => [] as [bigint, number][]);
   // The binding parses the preset, then runs the same brute-force search
   // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
   search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
@@ -203,9 +203,7 @@ describe('WasmBackend — stub delegations (rejections)', () => {
       () =>
         backend.storeSemanticFact('c', {
           id: 'a',
-          subject: 's',
-          relation: 'r',
-          object: 'o',
+          text: 's',
           embedding: [0.1],
         }),
     ],
@@ -218,8 +216,9 @@ describe('WasmBackend — stub delegations (rejections)', () => {
       () =>
         backend.recordEpisodicEvent('c', {
           id: 'e',
+          eventType: 'e',
           timestamp: 0,
-          description: 'd',
+          data: {},
           embedding: [0.1],
         }),
     ],
@@ -233,7 +232,7 @@ describe('WasmBackend — stub delegations (rejections)', () => {
         backend.storeProceduralPattern('c', {
           id: 'p',
           name: 'n',
-          actions: [],
+          steps: [],
           embedding: [0.1],
         }),
     ],
