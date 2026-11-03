@@ -271,7 +271,7 @@ pub enum MemoryError {
 
     /// A transcript segmentation request failed because of the transcript's
     /// FORMAT, not its size — e.g. `segmentation.format: "jsonl"` forced on
-    /// a line that does not parse as a `{role, content}` JSON object (see
+    /// a line that does not parse as JSON (see
     /// [`crate::context::segment::segment_transcript`]). Deliberately
     /// distinct from [`Self::ContextOverLimit`] (issue #1516, m2): a parsing
     /// failure is not a budget/cap breach, so a caller filtering on the
@@ -384,9 +384,26 @@ pub enum MemoryError {
     /// ingest adapter, such as the WASM build): [`crate::context`] never
     /// performs I/O itself, so an un-cleared `path` field always means the
     /// adapter that should have resolved or rejected it was skipped.
-    #[cfg(feature = "context")]
+    ///
+    /// The remedy named is the one this build can honor, and it is aimed
+    /// at the right actor: `VELESDB_MEMORY_INGEST_ROOTS` is read at server
+    /// startup, so the caller this error reaches — a model, through an MCP
+    /// tool — cannot set it (issue #2357). Naming it as an instruction
+    /// prescribed a knob the caller has no hand on; the applicable remedy
+    /// is the inline alternative, or an operator restart. On a build that
+    /// can hold no ingest-root allowlist at all the variable does not
+    /// exist and must not be named (same gate as `AnchorError::Disabled`
+    /// in `crate::anchor`, a `persistence`-gated module — plain text, not
+    /// a link, so this doc builds with `context` alone).
+    #[cfg(all(feature = "context", not(target_arch = "wasm32")))]
     #[error(
-        "path ingestion is disabled: set VELESDB_MEMORY_INGEST_ROOTS to enable the `path` field"
+        "path ingestion is disabled: this server was started without VELESDB_MEMORY_INGEST_ROOTS — enabling it is an operator action (set the variable and restart the server), not something a request can do; pass `content` or `transcript` inline instead of `path`"
+    )]
+    IngestDisabled,
+    /// The arm for a build that can configure no ingest roots at all.
+    #[cfg(all(feature = "context", target_arch = "wasm32"))]
+    #[error(
+        "path ingestion is disabled: this build can configure no ingest roots — pass `content` or `transcript` inline instead of `path`"
     )]
     IngestDisabled,
 

@@ -105,9 +105,9 @@ let params = HnswParams::million_scale(768);
 
 | Use Case | Recommendation |
 |----------|----------------|
-| Bulk import speed | **VelesDB** ✅ (3.2x faster) |
+| Bulk import speed | **VelesDB** ✅ |
 | Embedded/Desktop apps | **VelesDB** ✅ |
-| Real-time (<10ms) | **VelesDB** ✅ |
+| Real-time | **VelesDB** ✅ |
 | Edge/IoT/WASM | **VelesDB** ✅ |
 | Existing PostgreSQL | **pgvector** ✅ |
 | SQL ecosystem | **pgvector** ✅ |

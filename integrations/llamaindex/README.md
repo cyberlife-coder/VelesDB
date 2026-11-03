@@ -87,7 +87,7 @@ VelesDBVectorStore(
 | `path` | `str` | `"./velesdb_data"` | Path to database directory |
 | `collection_name` | `str` | `"llamaindex"` | Name of the collection |
 | `metric` | `str` | `"cosine"` | Distance metric: `cosine`, `euclidean`, `dot` (aliases: `dotproduct`, `inner`, `ip`), `hamming`, `jaccard` |
-| `storage_mode` | `str` | `"full"` | Storage mode: `full`/`f32`, `sq8`/`int8` (4× compression), `binary`/`bit` (32× compression), `pq` (`2 × dim / m` compression), `rabitq` (32× with scalar correction) |
+| `storage_mode` | `str` | `"full"` | Storage mode: `full`/`f32`, `sq8`/`int8` (4× compression), `binary`/`bit` (32× compression), `pq` (2× dim/m compression), `rabitq` (32× compression with scalar correction) |
 | `search_quality` | `str \| None` | `None` | Quality preset: `fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:N`, `adaptive:MIN:MAX` |
 
 **Methods:**
@@ -96,7 +96,7 @@ VelesDBVectorStore(
 |--------|-------------|
 | **Core Operations** | |
 | `add(nodes)` | Add nodes with embeddings |
-| `add_bulk(nodes)` | Bulk insert (2-3x faster for large batches) |
+| `add_bulk(nodes)` | Bulk insert (faster for large batches) |
 | `delete(ref_doc_id)` | Delete by document ID |
 | `get_nodes(node_ids)` | Retrieve nodes by their IDs |
 | `flush()` | Flush pending changes to disk |
@@ -399,7 +399,7 @@ return vector-only seeds (no graph collection required).
 ## Performance
 
 Measured on CI runners (ubuntu-latest, 2-core). Local hardware will be faster.
-Source: `benchmarks/baseline.json`.
+Source: `benchmarks/baseline.json` — not committed; the figures carry that run's recorded values.
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|

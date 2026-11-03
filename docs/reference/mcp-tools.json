@@ -656,7 +656,7 @@
       }
     },
     {
-      "description": "One-call shortcut over compile_context for a raw agent-session transcript: segments it into turns (markers System:/User:/Human:/Assistant:/AI:/Tool:, ### User/### Assistant, or JSONL one line per turn) then into code/log/body sub-segments, then compiles exactly like compile_context. Exactly one of `transcript` (inline) or `path` (absolute file under the VELESDB_MEMORY_INGEST_ROOTS allowlist, ≤8 MiB) must be set. `segmentation.format` forces plain/jsonl — a forced jsonl that fails to parse is a hard error. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context) plus `segmentation`: the detected format and a per-segment audit (turn, role, kind, byte range, fragment_id).",
+      "description": "One-call shortcut over compile_context for a raw agent-session transcript: segments it into turns (markers System:/User:/Human:/Assistant:/AI:/Tool:, ### User/### Assistant, or JSONL one line per turn — flat {role,content} objects or agent-harness {type,message:{role,content}} envelopes) then into code/log/body sub-segments, then compiles exactly like compile_context. Exactly one of `transcript` (inline) or `path` (absolute file under the VELESDB_MEMORY_INGEST_ROOTS allowlist, ≤8 MiB) must be set. `segmentation.format` forces plain/jsonl — a forced jsonl that fails to parse is a hard error. The first turn is tagged cache-eligible when it looks like a system prompt (segmentation.cache_system_turn, default true). Returns `context` (byte-compatible with compile_context) plus `segmentation`: the detected format and a per-segment audit (turn, role, kind, byte range, fragment_id).",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -838,7 +838,7 @@
               },
               "format": {
                 "default": "auto",
-                "description": "Which format to assume (see `SegmentFormat`). Default `SegmentFormat::Auto`.\n- \"auto\": Detect `jsonl` vs `plain` from the transcript itself (the default).\n- \"plain\": Force plain-text, marker-based turn splitting — a transcript that\nhappens to also be valid JSONL is still segmented as plain text.\n- \"jsonl\": Force one-line-one-turn JSONL parsing — a line that does not parse as\na `{role, content}` object is a hard error, never a silent fallback.",
+                "description": "Which format to assume (see `SegmentFormat`). Default `SegmentFormat::Auto`.\n- \"auto\": Detect `jsonl` vs `plain` from the transcript itself (the default).\n- \"plain\": Force plain-text, marker-based turn splitting — a transcript that\nhappens to also be valid JSONL is still segmented as plain text.\n- \"jsonl\": Force one-line-one-turn JSONL parsing — a line that does not parse\nas JSON is a hard error, never a silent fallback. Turn lines are\n`{role, content}` objects or `{type, message: {role, content}}`\nharness envelopes; any other JSON line is a role-less verbatim turn.",
                 "enum": [
                   "auto",
                   "plain",
@@ -1283,7 +1283,7 @@
                   },
                   {
                     "const": "jsonl",
-                    "description": "Force one-line-one-turn JSONL parsing — a line that does not parse as\na `{role, content}` object is a hard error, never a silent fallback.",
+                    "description": "Force one-line-one-turn JSONL parsing — a line that does not parse\nas JSON is a hard error, never a silent fallback. Turn lines are\n`{role, content}` objects or `{type, message: {role, content}}`\nharness envelopes; any other JSON line is a role-less verbatim turn.",
                     "type": "string"
                   }
                 ]
