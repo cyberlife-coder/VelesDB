@@ -1178,6 +1178,13 @@ jobs:
   # Regenerates the committed docs/openapi.{json,yaml} snapshots from the
   # utoipa-derived schema and fails if they differ from what is checked in,
   # so the spec can never silently drift from the code.
+  #
+  # `generate_openapi_spec_files` is cfg-gated on `openapi` + `prometheus`
+  # — the only two features that move the document — so `--features
+  # openapi` runs it as an ordinary test, without `--ignored`. `cargo
+  # test` exits 0 even when the filter matches nothing, so the step
+  # asserts on the run summary: a renamed or re-gated test must fail the
+  # job, not green it on zero tests run (#2592).
   # ===========================================================================
   openapi-drift:
     name: OpenAPI Drift Check
@@ -1195,7 +1202,14 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Regenerate OpenAPI snapshots
-        run: cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --ignored
+        run: |
+          set -o pipefail
+          cargo test -p velesdb-server --features openapi \
+            tests::generate_openapi_spec_files -- --exact 2>&1 | tee /tmp/openapi-drift.log
+          grep -q "test result: ok. 1 passed" /tmp/openapi-drift.log || {
+            echo "::error::the drift check ran zero tests — generate_openapi_spec_files was renamed, moved, or lost its feature gate"
+            exit 1
+          }
         env:
           UPDATE_OPENAPI_SNAPSHOT: "1"
 
