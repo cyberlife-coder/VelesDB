@@ -503,6 +503,35 @@ fn a_match_targeted_by_the_collection_param_is_gated_on_that_collection() {
     );
 }
 
+/// GIVEN a MATCH whose collection comes from `_collection`
+/// WHEN its plan-only explain runs
+/// THEN the gate is asked about the traversal target, and a denial refuses
+///      the plan — issue #2598: `Database::explain_query` gated with empty
+///      params, so the `_collection` target was never consulted.
+#[test]
+fn a_plan_only_explain_of_a_match_via_collection_param_is_gated() {
+    let (_dir, db, observer) = setup();
+    seed_graph(&db);
+    let query = Parser::parse("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b LIMIT 10")
+        .expect("test: parse MATCH");
+    let params = HashMap::from([("_collection".to_string(), json!("g"))]);
+
+    db.explain_query_with_params(&query, &params)
+        .expect("test: allowed MATCH explain");
+    assert!(
+        observer.asked().iter().any(|c| c == "g"),
+        "the traversal target must be consulted: {:?}",
+        observer.asked()
+    );
+
+    observer.deny("g", "no reads on g");
+
+    assert_denied_with(
+        db.explain_query_with_params(&query, &params),
+        "no reads on g",
+    );
+}
+
 /// GIVEN `g` scoped
 /// WHEN a MATCH traverses `g` (a traversal has no metadata-filter channel)
 /// THEN the statement is refused rather than run unscoped.

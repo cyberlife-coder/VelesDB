@@ -240,6 +240,69 @@ impl Collection {
         Ok(search_results_to_dicts(py, results, false))
     }
 
+    /// Search with metadata filtering and an optional quality tuning.
+    ///
+    /// The filtered counterpart of ``search_with_ef`` /
+    /// ``search_with_quality`` (#2302): ``ef_search`` is validated like
+    /// ``search_with_ef``'s and wins over ``quality`` when both are given —
+    /// the same precedence the read gate applies. Passing neither runs the
+    /// filtered search at the collection's configured quality.
+    ///
+    /// Args:
+    ///     vector: Dense query vector (list or numpy array).
+    ///     top_k: Number of results (default: 10).
+    ///     filter: Metadata filter dict (required).
+    ///     ef_search: Optional HNSW ``ef_search`` override in [16, 4096].
+    ///     quality: Optional quality mode string as ``search_with_quality``
+    ///         takes ("fast", "balanced", "accurate", "perfect", "autotune",
+    ///         "custom:<ef>", "adaptive:<min>:<max>").
+    #[allow(clippy::too_many_arguments)] // gate identity kwargs on top of the tuning+filter signature
+    #[pyo3(signature = (vector, top_k = 10, filter = None, ef_search = None, quality = None, *, principal = None, tenant = None))]
+    fn search_with_quality_and_filter(
+        &self,
+        py: Python<'_>,
+        vector: Py<PyAny>,
+        top_k: usize,
+        filter: Option<Py<PyAny>>,
+        ef_search: Option<&Bound<'_, PyAny>>,
+        quality: Option<&str>,
+        principal: Option<String>,
+        tenant: Option<String>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        self.ensure_vector()?;
+        let query_vector = extract_vector(py, &vector)?;
+        let filter_obj = filter
+            .map(|f| parse_filter(py, &f))
+            .transpose()?
+            .ok_or_else(|| {
+                PyValueError::new_err("Filter is required for search_with_quality_and_filter")
+            })?;
+        let ef = ef_search.map(ef_search_from_py).transpose()?;
+        let sq = quality.map(parse_search_quality).transpose()?;
+
+        // Routed through the read gate as a dense read carrying the tuning
+        // and the caller filter; the gate resolves `ef` over `quality` and
+        // AND-composes any observer scope filter (narrow-only).
+        let results = py.detach(|| {
+            self.db
+                .gated_search(
+                    &self.name,
+                    principal.as_deref(),
+                    tenant.as_deref(),
+                    GatedRead::Dense {
+                        query: &query_vector,
+                        k: top_k,
+                        ef,
+                        quality: sq,
+                        filter: Some(&filter_obj),
+                    },
+                )
+                .map_err(core_err)
+        })?;
+
+        Ok(search_results_to_dicts(py, results, false))
+    }
+
     /// Full-text search using BM25 ranking.
     #[pyo3(signature = (query, top_k = 10, filter = None, *, principal = None, tenant = None))]
     fn text_search(
