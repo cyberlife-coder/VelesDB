@@ -590,6 +590,39 @@ class Collection:
         """Search with metadata filtering."""
         ...
 
+    def search_with_quality_and_filter(
+        self,
+        vector: Union[List[float], "np.ndarray"],
+        top_k: int = 10,
+        filter: Optional[Dict[str, Any]] = None,
+        ef_search: Optional[int] = None,
+        quality: Optional[str] = None,
+        *,
+        principal: Optional[str] = None,
+        tenant: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search with metadata filtering and an optional quality tuning.
+
+        The filtered counterpart of ``search_with_ef`` /
+        ``search_with_quality``. ``ef_search`` wins over ``quality`` when
+        both are given (it maps to the ``custom:<ef>`` mode); passing
+        neither runs the filtered search at the collection's configured
+        quality.
+
+        Args:
+            vector: Query vector (list or numpy array).
+            top_k: Number of results (default: 10).
+            filter: Metadata filter dict (required).
+            ef_search: Optional HNSW ``ef_search`` override in [16, 4096].
+            quality: Optional quality mode string as
+                ``search_with_quality`` takes.
+
+        Raises:
+            ValueError: if ``filter`` is missing or malformed, ``ef_search``
+                is outside [16, 4096], or ``quality`` names no mode.
+        """
+        ...
+
     def text_search(
         self,
         query: str,

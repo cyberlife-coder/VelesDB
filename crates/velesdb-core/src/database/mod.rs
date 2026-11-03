@@ -58,6 +58,8 @@ mod database_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod ddl_executor_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod gated_search_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod graph_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod guardrails_wiring_tests;
