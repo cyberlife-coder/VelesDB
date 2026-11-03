@@ -62,6 +62,17 @@ impl VectorStore {
         idx.insert(doc_id, indices, values)
     }
 
+    /// Removes a document's sparse postings from the internal sparse index.
+    ///
+    /// Returns `true` when the document was present; `false` when no sparse
+    /// index exists or the document was never inserted.
+    #[wasm_bindgen]
+    pub fn sparse_remove(&mut self, doc_id: u64) -> bool {
+        self.sparse_index
+            .as_mut()
+            .is_some_and(|idx| idx.remove(doc_id))
+    }
+
     /// Searches the internal sparse index.
     ///
     /// Returns a JSON array of `{doc_id, score}` objects sorted by score descending.
