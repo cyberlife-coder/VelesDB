@@ -49,7 +49,7 @@ function respond(data: unknown): void {
 /** Body of the only request the call under test sent. */
 function sentBody(): Record<string, unknown> {
   expect(mockFetch).toHaveBeenCalledTimes(1);
-  return JSON.parse(mockFetch.mock.calls[0][1].body) as Record<string, unknown>;
+  return JSON.parse(mockFetch.mock.calls[0]![1].body) as Record<string, unknown>;
 }
 
 describe('agent-memory REST filters match the core wire fixture', () => {
@@ -76,7 +76,7 @@ describe('agent-memory REST filters match the core wire fixture', () => {
 
     await backend[method]('mem', [0.1, 0.2], 3);
 
-    expect(mockFetch.mock.calls[0][0]).toBe('http://localhost:8080/collections/mem/search');
+    expect(mockFetch.mock.calls[0]![0]).toBe('http://localhost:8080/collections/mem/search');
     expect(sentBody().filter).toEqual(wireFilter(caseId));
   });
 
@@ -89,7 +89,7 @@ describe('agent-memory REST filters match the core wire fixture', () => {
 
     await call();
 
-    expect(mockFetch.mock.calls[0][0]).toBe('http://localhost:8080/collections/mem/points/scroll');
+    expect(mockFetch.mock.calls[0]![0]).toBe('http://localhost:8080/collections/mem/points/scroll');
     expect(sentBody().filter).toEqual(wireFilter(caseId));
   });
 });

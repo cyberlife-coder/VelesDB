@@ -340,7 +340,7 @@ describe('RestBackend', () => {
 
       const results = await backend.search('test', [1.0, 0.0], { k: 5 });
       expect(results.length).toBe(2);
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.score).toBe(0.95);
       expect(mockFetch).toHaveBeenCalledWith(
         'http://localhost:8080/collections/test/search',
         expect.objectContaining({
@@ -486,8 +486,8 @@ describe('RestBackend', () => {
       const results = await backend.multiQuerySearch('test', [[0.1, 0.2]], { k: 5 });
       
       expect(results.length).toBe(2);
-      expect(results[0].id).toBe('1');
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.id).toBe('1');
+      expect(results[0]!.score).toBe(0.95);
     });
 
     it('should handle collection not found (typed VELES-002 → CollectionNotFoundError)', async () => {
