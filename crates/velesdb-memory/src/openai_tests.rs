@@ -19,12 +19,23 @@ fn an_embeddings_body_carries_the_model_and_the_input() {
     assert_eq!(json["input"], "hello world");
 }
 
+/// A minimal schema to constrain on: the tests here assert on the envelope
+/// `chat_body` builds, not on any contract a role states.
+#[cfg(feature = "extractor-http")]
+fn a_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": { "k": { "type": "string" } },
+        "required": ["k"],
+    })
+}
+
 #[test]
 #[cfg(feature = "extractor-http")]
 fn a_chat_body_pins_temperature_to_zero() {
     // Same reason the Ollama backend pins it: a backend that answers
     // differently to the same text turns one stored fact into two on a re-run.
-    let body = chat_body("qwen3", "extract facts", 512, None);
+    let body = chat_body("qwen3", "extract facts", 512, &a_schema(), None);
     let json: Value = serde_json::from_str(&body).expect("valid json");
     assert_eq!(json["model"], "qwen3");
     assert_eq!(json["messages"][0]["role"], "user");
@@ -39,7 +50,13 @@ fn a_chat_body_passes_chat_template_kwargs_through_when_set() {
     // generation budget on thinking and truncate the JSON the role parses;
     // the operator switches it off per request.
     let kwargs: Value = serde_json::from_str(r#"{"enable_thinking": false}"#).unwrap();
-    let body = chat_body("qwen3.8-27b", "extract facts", 512, Some(&kwargs));
+    let body = chat_body(
+        "qwen3.8-27b",
+        "extract facts",
+        512,
+        &a_schema(),
+        Some(&kwargs),
+    );
     let json: Value = serde_json::from_str(&body).expect("valid json");
     assert_eq!(json["chat_template_kwargs"]["enable_thinking"], false);
 }
@@ -49,9 +66,66 @@ fn a_chat_body_passes_chat_template_kwargs_through_when_set() {
 fn a_chat_body_caps_completion_tokens() {
     // Unbounded, the real extraction prompt measured 3 933 completion tokens
     // for a twelve-word sentence — 1 min 59 s to store one fact (#1846).
-    let body = chat_body("qwen3", "extract facts", 512, None);
+    let body = chat_body("qwen3", "extract facts", 512, &a_schema(), None);
     let json: Value = serde_json::from_str(&body).expect("valid json");
     assert_eq!(json["max_tokens"], 512);
+}
+
+#[test]
+#[cfg(feature = "extractor-http")]
+fn a_chat_body_sends_the_schema_as_strict_json_schema() {
+    // #1944: the OpenAI-protocol spelling of what the Ollama backend sends as
+    // `format`. The GitHub Models probe measured the strict arm — a schema
+    // sent without `strict` would not be the shape the measurement covers.
+    let schema = a_schema();
+    let body = chat_body("qwen3", "extract facts", 512, &schema, None);
+    let json: Value = serde_json::from_str(&body).expect("valid json");
+    let sent = &json["response_format"];
+    assert_eq!(sent["type"], "json_schema", "got: {body}");
+    assert_eq!(sent["json_schema"]["name"], "extraction", "got: {body}");
+    assert_eq!(sent["json_schema"]["strict"], true, "got: {body}");
+    assert_eq!(
+        sent["json_schema"]["schema"]["required"], schema["required"],
+        "the contract the role stated must survive verbatim, got: {body}"
+    );
+}
+
+#[test]
+#[cfg(feature = "extractor-http")]
+fn a_chat_body_closes_every_object_level_for_strict_mode() {
+    // Strict `json_schema` answers 400 to a schema whose object levels leave
+    // `additionalProperties` open. The canonical contract in `extract::wire`
+    // carries no such clause — Ollama's grammar needs none — so the clause is
+    // added here, at the protocol edge: same keys, same `required`s.
+    let schema: Value = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": { "k": { "type": "string" } },
+                    "required": ["k"],
+                },
+            },
+        },
+        "required": ["items"],
+    });
+    let body = chat_body("qwen3", "extract facts", 512, &schema, None);
+    let json: Value = serde_json::from_str(&body).expect("valid json");
+    let sent = &json["response_format"]["json_schema"]["schema"];
+    assert_eq!(
+        sent["additionalProperties"], false,
+        "the root object closes"
+    );
+    assert_eq!(
+        sent["properties"]["items"]["items"]["additionalProperties"], false,
+        "and so does every nested object level, got: {sent}"
+    );
+    assert_eq!(
+        sent["properties"]["items"]["type"], "array",
+        "non-object levels are untouched, got: {sent}"
+    );
 }
 
 #[test]
