@@ -107,7 +107,7 @@ impl OllamaExtractor {
     }
 
     /// Cap the tokens a reply may generate, sent as `num_predict`. The
-    /// default is [`MAX_GENERATION_TOKENS`]; raise it for passages that hold
+    /// default is `MAX_GENERATION_TOKENS`; raise it for passages that hold
     /// more facts than the default's reply budget can serialize — a reply
     /// that hits the cap is truncated mid-JSON and fails parsing instead of
     /// extracting what fit.
