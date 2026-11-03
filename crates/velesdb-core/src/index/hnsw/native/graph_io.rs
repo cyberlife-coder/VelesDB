@@ -251,14 +251,19 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             return Ok(count);
         }
 
-        let mut writer = BufWriter::new(File::create(&vectors_path)?);
-        Self::write_vectors_header(&mut writer, count, dimension, unit_norm)?;
-
-        if let Some(vectors) = vectors {
-            Self::write_vector_data(&mut writer, vectors)?;
-        }
-        writer.flush()?;
-        Ok(count)
+        // Atomic + durable: the payload goes to a sibling temp file that is
+        // fsynced before the rename, and the parent directory is fsynced
+        // after it. The previous in-place `File::create` rewrite truncated
+        // the live snapshot first and never synced, so a power loss could
+        // leave a right-sized file with unwritten (zeroed) tail pages that
+        // `load`'s length checks cannot detect (audit #2590).
+        crate::storage::atomic_write::atomic_write_with(&vectors_path, |writer| {
+            Self::write_vectors_header(writer, count, dimension, unit_norm)?;
+            if let Some(vectors) = vectors {
+                Self::write_vector_data(writer, vectors)?;
+            }
+            Ok(count)
+        })
     }
 
     /// Writes the vectors file header — version, count, dimension — then the
@@ -325,7 +330,6 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
     fn dump_graph_file(&self, path: &Path, basename: &str, count: u64) -> std::io::Result<()> {
         let graph_path = path.join(format!("{basename}.graph"));
         let layers = self.layers.read();
-        let mut writer = BufWriter::new(File::create(&graph_path)?);
 
         // Reason: HNSW params are always small (<256 layers, <1024 connections).
         #[allow(clippy::cast_possible_truncation)]
@@ -346,9 +350,13 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             alpha: self.alpha,
         };
 
-        Self::write_graph_header(&mut writer, &header, count)?;
-        Self::write_layer_data(&mut writer, &layers)?;
-        writer.flush()
+        // Same atomic + durable write as `dump_vectors_file` (audit #2590):
+        // a crash mid-dump leaves the previous complete `.graph`, never a
+        // torn one whose right-sized zero tail could pass `load`'s checks.
+        crate::storage::atomic_write::atomic_write_with(&graph_path, |writer| {
+            Self::write_graph_header(writer, &header, count)?;
+            Self::write_layer_data(writer, &layers)
+        })
     }
 
     /// Writes the graph file header fields to the writer (v2: alpha last).
@@ -957,6 +965,10 @@ mod load_bound_tests;
 #[cfg(test)]
 #[path = "vectors_format_tests.rs"]
 mod vectors_format_tests;
+
+#[cfg(test)]
+#[path = "graph_io_durability_tests.rs"]
+mod graph_io_durability_tests;
 
 #[cfg(feature = "persistence")]
 #[path = "graph_io_adoption.rs"]
