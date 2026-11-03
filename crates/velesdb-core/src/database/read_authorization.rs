@@ -26,11 +26,19 @@
 //! statement reaches the gate, each through [`Database::execute_query`] or
 //! [`Database::execute_aggregate`], so each one is decided by its own
 //! collection's answer.
+//!
+//! However a statement reaches a collection, the observer is consulted about
+//! each `(collection, operation)` **once per statement** (issue #2588): a
+//! self-JOIN, a set operation over one collection, a `MATCH` naming one
+//! `@collection` twice, a scalar subquery on the outer collection, or the
+//! plan read an `EXPLAIN`/`EXPLAIN ANALYZE` makes ahead of the row read all
+//! replay the first answer through [`GateDecisions`], so a logging or
+//! metering observer never sees the same collection decided twice.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::observer::QueryOperationKind;
+use crate::observer::{AccessScope, QueryOperationKind};
 use crate::velesql::{
     CompoundQuery, Condition, DmlStatement, IntrospectionStatement, Query, SelectStatement,
 };
@@ -95,6 +103,72 @@ pub(super) fn narrow_where(slot: &mut Option<Condition>, filter: Condition) {
         Some(existing) => Condition::And(Box::new(existing), Box::new(filter)),
         None => filter,
     });
+}
+
+/// The read gate's per-statement decision memo (issue #2588).
+///
+/// One statement can reach the same `(collection, operation)` consultation
+/// more than once — see the module documentation. The observer is asked only
+/// the first time; later consultations replay the recorded answer, so the
+/// statement sees one policy snapshot and a logging/metering observer sees
+/// each collection decided once. Created at each statement entry point
+/// (`execute_query`, `execute_aggregate`, `explain_query`,
+/// `explain_analyze_query`) and threaded through the gate; a fresh empty memo
+/// also serves call sites that consult once per invocation.
+///
+/// Only `Allow` and `Scope` outcomes are recorded: a `Deny` or an observer
+/// failure aborts the statement on first sight, so nothing downstream could
+/// consult the same collection again.
+#[derive(Debug, Default)]
+pub(super) struct GateDecisions {
+    /// Linear memo: a statement reads a handful of collections, so a scan
+    /// beats a `HashMap` (and spares `QueryOperationKind` a public `Hash`).
+    decided: std::cell::RefCell<Vec<(String, QueryOperationKind, StoredDecision)>>,
+}
+
+/// A replayable gate answer. `Deny` is absent by construction — see
+/// [`GateDecisions`].
+#[derive(Debug, Clone)]
+enum StoredDecision {
+    /// The read was allowed unmodified.
+    Allow,
+    /// The read was allowed narrowed by this scope.
+    Scope(AccessScope),
+}
+
+impl StoredDecision {
+    /// The recorded answer as a fresh [`RawGateOutcome`].
+    fn replay(&self) -> RawGateOutcome {
+        match self {
+            Self::Allow => RawGateOutcome::Allow,
+            Self::Scope(scope) => RawGateOutcome::Scope(scope.clone()),
+        }
+    }
+}
+
+impl GateDecisions {
+    /// The recorded answer for `(collection, operation)`, when this statement
+    /// already decided it.
+    fn find(&self, collection: &str, operation: QueryOperationKind) -> Option<StoredDecision> {
+        self.decided
+            .borrow()
+            .iter()
+            .find(|(name, op, _)| name == collection && *op == operation)
+            .map(|(_, _, decision)| decision.clone())
+    }
+
+    /// Records an `Allow`/`Scope` outcome; a `Deny` aborts the statement and
+    /// is never replayed, so it is not stored.
+    fn record(&self, collection: &str, operation: QueryOperationKind, outcome: &RawGateOutcome) {
+        let stored = match outcome {
+            RawGateOutcome::Allow => StoredDecision::Allow,
+            RawGateOutcome::Scope(scope) => StoredDecision::Scope(scope.clone()),
+            RawGateOutcome::Deny(_) => return,
+        };
+        self.decided
+            .borrow_mut()
+            .push((collection.to_string(), operation, stored));
+    }
 }
 
 /// Refuses a scope whose columns are qualified with one of `select`'s JOIN
@@ -184,6 +258,7 @@ impl Database {
         &self,
         query: &'q Query,
         params: &'q Params,
+        decisions: &GateDecisions,
     ) -> Result<AuthorizedQuery<'q>> {
         let target = read_target(query, params);
         let admitted = |query| AuthorizedQuery { query, target };
@@ -192,28 +267,34 @@ impl Database {
         }
         if let Some(DmlStatement::SelectEdges(stmt)) = &query.dml {
             let graph = QueryOperationKind::GraphTraversal;
-            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES")?;
+            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES", decisions)?;
         }
         if let Some(intro) = &query.introspection {
-            self.authorize_introspection(intro, params)?;
+            self.authorize_introspection(intro, params, decisions)?;
         }
         if !Self::is_read_path(query) {
             return Ok(admitted(Cow::Borrowed(query)));
         }
         if query.is_match_query() {
-            self.authorize_match(query, target)?;
+            self.authorize_match(query, target, decisions)?;
             return Ok(admitted(Cow::Borrowed(query)));
         }
-        self.authorize_select(query, target).map(admitted)
+        self.authorize_select(query, target, decisions)
+            .map(admitted)
     }
 
     /// A `MATCH` traverses its target and reads every `@collection` its nodes
     /// name; none of these reads has a row filter a scope could join, so each
     /// must be allowed unscoped.
-    fn authorize_match(&self, query: &Query, target: Option<&str>) -> Result<()> {
+    fn authorize_match(
+        &self,
+        query: &Query,
+        target: Option<&str>,
+        decisions: &GateDecisions,
+    ) -> Result<()> {
         let graph = QueryOperationKind::GraphTraversal;
         if let Some(name) = target {
-            self.require_unscoped(name, graph, "MATCH queries")?;
+            self.require_unscoped(name, graph, "MATCH queries", decisions)?;
         }
         let annotated = query
             .match_clause
@@ -222,7 +303,7 @@ impl Database {
             .flat_map(|pattern| pattern.nodes.iter())
             .filter_map(|node| node.collection.as_deref());
         for name in annotated {
-            self.require_unscoped(name, graph, "MATCH @collection enrichment")?;
+            self.require_unscoped(name, graph, "MATCH @collection enrichment", decisions)?;
         }
         Ok(())
     }
@@ -241,15 +322,17 @@ impl Database {
         &self,
         stmt: &IntrospectionStatement,
         params: &Params,
+        decisions: &GateDecisions,
     ) -> Result<()> {
         match stmt {
             IntrospectionStatement::DescribeCollection(desc) => self.require_unscoped(
                 &desc.name,
                 QueryOperationKind::Select,
                 "DESCRIBE COLLECTION",
+                decisions,
             ),
             IntrospectionStatement::Explain(inner) => {
-                self.authorize_unscoped_statement(inner, params)
+                self.authorize_unscoped_statement(inner, params, decisions)
             }
             IntrospectionStatement::ShowCollections => Ok(()),
         }
@@ -268,27 +351,38 @@ impl Database {
         &self,
         query: &Query,
         params: &Params,
+        decisions: &GateDecisions,
     ) -> Result<()> {
         if let Some(DmlStatement::SelectEdges(stmt)) = &query.dml {
             let graph = QueryOperationKind::GraphTraversal;
-            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES")?;
+            self.require_unscoped(&stmt.collection, graph, "SELECT EDGES", decisions)?;
         }
         if !Self::is_read_path(query) {
             return Ok(());
         }
         let target = read_target(query, params);
         if query.is_match_query() {
-            return self.authorize_match(query, target);
+            return self.authorize_match(query, target, decisions);
         }
         if let Some(name) = target {
-            self.require_unscoped(name, derive_operation_kind(query), "a plan-only EXPLAIN")?;
+            self.require_unscoped(
+                name,
+                derive_operation_kind(query),
+                "a plan-only EXPLAIN",
+                decisions,
+            )?;
         }
-        self.authorize_joins(&query.select)?;
+        self.authorize_joins(&query.select, decisions)?;
         if let Some(compound) = query.compound.as_ref() {
             for (_, operand) in &compound.operations {
-                self.authorize_joins(operand)?;
+                self.authorize_joins(operand, decisions)?;
                 let operation = derive_select_operation_kind(operand);
-                self.require_unscoped(&operand.from, operation, "a set-operation operand")?;
+                self.require_unscoped(
+                    &operand.from,
+                    operation,
+                    "a set-operation operand",
+                    decisions,
+                )?;
             }
         }
         Ok(())
@@ -302,27 +396,35 @@ impl Database {
         &self,
         query: &'q Query,
         target: Option<&str>,
+        decisions: &GateDecisions,
     ) -> Result<Cow<'q, Query>> {
         let mut scoped: Option<Query> = None;
         if let Some(name) = target {
-            if let Some(filter) = self.scope_filter(name, derive_operation_kind(query))? {
+            if let Some(filter) =
+                self.scope_filter(name, derive_operation_kind(query), decisions)?
+            {
                 require_join_free_scope(&query.select, &filter)?;
                 let owned = scoped.get_or_insert_with(|| query.clone());
                 narrow_where(&mut owned.select.where_clause, filter);
             }
         }
-        self.authorize_joins(&query.select)?;
-        self.authorize_operands(query, &mut scoped)?;
+        self.authorize_joins(&query.select, decisions)?;
+        self.authorize_operands(query, &mut scoped, decisions)?;
         Ok(scoped.map_or(Cow::Borrowed(query), Cow::Owned))
     }
 
     /// Decides each set-operation operand on its own collection, and folds
     /// every scope into that operand's `WHERE`.
-    fn authorize_operands(&self, query: &Query, scoped: &mut Option<Query>) -> Result<()> {
+    fn authorize_operands(
+        &self,
+        query: &Query,
+        scoped: &mut Option<Query>,
+        decisions: &GateDecisions,
+    ) -> Result<()> {
         let Some(compound) = query.compound.as_ref() else {
             return Ok(());
         };
-        let filters = self.operand_filters(compound)?;
+        let filters = self.operand_filters(compound, decisions)?;
         if filters.iter().all(Option::is_none) {
             return Ok(());
         }
@@ -343,12 +445,16 @@ impl Database {
 
     /// The observer's answer for each set-operation operand, in order, once
     /// each operand's JOINs are allowed.
-    fn operand_filters(&self, compound: &CompoundQuery) -> Result<Vec<Option<Condition>>> {
+    fn operand_filters(
+        &self,
+        compound: &CompoundQuery,
+        decisions: &GateDecisions,
+    ) -> Result<Vec<Option<Condition>>> {
         let mut filters = Vec::with_capacity(compound.operations.len());
         for (_, operand) in &compound.operations {
-            self.authorize_joins(operand)?;
+            self.authorize_joins(operand, decisions)?;
             let operation = derive_select_operation_kind(operand);
-            let filter = self.scope_filter(&operand.from, operation)?;
+            let filter = self.scope_filter(&operand.from, operation, decisions)?;
             if let Some(filter) = &filter {
                 require_join_free_scope(operand, filter)?;
             }
@@ -360,12 +466,36 @@ impl Database {
     /// A JOIN merges its secondary collection's payloads into each row, and
     /// none of its strategies filters that side, so the secondary collection
     /// must be allowed unscoped.
-    fn authorize_joins(&self, select: &SelectStatement) -> Result<()> {
+    fn authorize_joins(&self, select: &SelectStatement, decisions: &GateDecisions) -> Result<()> {
         for join in &select.joins {
             let select_read = QueryOperationKind::Select;
-            self.require_unscoped(&join.table, select_read, "a JOIN's secondary collection")?;
+            self.require_unscoped(
+                &join.table,
+                select_read,
+                "a JOIN's secondary collection",
+                decisions,
+            )?;
         }
         Ok(())
+    }
+
+    /// [`read_gate_raw`](Self::read_gate_raw) behind the statement memo: the
+    /// observer is consulted only when this statement has not already decided
+    /// `(collection, operation)`; a stored answer is replayed otherwise
+    /// (issue #2588). The statement gate never carries principal or tenant
+    /// hints, so the two-field memo key is complete.
+    fn gated_read(
+        &self,
+        collection: &str,
+        operation: QueryOperationKind,
+        decisions: &GateDecisions,
+    ) -> Result<RawGateOutcome> {
+        if let Some(stored) = decisions.find(collection, operation) {
+            return Ok(stored.replay());
+        }
+        let outcome = self.read_gate_raw(collection, operation, None, None)?;
+        decisions.record(collection, operation, &outcome);
+        Ok(outcome)
     }
 
     /// The observer's answer for one read: `Ok(None)` to read unmodified,
@@ -374,8 +504,9 @@ impl Database {
         &self,
         collection: &str,
         operation: QueryOperationKind,
+        decisions: &GateDecisions,
     ) -> Result<Option<Condition>> {
-        match self.read_gate_raw(collection, operation, None, None)? {
+        match self.gated_read(collection, operation, decisions)? {
             RawGateOutcome::Allow => Ok(None),
             RawGateOutcome::Deny(err) => Err(err),
             RawGateOutcome::Scope(scope) => Ok(scope.filter),
@@ -393,8 +524,9 @@ impl Database {
         collection: &str,
         operation: QueryOperationKind,
         what: &str,
+        decisions: &GateDecisions,
     ) -> Result<()> {
-        match self.scope_filter(collection, operation)? {
+        match self.scope_filter(collection, operation, decisions)? {
             None => Ok(()),
             Some(_) => Err(Error::Config(format!(
                 "scope narrowing is not supported for {what}"

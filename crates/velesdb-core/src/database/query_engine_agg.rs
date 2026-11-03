@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use super::read_authorization::GateDecisions;
 use super::Database;
 use crate::{Error, Result};
 
@@ -37,15 +38,28 @@ impl Database {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
+        self.execute_aggregate_gated(query, params, &GateDecisions::default())
+    }
+
+    /// [`execute_aggregate`](Self::execute_aggregate) sharing the caller's
+    /// statement gate memo (issue #2588): a scalar subquery resolving to this
+    /// aggregate replays the outer statement's decisions rather than
+    /// consulting the observer a second time for the same collection.
+    pub(super) fn execute_aggregate_gated(
+        &self,
+        query: &crate::velesql::Query,
+        params: &HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
+    ) -> Result<serde_json::Value> {
         // Resolve scalar subqueries (EPIC-039) in WHERE/HAVING before validation
         // so the aggregate engine sees a subquery-free AST. Each subquery runs
         // through `execute_query` / `execute_aggregate`, so it is decided by
         // the read gate on its own collection.
-        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
-            return self.execute_aggregate(&rewritten, params);
+        if let Some(rewritten) = self.resolve_subqueries(query, params, decisions)? {
+            return self.execute_aggregate_gated(&rewritten, params, decisions);
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
-        let authorized = self.authorize_statement(query, params)?;
+        let authorized = self.authorize_statement(query, params, decisions)?;
         let collection = self.resolve_read_target(&authorized, AGGREGATE_TARGET_MISSING)?;
         collection.execute_aggregate(authorized.query(), params)
     }

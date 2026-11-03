@@ -22,6 +22,7 @@ use crate::velesql::{
 };
 use crate::{Error, Result};
 
+use super::read_authorization::GateDecisions;
 use super::Database;
 
 /// Maximum scalar-subquery nesting depth. Guards against runaway recursion on
@@ -44,13 +45,14 @@ impl Database {
         &self,
         query: &Query,
         params: &HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
     ) -> Result<Option<Query>> {
         if !query_has_resolvable_subquery(query) {
             return Ok(None);
         }
         let mut rewritten = query.clone();
         let scope = query.select.outer_table_scope();
-        self.rewrite_query_subqueries(&mut rewritten, params, 0, &scope)?;
+        self.rewrite_query_subqueries(&mut rewritten, params, 0, &scope, decisions)?;
         Ok(Some(rewritten))
     }
 
@@ -64,15 +66,16 @@ impl Database {
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
         outer_tables: &[&str],
+        decisions: &GateDecisions,
     ) -> Result<()> {
         if let Some(cond) = query.select.where_clause.as_mut() {
-            self.rewrite_condition(cond, params, depth, outer_tables)?;
+            self.rewrite_condition(cond, params, depth, outer_tables, decisions)?;
         }
         if let Some(having) = query.select.having.as_mut() {
-            self.rewrite_having(having, params, depth, outer_tables)?;
+            self.rewrite_having(having, params, depth, outer_tables, decisions)?;
         }
         if let Some(dml) = query.dml.as_mut() {
-            self.rewrite_dml(dml, params, depth)?;
+            self.rewrite_dml(dml, params, depth, decisions)?;
         }
         Ok(())
     }
@@ -84,16 +87,17 @@ impl Database {
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
         outer_tables: &[&str],
+        decisions: &GateDecisions,
     ) -> Result<()> {
         match cond {
             Condition::And(l, r) | Condition::Or(l, r) => {
-                self.rewrite_condition(l, params, depth, outer_tables)?;
-                self.rewrite_condition(r, params, depth, outer_tables)
+                self.rewrite_condition(l, params, depth, outer_tables, decisions)?;
+                self.rewrite_condition(r, params, depth, outer_tables, decisions)
             }
             Condition::Group(inner) | Condition::Not(inner) => {
-                self.rewrite_condition(inner, params, depth, outer_tables)
+                self.rewrite_condition(inner, params, depth, outer_tables, decisions)
             }
-            other => self.rewrite_leaf_condition(other, params, depth, outer_tables),
+            other => self.rewrite_leaf_condition(other, params, depth, outer_tables, decisions),
         }
     }
 
@@ -104,18 +108,21 @@ impl Database {
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
         outer_tables: &[&str],
+        decisions: &GateDecisions,
     ) -> Result<()> {
         match cond {
             Condition::Comparison(c) => {
-                self.rewrite_value(&mut c.value, params, depth, outer_tables)
+                self.rewrite_value(&mut c.value, params, depth, outer_tables, decisions)
             }
             Condition::Between(c) => {
-                self.rewrite_value(&mut c.low, params, depth, outer_tables)?;
-                self.rewrite_value(&mut c.high, params, depth, outer_tables)
+                self.rewrite_value(&mut c.low, params, depth, outer_tables, decisions)?;
+                self.rewrite_value(&mut c.high, params, depth, outer_tables, decisions)
             }
-            Condition::In(c) => self.rewrite_values(&mut c.values, params, depth, outer_tables),
+            Condition::In(c) => {
+                self.rewrite_values(&mut c.values, params, depth, outer_tables, decisions)
+            }
             Condition::Contains(c) => {
-                self.rewrite_values(&mut c.values, params, depth, outer_tables)
+                self.rewrite_values(&mut c.values, params, depth, outer_tables, decisions)
             }
             _ => Ok(()),
         }
@@ -128,9 +135,10 @@ impl Database {
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
         outer_tables: &[&str],
+        decisions: &GateDecisions,
     ) -> Result<()> {
         for cond in &mut having.conditions {
-            self.rewrite_value(&mut cond.value, params, depth, outer_tables)?;
+            self.rewrite_value(&mut cond.value, params, depth, outer_tables, decisions)?;
         }
         Ok(())
     }
@@ -143,27 +151,32 @@ impl Database {
         dml: &mut DmlStatement,
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        decisions: &GateDecisions,
     ) -> Result<()> {
         match dml {
             DmlStatement::Insert(s) | DmlStatement::Upsert(s) => {
                 for row in &mut s.rows {
-                    self.rewrite_values(row, params, depth, &[s.table.as_str()])?;
+                    self.rewrite_values(row, params, depth, &[s.table.as_str()], decisions)?;
                 }
                 Ok(())
             }
             DmlStatement::Update(s) => {
                 let scope = [s.table.as_str()];
                 for assignment in &mut s.assignments {
-                    self.rewrite_value(&mut assignment.value, params, depth, &scope)?;
+                    self.rewrite_value(&mut assignment.value, params, depth, &scope, decisions)?;
                 }
                 if let Some(cond) = s.where_clause.as_mut() {
-                    self.rewrite_condition(cond, params, depth, &scope)?;
+                    self.rewrite_condition(cond, params, depth, &scope, decisions)?;
                 }
                 Ok(())
             }
-            DmlStatement::Delete(s) => {
-                self.rewrite_condition(&mut s.where_clause, params, depth, &[s.table.as_str()])
-            }
+            DmlStatement::Delete(s) => self.rewrite_condition(
+                &mut s.where_clause,
+                params,
+                depth,
+                &[s.table.as_str()],
+                decisions,
+            ),
             _ => Ok(()),
         }
     }
@@ -179,10 +192,11 @@ impl Database {
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
         outer_tables: &[&str],
+        decisions: &GateDecisions,
     ) -> Result<()> {
         if let Value::Subquery(subquery) = value {
             if !subquery.references_outer_table(outer_tables) {
-                *value = self.execute_scalar_subquery(subquery, params, depth)?;
+                *value = self.execute_scalar_subquery(subquery, params, depth, decisions)?;
             }
         }
         Ok(())
@@ -195,9 +209,10 @@ impl Database {
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
         outer_tables: &[&str],
+        decisions: &GateDecisions,
     ) -> Result<()> {
         for value in values {
-            self.rewrite_value(value, params, depth, outer_tables)?;
+            self.rewrite_value(value, params, depth, outer_tables, decisions)?;
         }
         Ok(())
     }
@@ -208,6 +223,7 @@ impl Database {
         subquery: &Subquery,
         params: &HashMap<String, serde_json::Value>,
         depth: u32,
+        decisions: &GateDecisions,
     ) -> Result<Value> {
         if depth >= MAX_SUBQUERY_DEPTH {
             return Err(Error::Query(format!(
@@ -224,8 +240,8 @@ impl Database {
             .map(|s| (*s).to_string())
             .collect();
         let inner_scope: Vec<&str> = inner_scope.iter().map(String::as_str).collect();
-        self.rewrite_query_subqueries(&mut inner, params, depth + 1, &inner_scope)?;
-        self.run_scalar_subquery(&inner, params)
+        self.rewrite_query_subqueries(&mut inner, params, depth + 1, &inner_scope, decisions)?;
+        self.run_scalar_subquery(&inner, params, decisions)
     }
 
     /// Runs a subquery-free inner SELECT and extracts its single scalar value.
@@ -233,13 +249,17 @@ impl Database {
         &self,
         inner: &Query,
         params: &HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
     ) -> Result<Value> {
         if inner.select.is_aggregation_query() {
-            let json = self.execute_aggregate(inner, params)?;
+            let json = self.execute_aggregate_gated(inner, params, decisions)?;
             return scalar_from_aggregate(&json);
         }
         let column = projected_subquery_column(&inner.select)?;
-        let results = self.execute_query(inner, params)?;
+        // The gated variants share the enclosing statement's memo (issue
+        // #2588): a subquery on the outer statement's own collection replays
+        // its decision instead of consulting the observer twice.
+        let results = self.execute_query_gated(inner, params, None, decisions)?;
         scalar_from_rows(&results, &column)
     }
 }

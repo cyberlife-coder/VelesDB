@@ -553,6 +553,7 @@ impl Database {
             name,
             crate::observer::QueryOperationKind::Select,
             "collection diagnostics",
+            &super::read_authorization::GateDecisions::default(),
         )?;
         if let Some(c) = self.get_vector_collection(name) {
             return Ok(c.diagnostics());
