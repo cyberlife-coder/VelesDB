@@ -16,6 +16,7 @@ use super::common::{
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::SupabaseConfig;
 use crate::error::Result;
+use crate::redact::redact_url;
 
 /// Supabase source connector using the PostgREST API.
 pub struct SupabaseConnector {
@@ -78,7 +79,7 @@ impl SourceConnector for SupabaseConnector {
     async fn connect(&mut self) -> Result<()> {
         crate::connectors::common::validate_url(&self.config.url)?;
 
-        info!("Connecting to Supabase: {}", self.config.url);
+        info!("Connecting to Supabase: {}", redact_url(&self.config.url));
 
         // Probe the configured table with `limit=0` to validate the
         // endpoint and API key without transferring rows.

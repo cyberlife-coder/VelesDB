@@ -9,6 +9,7 @@ use super::common::{check_response, create_http_client};
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::ChromaDBConfig;
 use crate::error::{Error, Result};
+use crate::redact::redact_url;
 
 /// `ChromaDB` source connector.
 pub struct ChromaDBConnector {
@@ -71,7 +72,7 @@ impl SourceConnector for ChromaDBConnector {
     }
 
     async fn connect(&mut self) -> Result<()> {
-        info!("Connecting to ChromaDB at {}", self.config.url);
+        info!("Connecting to ChromaDB at {}", redact_url(&self.config.url));
 
         // Get collection by name
         let url = format!("{}/collections/{}", self.base_url(), self.config.collection);
