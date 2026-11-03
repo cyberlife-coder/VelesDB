@@ -9,6 +9,7 @@ use super::common::{check_response, create_http_client, normalise_metric};
 use super::{ExtractedBatch, ExtractedPoint, SourceConnector, SourceSchema};
 use crate::config::QdrantConfig;
 use crate::error::Result;
+use crate::redact::redact_url;
 
 /// Qdrant source connector.
 pub struct QdrantConnector {
@@ -250,7 +251,7 @@ impl SourceConnector for QdrantConnector {
     async fn connect(&mut self) -> Result<()> {
         crate::connectors::common::validate_url(&self.config.url)?;
 
-        info!("Connecting to Qdrant at {}", self.config.url);
+        info!("Connecting to Qdrant at {}", redact_url(&self.config.url));
 
         let resp = self.request(reqwest::Method::GET, "").send().await?;
         check_response(resp, "Qdrant", "connect").await?;

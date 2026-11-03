@@ -50,9 +50,17 @@ impl WizardPrompts {
     }
 
     /// Gets connection details based on source type.
-    pub fn get_connection_details(&self, source_type: SourceType) -> Result<WizardConfig> {
+    ///
+    /// The API key is written to `api_key` rather than into the returned
+    /// [`WizardConfig`]: the config struct is rendered to the console, so it
+    /// must never hold a credential.
+    pub fn get_connection_details(
+        &self,
+        source_type: SourceType,
+        api_key: &mut Option<String>,
+    ) -> Result<WizardConfig> {
         let url = self.prompt_url(source_type)?;
-        let api_key = self.prompt_api_key(source_type)?;
+        *api_key = self.prompt_api_key(source_type)?;
         let collection = self.prompt_collection(source_type)?;
         let dest_path = self.prompt_destination()?;
         let use_sq8 = self.prompt_compression()?;
@@ -60,7 +68,6 @@ impl WizardPrompts {
         Ok(WizardConfig {
             source_type,
             url,
-            api_key,
             collection,
             dest_path,
             use_sq8,
@@ -176,50 +183,7 @@ impl WizardPrompts {
 
     /// Confirms migration before starting.
     pub fn confirm_migration(&self, schema: &SourceSchema, config: &WizardConfig) -> Result<bool> {
-        let bold = Style::new().bold();
-
-        println!();
-        println!("{}", bold.apply_to("📊 Migration Preview:"));
-        println!("┌─────────────────────────────────────────────────────────────┐");
-        println!(
-            "│ Source:      {} @ {}",
-            schema.collection,
-            config.source_type.short_name()
-        );
-        println!(
-            "│ Vectors:     {}",
-            schema
-                .total_count
-                .map_or("unknown".to_string(), |c| format!("{c}"))
-        );
-        println!("│ Dimension:   {}", schema.dimension);
-
-        if !schema.fields.is_empty() {
-            let field_names: Vec<&str> = schema
-                .fields
-                .iter()
-                .take(5)
-                .map(|f| f.name.as_str())
-                .collect();
-            let fields_str = if schema.fields.len() > 5 {
-                format!(
-                    "{}, ... (+{})",
-                    field_names.join(", "),
-                    schema.fields.len() - 5
-                )
-            } else {
-                field_names.join(", ")
-            };
-            println!("│ Fields:      {}", fields_str);
-        }
-
-        println!("│ Destination: {}/{}", config.dest_path, config.collection);
-        println!(
-            "│ Compression: {}",
-            if config.use_sq8 { "SQ8 (4x)" } else { "Full" }
-        );
-        println!("└─────────────────────────────────────────────────────────────┘");
-        println!();
+        println!("{}", format_preview(schema, config));
 
         Confirm::with_theme(&self.theme)
             .with_prompt("Start migration?")
@@ -227,4 +191,49 @@ impl WizardPrompts {
             .interact()
             .map_err(input_err)
     }
+}
+
+/// Builds the migration preview box. `WizardConfig` carries no credentials,
+/// so the whole struct is safe to render here.
+pub(crate) fn format_preview(schema: &SourceSchema, config: &WizardConfig) -> String {
+    use std::fmt::Write as _;
+    let bold = Style::new().bold();
+    let mut out = format!(
+        "\n{}\n┌─────────────────────────────────────────────────────────────┐\n│ Source:      {} @ {}\n│ Vectors:     {}\n│ Dimension:   {}\n",
+        bold.apply_to("📊 Migration Preview:"),
+        schema.collection,
+        config.source_type.short_name(),
+        schema
+            .total_count
+            .map_or("unknown".to_string(), |c| format!("{c}")),
+        schema.dimension
+    );
+
+    if !schema.fields.is_empty() {
+        let field_names: Vec<&str> = schema
+            .fields
+            .iter()
+            .take(5)
+            .map(|f| f.name.as_str())
+            .collect();
+        let fields_str = if schema.fields.len() > 5 {
+            format!(
+                "{}, ... (+{})",
+                field_names.join(", "),
+                schema.fields.len() - 5
+            )
+        } else {
+            field_names.join(", ")
+        };
+        let _ = writeln!(out, "│ Fields:      {fields_str}");
+    }
+
+    let _ = write!(
+        out,
+        "│ Destination: {}/{}\n│ Compression: {}\n└─────────────────────────────────────────────────────────────┘\n",
+        config.dest_path,
+        config.collection,
+        if config.use_sq8 { "SQ8 (4x)" } else { "Full" }
+    );
+    out
 }

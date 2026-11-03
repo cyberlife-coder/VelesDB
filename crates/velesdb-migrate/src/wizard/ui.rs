@@ -4,8 +4,90 @@ use console::{style, Style, Term};
 
 use crate::connectors::SourceSchema;
 use crate::pipeline::MigrationStats;
+use crate::redact::redact_url;
 
 use super::WizardConfig;
+
+/// Builds the "connecting" line with credentials stripped from the URL.
+pub(crate) fn format_connecting(url: &str) -> String {
+    format!(
+        "{} Connecting to {}...",
+        style("🔌").bold(),
+        redact_url(url)
+    )
+}
+
+/// Builds the post-migration success block (stats + quick-start hints).
+pub(crate) fn format_success(stats: &MigrationStats, config: &WizardConfig) -> String {
+    let green = Style::new().green().bold();
+    let mut out = format!("\n{}\n\n", green.apply_to("✅ Migration Complete!"));
+    out.push_str(&format_stats_lines(stats));
+    out.push_str(&format_quickstart_lines(config));
+    out
+}
+
+/// Builds the migrated-vectors / graph-edges stat lines.
+fn format_stats_lines(stats: &MigrationStats) -> String {
+    use std::fmt::Write as _;
+    let bold = Style::new().bold();
+    let mut out = format!(
+        "   {} {}\n   {} {:.1}s\n   {} {:.0} vec/s\n",
+        bold.apply_to("Vectors migrated:"),
+        stats.loaded,
+        bold.apply_to("Duration:        "),
+        stats.duration_secs,
+        bold.apply_to("Throughput:      "),
+        stats.throughput()
+    );
+    if stats.failed > 0 {
+        let _ = writeln!(
+            out,
+            "   {} {} (skipped)",
+            style("Failed:").yellow(),
+            stats.failed
+        );
+    }
+    if stats.relations_processed > 0 {
+        out.push_str(&format_relations_lines(stats));
+    }
+    out
+}
+
+/// Builds the graph-migration stat lines (only when relations were processed).
+fn format_relations_lines(stats: &MigrationStats) -> String {
+    use std::fmt::Write as _;
+    let bold = Style::new().bold();
+    let mut out = format!(
+        "\n   {} {}\n   {} {}\n",
+        bold.apply_to("Graph edges created:"),
+        stats.edges_created,
+        bold.apply_to("Relations processed: "),
+        stats.relations_processed
+    );
+    if stats.edges_failed > 0 {
+        let _ = writeln!(
+            out,
+            "   {} {} (skipped)",
+            style("Edges failed:").yellow(),
+            stats.edges_failed
+        );
+    }
+    out
+}
+
+/// Builds the "Quick start" command hints.
+fn format_quickstart_lines(config: &WizardConfig) -> String {
+    let bold = Style::new().bold();
+    let dim = Style::new().dim();
+    format!(
+        "\n{}\n   {} velesdb serve --data {}\n   {} velesdb query \"SELECT * FROM {} ORDER BY vector <-> [...] LIMIT 10\"\n",
+        bold.apply_to("💡 Quick start:"),
+        dim.apply_to("$"),
+        config.dest_path,
+        dim.apply_to("$"),
+        config.collection
+    )
+}
 
 /// Console UI handler for the wizard.
 pub struct WizardUI {
@@ -54,7 +136,7 @@ impl WizardUI {
     /// Prints connecting message.
     pub fn print_connecting(&self, url: &str) {
         println!();
-        println!("{} Connecting to {}...", style("🔌").bold(), url);
+        println!("{}", format_connecting(url));
     }
 
     /// Prints schema discovery results.
@@ -112,67 +194,7 @@ impl WizardUI {
 
     /// Prints success message with stats.
     pub fn print_success(&self, stats: &MigrationStats, config: &WizardConfig) {
-        let green = Style::new().green().bold();
-        let bold = Style::new().bold();
-        let dim = Style::new().dim();
-
-        println!();
-        println!("{}", green.apply_to("✅ Migration Complete!"));
-        println!();
-        println!("   {} {}", bold.apply_to("Vectors migrated:"), stats.loaded);
-        println!(
-            "   {} {:.1}s",
-            bold.apply_to("Duration:        "),
-            stats.duration_secs
-        );
-        println!(
-            "   {} {:.0} vec/s",
-            bold.apply_to("Throughput:      "),
-            stats.throughput()
-        );
-
-        if stats.failed > 0 {
-            println!(
-                "   {} {} (skipped)",
-                style("Failed:").yellow(),
-                stats.failed
-            );
-        }
-
-        if stats.relations_processed > 0 {
-            println!();
-            println!(
-                "   {} {}",
-                bold.apply_to("Graph edges created:"),
-                stats.edges_created
-            );
-            println!(
-                "   {} {}",
-                bold.apply_to("Relations processed: "),
-                stats.relations_processed
-            );
-            if stats.edges_failed > 0 {
-                println!(
-                    "   {} {} (skipped)",
-                    style("Edges failed:").yellow(),
-                    stats.edges_failed
-                );
-            }
-        }
-
-        println!();
-        println!("{}", bold.apply_to("💡 Quick start:"));
-        println!(
-            "   {} velesdb serve --data {}",
-            dim.apply_to("$"),
-            config.dest_path
-        );
-        println!(
-            "   {} velesdb query \"SELECT * FROM {} ORDER BY vector <-> [...] LIMIT 10\"",
-            dim.apply_to("$"),
-            config.collection
-        );
-        println!();
+        println!("{}", format_success(stats, config));
     }
 
     /// Prints cancellation message.
