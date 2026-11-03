@@ -9,14 +9,18 @@ use std::path::PathBuf;
 use super::WizardConfig;
 
 /// Builds a full [`MigrationConfig`] from wizard-collected config and discovered schema.
+///
+/// `api_key` is kept out of [`WizardConfig`] on purpose (that struct is
+/// rendered to the console); it is threaded through as a separate argument.
 pub(crate) fn build_migration_config(
     config: &WizardConfig,
     schema: &SourceSchema,
+    api_key: Option<&str>,
 ) -> Result<MigrationConfig> {
     let params = crate::source_config_builder::SourceParams {
         source_type: config.source_type,
         url: &config.url,
-        api_key: config.api_key.as_deref(),
+        api_key,
         collection: &config.collection,
     };
     let source = crate::source_config_builder::build_source_config(&params)?;
