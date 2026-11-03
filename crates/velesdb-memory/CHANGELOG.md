@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The OpenAI-compatible extractor constrains decoding** (#1944).
+  `OpenAiExtractor` sends the prompt's reply contract as `response_format` —
+  the OpenAI-protocol spelling (`json_schema`, `strict`) of the `format` the
+  Ollama extractor has sent since 5.1.0. The fact-only call carries the array
+  schema, the graph call the object schema — the same two contracts
+  `extract::wire` states for Ollama, so a reply that satisfies one is a reply
+  the parser reads. Strict mode requires every object level closed, so
+  `additionalProperties: false` is added at the protocol edge rather than in
+  the canonical schema, where Ollama's grammar needs none. A server that does
+  not know `response_format` keeps answering as before; one that rejects it
+  reports the refusal instead of silently unconstrained output.
+
 ## [0.17.0] - 2026-11-02
 
 > **BREAKING for Rust callers (0.x minor).** `velesdb-memory` now builds

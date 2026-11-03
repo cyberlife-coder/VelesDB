@@ -6,8 +6,8 @@
 //! request envelope and the schemas that constrain its decoding. It is not
 //! everything that leaves the process — the prompts leave too, and stay in
 //! `extract.rs` beside the parser, because they are what this crate wants said
-//! to any backend: the OpenAI-compatible extractor sends the same prompts, in
-//! an envelope `crate::openai` builds, and no schema.
+//! to any backend: the OpenAI-compatible extractor sends the same prompts and
+//! the same schemas, in the `response_format` envelope `crate::openai` builds.
 //!
 //! Each schema still sits beside nothing else, which is the point — it is one
 //! contract stated twice, once for the sampler and once for the reader, and
