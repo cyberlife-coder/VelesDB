@@ -29,7 +29,8 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 require_jq
 
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
+# shellcheck disable=SC2154 # read_exact sets payload (printf -v)
 read_exact session_id jq -j '.trajectory_id // empty' <<<"$payload"
 if [ -z "$session_id" ]; then
   session_id="windsurf-${PPID:-$$}"
