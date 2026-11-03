@@ -3,7 +3,9 @@
  * (`crates/velesdb-wasm/src/sparse.rs`) that keeps its limits: postings are
  * keyed by term, then document; an insert overwrites the (term, document)
  * weights it repeats and leaves that document's other terms in place;
- * nothing is ever removed; a search sums query × document weight per
+ * `remove` deletes a document's postings, as `sparse_remove` does on the
+ * bindings that carry it (8.0.0 does not — tests mock its absence by not
+ * exposing `sparse_remove`); a search sums query × document weight per
  * document and returns the top `k` by score.
  *
  * Tests use it so the SDK's sparse bookkeeping is checked against what the
@@ -18,6 +20,27 @@ export class FakeSparseIndex {
       list.set(BigInt(docId), values[i]!);
       this.postings.set(term, list);
     });
+  }
+
+  /** Delete `docId`'s postings. `true` when it had any, as the binding reports. */
+  remove(docId: bigint): boolean {
+    let found = false;
+    for (const [term, list] of this.postings) {
+      found = list.delete(BigInt(docId)) || found;
+      if (list.size === 0) {
+        this.postings.delete(term);
+      }
+    }
+    return found;
+  }
+
+  /** Live (term, document) entries — what the binding's memory holds. */
+  get size(): number {
+    let n = 0;
+    for (const list of this.postings.values()) {
+      n += list.size;
+    }
+    return n;
   }
 
   search(

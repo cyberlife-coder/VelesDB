@@ -371,6 +371,10 @@ index.insert(2n, new Uint32Array([10, 40]),     new Float32Array([0.8, 1.2]));
 index.search(new Uint32Array([10, 20]), new Float32Array([1.0, 1.0]), 5);
 // => [ { doc_id: 1, score: 1.5 }, { doc_id: 2, score: 0.800000011920929 } ]
 
+index.remove(1n);
+// => true — doc 1's postings are deleted and it stops matching;
+// re-inserting a doc_id replaces its vector rather than accumulating.
+
 hybrid_search_fuse([[1, 0.9], [2, 0.5]], [[2, 0.8], [3, 0.4]], 60, 3);
 // => [ { doc_id: 2, score: 0.0325… }, { doc_id: 1, score: 0.0163… }, { doc_id: 3, score: 0.0161… } ]
 ```
