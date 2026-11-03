@@ -251,7 +251,7 @@ fn read_section(
 /// Saves a snapshot to a file.
 ///
 /// Uses the shared `write-tmp-fsync-rename-dirfsync` primitive
-/// ([`crate::storage::atomic_write`]) so a crash mid-write leaves the
+/// (`storage::atomic_write`) so a crash mid-write leaves the
 /// previous complete snapshot and a power loss cannot roll back a
 /// committed rename — the earlier hand-rolled version fsynced the temp
 /// file but never the directory entry (audit #2590).

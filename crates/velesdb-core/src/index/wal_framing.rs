@@ -73,7 +73,7 @@ pub(crate) fn flush_wal(
 /// Truncates the WAL file to zero length and fsyncs the truncation.
 /// A missing file is a no-op.
 ///
-/// The fsync matches [`crate::storage::mmap::wal_replay`]'s `truncate_wal`
+/// The fsync matches `storage::mmap::wal_replay`'s `truncate_wal`
 /// and compaction's WAL reclaim: without it a lost truncation can leave
 /// stale tail bytes past newly appended entries on disk — recoverable only
 /// because both replays happen to be idempotent, which this fsync stops
