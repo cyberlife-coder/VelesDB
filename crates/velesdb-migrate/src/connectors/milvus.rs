@@ -12,6 +12,7 @@ use super::common::{
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::MilvusConfig;
 use crate::error::{Error, Result};
+use crate::redact::redact_url;
 
 /// Milvus source connector.
 pub struct MilvusConnector {
@@ -167,7 +168,7 @@ impl SourceConnector for MilvusConnector {
     async fn connect(&mut self) -> Result<()> {
         crate::connectors::common::validate_url(&self.config.url)?;
 
-        info!("Connecting to Milvus at {}", self.config.url);
+        info!("Connecting to Milvus at {}", redact_url(&self.config.url));
 
         let resp = self
             .request(reqwest::Method::GET, "/collections/has")
