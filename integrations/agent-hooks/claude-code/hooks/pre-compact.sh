@@ -29,6 +29,7 @@ require_jq
 read_exact payload read_stdin_payload
 read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
+read_exact transcript_path jq -j '.transcript_path // empty' <<<"$payload" 2>/dev/null || transcript_path=""
 
 if [ -z "$cwd" ]; then
   cwd="$PWD"
@@ -63,6 +64,18 @@ if ! touch_private_marker "$sentinel"; then
   exit 0
 fi
 
-reason="Before compaction: the transcript about to be compacted is exactly what compile_transcript exists for — call it (velesdb-memory) with a token_budget to deterministically compress it (duplicates dropped, logs collapsed, code/negative-constraints preserved verbatim) instead of losing detail to lossy compaction. Also call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state (goal, decisions, pending actions) so nothing is lost even for content compile_transcript can't recover. Then retry — compaction will proceed on the next attempt."
+# compile_transcript(path=…) resolves only under the server's
+# VELESDB_MEMORY_INGEST_ROOTS allowlist, and a harness transcript lives in
+# the harness's own state directory (~/.claude/projects) — normally outside
+# every configured root. Nudging the model to pass transcript_path verbatim
+# mandates a call the allowlist refuses (#2357), so the reason names the
+# path AND the constraint, plus the two routes that actually work.
+if [ -n "$transcript_path" ]; then
+  transcript_clause="the transcript about to be compacted is at $transcript_path — pass it to compile_transcript (velesdb-memory) as 'path' with a query and a token_budget to deterministically compress it (duplicates dropped, logs collapsed, code/negative-constraints preserved verbatim) instead of losing detail to lossy compaction. compile_transcript(path=…) only reads files under the server's VELESDB_MEMORY_INGEST_ROOTS allowlist — a harness state-directory transcript like this one is normally outside it, so if the call answers 'ingestion is disabled' or 'outside the configured ingest roots', copy the file inside an allowed root (e.g. under your cwd) and pass that path, or pass the transcript text inline via 'transcript'."
+else
+  transcript_clause="the transcript about to be compacted is exactly what compile_transcript exists for — call it (velesdb-memory) with a query and a token_budget to deterministically compress it (duplicates dropped, logs collapsed, code/negative-constraints preserved verbatim) instead of losing detail to lossy compaction."
+fi
+
+reason="Before compaction: $transcript_clause Also call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state (goal, decisions, pending actions) so nothing is lost even for content compile_transcript can't recover. Then retry — compaction will proceed on the next attempt."
 
 jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'

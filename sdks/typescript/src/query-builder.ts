@@ -19,6 +19,7 @@
  */
 
 import type { FusionStrategy } from './types';
+import { VelesDBError } from './types';
 
 /** Re-export FusionStrategy for backwards compatibility */
 export type { FusionStrategy } from './types';
@@ -86,6 +87,23 @@ interface BuilderState {
     alias?: string;
     options?: RelOptions;
   };
+}
+
+/**
+ * Refuse a fusion strategy that is not a string, naming the builder method
+ * that took it. The strategy types are compile-time guards only: an untyped
+ * (JavaScript) caller can pass any value, and interpolating a non-string
+ * coerces it — `String()` throws a bare `TypeError` on a value with no
+ * prototype, where `BAD_REQUEST` is the code the same bad input earns
+ * elsewhere in the SDK (the emitted clause is a parse error on the server).
+ */
+function requireStrategyName(strategy: unknown, method: string): void {
+  if (strategy !== undefined && typeof strategy !== 'string') {
+    throw new VelesDBError(
+      `${method} strategy must be a string; got a value of type ${typeof strategy}`,
+      'BAD_REQUEST'
+    );
+  }
 }
 
 /**
@@ -359,6 +377,10 @@ export class VelesQLBuilder {
     const params: Record<string, unknown> = Object.fromEntries(
       clean.map((name): [string, unknown] => [name, queue.shift()])
     );
+    // `null` reads as absent, as `fusion: null` does in `multiQuerySearch`.
+    if (options?.strategy != null) {
+      requireStrategyName(options.strategy, 'nearFused');
+    }
     const fusionSuffix = options?.strategy ? ` USING FUSION '${options.strategy}'` : '';
     const list = clean.map(name => `$${name}`).join(', ');
     return this.appendCondition(`vector NEAR_FUSED [${list}]${fusionSuffix}`, params);
@@ -453,6 +475,7 @@ export class VelesQLBuilder {
     strategy: FusionStrategy,
     options?: { k?: number; vectorWeight?: number; graphWeight?: number }
   ): VelesQLBuilder {
+    requireStrategyName(strategy, 'fusion');
     return this.clone({
       fusionOptions: {
         strategy,
