@@ -225,6 +225,13 @@ watchdog_expired() {
   [ $(($2 - $1)) -gt "$3" ]
 }
 
+# ppid_of PID: the parent id `ps` reports for PID, whitespace stripped —
+# empty once PID is gone, which is exactly what the watcher's parentage
+# check wants.
+ppid_of() {
+  ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '
+}
+
 # run_with_watchdog SECONDS OUTFILE CMD...
 # Run CMD on this function's stdin, with stdout captured into OUTFILE, killing
 # it once more than SECONDS seconds of wall-clock time have passed.
@@ -262,7 +269,7 @@ run_with_watchdog() {
   # used for this — the function may run inside a pipeline's subshell, where
   # $$ is the outer script and $PPID its parent, neither the real spawner.
   local expected_ppid
-  expected_ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  read_exact_line expected_ppid ppid_of "$pid" || expected_ppid=""
 
   # The bound is wall-clock time: counting rounds of `sleep 0.1` let the forks
   # between them, and a loaded machine, stretch it. SECONDS ticks with the
@@ -277,7 +284,7 @@ run_with_watchdog() {
   # a reuse would keep the loop alive until the bound killed a process that
   # had already exited cleanly.
   local fired
-  if ! fired="$(mktemp "${outfile}.watchdog.XXXXXX")"; then
+  if ! read_exact_line fired mktemp "${outfile}.watchdog.XXXXXX"; then
     kill -9 "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     return 124
@@ -292,8 +299,10 @@ run_with_watchdog() {
     # sent only while the process at PID is still the command we spawned —
     # the same parent recorded at spawn.
     : > "$fired" 2>/dev/null || true
+    local ppid_now
+    read_exact_line ppid_now ppid_of "$pid" || ppid_now=""
     [ -n "$expected_ppid" ] \
-      && [ "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$expected_ppid" ] \
+      && [ "$ppid_now" = "$expected_ppid" ] \
       && kill -9 "$pid" 2>/dev/null
   ) &
   local watcher=$!
