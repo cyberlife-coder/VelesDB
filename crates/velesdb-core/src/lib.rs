@@ -262,7 +262,8 @@ pub use quantization::{
 pub use scored_result::ScoredResult;
 pub use validation::{
     validate_collection_name, validate_dimension, validate_dimension_match,
-    MAX_COLLECTION_NAME_LENGTH, MAX_DIMENSION, MAX_JSON_NESTING, MAX_VALUE_DEPTH, MIN_DIMENSION,
+    validate_sparse_index_name, MAX_COLLECTION_NAME_LENGTH, MAX_DIMENSION, MAX_JSON_NESTING,
+    MAX_VALUE_DEPTH, MIN_DIMENSION,
 };
 // Canonical cross-engine stable hashing (FNV-1a). Lives in `wire::stable_hash`
 // so persistence-free targets (WASM) can delegate to it. Consumers deriving a

@@ -555,6 +555,31 @@ fn an_upsert_bulk_whose_flush_keeps_an_id_succeeds_and_finishes_its_bookkeeping(
     assert_eq!(first_hit(&coll, 3), Some(3), "and it is still found");
 }
 
+/// A sparse index name is request-controlled and reaches `sparse-{name}.*`
+/// filenames under the collection directory. `upsert_bulk` must refuse an
+/// unsafe one at the cold boundary, before any storage write (issue #2593,
+/// CodeQL `rust/path-injection`).
+#[test]
+fn upsert_bulk_rejects_invalid_sparse_index_name() {
+    let dir = tempfile::tempdir().expect("test: temp dir");
+    let coll = v2_collection(dir.path().to_path_buf(), HOLD_ALL);
+    let sparse = crate::index::sparse::SparseVector::new(vec![(1, 1.0)]);
+    let batch: Vec<Point> = points(0..2)
+        .into_iter()
+        .map(|mut p| {
+            p.sparse_vectors = Some([("../escape".to_string(), sparse.clone())].into());
+            p
+        })
+        .collect();
+
+    let err = coll.upsert_bulk(&batch).unwrap_err();
+    assert!(
+        matches!(err, crate::error::Error::SchemaValidation(_)),
+        "expected SchemaValidation, got {err:?}"
+    );
+    assert!(!coll.query.sparse_indexes.read().contains_key("../escape"));
+}
+
 /// A flush, and a full one, whose drain keeps an id run every step and
 /// succeed: the kept id stays queued, and searchable, for the next flush.
 /// Both used to stop at the drain's error, before the HNSW save, the
