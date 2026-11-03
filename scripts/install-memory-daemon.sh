@@ -71,7 +71,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ---- require_jq: copied verbatim (in spirit) from the guard already used by
-# integrations/agent-hooks/claude-code/hooks/lib/common.sh — every JSON edit
+# integrations/agent-hooks/shared/hooks/lib/common.sh — every JSON edit
 # in this script goes through jq to get escaping right, so fail loudly (not
 # silently) if it's missing.
 require_jq() {

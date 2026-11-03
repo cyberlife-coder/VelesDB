@@ -42,13 +42,25 @@ replacing a group would silently delete the neighbour.
 The document is never printed. A hook command carries paths and project names,
 and a report that echoed it is how one ends up in a log.
 
+## One shared library, composed per host
+
+`lib/common.sh` exists once, as the composition source
+`integrations/agent-hooks/shared/hooks/lib/common.sh`, and each host's copy
+is generated from it into the staged tree at install time — `# >>> only:
+<host>…` regions name the hosts a block belongs to. The repository holds the
+text once; every installed tree still carries its own standalone copy, which
+is what lets each host directory install without a reference back into the
+repository (#2337).
+
 Usage:
     python3 scripts/sync-agent-hooks.py --check                    # Claude; drift fails
     python3 scripts/sync-agent-hooks.py --check --strict           # Claude; absent fails too
     python3 scripts/sync-agent-hooks.py --install --client codex   # repo -> ~/.codex
-    python3 scripts/sync-agent-hooks.py --install --client all     # both supported clients
+    python3 scripts/sync-agent-hooks.py --install --client windsurf # repo -> ~/.codeium/windsurf
+    python3 scripts/sync-agent-hooks.py --install --client all     # every supported client
     python3 scripts/sync-agent-hooks.py --install --dry-run        # say it, write nothing
     python3 scripts/sync-agent-hooks.py --uninstall --client codex # remove ours, only ours
+    python3 scripts/sync-agent-hooks.py --stage /tmp/hooks         # installable trees, nowhere near HOME
 """
 
 from __future__ import annotations
@@ -56,6 +68,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -66,6 +79,25 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / "integrations" / "agent-hooks" / "claude-code" / "hooks"
 CODEX_SOURCE = REPO / "integrations" / "agent-hooks" / "codex" / "hooks"
+WINDSURF_SOURCE = REPO / "integrations" / "agent-hooks" / "windsurf" / "hooks"
+
+#: The one place the shared library lives. Each host's `lib/common.sh` is
+#: composed from it into the staged tree at install time, so the repository
+#: holds the text once while every install still ships standalone (#2337).
+#: `# >>> only: <host>…` / `# <<< only` regions are emitted only for the
+#: named hosts; every other line passes verbatim. Regions never nest.
+SHARED_LIB = REPO / "integrations" / "agent-hooks" / "shared" / "hooks" / "lib" / "common.sh"
+ONLY_BEGIN = re.compile(r"^# >>> only: ([a-z-]+(?: +[a-z-]+)*)$")
+ONLY_END = "# <<< only"
+
+#: Installer client -> host directory under `integrations/agent-hooks/`.
+#: `only:` regions name directories, not clients, so a marker's spelling is
+#: the same one a reader sees in the tree.
+HOST_DIRS = {"claude": "claude-code", "codex": "codex", "windsurf": "windsurf"}
+
+#: The composed artefact every staged tree carries. Not committed per host:
+#: a copy under a host directory would be a second source of truth.
+COMPOSED_LIB = "lib/common.sh"
 
 #: `(settings.json event, script file)`. An explicit list, not a scan of the
 #: source directory: `lib/` and `update-daemon.sh` ship with the hooks but are
@@ -85,6 +117,13 @@ CODEX_HOOKS: "tuple[tuple[str, str], ...]" = (
     ("Stop", "stop.sh"),
     ("PreToolUse", "pre-tool-use.sh"),
     ("PostToolUse", "post-tool-use.sh"),
+)
+
+#: Windsurf's registry is `~/.codeium/windsurf/hooks.json`, and its per-event
+#: value is a flat list of handlers — `{"command": …, "show_output": true}` —
+#: not the matcher/group/hooks nesting Claude Code and Codex share.
+WINDSURF_HOOKS: "tuple[tuple[str, str], ...]" = (
+    ("pre_user_prompt", "pre-user-prompt.sh"),
 )
 
 #: The installed directory name. Ownership is resolved from the client's
@@ -121,16 +160,31 @@ def codex_root() -> Path:
     return Path.home() / ".codex"
 
 
+def windsurf_root() -> Path:
+    """`~/.codeium/windsurf`, resolved through the running HOME."""
+    return Path.home() / ".codeium" / "windsurf"
+
+
 def client_root(client: str) -> Path:
-    return claude_root() if client == "claude" else codex_root()
+    return {"claude": claude_root, "codex": codex_root, "windsurf": windsurf_root}[
+        client
+    ]()
 
 
 def source_for(client: str) -> Path:
-    return SOURCE if client == "claude" else CODEX_SOURCE
+    return {
+        "claude": SOURCE,
+        "codex": CODEX_SOURCE,
+        "windsurf": WINDSURF_SOURCE,
+    }[client]
 
 
 def hooks_for(client: str) -> "tuple[tuple[str, str], ...]":
-    return HOOKS if client == "claude" else CODEX_HOOKS
+    return {
+        "claude": HOOKS,
+        "codex": CODEX_HOOKS,
+        "windsurf": WINDSURF_HOOKS,
+    }[client]
 
 
 def marker_for(client: str) -> str:
@@ -225,6 +279,8 @@ def command_for(script: str, client: str = "claude") -> str:
 
 def handler_for(event: str, script: str, client: str = "claude") -> dict:
     """The exact handler fields this installer owns for one event."""
+    if client == "windsurf":
+        return {"command": command_for(script, client), "show_output": True}
     handler: dict = {"type": "command", "command": command_for(script, client)}
     if client == "codex":
         handler.update(timeout=10, statusMessage=CODEX_STATUS_MESSAGES[event])
@@ -233,7 +289,83 @@ def handler_for(event: str, script: str, client: str = "claude") -> dict:
 
 def source_files(client: str = "claude") -> "list[str]":
     source = source_for(client)
-    return sorted(str(p.relative_to(source)) for p in source.rglob("*") if p.is_file())
+    files = sorted(
+        str(p.relative_to(source)) for p in source.rglob("*") if p.is_file()
+    )
+    # The shared library is composed into every tree, so it is a shipped file
+    # even though no host directory holds it.
+    files.append(COMPOSED_LIB)
+    return sorted(files)
+
+
+def compose_library(host_dir: str) -> str:
+    """Emit one host's `lib/common.sh` from the shared composition source.
+
+    A `# >>> only: <dirs>` region is emitted only for the named hosts; every
+    other line passes verbatim. Region markers are directives and never
+    reach the artefact. Regions never nest, so a depth counter is enough;
+    a malformed source refuses rather than emitting a silently
+    half-written library.
+    """
+    if host_dir not in HOST_DIRS.values():
+        raise SystemExit(f"compose_library: unknown hook host {host_dir!r}")
+    out: list[str] = []
+    depth = 0
+    keeping = True
+    for lineno, line in enumerate(
+        SHARED_LIB.read_text(encoding="utf-8").splitlines(keepends=True), start=1
+    ):
+        text = line.rstrip("\n")
+        opened = ONLY_BEGIN.match(text)
+        if opened:
+            if depth:
+                raise SystemExit(
+                    f"{SHARED_LIB}:{lineno}: nested `only:` region — regions "
+                    "stay flat so a reader can see what each host gets"
+                )
+            unknown = set(opened.group(1).split()) - set(HOST_DIRS.values())
+            if unknown:
+                raise SystemExit(
+                    f"{SHARED_LIB}:{lineno}: `only:` names unknown host(s) "
+                    f"{sorted(unknown)} — known hosts: {sorted(HOST_DIRS.values())}"
+                )
+            depth = 1
+            keeping = host_dir in opened.group(1).split()
+            continue
+        if text == ONLY_END:
+            if not depth:
+                raise SystemExit(f"{SHARED_LIB}:{lineno}: `# <<< only` opens nothing")
+            depth = 0
+            keeping = True
+            continue
+        if keeping:
+            out.append(line)
+    if depth:
+        raise SystemExit(f"{SHARED_LIB}: an `only:` region is never closed")
+    return "".join(out)
+
+
+def stage_source(client: str, staging: Path) -> None:
+    """Build CLIENT's installable hooks tree at `staging`.
+
+    The host's own scripts are copied; `lib/common.sh` is composed from the
+    shared source so the staged tree is standalone. A committed
+    `lib/common.sh` under the host would mean two sources of truth, so it
+    refuses rather than silently shadowing it.
+    """
+    source = source_for(client)
+    committed = source / "lib" / "common.sh"
+    if committed.exists():
+        raise SystemExit(
+            f"{committed} must not exist — lib/common.sh is composed from "
+            f"{SHARED_LIB.relative_to(REPO)}; a committed copy is the duplication "
+            "this composition removes"
+        )
+    shutil.copytree(source, staging)
+    (staging / "lib").mkdir(parents=True, exist_ok=True)
+    (staging / COMPOSED_LIB).write_text(
+        compose_library(HOST_DIRS[client]), encoding="utf-8"
+    )
 
 
 def read_settings(client: str = "claude") -> dict:
@@ -245,11 +377,9 @@ def read_settings(client: str = "claude") -> dict:
 
 def is_ours(hook: dict, client: str = "claude") -> bool:
     command = hook.get("command", "")
-    legacy = (
-        f".{client}/hooks/{INSTALL_DIR}/"
-        if client == "claude"
-        else f".codex/hooks/{INSTALL_DIR}/"
-    )
+    # `<client>/hooks/velesdb-memory/` appears inside every installed path —
+    # `.claude/hooks/…`, `.codex/hooks/…` and `.codeium/windsurf/hooks/…` alike.
+    legacy = f"{client}/hooks/{INSTALL_DIR}/"
     try:
         arguments = shlex.split(command)
     except ValueError:
@@ -261,20 +391,39 @@ def is_ours(hook: dict, client: str = "claude") -> bool:
     return installed_path or marker_for(client) in command or legacy in command
 
 
+def expected_bytes(script: str, client: str = "claude") -> bytes:
+    """What `script` must contain on disk — the source file's bytes, or the
+    composed library's for `lib/common.sh`."""
+    if script == COMPOSED_LIB:
+        return compose_library(HOST_DIRS[client]).encode("utf-8")
+    return (source_for(client) / script).read_bytes()
+
+
 def script_state(script: str, client: str = "claude") -> str:
     """`in step` / `drifted` / `absent` for one script on disk."""
     installed = hooks_target(client) / script
     if installed.is_symlink():
         return "drifted"
     if not installed.is_file():
-        return "absent"
-    if installed.read_bytes() != (source_for(client) / script).read_bytes():
+        return "drifted" if installed.exists() else "absent"
+    if installed.read_bytes() != expected_bytes(script, client):
         return "drifted"
     return "in step"
 
 
 def entry_state(document: dict, event: str, script: str, client: str = "claude") -> str:
     """Same three states for the `settings.json` entry."""
+    if client == "windsurf":
+        ours = [
+            hook
+            for hook in document.get("hooks", {}).get(event, [])
+            if is_ours(hook, client)
+        ]
+        if not ours:
+            return "absent"
+        if len(ours) != 1 or ours[0] != handler_for(event, script, client):
+            return "drifted"
+        return "in step"
     ours = [
         (group, hook)
         for group in document.get("hooks", {}).get(event, [])
@@ -315,12 +464,15 @@ def unexpected_owned_entries(document: dict, client: str = "claude") -> list[str
     for event, groups in document.get("hooks", {}).items():
         if event in expected_events:
             continue
-        count = sum(
-            1
-            for group in groups
-            for hook in group.get("hooks", [])
-            if is_ours(hook, client)
-        )
+        if client == "windsurf":
+            count = sum(1 for hook in groups if is_ours(hook, client))
+        else:
+            count = sum(
+                1
+                for group in groups
+                for hook in group.get("hooks", [])
+                if is_ours(hook, client)
+            )
         if count:
             unexpected.append(f"{event}: {count} unexpected owned entr(y/ies)")
     return unexpected
@@ -331,6 +483,9 @@ def merge_entries(document: dict, client: str = "claude") -> dict:
     document = strip_entries(document, client)
     hooks = document.setdefault("hooks", {})
     for event, script in hooks_for(client):
+        if client == "windsurf":
+            hooks.setdefault(event, []).append(handler_for(event, script, client))
+            continue
         group: dict = {"hooks": [handler_for(event, script, client)]}
         matcher = matcher_for(client, event)
         if matcher is not None:
@@ -343,6 +498,16 @@ def strip_entries(document: dict, client: str = "claude") -> dict:
     """Remove ours, and only ours. An event left with no hook at all loses its
     key, so an uninstall does not leave empty scaffolding behind."""
     hooks = document.get("hooks", {})
+    if client == "windsurf":
+        for event in list(hooks):
+            survivors = [hook for hook in hooks[event] if not is_ours(hook, client)]
+            if survivors:
+                hooks[event] = survivors
+            else:
+                del hooks[event]
+        if not hooks:
+            document.pop("hooks", None)
+        return document
     for event in list(hooks):
         groups = []
         for group in hooks[event]:
@@ -408,7 +573,6 @@ def write_settings(document: dict, client: str = "claude") -> None:
 def install_scripts(client: str = "claude") -> None:
     """Replace the hook tree by rename, carrying the local layer across."""
     target = hooks_write_target(client)
-    source = source_for(client)
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = target.parent / f".{target.name}.staging-{os.getpid()}"
     previous = target.parent / f".{target.name}.previous-{os.getpid()}"
@@ -417,7 +581,7 @@ def install_scripts(client: str = "claude") -> None:
     installed = False
     restored = False
     try:
-        shutil.copytree(source, staging)
+        stage_source(client, staging)
         for name in LOCAL_FILES:
             if (target / name).is_file():
                 shutil.copy2(target / name, staging / name)
@@ -468,12 +632,20 @@ def collect_states(client: str = "claude") -> "tuple[list[str], list[str], list[
     """`(in step, drifted, absent)` lines, one per artefact."""
     document = read_settings(client)
     fine, drifted, absent = [], [], []
+    event_scripts = {script for _event, script in hooks_for(client)}
     for event, script in hooks_for(client):
         for what, state in (
             (f"{script}", script_state(script, client)),
             (f"{event} entry", entry_state(document, event, script, client)),
         ):
             {"in step": fine, "drifted": drifted, "absent": absent}[state].append(what)
+    # A shipped file no event names — lib/common.sh and friends — drifts just
+    # as silently as an event script, and until now nothing compared it.
+    for relative in source_files(client):
+        if relative in event_scripts:
+            continue
+        state = script_state(relative, client)
+        {"in step": fine, "drifted": drifted, "absent": absent}[state].append(relative)
     return fine, drifted, absent
 
 
@@ -587,22 +759,46 @@ def run_uninstall(dry_run: bool, client: str = "claude") -> int:
     return 0
 
 
+def run_stage(target: Path) -> int:
+    """Build every host's installable hooks tree under `target/<host>/`.
+
+    What `--install` would lay down, written nowhere near HOME: the harness
+    runs hooks from these staged trees, which is also how the composed
+    library gets exercised with `shared/` absent.
+    """
+    for client, host_dir in HOST_DIRS.items():
+        try:
+            stage_source(client, target / host_dir)
+        except SystemExit as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f"  staged {host_dir}")
+    return 0
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="report drift, exit 1 if any")
     mode.add_argument("--install", action="store_true", help="copy hooks and merge entries")
     mode.add_argument("--uninstall", action="store_true", help="remove ours, and only ours")
+    mode.add_argument(
+        "--stage",
+        metavar="DIR",
+        help="build every host's installable tree under DIR, nothing installed",
+    )
     parser.add_argument("--strict", action="store_true", help="with --check: absent fails too")
     parser.add_argument("--dry-run", action="store_true", help="report, write nothing")
     parser.add_argument(
         "--client",
-        choices=("claude", "codex", "all"),
+        choices=("claude", "codex", "windsurf", "all"),
         default="claude",
         help="client to reconcile (default: claude)",
     )
     args = parser.parse_args(argv)
-    clients = ("claude", "codex") if args.client == "all" else (args.client,)
+    if args.stage:
+        return run_stage(Path(args.stage))
+    clients = ("claude", "codex", "windsurf") if args.client == "all" else (args.client,)
     results = []
     for client in clients:
         if len(clients) > 1:

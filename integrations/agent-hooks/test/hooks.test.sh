@@ -9,8 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOOKS_DIR="$ROOT/claude-code/hooks"
-WINDSURF_HOOKS_DIR="$ROOT/windsurf/hooks"
+REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 
 FAILED=0
 
@@ -106,6 +105,20 @@ export TMPDIR="$TMP_TEST_DIR/tmp"
 mkdir -p "$TMPDIR"
 HOOK_STATE_DIR="$TMPDIR/velesdb-agent-hooks-${UID}"
 mkdir -m 700 "$HOOK_STATE_DIR"
+
+# The hooks under test run from STAGED trees, not the repository: since
+# #2337 no host directory ships its own lib/common.sh — each is composed
+# from shared/hooks/lib/common.sh at install time, and the staged tree is
+# exactly what an install lays down. That is also the living proof that an
+# installed tree works with the composition source absent: nothing under
+# STAGED_ROOT can reach back into shared/.
+STAGED_ROOT="$TMP_TEST_DIR/staged"
+python3 "$REPO_ROOT/scripts/sync-agent-hooks.py" --stage "$STAGED_ROOT" \
+  || { echo "staging the hook trees failed" >&2; exit 1; }
+HOOKS_DIR="$STAGED_ROOT/claude-code"
+WINDSURF_HOOKS_DIR="$STAGED_ROOT/windsurf"
+CODEX_HOOKS_DIR="$STAGED_ROOT/codex"
+SHARED_LIB="$ROOT/shared/hooks/lib/common.sh"
 
 # An archived original is the only recovery path for a memoryless
 # `compile-stdin` result. Session startup must therefore never age it out behind
@@ -389,7 +402,6 @@ fi
 # asserts the scripts' decision logic against that contract — it does not and
 # cannot prove that a real Codex build sends exactly these fields.
 # ---------------------------------------------------------------------------
-CODEX_HOOKS_DIR="$ROOT/codex/hooks"
 CODEX_SESSION_ID="test-codex-session-$$"
 
 codex_session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
@@ -1076,7 +1088,7 @@ fi
 # ---------------------------------------------------------------------------
 # Runs "$@" in a subshell that has sourced the hooks' shared library.
 with_hook_lib() (
-  # shellcheck source=../claude-code/hooks/lib/common.sh
+  # shellcheck source=../staged/claude-code/lib/common.sh
   . "$HOOKS_DIR/lib/common.sh"
   "$@"
 )
@@ -1219,7 +1231,7 @@ fi
 # installed, don't fail the suite over its absence)
 # ---------------------------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-  if shipped_hook_files "$ROOT" | xargs -0 shellcheck; then
+  if { shipped_hook_files "$STAGED_ROOT"; printf '%s\0' "$SHARED_LIB"; } | xargs -0 shellcheck; then
     pass "shellcheck: hook scripts are clean"
   else
     fail "shellcheck: hook scripts are clean"
@@ -2027,7 +2039,7 @@ while IFS= read -r -d '' readers_lib; do
   case "$readers_lib" in
     */lib/common.sh) readers_libs+=("$readers_lib") ;;
   esac
-done < <(shipped_hook_files "$ROOT")
+done < <(shipped_hook_files "$ROOT"; shipped_hook_files "$STAGED_ROOT")
 readers_bad=""
 if [ "${#readers_libs[@]}" -lt 2 ]; then
   readers_bad=" fewer than two lib/common.sh found, so nothing is compared"
