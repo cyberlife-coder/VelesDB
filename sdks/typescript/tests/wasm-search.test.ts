@@ -1384,6 +1384,42 @@ describe('wasmMultiQuerySearch — a strategy that is not a string (#2095)', () 
 describe("wasmQuery — LIMIT is read as core's parser reads it, a u64 (#2095)", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // #2307: a LIMIT token the u64 grammar refuses is a bad value on every
+  // backend — REST answers it a parse error — so it earns BAD_REQUEST, not
+  // NOT_SUPPORTED, which is reserved for clauses WASM does not evaluate.
+  it.each(['-1', '+5', '1e3', 'abc', "'10'"])(
+    'refuses LIMIT %s with BAD_REQUEST, as core does',
+    async (token) => {
+      const query = vi.fn(() => [{ id: 1 }]);
+      const ctx = buildCtx('docs', buildStore({ query }), { dimension: 2 });
+
+      const outcome = await settle(
+        wasmQuery(ctx, 'docs', `SELECT * FROM docs WHERE vector NEAR $v LIMIT ${token}`, {
+          v: [0.1, 0.2],
+        })
+      );
+
+      expect(outcome).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(`Invalid LIMIT value '${token}'`);
+      expect(query).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    'SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 OFFSET 5',
+    'SELECT * FROM docs WHERE vector NEAR $v LIMIT',
+  ])('stays NOT_SUPPORTED when the clause is beyond the supported shape: %s', async (queryString) => {
+    const query = vi.fn(() => [{ id: 1 }]);
+    const ctx = buildCtx('docs', buildStore({ query }), { dimension: 2 });
+
+    const outcome = await settle(wasmQuery(ctx, 'docs', queryString, { v: [0.1, 0.2] }));
+
+    expect(outcome).toBeInstanceOf(VelesDBError);
+    expect((outcome as VelesDBError).code).toBe('NOT_SUPPORTED');
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('refuses LIMIT 18446744073709551616, one past the largest u64', async () => {
     const query = vi.fn(() => [{ id: 1 }]);
     const ctx = buildCtx('docs', buildStore({ query }), { dimension: 2 });
