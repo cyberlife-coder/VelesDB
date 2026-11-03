@@ -97,7 +97,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 TMP_TEST_DIR="$(mktemp -d)"
-# shellcheck disable=SC2329 # invoked indirectly via `trap ... EXIT` below
+# shellcheck disable=SC2317,SC2329 # invoked indirectly via `trap ... EXIT` below
 cleanup() {
   local job
   for job in $(jobs -p); do kill "$job" 2>/dev/null || true; done
@@ -1170,7 +1170,7 @@ watchdog_out="$TMP_TEST_DIR/watchdog-out"
 # redirected explicitly. Bash 3.2, the stock macOS one, does so even when a
 # pipe feeds the function, as post-tool-use.sh feeds the compiler; bash 5 does
 # so when a here-string feeds it, which is how Linux sees the same regression.
-# shellcheck disable=SC2329 # invoked through with_hook_lib
+# shellcheck disable=SC2317,SC2329 # invoked through with_hook_lib
 pipe_into_watchdog() { printf '%s' "$1" | run_with_watchdog 5 "$watchdog_out" cat; }
 if with_hook_lib pipe_into_watchdog 'piped input' \
   && [ "$(cat "$watchdog_out")" = "piped input" ]; then
@@ -1208,9 +1208,9 @@ expiry_is 2 expired
 # The loop must ask that function. Stubbed to answer "expired" at once, it
 # ends a 5 s command at its first poll, and the stub has been handed the bound.
 watchdog_asked="$TMP_TEST_DIR/watchdog-asked"
-# shellcheck disable=SC2329 # invoked through with_hook_lib
+# shellcheck disable=SC2317,SC2329 # invoked through with_hook_lib
 ask_a_stubbed_watchdog() {
-  # shellcheck disable=SC2329 # invoked by run_with_watchdog
+  # shellcheck disable=SC2317,SC2329 # invoked by run_with_watchdog
   watchdog_expired() { printf '%s\n' "$3" > "$watchdog_asked"; return 0; }
   run_with_watchdog 60 "$watchdog_out" sleep 5
 }
