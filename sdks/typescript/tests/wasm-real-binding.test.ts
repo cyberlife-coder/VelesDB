@@ -59,10 +59,10 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     const results = await db.search('docs', [1, 0], { k: 3 });
 
     expect(results.map(r => r.id)).toEqual(['1', '3', '2']);
-    expect(results[0].score).toBeCloseTo(1, 5);
-    expect(results[1].score).toBeCloseTo(0.6, 5);
-    expect(results[0].payload).toEqual(RUST);
-    expect(results[1].payload).toBeUndefined();
+    expect(results[0]!.score).toBeCloseTo(1, 5);
+    expect(results[1]!.score).toBeCloseTo(0.6, 5);
+    expect(results[0]!.payload).toEqual(RUST);
+    expect(results[1]!.payload).toBeUndefined();
   });
 
   it('filtered search returns plain-object records', async () => {
@@ -72,9 +72,9 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     });
 
     expect(results).toHaveLength(1);
-    expect(results[0].id).toBe('2');
-    expect(results[0].score).toBeCloseTo(0, 5);
-    expect(results[0].payload).toEqual(NOTES);
+    expect(results[0]!.id).toBe('2');
+    expect(results[0]!.score).toBeCloseTo(0, 5);
+    expect(results[0]!.payload).toEqual(NOTES);
   });
 
   it('textSearch returns ids and payloads, and no score: it ranks nothing', async () => {
@@ -97,9 +97,9 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
       expect.closeTo(0.56, 5),
       expect.closeTo(0.3, 5),
     ]);
-    expect(results[0].payload).toEqual(NOTES);
-    expect(results[1].payload).toBeUndefined();
-    expect(results[2].payload).toEqual(RUST);
+    expect(results[0]!.payload).toEqual(NOTES);
+    expect(results[1]!.payload).toBeUndefined();
+    expect(results[2]!.payload).toEqual(RUST);
   });
 
   it('multiQuerySearch returns fused ids, scores and payloads', async () => {
@@ -107,9 +107,9 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
     const results = await db.multiQuerySearch('docs', [[1, 0], [0.6, 0.8]], { k: 2 });
 
     expect(results.map(r => r.id)).toEqual(['3', '1']);
-    expect(results[0].score).toBeGreaterThan(results[1].score);
-    expect(results[1].score).toBeGreaterThan(0);
-    expect(results[1].payload).toEqual(RUST);
+    expect(results[0]!.score).toBeGreaterThan(results[1]!.score);
+    expect(results[1]!.score).toBeGreaterThan(0);
+    expect(results[1]!.payload).toEqual(RUST);
   });
 
   it('get returns the point with its payload', async () => {

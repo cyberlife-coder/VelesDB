@@ -113,7 +113,7 @@ describe('Agent Memory REST methods', () => {
       });
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
       const point = body.points[0];
 
       // vector must be the supplied embedding so vector search can recall it
@@ -144,7 +144,7 @@ describe('Agent Memory REST methods', () => {
         metadata: { _memory_type: 'hacked', name: 'spoofed', steps: ['evil'] },
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.payload._memory_type).toBe('procedural');
       expect(point.payload.name).toBe('real-name');
       expect(point.payload.steps).toEqual(['a']);
@@ -163,7 +163,7 @@ describe('Agent Memory REST methods', () => {
         metadata: { _memory_type: 'hacked', content: 'spoofed' },
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.payload._memory_type).toBe('semantic');
       expect(point.payload.content).toBe('real-fact');
     });
@@ -182,7 +182,7 @@ describe('Agent Memory REST methods', () => {
         metadata: { _memory_type: 'hacked2', event_type: 'spoofed2' },
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.payload._memory_type).toBe('episodic');
       expect(point.payload.event_type).toBe('real-event');
       expect(point.payload.timestamp).toBe(123);
@@ -201,7 +201,7 @@ describe('Agent Memory REST methods', () => {
       const result = await backend.delete('events', '12345');
 
       expect(result).toBe(true);
-      const url = mockFetch.mock.calls[0][0] as string;
+      const url = mockFetch.mock.calls[0]![0] as string;
       expect(url).toMatch(/\/points\/12345$/);
     });
 
@@ -236,7 +236,7 @@ describe('Agent Memory REST methods', () => {
       const result = await backend.delete('events', id);
 
       expect(result).toBe(true);
-      const url = mockFetch.mock.calls[1][0] as string;
+      const url = mockFetch.mock.calls[1]![0] as string;
       // The exact decimal string travels verbatim in the path param.
       expect(url).toMatch(/\/points\/18446744073709551615$/);
     });
@@ -250,7 +250,7 @@ describe('Agent Memory REST methods', () => {
       const doc = await backend.get('events', '18446744073709551615');
 
       expect(doc).not.toBeNull();
-      const url = mockFetch.mock.calls[0][0] as string;
+      const url = mockFetch.mock.calls[0]![0] as string;
       expect(url).toMatch(/\/points\/18446744073709551615$/);
     });
   });
@@ -278,8 +278,8 @@ describe('Agent Memory REST methods', () => {
         metadata: {},
       });
 
-      const id1 = JSON.parse(mockFetch.mock.calls[0][1].body).points[0].id;
-      const id2 = JSON.parse(mockFetch.mock.calls[1][1].body).points[0].id;
+      const id1 = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0].id;
+      const id2 = JSON.parse(mockFetch.mock.calls[1]![1].body).points[0].id;
 
       // Same ms, but different IDs
       expect(id1).not.toBe(id2);
@@ -306,8 +306,8 @@ describe('Agent Memory REST methods', () => {
         embedding: [0.2],
       });
 
-      const id1 = JSON.parse(mockFetch.mock.calls[0][1].body).points[0].id;
-      const id2 = JSON.parse(mockFetch.mock.calls[1][1].body).points[0].id;
+      const id1 = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0].id;
+      const id2 = JSON.parse(mockFetch.mock.calls[1]![1].body).points[0].id;
 
       expect(id1).not.toBe(id2);
     });
@@ -325,7 +325,7 @@ describe('Agent Memory REST methods', () => {
         embedding,
       });
 
-      const stored = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const stored = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(stored.vector).toEqual(embedding);
 
       // 2. matchProceduralPatterns -> vector search returns the stored point
@@ -342,8 +342,8 @@ describe('Agent Memory REST methods', () => {
 
       // Before the fix the point had no vector and search returned [].
       expect(matches).toHaveLength(1);
-      expect(matches[0].id).toBe(id);
-      expect(matches[0].payload?.name).toBe('deploy');
+      expect(matches[0]!.id).toBe(id);
+      expect(matches[0]!.payload?.name).toBe('deploy');
     });
   });
 
@@ -358,7 +358,7 @@ describe('Agent Memory REST methods', () => {
         embedding: [0.1, 0.2],
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.payload.content).toBe('the sky is blue');
       expect(point.payload.text).toBeUndefined();
       expect(point.payload._memory_type).toBe('semantic');
@@ -375,7 +375,7 @@ describe('Agent Memory REST methods', () => {
         data: {},
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.payload.timestamp).toBe(1700000000);
       expect(typeof point.payload.timestamp).toBe('number');
     });
@@ -390,7 +390,7 @@ describe('Agent Memory REST methods', () => {
         timestamp: 1234567890,
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.payload.timestamp).toBe(1234567890);
     });
   });
@@ -422,7 +422,7 @@ describe('Agent Memory REST methods', () => {
         id: big, eventType: 'x', embedding: [0.1], data: {},
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       // The wire id is the exact integer; the returned id is its string form.
       expect(point.id).toBe(Number.MAX_SAFE_INTEGER);
       expect(id).toBe(big);
@@ -440,7 +440,7 @@ describe('Agent Memory REST methods', () => {
         id: beyondSafe, name: 'p', steps: ['a'], embedding: [0.1],
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.id).toBe(beyondSafe); // string on the wire — no precision loss
       expect(id).toBe(beyondSafe);
     });
@@ -453,7 +453,7 @@ describe('Agent Memory REST methods', () => {
         id: u64Max, eventType: 'x', embedding: [0.1], data: {},
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.id).toBe(u64Max);
       expect(id).toBe(u64Max);
     });
@@ -484,7 +484,7 @@ describe('Agent Memory REST methods', () => {
         id: 42, eventType: 'x', embedding: [0.1], data: {},
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.id).toBe(42);
       expect(id).toBe('42');
     });
@@ -496,7 +496,7 @@ describe('Agent Memory REST methods', () => {
         id: 99, name: 'p', steps: ['a'], embedding: [0.1],
       });
 
-      const point = JSON.parse(mockFetch.mock.calls[0][1].body).points[0];
+      const point = JSON.parse(mockFetch.mock.calls[0]![1].body).points[0];
       expect(point.id).toBe(99);
       expect(id).toBe('99');
     });
@@ -532,7 +532,7 @@ describe('Agent Memory REST methods', () => {
     // The window is applied by core's filter on the server (its bounds are
     // pinned by conformance/filter_wire_cases.json); the SDK only sorts.
     const episodic = { type: 'eq', field: '_memory_type', value: 'episodic' };
-    const sentFilter = () => JSON.parse(mockFetch.mock.calls[0][1].body).filter;
+    const sentFilter = () => JSON.parse(mockFetch.mock.calls[0]![1].body).filter;
 
     it('recallRecent sends the since lower bound (exclusive, as core) to the server', async () => {
       mockFetch.mockResolvedValueOnce(scrollPage);
