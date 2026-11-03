@@ -71,7 +71,7 @@ require_jq() {
 # globals. Falls back to project=basename(cwd) and session="rolling" when no config file is found
 # or a field is missing — so the hooks work with zero setup, but a project
 # can pin stable identifiers via the config file.
-# shellcheck disable=SC2329 # in this composition source the windsurf variant below shadows it; a staged library holds exactly one
+# shellcheck disable=SC2317,SC2329 # in this composition source the windsurf variant below shadows it; a staged library holds exactly one. Shellcheck < 0.10 reports the shadowed body as SC2317, >= 0.10 as SC2329 — disable both.
 resolve_config() {
   local start_dir="$1"
   local physical_start
