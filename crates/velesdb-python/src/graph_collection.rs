@@ -142,22 +142,36 @@ impl PyGraphCollection {
 
     /// Returns the graph schema for this collection.
     ///
+    /// The schema is collection state, so the read gate decides it like the
+    /// gated metadata getters on ``Collection`` (#2589).
+    ///
     /// Returns:
     ///     GraphSchema: The schema configuration
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
     #[getter]
-    fn schema(&self) -> PyGraphSchema {
-        PyGraphSchema {
+    fn schema(&self) -> PyResult<PyGraphSchema> {
+        self.authorize("schema")?;
+        Ok(PyGraphSchema {
             inner: self.inner.schema(),
-        }
+        })
     }
 
     /// Whether this collection has node embeddings enabled.
     ///
+    /// Embeddings availability is collection state, so the read gate decides
+    /// it (#2589).
+    ///
     /// Returns:
     ///     bool: True if vector search is available
+    ///
+    /// Raises:
+    ///     PermissionError: If the read gate denies the read or returns a scope.
     #[getter]
-    fn has_embeddings(&self) -> bool {
-        self.inner.has_embeddings()
+    fn has_embeddings(&self) -> PyResult<bool> {
+        self.authorize("has_embeddings")?;
+        Ok(self.inner.has_embeddings())
     }
 
     /// Add an edge between two nodes.
@@ -638,12 +652,14 @@ impl PyGraphCollection {
         py.detach(|| self.inner.remove_edge(edge_id))
     }
 
-    fn __repr__(&self) -> String {
-        format!(
+    fn __repr__(&self) -> PyResult<String> {
+        // The repr leaks `has_embeddings`, a gated read (#2589).
+        self.authorize("__repr__")?;
+        Ok(format!(
             "GraphCollection(name='{}', has_embeddings={})",
             self.name,
             self.inner.has_embeddings(),
-        )
+        ))
     }
 
     /// Membership test: ``node_id in graph``.
