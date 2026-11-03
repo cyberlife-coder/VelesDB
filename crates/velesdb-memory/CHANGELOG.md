@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not know `response_format` keeps answering as before; one that rejects it
   reports the refusal instead of silently unconstrained output.
 
+### Fixed
+
+- **`compile_transcript` reads real agent-harness JSONL.** The JSONL
+  segmenter now accepts the `{type, message: {role, content}}` envelope
+  every harness writes (content a string or a block array — `text`/
+  `thinking` blocks contribute their field, other blocks stay as compact
+  JSON), keeps any other JSON line as a role-less verbatim turn, and —
+  under `format: "auto"` — detects JSONL whenever every non-empty line
+  parses as JSON. Previously an envelope transcript was judged "not JSONL",
+  silently fell back to `plain`, and produced one roleless turn covering
+  the whole file — a wrong segmentation, or a payload-cap error once the
+  file topped the fragment limit (#2357).
+- **`IngestDisabled` no longer prescribes a knob the caller cannot turn.**
+  The message now states that `VELESDB_MEMORY_INGEST_ROOTS` is operator-side
+  startup configuration (a request cannot enable it) and names the
+  applicable remedy — passing `content`/`transcript` inline; on builds that
+  can configure no ingest roots at all it names no variable (#2357).
+
 ## [0.17.0] - 2026-11-02
 
 > **BREAKING for Rust callers (0.x minor).** `velesdb-memory` now builds

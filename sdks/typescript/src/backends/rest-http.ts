@@ -57,13 +57,22 @@ function shouldRetry(status: number, method: string): boolean {
   return false;
 }
 
-/** HTTP status → typed error code lookup. */
+/**
+ * HTTP status → typed error code lookup.
+ *
+ * `422` is axum's `Json<T>` rejection: the body failed to deserialize before
+ * the handler ran, so the answer is a bare string, not an `ErrorResponse`
+ * (the server's OpenAPI contract documents it as `MalformedBody`). It still
+ * means "the request was malformed", the same refusal the WASM backend gives
+ * a `top_k` of `-1` or a string `rrf_k` locally, so it maps to the same code.
+ */
 const STATUS_ERROR_CODES: Record<number, string> = {
   400: 'BAD_REQUEST',
   401: 'UNAUTHORIZED',
   403: 'FORBIDDEN',
   404: 'NOT_FOUND',
   409: 'CONFLICT',
+  422: 'BAD_REQUEST',
   429: 'RATE_LIMITED',
   500: 'INTERNAL_ERROR',
   503: 'SERVICE_UNAVAILABLE',

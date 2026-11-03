@@ -225,10 +225,10 @@ Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations �
 | Solution | Search Latency | Notes |
 |----------|---------------|-------|
 | **VelesDB (this demo)** | **0.89ms** | Embedded PyO3 bindings, HNSW |
-| VelesDB (native Rust) | <1ms | Direct integration |
-| Pinecone | ~50-100ms | Cloud service |
-| Qdrant | ~10-50ms | Self-hosted |
-| FAISS | ~1ms | In-memory only |
+| VelesDB (native Rust) | sub-millisecond | Direct integration |
+| Pinecone | tens of ms (managed round-trip) | Cloud service |
+| Qdrant | tens of ms (network-dependent) | Self-hosted |
+| FAISS | single-digit ms | In-memory only |
 
 > **Note**: `benchmark_latency.py` is a legacy REST-era client that targets a running `velesdb-server` on `localhost:8080`; this demo now runs VelesDB embedded (in-process, no server), so the script only works if you separately start a `velesdb-server`.
 
@@ -310,7 +310,7 @@ curl -X DELETE "http://127.0.0.1:8000/documents/your-document.pdf"
 - **PDF documents**: Not stored (only processed)
 - **Text chunks**: Stored in VelesDB as payloads
 - **Embeddings**: 384 dimensions × 4 bytes = ~1.5KB per chunk
-- **Index overhead**: ~20-30% additional storage
+- **Index overhead**: additional storage for the HNSW graph
 
 ### 🔍 Check Current Storage
 ```bash

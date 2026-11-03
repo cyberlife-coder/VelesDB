@@ -262,6 +262,40 @@ else
   fail "PreCompact: second call in same session passes through ({})"
 fi
 
+# A payload carrying transcript_path (every real PreCompact payload does)
+# gets it named in the reason, together with the ingest-roots constraint —
+# a harness transcript lives under ~/.claude/projects, normally outside
+# VELESDB_MEMORY_INGEST_ROOTS, so pointing the model at the raw path without
+# the constraint mandates a call the allowlist refuses (#2357).
+pre_compact_path_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "${SESSION_ID}-path" --arg tp "/tmp/fake-harness/transcript.jsonl" \
+  '{session_id: $sid, transcript_path: $tp, cwd: $cwd, hook_event_name: "PreCompact", trigger: "auto"}')"
+
+pre_compact_path_out="$(bash "$HOOKS_DIR/pre-compact.sh" <<<"$pre_compact_path_payload")" || hook_exited "$LINENO" "$?"
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.decision == "block"' >/dev/null; then
+  pass "PreCompact: a transcript_path payload still blocks the first call"
+else
+  fail "PreCompact: a transcript_path payload still blocks the first call"
+fi
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.reason | contains("/tmp/fake-harness/transcript.jsonl")' >/dev/null; then
+  pass "PreCompact: reason names the payload's transcript_path"
+else
+  fail "PreCompact: reason names the payload's transcript_path"
+fi
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.reason | contains("VELESDB_MEMORY_INGEST_ROOTS")' >/dev/null; then
+  pass "PreCompact: reason surfaces the ingest-roots constraint"
+else
+  fail "PreCompact: reason surfaces the ingest-roots constraint"
+fi
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.reason | contains("transcript")' >/dev/null; then
+  pass "PreCompact: reason offers the inline transcript fallback"
+else
+  fail "PreCompact: reason offers the inline transcript fallback"
+fi
+
 # ---------------------------------------------------------------------------
 # Defaults when no .velesdb-hooks.json is present
 # ---------------------------------------------------------------------------
