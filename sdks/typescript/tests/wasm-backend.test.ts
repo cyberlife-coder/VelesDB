@@ -77,6 +77,30 @@ class MockVectorStore {
   }
 }
 
+/**
+ * A store whose `sparse_remove` deletes postings, as velesdb-wasm does after
+ * 8.0.0 (#2287): the SDK then removes retired ids outright instead of
+ * tombstoning them. `MockVectorStore` itself models 8.0.0 — the published
+ * floor the SDK's dependency range still admits — which has no such method.
+ */
+class MockVectorStoreWithSparseRemove extends MockVectorStore {
+  sparse_remove = vi.fn((id: bigint) => this.sparse.remove(id));
+
+  static override new_with_mode(
+    dimension: number,
+    metric: string,
+    mode: string
+  ): MockVectorStoreWithSparseRemove {
+    const store = new MockVectorStoreWithSparseRemove(dimension, metric);
+    store.storage_mode = mode;
+    return store;
+  }
+
+  static override new_metadata_only(): MockVectorStoreWithSparseRemove {
+    return new MockVectorStoreWithSparseRemove(0, 'cosine');
+  }
+}
+
 const mockWasmModule = {
   default: vi.fn(() => Promise.resolve()),
   VectorStore: MockVectorStore,
@@ -682,6 +706,66 @@ describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live
     await backend.delete('s', 1);
 
     expect(await hitIds({ 7: 1 }, 1)).toEqual(['2']);
+  });
+});
+
+describe('WasmBackend — a sparse_remove-capable binding deletes retired ids (#2287)', () => {
+  let backend: WasmBackend;
+  const hitIds = async (sparseVector: Record<number, number>, k = 10) =>
+    (await backend.search('s', [], { k, sparseVector })).map((r) => r.id);
+  const sparseStore = () =>
+    sparseIdsOf(backend, 's').store as MockVectorStoreWithSparseRemove;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockWasmModule.VectorStore = MockVectorStoreWithSparseRemove;
+    backend = new WasmBackend();
+    await backend.init();
+    await backend.createCollection('s', { dimension: 0 });
+  });
+
+  afterEach(() => {
+    mockWasmModule.VectorStore = MockVectorStore;
+  });
+
+  it("removes a deleted point's postings instead of tombstoning them", async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+    await backend.delete('s', 1);
+
+    const store = sparseStore();
+    expect(store.sparse_remove).toHaveBeenCalledTimes(1);
+    expect(store.sparse.size).toBe(0);
+    expect(sparseIdsOf(backend, 's').dead).toBe(0);
+    expect(await hitIds({ 7: 1 })).toEqual([]);
+  });
+
+  it('keeps the sparse entry count bounded by the live points', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 8: 1 } });
+    for (let i = 0; i < 50; i += 1) {
+      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1, [100 + i]: 1 } });
+    }
+
+    const store = sparseStore();
+    expect(store.sparse_remove).toHaveBeenCalledTimes(50);
+    expect(sparseIdsOf(backend, 's').dead).toBe(0);
+    // Point 1's latest vector holds 2 terms, point 2's holds 1: the index
+    // holds exactly the live postings, none of the 50 superseded vectors'.
+    expect(store.sparse.size).toBe(3);
+    expect(await hitIds({ 7: 1 })).toEqual(['1']);
+  });
+
+  it('never rebuilds nor frees the sparse store', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+    const store = sparseIdsOf(backend, 's').store!;
+    for (let i = 0; i < 10; i += 1) {
+      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 9: 1 } });
+    }
+
+    expect(sparseIdsOf(backend, 's').store).toBe(store);
+    expect(store.free).not.toHaveBeenCalled();
+    expect(await hitIds({ 7: 1 })).toEqual([]);
+    expect(await hitIds({ 9: 1 })).toEqual(['1']);
   });
 });
 
