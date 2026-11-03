@@ -61,6 +61,14 @@ pub(crate) fn embeddings_body(model: &str, input: &str) -> String {
 /// on a re-run. `max_tokens` caps runaway generation the same way the Ollama
 /// backend's `num_predict` does — see `extract::MAX_GENERATION_TOKENS` (#1846).
 ///
+/// `json_schema` restates the prompt's reply contract as a grammar the
+/// sampler cannot leave — the OpenAI-protocol spelling (`response_format`,
+/// `strict`) of the `format` the Ollama backend sends for the same reason
+/// (#1944): it makes replies parsable, it does not make them true. `strict`
+/// is the arm the GitHub Models probe measured; it requires every object
+/// level closed, which [`closed_for_strict`] adds at this protocol edge
+/// rather than in the canonical schema, where Ollama's grammar needs none.
+///
 /// `chat_template_kwargs` is passed through verbatim when set (llama.cpp's
 /// per-request chat-template knobs, e.g. `{"enable_thinking": false}`);
 /// servers that do not know the field ignore it.
@@ -69,6 +77,7 @@ pub(crate) fn chat_body(
     model: &str,
     prompt: &str,
     max_tokens: u32,
+    json_schema: &Value,
     chat_template_kwargs: Option<&Value>,
 ) -> String {
     let mut body = json!({
@@ -76,11 +85,48 @@ pub(crate) fn chat_body(
         "messages": [{ "role": "user", "content": prompt }],
         "temperature": 0,
         "max_tokens": max_tokens,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "extraction",
+                "strict": true,
+                "schema": closed_for_strict(json_schema),
+            },
+        },
     });
     if let Some(kwargs) = chat_template_kwargs {
         body["chat_template_kwargs"] = kwargs.clone();
     }
     body.to_string()
+}
+
+/// `schema` with `additionalProperties: false` at every `"type": "object"`
+/// level — the strict-mode spelling of the same contract.
+///
+/// Strict `json_schema` refuses a schema whose object levels leave
+/// `additionalProperties` open (a 400, not a silent fallback). Same keys,
+/// same `required`s — one mechanical clause added per object level, the
+/// transform `strict_object_schema` in `scripts/bench-memory-extraction.py`
+/// applied on the probe arm that decided this wiring.
+#[cfg(feature = "extractor-http")]
+fn closed_for_strict(schema: &Value) -> Value {
+    let mut closed = schema.clone();
+    close_object_level(&mut closed);
+    closed
+}
+
+/// Recursive half of [`closed_for_strict`]: non-object values are left alone.
+#[cfg(feature = "extractor-http")]
+fn close_object_level(node: &mut Value) {
+    let Some(map) = node.as_object_mut() else {
+        return;
+    };
+    if map.get("type") == Some(&Value::from("object")) {
+        map.insert("additionalProperties".to_owned(), Value::from(false));
+    }
+    for value in map.values_mut() {
+        close_object_level(value);
+    }
 }
 
 /// Why an OpenAI-compatible answer could not be read. The payload is previewed
