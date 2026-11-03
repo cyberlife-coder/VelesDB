@@ -28,7 +28,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 ## Gate 1 — Recall@10 ≥ 0.95
 
-**Why:** A 5% recall drop on 10K vectors compounds catastrophically at production scale (1M+ vectors with the same drop becomes effectively unusable). Performance optimizations that silently degrade recall are the most dangerous regressions in a vector database.
+**Why:** A recall drop on 10K vectors compounds catastrophically at production scale (at 1M+ vectors the same drop becomes effectively unusable). Performance optimizations that silently degrade recall are the most dangerous regressions in a vector database.
 
 **Enforcement:**
 
@@ -76,7 +76,7 @@ A pull request that breaks any of these gates **cannot be merged**. There are no
 
 **Enforcement:**
 
-- **CI gate (blocking — the `perf-gate-e2e` job in [`ci.yml`](.github/workflows/ci.yml), part of `CI Success`'s `needs:`):** runs `benchmarks/velesdb_benchmark.py --datasets 10000 --recall --json` on every PR that touches `crates/velesdb-core/src/{index,simd_native,quantization,fusion,wal,storage}/`, `crates/velesdb-python/`, or `benchmarks/velesdb_benchmark.py`. The recall@10 ≥ 0.95 bound (Gate 1) is gated at the contract threshold; the p50 bound is gated at a deliberately loose **1500 µs sanity floor** that catches order-of-magnitude algorithmic regressions without flaking on the ~3-4× slower GitHub-hosted runner. The canonical 450 µs claim itself is preserved by local + release-engineering measurement on the i9-14900KF reference machine.
+- **CI gate (blocking — the `perf-gate-e2e` job in [`ci.yml`](.github/workflows/ci.yml), part of `CI Success`'s `needs:`):** runs `benchmarks/velesdb_benchmark.py --datasets 10000 --recall --json` on every PR that touches `crates/velesdb-core/src/{index,simd_native,quantization,fusion,wal,storage}/`, `crates/velesdb-python/`, or `benchmarks/velesdb_benchmark.py`. The recall@10 ≥ 0.95 bound (Gate 1) is gated at the contract threshold; the p50 bound is gated at a deliberately loose **1500 µs sanity floor** that catches order-of-magnitude algorithmic regressions without flaking on the slower GitHub-hosted runners. The canonical 450 µs claim itself is preserved by local + release-engineering measurement on the i9-14900KF reference machine.
 - **Reproducible benchmark:** `python benchmarks/velesdb_benchmark.py --recall`
 - **Source:** `CHANGELOG.md` v1.13.0 (measured 2026-03-27, baseline preserved through pre-seed remediation phases)
 - **Promise contract:** [`docs/reference/promise-contract.json`](docs/reference/promise-contract.json) entry `readme_production_search_latency` enforces the exact substring `**450 us**` in `README.md`.
@@ -174,7 +174,7 @@ These are tracked but do not block release because they are SIMD intrinsics bloc
 
 ## Gate 7 — Code duplication < 2%
 
-**Why:** DRY violations multiply maintenance cost. Each duplicated 50-token block becomes 2x the work for every future change.
+**Why:** DRY violations multiply maintenance cost. Each duplicated 50-token block multiplies the work for every future change.
 
 **Threshold:** < 2% duplicated lines per language (Rust, Python, TypeScript).
 

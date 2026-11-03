@@ -46,6 +46,7 @@ describe('mapStatusToErrorCode', () => {
     [403, 'FORBIDDEN'],
     [404, 'NOT_FOUND'],
     [409, 'CONFLICT'],
+    [422, 'BAD_REQUEST'],
     [429, 'RATE_LIMITED'],
     [500, 'INTERNAL_ERROR'],
     [503, 'SERVICE_UNAVAILABLE'],

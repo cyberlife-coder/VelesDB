@@ -274,10 +274,13 @@ function validateSearchInputs(
   k: unknown,
   vectorCount?: { readonly min: number; readonly max: number }
 ): number {
-  if (vectorCount && (vectors.length < vectorCount.min || vectors.length > vectorCount.max)) {
+  // `vectors` is typed, but an untyped caller can hand the multi-query path
+  // anything: count a non-array as none rather than read `.length` off it.
+  const count = Array.isArray(vectors) ? vectors.length : 0;
+  if (vectorCount && (count < vectorCount.min || count > vectorCount.max)) {
     throw new VelesDBError(
       `a multi-query search takes ${vectorCount.min} to ${vectorCount.max} vectors, as core's ` +
-        `does; got ${vectors.length}`,
+        `does; got ${Array.isArray(vectors) ? count : describeValue(vectors)}`,
       'BAD_REQUEST'
     );
   }
@@ -652,6 +655,19 @@ export async function wasmMultiQuerySearch(
 const PURE_NEAR_QUERY =
   /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?(?:\s*;)?\s*$/i;
 
+/**
+ * The pure-NEAR shape with a LIMIT token that failed the grammar above:
+ * `LIMIT -1`, `LIMIT +5`, `LIMIT 1e3`, `LIMIT abc`. Read only when
+ * `PURE_NEAR_QUERY` did not match, so it fires exactly where the statement
+ * is one bad u64 away from supported — a value *every* backend refuses
+ * (core's parser reads LIMIT as a u64 and answers a caller error), never on
+ * a clause WASM does not evaluate: `LIMIT 10 OFFSET 5` leaves a second
+ * token after the value and stays `NOT_SUPPORTED`, as does a bare `LIMIT`
+ * with no value at all.
+ */
+const PURE_NEAR_BAD_LIMIT =
+  /^\s*select\s+\*\s+from\s+[a-z_]\w*\s+where\s+vector\s+near\s+\$[a-z_]\w*\s+limit\s+(\S+?)\s*;?\s*$/i;
+
 interface PureNearQuery {
   /** Collection named in the FROM clause. */
   from: string;
@@ -664,10 +680,21 @@ interface PureNearQuery {
 /** The largest `LIMIT` core's parser takes: it reads the value as a u64 (`velesql/parser/helpers.rs`). */
 const LARGEST_U64 = 2n ** 64n - 1n;
 
-/** Parse `queryString` against the pure-NEAR shape or throw `NOT_SUPPORTED`. */
+/**
+ * Parse `queryString` against the pure-NEAR shape: `BAD_REQUEST` for a
+ * LIMIT value core's u64 parser refuses, `NOT_SUPPORTED` for every other
+ * clause beyond the shape.
+ */
 function parsePureNearQuery(queryString: string): PureNearQuery {
   const match = PURE_NEAR_QUERY.exec(queryString);
   if (!match) {
+    const badLimit = PURE_NEAR_BAD_LIMIT.exec(queryString);
+    if (badLimit) {
+      throw new VelesDBError(
+        `Invalid LIMIT value '${badLimit[1]}': core's parser reads LIMIT as a u64`,
+        'BAD_REQUEST'
+      );
+    }
     throw new VelesDBError(
       'The WASM backend only executes pure top-k NEAR queries of the form ' +
         '"SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]". ' +

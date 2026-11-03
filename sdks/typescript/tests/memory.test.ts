@@ -270,7 +270,7 @@ describe('MemoryService', () => {
     });
 
     it.each([1.5, -1, Number.NaN, 2 ** 64, Number.POSITIVE_INFINITY])(
-      'remember() rejects ttlSeconds %p with ValidationError, not a raw RangeError',
+      'remember() rejects ttlSeconds %s with ValidationError, not a raw RangeError',
       async (ttlSeconds) => {
         // Regression: BigInt(1.5) throws a codeless RangeError, a negative
         // value dies as an opaque wasm-bindgen u64 conversion, and 2**64
@@ -487,7 +487,7 @@ describe('MemoryService', () => {
     });
 
     it.each([1.5, -1, Number.NaN, 2 ** 64, Number.POSITIVE_INFINITY])(
-      'suggestBudget() rejects reserveTokens %p with ValidationError, not a raw RangeError',
+      'suggestBudget() rejects reserveTokens %s with ValidationError, not a raw RangeError',
       async (reserveTokens) => {
         await expect(
           memory.suggestBudget('claude-sonnet-4-5', reserveTokens)
