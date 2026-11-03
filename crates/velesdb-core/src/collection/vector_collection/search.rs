@@ -104,6 +104,9 @@ impl VectorCollection {
 
     /// Performs kNN search with a metadata filter applied post-retrieval.
     ///
+    /// Runs at the collection's configured search quality; to tune the
+    /// filtered walk use [`Self::search_with_quality_and_filter`].
+    ///
     /// # Errors
     ///
     /// - Returns an error if the query dimension does not match the collection.
@@ -116,6 +119,32 @@ impl VectorCollection {
     ) -> Result<Vec<SearchResult>> {
         self.inner
             .search_with_filter(query, self.capped_k(k), filter)
+    }
+
+    /// Performs kNN search with a [`crate::SearchQuality`] profile and a
+    /// metadata filter.
+    ///
+    /// The filtered counterpart of [`Self::search_with_quality`]: the profile
+    /// shapes the candidate walk the filter then narrows, where
+    /// [`Self::search_with_filter`] always runs the configured default. An
+    /// explicit `ef_search` travels as [`crate::SearchQuality::Custom`].
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if the filter references an unsupported field type.
+    /// - Returns [`Error::GuardRail`](crate::error::Error::GuardRail) when
+    ///   `quality` is [`crate::SearchQuality::Perfect`] and the collection
+    ///   exceeds the configured `max_perfect_mode_vectors` cap.
+    pub fn search_with_quality_and_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner
+            .search_with_quality_and_filter(query, self.capped_k(k), quality, filter)
     }
 
     /// Returns [`crate::ScoredResult`] pairs without payload hydration.

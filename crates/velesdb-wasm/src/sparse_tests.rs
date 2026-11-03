@@ -84,6 +84,86 @@ fn test_sparse_index_upsert_does_not_increment_doc_count() {
 }
 
 #[test]
+fn test_sparse_index_remove_deletes_doc_postings() {
+    let mut index = SparseIndex::new();
+    index.insert(1, &[10, 20], &[1.0, 0.5]).unwrap();
+    index.insert(2, &[10, 30], &[0.8, 1.2]).unwrap();
+
+    assert!(index.remove(1), "removing a present doc returns true");
+    assert_eq!(index.doc_count(), 1, "remove decrements doc_count");
+
+    // Doc 1's postings are gone from every term it touched; doc 2 still matches.
+    let results = index
+        .search_scored(&[10, 20, 30], &[1.0, 1.0, 1.0], 10)
+        .unwrap();
+    let ids: Vec<u64> = results.iter().map(|r| r.doc_id()).collect();
+    assert_eq!(ids, vec![2], "only the surviving doc may match");
+}
+
+#[test]
+fn test_sparse_index_remove_unknown_doc_is_noop() {
+    let mut index = SparseIndex::new();
+    index.insert(1, &[10], &[1.0]).unwrap();
+
+    assert!(!index.remove(99), "removing an absent doc returns false");
+    assert_eq!(index.doc_count(), 1, "doc_count must not underflow");
+}
+
+#[test]
+fn test_sparse_index_remove_is_idempotent() {
+    let mut index = SparseIndex::new();
+    index.insert(1, &[10], &[1.0]).unwrap();
+
+    assert!(index.remove(1));
+    assert!(!index.remove(1), "a second remove reports the doc is gone");
+    assert_eq!(index.doc_count(), 0);
+    assert!(
+        index.search_scored(&[10], &[1.0], 10).unwrap().is_empty(),
+        "an emptied posting list matches nothing"
+    );
+}
+
+#[test]
+fn test_sparse_index_remove_all_then_reinsert() {
+    let mut index = SparseIndex::new();
+    index.insert(1, &[10], &[1.0]).unwrap();
+    index.insert(2, &[10], &[0.5]).unwrap();
+    index.remove(1);
+    index.remove(2);
+
+    assert_eq!(index.doc_count(), 0);
+    assert!(index.postings.is_empty(), "empty terms are dropped");
+
+    index.insert(1, &[10], &[2.0]).unwrap();
+    assert_eq!(index.doc_count(), 1);
+    let results = index.search_scored(&[10], &[1.0], 10).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].doc_id(), 1);
+}
+
+#[test]
+fn test_sparse_index_reinsert_replaces_dropped_terms() {
+    let mut index = SparseIndex::new();
+    index.insert(1, &[10, 20], &[1.0, 0.5]).unwrap();
+
+    // Re-inserting the same doc replaces its vector: terms the new vector
+    // leaves out must stop matching — insert is an upsert, not an
+    // accumulation (#2287).
+    index.insert(1, &[99], &[0.7]).unwrap();
+    assert_eq!(index.doc_count(), 1);
+    assert!(
+        index
+            .search_scored(&[10, 20], &[1.0, 1.0], 10)
+            .unwrap()
+            .is_empty(),
+        "terms the replacement dropped must not match"
+    );
+    let results = index.search_scored(&[99], &[1.0], 10).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].doc_id(), 1);
+}
+
+#[test]
 fn test_rrf_fusion_basic() {
     // Test RRF logic manually (can't call wasm function in native tests).
     let k_f32 = 60.0_f32;
