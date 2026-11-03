@@ -37,7 +37,7 @@ import type {
   WasmVectorStore,
 } from '../src/backends/wasm-types';
 
-const search = vi.fn(() => [[1n, 0.9]]);
+const search = vi.fn((_q: Float32Array, _k: number) => [[1n, 0.9]]);
 const search_with_filter = vi.fn(() => []);
 
 function buildCtx(): { ctx: WasmContext; store: WasmVectorStore } {

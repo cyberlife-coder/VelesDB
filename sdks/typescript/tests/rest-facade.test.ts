@@ -366,7 +366,7 @@ describe('RestBackend — missing-endpoints facade delegation (Wave 4)', () => {
 
   it('updateGuardrails delegates', async () => {
     mockOk({ enabled: true, limits: {} });
-    await backend.updateGuardrails({ enabled: true });
+    await backend.updateGuardrails({ maxDepth: 8 });
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 

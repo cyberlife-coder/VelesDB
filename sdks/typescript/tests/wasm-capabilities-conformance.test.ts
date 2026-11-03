@@ -37,7 +37,7 @@ class MockVectorStore {
   get = vi.fn(() => null);
   free = vi.fn();
   // One hit, so a probe can tell whether an option shaped the result.
-  search = vi.fn(() => [[1n, 0.9]]);
+  search = vi.fn((_q: Float32Array, _k: number) => [[1n, 0.9]]);
   // The binding parses the preset, then runs the same brute-force search
   // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
   search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
@@ -242,7 +242,7 @@ const BOOLEAN_PROBES: Record<string, readonly Probe[]> = {
     operation((b) => b.searchSemanticMemory(C, V)),
     operation((b) => b.recordEpisodicEvent(C, { eventType: 'e', data: {}, embedding: V })),
     operation((b) => b.recallEpisodicEvents(C, V)),
-    operation((b) => b.storeProceduralPattern(C, { name: 'p', steps: [] })),
+    operation((b) => b.storeProceduralPattern(C, { name: 'p', steps: [], embedding: V })),
     operation((b) => b.matchProceduralPatterns(C, V)),
   ],
   enableStreaming: [operation((b) => b.enableStreaming(C))],

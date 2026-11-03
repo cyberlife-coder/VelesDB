@@ -53,7 +53,7 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     };
     await backend.createCollection('docs', config);
 
-    const call = mockFetch.mock.calls[0];
+    const call = mockFetch.mock.calls[0]!;
     const body = JSON.parse(call[1].body as string);
     expect(body.pq_rescore_oversampling).toBe(8);
   });
@@ -75,7 +75,7 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     };
     await backend.createCollection('streams', config);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body as string);
     expect(body.deferred_indexing).toEqual({
       enabled: true,
       merge_threshold: 5000,
@@ -99,7 +99,7 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     };
     await backend.createCollection('bulk', config);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body as string);
     expect(body.async_index_builder).toEqual({
       merge_threshold: 50_000,
       segment_count: 8,
@@ -123,7 +123,7 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     };
     await backend.createCollection('tuned', config);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body as string);
     expect(body.hnsw_m).toBe(48);
     expect(body.hnsw_ef_construction).toBe(600);
     expect(body.hnsw_alpha).toBe(1.5);
@@ -142,7 +142,7 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     };
     await backend.createCollection('alpha-only', config);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body as string);
     expect(body.hnsw_alpha).toBe(1.8);
     expect(body.hnsw_m).toBeUndefined();
     expect(body.hnsw_ef_construction).toBeUndefined();
@@ -158,7 +158,7 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     const config: CollectionConfig = { dimension: 128 };
     await backend.createCollection('basic', config);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body as string);
     // Must NOT be present (undefined → JSON.stringify drops the key)
     expect(body).not.toHaveProperty('pq_rescore_oversampling');
     expect(body).not.toHaveProperty('deferred_indexing');
@@ -177,7 +177,7 @@ describe('CreateCollectionRequest — advanced fields forwarded to REST', () => 
     };
     await backend.createCollection('no-seg', config);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body as string);
     // segment_count omitted — server applies the num_cpus default
     expect(body.async_index_builder).toEqual({ merge_threshold: 20_000 });
     expect(body.async_index_builder.segment_count).toBeUndefined();
