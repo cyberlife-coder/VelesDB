@@ -79,14 +79,11 @@ fn graph_dump_reaches_the_atomic_write_barriers() {
 fn crashed_dump_leaves_previous_complete_snapshot() {
     let dir = tempdir().expect("test: tempdir");
     let hnsw = build_index(4);
-    hnsw
-        .file_dump(dir.path(), "native_hnsw")
+    hnsw.file_dump(dir.path(), "native_hnsw")
         .expect("test: gen-1 dump");
 
     // Grow the index so a successful second dump would differ visibly.
-    hnsw
-        .insert(&[42.0f32; 32])
-        .expect("test: grow");
+    hnsw.insert(&[42.0f32; 32]).expect("test: grow");
 
     let guard = FaultGuard::inject(AtomicWriteBoundary::Replacement);
     let second = hnsw.file_dump(dir.path(), "native_hnsw");

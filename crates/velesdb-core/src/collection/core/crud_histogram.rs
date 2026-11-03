@@ -223,12 +223,8 @@ mod durability_tests {
     #[test]
     fn write_stats_guarded_reaches_the_dir_fsync() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let coll = Collection::create(
-            dir.path().to_path_buf(),
-            4,
-            crate::DistanceMetric::Cosine,
-        )
-        .expect("collection");
+        let coll = Collection::create(dir.path().to_path_buf(), 4, crate::DistanceMetric::Cosine)
+            .expect("collection");
         let stats = coll.analyze().expect("analyze");
 
         let guard = FaultGuard::inject(AtomicWriteBoundary::ParentDirectorySync);

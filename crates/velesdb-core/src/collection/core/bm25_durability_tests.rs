@@ -572,7 +572,14 @@ fn wal_truncate_is_a_durability_barrier() {
 
     let dir = tempfile::tempdir().expect("temp dir");
     let path = wal_path(&dir);
-    wal_append_batch(&path, &[WalOp::Add { id: 1, text: "hello" }]).expect("append");
+    wal_append_batch(
+        &path,
+        &[WalOp::Add {
+            id: 1,
+            text: "hello",
+        }],
+    )
+    .expect("append");
 
     let ((), counts) = crate::index::wal_framing::io_counters::count_wal_io(&path, || {
         wal_truncate(&path).expect("truncate");
