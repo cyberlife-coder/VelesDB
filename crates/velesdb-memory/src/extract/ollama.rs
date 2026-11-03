@@ -3,8 +3,7 @@
 use super::prompt::{build_graph_prompt, build_prompt};
 use super::reply::{extraction_from_reply, facts_from_reply};
 use super::wire::{
-    extraction_schema, fact_list_schema, generate_body, MAX_GENERATION_TOKENS,
-    REQUEST_TIMEOUT_SECS,
+    extraction_schema, fact_list_schema, generate_body, MAX_GENERATION_TOKENS, REQUEST_TIMEOUT_SECS,
 };
 use super::{ExtractError, ExtractedFact, Extraction, Extractor};
 
