@@ -255,22 +255,64 @@ run_with_watchdog() {
   "$@" <&0 >"$outfile" 2>/dev/null &
   local pid=$!
   local started=$SECONDS
+  # The command's parent, read while it is certainly still our child. This is
+  # the identity the watcher's kill checks against: after `wait` reaps the
+  # command the PID may be reallocated to a process that merely inherited the
+  # number, and only a matching parent proves it is still ours. $$ cannot be
+  # used for this — the function may run inside a pipeline's subshell, where
+  # $$ is the outer script and $PPID its parent, neither the real spawner.
+  local expected_ppid
+  expected_ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
 
   # The bound is wall-clock time: counting rounds of `sleep 0.1` let the forks
   # between them, and a loaded machine, stretch it. SECONDS ticks with the
-  # clock's whole seconds, so killing only once more than `secs` of them have
-  # passed never cuts a command short, and overshoots the bound by at most a
-  # second plus one poll.
-  while kill -0 "$pid" 2>/dev/null; do
-    if watchdog_expired "$started" "$SECONDS" "$secs"; then
-      kill -9 "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      return 124
-    fi
-    sleep 0.1
-  done
+  # clock's whole seconds — and a subshell shares that clock — so killing only
+  # once more than `secs` of them have passed never cuts a command short, and
+  # overshoots the bound by at most a second plus one poll.
+  #
+  # The watcher polls in a subshell of its own and records the kill it is
+  # about to make. The parent then only `wait`s, which is race-free: polling
+  # the child with `kill -0` cannot tell a finished-then-reaped command from
+  # an unrelated process that inherited its PID, and on a loaded machine such
+  # a reuse would keep the loop alive until the bound killed a process that
+  # had already exited cleanly.
+  local fired
+  if ! fired="$(mktemp "${outfile}.watchdog.XXXXXX")"; then
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 124
+  fi
+  rm -f "$fired"
+  (
+    while ! watchdog_expired "$started" "$SECONDS" "$secs"; do
+      sleep 0.1
+    done
+    # The mark is written before the kill so that a `wait` waking on the
+    # command's death can never see the kill without its mark. And SIGKILL is
+    # sent only while the process at PID is still the command we spawned —
+    # the same parent recorded at spawn.
+    : > "$fired" 2>/dev/null || true
+    [ -n "$expected_ppid" ] \
+      && [ "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$expected_ppid" ] \
+      && kill -9 "$pid" 2>/dev/null
+  ) &
+  local watcher=$!
 
-  wait "$pid"
+  local rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+
+  # Reap the watcher either way: still polling if the command finished inside
+  # its bound, already exited if it fired. No parentage check is needed here:
+  # the number cannot be reallocated before `wait` reaps it.
+  kill "$watcher" 2>/dev/null || true
+  wait "$watcher" 2>/dev/null || true
+
+  if [ -e "$fired" ]; then
+    rm -f "$fired"
+    return 124
+  fi
+  rm -f "$fired"
+  return "$rc"
 }
 # <<< only
 

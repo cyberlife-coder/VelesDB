@@ -106,6 +106,28 @@ mkdir -p "$TMPDIR"
 HOOK_STATE_DIR="$TMPDIR/velesdb-agent-hooks-${UID}"
 mkdir -m 700 "$HOOK_STATE_DIR"
 
+# HOME and the VELESDB_* environment are ambient state too, and the hooks
+# consult both. session-start.sh's freshness check probes the daemon at
+# VELESDB_MCP_URL — whose default is the machine's real loopback server — then
+# reads and writes $HOME/.velesdb-memory/.latest-version, and every
+# VELESDB_HOOK_* knob silently retunes a check below (a developer who exports
+# VELESDB_HOOK_MIN_BYTES=1 would watch "below the threshold" checks compile).
+# Isolate all of it: a HOME the hooks may write freely, a daemon URL refused
+# at once so the freshness probe costs no curl timeout and no network, and no
+# inherited knob. VELESDB_MEMORY_BIN_REAL alone survives: it is CI's
+# deliberate handle for the real-binary contract further down.
+REAL_HOME="$HOME"
+export HOME="$TMP_TEST_DIR/home"
+mkdir -p "$HOME"
+for ambient in $(env | sed -n 's/^\(VELESDB_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  [ "$ambient" = "VELESDB_MEMORY_BIN_REAL" ] || unset "$ambient"
+done
+export VELESDB_MCP_URL="http://127.0.0.1:9/mcp"
+# The clock the end-of-suite sandbox check compares the real HOME's freshness
+# cache against: anything newer than this marker was written during the run.
+REAL_HOME_MARKER="$TMP_TEST_DIR/real-home-marker"
+touch "$REAL_HOME_MARKER"
+
 # The hooks under test run from STAGED trees, not the repository: since
 # #2337 no host directory ships its own lib/common.sh — each is composed
 # from shared/hooks/lib/common.sh at install time, and the staged tree is
@@ -335,6 +357,26 @@ if printf '%s' "$fresh_future_out" | jq -e '.hookSpecificOutput.additionalContex
   pass "SessionStart: a freshness cache stamped later than now is a miss"
 else
   fail "SessionStart: a freshness cache stamped later than now is a miss"
+fi
+
+# The checks above override HOME per call; every OTHER hook call in this file
+# inherits the ambient environment, so that is what must be proven sandboxed.
+# The same freshness run without the override must land its cache write — the
+# only thing a hook ever writes under HOME — inside the sandbox exported at
+# the top. A dropped export would send this write to the real HOME and leave
+# the sandbox empty.
+# The path is the literal sandbox, not "$HOME/…": a check that derives its
+# expectation from the variable under test cannot tell sandbox from real.
+ambient_cache="$TMP_TEST_DIR/home/.velesdb-memory/.latest-version"
+rm -f "$ambient_cache"
+ambient_fresh_out="$(PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
+  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+if [ -f "$ambient_cache" ] \
+  && printf '%s' "$ambient_fresh_out" | jq -e \
+    '.hookSpecificOutput.additionalContext | contains("but 9.9.9 is published")' >/dev/null; then
+  pass "Harness: a hook's ambient HOME is the sandbox — its freshness write landed inside TMPDIR"
+else
+  fail "Harness: a hook's ambient HOME is the sandbox — its freshness write landed inside TMPDIR"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1061,19 +1103,21 @@ else
 fi
 
 # The watchdogs count wall-clock seconds, not rounds of `sleep 0.1`. A shim
-# makes each of those rounds last 0.5 s, as a loaded machine does, and the
-# binary exits 8 s after printing its result. A 2 s watchdog cuts it short
-# within 3.5 s; counting rounds would wait 20 of them, 10 s, and ship.
+# makes each of those rounds last a whole second, as a loaded machine does,
+# and the binary exits 15 s after printing its result. A 2 s watchdog cuts it
+# short within ~5 s — a scheduler stall would have to hold this process for
+# ~10 s straight to ship the late exit — while counting the 20 rounds a
+# round-based bound would need waits 20 s and lets the exit ship.
 SLOW_SLEEP_DIR="$FAKE_BIN_DIR/slow-sleep"
 mkdir -p "$SLOW_SLEEP_DIR"
 cat > "$SLOW_SLEEP_DIR/sleep" <<'SHIM'
 #!/usr/bin/env bash
-if [ "$*" = 0.1 ]; then exec /bin/sleep 0.5; fi
+if [ "$*" = 0.1 ]; then exec /bin/sleep 1; fi
 exec /bin/sleep "$@"
 SHIM
 chmod +x "$SLOW_SLEEP_DIR/sleep"
 wall_out="$(env "${COMPILE_TIMEOUTS[@]}" PATH="$SLOW_SLEEP_DIR:$PATH" VELESDB_HOOK_COMPILE_TIMEOUT=2 \
-    FAKE_EXIT_AFTER=8 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-late-exit" \
+    FAKE_EXIT_AFTER=15 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-late-exit" \
     bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
     <<<"$(post_tool_payload "Bash" "wall-clock-watchdog" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$wall_out" | jq -c .)" = "{}" ]; then
@@ -2588,6 +2632,20 @@ if [ -z "$direct_git" ]; then
   pass "Evidence: every hook git call goes through safe_git"
 else
   fail "Evidence: every hook git call goes through safe_git:$direct_git"
+fi
+
+# The sandbox exported at the top is asserted, not assumed. The one hook path
+# that writes under HOME is session-start.sh's freshness check
+# ($HOME/.velesdb-memory/.latest-version), and this suite ran SessionStart
+# dozens of times: had HOME not been sandboxed, every one of them would have
+# read or rewritten the user's real cache. Require that file to be absent or
+# untouched since before the run — a content compare would miss a rewrite of
+# identical bytes, so the marker carries the clock.
+real_cache="$REAL_HOME/.velesdb-memory/.latest-version"
+if [ ! -e "$real_cache" ] || [ ! "$real_cache" -nt "$REAL_HOME_MARKER" ]; then
+  pass "Harness: the hooks' HOME is the sandbox — the real freshness cache was never touched"
+else
+  fail "Harness: the hooks' HOME is the sandbox — $real_cache was written during the run"
 fi
 
 if [ "$FAILED" -ne 0 ]; then

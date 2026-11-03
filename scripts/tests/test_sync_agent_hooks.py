@@ -1215,7 +1215,12 @@ class HarnessIsWired(unittest.TestCase):
         result = subprocess.run(
             ["bash", str(HARNESS)], capture_output=True, text=True, check=False
         )
-        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-2000:])
+        # Name the failing check, not just the tail it may have scrolled out
+        # of: a flake that ends mid-suite once left its `not ok` line above
+        # the 3000-character window and the failure named nothing.
+        not_ok = [line for line in result.stdout.splitlines() if line.startswith("not ok")]
+        detail = "\n".join(not_ok) if not_ok else result.stdout[-3000:]
+        self.assertEqual(result.returncode, 0, detail + "\n" + result.stderr[-2000:])
 
     def test_real_binary_contract_cannot_skip_a_missing_risk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
