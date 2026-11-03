@@ -131,7 +131,7 @@ bouncer = db.create_collection(
 **Why `storage_mode="binary"`?** Each dimension is 0 or 1. Binary storage
 packs 8 dimensions into 1 byte, reducing memory from 1024 bytes (256 x f32)
 to 32 bytes per vector. Hamming distance on binary storage uses hardware
-POPCNT instructions -- 48x faster than f32 distance.
+POPCNT instructions -- much faster than f32 distance.
 
 ### VelesQL (Bouncer)
 
