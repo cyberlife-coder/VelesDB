@@ -426,7 +426,14 @@ impl Database {
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
         let authorized = self.authorize_statement(query, params, decisions)?;
-        self.execute_query_timed(&authorized, params, probe, decisions)
+        let mut results = self.execute_query_timed(&authorized, params, probe, decisions)?;
+        // `search.max_results` is the deployment-wide ceiling on the rows one
+        // query hands back (#2591). It clamps here, at the outermost boundary,
+        // rather than inside the engine: compound operands, JOIN stages and
+        // MATCH candidate pools keep their own fetch windows, and only what
+        // the caller receives is bounded.
+        results.truncate(self.config.search.max_results);
+        Ok(results)
     }
 
     /// Executes the resolved (post-gate) query and fires the `on_query`
@@ -658,6 +665,10 @@ impl Database {
         if let Some(mc) = &query.match_clause {
             self.enrich_match_results_cross_collection(mc, &mut results);
         }
+        // MATCH `RETURN` has no implicit LIMIT — `search.max_results` is the
+        // ceiling that bounds it (#2591), applied post-enrichment so the
+        // merged payload columns cannot move a row past the cut.
+        results.truncate(self.config.search.max_results);
         Ok((results, nodes_visited, edges_traversed))
     }
 

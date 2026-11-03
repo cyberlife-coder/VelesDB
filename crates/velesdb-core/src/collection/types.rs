@@ -564,6 +564,21 @@ pub(crate) struct RuntimeGuards {
     ///
     /// [`SearchQuality::Balanced`]: crate::SearchQuality::Balanced
     pub(crate) runtime_search_quality: Arc<RwLock<crate::SearchQuality>>,
+
+    /// The `search.max_results` ceiling pushed from `VelesConfig::search` at
+    /// `Database` registration time (#2591): the maximum row count a single
+    /// caller-visible search or query may hand back.
+    ///
+    /// `None` is the uncapped state a direct `Collection::create`/`open`
+    /// caller keeps — same "permissive default" contract as
+    /// [`RuntimeLimits`], and why the field is an `Option` rather than a bare
+    /// `usize` (`usize::default()` would cap everything at zero rows). The
+    /// `Database` registration paths overwrite it via
+    /// [`Collection::set_runtime_max_results`]. `Arc<RwLock<_>>` so every
+    /// `Collection` clone shares the same value and the setter can run after
+    /// the registry has cloned the collection. **Not persisted** — re-pushed
+    /// on every open.
+    pub(crate) runtime_max_results: Arc<RwLock<Option<usize>>>,
 }
 
 /// A collection of vectors with associated metadata.
@@ -637,6 +652,23 @@ impl Collection {
     /// Returns the configured default quality (`Copy`, no lock retained).
     pub(crate) fn runtime_search_quality(&self) -> crate::SearchQuality {
         *self.runtime.runtime_search_quality.read()
+    }
+
+    /// Overwrites the per-query result ceiling (#2591).
+    ///
+    /// Same contract as [`Self::set_runtime_limits`]: pushed by the `Database`
+    /// registration paths from the live config, never persisted.
+    pub(crate) fn set_runtime_max_results(&self, cap: usize) {
+        *self.runtime.runtime_max_results.write() = Some(cap);
+    }
+
+    /// The configured per-query result ceiling; `usize::MAX` when nothing was
+    /// pushed (a direct `Collection::create`/`open`), making the clamp a no-op.
+    pub(crate) fn runtime_max_results(&self) -> usize {
+        self.runtime
+            .runtime_max_results
+            .read()
+            .unwrap_or(usize::MAX)
     }
 
     /// Enforces the runtime ingest limits at the cold upsert boundary

@@ -300,7 +300,11 @@ impl GraphCollection {
         batch_size: usize,
         filter: Option<&crate::filter::Filter>,
     ) -> Result<crate::collection::ScrollBatch> {
-        self.inner.scroll_batch(cursor, batch_size, filter)
+        self.inner.scroll_batch(
+            cursor,
+            batch_size.min(self.inner.runtime_max_results()),
+            filter,
+        )
     }
 
     /// Returns the number of nodes (points) stored in this collection.
@@ -548,7 +552,10 @@ impl GraphCollection {
     /// Returns `Error::VectorNotAllowed` if this collection has no embeddings,
     /// or `Error::DimensionMismatch` if the query dimension is wrong.
     pub fn search_by_embedding(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        self.inner.search_by_embedding(query, k)
+        // `search.max_results` bounds the caller-visible row count (#2591);
+        // `usize::MAX` when no `Database` pushed a cap at open.
+        self.inner
+            .search_by_embedding(query, k.min(self.inner.runtime_max_results()))
     }
 
     /// Alias for [`search_by_embedding`](Self::search_by_embedding).

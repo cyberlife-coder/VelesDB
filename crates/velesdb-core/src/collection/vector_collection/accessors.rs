@@ -80,7 +80,13 @@ impl VectorCollection {
         batch_size: usize,
         filter: Option<&crate::filter::Filter>,
     ) -> crate::error::Result<crate::collection::ScrollBatch> {
-        self.inner.scroll_batch(cursor, batch_size, filter)
+        // A page is a per-call row set: `search.max_results` bounds it (#2591);
+        // `usize::MAX` when no `Database` pushed a cap at open.
+        self.inner.scroll_batch(
+            cursor,
+            batch_size.min(self.inner.runtime_max_results()),
+            filter,
+        )
     }
 
     /// Returns the current collection config.

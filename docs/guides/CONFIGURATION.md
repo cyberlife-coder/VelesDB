@@ -64,8 +64,12 @@ To point at a file anywhere else, pass it explicitly:
 > anchors) (issues #2087, #2399, #2430 —
 > `default_mode = "perfect"` is applied as `accurate`, with a warning: an
 > exhaustive scan cannot be a global default). No other query shape or search
-> entry point is guaranteed to follow it yet; #2430 tracks the audit. Everything else
-> below is parsed and validated but **not** wired: `search.max_results`,
+> entry point is guaranteed to follow it yet; #2430 tracks the audit.
+> `search.max_results` is wired too (#2591): it is the ceiling on the rows a
+> single search call or `VelesQL` query (`SELECT`, `MATCH` `RETURN`,
+> compounds) hands back — a caller `k`/`LIMIT` below the ceiling still wins.
+> Everything else
+> below is parsed and validated but **not** wired:
 > `search.query_timeout_ms`, `[quantization]`, `hnsw.max_layers` and
 > `storage.storage_mode` — each still pending its own decision. Setting any of
 > these away from its default logs a warning at load, naming exactly what is
@@ -419,8 +423,7 @@ name kept as they are:
 | `VELESDB_STORAGE_STORAGE_MODE` | `storage.storage_mode` | `mmap` |
 
 Setting one of these is exactly equivalent to setting its TOML key. Most are
-**reserved** and stay reserved when set this way: `VELESDB_SEARCH_MAX_RESULTS`
-is parsed, validated and applied by nothing, just like `[search] max_results`;
+**reserved** and stay reserved when set this way;
 see the note at the top of this guide for what the engine acts on.
 
 Note `VELESDB_STORAGE_STORAGE_MODE`, not `VELESDB_STORAGE_MODE`: the section is
