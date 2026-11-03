@@ -164,7 +164,7 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 
 | File | NLOC | Plan |
 |------|------|------|
-| `simd_native/x86_avx512.rs` | 1468 | Hard to split (intrinsics block); accepted exception |
+| `simd_native/x86_avx512.rs` | ~556 | Hamming/Jaccard split out into `x86_avx512/hamming_jaccard.rs` (#2396); intrinsics block remains dense |
 | `velesdb-server/src/config.rs` | 837 | Refactor pending |
 | `velesdb-migrate/src/pipeline.rs` | 806 | Refactor pending |
 
