@@ -23,6 +23,7 @@ import {
   type SearchTransport,
 } from '../src/backends/search-backend';
 import type { TransportResponse } from '../src/backends/shared';
+import type { FusionStrategy } from '../src/types/search';
 import { CollectionNotFoundError } from '../src/errors';
 import { ValidationError } from '../src/types';
 
@@ -385,7 +386,9 @@ describe('multiQuerySearch', () => {
       [new Float32Array([0.1]), [0.2]],
       {
         k: 5,
-        fusion: 'avg',
+        // 'avg' is an alias core accepts for 'average' (FUSION_STRATEGY_NAMES);
+        // the REST path forwards the caller's name verbatim.
+        fusion: 'avg' as FusionStrategy,
         fusionParams: {
           k: 99,
           avgWeight: 0.3,
@@ -497,7 +500,11 @@ describe('multiQuerySearchIds', () => {
       transport,
       'docs',
       [new Float32Array([0.1]), [0.2]],
-      { k: 5, fusion: 'avg', fusionParams: { avgWeight: 0.3, maxWeight: 0.7, hitWeight: 0.5 } }
+      {
+        k: 5,
+        fusion: 'avg' as FusionStrategy,
+        fusionParams: { avgWeight: 0.3, maxWeight: 0.7, hitWeight: 0.5 },
+      }
     );
 
     const body = (transport.requestJson as ReturnType<typeof vi.fn>).mock
