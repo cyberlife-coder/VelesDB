@@ -76,7 +76,6 @@ fn test_wizard_config_creation() {
     let config = WizardConfig {
         source_type: SourceType::Qdrant,
         url: "http://localhost:6333".to_string(),
-        api_key: None,
         collection: "test_collection".to_string(),
         dest_path: "./velesdb_data".to_string(),
         use_sq8: false,
@@ -85,28 +84,9 @@ fn test_wizard_config_creation() {
     // Assert
     assert_eq!(config.source_type, SourceType::Qdrant);
     assert_eq!(config.url, "http://localhost:6333");
-    assert!(config.api_key.is_none());
     assert_eq!(config.collection, "test_collection");
     assert_eq!(config.dest_path, "./velesdb_data");
     assert!(!config.use_sq8);
-}
-
-#[test]
-fn test_wizard_config_with_api_key() {
-    // Arrange & Act
-    let config = WizardConfig {
-        source_type: SourceType::Supabase,
-        url: "https://xyz.supabase.co".to_string(),
-        api_key: Some("secret-key".to_string()),
-        collection: "documents".to_string(),
-        dest_path: "./data".to_string(),
-        use_sq8: true,
-    };
-
-    // Assert
-    assert_eq!(config.source_type, SourceType::Supabase);
-    assert_eq!(config.api_key, Some("secret-key".to_string()));
-    assert!(config.use_sq8);
 }
 
 // ==================== Wizard Tests ====================
@@ -139,14 +119,13 @@ fn test_build_source_config_qdrant() {
     let config = WizardConfig {
         source_type: SourceType::Qdrant,
         url: "http://localhost:6333".to_string(),
-        api_key: Some("test-key".to_string()),
         collection: "vectors".to_string(),
         dest_path: "./data".to_string(),
         use_sq8: false,
     };
 
     // Act
-    let result = wizard.build_source_config(&config);
+    let result = wizard.build_source_config(&config, Some("test-key"));
 
     // Assert
     assert!(result.is_ok());
@@ -168,14 +147,13 @@ fn test_build_source_config_supabase() {
     let config = WizardConfig {
         source_type: SourceType::Supabase,
         url: "https://xyz.supabase.co".to_string(),
-        api_key: Some("service-key".to_string()),
         collection: "documents".to_string(),
         dest_path: "./data".to_string(),
         use_sq8: false,
     };
 
     // Act
-    let result = wizard.build_source_config(&config);
+    let result = wizard.build_source_config(&config, Some("service-key"));
 
     // Assert
     assert!(result.is_ok());
@@ -197,14 +175,13 @@ fn test_build_source_config_chromadb() {
     let config = WizardConfig {
         source_type: SourceType::ChromaDB,
         url: "http://localhost:8000".to_string(),
-        api_key: None,
         collection: "embeddings".to_string(),
         dest_path: "./data".to_string(),
         use_sq8: false,
     };
 
     // Act
-    let result = wizard.build_source_config(&config);
+    let result = wizard.build_source_config(&config, None);
 
     // Assert
     assert!(result.is_ok());
@@ -225,14 +202,13 @@ fn test_build_source_config_pinecone() {
     let config = WizardConfig {
         source_type: SourceType::Pinecone,
         url: "https://index.pinecone.io".to_string(),
-        api_key: Some("pinecone-key".to_string()),
         collection: "my-index".to_string(),
         dest_path: "./data".to_string(),
         use_sq8: false,
     };
 
     // Act
-    let result = wizard.build_source_config(&config);
+    let result = wizard.build_source_config(&config, Some("pinecone-key"));
 
     // Assert
     assert!(result.is_ok());
@@ -253,14 +229,13 @@ fn test_build_source_config_weaviate() {
     let config = WizardConfig {
         source_type: SourceType::Weaviate,
         url: "http://localhost:8080".to_string(),
-        api_key: None,
         collection: "Document".to_string(),
         dest_path: "./data".to_string(),
         use_sq8: false,
     };
 
     // Act
-    let result = wizard.build_source_config(&config);
+    let result = wizard.build_source_config(&config, None);
 
     // Assert
     assert!(result.is_ok());
@@ -281,14 +256,13 @@ fn test_build_source_config_milvus() {
     let config = WizardConfig {
         source_type: SourceType::Milvus,
         url: "http://localhost:19530".to_string(),
-        api_key: None,
         collection: "vectors".to_string(),
         dest_path: "./data".to_string(),
         use_sq8: false,
     };
 
     // Act
-    let result = wizard.build_source_config(&config);
+    let result = wizard.build_source_config(&config, None);
 
     // Assert
     assert!(result.is_ok());
@@ -311,7 +285,6 @@ fn test_build_migration_config_full_storage() {
     let config = WizardConfig {
         source_type: SourceType::Qdrant,
         url: "http://localhost:6333".to_string(),
-        api_key: None,
         collection: "test".to_string(),
         dest_path: "./velesdb_data".to_string(),
         use_sq8: false,
@@ -328,7 +301,7 @@ fn test_build_migration_config_full_storage() {
     };
 
     // Act
-    let result = wizard.build_migration_config(&config, &schema);
+    let result = wizard.build_migration_config(&config, &schema, None);
 
     // Assert
     assert!(result.is_ok());
@@ -352,7 +325,6 @@ fn test_build_migration_config_sq8_storage() {
     let config = WizardConfig {
         source_type: SourceType::Qdrant,
         url: "http://localhost:6333".to_string(),
-        api_key: None,
         collection: "test".to_string(),
         dest_path: "./velesdb_data".to_string(),
         use_sq8: true, // SQ8 enabled
@@ -369,7 +341,7 @@ fn test_build_migration_config_sq8_storage() {
     };
 
     // Act
-    let result = wizard.build_migration_config(&config, &schema);
+    let result = wizard.build_migration_config(&config, &schema, None);
 
     // Assert
     assert!(result.is_ok());
@@ -388,7 +360,6 @@ fn test_build_migration_config_options() {
     let config = WizardConfig {
         source_type: SourceType::ChromaDB,
         url: "http://localhost:8000".to_string(),
-        api_key: None,
         collection: "embeddings".to_string(),
         dest_path: "./data".to_string(),
         use_sq8: false,
@@ -405,7 +376,7 @@ fn test_build_migration_config_options() {
     };
 
     // Act
-    let result = wizard.build_migration_config(&config, &schema);
+    let result = wizard.build_migration_config(&config, &schema, None);
 
     // Assert
     assert!(result.is_ok());
@@ -414,4 +385,142 @@ fn test_build_migration_config_options() {
     assert_eq!(migration.options.workers, 4);
     assert!(!migration.options.dry_run);
     assert!(migration.options.checkpoint_enabled);
+}
+
+// ==================== Secret Redaction Tests ====================
+// The wizard collects an API key via `Password` input. Nothing the wizard
+// writes to the console or tracing may contain that secret (issue #2601).
+
+const CANARY_KEY: &str = "sk-canary-4f8e2d1c9b7a";
+
+#[test]
+fn test_redact_url_strips_userinfo_password() {
+    let redacted = crate::redact::redact_url("redis://:s3cr3t-p4ss@cache.internal:6379/0");
+    assert!(!redacted.contains("s3cr3t-p4ss"), "leaked: {redacted}");
+    assert_eq!(redacted, "redis://***@cache.internal:6379/0");
+}
+
+#[test]
+fn test_redact_url_strips_user_and_password() {
+    let redacted = crate::redact::redact_url("postgres://admin:hunter2@db.local:5432/vecs");
+    assert!(!redacted.contains("hunter2"), "leaked: {redacted}");
+    assert!(!redacted.contains("admin"), "leaked: {redacted}");
+    assert_eq!(redacted, "postgres://***@db.local:5432/vecs");
+}
+
+#[test]
+fn test_redact_url_drops_query_and_fragment() {
+    let redacted = crate::redact::redact_url("https://h.example.com/api?api_key=abc123#frag");
+    assert!(!redacted.contains("abc123"), "leaked: {redacted}");
+    assert_eq!(redacted, "https://h.example.com/api");
+}
+
+#[test]
+fn test_redact_url_without_credentials_unchanged() {
+    assert_eq!(
+        crate::redact::redact_url("http://localhost:6333"),
+        "http://localhost:6333"
+    );
+    assert_eq!(
+        crate::redact::redact_url("./vectors.json"),
+        "./vectors.json"
+    );
+}
+
+#[test]
+fn test_wizard_config_debug_contains_no_api_key_field() {
+    // `WizardConfig` is echoed to the console; a struct that can hold the
+    // collected key would leak it through its derived `Debug` too.
+    let config = WizardConfig {
+        source_type: SourceType::Qdrant,
+        url: "http://localhost:6333".to_string(),
+        collection: "vectors".to_string(),
+        dest_path: "./data".to_string(),
+        use_sq8: false,
+    };
+    let debug = format!("{config:?}");
+    assert!(!debug.contains(CANARY_KEY), "leaked: {debug}");
+    assert!(!debug.contains("api_key"), "leaked: {debug}");
+}
+
+#[test]
+fn test_api_key_reaches_source_config_but_never_log_output() {
+    // The key must still reach the connector config (its only consumer) while
+    // every wizard sink renders output that cannot contain it.
+    let config = WizardConfig {
+        source_type: SourceType::Supabase,
+        url: "https://xyz.supabase.co".to_string(),
+        collection: "documents".to_string(),
+        dest_path: "./data".to_string(),
+        use_sq8: false,
+    };
+    let api_key = Some(CANARY_KEY.to_string());
+
+    let wizard = Wizard::new();
+    let source = wizard
+        .build_source_config(&config, api_key.as_deref())
+        .unwrap();
+    match source {
+        SourceConfig::Supabase(cfg) => assert_eq!(cfg.api_key, CANARY_KEY),
+        _ => panic!("Expected Supabase config"),
+    }
+
+    let sinks = [
+        super::ui::format_connecting(&config.url),
+        format!("{config:?}"),
+    ];
+    for out in &sinks {
+        assert!(!out.contains(CANARY_KEY), "leaked: {out}");
+    }
+}
+
+#[test]
+fn test_format_connecting_redacts_embedded_credentials() {
+    let out = super::ui::format_connecting("redis://:hunter2@host:6379");
+    assert!(!out.contains("hunter2"), "leaked: {out}");
+    assert!(out.contains("host:6379"), "lost host: {out}");
+}
+
+#[test]
+fn test_wizard_rendered_output_never_contains_secret() {
+    // Render every wizard sink from a config plus a credential-bearing URL and
+    // assert the secret cannot appear anywhere.
+    let config = WizardConfig {
+        source_type: SourceType::Supabase,
+        url: "https://user:hunter2@proj.supabase.co".to_string(),
+        collection: "documents".to_string(),
+        dest_path: "./data".to_string(),
+        use_sq8: false,
+    };
+    let schema = crate::connectors::SourceSchema {
+        source_type: "supabase".to_string(),
+        collection: "documents".to_string(),
+        dimension: 768,
+        total_count: Some(10),
+        fields: vec![],
+        vector_column: None,
+        id_column: None,
+        metric: None,
+    };
+    let stats = crate::pipeline::MigrationStats {
+        extracted: 10,
+        loaded: 10,
+        failed: 0,
+        batches: 1,
+        duration_secs: 1.0,
+        edges_created: 0,
+        edges_failed: 0,
+        relations_processed: 0,
+    };
+
+    let sinks = [
+        super::ui::format_connecting(&config.url),
+        super::prompts::format_preview(&schema, &config),
+        super::ui::format_success(&stats, &config),
+        format!("{config:?}"),
+    ];
+    for out in &sinks {
+        assert!(!out.contains(CANARY_KEY), "leaked: {out}");
+        assert!(!out.contains("hunter2"), "leaked: {out}");
+    }
 }
