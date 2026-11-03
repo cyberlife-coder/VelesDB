@@ -112,9 +112,10 @@ pub(super) fn narrow_where(slot: &mut Option<Condition>, filter: Condition) {
 /// the first time; later consultations replay the recorded answer, so the
 /// statement sees one policy snapshot and a logging/metering observer sees
 /// each collection decided once. Created at each statement entry point
-/// (`execute_query`, `execute_aggregate`, `explain_query`,
-/// `explain_analyze_query`) and threaded through the gate; a fresh empty memo
-/// also serves call sites that consult once per invocation.
+/// (`execute_query`, `execute_aggregate`, `explain_query` /
+/// `explain_query_with_params`, `explain_analyze_query`) and threaded through
+/// the gate; a fresh empty memo also serves call sites that consult once per
+/// invocation.
 ///
 /// Only `Allow` and `Scope` outcomes are recorded: a `Deny` or an observer
 /// failure aborts the statement on first sight, so nothing downstream could
