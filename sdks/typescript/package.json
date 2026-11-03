@@ -26,7 +26,7 @@
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
     "format": "prettier --write src",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.examples.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.eslint.json && tsc -p tsconfig.examples.json",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
