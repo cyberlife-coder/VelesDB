@@ -36,6 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TypeScript SDK: one error code per bad input, on both backends** (#2307).
+  A type-level bad value over REST (a negative or fractional `top_k`, a
+  string `rrf_k`, a `null` fusion weight, a non-string `fusion` strategy)
+  fails axum's body deserialization, which answers a plain-text `422` with no
+  JSON code — the SDK surfaced `UNKNOWN_ERROR` where the WASM backend gives
+  `BAD_REQUEST` for the same input. `422` now maps to `BAD_REQUEST`, the code
+  every such refusal means. `db.multiQuerySearch([])` was `VALIDATION_ERROR`
+  at the client layer while the WASM backend answered `BAD_REQUEST`; the
+  client guard and both backends now refuse an out-of-range vector count
+  (core's 1-to-10) with `BAD_REQUEST`, and a direct `RestBackend` call
+  refuses it before any request leaves. The WASM `query` path names a LIMIT
+  token core's u64 parser refuses (`LIMIT -1`, `+5`, `1e3`) `BAD_REQUEST`
+  rather than `NOT_SUPPORTED`, which stays for clauses WASM does not
+  evaluate. And `velesql().nearFused()`/`fusion()` refuse a non-string
+  strategy with `BAD_REQUEST` instead of coercing it — a bare `TypeError`
+  on a prototype-less object.
 - **The read gate consults the observer once per `(collection, operation)`
   per statement** (#2588). A statement that fans out internally — a
   self-JOIN, a `UNION`/`INTERSECT`/`EXCEPT` over one collection, a `MATCH`

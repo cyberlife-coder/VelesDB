@@ -81,7 +81,7 @@ VelesDBVectorStore(
 
 **Core Operations:**
 - `add_texts(texts, metadatas=None, ids=None)` - Add texts to the store
-- `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (2-3x faster for large batches)
+- `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (faster for large batches)
 - `add_texts_streaming(texts, metadatas=None, ids=None, ...)` - Stream-insert via the bounded-channel ingestion pipeline (returns the list of inserted IDs)
 - `delete(ids)` - Delete documents by ID
 - `get_by_ids(ids)` - Retrieve documents by their IDs

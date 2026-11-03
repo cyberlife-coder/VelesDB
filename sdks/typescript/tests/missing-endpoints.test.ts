@@ -25,7 +25,7 @@ async function initBackend(): Promise<RestBackend> {
 }
 
 function lastCall(): { url: string; method: string; body?: Record<string, unknown> } {
-  const call = mockFetch.mock.calls[mockFetch.mock.calls.length - 1];
+  const call = mockFetch.mock.calls[mockFetch.mock.calls.length - 1]!;
   const url = call[0] as string;
   const init = call[1];
   const body = init?.body ? JSON.parse(init.body as string) : undefined;
@@ -237,10 +237,10 @@ describe('matchQuery', () => {
     expect(call.body).not.toHaveProperty('timeout_ms');
 
     expect(resp.results).toHaveLength(1);
-    expect(resp.results[0].bindings).toEqual({ a: 1, b: 2 });
-    expect(resp.results[0].score).toBe(0.92);
-    expect(resp.results[0].depth).toBe(2);
-    expect(resp.results[0].projected).toEqual({ 'a.name': 'Alice' });
+    expect(resp.results[0]!.bindings).toEqual({ a: 1, b: 2 });
+    expect(resp.results[0]!.score).toBe(0.92);
+    expect(resp.results[0]!.depth).toBe(2);
+    expect(resp.results[0]!.projected).toEqual({ 'a.name': 'Alice' });
     expect(resp.tookMs).toBe(7);
     expect(resp.count).toBe(1);
     expect(resp.meta.velesqlContractVersion).toBe('3.6');
@@ -280,8 +280,8 @@ describe('matchQuery', () => {
         }),
     });
     const resp = await backend.matchQuery('kg', 'MATCH (a) RETURN a');
-    expect(resp.results[0].projected).toEqual({});
-    expect(resp.results[0].score).toBeUndefined();
+    expect(resp.results[0]!.projected).toEqual({});
+    expect(resp.results[0]!.score).toBeUndefined();
   });
 });
 
@@ -430,7 +430,7 @@ describe('getNodeEdges', () => {
     expect(lastCall().url).toContain('direction=in');
     expect(lastCall().url).toContain('label=KNOWS');
     expect(edges).toHaveLength(1);
-    expect(edges[0].label).toBe('KNOWS');
+    expect(edges[0]!.label).toBe('KNOWS');
   });
 
   it('preserves string-typed IDs from serialize_id_as_string', async () => {
@@ -453,10 +453,10 @@ describe('getNodeEdges', () => {
 
     const edges = await backend.getNodeEdges('kg', 10);
     expect(edges).toHaveLength(1);
-    expect(edges[0].id).toBe('42');
-    expect(edges[0].source).toBe('10');
-    expect(edges[0].target).toBe('20');
-    expect(edges[0].properties).toEqual({ since: '2020' });
+    expect(edges[0]!.id).toBe('42');
+    expect(edges[0]!.source).toBe('10');
+    expect(edges[0]!.target).toBe('20');
+    expect(edges[0]!.properties).toEqual({ since: '2020' });
   });
 
   it('omits the query string entirely when no options supplied', async () => {
@@ -553,12 +553,12 @@ describe('graphSearch', () => {
     expect(call.body?.vector).toEqual([0.1, 0.2, 0.3]);
     expect(call.body?.top_k).toBe(5);
     expect(res.results).toHaveLength(2);
-    expect(res.results[0].id).toBe('10');
-    expect(res.results[0].score).toBe(0.92);
+    expect(res.results[0]!.id).toBe('10');
+    expect(res.results[0]!.score).toBe(0.92);
     // Payload must round-trip (not dropped by the mapper).
-    expect(res.results[0].payload).toEqual({ name: 'Alice' });
-    expect(res.results[1].id).toBe('20');
-    expect(res.results[1].payload).toBeUndefined();
+    expect(res.results[0]!.payload).toEqual({ name: 'Alice' });
+    expect(res.results[1]!.id).toBe('20');
+    expect(res.results[1]!.payload).toBeUndefined();
   });
 
   it('defaults k to 10 when omitted', async () => {

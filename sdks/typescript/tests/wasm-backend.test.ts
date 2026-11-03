@@ -4,7 +4,7 @@
  * Tests the WasmBackend class with mock WASM module
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
 import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
 import { FakeSparseIndex } from './helpers/fake-sparse-index';
@@ -14,7 +14,10 @@ class MockVectorStore {
   insert = vi.fn();
   insert_with_payload = vi.fn();
   insert_batch = vi.fn();
-  search = vi.fn(() => [[BigInt(1), 0.95], [BigInt(2), 0.85]]);
+  search = vi.fn((_q: Float32Array, _k: number) => [
+    [BigInt(1), 0.95],
+    [BigInt(2), 0.85],
+  ]);
   // The binding parses the preset, then runs the same brute-force search
   // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
   search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
@@ -32,8 +35,18 @@ class MockVectorStore {
   query = vi.fn(() => [
     { id: 1, a: 1 },
   ]);
-  multi_query_search = vi.fn(() => [[BigInt(1), 0.95]]);
-  remove = vi.fn(() => true);
+  // (flat, numVectors, k, strategy, rrfK, weights) — tests read calls[0][5].
+  multi_query_search = vi.fn(
+    (
+      _flat: Float32Array,
+      _numVectors: number,
+      _k: number,
+      _strategy: string,
+      _rrfK: number,
+      _weights: Float32Array | null
+    ) => [[BigInt(1), 0.95]]
+  );
+  remove = vi.fn((_id: bigint) => true);
   clear = vi.fn();
   reserve = vi.fn();
   free = vi.fn();
@@ -358,7 +371,7 @@ describe('WasmBackend', () => {
     it('should search vectors', async () => {
       const results = await backend.search('vectors', [1.0, 0.0, 0.0, 0.0], { k: 2 });
       expect(results.length).toBe(2);
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.score).toBe(0.95);
     });
 
     it('should delete a vector', async () => {
@@ -376,7 +389,8 @@ describe('WasmBackend', () => {
 
       const collections = (backend as any).collections;
       const store = collections.get('vectors').store as MockVectorStore;
-      const lastRemoveArg = store.remove.mock.calls.at(-1)?.[0];
+      const calls = store.remove.mock.calls;
+      const lastRemoveArg = calls[calls.length - 1]?.[0];
       expect(lastRemoveArg).not.toBe(BigInt(123));
     });
   });
@@ -390,7 +404,7 @@ describe('WasmBackend', () => {
     it('should execute multi-query search', async () => {
       const results = await backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]]);
       expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.score).toBe(0.95);
     });
 
     it('should accept weighted fusion strategy', async () => {
@@ -407,10 +421,10 @@ describe('WasmBackend', () => {
       expect(store.multi_query_search).toHaveBeenCalledWith(
         expect.any(Float32Array), 1, 10, 'weighted', 60, expect.any(Float32Array),
       );
-      const weights = store.multi_query_search.mock.calls[0][5] as Float32Array;
+      const weights = store.multi_query_search.mock.calls[0]![5] as Float32Array;
       expect(Array.from(weights)).toEqual(Array.from(new Float32Array([0.6, 0.3, 0.1])));
       expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.score).toBe(0.95);
     });
   });
 
@@ -428,7 +442,7 @@ describe('WasmBackend', () => {
     it('supports hybrid search', async () => {
       const results = await backend.hybridSearch('vectors', [0.1, 0.2, 0.3, 0.4], 'query');
       expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.91);
+      expect(results[0]!.score).toBe(0.91);
     });
 
     it('supports query mapping', async () => {

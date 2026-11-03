@@ -17,12 +17,19 @@ of results measured in one run is registered once, with that run's source,
 date, machine and version). A figure nobody measured is removed, or stated
 without a number.
 
-Scope: README.md, docs/ (except docs/archive/), every README under crates/,
-sdks/ and examples/, the doc comments (`///`, `//!`) under crates/*/src, and
-the Python and TypeScript bindings' docstrings and doc comments. A CHANGELOG
-records history, not promises, and benchmark result files are sources: both
-are out of scope. So is bench code: its figures are the bounds it asserts and
-the results it prints, the measurement itself rather than a promise about it.
+Scope: every Markdown document at the repository root (README.md included),
+docs/ (except docs/archive/), every README under crates/, sdks/ and
+examples/, the Markdown documents of tutorials/, demos/, benchmarks/ and
+integrations/, the docstrings and doc comments of the Python and TypeScript
+sources under tutorials/, demos/ and integrations/, the doc comments (`///`,
+`//!`) under crates/*/src, and the Python and TypeScript bindings' docstrings
+and doc comments. A CHANGELOG records history, not promises, and benchmark
+result files are sources: both are out of scope, the latter wherever they sit
+(benchmarks/ is read at its top level only, so results/ stays a source). So is
+bench code: its figures are the bounds it asserts and the results it prints,
+the measurement itself rather than a promise about it. And so is a claim
+surface that lives outside the tree — a pull-request body, an issue comment:
+no file carries them, so nothing here reads them (#2295).
 
 It reads what a reader sees. Every document, and every doc comment or
 docstring once its comment markers are taken off, is parsed as Markdown by
@@ -259,6 +266,13 @@ RATIO_QUALIFIERS = (SIZE_WORDS, BOUND_WORDS, CONFIG_WORDS)
 CONFIG_QUALIFIERS = (CONFIG_WORDS,)
 QUALIFIERS = {"ratio": RATIO_QUALIFIERS, "time": CONFIG_QUALIFIERS, "latency": CONFIG_QUALIFIERS, "throughput": CONFIG_QUALIFIERS}
 
+# How the files of tutorials/, demos/ and integrations/ are read: a Markdown
+# document whole, a Python or TypeScript source through its docstrings and doc
+# comments only.
+DOC_SUFFIXES = {".md": "text", ".py": "python", ".pyi": "python", ".ts": "typescript"}
+# Trees that ship someone else's files, not documents of this repository.
+VENDOR_PARTS = {"node_modules", "target", "__pycache__", "site-packages", ".venv", "venv"}
+
 # The comment markers a doc comment's Markdown sits behind.
 RUST_DOC = re.compile(r"^\s*(///|//!)")
 TS_DOC = re.compile(r"^\s*(?:/\*+|\*+(?!/)|//+)")
@@ -314,9 +328,21 @@ def documents(root: Path):
     readme = root / "README.md"
     if readme.is_file():
         yield readme, "text"
+    for path in sorted(root.glob("*.md")):
+        if path.name != "README.md":
+            yield path, "text"
     for path in sorted((root / "docs").rglob("*.md")):
         if "archive" not in path.relative_to(root / "docs").parts:
             yield path, "text"
+    # The rest of the tree a reader reaches (#2295). benchmarks/ is read at
+    # its top level only: its results/ hold sources, not promises.
+    for path in sorted((root / "benchmarks").glob("*.md")):
+        yield path, "text"
+    for top in ("demos", "integrations", "tutorials"):
+        for path in sorted((root / top).rglob("*")):
+            kind = DOC_SUFFIXES.get(path.suffix)
+            if kind and path.is_file() and not VENDOR_PARTS & set(path.parts):
+                yield path, kind
     for top in ("crates", "sdks", "examples"):
         for path in sorted((root / top).rglob("README.md")):
             if not {"node_modules", "target"} & set(path.parts):

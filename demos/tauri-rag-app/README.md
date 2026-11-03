@@ -208,13 +208,13 @@ export function SearchBar({ onResults }: SearchBarProps) {
 
 ## Performance
 
-VelesDB provides **microsecond-level** latency:
+VelesDB provides **low-latency** operations:
 
 | Operation | Time |
 |-----------|------|
-| Insert 10k vectors (384D) | ~25ms total |
-| Search 10k vectors | ~1ms |
-| Search 100k vectors | ~50ms |
+| Insert 10k vectors (384D) | tens of ms total |
+| Search 10k vectors | millisecond-scale |
+| Search 100k vectors | tens of ms |
 
 This makes it perfect for:
 - **Real-time RAG** - No perceptible delay

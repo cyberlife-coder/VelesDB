@@ -581,3 +581,151 @@ fn jsonl_tolerates_a_blank_line_between_turns() {
     }
     assert_eq!(cursor, text.len());
 }
+
+// --- Real agent-harness envelopes (issue #2357) -------------------------------
+
+/// Assert `outcome`'s byte ranges partition `text` exactly — the check the
+/// envelope tests all share.
+fn assert_partitions(text: &str, outcome: &super::SegmentationOutcome) {
+    let mut ranges: Vec<(usize, usize)> = outcome
+        .segments
+        .iter()
+        .map(|s| (s.byte_start, s.byte_end))
+        .collect();
+    ranges.sort_unstable();
+    let mut cursor = 0_usize;
+    for (start, end) in ranges {
+        assert_eq!(start, cursor, "gap or overlap at byte {cursor}");
+        cursor = end;
+    }
+    assert_eq!(cursor, text.len());
+}
+
+#[test]
+fn harness_envelope_turns_are_detected_as_jsonl_not_one_plain_blob() {
+    // Given a transcript in the shape a real agent harness writes — every
+    // turn wrapped in {"type": ..., "message": {role, content}} — Auto used
+    // to conclude "not JSONL" (the wrapper is not a flat {role, content}
+    // object), fall back to `plain`, find no marker, and emit ONE roleless
+    // turn covering the whole file: a silently wrong segmentation, or a
+    // payload-cap crash once the file topped the fragment cap (issue
+    // #2357).
+    let text = concat!(
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"what broke?\"},\"uuid\":\"u1\"}\n",
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"clippy failed\"}]},\"uuid\":\"a1\"}\n",
+    );
+
+    // When segmenting with auto-detection (the default)
+    let outcome = segment_transcript(text, &policy()).expect("segments");
+
+    // Then the envelopes are turns: jsonl detected, one turn per line,
+    // roles from message.role, content decoded — never a plain blob
+    assert_eq!(outcome.format_detected, SegmentFormat::Jsonl, "{outcome:?}");
+    assert_eq!(outcome.segments.len(), 2, "{outcome:?}");
+    assert_eq!(outcome.segments[0].role, Some("user".to_owned()));
+    assert_eq!(outcome.segments[0].fragment.content, "what broke?");
+    assert_eq!(outcome.segments[1].role, Some("assistant".to_owned()));
+    assert_eq!(outcome.segments[1].fragment.content, "clippy failed");
+    assert_partitions(text, &outcome);
+}
+
+#[test]
+fn envelope_content_blocks_extract_text_and_keep_tool_calls_verbatim() {
+    // Given an assistant turn whose `content` is a block array — a text
+    // block then a tool_use block with no `text` field of its own
+    let text = concat!(
+        "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[",
+        "{\"type\":\"text\",\"text\":\"let me check\"},",
+        "{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}",
+        "]}}\n",
+    );
+
+    // When segmenting
+    let outcome = segment_transcript(text, &policy()).expect("segments");
+
+    // Then the text block contributes its text, and the tool call is kept
+    // as compact JSON rather than dropped — the compiler should see that a
+    // tool ran, never silence
+    assert_eq!(outcome.format_detected, SegmentFormat::Jsonl, "{outcome:?}");
+    assert_eq!(outcome.segments.len(), 1, "{outcome:?}");
+    assert_eq!(outcome.segments[0].role, Some("assistant".to_owned()));
+    let content = &outcome.segments[0].fragment.content;
+    assert!(content.contains("let me check"), "{content}");
+    assert!(content.contains("tool_use"), "{content}");
+    assert!(content.contains("Bash"), "{content}");
+    assert_partitions(text, &outcome);
+}
+
+#[test]
+fn non_turn_json_records_stay_verbatim_roleless_turns() {
+    // Given a real-shaped transcript interleaving harness bookkeeping
+    // records — a compaction summary, a file-history snapshot — with turns.
+    // Such a line parses as JSON but matches no turn shape: it must not
+    // fail the file (it IS jsonl) and its content must not be dropped — it
+    // becomes a role-less turn whose content is the record's
+    // `content`/`summary` payload when it carries one, else the line
+    // verbatim.
+    let text = concat!(
+        "{\"type\":\"summary\",\"summary\":\"prior session compressed\",\"leafUuid\":\"abc\"}\n",
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+        "{\"type\":\"file-history-snapshot\",\"messageId\":\"m1\",\"snapshot\":{\"files\":[]}}\n",
+    );
+
+    // When segmenting
+    let outcome = segment_transcript(text, &policy()).expect("segments");
+
+    // Then jsonl is detected, every line is its own turn, and a record's
+    // payload is extracted where it has one, verbatim where it does not
+    assert_eq!(outcome.format_detected, SegmentFormat::Jsonl, "{outcome:?}");
+    assert_eq!(outcome.segments.len(), 3, "{outcome:?}");
+    assert_eq!(outcome.segments[0].role, None);
+    assert_eq!(
+        outcome.segments[0].fragment.content,
+        "prior session compressed"
+    );
+    assert_eq!(outcome.segments[0].turn, 0);
+    assert_eq!(outcome.segments[1].role, Some("user".to_owned()));
+    assert_eq!(outcome.segments[2].role, None);
+    assert!(
+        outcome.segments[2]
+            .fragment
+            .content
+            .contains("file-history-snapshot"),
+        "{}",
+        outcome.segments[2].fragment.content
+    );
+    assert_partitions(text, &outcome);
+}
+
+#[test]
+fn flat_and_envelope_lines_mix_in_one_transcript() {
+    // Given a transcript mixing the flat {role, content} shape and the
+    // harness envelope — a caller flattening some lines but not others
+    // must not lose either
+    let text = concat!(
+        "{\"role\":\"system\",\"content\":\"be terse\"}\n",
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+    );
+
+    let mut jsonl_policy = policy();
+    jsonl_policy.format = SegmentFormat::Jsonl;
+    let outcome = segment_transcript(text, &jsonl_policy).expect("segments");
+
+    assert_eq!(outcome.format_detected, SegmentFormat::Jsonl);
+    assert_eq!(outcome.segments.len(), 2, "{outcome:?}");
+    assert_eq!(outcome.segments[0].role, Some("system".to_owned()));
+    assert_eq!(outcome.segments[1].role, Some("user".to_owned()));
+}
+
+#[test]
+fn auto_falls_back_to_plain_only_when_a_line_is_not_json() {
+    // Given a file that is NOT clean JSONL — its first line is plain text
+    // — the Auto fallback to `plain` is the correct answer still: the
+    // defect was never "fallback exists" but "all-JSON content was treated
+    // as non-JSONL" (issue #2357)
+    let text = "User: hi\n{\"role\":\"assistant\",\"content\":\"hello\"}\n";
+
+    let outcome = segment_transcript(text, &policy()).expect("segments");
+
+    assert_eq!(outcome.format_detected, SegmentFormat::Plain);
+}

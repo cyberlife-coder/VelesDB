@@ -103,6 +103,43 @@ class FigureSourcesTest(unittest.TestCase):
         root = self.tree({"crates/c/README.md": "12k QPS on one core.\n", "sdks/py/README.md": "95%+ recall.\n"})
         self.assertEqual(len(self.flagged(root)), 2)
 
+    def test_the_other_root_documents_are_in_scope(self):
+        root = self.tree(
+            {"ARCHITECTURE.md": "Search answers in 42 ms.\n", "NOTES.txt": "Search answers in 42 ms.\n"}
+        )
+        self.assertEqual([v.split(": ")[0] for v in self.flagged(root)], ["ARCHITECTURE.md:1"])
+
+    def test_tutorials_demos_and_benchmarks_documents_are_in_scope(self):
+        figure = "| Mode | Latency |\n|---|---|\n| Fast | 42 ms |\n"
+        root = self.tree(
+            {
+                "tutorials/t/README.md": figure,
+                "demos/d/README.md": figure,
+                "benchmarks/README.md": figure,
+                # A benchmark result file is a source, not a promise: it stays
+                # out of scope whatever tree it sits in.
+                "benchmarks/results/run.md": figure,
+            }
+        )
+        self.assertEqual(
+            [v.split(": ")[0] for v in self.flagged(root)],
+            ["benchmarks/README.md:3", "demos/d/README.md:3", "tutorials/t/README.md:3"],
+        )
+
+    def test_integration_documents_and_docstrings_are_in_scope(self):
+        root = self.tree(
+            {
+                "integrations/i/README.md": "Bulk insert is 3x faster.\n",
+                "integrations/i/src/mod.py": 'def f():\n    """Bulk insert is 3x faster."""\n',
+                "integrations/i/src/mod.ts": "/**\n * Bulk insert is 3x faster.\n */\n",
+                "integrations/i/node_modules/dep/README.md": "Bulk insert is 3x faster.\n",
+            }
+        )
+        self.assertEqual(
+            [v.split(": ")[0] for v in self.flagged(root)],
+            ["integrations/i/README.md:1", "integrations/i/src/mod.py:2", "integrations/i/src/mod.ts:2"],
+        )
+
     def test_a_configured_bound_is_not_a_latency_figure(self):
         root = self.tree(
             {"docs/guides/G.md": "Queries time out after 500 ms by default.\nThe p99 latency is 2 ms.\n"}
