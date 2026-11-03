@@ -18,6 +18,7 @@ pub struct OpenAiExtractor {
     client: crate::http_client::HttpJsonClient,
     model: String,
     chat_template_kwargs: Option<serde_json::Value>,
+    max_generation_tokens: u32,
 }
 
 /// Hand-written for the reason [`crate::http_client::Auth`]'s is: the template
@@ -63,7 +64,19 @@ impl OpenAiExtractor {
             ),
             model: model.into(),
             chat_template_kwargs: None,
+            max_generation_tokens: MAX_GENERATION_TOKENS,
         }
+    }
+
+    /// Cap the tokens a reply may generate, sent as `max_tokens`. The
+    /// default is [`MAX_GENERATION_TOKENS`]; raise it for passages that hold
+    /// more facts than the default's reply budget can serialize — a reply
+    /// that hits the cap is truncated mid-JSON and fails parsing instead of
+    /// extracting what fit.
+    #[must_use]
+    pub fn with_max_generation_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_generation_tokens = max_tokens;
+        self
     }
 
     /// Send `kwargs` as the chat body's `chat_template_kwargs` on every call.
@@ -90,7 +103,7 @@ impl OpenAiExtractor {
         let body = crate::openai::chat_body(
             &self.model,
             prompt,
-            MAX_GENERATION_TOKENS,
+            self.max_generation_tokens,
             schema,
             self.chat_template_kwargs.as_ref(),
         );

@@ -2,7 +2,10 @@
 
 use super::prompt::{build_graph_prompt, build_prompt};
 use super::reply::{extraction_from_reply, facts_from_reply};
-use super::wire::{extraction_schema, fact_list_schema, generate_body, REQUEST_TIMEOUT_SECS};
+use super::wire::{
+    extraction_schema, fact_list_schema, generate_body, MAX_GENERATION_TOKENS,
+    REQUEST_TIMEOUT_SECS,
+};
 use super::{ExtractError, ExtractedFact, Extraction, Extractor};
 
 // --- Optional batteries-included backend: a local Ollama generative model -----
@@ -76,6 +79,7 @@ pub struct OllamaExtractor {
     base_url: String,
     model: String,
     agent: ureq::Agent,
+    max_generation_tokens: u32,
 }
 
 impl OllamaExtractor {
@@ -99,7 +103,19 @@ impl OllamaExtractor {
             base_url: base_url.into(),
             model: model.into(),
             agent,
+            max_generation_tokens: MAX_GENERATION_TOKENS,
         }
+    }
+
+    /// Cap the tokens a reply may generate, sent as `num_predict`. The
+    /// default is [`MAX_GENERATION_TOKENS`]; raise it for passages that hold
+    /// more facts than the default's reply budget can serialize — a reply
+    /// that hits the cap is truncated mid-JSON and fails parsing instead of
+    /// extracting what fit.
+    #[must_use]
+    pub fn with_max_generation_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_generation_tokens = max_tokens;
+        self
     }
 }
 
@@ -124,7 +140,8 @@ impl OllamaExtractor {
     /// truncated response is replayed rather than surfacing as a parse error.
     fn generate(&self, prompt: &str, schema: &serde_json::Value) -> Result<String, ExtractError> {
         let url = format!("{}/api/generate", self.base_url);
-        let body = generate_body(&self.model, prompt, schema).to_string();
+        let body =
+            generate_body(&self.model, prompt, schema, self.max_generation_tokens).to_string();
         let attempt = || {
             let response = self
                 .agent

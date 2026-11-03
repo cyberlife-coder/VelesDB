@@ -215,7 +215,11 @@ pub(crate) fn build_ollama_extractor(
         "VELESDB_MEMORY_EXTRACTOR=ollama requires VELESDB_MEMORY_EXTRACTOR_MODEL \
          (e.g. qwen3.6:35b-mlx)",
     )?;
-    Ok(Arc::new(OllamaExtractor::new(url, model)))
+    let extractor = OllamaExtractor::new(url, model);
+    Ok(Arc::new(match max_generation_tokens()? {
+        Some(max_tokens) => extractor.with_max_generation_tokens(max_tokens),
+        None => extractor,
+    }))
 }
 
 /// Build the OpenAI-compatible extractor from the extraction role's own
@@ -228,10 +232,56 @@ pub(crate) fn build_openai_extractor(
 
     let (url, model, auth) = extractor_endpoint()?.require("VELESDB_MEMORY_EXTRACTOR")?;
     let extractor = OpenAiExtractor::new(url, model, auth);
-    Ok(Arc::new(match chat_template_kwargs()? {
+    let extractor = match chat_template_kwargs()? {
         Some(kwargs) => extractor.with_chat_template_kwargs(kwargs),
         None => extractor,
+    };
+    Ok(Arc::new(match max_generation_tokens()? {
+        Some(max_tokens) => extractor.with_max_generation_tokens(max_tokens),
+        None => extractor,
     }))
+}
+
+/// The variable holding the extraction role's per-reply token ceiling:
+/// a positive integer, sent as `num_predict` to Ollama and `max_tokens` to an
+/// OpenAI-compatible server (e.g. `2048` for passages richer than the
+/// default's reply budget serializes). Read here, with the role's other
+/// `VELESDB_MEMORY_EXTRACTOR_*` variables, because the library takes values
+/// from its callers rather than from the environment.
+#[cfg(feature = "extractor-http")]
+const EXTRACTOR_MAX_TOKENS_VAR: &str = "VELESDB_MEMORY_EXTRACTOR_MAX_TOKENS";
+
+/// [`parse_max_generation_tokens`] over the process environment.
+///
+/// # Errors
+/// [`SettingError::InvalidExtractorMaxTokens`] when the variable is set,
+/// non-blank and not a positive integer.
+#[cfg(feature = "extractor-http")]
+fn max_generation_tokens() -> Result<Option<u32>, SettingError> {
+    parse_max_generation_tokens(env_opt(EXTRACTOR_MAX_TOKENS_VAR).as_deref())
+}
+
+/// Validate the raw value of [`EXTRACTOR_MAX_TOKENS_VAR`]. Unset or blank is
+/// "not configured" — the extractors' built-in default applies; anything else
+/// must be a positive integer, or startup stops — the rule every other
+/// `VELESDB_MEMORY_*` numeric setting follows, because a value dropped with a
+/// warning is how an operator believes a ceiling moved while nothing did.
+///
+/// # Errors
+/// [`SettingError::InvalidExtractorMaxTokens`] when `raw` is non-blank and
+/// not a positive integer.
+#[cfg(feature = "extractor-http")]
+fn parse_max_generation_tokens(raw: Option<&str>) -> Result<Option<u32>, SettingError> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    match raw.parse::<u32>().ok().filter(|tokens| *tokens > 0) {
+        Some(tokens) => Ok(Some(tokens)),
+        None => Err(SettingError::InvalidExtractorMaxTokens {
+            variable: EXTRACTOR_MAX_TOKENS_VAR.to_owned(),
+            reason: "not a positive integer".to_owned(),
+        }),
+    }
 }
 
 /// The variable holding the extractor's per-request chat-template arguments:

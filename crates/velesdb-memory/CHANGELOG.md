@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the canonical schema, where Ollama's grammar needs none. A server that does
   not know `response_format` keeps answering as before; one that rejects it
   reports the refusal instead of silently unconstrained output.
+- **The extraction reply budget is configurable** as
+  `VELESDB_MEMORY_EXTRACTOR_MAX_TOKENS` — a positive integer, sent as
+  `num_predict` to Ollama and `max_tokens` to an OpenAI-compatible server.
+  The built-in 512-token ceiling fits the facts a short passage serializes;
+  a richer passage's reply hits it and is cut mid-JSON, which surfaces as a
+  parse failure rather than extracted facts. Raise the variable for those
+  passages; unset or blank keeps the default, an invalid value stops
+  startup like every other `VELESDB_MEMORY_*` numeric setting.
 
 ### Fixed
 
