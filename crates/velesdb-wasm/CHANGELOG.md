@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`VectorStore::sparse_remove(doc_id)`** and **`SparseIndex::remove`**:
+  delete a document's sparse postings. The in-memory sparse index could
+  only grow — a deleted or replaced point kept matching sparse queries and
+  kept its postings for the life of the store, so the TS SDK indexed every
+  upsert under a fresh id and rebuilt the index once retired ids outnumbered
+  live ones. Re-inserting an id now also replaces the document's vector
+  instead of accumulating under it: terms the new vector drops stop
+  matching, as core's delete + insert upsert does. (#2287)
 - **`MemoryService`**: `compileTranscript`, `explainCompilation`,
   `contextSavings`, and `suggestBudget` — the context-compiler tools that
   were previously Node/MCP-only are now reachable in the browser.
