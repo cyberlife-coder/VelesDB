@@ -4,7 +4,7 @@
  * Tests the WasmBackend class with mock WASM module
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
 import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
 import { FakeSparseIndex } from './helpers/fake-sparse-index';
