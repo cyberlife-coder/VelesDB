@@ -9,6 +9,7 @@ use super::common::{check_response, create_http_client, normalise_metric};
 use super::{ExtractedBatch, ExtractedPoint, FieldInfo, SourceConnector, SourceSchema};
 use crate::config::WeaviateConfig;
 use crate::error::{Error, Result};
+use crate::redact::redact_url;
 
 /// Weaviate source connector.
 pub struct WeaviateConnector {
@@ -206,7 +207,7 @@ impl SourceConnector for WeaviateConnector {
     async fn connect(&mut self) -> Result<()> {
         crate::connectors::common::validate_url(&self.config.url)?;
 
-        info!("Connecting to Weaviate at {}", self.config.url);
+        info!("Connecting to Weaviate at {}", redact_url(&self.config.url));
 
         let resp = self
             .request(reqwest::Method::GET, "/v1/.well-known/ready")
