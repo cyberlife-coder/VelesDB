@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Filtered search now honours `ef_search` and quality presets end to end
+  (closes #2302).** Core gains
+  `VectorCollection::search_with_quality_and_filter` — the filtered
+  counterpart of `search_with_quality`, routing through the same
+  quality-aware dispatch `WITH (mode=…, ef_search=…)` reaches — and the read
+  gate's `run_dense` no longer drops `ef`/`quality` when a caller or scope
+  filter is present (`ef` resolves to `SearchQuality::Custom` and still wins
+  over `quality`). The Python binding exposes it as
+  `Collection.search_with_quality_and_filter(vector, top_k=10, filter=None,
+  ef_search=None, quality=None, *, principal=None, tenant=None)`; existing
+  method signatures are unchanged. The LangChain integration routes
+  `ef_search`/`search_quality` + `filter` through it instead of refusing:
+  `similarity_search_with_ef(query, ef_search=…, filter=…)` now runs the
+  filtered search at the requested `ef_search`. REST `/search` picks the same
+  behaviour up through `GatedRead::Dense`, retiring the "mode/ef_search
+  ignored when a filter is present" limitation on that path.
+
 ### Fixed
 
 - **TypeScript SDK: one error code per bad input, on both backends** (#2307).

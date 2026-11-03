@@ -32,10 +32,11 @@ pub enum GatedRead<'a> {
     /// Dense kNN similarity search.
     ///
     /// `ef` / `quality` tune recall via the engine's dedicated entry points.
-    /// They are honoured only when no filter is in effect: when a caller filter
-    /// or an observer scope filter is present the search routes through the
-    /// filtered leaf (`search_with_filter`), which the engine exposes
-    /// separately from the tuning leaves.
+    /// `ef` wins over `quality` when both are set (it maps to
+    /// [`SearchQuality::Custom`](crate::SearchQuality::Custom)), and the
+    /// resolved tuning is honoured on the filtered path too: a caller filter
+    /// or an observer scope filter routes through
+    /// [`VectorCollection::search_with_quality_and_filter`].
     Dense {
         /// Query vector.
         query: &'a [f32],
@@ -110,7 +111,9 @@ fn and_filters(caller: Option<&Filter>, scope: Option<Filter>) -> Option<Filter>
 
 /// Runs a dense kNN search, picking the leaf by the effective filter and tuning.
 /// A filter (caller filter already AND-composed with any scope) routes through
-/// the filtered leaf; otherwise `ef` wins over `quality`, then plain search.
+/// the filtered leaves, with `ef`/`quality` honoured the way the unfiltered
+/// dispatch resolves them — `ef` wins, as `SearchQuality::Custom`; otherwise
+/// `ef` wins over `quality`, then plain search.
 fn run_dense(
     coll: &VectorCollection,
     query: &[f32],
@@ -120,7 +123,10 @@ fn run_dense(
     filter: Option<Filter>,
 ) -> Result<Vec<SearchResult>> {
     match filter {
-        Some(f) => coll.search_with_filter(query, k, &f),
+        Some(f) => match ef.map(crate::SearchQuality::Custom).or(quality) {
+            Some(q) => coll.search_with_quality_and_filter(query, k, q, &f),
+            None => coll.search_with_filter(query, k, &f),
+        },
         None => match (ef, quality) {
             (Some(ef), _) => coll.search_with_ef(query, k, ef),
             (None, Some(q)) => coll.search_with_quality(query, k, q),
