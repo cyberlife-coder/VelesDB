@@ -35,7 +35,7 @@ import type {
   SparseVector,
 } from '../types';
 import type { FilterInput } from '../filter';
-import { ValidationError } from '../types';
+import { ValidationError, VelesDBError } from '../types';
 import {
   requireNonEmptyString,
   requireVector,
@@ -120,7 +120,14 @@ export function sparseSearchNamed(
   return backend.sparseSearchNamed(collection, query, indexName, options);
 }
 
-/** Multi-query fusion search combining results from multiple query vectors. */
+/**
+ * Multi-query fusion search combining results from multiple query vectors.
+ *
+ * A missing or empty `vectors` is refused with `BAD_REQUEST`, not
+ * `VALIDATION_ERROR`: core refuses the same input (a multi-query search
+ * takes 1 to 10 vectors), and both backends answer it with `BAD_REQUEST`, so
+ * the client guard names the same code rather than a third one.
+ */
 export function multiQuerySearch(
   backend: IVelesDBBackend,
   collection: string,
@@ -128,7 +135,7 @@ export function multiQuerySearch(
   options?: MultiQuerySearchOptions
 ): Promise<SearchResult[]> {
   if (!Array.isArray(vectors) || vectors.length === 0) {
-    throw new ValidationError('Vectors must be a non-empty array');
+    throw new VelesDBError('Vectors must be a non-empty array', 'BAD_REQUEST');
   }
 
   for (const v of vectors) {
@@ -146,7 +153,7 @@ export function multiQuerySearchIds(
   options?: MultiQuerySearchOptions
 ): Promise<Array<{ id: number; score: number }>> {
   if (!Array.isArray(vectors) || vectors.length === 0) {
-    throw new ValidationError('Vectors must be a non-empty array');
+    throw new VelesDBError('Vectors must be a non-empty array', 'BAD_REQUEST');
   }
 
   for (const v of vectors) {
