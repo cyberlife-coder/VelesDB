@@ -2571,6 +2571,29 @@ class TypeScriptSdkIsLintedTests(unittest.TestCase):
         targets = self.package.get("scripts", {}).get("lint", "").split()[1:]
         self.assertLessEqual({"src", "tests"}, set(targets), f"lint targets: {targets}")
 
+    def test_the_typecheck_script_covers_the_tests_too(self) -> None:
+        """`tsc --noEmit` reads tsconfig.json, which excludes tests/, and vitest
+        transpiles with esbuild, which strips types without checking them -- so
+        tests/ was linted but never type-checked, 141 errors deep (#2393). The
+        fix compiles the suite under tsconfig.eslint.json; this pins both ends
+        of that wiring: the script names the project, and the project still
+        includes tests/."""
+        script = self.package.get("scripts", {}).get("typecheck", "")
+        self.assertIn(
+            "tsconfig.eslint.json",
+            script,
+            f"`npm run typecheck` no longer compiles the project that covers "
+            f"tests/ ({script!r}), so test files merge type-unsafe again",
+        )
+        project = json.loads(
+            (TS_SDK_PACKAGE.parent / "tsconfig.eslint.json").read_text(encoding="utf-8")
+        )
+        include = project.get("include", [])
+        self.assertTrue(
+            any("tests" in entry for entry in include),
+            f"tsconfig.eslint.json no longer includes tests/: {include}",
+        )
+
     def test_the_parser_refuses_a_job_that_lost_the_step(self) -> None:
         """The positive control, on the shape this replaces."""
         without_lint = self.workflow.replace(

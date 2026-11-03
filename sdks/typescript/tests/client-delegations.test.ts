@@ -329,7 +329,7 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
     expect(backend.rebuildIndex).toHaveBeenCalledWith('c');
     await db.getGuardrails();
     expect(backend.getGuardrails).toHaveBeenCalled();
-    await db.updateGuardrails({ enabled: true });
+    await db.updateGuardrails({ maxDepth: 8 });
     expect(backend.updateGuardrails).toHaveBeenCalled();
     await db.aggregate('q');
     expect(backend.aggregate).toHaveBeenCalled();
