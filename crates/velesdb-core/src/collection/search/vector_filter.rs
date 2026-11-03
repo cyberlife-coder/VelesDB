@@ -73,6 +73,32 @@ impl Collection {
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
 
+    /// [`Self::search_with_filter_and_opts`] for callers that carry a bare
+    /// [`SearchQuality`](crate::SearchQuality) rather than a parsed `WITH`
+    /// clause — the read gate's filtered leaf (`run_dense`), which maps an
+    /// `ef` override to `Custom` before calling. Building the options here
+    /// keeps `QuerySearchOptions` construction inside this module; the
+    /// recorded-strategy probe stays `None` outside the query pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query vector dimension doesn't match the
+    /// collection, or the [`SearchQuality::Perfect`](crate::SearchQuality)
+    /// guard rail fires.
+    pub(crate) fn search_with_quality_and_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        let opts = crate::collection::search::query::QuerySearchOptions {
+            quality: Some(quality),
+            ..Default::default()
+        };
+        self.search_with_filter_and_opts(query, k, filter, &opts)
+    }
+
     /// Dispatches to full-scan, HNSW+bitmap, or post-filter based on selectivity.
     #[allow(clippy::too_many_arguments)] // Reason: dispatch bundle mirrors the query's full shape.
     fn search_with_bitmap_strategy(
