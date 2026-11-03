@@ -180,6 +180,41 @@ fn is_windows_reserved(name: &str) -> bool {
     )
 }
 
+/// Validates that a sparse index name is safe as a persistence filename
+/// component.
+///
+/// Sparse index names arrive verbatim as the `sparse_vectors` map keys of an
+/// upsert request and reach the filesystem as `sparse-{name}.{wal,snapshot,
+/// meta,terms,idx}` — see `index::sparse::persistence::sparse_file_prefix`.
+/// This function is the guard that keeps path separators, `..` and overlong
+/// names out of that construction; the `sparse-` glue is not the guard
+/// (`CodeQL` triage, issue #2593).
+///
+/// The empty name is valid: it selects the default, unprefixed index.
+///
+/// # Errors
+///
+/// Returns [`Error::SchemaValidation`] when `name` is non-empty and fails
+/// [`validate_collection_name`]'s rules.
+///
+/// # Examples
+///
+/// ```
+/// use velesdb_core::validate_sparse_index_name;
+///
+/// assert!(validate_sparse_index_name("").is_ok()); // default index
+/// assert!(validate_sparse_index_name("title").is_ok());
+/// assert!(validate_sparse_index_name("a/b").is_err());
+/// assert!(validate_sparse_index_name("../x").is_err());
+/// ```
+pub fn validate_sparse_index_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Ok(());
+    }
+    validate_collection_name(name)
+        .map_err(|e| Error::SchemaValidation(format!("invalid sparse index name {name:?}: {e}")))
+}
+
 /// The most arrays and objects `serde_json` reads back nested in one document.
 ///
 /// Its parser stops at the 128th level, so a value written inside a deeper

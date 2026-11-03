@@ -65,10 +65,17 @@ impl Collection {
     /// dimension check. Shared by [`Self::upsert`] and [`Self::upsert_bulk`]
     /// so both ingest paths apply the identical pre-storage validation.
     ///
+    /// Sparse index names are checked here too: they are request-controlled
+    /// (`Point::sparse_vectors` map keys) and later reach the filesystem as
+    /// `sparse-{name}.*` path components, so a hostile name must be refused
+    /// before it can enter the `sparse_indexes` map or a WAL path (issue
+    /// #2593 — the guard `sparse_file_prefix` documents as its own).
+    ///
     /// # Errors
     ///
     /// Returns [`Error::GuardRail`] on a limit violation, or the dimension
-    /// mismatch error from [`validate_dimension_match`].
+    /// mismatch error from [`validate_dimension_match`], or
+    /// [`Error::SchemaValidation`] on an invalid sparse index name.
     pub(super) fn validate_vector_upsert_batch(
         &self,
         points: &[Point],
@@ -78,6 +85,11 @@ impl Collection {
         for point in points {
             validate_dimension_match(dimension, point.dimension())?;
             crate::validation::validate_vector_is_finite(&point.vector)?;
+            if let Some(sv_map) = &point.sparse_vectors {
+                for name in sv_map.keys() {
+                    crate::validation::validate_sparse_index_name(name)?;
+                }
+            }
         }
         Ok(())
     }
