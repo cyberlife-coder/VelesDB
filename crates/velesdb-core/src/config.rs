@@ -174,10 +174,10 @@ impl SearchConfig {
     /// `Perfect` itself is applied as `Accurate` here. A per-query `Perfect` is
     /// an exhaustive scan capped by `enforce_perfect_mode_limit`; as a global
     /// default it could not be applied at all: a filtered search's bitmap
-    /// pre-filter never reads the configured quality — it traverses the graph at
-    /// its own ef — so a `perfect` default would scan on some queries and
-    /// traverse on others. `VelesConfig::validate` warns when this downgrade
-    /// happens rather than failing the load.
+    /// pre-filter has no exhaustive-scan arm — `search_with_quality_and_bitmap`
+    /// traverses the graph at `Perfect`'s ef — so a `perfect` default would
+    /// scan on some queries and traverse on others. `VelesConfig::validate`
+    /// warns when this downgrade happens rather than failing the load.
     ///
     /// Available only with the `persistence` feature, the only build that
     /// exports [`SearchQuality`](crate::SearchQuality).
@@ -187,9 +187,10 @@ impl SearchConfig {
         self.ef_search.map_or_else(
             || match self.default_mode {
                 // Applied as `Accurate`, and warned about at load by
-                // `validate()`: a filtered search's bitmap pre-filter never
-                // reads this quality, so a global `Perfect` would scan on some
-                // queries and traverse on others (see the doc above).
+                // `validate()`: a filtered search's bitmap pre-filter
+                // traverses rather than scans, so a global `Perfect` would
+                // scan on some queries and traverse on others (see the doc
+                // above).
                 SearchMode::Perfect => crate::SearchQuality::Accurate,
                 mode => mode.quality(),
             },

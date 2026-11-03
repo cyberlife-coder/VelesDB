@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Database` config) stays unbounded. `scroll_batch` pages are bounded by the
   same ceiling, so callers paging with a larger `batch_size` receive smaller
   pages — issue more `scroll_batch` calls to cover the same range.
+- **core: the secondary-index bitmap pre-filter of a metadata-filtered `NEAR`
+  takes the configured `[search]` quality (#2430).** A filtered `NEAR` whose
+  condition resolves through a `CREATE INDEX` bitmap, naming no quality of its
+  own — no `WITH`, or a `WITH` that sets none of `mode` / `ef_search` /
+  `rerank` — ran its HNSW walk at a self-computed
+  `ef_search = candidates_k.max(k * 10)`, ignoring `default_mode` and
+  `ef_search`. It now runs `search_with_quality_and_bitmap` at the
+  collection's runtime quality — the same call the `WITH (ef_search = N)`
+  branch of the same query already took. With a non-default `[search]` this
+  query shape's results change; a default config still resolves to `Balanced`.
+  This was the last entry point the #2430 audit listed.
 
 ## [8.0.0] - 2026-11-02
 

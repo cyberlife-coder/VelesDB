@@ -559,7 +559,7 @@ impl Collection {
 
         // Attempt bitmap pre-filter from secondary indexes.
         let index_results =
-            self.search_with_optional_bitmap(query, k, candidates_k, filter, metric, opts)?;
+            self.search_with_optional_bitmap(query, candidates_k, filter, metric, opts)?;
 
         Ok(self.filter_and_hydrate(index_results, filter, k, higher_is_better))
     }
@@ -568,7 +568,6 @@ impl Collection {
     fn search_with_optional_bitmap(
         &self,
         query: &[f32],
-        k: usize,
         candidates_k: usize,
         filter: &crate::filter::Filter,
         metric: DistanceMetric,
@@ -578,24 +577,27 @@ impl Collection {
             if let Some(opts) = opts {
                 opts.record_executed_strategy(crate::velesql::FilterStrategy::PreFilter);
             }
-            let ef_search = candidates_k.max(k * 10);
             let restriction = PendingRestriction::within(&bitmap).and_post_filtered();
+            // `search_with_quality_and_bitmap` at the configured quality —
+            // the same call the `WITH (ef_search = N)` arm of
+            // `search_with_bitmap_strategy` runs. The ef it used to compute
+            // itself (`candidates_k.max(k * 10)`) ignored `[search]` (#2430).
             return self.search_merging_pending(query, candidates_k, metric, restriction, |n| {
-                Ok(self.storage.index.search_hnsw_only_filtered(
+                self.storage.index.search_with_quality_and_bitmap(
                     query,
                     n,
-                    ef_search.max(n),
+                    self.runtime_search_quality(),
                     &bitmap,
-                ))
+                )
             });
         }
         if let Some(opts) = opts {
             opts.record_executed_strategy(crate::velesql::FilterStrategy::PostFilter);
         }
         // The configured default, not `opts.quality`: this fallback has never
-        // honoured a per-query quality -- the pre-filter branch above computes
-        // its own `ef` in the same way -- and this change does not start. With
-        // a default config it resolves to `Balanced`, exactly what the previous
+        // honoured a per-query quality and this change does not start — the
+        // pre-filter branch above takes the same runtime quality. With a
+        // default config it resolves to `Balanced`, exactly what the previous
         // `index.search` hard-coded.
         self.search_ids_with_adc_if_pq(
             query,
