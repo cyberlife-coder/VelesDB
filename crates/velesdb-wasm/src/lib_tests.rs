@@ -184,6 +184,39 @@ fn test_wasm_sparse_search_no_index_error() {
     );
 }
 
+#[test]
+fn test_wasm_sparse_remove() {
+    // sparse_remove drops a doc's postings (#2287): after removal the doc
+    // no longer matches, and removing it again reports it absent.
+    let mut store = store_new::create_store(4, DistanceMetric::Cosine, StorageMode::Full);
+    store
+        .sparse_insert(1, &[10, 20], &[1.0, 0.5])
+        .expect("test: sparse_insert doc 1");
+    store
+        .sparse_insert(2, &[10], &[0.8])
+        .expect("test: sparse_insert doc 2");
+
+    assert!(
+        store.sparse_remove(1),
+        "removing a present doc returns true"
+    );
+    assert!(!store.sparse_remove(1), "double-remove reports absence");
+
+    let results = store
+        .search_sparse_scored(&[10, 20], &[1.0, 1.0], 10)
+        .expect("test: search_sparse after removal");
+    assert_eq!(results.len(), 1, "only the surviving doc matches");
+    assert_eq!(results[0].doc_id(), 2);
+}
+
+#[test]
+fn test_wasm_sparse_remove_no_index() {
+    // Removing from a store that never got a sparse vector is a no-op
+    // reporting absence, not an error.
+    let mut store = store_new::create_store(4, DistanceMetric::Cosine, StorageMode::Full);
+    assert!(!store.sparse_remove(1));
+}
+
 // =============================================================================
 // validate_multi_vector_len — overflow-safe flat multi-vector length check
 // =============================================================================

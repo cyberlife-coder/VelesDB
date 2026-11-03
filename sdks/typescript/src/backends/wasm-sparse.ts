@@ -1,28 +1,34 @@
 /**
  * WASM Backend — sparse vector bookkeeping
  *
- * velesdb-wasm's sparse index keys postings by a document id and has no way
- * to delete a document's postings, nor to drop the terms a re-insert leaves
- * out: an insert overwrites only the terms it repeats. Indexed under the
+ * velesdb-wasm's sparse index keys postings by a document id. A binding that
+ * exposes `sparse_remove` (after 8.0.0, #2287) deletes a document's postings
+ * outright; 8.0.0, the oldest release the SDK's dependency range admits, has
+ * no way to delete them, nor to drop the terms a re-insert leaves out: an
+ * insert there overwrites only the terms it repeats. Indexed under the
  * point's own id, a deleted point, or a term a point no longer has, would
  * keep matching sparse queries.
  *
- * Each sparse upsert is therefore indexed under a fresh sparse id. Replacing
- * or deleting the point retires that id: its postings stay in the index but
- * map to no point, and searches skip them, over-fetching by the number of
+ * Each sparse upsert is therefore indexed under a fresh sparse id on every
+ * binding generation. Replacing or deleting the point retires that id, and
+ * `retireId` does what the binding allows: on a `sparse_remove` binding it
+ * deletes the id's postings — `dead` never grows, searches fetch exactly
+ * `k`, and the index holds live entries only; on 8.0.0 the postings stay but
+ * map to no point, searches skip them and over-fetch by the number of
  * retired ids so the dead cannot crowd live points out of the top `k`. As in
  * core, an upsert without a sparse vector keeps the point's current one.
  *
- * Retired postings would otherwise pile up for good, and every search would
- * over-fetch by their number, so the cost of a search would grow with the
- * replacements a collection has seen. The sparse index therefore lives in a
- * store of its own, a metadata-only velesdb-wasm store beside the
- * collection's vector store, and once retired
- * ids outnumber live ones it is rebuilt from the live sparse vectors the SDK
- * keeps: the index then never holds more than twice the live entries, and a
- * rebuild costs O(live) once per `live` retirements, O(1) amortized. The
- * collection's vectors and payloads are never touched. velesdb-wasm deleting
- * postings itself (#2287) will make this unnecessary.
+ * Without `sparse_remove`, retired postings would pile up for good and every
+ * search would over-fetch by their number, so the cost of a search would
+ * grow with the replacements a collection has seen. The sparse index
+ * therefore lives in a store of its own, a metadata-only velesdb-wasm store
+ * beside the collection's vector store, and once retired ids outnumber live
+ * ones it is rebuilt from the live sparse vectors the SDK keeps: the index
+ * then never holds more than twice the live entries, and a rebuild costs
+ * O(live) once per `live` retirements, O(1) amortized. The collection's
+ * vectors and payloads are never touched. Once the dependency floor passes
+ * the release carrying `sparse_remove`, the tombstone path — and the
+ * fresh-id scheme itself — can go.
  */
 
 import type { SparseVector } from '../types';
@@ -111,6 +117,11 @@ export function sparseHits(
 function retireId(ids: SparseIds, newStore: NewSparseStore, sparseId: bigint): void {
   ids.byId.delete(sparseId);
   ids.vectors.delete(sparseId);
+  const store = ids.store;
+  if (store !== null && typeof store.sparse_remove === 'function') {
+    store.sparse_remove(sparseId);
+    return;
+  }
   ids.dead += 1;
   if (ids.dead > ids.byId.size) {
     rebuildSparse(ids, newStore);
