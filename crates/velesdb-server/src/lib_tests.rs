@@ -187,21 +187,35 @@ fn test_openapi_paths_taking_a_json_body_document_422() {
 /// comparing against them. Opt-in via `UPDATE_OPENAPI_SNAPSHOT=1` so that
 /// a plain `cargo test` — including the default parallel test threads —
 /// never mutates the working tree; see `generate_openapi_spec_files`.
+#[cfg(all(feature = "openapi", feature = "prometheus"))]
 fn update_openapi_snapshot_requested() -> bool {
     std::env::var_os("UPDATE_OPENAPI_SNAPSHOT").is_some()
 }
 
-// #[ignore]: excludes this from the general `cargo test --workspace`
-// sweep (the "Tests" CI job), which runs with a DIFFERENT feature set
-// (persistence,gpu,update-check, no `openapi`/`prometheus`) than the one
-// the committed docs/openapi.{json,yaml} were generated under. Run under
-// that other feature set, the assert-equal below fails on a real (but
-// benign) schema difference -- not staleness, a feature-combination
-// mismatch. Only the dedicated `openapi-drift` CI step, which targets
-// this test by exact name with `--ignored` under the canonical feature
-// set, should ever run it.
+// The published document depends on exactly two features, so the
+// conjunction below — not `#[ignore]` — is what scopes this test (#2592):
+//
+//  * `openapi` switches the `schema_with`/`value_type` attributes on
+//    server request types (the point/edge id `oneOf` schemas) — run the
+//    compare under `persistence,gpu,update-check` and it fails on those
+//    alone;
+//  * `prometheus` merges the `/metrics` path (`MetricsApiDoc`).
+//
+// Nothing else moves the document: `velesdb-core`'s own `openapi` and
+// `persistence` are force-on through this crate's unconditional
+// dependency features, so every remaining flag (`gpu`, `update-check`,
+// `test-fault-injection`, ...) is invisible to it. Under any feature set
+// missing one of the two — the workspace sweep included — the test
+// compiles to nothing, which `#[ignore]` could never do: an
+// `UPDATE_OPENAPI_SNAPSHOT=1 ... --ignored` run under the wrong features
+// used to be able to write the wrong-shaped document to docs/. Under a
+// set containing both it is an ordinary test and a stale spec fails
+// `cargo test` outright, no name filter needed. The `openapi-drift` CI
+// job still invokes it by name — and fails the step when the summary
+// reports anything but `1 passed`, so renaming or re-gating it cannot
+// green the job on zero tests run.
+#[cfg(all(feature = "openapi", feature = "prometheus"))]
 #[test]
-#[ignore = "run explicitly via the openapi-drift CI job; see comment above"]
 fn generate_openapi_spec_files() {
     let openapi = ApiDoc::openapi();
     let json = openapi

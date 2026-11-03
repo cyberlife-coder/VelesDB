@@ -27,6 +27,7 @@ impl Database {
             name,
             crate::observer::QueryOperationKind::Select,
             "collection statistics",
+            &super::read_authorization::GateDecisions::default(),
         )?;
 
         let collection = self.resolve_collection(name)?;

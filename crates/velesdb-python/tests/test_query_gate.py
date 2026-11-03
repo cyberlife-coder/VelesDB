@@ -17,6 +17,9 @@ read gate. This module proves the rest of the Python read surface does too:
   scope ⇒ fail closed (no payload to filter on).
 * ``PyGraphCollection.query`` / ``match_query`` / ``query_ids`` /
   ``explain_analyze`` — same mechanisms.
+* ``PyGraphCollection.schema`` / ``has_embeddings`` / ``__repr__`` — collection
+  metadata reads gated the same way (#2589); ``name`` stays ungated like
+  ``Collection.name``.
 * ``Collection.explain()`` is gated too: its plan is calibrated by
   ``analyze()``, which walks the column store — a denied read must refuse
   rather than leak the statistics. ``PyGraphCollection.explain()`` stays
@@ -251,6 +254,49 @@ def test_graph_explain_analyze_deny_fails_closed():
 
 
 # ---------------------------------------------------------------------------
+# Deny fails closed — PyGraphCollection metadata getters (#2589).
+# ``schema`` / ``has_embeddings`` read collection state and ``__repr__``
+# leaks ``has_embeddings``; each routes through the same read gate as the
+# graph reads. ``name`` stays ungated like ``Collection.name``.
+# ---------------------------------------------------------------------------
+
+
+def test_graph_schema_getter_deny_fails_closed():
+    with _Db(observer=_deny_reads) as db:
+        graph = _seed_graph(db)
+        with pytest.raises(Exception):
+            graph.schema
+
+
+def test_graph_has_embeddings_getter_deny_fails_closed():
+    with _Db(observer=_deny_reads) as db:
+        graph = _seed_graph(db)
+        with pytest.raises(Exception):
+            graph.has_embeddings
+
+
+def test_graph_repr_deny_fails_closed():
+    """The facade ``GraphCollection`` adapter has no ``__repr__``, so the
+    gated ``PyGraphCollection.__repr__`` (which leaks ``has_embeddings``)
+    is exercised on ``._inner`` — the raw binding."""
+    with _Db(observer=_deny_reads) as db:
+        graph = _seed_graph(db)
+        with pytest.raises(Exception):
+            repr(graph._inner)
+
+
+def test_graph_metadata_getters_scope_fails_closed():
+    """The getters take no metadata filter to narrow, so a scope fails
+    closed like every other non-narrowable graph read."""
+    with _Db(observer=_scope_to_acme) as db:
+        graph = _seed_graph(db)
+        with pytest.raises(Exception):
+            graph.schema
+        with pytest.raises(Exception):
+            graph.has_embeddings
+
+
+# ---------------------------------------------------------------------------
 # Scope narrows (payload shapes) or fails closed (shapes that cannot carry a
 # metadata filter).
 # ---------------------------------------------------------------------------
@@ -417,6 +463,15 @@ def test_graph_match_query_scope_fails_closed():
         graph = _seed_graph(db)
         with pytest.raises(Exception):
             graph.match_query("MATCH (n) RETURN n LIMIT 10")
+
+
+def test_graph_metadata_getters_no_observer_unchanged():
+    with _Db() as db:
+        graph = _seed_graph(db)
+        assert graph.name == "kg"
+        assert graph.has_embeddings is True
+        assert graph.schema is not None
+        assert "GraphCollection(" in repr(graph._inner)
 
 
 # ---------------------------------------------------------------------------

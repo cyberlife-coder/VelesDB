@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The read gate consults the observer once per `(collection, operation)`
+  per statement** (#2588). A statement that fans out internally — a
+  self-JOIN, a `UNION`/`INTERSECT`/`EXCEPT` over one collection, a `MATCH`
+  naming the same `@collection` twice or annotating its own target, a scalar
+  subquery on the outer statement's collection, and `EXPLAIN`/`EXPLAIN
+  ANALYZE` (whose plan read preceded the row read through a second gate
+  pass) — consulted `DatabaseObserver::on_query_request` twice for the same
+  collection, double-counting one logical query for logging and metering
+  observers. The first answer is now memoized for the statement's lifetime
+  and replayed; denials still abort on first sight and scope filters still
+  fold into each consumer's own `WHERE`.
 - `search.max_results` is now applied as the ceiling on the rows a single
   caller-visible search or query returns (#2591). The key used to be parsed,
   validated, and ignored: a `search(query, k)` above the ceiling, a filtered
