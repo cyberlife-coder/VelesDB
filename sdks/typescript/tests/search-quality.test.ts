@@ -41,7 +41,7 @@ function stubSearchResponse(): void {
 }
 
 function bodyOf(call: number): Record<string, unknown> {
-  return JSON.parse(mockFetch.mock.calls[call][1].body as string);
+  return JSON.parse(mockFetch.mock.calls[call]![1].body as string);
 }
 
 // ============================================================================
@@ -159,8 +159,8 @@ describe('searchBatch() forwards per-sub-request quality', () => {
     const body = bodyOf(0);
     const searches = body.searches as Array<Record<string, unknown>>;
     expect(searches).toHaveLength(2);
-    expect(searches[0].mode).toBe('fast');
-    expect(searches[1].mode).toBe('accurate');
+    expect(searches[0]!.mode).toBe('fast');
+    expect(searches[1]!.mode).toBe('accurate');
   });
 
   it('omits mode per sub-request when quality is undefined', async () => {
