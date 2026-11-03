@@ -238,9 +238,9 @@ pub(crate) fn execute_dense_search(
     }
 
     // Parse the optional metadata filter up front so the search can be routed
-    // through the governed facade. Known limitation (#457): when a filter is
-    // present, mode/ef_search are ignored (search_with_filter takes no quality
-    // parameter yet) — `gated_search` preserves that same precedence.
+    // through the governed facade. A filter no longer drops mode/ef_search:
+    // `gated_search` resolves them onto the filtered-quality leaf, `ef`
+    // winning over `mode` the way `QuerySearchOptions::resolved_quality` does.
     let filter = match req.filter {
         Some(ref filter_json) => Some(parse_filter_or_400(filter_json, &state.onboarding_metrics)?),
         None => None,

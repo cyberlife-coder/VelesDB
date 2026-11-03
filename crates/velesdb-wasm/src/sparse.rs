@@ -101,6 +101,10 @@ impl SparseIndex {
     /// Inserts a document with the given sparse vector.
     ///
     /// `indices` and `values` must have the same length.
+    ///
+    /// Re-inserting a `doc_id` replaces its vector, as core's upsert does
+    /// (delete + insert): terms the new vector drops stop matching instead of
+    /// keeping their previous postings.
     #[wasm_bindgen]
     pub fn insert(&mut self, doc_id: u64, indices: &[u32], values: &[f32]) -> Result<(), JsValue> {
         if indices.len() != values.len() {
@@ -110,17 +114,18 @@ impl SparseIndex {
                 values.len()
             )));
         }
+        // `known_docs` is the authoritative set of all doc_ids ever inserted.
+        // A re-insert first drops the doc's previous postings so the index
+        // afterwards holds exactly the vector passed here.
+        if self.known_docs.contains(&doc_id) {
+            self.remove(doc_id);
+        }
         let pairs: Vec<(u32, f32)> = indices
             .iter()
             .copied()
             .zip(values.iter().copied())
             .collect();
         let sv = SparseVec::new(pairs);
-
-        // `known_docs` is the authoritative set of all doc_ids ever inserted.
-        // This is O(log n) and correctly handles the disjoint-term re-insert case
-        // (where the new vector touches different terms than the original insert).
-        let is_new_doc = !self.known_docs.contains(&doc_id);
 
         for (&term_id, &weight) in sv.indices.iter().zip(sv.values.iter()) {
             let list = self.postings.entry(term_id).or_default();
@@ -133,12 +138,46 @@ impl SparseIndex {
                 *max_w = weight.abs();
             }
         }
-        // Only increment doc_count for genuinely new documents, not for re-inserts/updates.
-        if is_new_doc {
-            self.known_docs.insert(doc_id);
-            self.doc_count += 1;
-        }
+        // `remove` above already took the doc out of `known_docs` and off
+        // `doc_count`, so this restore keeps both correct on re-inserts too.
+        self.known_docs.insert(doc_id);
+        self.doc_count += 1;
         Ok(())
+    }
+
+    /// Removes a document's postings from the index.
+    ///
+    /// Returns `true` when the document was present. Posting lists left empty
+    /// are dropped and `max_weights` is recomputed for every term the document
+    /// touched, since the removed entry may have carried the term's maximum.
+    /// Mirrors core's `MutableSegment::delete`: this index is a single
+    /// always-mutable segment, so removal needs no tombstones.
+    #[wasm_bindgen]
+    pub fn remove(&mut self, doc_id: u64) -> bool {
+        if !self.known_docs.remove(&doc_id) {
+            return false;
+        }
+        self.doc_count -= 1;
+        let mut touched = Vec::new();
+        for (&term_id, list) in &mut self.postings {
+            if let Ok(pos) = list.binary_search_by_key(&doc_id, |&(id, _)| id) {
+                list.remove(pos);
+                touched.push(term_id);
+            }
+        }
+        self.postings.retain(|_, list| !list.is_empty());
+        for term_id in touched {
+            match self.postings.get(&term_id) {
+                Some(list) => {
+                    let max_w = list.iter().fold(0.0_f32, |m, &(_, w)| m.max(w.abs()));
+                    self.max_weights.insert(term_id, max_w);
+                }
+                None => {
+                    self.max_weights.remove(&term_id);
+                }
+            }
+        }
+        true
     }
 
     /// Searches the index with the given sparse query vector.

@@ -136,8 +136,21 @@ export interface WasmVectorStore {
   /** k-NN search with metadata filter. Returns array of {id, score, payload}. */
   search_with_filter(...args: StoreParams<'search_with_filter'>): WasmFilteredResult[];
 
-  /** Add a document's sparse postings. Nothing removes them afterwards (`wasm-sparse.ts`). */
+  /**
+   * Add a document's sparse postings (`wasm-sparse.ts`). On velesdb-wasm
+   * 8.0.0 nothing removes them afterwards; newer bindings take them out
+   * through {@link sparse_remove} and re-inserts replace the document.
+   */
   sparse_insert(...args: StoreParams<'sparse_insert'>): void;
+
+  /**
+   * Remove a document's sparse postings; `true` when it had any. Absent on
+   * velesdb-wasm 8.0.0 — the version the SDK's declared range still admits —
+   * so callers must feature-test before using it (`wasm-sparse.ts`), which
+   * is also why it is declared here by hand rather than via `StoreParams`:
+   * the published declaration this type reads has no such method yet.
+   */
+  sparse_remove?(doc_id: bigint): boolean;
 
   /** Sparse index search. Returns array of {doc_id, score}. */
   sparse_search(...args: StoreParams<'sparse_search'>): WasmSparseResult[];
@@ -201,9 +214,11 @@ export interface WasmModule {
 
 /**
  * Sparse bookkeeping for one collection: each sparse upsert is indexed under
- * a fresh sparse id, and a replaced or deleted point's id is retired, since
- * the binding cannot remove postings; the index is rebuilt once retired ids
- * outnumber live ones (`backends/wasm-sparse.ts`).
+ * a fresh sparse id, and a replaced or deleted point's id is retired. A
+ * binding that exposes `sparse_remove` deletes the retired id's postings;
+ * an older one (velesdb-wasm 8.0.0) keeps them, so they are tombstoned and
+ * the index is rebuilt once retired ids outnumber live ones
+ * (`backends/wasm-sparse.ts`).
  */
 export interface SparseIds {
   /** The metadata-only store holding the sparse index; `null` until the first sparse upsert. */
@@ -212,9 +227,9 @@ export interface SparseIds {
   byPoint: Map<number, bigint>;
   /** Point behind each live sparse id. */
   byId: Map<bigint, number>;
-  /** Each live sparse id's vector, kept to rebuild the index from. */
+  /** Each live sparse id's vector, kept to rebuild the index from when the binding cannot remove. */
   vectors: Map<bigint, { indices: Uint32Array; values: Float32Array }>;
-  /** Retired ids the binding still holds; a search over-fetches by this many. */
+  /** Retired ids a remove-incapable binding still holds; a search over-fetches by this many. */
   dead: number;
   /** Next sparse id to hand out. */
   next: bigint;

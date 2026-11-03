@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Filtered search now honours `ef_search` and quality presets end to end
+  (closes #2302).** Core gains
+  `VectorCollection::search_with_quality_and_filter` — the filtered
+  counterpart of `search_with_quality`, routing through the same
+  quality-aware dispatch `WITH (mode=…, ef_search=…)` reaches — and the read
+  gate's `run_dense` no longer drops `ef`/`quality` when a caller or scope
+  filter is present (`ef` resolves to `SearchQuality::Custom` and still wins
+  over `quality`). The Python binding exposes it as
+  `Collection.search_with_quality_and_filter(vector, top_k=10, filter=None,
+  ef_search=None, quality=None, *, principal=None, tenant=None)`; existing
+  method signatures are unchanged. The LangChain integration routes
+  `ef_search`/`search_quality` + `filter` through it instead of refusing:
+  `similarity_search_with_ef(query, ef_search=…, filter=…)` now runs the
+  filtered search at the requested `ef_search`. REST `/search` picks the same
+  behaviour up through `GatedRead::Dense`, retiring the "mode/ef_search
+  ignored when a filter is present" limitation on that path.
 - **`velesdb-extract-outline` agent skill** (#1957). A fourth managed skill
   that documents the `outline` extractor's `fact:`/`edge:`/`attr:` directive
   grammar, so the agent itself performs the extraction for
@@ -41,6 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Database` config) stays unbounded. `scroll_batch` pages are bounded by the
   same ceiling, so callers paging with a larger `batch_size` receive smaller
   pages — issue more `scroll_batch` calls to cover the same range.
+- **A plan-only `EXPLAIN` of a `MATCH` addressed through `_collection` now
+  consults the read gate on the traversal target** (#2598).
+  `Database::explain_query` gated with empty params, so a `MATCH` whose
+  target collection rides in the `_collection` parameter — how
+  `POST /query/explain` addresses a top-level `MATCH` — was decided on no
+  collection at all: a denial of the traversed collection still answered
+  HTTP 200 with a plan. The new `Database::explain_query_with_params` carries
+  the caller's params into the gate, and the REST plan path uses it; a denial
+  now surfaces as an error and an inapplicable scope is refused, matching
+  what `execute_query` has answered for the same statement since the read
+  gate landed.
 
 ## [8.0.0] - 2026-11-02
 

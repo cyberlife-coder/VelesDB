@@ -415,6 +415,34 @@ async fn plan_only_explain_propagates_a_denial_the_select_check_missed() {
     );
 }
 
+/// GIVEN the observer denies `items`
+/// WHEN a plan-only `/query/explain` of a `MATCH` whose target arrives in the
+///      `_collection` param runs
+/// THEN the gate is consulted on the traversal target and the denial is an
+///      error — never a `200` plan payload (#2598): the plan-only path used to
+///      gate with empty params, so the `_collection` target was never asked
+///      about.
+#[tokio::test]
+async fn plan_only_explain_gates_a_match_addressed_by_the_collection_param() {
+    let (_dir, app, observer) = setup().await;
+    let explain = || json!({"query": "MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10", "analyze": false, "params": {"_collection": "items"}});
+
+    let (status, body) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    assert_eq!(status, StatusCode::OK, "allowed MATCH explain: {body}");
+
+    observer.set(Rule::Deny);
+    let (status, body) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    assert!(
+        !status.is_success(),
+        "denied MATCH explain must refuse, got {status}: {body}"
+    );
+    assert!(
+        body.to_string()
+            .contains("read denied by governance policy"),
+        "{status}: {body}"
+    );
+}
+
 /// GIVEN the observer denies `items` — wait: stream is graph; use a graph coll.
 /// WHEN the SSE traversal endpoint is hit
 /// THEN the denial refuses it instead of streaming an unscoped traversal —

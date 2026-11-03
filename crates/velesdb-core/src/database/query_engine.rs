@@ -271,11 +271,23 @@ impl Database {
         &self,
         query: &crate::velesql::Query,
     ) -> Result<crate::velesql::QueryPlan> {
-        self.explain_query_ctx(
-            query,
-            &std::collections::HashMap::new(),
-            &GateDecisions::default(),
-        )
+        self.explain_query_with_params(query, &std::collections::HashMap::new())
+    }
+
+    /// [`explain_query`](Self::explain_query) with the caller's statement
+    /// params, so a read whose target rides in `params` — a `MATCH` addressed
+    /// through `_collection` rather than the statement text — is gated on the
+    /// collection it actually reads (issue #2598).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`explain_query`](Self::explain_query).
+    pub fn explain_query_with_params(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::QueryPlan> {
+        self.explain_query_ctx(query, params, &GateDecisions::default())
     }
 
     /// [`explain_query`](Self::explain_query) with the caller's params (so a

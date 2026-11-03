@@ -502,7 +502,10 @@ impl HnswIndex {
     ///
     /// Internal indices `0..count` are filtered through `mappings.get_id`,
     /// so tombstoned slots (deleted/upserted vectors that remain in the
-    /// graph store) are never returned.
+    /// graph store) are never returned. The id each slot answers to is read
+    /// under the same guard as the slab: resolved later, a
+    /// `reorder_for_locality` or a vacuum's swap could renumber the mappings
+    /// in between and hand a snapshotted vector another id's slot (#2607).
     pub(super) fn brute_force_search_rayon(&self, query: &[f32], k: usize) -> Vec<ScoredResult> {
         // Preserve fast-insert semantics: exact-distance features are gated
         // on `enable_vector_storage` even though the graph stores vectors.
@@ -510,19 +513,30 @@ impl HnswIndex {
             return Vec::new();
         }
 
-        let (flat, dimension) = {
+        let (flat, dimension, slot_ids) = {
             let inner = self.inner.read();
             inner.with_contiguous_vectors(|vectors| {
-                (vectors.as_flat_slice().to_vec(), vectors.dimension())
+                let slot_ids: Vec<Option<u64>> = (0..vectors.len())
+                    .map(|idx| self.mappings.get_id(idx))
+                    .collect();
+                (
+                    vectors.as_flat_slice().to_vec(),
+                    vectors.dimension(),
+                    slot_ids,
+                )
             })
         };
         if flat.is_empty() || dimension == 0 {
             return Vec::new();
         }
+        // The window the snapshot releases the guard into: a renumber running
+        // here is what the scan-window test parks (#2607).
+        #[cfg(test)]
+        super::scan_window::pause();
 
         let mut results: Vec<ScoredResult> =
             pools::filter_map_chunks_enumerated(&flat, dimension, |idx, vec| {
-                let id = self.mappings.get_id(idx)?;
+                let id = slot_ids[idx]?;
                 let score = self.compute_distance(query, vec);
                 Some(ScoredResult::new(id, score))
             });
