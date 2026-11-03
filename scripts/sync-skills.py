@@ -83,6 +83,7 @@ REPO = Path(__file__).resolve().parents[1]
 #: in its lane.
 SKILLS: tuple[tuple[str, str], ...] = (
     ("skills/velesdb-context-optimizer", "velesdb-context-optimizer"),
+    ("skills/velesdb-extract-outline", "velesdb-extract-outline"),
     ("skills/velesdb-learning-loop", "velesdb-learning-loop"),
     ("crates/velesdb-memory/skill/velesdb-memory", "velesdb-memory"),
 )

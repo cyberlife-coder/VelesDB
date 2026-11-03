@@ -243,18 +243,20 @@ same decimal-string contract in both directions — including the ones under
 
 ## Bundled agent skills
 
-The npm package ships two skills that teach an agent *when* to call these
+The npm package ships four skills that teach an agent *when* to call these
 methods — wiring the API alone gives it the verbs, not the loop:
 
 | Skill | What it teaches |
 |---|---|
 | `skills/velesdb-memory` | recall before acting → remember decisions with metadata **and** links → `relate` as relationships appear → `why` to explain → `feedback` to reinforce |
 | `skills/velesdb-context-optimizer` | the full compression workflow, including when *not* to compress |
+| `skills/velesdb-extract-outline` | the `outline` directive grammar (`fact:`/`edge:`/`attr:`) — agent-side extraction without a generative model, for no-LLM and small-model setups the user opts into |
 | `skills/velesdb-learning-loop` | the discipline over both: recall before designing, check recurrence before storing a fix, correct a wrong memory instead of adding beside it, and never write by reflex |
 
 ```bash
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory ~/.claude/skills/
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-context-optimizer ~/.claude/skills/
+cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-extract-outline ~/.claude/skills/
 cp -r node_modules/@wiscale/velesdb-memory-node/skills/velesdb-learning-loop ~/.claude/skills/
 ```
 

@@ -247,8 +247,9 @@ cargo bench -p velesdb-core --features internal-bench -- --noplot
 
 ### Agent Skills — installing, checking, re-syncing
 
-This repository is the source of truth for three agent skills:
-`skills/velesdb-context-optimizer`, `skills/velesdb-learning-loop` and
+This repository is the source of truth for four agent skills:
+`skills/velesdb-context-optimizer`, `skills/velesdb-extract-outline`,
+`skills/velesdb-learning-loop` and
 `crates/velesdb-memory/skill/velesdb-memory`. An agent does not load them from
 here — it loads a copy installed under `~/.claude/skills`.
 

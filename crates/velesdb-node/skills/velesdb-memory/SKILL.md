@@ -37,7 +37,7 @@ well is a *loop you run throughout a task*, not a one-shot lookup.
 Install: `cp -r crates/velesdb-memory/skill/velesdb-memory ~/.claude/skills/`
 (repo clone). No repo clone? Every
 [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
-attaches `velesdb-skills.tar.gz` (both bundled skills, one folder per skill):
+attaches `velesdb-skills.tar.gz` (every bundled skill, one folder per skill):
 `curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz | tar -xz -C ~/.claude/skills/`.
 The npm package bundles it too, at
 `node_modules/@wiscale/velesdb-memory-node/skills/velesdb-memory`.
@@ -294,20 +294,30 @@ is the same trap as the date field in step 2, and it is the single most common
 way a memory system looks like it is working while returning nothing.
 
 `remember_extracted` needs an extraction backend; without one the tool reports
-itself as unconfigured rather than silently storing less. Two exist, and they
+itself as unconfigured rather than silently storing less. Three exist, and they
 are **not** interchangeable:
 
 - `"ollama"` runs a local generative model that **infers** the facts, entity
   edges and attributes a passage states. It needs that model running — the
   backend itself is compiled into the default binary, no rebuild.
+- `"openai"` runs the same inference against any OpenAI-compatible server —
+  see the extractor section of the setup notes below.
 - `"outline"` is deterministic and fully offline — no model, no network, and no
   extra build feature. But it only reads structure you write out **explicitly**,
   one directive per line (`fact:`, `edge:`, `attr:`). Hand it free prose and you
   get plain facts with no graph around them.
 
 Pick `"outline"` when you control the input format, or to get a graph at all
-without running a model. Pick `"ollama"` when the input is prose nobody is
-going to reformat.
+without running a model. Pick `"ollama"`/`"openai"` when the input is prose
+nobody is going to reformat.
+
+When the setup has no usable generative extractor — no model configured at
+all, or a local model too small to hold the extraction contract — the user
+may instead choose **agent-side extraction**: the **`velesdb-extract-outline`
+skill** teaches you to write the `fact:`/`edge:`/`attr:` directives yourself
+and pass them with `extractor: "outline"`, which works even when
+`extraction.configured` is false. That skill is opt-in and user-chosen:
+install it only when the user picks that arrangement, never as a default.
 
 **Always close the asynchronous loop.** Give one logical write a stable
 `idempotency_key`; if the client times out, retry that same key and unchanged
