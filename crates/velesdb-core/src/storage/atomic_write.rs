@@ -119,7 +119,8 @@ fn parent_directory(path: &Path) -> &Path {
 pub(crate) enum AtomicWriteBoundary {
     TemporaryFileSync,
     Replacement,
-    #[cfg(unix)]
+    // The fault point exists on every platform — only `sync_parent_directory`'s
+    // unix arm checks it; tests may inject it unconditionally.
     ParentDirectorySync,
 }
 
