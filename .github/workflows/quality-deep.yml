@@ -156,6 +156,24 @@ jobs:
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
 
+      # aarch64 NEON bounds - every NEON kernel is `cfg(target_arch =
+      # "aarch64")`, so on this x86_64 runner no step above has ever compiled
+      # them (#2397). Miri interprets cross-target: `neon_bounds_tests` calls
+      # no intrinsic Miri lacks (`vaddvq_f32`, `fmin`, `uaddlv` stay
+      # uninterpretable), so it is the one NEON test Miri can run, and it fails
+      # under Stacked Borrows if `bounds_16wide` derives its tail pointer from
+      # `a[..main]` again (#2391). `rustup target add` registers the target;
+      # Miri builds its aarch64 sysroot from rust-src itself.
+      - name: Miri - aarch64 NEON bounds (cross-target)
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          scripts/miri-step.sh 'simd_native::neon::neon_bounds_tests::' \
+            --target aarch64-unknown-linux-gnu \
+            --no-default-features -p velesdb-core --lib -- \
+            neon_bounds --test-threads=1
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-symbolic-alignment-check"
+
   # ===========================================================================
   # Cost Crossover - travail déterministe par stratégie de filtre
   # ===========================================================================
