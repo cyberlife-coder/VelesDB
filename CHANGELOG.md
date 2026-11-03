@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Database` config) stays unbounded. `scroll_batch` pages are bounded by the
   same ceiling, so callers paging with a larger `batch_size` receive smaller
   pages — issue more `scroll_batch` calls to cover the same range.
+- **A plan-only `EXPLAIN` of a `MATCH` addressed through `_collection` now
+  consults the read gate on the traversal target** (#2598).
+  `Database::explain_query` gated with empty params, so a `MATCH` whose
+  target collection rides in the `_collection` parameter — how
+  `POST /query/explain` addresses a top-level `MATCH` — was decided on no
+  collection at all: a denial of the traversed collection still answered
+  HTTP 200 with a plan. The new `Database::explain_query_with_params` carries
+  the caller's params into the gate, and the REST plan path uses it; a denial
+  now surfaces as an error and an inapplicable scope is refused, matching
+  what `execute_query` has answered for the same statement since the read
+  gate landed.
 
 ## [8.0.0] - 2026-11-02
 

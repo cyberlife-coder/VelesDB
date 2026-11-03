@@ -100,17 +100,20 @@ fn explain_plan_only(
     // runs the read gate in-core with the query's own operation kind — a
     // denial or an unnarrowable scope is an error it returns, and it is
     // surfaced as one: a failure folded into a plan payload would answer
-    // HTTP 200 for a plan the caller was refused (#2587).
-    let (plan, cache_hit, plan_reuse_count) = match state.db.explain_query(parsed) {
-        Ok(qp) => (core_plan_steps(&qp), qp.cache_hit, qp.plan_reuse_count),
-        Err(e) => {
-            return velesql_execution_error(
-                &e,
-                "VELESQL_EXPLAIN_ERROR",
-                "The read gate refused the plan or the query failed plan-time checks",
-            );
-        }
-    };
+    // HTTP 200 for a plan the caller was refused (#2587). The request's
+    // params go through so a `MATCH` whose target rides in `_collection` is
+    // gated on the collection it actually traverses (#2598).
+    let (plan, cache_hit, plan_reuse_count) =
+        match state.db.explain_query_with_params(parsed, &req.params) {
+            Ok(qp) => (core_plan_steps(&qp), qp.cache_hit, qp.plan_reuse_count),
+            Err(e) => {
+                return velesql_execution_error(
+                    &e,
+                    "VELESQL_EXPLAIN_ERROR",
+                    "The read gate refused the plan or the query failed plan-time checks",
+                );
+            }
+        };
 
     Json(ExplainResponse {
         query: req.query.clone(),
