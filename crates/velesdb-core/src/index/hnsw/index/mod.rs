@@ -305,5 +305,9 @@ impl Drop for HnswIndex {
 mod safety_tests;
 
 #[cfg(test)]
+#[path = "scan_window_tests.rs"]
+pub(crate) mod scan_window;
+
+#[cfg(test)]
 #[path = "global_pool_tests.rs"]
 mod global_pool_tests;
