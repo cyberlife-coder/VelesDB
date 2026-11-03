@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-10-25",
+  "last_updated": "2026-11-03",
   "claims": [
     {
       "id": "root_readme_hnsw_latency_microseconds",
@@ -5814,6 +5814,659 @@
       "measured_on": "2026-10-31",
       "measured_machine": "Intel(R) Xeon(R) Processor @ 2.10GHz, 4 vCPU, x86_64 Linux (shared cloud sandbox, not the reference machine)",
       "measured_version": "8.0.0"
+    },
+    {
+      "id": "agents_recall_gate_bound",
+      "file": "AGENTS.md",
+      "must_contain": "Recall@10 ≥ 0.95",
+      "validation_command": "cargo test -p velesdb-core --features persistence test_recall -- --test-threads=1",
+      "executable": false,
+      "source": "the search-path recall bound this line states (QUALITY_BAR.md Gate 1) — a bound a change must meet, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "agents_perf_smoke_regression_bound",
+      "file": "AGENTS.md",
+      "must_contain": "a 15% regression comparison",
+      "validation_command": "the perf-smoke job in .github/workflows/ci.yml",
+      "executable": false,
+      "source": "the perf-smoke job's regression bound, stated where the job is described — a configured threshold, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "architecture_canonical_path_claim",
+      "file": "ARCHITECTURE.md",
+      "must_contain": "canonical 450 µs p50 latency claim",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
+      "source": "benchmarks/report_1.7.2_2026-03-27.json, written by `python benchmarks/velesdb_benchmark.py --recall` (Python SDK, WAL ON, 10K x 384D): search p50 447 us, recall@10 mean 0.976 — the canonical claim, also pinned by readme_production_search_latency and core_readme_hnsw_latency. measured_version is the workspace version of that report.",
+      "measured_on": "2026-03-27",
+      "measured_machine": "Intel Core i9-14900KF, 64 GB, Windows (benchmarks/report_1.7.2_2026-03-27.json)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "Restates the canonical registered claim (report_1.7.2_2026-03-27.json, 1.7.2) in a root document; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "architecture_canonical_number",
+      "file": "ARCHITECTURE.md",
+      "must_contain": "450 µs p50 end-to-end** (10K vectors, 384D, WAL ON, recall ≥ 96%)",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
+      "source": "benchmarks/report_1.7.2_2026-03-27.json, written by `python benchmarks/velesdb_benchmark.py --recall` (Python SDK, WAL ON, 10K x 384D): search p50 447 us, recall@10 mean 0.976 — the canonical claim, also pinned by readme_production_search_latency and core_readme_hnsw_latency. measured_version is the workspace version of that report.",
+      "measured_on": "2026-03-27",
+      "measured_machine": "Intel Core i9-14900KF, 64 GB, Windows (benchmarks/report_1.7.2_2026-03-27.json)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "Restates the canonical registered claim (report_1.7.2_2026-03-27.json, 1.7.2) in a root document; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "architecture_index_only_microbench",
+      "file": "ARCHITECTURE.md",
+      "must_contain": "~55 µs in the same conditions",
+      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
+      "executable": false,
+      "source": "benchmarks/results/pr363_365_comparison.md (index-only, 47-56 µs, i9-14900KF) and the quiet Apple M5 Pro re-run of 2026-07-20 (53.2 µs at 10K/768D) — the index-only figure '~55 µs' rounds; the same run as root_readme_hnsw_latency_microseconds.",
+      "measured_on": "2026-07-20",
+      "measured_machine": "Apple M5 Pro (quiet re-run, 53.2 µs)",
+      "measured_version": "3.12.0",
+      "stale_accepted": {
+        "reason": "The index-only figure's run of record (M5 Pro re-run, 2026-07-20, 3.12.0); Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_e2e_threshold_row",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "≤ 450 µs (10K/384D, WAL ON, recall ≥ 96%)",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
+      "source": "benchmarks/report_1.7.2_2026-03-27.json, written by `python benchmarks/velesdb_benchmark.py --recall` (Python SDK, WAL ON, 10K x 384D): search p50 447 us, recall@10 mean 0.976 — the canonical claim, also pinned by readme_production_search_latency and core_readme_hnsw_latency. measured_version is the workspace version of that report.",
+      "measured_on": "2026-03-27",
+      "measured_machine": "Intel Core i9-14900KF, 64 GB, Windows (benchmarks/report_1.7.2_2026-03-27.json)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "Restates the canonical registered claim (report_1.7.2_2026-03-27.json, 1.7.2) in a root document; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_gate2_heading",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "search latency p50 ≤ 450 µs",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
+      "source": "benchmarks/report_1.7.2_2026-03-27.json, written by `python benchmarks/velesdb_benchmark.py --recall` (Python SDK, WAL ON, 10K x 384D): search p50 447 us, recall@10 mean 0.976 — the canonical claim, also pinned by readme_production_search_latency and core_readme_hnsw_latency. measured_version is the workspace version of that report.",
+      "measured_on": "2026-03-27",
+      "measured_machine": "Intel Core i9-14900KF, 64 GB, Windows (benchmarks/report_1.7.2_2026-03-27.json)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "Restates the canonical registered claim (report_1.7.2_2026-03-27.json, 1.7.2) in a root document; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_full_path_recall",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "recall ≥ 96%",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
+      "source": "benchmarks/report_1.7.2_2026-03-27.json, written by `python benchmarks/velesdb_benchmark.py --recall` (Python SDK, WAL ON, 10K x 384D): search p50 447 us, recall@10 mean 0.976 — the canonical claim, also pinned by readme_production_search_latency and core_readme_hnsw_latency. measured_version is the workspace version of that report.",
+      "measured_on": "2026-03-27",
+      "measured_machine": "Intel Core i9-14900KF, 64 GB, Windows (benchmarks/report_1.7.2_2026-03-27.json)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "Restates the canonical registered claim (report_1.7.2_2026-03-27.json, 1.7.2) in a root document; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_threshold_450",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "450 µs p50 on 10K vectors / 384D",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
+      "source": "benchmarks/report_1.7.2_2026-03-27.json, written by `python benchmarks/velesdb_benchmark.py --recall` (Python SDK, WAL ON, 10K x 384D): search p50 447 us, recall@10 mean 0.976 — the canonical claim, also pinned by readme_production_search_latency and core_readme_hnsw_latency. measured_version is the workspace version of that report.",
+      "measured_on": "2026-03-27",
+      "measured_machine": "Intel Core i9-14900KF, 64 GB, Windows (benchmarks/report_1.7.2_2026-03-27.json)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "Restates the canonical registered claim (report_1.7.2_2026-03-27.json, 1.7.2) in a root document; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_canonical_450",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "canonical 450 µs",
+      "validation_command": "python benchmarks/velesdb_benchmark.py --recall",
+      "executable": false,
+      "source": "benchmarks/report_1.7.2_2026-03-27.json, written by `python benchmarks/velesdb_benchmark.py --recall` (Python SDK, WAL ON, 10K x 384D): search p50 447 us, recall@10 mean 0.976 — the canonical claim, also pinned by readme_production_search_latency and core_readme_hnsw_latency. measured_version is the workspace version of that report.",
+      "measured_on": "2026-03-27",
+      "measured_machine": "Intel Core i9-14900KF, 64 GB, Windows (benchmarks/report_1.7.2_2026-03-27.json)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "Restates the canonical registered claim (report_1.7.2_2026-03-27.json, 1.7.2) in a root document; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_recall_fast_row",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "| 97.4% |",
+      "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
+      "executable": false,
+      "source": "`recall_benchmark`'s recall report (10K random 128-D vectors, an index built with HnswParams::max_recall), re-measured 2026-09-10 on 6.0.0 at the current ef_search bases — the run the table's own 'Source:' note names; the same run backs the identical table in docs/BENCHMARKS.md.",
+      "measured_on": "2026-09-10",
+      "measured_machine": "unknown (the doc names the date and version, not the machine)",
+      "measured_version": "6.0.0",
+      "stale_accepted": {
+        "reason": "Published with its date and version (2026-09-10, 6.0.0), the run QUALITY_BAR.md's own note names; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_recall_balanced_row",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "| 99.8% |",
+      "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
+      "executable": false,
+      "source": "`recall_benchmark`'s recall report (10K random 128-D vectors, an index built with HnswParams::max_recall), re-measured 2026-09-10 on 6.0.0 at the current ef_search bases — the run the table's own 'Source:' note names; the same run backs the identical table in docs/BENCHMARKS.md.",
+      "measured_on": "2026-09-10",
+      "measured_machine": "unknown (the doc names the date and version, not the machine)",
+      "measured_version": "6.0.0",
+      "stale_accepted": {
+        "reason": "Published with its date and version (2026-09-10, 6.0.0), the run QUALITY_BAR.md's own note names; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_recall_accurate_row",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "| 100.0% |",
+      "validation_command": "cargo bench -p velesdb-core --bench recall_benchmark",
+      "executable": false,
+      "source": "`recall_benchmark`'s recall report (10K random 128-D vectors, an index built with HnswParams::max_recall), re-measured 2026-09-10 on 6.0.0 at the current ef_search bases — the run the table's own 'Source:' note names; the same run backs the identical table in docs/BENCHMARKS.md.",
+      "measured_on": "2026-09-10",
+      "measured_machine": "unknown (the doc names the date and version, not the machine)",
+      "measured_version": "6.0.0",
+      "stale_accepted": {
+        "reason": "Published with its date and version (2026-09-10, 6.0.0), the run QUALITY_BAR.md's own note names; Re-measuring belongs on the reference machine or re-run of record, not done in this change. Carried over: not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_recall_gate_heading",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "Recall@10 ≥ 0.95",
+      "validation_command": "cargo test -p velesdb-core --features persistence test_recall -- --test-threads=1",
+      "executable": false,
+      "source": "the Gate 1 bound the heading names — a configured bound, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_recall_local_bound",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "recall ≥ 0.95",
+      "validation_command": "cargo test -p velesdb-core --features persistence test_recall -- --test-threads=1",
+      "executable": false,
+      "source": "the bound the local recall test enforces — a configured bound, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_recall_ci_bound",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "recall@10 ≥ 0.95",
+      "validation_command": "the perf-gate-e2e job in .github/workflows/ci.yml",
+      "executable": false,
+      "source": "the bound perf-gate-e2e enforces on the 10K benchmark — a configured bound, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_recall_checklist_bound",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "recall test ≥ 0.95",
+      "validation_command": "cargo test -p velesdb-core --features persistence test_recall -- --test-threads=1",
+      "executable": false,
+      "source": "the same Gate 1 bound, restated in the pre-release checklist — a configured bound.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_sanity_floor",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "1500 µs sanity floor",
+      "validation_command": "the perf-gate-e2e job in .github/workflows/ci.yml",
+      "executable": false,
+      "source": "the deliberately loose p50 bound the CI job gates at — a configured floor, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_hnsw_ceiling",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "≤ 60 µs",
+      "validation_command": "cargo bench -p velesdb-core --bench hnsw_benchmark",
+      "executable": false,
+      "source": "the index-only HNSW ceiling — a gate bound; the measured figure it bounds is registered for the README (root_readme_hnsw_latency_microseconds, 53.2 µs).",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_simd_ceiling",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "≤ 25 ns",
+      "validation_command": "cargo bench -p velesdb-core --bench simd_benchmark",
+      "executable": false,
+      "source": "the SIMD dot-product ceiling — a gate bound; the measured figure it bounds is registered for the README (21.7/21.8 ns runs).",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_bm25_ceiling",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "≤ 70 µs",
+      "validation_command": "cargo bench -p velesdb-core --bench sparse_benchmark",
+      "executable": false,
+      "source": "the BM25 sparse-search ceiling — a gate bound, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "quality_bar_mutation_run_facts",
+      "file": "QUALITY_BAR.md",
+      "must_contain": "105 s of build and 981 s of unmutated baseline",
+      "validation_command": "none: CI job logs, not a benchmark",
+      "executable": false,
+      "source": "the durations of the two cargo-mutants CI runs #2339 records — job-log facts justifying the job's removal, not a performance promise.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "roadmap_dx_timing_median",
+      "file": "ROADMAP.md",
+      "must_contain": "median under 26 s across 4 paths",
+      "validation_command": "bash scripts/dx-timing/run_all.sh",
+      "executable": false,
+      "source": "the reproducible harness the row cites (scripts/dx-timing/run_all.sh), run for v1.13.7 — its recorded output is not in the tree.",
+      "measured_on": "unknown (the row names the version, not the date)",
+      "measured_machine": "unknown",
+      "measured_version": "1.13.7",
+      "stale_accepted": {
+        "reason": "A delivered-outcome record pinned at v1.13.7 — it describes a past state, not a current performance claim. Not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "roadmap_hnsw_index_target",
+      "file": "ROADMAP.md",
+      "must_contain": "HNSW <30µs index-only",
+      "validation_command": "none: a tracked goal, not a measured figure",
+      "executable": false,
+      "source": "the target of tracked issue #377, named as the roadmap item — a goal, not a measurement.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "roadmap_cost_unit_ratio",
+      "file": "ROADMAP.md",
+      "must_contain": "~22×",
+      "validation_command": "none: an arithmetic consequence, not a measured figure",
+      "executable": false,
+      "source": "the documented consequence of the uncalibrated COST_UNIT_TO_MS = 0.001 (docs/reference/KNOWN_LIMITATIONS.md §1) — a derivation between the two cost scales, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "benchmarks_adaptive_targets",
+      "file": "benchmarks/README.md",
+      "must_contain": "### HNSW Parameters (Adaptive)",
+      "covers_section": true,
+      "validation_command": "none: design targets, not a measured figure",
+      "executable": false,
+      "source": "the adaptive-parameter 'Target Recall' column — the design targets HnswParams::for_dataset_size aims at, not a measured run.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_total_latency_under_1ms",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "total latency stays under 1ms",
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_first_pass_single_pass",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "~5ms (HNSW, 512-dim)",
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt. Consistent with the Benchmark table's brute-force and HNSW-Balanced rows.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_first_pass_two_pass",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "~0.05ms (Hamming on 256-bit binary vectors)",
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt. The Benchmark table's K=50 row reads the same 0.05 ms pass-1 figure.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_benchmark_latency",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "### Latency",
+      "covers_section": true,
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_benchmark_memory",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "### Memory (per 100K images)",
+      "covers_section": true,
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_benchmark_index_build",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "### Index Build Time",
+      "covers_section": true,
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_shortlist_k20",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "| 20 | 0.25ms | ~92% |",
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_shortlist_k50",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "| 50 | 0.35ms | ~97% |",
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_shortlist_k100",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "| 100 | 0.46ms | ~99% |",
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_shortlist_k200",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "| 200 | 0.58ms | ~99.5% |",
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "the run the Benchmark section names in prose: 'Measured on a 100K image dataset (256-dim dHash + 512-dim CLIP, single machine, AMD Ryzen 9 7950X, 64GB RAM)' — no date or version is recorded, so the claim is carried as honest debt.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_quality_modes",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "### Quality Modes",
+      "covers_section": true,
+      "validation_command": "none: the tutorial states the run, no committed command",
+      "executable": false,
+      "source": "two stated runs: the Recall column is recall_benchmark's report (10K random 128-D vectors), re-measured 2026-09-10 on 6.0.0 per the table's own footnote; the Latency column states the 100K-image Ryzen 9 7950X run the Benchmark section names.",
+      "measured_on": "unknown (the section states dataset and machine, not a date)",
+      "measured_machine": "AMD Ryzen 9 7950X, 64GB RAM (as the Benchmark section names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_k_rule_of_thumb",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "5-10x",
+      "validation_command": "none: tuning guidance, not a measured figure",
+      "executable": false,
+      "source": "the tutorial's shortlist rule of thumb — a heuristic for choosing K, not a measured figure.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "tutorial_monitoring_thresholds",
+      "file": "tutorials/image-search-hamming-clip/README.md",
+      "must_contain": "### Monitoring",
+      "covers_section": true,
+      "validation_command": "none: operational targets, not a measured figure",
+      "executable": false,
+      "source": "the table's p99 targets and alert thresholds — operational bounds set for monitoring, not a measured run.",
+      "measured_on": "n/a",
+      "measured_machine": "n/a",
+      "measured_version": "n/a",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "demo_rag_layer_latency",
+      "file": "demos/rag-pdf-demo/README.md",
+      "must_contain": "### Layer-by-Layer Latency (historical, REST-era)",
+      "covers_section": true,
+      "validation_command": "python benchmark_latency.py (legacy REST-era client; see the README's note under the table)",
+      "executable": false,
+      "source": "the demo README's own statement: 'Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations — historical baseline from a REST-based earlier version of this demo)'.",
+      "measured_on": "unknown (undated)",
+      "measured_machine": "Windows 11, Python 3.10 (as the README names it)",
+      "measured_version": "1.11.1",
+      "stale_accepted": {
+        "reason": "A historical REST-era baseline, labelled so by the README's own note and section heading; the demo now runs embedded, so re-measuring this table is a separate exercise. Not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "demo_rag_api_breakdown",
+      "file": "demos/rag-pdf-demo/README.md",
+      "must_contain": "### Full API Breakdown",
+      "covers_section": true,
+      "validation_command": "python benchmark_latency.py (legacy REST-era client; see the README's note under the table)",
+      "executable": false,
+      "source": "the demo README's own statement: 'Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations — historical baseline from a REST-based earlier version of this demo)'.",
+      "measured_on": "unknown (undated)",
+      "measured_machine": "Windows 11, Python 3.10 (as the README names it)",
+      "measured_version": "1.11.1",
+      "stale_accepted": {
+        "reason": "A historical REST-era baseline, labelled so by the README's own note and section heading; the demo now runs embedded, so re-measuring this table is a separate exercise. Not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "demo_rag_ingestion",
+      "file": "demos/rag-pdf-demo/README.md",
+      "must_contain": "### Document Ingestion",
+      "covers_section": true,
+      "validation_command": "python benchmark_latency.py (legacy REST-era client; see the README's note under the table)",
+      "executable": false,
+      "source": "the demo README's own statement: 'Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations — historical baseline from a REST-based earlier version of this demo)'.",
+      "measured_on": "unknown (undated)",
+      "measured_machine": "Windows 11, Python 3.10 (as the README names it)",
+      "measured_version": "1.11.1",
+      "stale_accepted": {
+        "reason": "A historical REST-era baseline, labelled so by the README's own note and section heading; the demo now runs embedded, so re-measuring this table is a separate exercise. Not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "demo_rag_cold_start",
+      "file": "demos/rag-pdf-demo/README.md",
+      "must_contain": "### Cold Start vs Warm",
+      "covers_section": true,
+      "validation_command": "python benchmark_latency.py (legacy REST-era client; see the README's note under the table)",
+      "executable": false,
+      "source": "the demo README's own statement: 'Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations — historical baseline from a REST-based earlier version of this demo)'.",
+      "measured_on": "unknown (undated)",
+      "measured_machine": "Windows 11, Python 3.10 (as the README names it)",
+      "measured_version": "1.11.1",
+      "stale_accepted": {
+        "reason": "A historical REST-era baseline, labelled so by the README's own note and section heading; the demo now runs embedded, so re-measuring this table is a separate exercise. Not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "demo_rag_velesdb_row",
+      "file": "demos/rag-pdf-demo/README.md",
+      "must_contain": "**VelesDB (this demo)** | **0.89ms**",
+      "validation_command": "python benchmark_latency.py (legacy REST-era client; see the README's note under the table)",
+      "executable": false,
+      "source": "the demo README's own statement: 'Benchmarks measured on Windows 11, Python 3.10, VelesDB 1.11.1 (500 iterations — historical baseline from a REST-based earlier version of this demo)'.",
+      "measured_on": "unknown (undated)",
+      "measured_machine": "Windows 11, Python 3.10 (as the README names it)",
+      "measured_version": "1.11.1",
+      "stale_accepted": {
+        "reason": "A historical REST-era baseline, labelled so by the README's own note and section heading; the demo now runs embedded, so re-measuring this table is a separate exercise. Not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "llamaindex_performance_table",
+      "file": "integrations/llamaindex/README.md",
+      "must_contain": "## Performance",
+      "covers_section": true,
+      "validation_command": "none: the README cites benchmarks/baseline.json, which is not committed",
+      "executable": false,
+      "source": "the run the README states: 'Measured on CI runners (ubuntu-latest, 2-core). Source: benchmarks/baseline.json' — that JSON is not in the tree, so the figures carry its recorded values unaudited (honest debt).",
+      "measured_on": "unknown (undated)",
+      "measured_machine": "GitHub Actions ubuntu-latest, 2-core (as the README names it)",
+      "measured_version": "unknown",
+      "last_updated": "2026-11-03"
+    },
+    {
+      "id": "perf_slo_insert_ci_baseline",
+      "file": "docs/reference/PERFORMANCE_SLO.md",
+      "must_contain": "(CI baseline: 9.0s, threshold: 25%)",
+      "validation_command": "cargo bench -p velesdb-core --bench smoke_test -- --noplot",
+      "executable": false,
+      "source": "the then-current perf-smoke CI baseline the line records beside the registered 8.36 s local figure — written with the v1.7.2 validation pass (release commit 399fc2fc, 2026-03-25).",
+      "measured_on": "2026-03-25 (date of the release commit that records it)",
+      "measured_machine": "GitHub Actions runner (the CI baseline — the 8.36 s beside it is the local i9-14900KF figure)",
+      "measured_version": "1.7.2",
+      "stale_accepted": {
+        "reason": "A historical CI-baseline record of the v1.7.2 pass, beside the registered 8.36 s local figure; the perf-smoke job keeps its own current baseline. Not re-measured and not re-verified for 8.0.0.",
+        "granted": "2026-11-03",
+        "for_workspace_major": 8
+      },
+      "last_updated": "2026-11-03"
     }
   ],
   "claim_families": [

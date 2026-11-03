@@ -179,7 +179,8 @@ export interface CompileTranscriptRequest {
   /**
    * The raw transcript text: plain (marker-based —
    * `System:`/`User:`/`Human:`/`Assistant:`/`AI:`/`Tool:`/`### User`/`### Assistant`)
-   * or JSONL (one `{role, content}` object per line).
+   * or JSONL — one `{role, content}` object or agent-harness
+   * `type`/`message` envelope per line.
    */
   transcript: string;
   /** Hard budget for the compiled context, in estimated tokens. */

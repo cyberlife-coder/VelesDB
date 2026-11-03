@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import type { FilterInput } from '../filter';
 import { normalizeFilter } from '../filter';
+import { VelesDBError } from '../types';
 import type { BaseTransport } from './shared';
 import { throwOnError, collectionPath, toNumberArray } from './shared';
 import { searchQualityToMode } from '../search-quality';
@@ -139,6 +140,34 @@ export async function hybridSearch(
 }
 
 /**
+ * How many query vectors core's multi-query search takes
+ * (`validate_multi_query_inputs`, `crates/velesdb-core/src/collection/search/batch.rs`).
+ * The WASM backend holds the same bound in `wasm-search.ts`.
+ */
+const MULTI_QUERY_VECTORS = { min: 1, max: 10 } as const;
+
+/**
+ * Refuse a vector count core would refuse, before a request leaves: the
+ * server answers an out-of-range count with a 400 caller error, and the WASM
+ * backend with `BAD_REQUEST`, so a direct call on this backend must not send
+ * it on to fail there.
+ */
+function requireMultiQueryVectorCount(
+  vectors: Array<number[] | Float32Array>
+): void {
+  // `vectors` is typed, but an untyped caller can hand in anything: count a
+  // non-array as none rather than read `.length` off it.
+  const count = Array.isArray(vectors) ? vectors.length : 0;
+  if (count < MULTI_QUERY_VECTORS.min || count > MULTI_QUERY_VECTORS.max) {
+    throw new VelesDBError(
+      `a multi-query search takes ${MULTI_QUERY_VECTORS.min} to ${MULTI_QUERY_VECTORS.max} ` +
+        `vectors, as core's does; got ${Array.isArray(vectors) ? count : `a value of type ${typeof vectors}`}`,
+      'BAD_REQUEST'
+    );
+  }
+}
+
+/**
  * The request body both multi-query endpoints send.
  *
  * `/search/multi` and `/search/multi/ids` read the same fusion request; only
@@ -170,6 +199,7 @@ export async function multiQuerySearch(
   vectors: Array<number[] | Float32Array>,
   options?: MultiQuerySearchOptions
 ): Promise<SearchResult[]> {
+  requireMultiQueryVectorCount(vectors);
   const response = await transport.requestJson<{ results: SearchResult[] }>(
     'POST',
     `${collectionPath(collection)}/search/multi`,
@@ -195,6 +225,7 @@ export async function multiQuerySearchIds(
   vectors: Array<number[] | Float32Array>,
   options?: MultiQuerySearchOptions
 ): Promise<Array<{ id: number; score: number }>> {
+  requireMultiQueryVectorCount(vectors);
   const response = await transport.requestJson<{
     results: Array<{ id: number; score: number }>;
   }>(

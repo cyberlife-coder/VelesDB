@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { velesql } from '../src/query-builder';
+import { VelesDBError } from '../src/types';
 
 describe('VelesQLBuilder', () => {
   describe('Basic MATCH patterns', () => {
@@ -305,6 +306,30 @@ describe('VelesQLBuilder', () => {
         "SELECT * FROM docs WHERE vector NEAR $q AND content MATCH 'x' LIMIT 10 OFFSET 5 USING FUSION(strategy='maximum')"
       );
     });
+
+    // #2307: `fusion()` interpolates the strategy the same way nearFused
+    // does, so a required-position non-string is refused the same way —
+    // `null` included, since the strategy is not optional here.
+    it.each([5, Object.create(null), null])(
+      'refuses a non-string strategy %s with BAD_REQUEST',
+      (strategy) => {
+        const outcome = (() => {
+          try {
+            velesql()
+              .from('docs')
+              .nearVector('$q', [0.1, 0.2])
+              .fusion(strategy as never);
+            return 'built';
+          } catch (error) {
+            return error;
+          }
+        })();
+
+        expect(outcome).toBeInstanceOf(VelesDBError);
+        expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+        expect((outcome as VelesDBError).message).toContain(`of type ${typeof strategy}`);
+      }
+    );
   });
 
   describe('nearFused (typed multi-vector fusion, #27)', () => {
@@ -349,6 +374,36 @@ describe('VelesQLBuilder', () => {
       builder.nearFused(['$a', '$b'], [a, b], { strategy: 'rrf' });
       builder.nearFused(['$a', '$b'], [a, b], { strategy: 'average' });
       builder.nearFused(['$a', '$b'], [a, b], { strategy: 'maximum' });
+    });
+
+    // #2307: an untyped caller can pass any value; a non-string strategy was
+    // coerced by the template — a bare TypeError on `Object.create(null)`.
+    it.each([5, { name: 'rrf' }, Object.create(null), true])(
+      'refuses a non-string strategy %s with BAD_REQUEST, as wasm-search does',
+      (strategy) => {
+        const outcome = (() => {
+          try {
+            velesql()
+              .from('docs')
+              .nearFused(['$a', '$b'], [a, b], { strategy: strategy as never });
+            return 'built';
+          } catch (error) {
+            return error;
+          }
+        })();
+
+        expect(outcome).toBeInstanceOf(VelesDBError);
+        expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+        expect((outcome as VelesDBError).message).toContain(`of type ${typeof strategy}`);
+      }
+    );
+
+    it('reads a null strategy as absent, as multiQuerySearch reads fusion: null', () => {
+      const builder = velesql()
+        .from('docs')
+        .nearFused(['$a', '$b'], [a, b], { strategy: null as never });
+
+      expect(builder.toVelesQL()).toBe('SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b]');
     });
   });
 
