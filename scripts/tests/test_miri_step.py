@@ -73,9 +73,17 @@ class WorkflowUsesTheGate(unittest.TestCase):
                 if "cargo miri test" in line and not line.lstrip().startswith("#")]
         self.assertEqual(bare, [], "run Miri through scripts/miri-step.sh so an empty step fails")
 
-    def test_the_miri_job_runs_four_gated_steps(self) -> None:
+    def test_the_miri_job_runs_five_gated_steps(self) -> None:
         steps = re.findall(r"scripts/miri-step\.sh '([^']+)'", WORKFLOW.read_text(encoding="utf-8"))
-        self.assertEqual(len(steps), 4, steps)
+        self.assertEqual(len(steps), 5, steps)
+
+    def test_the_neon_step_interprets_for_aarch64(self) -> None:
+        # The NEON kernels are `cfg(target_arch = "aarch64")` and the runner is
+        # x86_64: without `--target`, Miri compiles the test away and the regex
+        # matches nothing (#2397).
+        text = WORKFLOW.read_text(encoding="utf-8")
+        step = text[text.index("scripts/miri-step.sh 'simd_native::neon::"):]
+        self.assertIn("--target aarch64-unknown-linux-gnu", step.split("env:", 1)[0])
 
     def test_the_storage_step_enables_the_feature_that_compiles_storage(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
