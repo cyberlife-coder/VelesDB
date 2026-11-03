@@ -1,8 +1,8 @@
 //! Durability tests for `crud_histogram`'s stats write path (audit #2590).
 
 use super::Collection;
-use crate::DistanceMetric;
 use crate::storage::atomic_write::{AtomicWriteBoundary, FaultGuard};
+use crate::DistanceMetric;
 
 /// `analyze_collection` advertises that it "persists them to disk":
 /// `write_stats_guarded` must reach the `atomic_write` barriers — a
