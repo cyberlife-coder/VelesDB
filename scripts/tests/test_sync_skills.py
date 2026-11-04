@@ -33,6 +33,7 @@ BUNDLE = REPO / "crates" / "velesdb-node" / "skills"
 #: what every test in this file covers.
 EXPECTED_PAIRS = (
     ("skills/velesdb-context-optimizer", "velesdb-context-optimizer"),
+    ("skills/velesdb-extract-outline", "velesdb-extract-outline"),
     ("skills/velesdb-learning-loop", "velesdb-learning-loop"),
     ("crates/velesdb-memory/skill/velesdb-memory", "velesdb-memory"),
 )

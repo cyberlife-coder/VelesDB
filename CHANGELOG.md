@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filtered search at the requested `ef_search`. REST `/search` picks the same
   behaviour up through `GatedRead::Dense`, retiring the "mode/ef_search
   ignored when a filter is present" limitation on that path.
+- **`velesdb-extract-outline` agent skill** (#1957). A fourth managed skill
+  that documents the `outline` extractor's `fact:`/`edge:`/`attr:` directive
+  grammar, so the agent itself performs the extraction for
+  `remember_extracted(extractor="outline")` — the option a user picks for
+  no-LLM setups and models too small to hold the generative extraction
+  contract. Registered for install (`sync-skills.py`), npm bundling and the
+  `velesdb-skills.tar.gz` release archive, and pointed at as a user-chosen
+  option from the `velesdb-memory` skill's backend-selection notes.
 
 ### Fixed
 

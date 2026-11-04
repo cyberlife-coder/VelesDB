@@ -193,6 +193,19 @@ cp -r skills/velesdb-learning-loop ~/.claude/skills/
 
 → [`skills/velesdb-learning-loop/SKILL.md`](../../skills/velesdb-learning-loop/SKILL.md)
 
+A fourth, **`velesdb-extract-outline`**, is the one to reach for when no
+generative extraction backend is configured — a no-LLM setup, or a local
+model too small to hold the extraction contract. It teaches the agent to
+write the `outline` backend's `fact:`/`edge:`/`attr:` directives itself, so
+`remember_extracted` still builds the full entity graph with no model at
+all. It is an opt-in the user chooses, not a default:
+
+```bash
+cp -r skills/velesdb-extract-outline ~/.claude/skills/
+```
+
+→ [`skills/velesdb-extract-outline/SKILL.md`](../../skills/velesdb-extract-outline/SKILL.md)
+
 **No repo clone needed.** Every
 [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
 attaches `velesdb-skills.tar.gz` — every skill, one folder per skill at the

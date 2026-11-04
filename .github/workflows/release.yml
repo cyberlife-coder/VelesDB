@@ -266,8 +266,9 @@ jobs:
           stage="$(mktemp -d)"
           cp -r crates/velesdb-memory/skill/velesdb-memory "$stage/"
           cp -r skills/velesdb-context-optimizer "$stage/"
+          cp -r skills/velesdb-extract-outline "$stage/"
           cp -r skills/velesdb-learning-loop "$stage/"
-          tar -czf velesdb-skills.tar.gz -C "$stage" velesdb-memory velesdb-context-optimizer velesdb-learning-loop
+          tar -czf velesdb-skills.tar.gz -C "$stage" velesdb-memory velesdb-context-optimizer velesdb-extract-outline velesdb-learning-loop
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
