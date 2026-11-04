@@ -20,12 +20,14 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use super::not_a_regular_file;
 #[cfg(not(unix))]
 use super::{
     open_regular_file, open_regular_file_allow_hard_links, path_exists, promote, sync_directory,
     validate_regular_file, validate_workspace,
 };
+#[cfg(unix)]
 use crate::migration::capture;
 use crate::MemoryError;
 #[cfg(unix)]
