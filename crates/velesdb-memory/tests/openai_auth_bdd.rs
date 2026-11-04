@@ -338,3 +338,54 @@ fn no_chat_template_kwargs_field_is_sent_when_none_was_set() {
 
     assert!(body.get("chat_template_kwargs").is_none(), "got: {body}");
 }
+
+// --- response_format on the wire (#1944) -------------------------------------
+
+#[test]
+fn the_fact_call_sends_the_fact_list_schema_as_response_format() {
+    // Byte-level, like everything here: only the socket can distinguish
+    // "sent" from "dropped in transit", and a `response_format` that silently
+    // stopped going out would restore the exact defect #1944 closed while
+    // every stub-free test stayed green.
+    let (addr, server) = capture_one_request(CHAT_RESPONSE);
+    let extractor = OpenAiExtractor::new(format!("http://{addr}"), "qwen3", Auth::None);
+    let _ = extractor.extract("peu importe le texte");
+    let body = request_body_json(&server.join().expect("stub thread"));
+
+    let format = &body["response_format"];
+    assert_eq!(format["type"], "json_schema", "got: {body}");
+    assert_eq!(
+        format["json_schema"]["strict"], true,
+        "the probe measured the strict arm — that is the shape shipped: {body}"
+    );
+    assert_eq!(
+        format["json_schema"]["schema"]["type"], "array",
+        "the fact call carries the array contract its own prompt states: {body}"
+    );
+}
+
+#[test]
+fn the_graph_call_sends_the_extraction_schema_as_response_format() {
+    // The graph prompt's contract is an object the reply reader parses by
+    // key — the schema sent must name the same `required`s or constrained
+    // decoding starts guaranteeing a shape nothing reads.
+    let (addr, server) = capture_one_request(CHAT_RESPONSE);
+    let extractor = OpenAiExtractor::new(format!("http://{addr}"), "qwen3", Auth::None);
+    let _ = extractor.extract_graph("peu importe le texte");
+    let body = request_body_json(&server.join().expect("stub thread"));
+
+    let sent = &body["response_format"]["json_schema"]["schema"];
+    assert_eq!(
+        sent["required"],
+        serde_json::json!(["facts", "relations", "attributes"]),
+        "the graph call must carry the extraction schema's requireds: {body}"
+    );
+    assert_eq!(
+        sent["additionalProperties"], false,
+        "strict mode needs every object level closed, the root first: {body}"
+    );
+    assert_eq!(
+        sent["properties"]["relations"]["items"]["additionalProperties"], false,
+        "and every nested object level with it: {body}"
+    );
+}
