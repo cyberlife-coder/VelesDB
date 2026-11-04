@@ -85,6 +85,12 @@ unsafe fn cosine_avx2_remainder(
 // =============================================================================
 
 /// AVX2 fused cosine similarity with 2 accumulators for medium-sized vectors.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
@@ -199,6 +205,12 @@ unsafe fn cosine_4acc_main_loop(
 }
 
 /// AVX2 fused cosine similarity - computes dot product and norms in single SIMD pass.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2+FMA (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 #[inline]
@@ -229,6 +241,12 @@ pub(crate) unsafe fn cosine_fused_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// The key trick: `and_ps(0xFFFFFFFF, 1.0_bits) = 1.0` and
 /// `and_ps(0x00000000, 1.0_bits) = 0.0`, converting boolean masks to 1.0/0.0
 /// without leaving the FP domain.
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2 (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn hamming_avx2(a: &[f32], b: &[f32]) -> f32 {
@@ -430,6 +448,12 @@ unsafe fn jaccard_avx2_remainder(
 }
 
 /// AVX2 Jaccard with 4 accumulators for ILP optimization (EPIC-052/US-008).
+///
+/// # Safety
+///
+/// Caller must ensure:
+/// - CPU supports AVX2 (enforced by `#[target_feature]` and runtime detection)
+/// - `a.len() == b.len()` (enforced by public API assert)
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn jaccard_avx2(a: &[f32], b: &[f32]) -> f32 {
