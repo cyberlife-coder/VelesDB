@@ -23,6 +23,10 @@ type-complexity-threshold = 250
 # Documentation
 # =============================================================================
 missing-docs-in-crate-items = true
+# Lint private items too — without this, `undocumented_unsafe_blocks` and
+# `missing_safety_doc` only cover publicly reachable code, so a `pub(crate)`
+# or private `unsafe fn` could ship with no `# Safety` contract (#2396).
+check-private-items = true
 
 # =============================================================================
 # Toolchain compatibility

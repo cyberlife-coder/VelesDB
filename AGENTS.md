@@ -78,12 +78,18 @@ cargo fmt --all
 # Two workspace passes, and the pair is the point: between them they lint both
 # states of every feature that gates code. `scripts/check_feature_lint_coverage.py`
 # fails the build if a feature gating code is named by neither (#2348).
+# The -A pair reinstates the [workspace.lints] allow of the two doc-coverage
+# lints after the pedantic group deny: .clippy.toml's check-private-items
+# (which is what makes missing_safety_doc cover non-public unsafe fns, #2396)
+# would otherwise demand # Panics/# Errors on every documented private fn.
 cargo clippy --workspace --all-targets \
   --features persistence,gpu,update-check,openapi,test-fault-injection \
-  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
+  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic \
+     -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 cargo clippy --workspace --all-targets \
   --features persistence,update-check,internal-bench \
-  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
+  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic \
+     -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 cargo clippy -p velesdb-node --lib -- -D warnings   # node is excluded above (N-API link), linted separately
 PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib -- -D warnings   # excluded above too (PyO3 link)
 cargo clippy -p velesdb-core --lib --bins --features persistence,gpu,update-check \

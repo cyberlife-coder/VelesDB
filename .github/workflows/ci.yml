@@ -341,12 +341,22 @@ jobs:
       # compiles, and no pedantic pass named them. `openapi` alone gates 128
       # `cfg` sites. `scripts/check_feature_lint_coverage.py` is what keeps
       # this list and the crate's features in step (#2348).
+      #
+      # `.clippy.toml` sets `check-private-items = true` so
+      # `missing_safety_doc` and `undocumented_unsafe_blocks` cover
+      # `pub(crate)`/private unsafe code too (#2396). The flag is global: it
+      # also scopes `missing_errors_doc`/`missing_panics_doc` to private
+      # items, where requiring `# Panics`/`# Errors` sections on every
+      # documented helper is not the policy `[workspace.lints]` declares —
+      # both are `allow` there, and the `-A` pair reinstates that after the
+      # `-D clippy::pedantic` group deny.
       - name: Run Clippy (strict)
         run: |
           cargo clippy --workspace --all-targets \
             --features persistence,gpu,update-check,openapi,test-fault-injection \
             --exclude velesdb-python --exclude velesdb-node \
-            -- -D warnings -D clippy::pedantic
+            -- -D warnings -D clippy::pedantic \
+               -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
       # The same sweep with `gpu` OFF. The step above is the ONLY workspace
       # clippy in CI and it always enables `gpu`, so a lint that fires only in
@@ -377,7 +387,8 @@ jobs:
           cargo clippy --workspace --all-targets \
             --features persistence,update-check,internal-bench \
             --exclude velesdb-python --exclude velesdb-node \
-            -- -D warnings -D clippy::pedantic
+            -- -D warnings -D clippy::pedantic \
+               -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
       # velesdb-node is a cdylib: `--all-targets` would build a test harness that
       # links N-API symbols and fail (same reason velesdb-python is excluded
@@ -1468,12 +1479,14 @@ jobs:
       - name: cargo clippy (bench + feature)
         run: |
           cargo clippy -p velesdb-core --benches --features bench-sift1m \
-            -- -D warnings -D clippy::pedantic
+            -- -D warnings -D clippy::pedantic \
+               -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
       - name: cargo clippy (sift1m loader unit tests)
         run: |
           cargo clippy --tests -p velesdb-core --features bench-sift1m \
-            --test sift1m_loader_unit_tests -- -D warnings -D clippy::pedantic
+            --test sift1m_loader_unit_tests -- -D warnings -D clippy::pedantic \
+               -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
   # ===========================================================================
   # Python Integration Tests (uniquement si integrations/ modifié)

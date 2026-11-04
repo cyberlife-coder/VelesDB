@@ -160,7 +160,10 @@ class TestRealBaseline(unittest.TestCase):
 
     def test_the_baseline_file_is_well_formed(self) -> None:
         baseline = cfb.load_baseline(REPO_ROOT / "scripts" / "file-budgets-baseline.txt")
-        self.assertTrue(baseline, "the baseline should not be empty today")
+        # Zero over-budget files is the program's goal state, so an empty
+        # baseline is well-formed. What stays malformed is an entry at or
+        # under the budget, which would hide future growth under a stale
+        # ceiling.
         for rel, count in baseline.items():
             self.assertGreater(count, cfb.LINE_BUDGET, rel)
 
