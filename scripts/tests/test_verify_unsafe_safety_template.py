@@ -84,6 +84,78 @@ fn view(p: *const u8) -> u8 {
 }
 """
 
+# --- unsafe fn fixtures (#2396) ------------------------------------------------
+# `missing_safety_doc`/`undocumented_unsafe_blocks` only see code the target
+# triple compiles: aarch64 NEON fns are cfg'd out on the x86_64 CI runner and
+# vice versa. This text-based check sees every declaration.
+
+# Every fixture's inner `unsafe {}` block carries the complete block template,
+# so the only thing under test is the `unsafe fn` contract itself.
+
+UNSAFE_FN_NO_DOC = """\
+unsafe fn danger(p: *const u8) -> u8 {
+    // SAFETY: caller guarantees the pointer is valid and aligned.
+    // - p is non-null and points to an initialised byte
+    // Reason: fixture exercises a raw dereference.
+    unsafe { *p }
+}
+"""
+
+UNSAFE_FN_DOC_NO_SAFETY_HEADING = """\
+/// Deref a raw pointer.
+unsafe fn danger(p: *const u8) -> u8 {
+    // SAFETY: caller guarantees the pointer is valid and aligned.
+    // - p is non-null and points to an initialised byte
+    // Reason: fixture exercises a raw dereference.
+    unsafe { *p }
+}
+"""
+
+UNSAFE_FN_SAFETY_DOCS = """\
+/// Deref a raw pointer.
+///
+/// # Safety
+/// `p` must be non-null and point to an initialised byte.
+#[inline]
+unsafe fn danger(p: *const u8) -> u8 {
+    // SAFETY: caller guarantees the pointer is valid and aligned.
+    // - p is non-null and points to an initialised byte
+    // Reason: fixture exercises a raw dereference.
+    unsafe { *p }
+}
+"""
+
+UNSAFE_FN_SAFETY_LINE_COMMENT = """\
+// SAFETY: `p` must be non-null and point to an initialised byte; the contract
+// is the trait's, this impl only delegates.
+unsafe fn danger(p: *const u8) -> u8 {
+    // SAFETY: caller guarantees the pointer is valid and aligned.
+    // - p is non-null and points to an initialised byte
+    // Reason: fixture exercises a raw dereference.
+    unsafe { *p }
+}
+"""
+
+UNSAFE_FN_NEIGHBOUR_DOCS_DONT_COUNT = """\
+/// Deref a raw pointer.
+///
+/// # Safety
+/// `p` must be valid.
+unsafe fn documented(p: *const u8) -> u8 {
+    // SAFETY: caller guarantees the pointer is valid and aligned.
+    // - p is non-null and points to an initialised byte
+    // Reason: fixture exercises a raw dereference.
+    unsafe { *p }
+}
+
+unsafe fn undocumented(p: *const u8) -> u8 {
+    // SAFETY: caller guarantees the pointer is valid and aligned.
+    // - p is non-null and points to an initialised byte
+    // Reason: fixture exercises a raw dereference.
+    unsafe { *p }
+}
+"""
+
 
 class GuardRefuses(unittest.TestCase):
     """The positive control: the guard must fail on real violations."""
@@ -94,6 +166,25 @@ class GuardRefuses(unittest.TestCase):
     def test_prose_mention_does_not_document_a_following_unsafe_item(self):
         self.assertEqual(
             _run_on(PROSE_THEN_REAL), 1, "a comment mentioning unsafe satisfied the template"
+        )
+
+    def test_undocumented_unsafe_fn_is_refused(self):
+        self.assertEqual(
+            _run_on(UNSAFE_FN_NO_DOC), 1, "guard passed an undocumented unsafe fn"
+        )
+
+    def test_unsafe_fn_doc_without_safety_heading_is_refused(self):
+        self.assertEqual(
+            _run_on(UNSAFE_FN_DOC_NO_SAFETY_HEADING),
+            1,
+            "guard passed an unsafe fn whose docs lack a `# Safety` section",
+        )
+
+    def test_unsafe_fn_neighbour_docs_dont_count(self):
+        self.assertEqual(
+            _run_on(UNSAFE_FN_NEIGHBOUR_DOCS_DONT_COUNT),
+            1,
+            "a previous fn's `# Safety` section satisfied the undocumented one",
         )
 
 
@@ -114,6 +205,22 @@ class GuardAccepts(unittest.TestCase):
 
     def test_double_slash_inside_a_string_does_not_truncate_code(self):
         self.assertEqual(_run_on(STRING_WITH_SLASHES), 0, "`//` inside a string literal hid code")
+
+    def test_unsafe_fn_with_safety_doc_passes(self):
+        self.assertEqual(
+            _run_on(UNSAFE_FN_SAFETY_DOCS),
+            0,
+            "guard refused an unsafe fn with a `# Safety` doc section",
+        )
+
+    def test_unsafe_fn_with_safety_line_comment_passes(self):
+        # Trait impl methods inherit their doc contract from the trait; the
+        # repository documents them with the `// SAFETY:` convention instead.
+        self.assertEqual(
+            _run_on(UNSAFE_FN_SAFETY_LINE_COMMENT),
+            0,
+            "guard refused an unsafe fn carrying an attached `// SAFETY:` comment",
+        )
 
 
 class CommentScrubbingKeepsOffsets(unittest.TestCase):

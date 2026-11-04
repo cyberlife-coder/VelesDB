@@ -57,6 +57,11 @@
 
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+// [workspace.lints] declares both doc-coverage lints `allow`, but this crate
+// re-warns pedantic above — and attributes outrank the `-A` on CI's clippy
+// line — so with `check-private-items` the pair must be re-allowed here too.
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
 
 use std::path::{Path, PathBuf};
 
