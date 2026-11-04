@@ -86,7 +86,7 @@ read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 # results are normally small and are evidence for the learning-loop guard,
 # not candidates for context compression.
 resolve_config "$cwd"
-if [ -n "$session_id" ] && successful_memory_recall "$tool_name" "$payload"; then
+if [ -n "$session_id" ] && successful_memory_recall "$payload"; then
   # Credit assignment: the ids this recall returned, for the Stop checklist
   # to name instead of "every recalled memory". Records are kept only where
   # the learning loop is opted in — gated exactly like the unlock below, so a

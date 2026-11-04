@@ -1171,7 +1171,7 @@ fi
 # ---------------------------------------------------------------------------
 # Runs "$@" in a subshell that has sourced the hooks' shared library.
 with_hook_lib() (
-  # shellcheck source=../staged/claude-code/lib/common.sh
+  # shellcheck source=../shared/hooks/lib/common.sh
   . "$HOOKS_DIR/lib/common.sh"
   "$@"
 )

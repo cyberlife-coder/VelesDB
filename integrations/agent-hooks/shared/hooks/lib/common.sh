@@ -171,17 +171,51 @@ learning_loop_enabled() {
 learning_marker_identity() {
   printf -v "$1" '%s\n%s' "$2" "${CONFIG_ROOT:-$PWD}"
 }
+# <<< only
+
+# >>> only: claude-code
+
 # successful_memory_recall PAYLOAD
 # A recall counts only after a VelesDB MCP tool returned a successful result.
 # `compile_context` counts only when it actually requested memory_scope.
-# TOOL_NAME is the payload's, as PostToolUse already read it: the hook reads
-# it once, for this check and the working-context recording.
+# TOOL_NAME is the payload's: the hook reads it once, for this check and the
+# working-context recording.
+# shellcheck disable=SC2317,SC2329 # in this composition source the codex variant below shadows it; a staged library holds exactly one. Shellcheck < 0.10 reports the shadowed body as SC2317, >= 0.10 as SC2329 — disable both.
 successful_memory_recall() {
   local payload="$1"
   local tool_name
   tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"  # exact-read-ok: a tool name is one word, never a line
 
   case "$tool_name" in
+    mcp__velesdb-memory__recall|mcp__velesdb_memory__recall|\
+    mcp__velesdb-memory__recall_fused|mcp__velesdb_memory__recall_fused|\
+    mcp__velesdb-memory__recall_where|mcp__velesdb_memory__recall_where|\
+    mcp__velesdb-memory__entity|mcp__velesdb_memory__entity|\
+    mcp__velesdb-memory__why|mcp__velesdb_memory__why)
+      ;;
+    mcp__velesdb-memory__compile_context|mcp__velesdb_memory__compile_context)
+      printf '%s' "$payload" | jq -e '.tool_input.memory_scope != null' >/dev/null 2>&1 || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  successful_tool_response "$payload"
+}
+# <<< only
+
+# >>> only: codex
+
+# successful_memory_recall TOOL_NAME PAYLOAD
+# A recall counts only after a VelesDB MCP tool returned a successful result.
+# `compile_context` counts only when it actually requested memory_scope.
+# TOOL_NAME is the caller's, as PostToolUse already read it: the hook reads
+# it once, for this check and the working-context recording.
+successful_memory_recall() {
+  local payload="$2"
+
+  case "$1" in
     mcp__velesdb-memory__recall|mcp__velesdb_memory__recall|\
     mcp__velesdb-memory__recall_fused|mcp__velesdb_memory__recall_fused|\
     mcp__velesdb-memory__recall_where|mcp__velesdb_memory__recall_where|\
