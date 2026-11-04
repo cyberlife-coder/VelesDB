@@ -97,4 +97,16 @@ pub enum SettingError {
         /// Why the value is not an object.
         reason: String,
     },
+
+    /// The extractor's generation ceiling is set but is not a positive
+    /// integer. The reason is the parser's message — never the raw value,
+    /// which is not a secret but need not be echoed either.
+    #[cfg(feature = "extractor-http")]
+    #[error("{variable} must be a positive integer: {reason}")]
+    InvalidExtractorMaxTokens {
+        /// The variable that holds the ceiling.
+        variable: String,
+        /// Why the value is not a positive integer.
+        reason: String,
+    },
 }
