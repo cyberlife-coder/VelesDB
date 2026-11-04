@@ -654,6 +654,14 @@ class OpenAiBackend:
                                 "schema": strict_object_schema(EXTRACTION_SCHEMA)},
             },
         }
+        # The product forwards the operator's
+        # VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS on every call (e.g.
+        # {"enable_thinking": false} to keep a thinking model's budget for the
+        # reply); the bench reads the same variable so a run measures what the
+        # configured daemon would send — never a bench-only variant.
+        kwargs = os.environ.get("VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS")
+        if kwargs:
+            body["chat_template_kwargs"] = json.loads(kwargs)
         started = time.monotonic()
         response = http_json(f"{self.base_url}/v1/chat/completions", body, self.token,
                              timeout=generation_timeout(self.cap))
@@ -671,8 +679,10 @@ class OpenAiBackend:
 
     def settings(self) -> dict:
         """Same contract as the ollama backend — see its `settings`."""
+        kwargs = os.environ.get("VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS")
         return {
             "backend": "openai",
+            "chat_template_kwargs": json.loads(kwargs) if kwargs else None,
             # The crate's extractor constrains every call (`response_format`,
             # strict `json_schema`, #1944): the product has no unconstrained
             # arm, so a faithful run reports that rather than implying a knob
