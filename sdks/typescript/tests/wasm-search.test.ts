@@ -32,6 +32,25 @@ import type {
 
 type StoreStub = Partial<Record<keyof WasmVectorStore, unknown>>;
 
+/**
+ * The binding's `multi_query_search` parameter list
+ * `(flat, numVectors, k, strategy, rrfK, weights)` — declared on the stubs
+ * whose `mock.calls` rows a test indexes, so `calls[0][5]` (the weights) is a
+ * real element instead of an out-of-range read on the `[]` tuple `vi.fn()`
+ * infers for an argument-free stub.
+ */
+type MultiQuerySearchArgs = [
+  flat: Float32Array,
+  numVectors: number,
+  k: number,
+  strategy: string,
+  rrfK: number,
+  weights: Float32Array | null,
+];
+
+const multiQuerySearchStub = (result: [bigint, number][]) =>
+  vi.fn((..._args: MultiQuerySearchArgs) => result);
+
 function buildStore(overrides: StoreStub = {}): WasmVectorStore {
   const stub: StoreStub = {
     search: vi.fn(() => []),
@@ -268,7 +287,7 @@ describe('wasmSearch — quality reaches the binding, and its refusal reaches ba
       // merely the class: `toBeInstanceOf(VelesDBError)` alone survives
       // `'BAD_REQUEST' → 'INTERNAL'`.
       const outcome = await settle(
-        wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' })
+        wasmSearch(ctx, 'docs', [], { ...options, quality: 'nonsense' as SearchQuality })
       );
       expectBadRequest(outcome, /Unknown search mode/);
 
@@ -525,7 +544,7 @@ describe('wasmMultiQuerySearch', () => {
   });
 
   it('flattens vectors to a single Float32Array and forwards strategy/rrfK', async () => {
-    const multi = vi.fn(() => [[7n, 0.77]]);
+    const multi = multiQuerySearchStub([[7n, 0.77]]);
     const store = buildStore({ multi_query_search: multi });
     const ctx = buildCtx('docs', store, { dimension: 2 });
 
@@ -547,7 +566,7 @@ describe('wasmMultiQuerySearch', () => {
   });
 
   it('applies defaults: fusion=rrf, rrfK=60, k=10', async () => {
-    const multi = vi.fn(() => []);
+    const multi = multiQuerySearchStub([]);
     const store = buildStore({ multi_query_search: multi });
     const ctx = buildCtx('docs', store, { dimension: 2 });
 
@@ -615,6 +634,9 @@ describe('wasmQuery', () => {
     const ctx = buildCtx('docs', store);
 
     const out = await wasmQuery(ctx, 'docs', PURE_NEAR, { q: [0.1, 0.2] });
+    if (!('results' in out)) {
+      throw new Error('expected a QueryResponse carrying results');
+    }
     expect(out.results).toBe(raw);
     expect(out.stats.strategy).toBe('wasm-query');
     expect(out.stats.scannedNodes).toBe(2);
@@ -874,7 +896,7 @@ describe('wasmMultiQuerySearch — fusionParams reach the binding or are refused
   beforeEach(() => vi.clearAllMocks());
 
   it("passes avgWeight/maxWeight/hitWeight as the binding's weights argument", async () => {
-    const multi = vi.fn(() => []);
+    const multi = multiQuerySearchStub([]);
     const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
 
     await wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], {
@@ -888,7 +910,7 @@ describe('wasmMultiQuerySearch — fusionParams reach the binding or are refused
   });
 
   it("passes no weights when none is given, so the binding applies core's defaults", async () => {
-    const multi = vi.fn(() => []);
+    const multi = multiQuerySearchStub([]);
     const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
 
     await wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], { fusion: 'weighted' });
@@ -1018,7 +1040,7 @@ describe('wasmMultiQuerySearch — the weighted triple matters only under `weigh
   it.each(['rrf', 'average', 'maximum', 'relative_score'] as const)(
     '%s passes a triple `weighted` would reject, since it never reads the weights',
     async (fusion) => {
-      const multi = vi.fn(() => []);
+      const multi = multiQuerySearchStub([]);
       const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
 
       await wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], {
@@ -1034,7 +1056,7 @@ describe('wasmMultiQuerySearch — the weighted triple matters only under `weigh
   it.each(['rrf', 'average', 'maximum', 'relative_score'] as const)(
     '%s accepts a partial triple, since it never reads the weights',
     async (fusion) => {
-      const multi = vi.fn(() => []);
+      const multi = multiQuerySearchStub([]);
       const ctx = buildCtx('docs', buildStore({ multi_query_search: multi }));
 
       await wasmMultiQuerySearch(ctx, 'docs', [[0.1, 0.2]], {
@@ -1102,6 +1124,9 @@ describe('WASM search — k = 0 returns nothing, before any binding call (#2095)
       v: [0.1, 0.2],
     });
 
+    if (!('results' in response)) {
+      throw new Error('expected a QueryResponse carrying results');
+    }
     expect(response.results).toEqual([]);
     expect(bindingCalls()).toBe(0);
   });
@@ -1135,7 +1160,7 @@ function bindingCallCount(store: WasmVectorStore): number {
 describe("WASM search — a search's inputs are validated before any early return (#2095)", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it.each([
+  it.each<[string, (ctx: WasmContext) => Promise<unknown>]>([
     ['search with k = 0', (ctx: WasmContext) => wasmSearch(ctx, 'docs', [0.1], { k: 0 })],
     ['searchBatch with k = 0', (ctx: WasmContext) => wasmSearchBatch(ctx, 'docs', [{ vector: [0.1], k: 0 }])],
     ['hybridSearch with k = 0', (ctx: WasmContext) => wasmHybridSearch(ctx, 'docs', [0.1], 'q', { k: 0 })],
@@ -1193,7 +1218,7 @@ describe("WASM search — a search's inputs are validated before any early retur
       sparseIds.store = buildStore({ sparse_search });
       sparseIds.byId.set(1n, 1);
 
-      const calls = [
+      const calls: Array<() => Promise<unknown>> = [
         () => wasmSearch(dense, 'docs', [0.1, 0.2], { k }),
         () => wasmSearch(sparseOnly, 'docs', [], { k, sparseVector: { 7: 1 } }),
         () => wasmSearchBatch(dense, 'docs', [{ vector: [0.1, 0.2], k }]),
@@ -1384,6 +1409,42 @@ describe('wasmMultiQuerySearch — a strategy that is not a string (#2095)', () 
 describe("wasmQuery — LIMIT is read as core's parser reads it, a u64 (#2095)", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // #2307: a LIMIT token the u64 grammar refuses is a bad value on every
+  // backend — REST answers it a parse error — so it earns BAD_REQUEST, not
+  // NOT_SUPPORTED, which is reserved for clauses WASM does not evaluate.
+  it.each(['-1', '+5', '1e3', 'abc', "'10'"])(
+    'refuses LIMIT %s with BAD_REQUEST, as core does',
+    async (token) => {
+      const query = vi.fn(() => [{ id: 1 }]);
+      const ctx = buildCtx('docs', buildStore({ query }), { dimension: 2 });
+
+      const outcome = await settle(
+        wasmQuery(ctx, 'docs', `SELECT * FROM docs WHERE vector NEAR $v LIMIT ${token}`, {
+          v: [0.1, 0.2],
+        })
+      );
+
+      expect(outcome).toBeInstanceOf(VelesDBError);
+      expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
+      expect((outcome as VelesDBError).message).toContain(`Invalid LIMIT value '${token}'`);
+      expect(query).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    'SELECT * FROM docs WHERE vector NEAR $v LIMIT 10 OFFSET 5',
+    'SELECT * FROM docs WHERE vector NEAR $v LIMIT',
+  ])('stays NOT_SUPPORTED when the clause is beyond the supported shape: %s', async (queryString) => {
+    const query = vi.fn(() => [{ id: 1 }]);
+    const ctx = buildCtx('docs', buildStore({ query }), { dimension: 2 });
+
+    const outcome = await settle(wasmQuery(ctx, 'docs', queryString, { v: [0.1, 0.2] }));
+
+    expect(outcome).toBeInstanceOf(VelesDBError);
+    expect((outcome as VelesDBError).code).toBe('NOT_SUPPORTED');
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('refuses LIMIT 18446744073709551616, one past the largest u64', async () => {
     const query = vi.fn(() => [{ id: 1 }]);
     const ctx = buildCtx('docs', buildStore({ query }), { dimension: 2 });
@@ -1456,7 +1517,7 @@ describe("WASM search — k fits velesdb-wasm's 32-bit usize (#2095)", () => {
       const store = buildStore({ search: vi.fn(() => [[1n, 0.9]]) });
       const ctx = buildCtx('docs', store, { dimension: 2 });
 
-      const calls = [
+      const calls: Array<() => Promise<unknown>> = [
         () => wasmSearch(ctx, 'docs', [0.1, 0.2], { k }),
         () => wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], k }]),
         () => wasmTextSearch(ctx, 'docs', 'q', { k }),
@@ -1524,7 +1585,7 @@ describe('WASM search — a number option that is not a number is BAD_REQUEST, n
     const store = buildStore();
     const ctx = buildCtx('docs', store, { dimension: 2 });
 
-    const calls = [
+    const calls: Array<() => Promise<unknown>> = [
       () => wasmSearch(ctx, 'docs', [0.1, 0.2], { k: k as never }),
       () => wasmSearchBatch(ctx, 'docs', [{ vector: [0.1, 0.2], k: k as never }]),
       () => wasmTextSearch(ctx, 'docs', 'q', { k: k as never }),

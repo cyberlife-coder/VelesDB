@@ -28,7 +28,7 @@ async function initBackend(): Promise<RestBackend> {
 }
 
 function lastCall(): { url: string; method: string; body?: Record<string, unknown> } {
-  const call = mockFetch.mock.calls[mockFetch.mock.calls.length - 1];
+  const call = mockFetch.mock.calls[mockFetch.mock.calls.length - 1]!;
   const url = call[0] as string;
   const init = call[1];
   const body = init?.body ? JSON.parse(init.body as string) : undefined;

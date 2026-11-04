@@ -240,7 +240,10 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
   });
 
   it('multiQuerySearchIds refuses an empty, non-array or ill-typed batch before the backend', async () => {
-    await expect(db.multiQuerySearchIds('c', [])).rejects.toThrow('non-empty array');
+    await expect(db.multiQuerySearchIds('c', [])).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('non-empty array'),
+    });
     await expect(db.multiQuerySearchIds('c', null as never)).rejects.toThrow('non-empty array');
     await expect(db.multiQuerySearchIds('c', [[0.1], 'x' as never])).rejects.toThrow(
       'Each vector must be an array or Float32Array'
@@ -326,7 +329,7 @@ describe('VelesDB — search / admin / scroll delegations (search-methods.ts)', 
     expect(backend.rebuildIndex).toHaveBeenCalledWith('c');
     await db.getGuardrails();
     expect(backend.getGuardrails).toHaveBeenCalled();
-    await db.updateGuardrails({ enabled: true });
+    await db.updateGuardrails({ maxDepth: 8 });
     expect(backend.updateGuardrails).toHaveBeenCalled();
     await db.aggregate('q');
     expect(backend.aggregate).toHaveBeenCalled();
