@@ -121,6 +121,7 @@ pub(crate) enum AtomicWriteBoundary {
     Replacement,
     // The fault point exists on every platform — only `sync_parent_directory`'s
     // unix arm checks it; tests may inject it unconditionally.
+    #[cfg(any(unix, test))]
     ParentDirectorySync,
 }
 
