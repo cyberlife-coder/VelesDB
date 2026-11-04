@@ -654,6 +654,14 @@ class OpenAiBackend:
                                 "schema": strict_object_schema(EXTRACTION_SCHEMA)},
             },
         }
+        # The product forwards the operator's
+        # VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS on every call (e.g.
+        # {"enable_thinking": false} to keep a thinking model's budget for the
+        # reply); the bench reads the same variable so a run measures what the
+        # configured daemon would send — never a bench-only variant.
+        kwargs = os.environ.get("VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS")
+        if kwargs:
+            body["chat_template_kwargs"] = json.loads(kwargs)
         started = time.monotonic()
         response = http_json(f"{self.base_url}/v1/chat/completions", body, self.token,
                              timeout=generation_timeout(self.cap))
@@ -671,8 +679,10 @@ class OpenAiBackend:
 
     def settings(self) -> dict:
         """Same contract as the ollama backend — see its `settings`."""
+        kwargs = os.environ.get("VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS")
         return {
             "backend": "openai",
+            "chat_template_kwargs": json.loads(kwargs) if kwargs else None,
             # The crate's extractor constrains every call (`response_format`,
             # strict `json_schema`, #1944): the product has no unconstrained
             # arm, so a faithful run reports that rather than implying a knob
@@ -689,7 +699,27 @@ class OpenAiBackend:
         return unasked_runtime([self.model], NOT_ASKED_REASON.format("openai"))
 
     def residency(self) -> dict:
-        return http_json(f"{self.base_url}/v1/models/status", token=self.token, timeout=30)
+        """What the server reports as loaded — when it has a residency API at all.
+
+        omlx answers `/v1/models/status`. A plain OpenAI-compatible server
+        (llama-server, vLLM) has no such endpoint: every model it serves is
+        loaded by construction, so a 404 there says nothing about the model
+        and everything about the API. Fall back to the standard `/v1/models`
+        listing and mark the record — `preflight` reads the mark to tell "the
+        check does not apply" apart from "the check failed".
+        """
+        try:
+            return http_json(f"{self.base_url}/v1/models/status", token=self.token, timeout=30)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+        listing = http_json(f"{self.base_url}/v1/models", token=self.token, timeout=30)
+        models = [
+            {"id": entry.get("id"), "name": entry.get("id"), "loaded": True}
+            for entry in listing.get("data") or []
+            if isinstance(entry, dict) and entry.get("id")
+        ]
+        return {"models": models, "residency_api": False}
 
     def set_loaded(self, model: str, loaded: bool) -> None:
         """Bring the model to the requested residency, which may already hold.
@@ -2907,8 +2937,15 @@ def preflight(residency: dict, model: str) -> dict:
     model for a cable.
     """
     record = model_record(residency, model)
-    backing = storage_backing(record.get("model_path"))
-    if record and not backing.get("reachable"):
+    if residency.get("residency_api") is False:
+        # A server with no residency endpoint cannot report where weights sit,
+        # so there is nothing for the reachability check to check — that is an
+        # n/a, not a failure.
+        backing = {"path": None, "reachable": None,
+                   "reason": "server exposes no residency API"}
+    else:
+        backing = storage_backing(record.get("model_path"))
+    if record and backing.get("reachable") is False:
         raise RuntimeError(
             f"{model}: weights unreachable at {backing.get('path')} "
             f"({backing.get('reason')}) — this is a storage problem, not a model result"
