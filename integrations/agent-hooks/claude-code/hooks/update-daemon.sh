@@ -37,7 +37,7 @@ if [ ! -f "$manifest" ]; then
   exit 1
 fi
 
-before=$(running_version || true)
+before=$(running_version || true)  # exact-read-ok: a version string or empty
 target=$(grep -m1 '^version' "$manifest" | cut -d'"' -f2) # exact-read-ok: a crate version between two quotes of one TOML line; it cannot hold the newline $( ) strips
 echo "daemon: ${before:-unreachable} → building ${target} from ${REPO}"
 
@@ -51,7 +51,7 @@ cargo install --path "$REPO/crates/velesdb-memory" \
   --force
 
 if command -v launchctl >/dev/null 2>&1; then
-  launchctl kickstart -k "gui/$(id -u)/${LABEL}"
+  launchctl kickstart -k "gui/$(id -u)/${LABEL}"  # exact-read-ok: uid is digits
 elif command -v systemctl >/dev/null 2>&1; then
   systemctl --user restart "${LABEL}"
 else
@@ -59,8 +59,8 @@ else
   exit 1
 fi
 
-for _ in $(seq 1 20); do
-  after=$(running_version || true)
+for _ in $(seq 1 20); do  # exact-read-ok: seq prints digits
+  after=$(running_version || true)  # exact-read-ok: a version string or empty
   [ -n "${after:-}" ] && break
   sleep 1
 done

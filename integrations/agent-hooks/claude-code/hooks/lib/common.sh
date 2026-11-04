@@ -114,7 +114,7 @@ learning_marker_identity() {
 successful_memory_recall() {
   local payload="$1"
   local tool_name
-  tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
+  tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"  # exact-read-ok: a tool name is one word, never a line
 
   case "$tool_name" in
     mcp__velesdb-memory__recall|mcp__velesdb_memory__recall|\
@@ -160,6 +160,13 @@ watchdog_expired() {
   [ $(($2 - $1)) -gt "$3" ]
 }
 
+# ppid_of PID: the parent id `ps` reports for PID, whitespace stripped —
+# empty once PID is gone, which is exactly what the watcher's parentage
+# check wants.
+ppid_of() {
+  ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '
+}
+
 # run_with_watchdog SECONDS OUTFILE CMD...
 # Run CMD on this function's stdin, with stdout captured into OUTFILE, killing
 # it once more than SECONDS seconds of wall-clock time have passed.
@@ -197,7 +204,7 @@ run_with_watchdog() {
   # used for this — the function may run inside a pipeline's subshell, where
   # $$ is the outer script and $PPID its parent, neither the real spawner.
   local expected_ppid
-  expected_ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  read_exact_line expected_ppid ppid_of "$pid" || expected_ppid=""
 
   # The bound is wall-clock time: counting rounds of `sleep 0.1` let the forks
   # between them, and a loaded machine, stretch it. SECONDS ticks with the
@@ -212,7 +219,7 @@ run_with_watchdog() {
   # a reuse would keep the loop alive until the bound killed a process that
   # had already exited cleanly.
   local fired
-  if ! fired="$(mktemp "${outfile}.watchdog.XXXXXX")"; then
+  if ! read_exact_line fired mktemp "${outfile}.watchdog.XXXXXX"; then
     kill -9 "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     return 124
@@ -227,8 +234,10 @@ run_with_watchdog() {
     # sent only while the process at PID is still the command we spawned —
     # the same parent recorded at spawn.
     : > "$fired" 2>/dev/null || true
+    local ppid_now
+    read_exact_line ppid_now ppid_of "$pid" || ppid_now=""
     [ -n "$expected_ppid" ] \
-      && [ "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$expected_ppid" ] \
+      && [ "$ppid_now" = "$expected_ppid" ] \
       && kill -9 "$pid" 2>/dev/null
   ) &
   local watcher=$!
@@ -257,7 +266,7 @@ run_with_watchdog() {
 safe_marker_key() {
   local value="$1"
   local checksum
-  checksum="$(printf '%s' "$value" | cksum)"
+  checksum="$(printf '%s' "$value" | cksum)"  # exact-read-ok: cksum prints digits and a byte count
   printf '%s' "${checksum// /-}"
 }
 
@@ -285,7 +294,7 @@ sentinel_path() {
   local dir
   local key
   read_exact dir marker_base_dir || return 1
-  key="$(safe_marker_key "$session_id")"
+  read_exact_line key safe_marker_key "$session_id"
   printf '%s/%s-%s.marker' "$dir" "$kind" "$key"
 }
 
@@ -298,7 +307,7 @@ write_private_marker() {
   if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
     return 1
   fi
-  tmp="$(mktemp "${path}.tmp.XXXXXX")" || return 1
+  read_exact_line tmp mktemp "${path}.tmp.XXXXXX" || return 1
   if ! printf '%s\n' "$value" > "$tmp"; then
     rm -f "$tmp"
     return 1
@@ -369,7 +378,7 @@ record_project_json() {
     | select((.session | type) == "string")
     | select((.root | type) == "string" and (.root | length) > 0)
     | {project, session, root}
-  ' 2>/dev/null)" || return 1
+  ' 2>/dev/null)" || return 1  # exact-read-ok: compact JSON, whose own newline is the only one
 
   if [ -L "$dir" ]; then
     return 1
@@ -377,7 +386,7 @@ record_project_json() {
   mkdir -p "$dir" || return 1
   [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
 
-  key="$(safe_marker_key "$canonical")" || return 1
+  read_exact_line key safe_marker_key "$canonical" || return 1
   path="$dir/$key.json"
   if [ -e "$path" ] || [ -L "$path" ]; then
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
@@ -389,7 +398,7 @@ record_project_json() {
 }
 
 record_current_project() {
-  record_project_json "$1" "$(project_record)"
+  record_project_json "$1" "$(project_record)"  # exact-read-ok: project_record emits one compact object through jq -cn
 }
 
 # >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
@@ -404,7 +413,7 @@ record_current_project() {
 # read_exact VAR CMD...: set VAR to CMD's whole output; fail when CMD fails.
 read_exact() {
   local read_exact_out
-  read_exact_out="$("${@:2}" && printf x)" || return 1
+  read_exact_out="$("${@:2}" && printf x)" || return 1  # exact-read-ok: the capture ends in the sentinel x, so no trailing newline exists to strip
   printf -v "$1" '%s' "${read_exact_out%x}"
 }
 
@@ -535,7 +544,7 @@ successful_tool_response() {
         (fromjson? // null)
         | (type == "object") and (length > 0) and no_error
           and (((.content? | type) != "array") or any(.content[]; text_block))
-      else false end
+      else false end  # exact-read-ok: the backticks are literal characters inside the jq program
   ' >/dev/null 2>&1
 }
 
@@ -627,7 +636,7 @@ remember_working_session() {
   local session
   local marker
   local record
-  call="$(working_context_call "$2" "$3")" || return 1
+  read_exact_line call working_context_call "$2" "$3" || return 1
   [ -n "$call" ] || return 1
   IFS=$'\t' read -r via project session <<<"$call" # exact-read-ok: one tab-separated record from working_context_call, which rejects every control character
   read_exact marker working_session_marker "$1" "$project" "$via" || return 1
@@ -714,7 +723,7 @@ promote_pending_recall() {
     [ -e "$file" ] || [ -L "$file" ] || continue
     [ -f "$file" ] && [ ! -L "$file" ] && valid_project_record "$file" || return 2
     canonical="$(jq -sc '.[0] | {project, session, root}' "$file")" || return 2 # exact-read-ok: compact JSON, whose own newline is the only one
-    expected="$(safe_marker_key "$canonical")" || return 2
+    read_exact_line expected safe_marker_key "$canonical" || return 2
     expected="${expected}.json"
     [ "${file##*/}" = "$expected" ] || return 2
     files+=("$file")
@@ -856,11 +865,11 @@ record_evidence() {
   local oldest
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
     while :; do
-      count="$(find "$1" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d '[:space:]')"
+      count="$(find "$1" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d '[:space:]')"  # exact-read-ok: a decimal count
       [ "$count" -lt "$EVIDENCE_RECORD_CAP" ] && break
       # Record names are bounded and safe (digits or a checksum): ls -t gives
       # the oldest mtime last.
-      oldest="$(find "$1" -maxdepth 1 -type f -name '*.json' -exec ls -d1t {} + | tail -n 1)"
+      oldest="$(find "$1" -maxdepth 1 -type f -name '*.json' -exec ls -d1t {} + | tail -n 1)"  # exact-read-ok: record names are bounded — hex keys and .json
       [ -n "$oldest" ] || return 1
       rm -f -- "$oldest" || return 1
       case "$oldest" in
@@ -887,13 +896,13 @@ record_recalled_memories() {
   local records
   local record
   local id
-  records="$(printf '%s' "$3" | jq -c --arg tool "${2##*__}" "$RECALLED_MEMORIES" 2>/dev/null)" || return 1
+  records="$(printf '%s' "$3" | jq -c --arg tool "${2##*__}" "$RECALLED_MEMORIES" 2>/dev/null)" || return 1  # exact-read-ok: compact JSON, whose own newline is the only one
   [ -n "$records" ] || return 0
   evidence_dir "$dir" || return 1
-  while IFS= read -r record; do
-    id="$(printf '%s' "$record" | jq -r '.id')" || return 1
+  while IFS= read -r record; do  # exact-read-ok: jq -c emits one compact record per line
+    id="$(printf '%s' "$record" | jq -r '.id')" || return 1  # exact-read-ok: a decimal id
     record_evidence "$dir" "$id" "$record" || return 1
-    if [ "$(printf '%s' "$record" | jq -r '.stale')" = "true" ]; then
+    if [ "$(printf '%s' "$record" | jq -r '.stale')" = "true" ]; then  # exact-read-ok: the literal true or false
       record_evidence "$dir" "$id.stale" "$record" || return 1
     fi
   done <<<"$records"
@@ -917,7 +926,7 @@ parse_check_command() {
   case "$1" in
     *[[:cntrl:]]*) return 1 ;;
   esac
-  read -r -a words <<<"$1"
+  read -r -a words <<<"$1"  # exact-read-ok: the case above refused every control character in $1, so no newline is here
   for word in ${words[@]+"${words[@]}"}; do
     [ "$word" = "2>&1" ] || kept+=("$word")
   done
@@ -925,7 +934,7 @@ parse_check_command() {
   words=("${kept[@]}")
   for word in "${words[@]}"; do
     case "$word" in
-      *[\|\;\&\`\$\(\)\<]* | *[[:cntrl:]]*) return 1 ;;
+      *[\|\;\&\`\$\(\)\<]* | *[[:cntrl:]]*) return 1 ;;  # exact-read-ok: literal pattern characters, not a substitution
     esac
   done
   while [ "${#words[@]}" -gt 0 ] && [[ "${words[0]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do
@@ -971,15 +980,15 @@ check_kind() {
   local word
   local kind
   local -a argv=()
-  parsed="$(parse_check_command "$1")" || return 1
+  read_exact parsed parse_check_command "$1" || return 1
   {
-    IFS= read -r wrapped
-    while IFS= read -r word; do
+    IFS= read -r wrapped  # exact-read-ok: parse_check_command prints one word per line
+    while IFS= read -r word; do  # exact-read-ok: parse_check_command prints one word per line
       argv+=("$word")
     done
   } <<<"$parsed"
   [ "${#argv[@]}" -gt 0 ] || return 1
-  kind="$(check_kind_of "${argv[@]}")" || return 1
+  read_exact_line kind check_kind_of "${argv[@]}" || return 1
   check_actually_runs "$kind" "${argv[@]}" || return 1
   printf '%s' "$kind"
 }
@@ -1042,15 +1051,15 @@ check_failure_counts() {
   local word
   local kind
   local -a argv=()
-  parsed="$(parse_check_command "$1")" || return 1
+  read_exact parsed parse_check_command "$1" || return 1
   {
-    IFS= read -r wrapped
-    while IFS= read -r word; do
+    IFS= read -r wrapped  # exact-read-ok: parse_check_command prints one word per line
+    while IFS= read -r word; do  # exact-read-ok: parse_check_command prints one word per line
       argv+=("$word")
     done
   } <<<"$parsed"
   [ "${#argv[@]}" -gt 0 ] || return 1
-  kind="$(check_kind_of "${argv[@]}")" || return 1
+  read_exact_line kind check_kind_of "${argv[@]}" || return 1
   check_actually_runs "$kind" "${argv[@]}" || return 1
   [[ "$2" =~ ^[0-9]{1,3}$ ]] || return 1
   if [ "$wrapped" = flock ]; then
@@ -1085,12 +1094,12 @@ record_check_outcome() {
   case "$3" in
     *[[:cntrl:]]*) return 0 ;;
   esac
-  kind="$(check_kind "$3")" || return 0
+  read_exact_line kind check_kind "$3" || return 0
   [ "${#3}" -le "$EVIDENCE_COMMAND_MAX" ] || return 0
-  key="$(safe_marker_key "$repo"$'\n'"$3")"
+  read_exact_line key safe_marker_key "$repo"$'\n'"$3"
   # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
   record="$(jq -cn --arg kind "$kind" --arg command "$3" --arg repo "$repo" --arg status "$4" \
-    '{kind: $kind, command: $command, repository: $repo, status: $status}')" || return 1
+    '{kind: $kind, command: $command, repository: $repo, status: $status}')" || return 1  # exact-read-ok: compact JSON, whose own newline is the only one
   evidence_dir "$dir" || return 1
   if [ "$4" = fail ]; then
     record_evidence "$dir" "$key.failed" "$record" || return 1
@@ -1112,7 +1121,7 @@ open_evidence_window() {
     read_exact_line since cat "$1" || since=""
     evidence_epoch "$since" && return 0
   fi
-  write_private_marker "$1" "$(date +%s)"
+  write_private_marker "$1" "$(date +%s)"  # exact-read-ok: epoch digits
 }
 
 # What collect_learning_evidence found: the record files it read, which the
@@ -1149,7 +1158,7 @@ collect_recalled() {
   local -a files=()
   local -a stale_files=()
   [ -L "$1" ] && return 2
-  DROPPED_RECALLED="$(dropped_count "$1")" || return 2
+  read_exact_line DROPPED_RECALLED dropped_count "$1" || return 2
   if [ "$DROPPED_RECALLED" != "0" ]; then
     track_evidence "$1/dropped.count" || return 2
   fi
@@ -1197,14 +1206,14 @@ collect_recalled() {
   for file in "${files[@]}"; do
     track_evidence "$file" || return 2
   done
-  EVIDENCE_RECALLED="$(jq -sc 'map({id, stale})' "${files[@]}")" || return 2
+  EVIDENCE_RECALLED="$(jq -sc 'map({id, stale})' "${files[@]}")" || return 2  # exact-read-ok: compact JSON, whose own newline is the only one
   if [ "${#stale_files[@]}" -gt 0 ]; then
     for file in "${stale_files[@]}"; do
       track_evidence "$file" || return 2
     done
-    stale_ids="$(jq -sc '[.[].id]' "${stale_files[@]}")" || return 2
+    stale_ids="$(jq -sc '[.[].id]' "${stale_files[@]}")" || return 2  # exact-read-ok: compact JSON, whose own newline is the only one
     EVIDENCE_RECALLED="$(printf '%s' "$EVIDENCE_RECALLED" | jq -c --argjson tombstones "$stale_ids" \
-      'map(.stale = (.stale or (.id as $id | ($tombstones | index($id)) != null)))')" || return 2
+      'map(.stale = (.stale or (.id as $id | ($tombstones | index($id)) != null)))')" || return 2  # exact-read-ok: compact JSON, whose own newline is the only one
   fi
 }
 
@@ -1240,7 +1249,7 @@ collect_checks() {
   local -a verdicts=()
   EVIDENCE_CHECKS='[]'
   [ -L "$1" ] && return 2
-  DROPPED_CHECKS="$(dropped_count "$1")" || return 2
+  read_exact_line DROPPED_CHECKS dropped_count "$1" || return 2
   if [ "$DROPPED_CHECKS" != "0" ]; then
     track_evidence "$1/dropped.count" || return 2
   fi
@@ -1264,12 +1273,12 @@ collect_checks() {
     verdicts+=("$(jq -c --argjson failed "$failed" '
       if .status == "fail" then {kind, command, repository, verdict: "still failing"}
       elif $failed then {kind, command, repository, verdict: "failed, then passed"}
-      else empty end' "$file")")
+      else empty end' "$file")")  # exact-read-ok: compact JSON, whose own newline is the only one
   done
   if [ "${#verdicts[@]}" -eq 0 ]; then
     return 0
   fi
-  EVIDENCE_CHECKS="$(printf '%s\n' "${verdicts[@]}" | jq -sc '.')" || return 2
+  EVIDENCE_CHECKS="$(printf '%s\n' "${verdicts[@]}" | jq -sc '.')" || return 2  # exact-read-ok: compact JSON, whose own newline is the only one
 }
 
 # collect_reverts SINCE_MARKER ROOTS_JSON: print, as one JSON array, every
@@ -1301,7 +1310,7 @@ collect_reverts() {
     read_exact_line toplevel safe_git "$repo" rev-parse --show-toplevel || continue
     read_exact_line toplevel physical_dir "$toplevel" || continue
     [ "$repo_root" = "$toplevel" ] || continue
-    while IFS= read -r commit; do
+    while IFS= read -r commit; do  # exact-read-ok: collect_reverts prints one hex id per line
       read_exact body safe_git "$repo" show -s --no-show-signature --format=%B "$commit" || continue
       [[ "$body" =~ This\ reverts\ commit\ ([0-9a-f]{40}) ]] || continue
       # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
@@ -1339,14 +1348,14 @@ collect_learning_evidence() {
   LEARNING_EVIDENCE=""
   collect_recalled "$1" || return 2
   collect_checks "$2" || return 2
-  reverts="$(collect_reverts "$3" "$4")" || reverts='[]'
+  read_exact reverts collect_reverts "$3" "$4" || reverts='[]'
   # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
   # shellcheck disable=SC2034 # read by the stop.sh that sources this library
   LEARNING_EVIDENCE="$(jq -cn --argjson recalled "$EVIDENCE_RECALLED" \
     --argjson checks "$EVIDENCE_CHECKS" --argjson reverts "$reverts" \
     --argjson d_recalled "$DROPPED_RECALLED" --argjson d_checks "$DROPPED_CHECKS" \
     '{recalled: $recalled, checks: $checks, reverts: $reverts,
-      dropped: {recalled: $d_recalled, checks: $d_checks}}')" || return 2
+      dropped: {recalled: $d_recalled, checks: $d_checks}}')" || return 2  # exact-read-ok: compact JSON, whose own newline is the only one
 }
 
 # evidence_present EVIDENCE: EVIDENCE holds at least one record.
@@ -1388,7 +1397,7 @@ consume_learning_evidence() {
       fi
     fi
   done
-  write_private_marker "$1" "$(date +%s)"
+  write_private_marker "$1" "$(date +%s)"  # exact-read-ok: epoch digits
 }
 
 # feedback_step EVIDENCE: step 4 of the checklist, naming the memories the
@@ -1408,7 +1417,7 @@ feedback_step() {
         "4. Feedback: no recall result was observed since the last checkpoint, so no memory has earned feedback; send none. Verified outcomes observed: \($seen).\(truncation)"
       else
         "4. Feedback: the recalls since the last checkpoint returned \(if drops == 0 then "exactly " else "" end)these memories: \(memories | join(", ")). Verified outcomes observed: \($seen).\(truncation) Call feedback(id_str, true|false) only for a listed memory whose effect one of these outcomes demonstrates, and name that outcome; leave every other listed memory without feedback. Never score a memory on your own impression that it helped or misled."
-      end'
+      end'  # exact-read-ok: the backticks are literal characters inside the jq program
 }
 
 # bash_result_has_exit_status PAYLOAD: the Bash call whose PostToolUse this is
@@ -1494,7 +1503,7 @@ valid_checkpoint_manifest() {
       and ((.project | type) == "string")
       and ((.session | type) == "string")
       and ((.root | type) == "string" and (.root | length) > 0)))
-  ' "$1" >/dev/null 2>&1
+  ' "$1" >/dev/null 2>&1  # exact-read-ok: literal pattern characters inside the jq program
 }
 
 # <<< END: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.

@@ -26,7 +26,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 require_jq
 
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
 read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 read_exact transcript_path jq -j '.transcript_path // empty' <<<"$payload" 2>/dev/null || transcript_path=""

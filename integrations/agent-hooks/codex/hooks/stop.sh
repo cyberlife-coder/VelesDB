@@ -25,7 +25,7 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
 read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 
@@ -57,13 +57,13 @@ if valid_private_marker "$checkpoint_manifest"; then
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
     exit 0
   fi
-  manifest_state="$(jq -r '.state' "$checkpoint_manifest")"
+  read_exact_line manifest_state jq -r '.state' "$checkpoint_manifest"
   if [ "$manifest_state" = "pending" ]; then
     targets="$(jq -c '.targets' "$checkpoint_manifest")" # exact-read-ok: compact JSON, whose own newline is the only one
-    feedback="$(feedback_step "$(jq -c '.evidence // {recalled: [], checks: [], reverts: []}' "$checkpoint_manifest")")"
+    read_exact feedback feedback_step "$(jq -c '.evidence // {recalled: [], checks: [], reverts: []}' "$checkpoint_manifest")"  # exact-read-ok: compact JSON inside, whose own newline is the only one
     reason="Before finishing, complete the VelesDB learning loop for every repository in this recovered batch ($targets): 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause and each incident to its root cause with outgoing relations; $feedback Then call save_working_context for every listed project/session with its distilled state and stop."
-    response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')"
-    delivered_manifest="$(jq -c '.state = "delivered"' "$checkpoint_manifest")"
+    response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')"  # exact-read-ok: compact JSON, whose own newline is the only one
+    delivered_manifest="$(jq -c '.state = "delivered"' "$checkpoint_manifest")"  # exact-read-ok: compact JSON, whose own newline is the only one
     printf '%s\n' "$response"
     write_private_marker "$checkpoint_manifest" "$delivered_manifest" || true
     exit 0
@@ -94,8 +94,8 @@ elif [ -d "$dirty_dir" ]; then
       dirty_invalid="true"
       break
     fi
-    canonical="$(jq -c '{project, session, root}' "$record_file")"
-    if [ "${record_file##*/}" != "$(safe_marker_key "$canonical").json" ]; then
+    canonical="$(jq -c '{project, session, root}' "$record_file")"  # exact-read-ok: compact JSON, whose own newline is the only one
+    if [ "${record_file##*/}" != "$(safe_marker_key "$canonical").json" ]; then  # exact-read-ok: a checksum
       dirty_invalid="true"
       break
     fi
@@ -124,7 +124,7 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
     exit 0
   fi
-  feedback="$(feedback_step "$LEARNING_EVIDENCE")"
+  read_exact feedback feedback_step "$LEARNING_EVIDENCE"
   for record_file in "${dirty_records[@]}"; do
     # shellcheck disable=SC2154 # read_exact sets root (printf -v)
     if ! read_exact root jq -j '.root' "$record_file" \
@@ -153,7 +153,7 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
   reason="Before finishing, complete the VelesDB learning loop for every edited repository in this batch ($targets): 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause and each incident to its root cause with outgoing relations; $feedback Then call save_working_context for every listed project/session with its distilled state and stop."
   failure_reason="$reason Storage warning: at least one checkpoint record could not be consumed; keep the session open after completing the checklist, inspect $dirty_dir, and retry Stop."
   if ! response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')" \
-    || ! failure_response="$(jq -n --arg reason "$failure_reason" '{decision: "block", reason: $reason}')"; then
+    || ! failure_response="$(jq -n --arg reason "$failure_reason" '{decision: "block", reason: $reason}')"; then  # exact-read-ok: compact JSON, whose own newline is the only one
     reason="VelesDB could not encode the repository checklist. Keep the session open and retry Stop; the edit records remain at $dirty_dir."
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
     exit 0
@@ -170,7 +170,7 @@ if [ "${#dirty_records[@]}" -gt 0 ]; then
     fi
   done
   rmdir "$dirty_dir" 2>/dev/null || true
-  delivered_manifest="$(printf '%s' "$pending_manifest" | jq -c '.state = "delivered"')"
+  delivered_manifest="$(printf '%s' "$pending_manifest" | jq -c '.state = "delivered"')"  # exact-read-ok: compact JSON, whose own newline is the only one
   printf '%s\n' "$response"
   write_private_marker "$checkpoint_manifest" "$delivered_manifest" || true
   exit 0
@@ -207,9 +207,9 @@ if learning_loop_enabled; then
     jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
     exit 0
   fi
-  feedback="$(feedback_step "$LEARNING_EVIDENCE")"
+  read_exact feedback feedback_step "$LEARNING_EVIDENCE"
   reason="Before finishing, complete the VelesDB learning loop: 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause and each incident to its root cause with outgoing relations; $feedback Then call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state and stop."
-  response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')"
+  response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')"  # exact-read-ok: compact JSON, whose own newline is the only one
   if ! evidence_present "$LEARNING_EVIDENCE"; then
     printf '%s\n' "$response"
     exit 0
@@ -225,7 +225,7 @@ if learning_loop_enabled; then
     exit 0
   fi
   printf '%s\n' "$response"
-  write_private_marker "$checkpoint_manifest" "$(printf '%s' "$pending_manifest" | jq -c '.state = "delivered"')" || true
+  write_private_marker "$checkpoint_manifest" "$(printf '%s' "$pending_manifest" | jq -c '.state = "delivered"')" || true  # exact-read-ok: compact JSON, whose own newline is the only one
   exit 0
 fi
 

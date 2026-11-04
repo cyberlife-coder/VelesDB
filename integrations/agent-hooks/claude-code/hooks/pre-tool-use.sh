@@ -12,8 +12,8 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "VelesDB learning-loop guard: jq is unavailable, so repository policy and same-session recall cannot be verified. Install jq before retrying this Edit/Write." >&2
   exit 2
 fi
-payload="$(read_stdin_payload)"
-tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+read_exact payload read_stdin_payload
+tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"  # exact-read-ok: a tool name is one word, never a line
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
 read_exact target_path jq -j '.tool_input.file_path // empty' <<<"$payload" 2>/dev/null || target_path=""
