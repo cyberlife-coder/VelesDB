@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
+# >>> only: claude-code
 # Shared helpers for the VelesDB agent-hooks scripts.
 # Sourced by all five event hooks — not meant to be run directly.
+# <<< only
+# >>> only: codex
+# Shared helpers for the VelesDB Codex CLI hooks.
+# Sourced by all four event hooks — not meant to be run directly.
+# <<< only
+# >>> only: windsurf
+# Shared helpers for the VelesDB Windsurf hooks.
+# Sourced by pre-user-prompt.sh — not meant to be run directly.
+# <<< only
+#
+# Composed for one host from
+# integrations/agent-hooks/shared/hooks/lib/common.sh by
+# scripts/sync-agent-hooks.py — edit that file, not this one.
 
 umask 077
 
@@ -19,6 +33,7 @@ physical_policy_start() {
   [ -d "$candidate" ] || return 1
   physical_dir "$candidate"
 }
+# >>> only: claude-code codex
 
 resolve_final_symlink() {
   local current="$1"
@@ -38,6 +53,7 @@ resolve_final_symlink() {
   [ ! -L "$current" ] || return 1
   printf '%s' "$current"
 }
+# <<< only
 
 # require_jq: fail loudly (not silently) if jq is missing, since every hook
 # builds its JSON output through jq to get escaping right.
@@ -48,12 +64,14 @@ require_jq() {
   fi
 }
 
+# >>> only: claude-code codex
 # resolve_config CWD
 # Walks up from CWD looking for a .velesdb-hooks.json file (project root
 # convention). Sets PROJECT, SESSION, CONFIG_ROOT and ENFORCE_LEARNING_LOOP
 # globals. Falls back to project=basename(cwd) and session="rolling" when no config file is found
 # or a field is missing — so the hooks work with zero setup, but a project
 # can pin stable identifiers via the config file.
+# shellcheck disable=SC2317,SC2329 # in this composition source the windsurf variant below shadows it; a staged library holds exactly one. Shellcheck < 0.10 reports the shadowed body as SC2317, >= 0.10 as SC2329 — disable both.
 resolve_config() {
   local start_dir="$1"
   local physical_start
@@ -93,6 +111,52 @@ resolve_config() {
     SESSION="rolling"
   fi
 }
+# <<< only
+# >>> only: windsurf
+
+# resolve_config CWD
+# Walks up from CWD looking for a .velesdb-hooks.json file (project root
+# convention). Sets PROJECT and SESSION globals. Falls back to
+# project=basename(cwd) and session="rolling" when no config file is found
+# or a field is missing — so the hooks work with zero setup, but a project
+# can pin stable identifiers via the config file.
+resolve_config() {
+  local start_dir="$1"
+  local physical_start
+  read_exact_line physical_start physical_policy_start "$start_dir" || return 1
+  start_dir="$physical_start"
+  local dir="$start_dir"
+  local config=""
+  local depth=0
+
+  while [ "$depth" -lt 20 ]; do
+    if [ -f "$dir/.velesdb-hooks.json" ]; then
+      config="$dir/.velesdb-hooks.json"
+      break
+    fi
+    if [ "$dir" = "/" ] || [ -z "$dir" ]; then
+      break
+    fi
+    read_exact_line dir dirname -- "$dir" || return 1
+    depth=$((depth + 1))
+  done
+
+  PROJECT=""
+  SESSION=""
+  if [ -n "$config" ] && jq -e . "$config" >/dev/null 2>&1; then
+    read_exact PROJECT jq -j '.project // empty' "$config" || PROJECT=""
+    read_exact SESSION jq -j '.session // empty' "$config" || SESSION=""
+  fi
+
+  if [ -z "$PROJECT" ]; then
+    read_exact_line PROJECT basename -- "$start_dir" || PROJECT=""
+  fi
+  if [ -z "$SESSION" ]; then
+    SESSION="rolling"
+  fi
+}
+# <<< only
+# >>> only: claude-code codex
 
 # learning_loop_enabled: true only for a project that explicitly opted in.
 # The hooks are installed user-wide, so a missing or malformed project config
@@ -102,15 +166,21 @@ learning_loop_enabled() {
 }
 
 # learning_marker_identity VAR SESSION_ID: set VAR to the identity that scopes mechanical learning markers to
-# both the host session and the opted-in repository. One Claude session can
-# change cwd, so a recall in repo A must never unlock an edit in repo B.
+# both the host session and the opted-in repository. One Claude Code or Codex
+# session can change cwd, so a recall in repo A must never unlock an edit in repo B.
 learning_marker_identity() {
   printf -v "$1" '%s\n%s' "$2" "${CONFIG_ROOT:-$PWD}"
 }
+# <<< only
+
+# >>> only: claude-code
 
 # successful_memory_recall PAYLOAD
 # A recall counts only after a VelesDB MCP tool returned a successful result.
 # `compile_context` counts only when it actually requested memory_scope.
+# TOOL_NAME is the payload's: the hook reads it once, for this check and the
+# working-context recording.
+# shellcheck disable=SC2317,SC2329 # in this composition source the codex variant below shadows it; a staged library holds exactly one. Shellcheck < 0.10 reports the shadowed body as SC2317, >= 0.10 as SC2329 — disable both.
 successful_memory_recall() {
   local payload="$1"
   local tool_name
@@ -133,11 +203,42 @@ successful_memory_recall() {
 
   successful_tool_response "$payload"
 }
+# <<< only
+
+# >>> only: codex
+
+# successful_memory_recall TOOL_NAME PAYLOAD
+# A recall counts only after a VelesDB MCP tool returned a successful result.
+# `compile_context` counts only when it actually requested memory_scope.
+# TOOL_NAME is the caller's, as PostToolUse already read it: the hook reads
+# it once, for this check and the working-context recording.
+successful_memory_recall() {
+  local payload="$2"
+
+  case "$1" in
+    mcp__velesdb-memory__recall|mcp__velesdb_memory__recall|\
+    mcp__velesdb-memory__recall_fused|mcp__velesdb_memory__recall_fused|\
+    mcp__velesdb-memory__recall_where|mcp__velesdb_memory__recall_where|\
+    mcp__velesdb-memory__entity|mcp__velesdb_memory__entity|\
+    mcp__velesdb-memory__why|mcp__velesdb_memory__why)
+      ;;
+    mcp__velesdb-memory__compile_context|mcp__velesdb_memory__compile_context)
+      printf '%s' "$payload" | jq -e '.tool_input.memory_scope != null' >/dev/null 2>&1 || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  successful_tool_response "$payload"
+}
+# <<< only
 
 # read_stdin_payload: read the hook's JSON payload from stdin exactly once.
 read_stdin_payload() {
   cat
 }
+# >>> only: claude-code
 
 # is_decimal VALUE: VALUE is a decimal integer written without a leading zero,
 # at most 10 digits long. Only such text may reach a number in these hooks:
@@ -258,6 +359,7 @@ run_with_watchdog() {
   rm -f "$fired"
   return "$rc"
 }
+# <<< only
 
 # safe_marker_key VALUE: a bounded, filename-safe identity for host-provided
 # session/tool ids. Hook payload ids are normally UUIDs, but treating raw
@@ -286,8 +388,10 @@ marker_base_dir() {
   printf '%s' "$dir"
 }
 
-# sentinel_path KIND SESSION_ID: path to a session-scoped marker used by Stop,
-# PreCompact, the successful-recall gate, and edit-dirty checkpoints.
+# sentinel_path KIND SESSION_ID: path to a session-scoped marker file. Which
+# kinds a host fires once per session is its own — end-of-session saves,
+# compaction, the successful-recall gate, edit-dirty checkpoints, a
+# once-per-prompt reminder.
 sentinel_path() {
   local kind="$1"
   local session_id="$2"
@@ -322,6 +426,7 @@ valid_private_marker() {
   local path="$1"
   [ -f "$path" ] && [ ! -L "$path" ] && [ -O "$path" ]
 }
+# >>> only: claude-code
 
 # private_temp_file PREFIX: reserve an unpredictable mode-0600 regular file in
 # the owned mode-0700 state directory before a subprocess writes its result.
@@ -332,10 +437,12 @@ private_temp_file() {
   read_exact dir marker_base_dir || return 1
   mktemp "${dir}/${prefix}.XXXXXX"
 }
+# <<< only
 
 touch_private_marker() {
   write_private_marker "$1" ""
 }
+# >>> only: claude-code codex
 
 # Alias named for record callers.
 write_json_atomically() {
@@ -402,6 +509,7 @@ record_current_project() {
 }
 
 # >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
+# <<< only
 # >>> BEGIN readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it.
 # --- Reading a string exactly --------------------------------------------------
 # `$(…)` strips every trailing newline of what it captures, and a directory
@@ -430,6 +538,7 @@ physical_dir() {
   (cd "$1" 2>/dev/null && pwd -P)
 }
 # <<< END readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it.
+# >>> only: claude-code codex
 
 # valid_project_record FILE: FILE holds exactly one pending/dirty record. jq
 # reads every JSON value in a file, and `jq -e` judges only the last, so a file
@@ -1507,3 +1616,4 @@ valid_checkpoint_manifest() {
 }
 
 # <<< END: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it.
+# <<< only

@@ -49,6 +49,9 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "sync-agent-hooks.py"
 SOURCE = REPO / "integrations" / "agent-hooks" / "claude-code" / "hooks"
 CODEX_SOURCE = REPO / "integrations" / "agent-hooks" / "codex" / "hooks"
+SHARED_LIB = (
+    REPO / "integrations" / "agent-hooks" / "shared" / "hooks" / "lib" / "common.sh"
+)
 HARNESS = REPO / "integrations" / "agent-hooks" / "test" / "hooks.test.sh"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
@@ -146,6 +149,18 @@ def load_installer():
     return module
 
 
+def staged_host(client: str, root: Path) -> Path:
+    """Stage CLIENT's installable hooks tree at ROOT/client and return it.
+
+    `lib/common.sh` is not committed per host — the installer composes it
+    from `integrations/agent-hooks/shared/` — so a test that needs the file
+    a user would receive must read the staged tree, not the source one.
+    """
+    target = root / client
+    load_installer().stage_source(client, target)
+    return target
+
+
 def foreign_view(settings: Path) -> str:
     """Everything in `settings` that is NOT VelesDB's, canonically ordered.
 
@@ -184,12 +199,16 @@ class SourceAbsorbedTheLocalLayer(unittest.TestCase):
     until the source covered it."""
 
     def test_the_source_ships_every_file_the_install_needs(self) -> None:
-        for name in EXPECTED_FILES:
-            self.assertTrue(
-                (SOURCE / name).is_file(),
-                f"{name} is missing from the versioned hooks — an --install would "
-                "delete it from a machine that has it",
-            )
+        """`lib/common.sh` is composed, not committed, so the staged tree —
+        the artefact an install actually lays down — is what must be whole."""
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = staged_host("claude", Path(tmp))
+            for name in EXPECTED_FILES:
+                self.assertTrue(
+                    (staged / name).is_file(),
+                    f"{name} is missing from the staged hooks — an --install would "
+                    "delete it from a machine that has it",
+                )
 
     def test_the_freshness_check_is_wired_into_session_start(self) -> None:
         """Shipping the file without sourcing it is the orphan case: the
@@ -242,10 +261,12 @@ class SourceAbsorbedTheLocalLayer(unittest.TestCase):
         # list of the patterns this test searches FOR is exactly that shape —
         # it refused this file once. The name alone is enough: `API_TOKEN`
         # appearing anywhere in a shipped hook is already the finding.
-        for name in EXPECTED_FILES:
-            body = (SOURCE / name).read_text(encoding="utf-8")
-            for marker in ("api_key", "API_TOKEN", "Bearer ", "sk-"):
-                self.assertNotIn(marker, body, f"{name} carries something secret-shaped")
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = staged_host("claude", Path(tmp))
+            for name in EXPECTED_FILES:
+                body = (staged / name).read_text(encoding="utf-8")
+                for marker in ("api_key", "API_TOKEN", "Bearer ", "sk-"):
+                    self.assertNotIn(marker, body, f"{name} carries something secret-shaped")
 
 
 class InstallerBehaviour(unittest.TestCase):
@@ -813,12 +834,16 @@ class BindingLoopInstallerContract(unittest.TestCase):
         )
 
     def test_codex_binding_hooks_are_all_versioned(self) -> None:
-        for name in BINDING_CODEX_FILES:
-            with self.subTest(name=name):
-                self.assertTrue(
-                    (CODEX_SOURCE / name).is_file(),
-                    f"Codex hook source is incomplete: {name} is missing",
-                )
+        """`lib/common.sh` is composed at install time, so completeness is
+        judged on the staged tree, not the source one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = staged_host("codex", Path(tmp))
+            for name in BINDING_CODEX_FILES:
+                with self.subTest(name=name):
+                    self.assertTrue(
+                        (staged / name).is_file(),
+                        f"Codex hook source is incomplete: {name} is missing",
+                    )
 
     def test_installer_declares_a_codex_registry_not_only_claude(self) -> None:
         installer = SCRIPT.read_text(encoding="utf-8")
@@ -1160,10 +1185,15 @@ class HarnessIsWired(unittest.TestCase):
 
     def test_the_harness_refuses_a_broken_hook(self) -> None:
         """The positive control. A harness that passes on a sabotaged tree is
-        decorative, and nothing else here would notice."""
+        decorative, and nothing else here would notice. The copy sits in a
+        repo-shaped layout because the harness stages its hosts through
+        scripts/sync-agent-hooks.py, found relative to itself."""
         with tempfile.TemporaryDirectory() as tmp:
-            copy = Path(tmp) / "agent-hooks"
+            copy = Path(tmp) / "repo" / "integrations" / "agent-hooks"
             shutil.copytree(REPO / "integrations" / "agent-hooks", copy)
+            scripts = Path(tmp) / "repo" / "scripts"
+            scripts.mkdir(parents=True)
+            shutil.copy2(SCRIPT, scripts / SCRIPT.name)
             broken = copy / "claude-code" / "hooks" / "session-start.sh"
             broken.write_text("#!/usr/bin/env bash\necho '{}'\n", encoding="utf-8")
 
@@ -1175,6 +1205,11 @@ class HarnessIsWired(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 1, "the harness passed a sabotaged hook")
+            self.assertIn(
+                "not ok",
+                result.stdout,
+                "the harness failed before its checks ran — the sabotage proved nothing",
+            )
 
     def test_the_harness_passes_on_the_tree_as_committed(self) -> None:
         result = subprocess.run(
@@ -1225,7 +1260,7 @@ class CodexMatcherCoversEveryObservedTool(unittest.TestCase):
         installer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(installer)
         matcher = installer.matcher_for("codex", "PostToolUse")
-        library = (CODEX_SOURCE / "lib" / "common.sh").read_text(encoding="utf-8")
+        library = installer.compose_library("codex")
         accepted = set()
         for function in ("successful_memory_recall", "working_context_call"):
             start = library.index(f"{function}() {{")
@@ -1237,6 +1272,323 @@ class CodexMatcherCoversEveryObservedTool(unittest.TestCase):
         self.assertTrue(both_spellings <= accepted, sorted(both_spellings - accepted))
         missed = sorted(name for name in accepted if not re.search(matcher, name))
         self.assertEqual(missed, [], f"the Codex PostToolUse matcher {matcher!r} omits them")
+
+
+TAIL_BEGIN = "# >>> BEGIN: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it."
+TAIL_END = "# <<< END: shared byte for byte with the other host's lib/common.sh; test/hooks.test.sh checks it."
+READERS_BEGIN = "# >>> BEGIN readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it."
+READERS_END = "# <<< END readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it."
+
+
+class SharedLibraryComposition(unittest.TestCase):
+    """One canonical library, one composed copy per host (#2337).
+
+    The three host directories used to ship three copies of the shared tail
+    and of the exact readers, compared only inside their marked spans. The
+    repository now keeps the composition source once, under
+    `shared/hooks/lib/common.sh`, and the installer composes each host's
+    `lib/common.sh` into the staged tree — so an install is still
+    standalone, and these tests are what stand between the source and a
+    hand-edited copy coming back.
+    """
+
+    def setUp(self) -> None:
+        self.installer = load_installer()
+
+    @staticmethod
+    def marked_span(text: str, begin: str, end: str) -> "list[str]":
+        lines = text.splitlines()
+        assert lines.count(begin) == 1, begin
+        assert lines.count(end) == 1, end
+        return lines[lines.index(begin) : lines.index(end) + 1]
+
+    def test_the_repository_holds_exactly_one_common_library(self) -> None:
+        """A committed per-host `lib/common.sh` is the defect returning."""
+        libs = sorted(
+            str(path.relative_to(REPO))
+            for path in (REPO / "integrations" / "agent-hooks").rglob("common.sh")
+        )
+        self.assertEqual(
+            libs,
+            ["integrations/agent-hooks/shared/hooks/lib/common.sh"],
+        )
+
+    def test_the_readers_live_in_one_file(self) -> None:
+        hits = sorted(
+            str(path.relative_to(REPO))
+            for path in (REPO / "integrations" / "agent-hooks").rglob("*.sh")
+            if "read_exact_line() {" in path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            hits, ["integrations/agent-hooks/shared/hooks/lib/common.sh"]
+        )
+
+    def test_the_shared_tail_lives_in_one_file(self) -> None:
+        hits = sorted(
+            str(path.relative_to(REPO))
+            for path in (REPO / "integrations" / "agent-hooks").rglob("*.sh")
+            if "promote_pending_recall() {" in path.read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            hits, ["integrations/agent-hooks/shared/hooks/lib/common.sh"]
+        )
+
+    def test_composition_emits_a_clean_library_for_each_host(self) -> None:
+        for host_dir in ("claude-code", "codex", "windsurf"):
+            with self.subTest(host_dir=host_dir):
+                text = self.installer.compose_library(host_dir)
+                self.assertTrue(
+                    text.startswith("#!/usr/bin/env bash\n"), host_dir
+                )
+                self.assertNotIn(
+                    "# >>> only:",
+                    text,
+                    f"{host_dir}: a composition marker escaped into the artefact",
+                )
+                with tempfile.NamedTemporaryFile(
+                    "w", suffix=".sh", delete=False, encoding="utf-8"
+                ) as handle:
+                    handle.write(text)
+                self.addCleanup(os.unlink, handle.name)
+                result = subprocess.run(
+                    ["bash", "-n", handle.name],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, f"{host_dir}: {result.stderr}")
+
+    def test_the_readers_span_is_identical_for_every_host(self) -> None:
+        spans = {
+            host_dir: self.marked_span(
+                self.installer.compose_library(host_dir), READERS_BEGIN, READERS_END
+            )
+            for host_dir in ("claude-code", "codex", "windsurf")
+        }
+        spans["shared"] = self.marked_span(
+            SHARED_LIB.read_text(encoding="utf-8"), READERS_BEGIN, READERS_END
+        )
+        distinct = {tuple(span) for span in spans.values()}
+        self.assertEqual(len(distinct), 1, f"readers spans differ: {sorted(spans)}")
+
+    def test_the_tail_span_is_identical_for_the_sessioned_hosts(self) -> None:
+        spans = {}
+        for host_dir in ("claude-code", "codex"):
+            text = self.installer.compose_library(host_dir)
+            self.assertTrue(
+                text.rstrip("\n").endswith(TAIL_END),
+                f"{host_dir}: the shared tail must end the file — a line after "
+                "END could redefine what the tail defines",
+            )
+            spans[host_dir] = self.marked_span(text, TAIL_BEGIN, TAIL_END)
+        self.assertEqual(spans["claude-code"], spans["codex"])
+
+    def test_windsurf_gets_the_readers_without_the_tail(self) -> None:
+        text = self.installer.compose_library("windsurf")
+        self.marked_span(text, READERS_BEGIN, READERS_END)
+        self.assertNotIn(TAIL_BEGIN, text)
+        self.assertNotIn(TAIL_END, text)
+        for function in (
+            "read_exact",
+            "read_exact_line",
+            "physical_dir",
+            "resolve_config",
+            "sentinel_path",
+            "touch_private_marker",
+            "valid_private_marker",
+        ):
+            self.assertIn(f"{function}() {{", text, f"windsurf lost {function}")
+
+    def test_a_composed_library_runs_with_the_shared_tree_absent(self) -> None:
+        """The staged artefact must not reference shared/ at all: it is what
+        ships, and the machine it lands on has no `shared/` beside it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Path(tmp) / "common.sh"
+            lib.write_text(
+                self.installer.compose_library("windsurf"), encoding="utf-8"
+            )
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'source "$1"; read_exact answer printf %s 42; '
+                    '[ "$answer" = 42 ] && sentinel_path test-kind sid >/dev/null',
+                    "_",
+                    str(lib),
+                ],
+                capture_output=True,
+                text=True,
+                env=dict(os.environ, TMPDIR=tmp),
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_malformed_only_region_is_refused(self) -> None:
+        for label, body in (
+            ("unclosed", "# >>> only: claude-code\nx=1\n"),
+            ("stray-close", "x=1\n# <<< only\n"),
+            ("nested", "# >>> only: claude-code\n# >>> only: codex\nx=1\n# <<< only\n# <<< only\n"),
+            ("unknown-host", "# >>> only: emacs\nx=1\n# <<< only\n"),
+        ):
+            with self.subTest(label=label):
+                with tempfile.NamedTemporaryFile(
+                    "w", suffix=".sh", delete=False, encoding="utf-8"
+                ) as handle:
+                    handle.write(body)
+                self.addCleanup(os.unlink, handle.name)
+                with mock.patch.object(
+                    self.installer, "SHARED_LIB", Path(handle.name)
+                ):
+                    with self.assertRaises(SystemExit):
+                        self.installer.compose_library("claude-code")
+
+    def test_stage_lays_down_a_standalone_tree_per_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            result = run("--stage", str(Path(tmp) / "staged"), home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            staged = Path(tmp) / "staged"
+            expected = {
+                "claude-code": "session-start.sh",
+                "codex": "session-start.sh",
+                "windsurf": "pre-user-prompt.sh",
+            }
+            for host_dir, hook in expected.items():
+                tree = staged / host_dir
+                self.assertTrue((tree / hook).is_file(), f"{host_dir}: {hook}")
+                self.assertTrue(
+                    (tree / "lib" / "common.sh").is_file(),
+                    f"{host_dir}: lib/common.sh was not composed",
+                )
+            self.assertFalse(
+                (staged / "shared").exists(),
+                "the staged trees must carry no composition source — an install is standalone",
+            )
+
+
+@unittest.skipUnless(
+    shutil.which("jq"), "the installer refuses to lay down an inert tree without jq"
+)
+class WindsurfIsInstalled(unittest.TestCase):
+    """Windsurf never had an installer path at all (#2337): its hook was
+    copied by hand, which is how its library drifted out of every comparison.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.windsurf = self.home / ".codeium" / "windsurf"
+        self.windsurf.mkdir(parents=True)
+        self.settings = self.windsurf / "hooks.json"
+        self.settings.write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        "pre_user_prompt": [
+                            {
+                                "command": "bash ~/.codeium/windsurf/hooks/foreign/linter.sh",
+                                "show_output": True,
+                            }
+                        ],
+                        "post_run_command": [
+                            {"command": "bash ~/.codeium/windsurf/hooks/foreign/audit.sh"}
+                        ],
+                    }
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.hooks = self.windsurf / "hooks" / "velesdb-memory"
+
+    def test_install_lays_down_a_standalone_tree_and_one_flat_entry(self) -> None:
+        result = run("--install", "--client", "windsurf", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ("pre-user-prompt.sh", "lib/common.sh"):
+            self.assertTrue((self.hooks / name).is_file(), name)
+        document = json.loads(self.settings.read_text(encoding="utf-8"))
+        ours = [
+            handler
+            for handler in document["hooks"]["pre_user_prompt"]
+            if "velesdb-memory/" in handler.get("command", "")
+        ]
+        self.assertEqual(len(ours), 1, document["hooks"]["pre_user_prompt"])
+        self.assertEqual(ours[0]["show_output"], True)
+        self.assertTrue(
+            ours[0]["command"].endswith("pre-user-prompt.sh'")
+            or ours[0]["command"].endswith("pre-user-prompt.sh"),
+            ours[0],
+        )
+
+    def test_the_installed_hook_runs_with_the_shared_tree_absent(self) -> None:
+        self.assertEqual(
+            run("--install", "--client", "windsurf", home=self.home).returncode, 0
+        )
+        payload = json.dumps(
+            {
+                "trajectory_id": "test-trajectory",
+                "cwd": str(self.home),
+                "execution_id": "exec-1",
+                "model_name": "test-model",
+            }
+        )
+        result = subprocess.run(
+            ["bash", str(self.hooks / "pre-user-prompt.sh")],
+            input=payload,
+            capture_output=True,
+            text=True,
+            env=dict(os.environ, HOME=str(self.home), TMPDIR=self._tmp.name),
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("load_working_context", result.stdout)
+
+    def test_check_reports_in_step_then_drift(self) -> None:
+        self.assertEqual(
+            run("--install", "--client", "windsurf", home=self.home).returncode, 0
+        )
+        in_step = run("--check", "--strict", "--client", "windsurf", home=self.home)
+        self.assertEqual(in_step.returncode, 0, in_step.stderr)
+
+        lib = self.hooks / "lib" / "common.sh"
+        lib.write_text("#!/usr/bin/env bash\n# drifted library\n", encoding="utf-8")
+        drifted = run("--check", "--client", "windsurf", home=self.home)
+        self.assertEqual(drifted.returncode, 1, "a drifted lib/common.sh is invisible")
+        self.assertIn("lib/common.sh", drifted.stdout + drifted.stderr)
+        self.assertIn("drifted", drifted.stdout + drifted.stderr)
+
+    def test_install_preserves_foreign_handlers(self) -> None:
+        run("--install", "--client", "windsurf", home=self.home)
+        document = json.loads(self.settings.read_text(encoding="utf-8"))
+        commands = [
+            handler["command"]
+            for handlers in document["hooks"].values()
+            for handler in handlers
+        ]
+        self.assertTrue(any("linter.sh" in c for c in commands), commands)
+        self.assertTrue(any("audit.sh" in c for c in commands), commands)
+
+    def test_uninstall_removes_only_ours(self) -> None:
+        run("--install", "--client", "windsurf", home=self.home)
+        result = run("--uninstall", "--client", "windsurf", home=self.home)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.hooks.exists())
+        document = json.loads(self.settings.read_text(encoding="utf-8"))
+        self.assertTrue(
+            any("linter.sh" in h["command"] for h in document["hooks"]["pre_user_prompt"])
+        )
+        ours = [
+            handler
+            for handlers in document.get("hooks", {}).values()
+            for handler in handlers
+            if "velesdb-memory/" in handler.get("command", "")
+        ]
+        self.assertEqual(ours, [])
 
 
 if __name__ == "__main__":

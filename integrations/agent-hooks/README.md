@@ -138,6 +138,13 @@ exists for: the hooks a session runs live outside any repository, and measured
 on 2026-08-02 they had diverged in *both* directions at once — the repository
 ahead on the model-facing text, the install ahead on function.
 
+**The shared library is composed, not committed.** `shared/hooks/lib/common.sh`
+is the only copy of the library every host ships as `lib/common.sh` — the
+`# >>> only: <host>…` regions in it name which hosts each block belongs to,
+and the installer generates each staged tree's copy from it. Edit that file,
+never a generated one; `python3 scripts/sync-agent-hooks.py --stage DIR`
+builds every host's installable tree for inspection.
+
 <details>
 <summary>Doing it by hand</summary>
 
@@ -225,19 +232,20 @@ vendored copy of the scripts. Use the global pattern above instead.
 ## Install — Windsurf
 
 ```bash
-mkdir -p ~/.codeium/windsurf/hooks/velesdb-memory
-cp /path/to/velesdb/integrations/agent-hooks/windsurf/hooks/pre-user-prompt.sh ~/.codeium/windsurf/hooks/velesdb-memory/
-cp -r /path/to/velesdb/integrations/agent-hooks/windsurf/hooks/lib ~/.codeium/windsurf/hooks/velesdb-memory/
-chmod +x ~/.codeium/windsurf/hooks/velesdb-memory/*.sh
+python3 scripts/sync-agent-hooks.py --install --client windsurf
 ```
 
-Merge this into `~/.codeium/windsurf/hooks.json`'s `"hooks"` key:
+The installer lays the hooks tree under
+`~/.codeium/windsurf/hooks/velesdb-memory/` — including the `lib/common.sh`
+it composes from the shared source — and merges this into
+`~/.codeium/windsurf/hooks.json`'s `"hooks"` key, leaving every foreign
+handler in place:
 
 ```json
 {
   "hooks": {
     "pre_user_prompt": [
-      { "command": "bash /Users/you/.codeium/windsurf/hooks/velesdb-memory/pre-user-prompt.sh", "show_output": true }
+      { "command": "bash '/Users/you/.codeium/windsurf/hooks/velesdb-memory/pre-user-prompt.sh'", "show_output": true }
     ]
   }
 }

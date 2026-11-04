@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -32,14 +33,43 @@ BUNDLED_SKILL = (
 
 HOSTS = {
     "claude": {
-        "root": REPO / "integrations" / "agent-hooks" / "claude-code" / "hooks",
+        "dir": "claude-code",
         "edit_tools": ("Edit", "Write"),
     },
     "codex": {
-        "root": REPO / "integrations" / "agent-hooks" / "codex" / "hooks",
+        "dir": "codex",
         "edit_tools": ("apply_patch",),
     },
 }
+
+_STAGED: "Path | None" = None
+
+
+def hooks_root(host: str) -> Path:
+    """HOST's installable hooks tree, staged once per process.
+
+    `lib/common.sh` is composed at install time, not committed, so the
+    hook scripts run against the tree `--stage` produces — the same one an
+    install lays down.
+    """
+    global _STAGED
+    if _STAGED is None:
+        staged = Path(tempfile.mkdtemp(prefix="velesdb-hooks-staged-"))
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "scripts" / "sync-agent-hooks.py"),
+                "--stage",
+                str(staged),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"staging hook trees failed: {result.stderr}")
+        _STAGED = staged
+    return _STAGED / HOSTS[host]["dir"]
 
 
 def hook_payload(
@@ -106,8 +136,11 @@ class LearningLoopPolicy(unittest.TestCase):
         *,
         env_overrides: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        path = HOSTS[host]["root"] / script
-        self.assertTrue(path.is_file(), f"{host}: missing binding hook {path.relative_to(REPO)}")
+        path = hooks_root(host) / script
+        self.assertTrue(
+            path.is_file(),
+            f"{host}: missing binding hook {HOSTS[host]['dir']}/{script}",
+        )
         env = dict(
             os.environ,
             HOME=str(self.home),
@@ -253,7 +286,7 @@ class LearningLoopPolicy(unittest.TestCase):
     def repository_marker_path(
         self, host: str, *, kind: str, session_id: str
     ) -> Path:
-        common = HOSTS[host]["root"] / "lib" / "common.sh"
+        common = hooks_root(host) / "lib" / "common.sh"
         command = (
             'source "$1"; CONFIG_ROOT="$2"; '
             'learning_marker_identity marker_id "$3"; '
@@ -597,7 +630,7 @@ class LearningLoopPolicy(unittest.TestCase):
                         "*** End Patch",
                     },
                 )
-                path = HOSTS[host]["root"] / "pre-tool-use.sh"
+                path = hooks_root(host) / "pre-tool-use.sh"
                 env = dict(
                     os.environ,
                     HOME=str(self.home),
@@ -617,7 +650,7 @@ class LearningLoopPolicy(unittest.TestCase):
                 self.assertIn("jq", result.stderr)
 
                 stop = subprocess.run(
-                    [BASH, str(HOSTS[host]["root"] / "stop.sh")],
+                    [BASH, str(hooks_root(host) / "stop.sh")],
                     input=json.dumps(
                         hook_payload(
                             "Stop",
@@ -1946,7 +1979,7 @@ class LearningLoopPolicy(unittest.TestCase):
 
     def session_marker_path(self, host: str, *, kind: str, session_id: str) -> Path:
         """The private marker a hook keeps for KIND in one host session."""
-        common = HOSTS[host]["root"] / "lib" / "common.sh"
+        common = hooks_root(host) / "lib" / "common.sh"
         result = subprocess.run(
             [
                 BASH,
@@ -2153,7 +2186,7 @@ class LearningLoopPolicy(unittest.TestCase):
 
     def run_common(self, script: str) -> subprocess.CompletedProcess[str]:
         """Run SCRIPT with one host's lib/common.sh sourced, privately."""
-        common = HOSTS["claude"]["root"] / "lib" / "common.sh"
+        common = hooks_root("claude") / "lib" / "common.sh"
         return subprocess.run(
             [BASH, "-c", f'source "{common}"\n{script}'],
             capture_output=True,
