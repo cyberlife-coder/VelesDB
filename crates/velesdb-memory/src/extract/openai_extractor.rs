@@ -35,6 +35,7 @@ impl std::fmt::Debug for OpenAiExtractor {
                 "chat_template_kwargs",
                 &self.chat_template_kwargs.as_ref().map(|_| "<redacted>"),
             )
+            .field("max_generation_tokens", &self.max_generation_tokens)
             .finish()
     }
 }
