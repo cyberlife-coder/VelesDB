@@ -8,6 +8,15 @@ validating that each has an adjacent AGENTS-template SAFETY comment:
 - One or more condition bullet lines  
 - Reason line
 
+Also scans `unsafe fn` declarations (#2396): each must state its contract in
+the item-level header — a `# Safety` section in the `///` doc comment (the
+contract clippy's `missing_safety_doc` requires) or an attached `// SAFETY:`
+comment (the convention used for `unsafe impl`, and the only option for
+trait impl methods whose doc contract lives on the trait). This matters
+because clippy only sees code the build triple compiles: `cfg`-gated SIMD
+(e.g. aarch64 NEON on an x86_64 runner) is invisible to it, while this
+text-level check sees every declaration.
+
 Exit codes:
 - 0: All unsafe blocks have complete SAFETY documentation
 - 1: One or more unsafe blocks missing required SAFETY template fields
@@ -28,6 +37,22 @@ from typing import List, Tuple
 UNSAFE_BLOCK_PATTERN = re.compile(
     r'\bunsafe\s*(?:\{|impl)',
     re.MULTILINE
+)
+
+# Pattern to match `unsafe fn` declarations. `unsafe\s*(?:\{|impl)` above
+# deliberately does not match these: the contract shape is different (a
+# `# Safety` doc section or attached SAFETY comment, not the 3-part block
+# template). An `unsafe fn` in type position (e.g. `fn f(g: unsafe fn())`)
+# also matches — the enclosing item is then asked to document the contract,
+# which is a reasonable demand and keeps the rule one pattern wide.
+UNSAFE_FN_PATTERN = re.compile(
+    r'\bunsafe\s+fn\b',
+    re.MULTILINE
+)
+
+# Pattern to match a `# Safety` heading inside a `///` doc comment.
+DOC_SAFETY_HEADING_PATTERN = re.compile(
+    r'^\s*///\s*#+\s*Safety\b'
 )
 
 # Pattern to match SAFETY comment header
@@ -115,6 +140,63 @@ def get_preceding_lines(content: str, line_num: int, max_lines: int = 20) -> Lis
     lines = content.split('\n')
     start = max(0, line_num - max_lines - 1)
     return lines[start:line_num - 1]
+
+
+def find_unsafe_fn_sites(content: str) -> List[Tuple[int, str]]:
+    """Find all `unsafe fn` declarations with their line numbers.
+
+    Same comment-scrubbing discipline as :func:`find_unsafe_sites`, so prose
+    that merely mentions `unsafe fn` (e.g. tasks.rs explaining napi's trait
+    design) is never reported as a declaration site.
+    """
+    sites = []
+    lines = content.split('\n')
+    scrubbed = strip_comments(content)
+
+    for match in UNSAFE_FN_PATTERN.finditer(scrubbed):
+        line_num = scrubbed[:match.start()].count('\n') + 1
+        line_content = lines[line_num - 1] if line_num <= len(lines) else ""
+        sites.append((line_num, line_content.strip()))
+
+    return sites
+
+
+def get_attached_header_lines(content: str, line_num: int) -> List[str]:
+    """Collect the comment/attribute block directly attached above a line.
+
+    Walks up through blank lines, `#[...]` attributes and `//`/`///`
+    comments, stopping at the first real code line. Unlike the 20-line
+    window used for blocks, this bounds the search so the contract of a
+    *previous* item can never satisfy a bare declaration below it.
+    """
+    lines = content.split('\n')
+    header = []
+    i = line_num - 2  # 0-based index of the line above
+    while i >= 0:
+        stripped = lines[i].strip()
+        if stripped == '' or stripped.startswith('//') or stripped.startswith('#['):
+            header.append(lines[i])
+            i -= 1
+        else:
+            break
+    return header
+
+
+def check_unsafe_fn_doc(header_lines: List[str]) -> bool:
+    """True if the attached header states the `unsafe fn`'s safety contract.
+
+    Accepts either a `# Safety` section in the `///` doc comment — the
+    contract `clippy::missing_safety_doc` enforces — or an attached
+    `// SAFETY:` comment, the convention used for `unsafe impl` and the only
+    option for trait impl methods (whose doc contract lives on the trait).
+    """
+    has_doc_safety = any(
+        DOC_SAFETY_HEADING_PATTERN.match(line) for line in header_lines
+    )
+    has_safety_comment = any(
+        SAFETY_HEADER_PATTERN.search(line) for line in header_lines
+    )
+    return has_doc_safety or has_safety_comment
 
 
 def check_safety_template(lines: List[str]) -> Tuple[bool, List[str]]:
@@ -227,6 +309,16 @@ def verify_file(filepath: Path, strict: bool = False) -> List[Tuple[int, str, Li
         
         if not is_valid:
             violations.append((line_num, line_content, missing))
+    
+    for line_num, line_content in find_unsafe_fn_sites(content):
+        header = get_attached_header_lines(content, line_num)
+        if not check_unsafe_fn_doc(header):
+            violations.append((
+                line_num,
+                line_content,
+                ["unsafe fn safety contract (`/// # Safety` section or "
+                 "attached `// SAFETY:` comment)"],
+            ))
     
     violations.extend(find_adjacent_safety_duplicates(content))
     

@@ -156,6 +156,12 @@ fn build_padded_bytes(text: &str) -> Vec<u8> {
 /// feature enables `_mm_prefetch` intrinsic for cache-line prefetching, which
 /// improves memory access patterns for large texts. True SIMD vectorized
 /// trigram extraction would require packed byte shuffles (future optimization).
+///
+/// # Safety
+///
+/// Caller must ensure the CPU supports AVX2 (enforced by `#[target_feature]`
+/// and the caller's runtime feature detection). The only unsafe operation is
+/// `_mm_prefetch`, a non-faulting cache hint over `bytes`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 #[must_use]
@@ -226,6 +232,12 @@ pub fn extract_trigrams_avx2(text: &str) -> HashSet<Trigram> {
 /// Note: Like `extract_trigrams_avx2_inner`, the core logic is scalar.
 /// The AVX-512 target feature enables wider prefetch reach (128 bytes ahead).
 /// True SIMD trigram extraction would use `vpshufb` for parallel extraction.
+///
+/// # Safety
+///
+/// Caller must ensure the CPU supports AVX-512F and AVX-512BW (enforced by
+/// `#[target_feature]` and the caller's runtime feature detection). The only
+/// unsafe operation is `_mm_prefetch`, a non-faulting cache hint over `bytes`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f", enable = "avx512bw")]
 #[must_use]

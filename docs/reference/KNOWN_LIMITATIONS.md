@@ -536,7 +536,7 @@ silently relied upon:
 
 The enforced Codacy metric is **per-function**: cyclomatic complexity ≤ 8 and function NLOC ≤ 50. There is no hard file-length gate — a file can be large yet fully compliant if it is a set of small functions or is comment-dense. So raw line count is not, by itself, a violation.
 
-Several production files exceed ~900 raw lines (e.g. `simd_native/x86_avx512.rs` ≈ 1469 raw / ~944 NLOC — dominated by per-intrinsic `// SAFETY:` blocks; `tauri-plugin-velesdb/src/{types,commands}.rs`; `velesdb-python/src/{agent.rs, collection/search.rs}`; `velesql/.../match_dispatch.rs`; `velesdb-server/src/config.rs`). They fall into two buckets:
+Several production files exceed ~900 raw lines (e.g. `tauri-plugin-velesdb/src/{types,commands}.rs`; `velesdb-python/src/{agent.rs, collection/search.rs}`; `velesql/.../match_dispatch.rs`; `velesdb-server/src/config.rs`). They fall into two buckets:
 
 - **Covered by an exclusion**: the tauri-plugin files via the `crates/tauri-plugin-velesdb/src/**` lizard glob.
 - **Compliant without an exclusion**: the rest — their individual functions stay within CC ≤ 8 / NLOC ≤ 50, which is why `main` ships Codacy-green. They are intentionally **not** added to `.codacy.yml`, because a blanket file exclusion would suppress genuine future per-function findings in them.
