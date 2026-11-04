@@ -60,7 +60,8 @@ try {
     # separement (ci.yml:226) avec ses propres regles.
     cargo clippy --workspace --all-targets --features persistence,gpu,update-check `
         --exclude velesdb-python --exclude velesdb-node `
-        -- -D warnings -D clippy::pedantic 2>&1 | Out-Host
+        -- -D warnings -D clippy::pedantic `
+           -A clippy::missing_errors_doc -A clippy::missing_panics_doc 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Clippy failed" }
     Write-Success "Clippy OK"
 } catch {

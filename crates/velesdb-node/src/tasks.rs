@@ -28,6 +28,8 @@ impl TypeName for JsonOut {
 // existing `serde_json::Value` implementation.
 #[allow(unsafe_code)]
 impl ToNapiValue for JsonOut {
+    // SAFETY: napi's trait-level contract on `to_napi_value` is satisfied by
+    // delegating verbatim to `serde_json::Value`; no unsafe op is added here.
     unsafe fn to_napi_value(env: napi::sys::napi_env, val: Self) -> Result<napi::sys::napi_value> {
         serde_json::Value::to_napi_value(env, val.0)
     }

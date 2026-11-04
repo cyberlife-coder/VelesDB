@@ -26,11 +26,11 @@ VelesDB uses `unsafe` code in the following categories:
 
 | Category | Purpose | Files |
 |----------|---------|-------|
-| **SIMD (consolidated)** | AVX-512/AVX2/NEON distance kernels | `simd_native/x86_avx512.rs`, `simd_native/x86_avx2/`, `simd_native/x86_avx2_similarity.rs`, `simd_native/neon.rs`, `simd_native/neon_hamming_jaccard.rs` |
+| **SIMD (consolidated)** | AVX-512/AVX2/NEON distance kernels | `simd_native/x86_avx512.rs`, `simd_native/x86_avx512/hamming_jaccard.rs`, `simd_native/x86_avx2/`, `simd_native/x86_avx2_similarity.rs`, `simd_native/neon.rs`, `simd_native/neon_hamming_jaccard.rs` |
 | **SIMD (dispatch)** | Runtime feature detection + dispatch to ISA kernels | `simd_native/dispatch/` (`mod.rs`, `dot.rs`, `euclidean.rs`, `cosine.rs`, `hamming.rs`) |
 | **SIMD (reduction)** | Horizontal sum helpers for accumulator registers | `simd_native/reduction.rs` |
 | **SIMD (ADC)** | Asymmetric Distance Computation for PQ search | `simd_native/adc.rs` |
-| **SIMD (RaBitQ)** | AVX-512 VPOPCNTDQ for binary Hamming distance | `simd_native/x86_avx512.rs` (kernels consolidated; `quantization/rabitq*.rs` contains no `unsafe`) |
+| **SIMD (RaBitQ)** | AVX-512 VPOPCNTDQ for binary Hamming distance | `simd_native/x86_avx512/hamming_jaccard.rs` (kernels consolidated; `quantization/rabitq*.rs` contains no `unsafe`) |
 | **SIMD (trigram)** | AVX2/AVX-512 trigram extraction | `index/trigram/simd.rs` |
 | **SIMD (bench helpers)** | Direct kernel calls behind runtime feature detection | `internal_bench.rs` |
 | **Prefetch (x86)** | Software prefetch hints (`_mm_prefetch`) | `simd_native/prefetch.rs`, `perf_optimizations.rs` |
@@ -52,7 +52,7 @@ VelesDB uses `unsafe` code in the following categories:
 
 ## SIMD Intrinsics
 
-### Module: `crates/velesdb-core/src/simd_native/x86_avx512.rs`
+### Modules: `crates/velesdb-core/src/simd_native/x86_avx512.rs` and `x86_avx512/hamming_jaccard.rs`
 
 **Functions** (all `unsafe fn` with `#[target_feature(enable = "avx512f")]`):
 - `dot_product_avx512()` / `dot_product_avx512_4acc()` / `dot_product_avx512_8acc()`
@@ -61,6 +61,10 @@ VelesDB uses `unsafe` code in the following categories:
 - `hamming_avx512()` / `hamming_avx512_4acc()` - Hamming distance on f32 vectors
 - `jaccard_avx512()` / `jaccard_avx512_4acc()` / `jaccard_avx512_8acc()`
 - `hamming_binary_avx512()` / `hamming_binary_avx512_vpopcntdq()` - Binary Hamming
+
+The Hamming/Jaccard/binary-Hamming kernels live in the `x86_avx512/`
+child file (the same split `neon.rs` / `neon_hamming_jaccard.rs` models) and
+are re-exported under the `x86_avx512::` paths callers already use.
 
 **Invariants**:
 1. `#[target_feature(enable = "avx512f")]` enforces CPU feature at function level
@@ -339,9 +343,9 @@ hidden bench-only helpers that call the AVX2/AVX-512 cosine kernels directly
 
 ### RaBitQ SIMD (Binary Hamming Distance)
 
-**Module**: `crates/velesdb-core/src/simd_native/x86_avx512.rs` (binary Hamming
-kernels; dispatched from `simd_native/dispatch/hamming.rs`. The
-`quantization/rabitq*.rs` files contain no `unsafe`.)
+**Module**: `crates/velesdb-core/src/simd_native/x86_avx512/hamming_jaccard.rs`
+(binary Hamming kernels; dispatched from `simd_native/dispatch/hamming.rs`.
+The `quantization/rabitq*.rs` files contain no `unsafe`.)
 
 **Function**: `hamming_binary_avx512_vpopcntdq()`
 
@@ -1232,8 +1236,8 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 ---
 
-*Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0 (this stamp tracks
-the document revision; this revision describes the in-place
-`ContiguousVectors::reorder` and `retrieve_ref`, and drops the removed
-`reduce_4acc_*` helpers. The underlying unsafe audit was last run in full on
+*Last updated: 2026-11-03 · Applies to: velesdb-core 8.0.0 (this stamp tracks
+the document revision; this revision moves the Hamming/Jaccard/binary-Hamming
+kernels into `x86_avx512/hamming_jaccard.rs`. The underlying unsafe audit was
+last run in full on
 2026-06-12, as stated at the top of this page)*
