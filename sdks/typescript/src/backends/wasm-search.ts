@@ -462,6 +462,7 @@ const FUSION_WEIGHTS = [...WEIGHTED_TRIPLE, 'denseWeight', 'sparseWeight'] as co
  */
 const FUSION_PARAMS_READ: Readonly<Record<FusionStrategy, readonly FusionParamName[]>> = {
   rrf: ['k'],
+  weighted_rrf: ['k', 'branchWeights'],
   weighted: WEIGHTED_TRIPLE,
   relative_score: ['denseWeight', 'sparseWeight'],
   average: [],
@@ -475,6 +476,7 @@ const FUSION_PARAMS_READ: Readonly<Record<FusionStrategy, readonly FusionParamNa
  */
 const FUSION_STRATEGY_NAMES: ReadonlyMap<string, FusionStrategy> = new Map([
   ['rrf', 'rrf'],
+  ['weighted_rrf', 'weighted_rrf'],
   ['average', 'average'],
   ['avg', 'average'],
   ['maximum', 'maximum'],
@@ -498,7 +500,7 @@ function canonicalStrategy(name: unknown): FusionStrategy {
     const named = typeof name === 'string' ? `'${name}'` : `of type ${typeof name}`;
     throw new VelesDBError(
       `Unknown fusion strategy ${named}: core accepts average (avg), maximum (max), ` +
-        'rrf, weighted and relative_score (rsf), in any case',
+        'rrf, weighted_rrf, weighted and relative_score (rsf), in any case',
       'BAD_REQUEST'
     );
   }
@@ -559,7 +561,8 @@ function validateWeightedTriple(weights: readonly number[]): void {
  */
 function wasmFusionArgs(
   strategy: FusionStrategy,
-  params: FusionParams | undefined
+  params: FusionParams | undefined,
+  numVectors: number
 ): {
   rrfK: number;
   weights: Float32Array | null;
@@ -571,12 +574,34 @@ function wasmFusionArgs(
       requireFiniteNumber(`fusionParams.${name}`, weight);
     }
   }
-  const read: FusionParams = {};
+  // `branchWeights` is the one non-scalar field: an array of finite numbers,
+  // as REST's `branch_weights: Vec<f32>` requires, whichever strategy reads
+  // it. `null` counts as absent, as REST's `Option<Vec<f32>>` reads it.
+  const branchWeights = params?.branchWeights;
+  if (isSet(branchWeights)) {
+    if (!Array.isArray(branchWeights)) {
+      throw new VelesDBError(
+        `fusionParams.branchWeights must be an array of finite numbers; ` +
+          `got ${describeValue(branchWeights)}`,
+        'BAD_REQUEST'
+      );
+    }
+    branchWeights.forEach((weight, index) =>
+      requireFiniteNumber(`fusionParams.branchWeights[${index}]`, weight)
+    );
+  }
+  const read: Partial<Record<FusionParamName, unknown>> = {};
   for (const name of FUSION_PARAMS_READ[strategy]) {
     read[name] = params?.[name];
   }
   requireWasmFieldsListed('multiQueryFusionParams', 'multiQuerySearch fusionParams', read);
-  const weights = WEIGHTED_TRIPLE.map((name) => read[name]).filter(isSet);
+  if (strategy === 'weighted_rrf') {
+    return { rrfK, weights: weightedRrfWeights(branchWeights, numVectors) };
+  }
+  const weights =
+    strategy === 'weighted'
+      ? WEIGHTED_TRIPLE.map((name) => params?.[name]).filter(isSet)
+      : [];
   if (weights.length === 0) {
     return { rrfK, weights: null };
   }
@@ -589,6 +614,34 @@ function wasmFusionArgs(
   }
   validateWeightedTriple(weights);
   return { rrfK, weights: new Float32Array(weights) };
+}
+
+/**
+ * `weighted_rrf`'s per-branch weights as the binding's `weights` argument —
+ * one per query vector, the arity velesdb-server's `build_fusion_strategy`
+ * refuses a mismatch on and velesdb-wasm's `multi_query_search` re-checks.
+ * The two refusals run here too, as the weighted triple's do, because the
+ * binding reports its own as a bare string.
+ */
+function weightedRrfWeights(
+  branchWeights: number[] | null | undefined,
+  numVectors: number
+): Float32Array {
+  if (!isSet(branchWeights)) {
+    throw new VelesDBError(
+      'multiQuerySearch weighted_rrf fusion: branchWeights requires one weight per ' +
+        'query vector and none were provided',
+      'BAD_REQUEST'
+    );
+  }
+  if (branchWeights.length !== numVectors) {
+    throw new VelesDBError(
+      `weighted_rrf requires one weight per query vector: ` +
+        `${branchWeights.length} weights for ${numVectors} vectors`,
+      'BAD_REQUEST'
+    );
+  }
+  return new Float32Array(branchWeights);
 }
 
 export async function wasmMultiQuerySearch(
@@ -604,7 +657,7 @@ export async function wasmMultiQuerySearch(
   const k = validateSearchInputs(collection, vectors, options?.k ?? 10, MULTI_QUERY_VECTORS);
   requireWasmFilterSupport('multiQuerySearch', options?.filter);
   const strategy = canonicalStrategy(options?.fusion ?? 'rrf');
-  const { rrfK, weights } = wasmFusionArgs(strategy, options?.fusionParams);
+  const { rrfK, weights } = wasmFusionArgs(strategy, options?.fusionParams, vectors.length);
   if (k <= 0) {
     return [];
   }

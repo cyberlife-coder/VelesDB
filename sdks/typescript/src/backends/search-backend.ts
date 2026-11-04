@@ -189,6 +189,7 @@ function multiQueryBody(
     hit_weight: options?.fusionParams?.hitWeight,
     dense_weight: options?.fusionParams?.denseWeight,
     sparse_weight: options?.fusionParams?.sparseWeight,
+    branch_weights: options?.fusionParams?.branchWeights,
     filter: normalizeFilter(options?.filter),
   };
 }

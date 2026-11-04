@@ -3247,7 +3247,7 @@ components:
           - number
           - "null"
           format: float
-          description: "Dense weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `sparse_w` when only that one is given)."
+          description: "Dense weight (for strategy = \"rsf\", default 0.5, or the\ncomplement of `sparse_w` when only that one is given; for\n\"`weighted_rrf`\", the dense branch's weight — both weights\nrequired)."
         hit_w:
           type:
           - number
@@ -3259,7 +3259,7 @@ components:
           - integer
           - "null"
           format: int32
-          description: RRF k parameter (only for strategy = "rrf", default 60).
+          description: "RRF k parameter (only for strategy = \"rrf\" or \"`weighted_rrf`\",\ndefault 60)."
           minimum: 0
         max_w:
           type:
@@ -3272,10 +3272,10 @@ components:
           - number
           - "null"
           format: float
-          description: "Sparse weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `dense_w` when only that one is given)."
+          description: "Sparse weight (for strategy = \"rsf\", default 0.5, or the\ncomplement of `dense_w` when only that one is given; for\n\"`weighted_rrf`\", the sparse branch's weight — both weights\nrequired)."
         strategy:
           type: string
-          description: "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\",\ncase-insensitive — the grammar of `FusionStrategy::from_name`."
+          description: "Fusion strategy: \"rrf\", \"`weighted_rrf`\", \"rsf\" (alias\n\"`relative_score`\"), \"average\" (alias \"avg\"), \"maximum\" (alias\n\"max\"), or \"weighted\", case-insensitive — the grammar of\n`FusionStrategy::from_name`."
           example: rrf
     GraphSearchRequest:
       type: object
@@ -3654,6 +3654,14 @@ components:
           format: float
           description: "Weighted fusion: weight for average score component."
           example: 0.6
+        branch_weights:
+          type:
+          - array
+          - "null"
+          items:
+            type: number
+            format: float
+          description: "`weighted_rrf` only: one weight per query vector, in vector order —\nthe parameter the strategy cannot default. Ignored by every other\nstrategy, like the scalar weight fields."
         dense_weight:
           type: number
           format: float
@@ -3690,7 +3698,7 @@ components:
           example: 0.5
         strategy:
           type: string
-          description: "Fusion strategy: \"average\" (alias \"avg\"), \"maximum\" (alias \"max\"),\n\"rrf\", \"weighted\", or \"`relative_score`\" (alias \"rsf\"),\ncase-insensitive — the grammar of `FusionStrategy::from_name`."
+          description: "Fusion strategy: \"average\" (alias \"avg\"), \"maximum\" (alias \"max\"),\n\"rrf\", \"`weighted_rrf`\", \"weighted\", or \"`relative_score`\" (alias\n\"rsf\"), case-insensitive — the grammar of\n`FusionStrategy::from_name`."
           example: rrf
         top_k:
           type: integer

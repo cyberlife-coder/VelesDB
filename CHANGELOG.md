@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`FusionStrategy::WeightedRRF` is reachable on every surface**
+  (closes #2369). The variant was reachable only by embedding the Rust
+  crate: core's name grammar refused `weighted_rrf` because its one weight
+  per branch cannot ride the scalar `FusionParams`. A companion channel
+  fixes that — `FusionStrategy::from_name_with_weights(name, params,
+  weights)` keeps `params` `Copy` and refuses the name without weights as
+  `FusionError::MissingWeights` rather than inventing a default, while
+  weights a strategy does not read are ignored like its other scalars. Every
+  name-reading surface went through it: REST `/search/multi` gains a
+  `branch_weights` field (arity-checked against the vector count with a
+  400), the hybrid `FusionRequest` and VelesQL
+  `USING FUSION (strategy='weighted_rrf')` read `dense_w`/`sparse_w` /
+  `dense_weight`/`sparse_weight` as the two branch weights — the same math
+  `weighted` already ran there — Python grows
+  `FusionStrategy.weighted_rrf(weights, k)` and a `weights` kwarg on
+  `from_name`, WASM's `multi_query_search` interprets its `weights` argument
+  per strategy name (and its VelesQL executor builds the two-branch
+  `weighted_rrf` like core's), mobile exposes `WeightedRrf { weights, k }`
+  through a `TryFrom` running core's validating constructor, Tauri reads a
+  `weights`/`branch_weights`/`branchWeights` key in `fusion_params`, the
+  CLI's `search` takes `--branch-weights` and the TypeScript SDK sends
+  `fusionParams.branchWeights` as REST's `branch_weights` or the WASM
+  `weights` argument. `NEAR_FUSED` keeps refusing `weighted_rrf` (V012),
+  like `weighted`/`rsf`, pinned by conformance case R016.
 - **Filtered search now honours `ef_search` and quality presets end to end
   (closes #2302).** Core gains
   `VectorCollection::search_with_quality_and_filter` — the filtered
