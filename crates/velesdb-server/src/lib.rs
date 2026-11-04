@@ -211,6 +211,7 @@ pub use handlers::metrics::{health_metrics, prometheus_metrics};
             TextSearchRequest,
             HybridSearchRequest,
             MultiQuerySearchRequest,
+            MultiQuerySearchRequestWithWeights,
             SearchResponse,
             BatchSearchResponse,
             SearchResultResponse,

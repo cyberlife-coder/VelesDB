@@ -218,6 +218,8 @@ fn weighted_rrf_weights_default_k_is_the_shared_one() {
         FusionParams::default(),
         Some(&[1.0, 1.0]),
     );
+    // `rrf_k` is a rank offset well below 2^24 — the widening is exact.
+    #[allow(clippy::cast_precision_loss)]
     let expected = FusionStrategy::weighted_rrf(vec![1.0, 1.0], DEFAULT_RRF_K as f32);
     assert_eq!(parsed, expected);
 }

@@ -1965,7 +1965,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MultiQuerySearchRequest"
+              $ref: "#/components/schemas/MultiQuerySearchRequestWithWeights"
         required: true
       responses:
         "200":
@@ -2024,7 +2024,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MultiQuerySearchRequest"
+              $ref: "#/components/schemas/MultiQuerySearchRequestWithWeights"
         required: true
       responses:
         "200":
@@ -3654,14 +3654,6 @@ components:
           format: float
           description: "Weighted fusion: weight for average score component."
           example: 0.6
-        branch_weights:
-          type:
-          - array
-          - "null"
-          items:
-            type: number
-            format: float
-          description: "`weighted_rrf` only: one weight per query vector, in vector order —\nthe parameter the strategy cannot default. Ignored by every other\nstrategy, like the scalar weight fields."
         dense_weight:
           type: number
           format: float
@@ -3713,6 +3705,21 @@ components:
               type: number
               format: float
           description: List of query vectors.
+    MultiQuerySearchRequestWithWeights:
+      allOf:
+      - $ref: "#/components/schemas/MultiQuerySearchRequest"
+        description: Every field core's DTO declares.
+      - type: object
+        properties:
+          branch_weights:
+            type:
+            - array
+            - "null"
+            items:
+              type: number
+              format: float
+            description: "`weighted_rrf` only: one weight per query vector, in vector order —\nthe parameter the strategy cannot default. Ignored by every other\nstrategy, like the scalar weight fields."
+      description: "`/search/multi`'s request: core's `MultiQuerySearchRequest`\nplus the `branch_weights` `weighted_rrf` reads.\n\nKept server-side on purpose: the core DTO is a published,\nexternally-constructible struct, so a new pub field would break\ndownstream struct literals — the semver gate refuses it\n(`constructible_struct_adds_field`). `#[serde(flatten)]` keeps the wire\nbody byte-identical."
     NodeListResponse:
       type: object
       description: Response containing all node IDs in the graph.

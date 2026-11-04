@@ -14,16 +14,17 @@ pub enum FusionStrategyType {
     Rrf,
     /// Weighted sum of normalized scores.
     Weighted,
-    /// Weighted Reciprocal Rank Fusion over per-branch weights — the named
-    /// form of what the dense+sparse `weighted` path already computes
-    /// (`dense_weight`/`sparse_weight`, defaults 0.5 / 0.5).
-    WeightedRrf,
     /// Take maximum score from either source.
     Maximum,
     /// Reciprocal Sparse Fusion for dense + sparse hybrid search.
     Rsf,
     /// Average score across all queries where the document appears.
     Average,
+    /// Weighted Reciprocal Rank Fusion over per-branch weights — the named
+    /// form of what the dense+sparse `weighted` path already computes
+    /// (`dense_weight`/`sparse_weight`, defaults 0.5 / 0.5). Last variant:
+    /// keeps every earlier discriminant stable for `as`-cast consumers.
+    WeightedRrf,
 }
 
 /// USING FUSION clause for hybrid search (EPIC-040 US-005).

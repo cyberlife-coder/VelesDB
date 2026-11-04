@@ -42,17 +42,18 @@ pub enum FusionError {
         /// Number of branches passed to fuse.
         branches: usize,
     },
+    /// A strategy name [`FusionStrategy::from_name`] does not know.
+    UnknownStrategy {
+        /// The name as the caller gave it.
+        name: String,
+    },
     /// A strategy name that requires weights was given none.
     ///
     /// `weighted_rrf` is the only named strategy whose weights have no
     /// default: it needs exactly one per branch, and the branch count is not
-    /// known until fuse time.
+    /// known until fuse time. Last variant: keeps every earlier
+    /// discriminant stable for `as`-cast consumers.
     MissingWeights {
-        /// The name as the caller gave it.
-        name: String,
-    },
-    /// A strategy name [`FusionStrategy::from_name`] does not know.
-    UnknownStrategy {
         /// The name as the caller gave it.
         name: String,
     },

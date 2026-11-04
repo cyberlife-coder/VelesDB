@@ -467,11 +467,6 @@ pub struct MultiQuerySearchRequest {
     #[serde(default = "default_fusion_strategy")]
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
-    /// `weighted_rrf` only: one weight per query vector, in vector order —
-    /// the parameter the strategy cannot default. Ignored by every other
-    /// strategy, like the scalar weight fields.
-    #[serde(default)]
-    pub branch_weights: Option<Vec<f32>>,
     /// RRF k parameter (only used when strategy = "rrf").
     #[serde(default = "default_rrf_k")]
     #[cfg_attr(feature = "openapi", schema(example = 60))]

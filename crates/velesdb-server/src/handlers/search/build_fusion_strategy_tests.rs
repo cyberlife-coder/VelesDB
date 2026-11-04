@@ -8,14 +8,14 @@
 //! asked for (#2095).
 
 use super::multi::build_fusion_strategy;
-use crate::types::MultiQuerySearchRequest;
+use crate::types::MultiQuerySearchRequestWithWeights;
 
 /// A request with the canonical defaults, ready for one field to be perturbed.
 ///
 /// Built by deserializing rather than by struct literal so the `#[serde]`
 /// defaults are the ones under test — a literal would hardcode a second copy
 /// of them here.
-fn request(strategy: &str) -> MultiQuerySearchRequest {
+fn request(strategy: &str) -> MultiQuerySearchRequestWithWeights {
     serde_json::from_value(serde_json::json!({
         "vectors": [[0.1f32, 0.2f32]],
         "strategy": strategy,
@@ -60,9 +60,9 @@ fn weighted_defaults_are_the_canonical_constants() {
 #[test]
 fn a_negative_weighted_component_is_refused() {
     let mut req = request("weighted");
-    req.avg_weight = -0.2;
-    req.max_weight = 0.9;
-    req.hit_weight = 0.3;
+    req.base.avg_weight = -0.2;
+    req.base.max_weight = 0.9;
+    req.base.hit_weight = 0.3;
     let error = build_fusion_strategy(&req).expect_err("a negative weight must be refused");
     assert!(
         error.contains("non-negative"),
@@ -73,9 +73,9 @@ fn a_negative_weighted_component_is_refused() {
 #[test]
 fn weighted_components_that_do_not_sum_to_one_are_refused() {
     let mut req = request("weighted");
-    req.avg_weight = 0.9;
-    req.max_weight = 0.9;
-    req.hit_weight = 0.9;
+    req.base.avg_weight = 0.9;
+    req.base.max_weight = 0.9;
+    req.base.hit_weight = 0.9;
     let error = build_fusion_strategy(&req).expect_err("weights summing to 2.7 must be refused");
     assert!(
         error.contains("sum to 1.0"),
@@ -87,7 +87,7 @@ fn weighted_components_that_do_not_sum_to_one_are_refused() {
 fn a_non_finite_weighted_component_is_refused() {
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let mut req = request("weighted");
-        req.avg_weight = bad;
+        req.base.avg_weight = bad;
         let error = build_fusion_strategy(&req)
             .err()
             .unwrap_or_else(|| panic!("{bad} must be refused"));
@@ -101,8 +101,8 @@ fn a_non_finite_weighted_component_is_refused() {
 #[test]
 fn relative_score_weights_that_do_not_sum_to_one_are_refused() {
     let mut req = request("rsf");
-    req.dense_weight = 0.9;
-    req.sparse_weight = 0.9;
+    req.base.dense_weight = 0.9;
+    req.base.sparse_weight = 0.9;
     let error = build_fusion_strategy(&req).expect_err("weights summing to 1.8 must be refused");
     assert!(
         error.contains("sum to 1.0"),
@@ -113,8 +113,8 @@ fn relative_score_weights_that_do_not_sum_to_one_are_refused() {
 #[test]
 fn a_non_finite_relative_score_weight_is_refused() {
     let mut req = request("rsf");
-    req.dense_weight = f32::NAN;
-    req.sparse_weight = 0.5;
+    req.base.dense_weight = f32::NAN;
+    req.base.sparse_weight = 0.5;
     let error = build_fusion_strategy(&req).expect_err("a NaN weight must be refused");
     assert!(
         error.contains("finite"),
