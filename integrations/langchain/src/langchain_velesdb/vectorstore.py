@@ -388,7 +388,7 @@ class VelesDBVectorStore(CollectionAdminMixin, SearchOpsMixin, GraphOpsMixin, Sc
     ) -> List[str]:
         """Bulk insert optimized for large batches.
 
-        ~2-3x faster than regular add_texts() for large batches.
+        Faster than regular add_texts() for large batches.
 
         Args:
             texts: Iterable of strings to add.

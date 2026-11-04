@@ -306,12 +306,12 @@ describe('VelesDB Client', () => {
       (db as any).initialized = true;
     });
 
-    it('should validate that vectors is a non-empty array', async () => {
+    it('should refuse a missing or empty vectors array with BAD_REQUEST, as the backends do', async () => {
       await expect(db.multiQuerySearch('test', []))
-        .rejects.toThrow(ValidationError);
+        .rejects.toMatchObject({ name: 'VelesDBError', code: 'BAD_REQUEST' });
 
       await expect(db.multiQuerySearch('test', null as any))
-        .rejects.toThrow(ValidationError);
+        .rejects.toMatchObject({ name: 'VelesDBError', code: 'BAD_REQUEST' });
     });
 
     it('should validate each vector in the array', async () => {
