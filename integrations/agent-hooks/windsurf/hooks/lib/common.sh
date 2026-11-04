@@ -15,7 +15,7 @@ umask 077
 # read_exact VAR CMD...: set VAR to CMD's whole output; fail when CMD fails.
 read_exact() {
   local read_exact_out
-  read_exact_out="$("${@:2}" && printf x)" || return 1
+  read_exact_out="$("${@:2}" && printf x)" || return 1  # exact-read-ok: the capture ends in the sentinel x, so no trailing newline exists to strip
   printf -v "$1" '%s' "${read_exact_out%x}"
 }
 
@@ -104,7 +104,7 @@ read_stdin_payload() {
 safe_marker_key() {
   local value="$1"
   local checksum
-  checksum="$(printf '%s' "$value" | cksum)"
+  checksum="$(printf '%s' "$value" | cksum)"  # exact-read-ok: cksum prints digits and a byte count
   printf '%s' "${checksum// /-}"
 }
 
@@ -130,7 +130,7 @@ sentinel_path() {
   local dir
   local key
   read_exact dir marker_base_dir || return 1
-  key="$(safe_marker_key "$session_id")"
+  read_exact_line key safe_marker_key "$session_id"
   printf '%s/%s-%s.marker' "$dir" "$kind" "$key"
 }
 
@@ -140,7 +140,7 @@ touch_private_marker() {
   if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; }; then
     return 1
   fi
-  tmp="$(mktemp "${path}.tmp.XXXXXX")" || return 1
+  read_exact_line tmp mktemp "${path}.tmp.XXXXXX" || return 1
   if ! : > "$tmp"; then
     rm -f "$tmp"
     return 1

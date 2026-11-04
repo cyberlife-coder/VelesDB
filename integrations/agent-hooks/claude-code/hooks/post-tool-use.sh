@@ -71,13 +71,13 @@ positive_decimal_at_most() {
 
 command -v jq >/dev/null 2>&1 || passthrough
 
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
 
 # A malformed payload is not something to fail loudly on: it would mean
 # every tool call in the session errors.
 printf '%s' "$payload" | jq -e . >/dev/null 2>&1 || passthrough
 
-tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"
+tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty')"  # exact-read-ok: a tool name is one word, never a line
 read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 [ -n "$cwd" ] || cwd="$PWD"
@@ -178,17 +178,16 @@ printf '%s' "$payload" | jq -e '
 #
 # Join stdout and stderr with a real newline while the complete structured
 # object is preserved separately for recovery.
-text="$(printf '%s' "$payload" \
-  | jq -r '[.tool_response.stdout, .tool_response.stderr]
+  read_exact text jq -r '[.tool_response.stdout, .tool_response.stderr]
       | map(select(length > 0))
-      | join("\n")')"
+      | join("\n")' <<<"$payload"
 [ -n "$text" ] || passthrough
 
 # Below the threshold, compiling costs more (a process spawn on every tool
 # call) than the tokens it would save.
 min_bytes="${VELESDB_HOOK_MIN_BYTES:-12000}"
 positive_decimal_at_most "$min_bytes" 1000000000 || passthrough
-original_bytes="$(printf '%s' "$text" | wc -c | tr -d ' ')"
+original_bytes="$(printf '%s' "$text" | wc -c | tr -d ' ')"  # exact-read-ok: a decimal byte count
 [ "$original_bytes" -ge "$min_bytes" ] || passthrough
 
 bin="${VELESDB_MEMORY_BIN:-velesdb-memory}"
@@ -203,7 +202,8 @@ positive_decimal_at_most "$probe_timeout" 60 || passthrough
 # Each compilation attempt gets a watchdog of its own, bounded like the probe's.
 compile_timeout="${VELESDB_HOOK_COMPILE_TIMEOUT:-20}"
 positive_decimal_at_most "$compile_timeout" 60 || passthrough
-probe_key="$(safe_marker_key "$bin")"
+read_exact_line probe_key safe_marker_key "$bin"
+# shellcheck disable=SC2154 # read_exact_line sets probe_key (printf -v)
 if ! read_exact probe_marker sentinel_path "compile-stdin-${probe_key}" "$session_id"; then
   passthrough
 fi
@@ -213,7 +213,7 @@ if valid_private_marker "$probe_marker"; then
 elif [ -e "$probe_marker" ] || [ -L "$probe_marker" ]; then
   passthrough
 else
-  if ! probe_out="$(private_temp_file "compile-stdin-probe-out-${probe_key}")"; then
+  if ! read_exact_line probe_out private_temp_file "compile-stdin-probe-out-${probe_key}"; then
     passthrough
   fi
   if printf 'probe corpus for the capability check\n' \
@@ -229,7 +229,7 @@ else
   rm -f "$probe_out"
 fi
 valid_private_marker "$probe_marker" || passthrough
-[ "$(cat "$probe_marker")" = "yes" ] || passthrough
+[ "$(cat "$probe_marker")" = "yes" ] || passthrough  # exact-read-ok: the marker holds the literal yes
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"
 # Checked before the arithmetic below reads it. The cap cannot refuse a budget
@@ -240,12 +240,13 @@ budget_max="${VELESDB_HOOK_TOKEN_BUDGET_MAX:-$((budget * 2))}"
 positive_decimal_at_most "$budget_max" 1000000 || passthrough
 [ "$budget_max" -ge "$budget" ] || passthrough
 final_budget="$budget"
-if ! compiled_file="$(private_temp_file "compile-stdin-result")"; then
+if ! read_exact_line compiled_file private_temp_file "compile-stdin-result"; then
   passthrough
 fi
 
 # One compilation attempt at $1 tokens, into $compiled_file.
 compile_at() {
+  # shellcheck disable=SC2154 # read_exact_line sets compiled_file (printf -v)
   printf '%s' "$text" \
     | run_with_watchdog "$compile_timeout" "$compiled_file" "$bin" compile-stdin --budget "$1" \
       --query "$tool_name output"
@@ -259,7 +260,7 @@ if ! compile_at "$budget"; then
   rm -f "$compiled_file"
   passthrough
 fi
-risk="$(field '.risk')"
+read_exact_line risk field '.risk'
 
 # Rule 5: FIDELITY. `risk: high` is not a hint that the summary reads badly —
 # it is the compiler reporting that at least one fragment it classifies as
@@ -272,13 +273,14 @@ risk="$(field '.risk')"
 # tokens and `medium` at 4 000. When the ceiling does not rescue it — a 584 KB
 # thread-stack sample stays `high` at 2 000, 4 000, 8 000 and 16 000 — the
 # answer is to compress nothing.
+# shellcheck disable=SC2154 # read_exact sets risk (printf -v)
 if [ "$risk" = "high" ] && [ "$budget_max" -gt "$budget" ]; then
   if ! compile_at "$budget_max"; then
     rm -f "$compiled_file"
     passthrough
   fi
   final_budget="$budget_max"
-  risk="$(field '.risk')"
+  read_exact_line risk field '.risk'
 fi
 
 # Fail closed on the wire contract. Only the two explicitly shippable verdicts
@@ -300,10 +302,10 @@ case "$risk" in
     ;;
 esac
 
-content="$(field '.content')"
-tokens_in="$(jq -r '.tokens_in // 0' "$compiled_file" 2>/dev/null || echo 0)"
-tokens_out="$(jq -r '.tokens_out // 0' "$compiled_file" 2>/dev/null || echo 0)"
-tokens_saved="$(jq -r '.tokens_saved // 0' "$compiled_file" 2>/dev/null || echo 0)"
+read_exact content field '.content'
+read_exact_line tokens_in jq -r '.tokens_in // 0' "$compiled_file" 2>/dev/null || tokens_in="0"
+read_exact_line tokens_out jq -r '.tokens_out // 0' "$compiled_file" 2>/dev/null || tokens_out="0"
+read_exact_line tokens_saved jq -r '.tokens_saved // 0' "$compiled_file" 2>/dev/null || tokens_saved="0"
 
 # An empty compilation would replace a real result with nothing. compile-stdin
 # already refuses to emit one, but the hook does not take that on trust.
@@ -331,7 +333,7 @@ if ! printf '%s' "$payload" | jq '.tool_response' > "$archive_path"; then
 fi
 
 footer="$(printf '\n\n--- velesdb: compiled %s tokens down to %s (saved %s before this footer, fidelity risk %s). Nothing was deleted — the complete original Bash output object is serialized as JSON at %s; Read it if this view is not enough. The compiler received %s bytes of combined stdout/stderr text. ---' \
-  "$tokens_in" "$tokens_out" "$tokens_saved" "$risk" "$archive_path" "$original_bytes")"
+  "$tokens_in" "$tokens_out" "$tokens_saved" "$risk" "$archive_path" "$original_bytes")"  # exact-read-ok: the footer format ends in ---, not a newline
 
 # Never replace a result merely because compression was faithful. The footer
 # also costs context, so require a conservative net margin: each footer byte is
@@ -342,7 +344,7 @@ if ! decimal_at_most "$min_saved" 1000000; then
   rm -f "$archive_path" "$compiled_file"
   passthrough
 fi
-footer_bytes="$(printf '%s' "$footer" | wc -c | tr -d ' ')"
+footer_bytes="$(printf '%s' "$footer" | wc -c | tr -d ' ')"  # exact-read-ok: a decimal byte count
 if ! jq -e \
   --argjson minimum "$((min_saved + footer_bytes))" '
     (.tokens_in | type) == "number"
@@ -364,6 +366,7 @@ rm -f "$compiled_file"
 # Preserve the complete host-provided Bash object and modify only its two text
 # fields. This keeps optional version-specific fields while satisfying Claude's
 # documented `{stdout, stderr, interrupted, isImage}` schema.
+# shellcheck disable=SC2154 # read_exact sets content (printf -v)
 printf '%s' "$payload" | jq --arg out "${content}${footer}" '
   {
     hookSpecificOutput: {

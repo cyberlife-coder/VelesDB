@@ -20,11 +20,11 @@ source "$SCRIPT_DIR/lib/freshness.sh"
 
 require_jq
 
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
 # Documented values: startup | resume | clear | compact.
-source_kind="$(printf '%s' "$payload" | jq -r '.source // empty' 2>/dev/null || true)"
+source_kind="$(printf '%s' "$payload" | jq -r '.source // empty' 2>/dev/null || true)"  # exact-read-ok: a word from the payload schema
 if [ -z "$cwd" ]; then
   cwd="$PWD"
 fi
@@ -54,7 +54,7 @@ fi
 # A daemon behind the published release is worth one line, and only when it
 # is true: an up-to-date session sees nothing. Best-effort by construction —
 # `|| true` because no version check may ever cost the user a session start.
-freshness="$(veles_freshness_notice 2>/dev/null || true)"
+freshness="$(veles_freshness_notice 2>/dev/null || true)"  # exact-read-ok: a one-line notice printed without a trailing newline
 if [ -n "${freshness:-}" ]; then
   context="$context
 

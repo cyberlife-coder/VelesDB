@@ -28,14 +28,14 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 require_jq
 
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 if [ -z "$cwd" ]; then
   cwd="$PWD"
 fi
 
 # Documented values: startup | resume | clear | compact.
-source_kind="$(printf '%s' "$payload" | jq -r '.source // empty')"
+source_kind="$(printf '%s' "$payload" | jq -r '.source // empty')"  # exact-read-ok: a word from the payload schema
 read_exact session_id jq -j '.session_id // empty' <<<"$payload"
 
 resolve_config "$cwd"

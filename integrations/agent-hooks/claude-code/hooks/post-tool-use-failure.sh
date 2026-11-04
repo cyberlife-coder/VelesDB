@@ -29,7 +29,7 @@ done_here() {
 }
 
 command -v jq >/dev/null 2>&1 || done_here
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
 printf '%s' "$payload" | jq -e '.tool_name == "Bash" and .is_interrupt != true' >/dev/null 2>&1 \
   || done_here
 read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
@@ -41,7 +41,7 @@ resolve_config "$cwd" || done_here
 learning_loop_enabled || done_here
 read_exact error_text jq -j '.error // empty' <<<"$payload" 2>/dev/null || done_here
 # shellcheck disable=SC2154 # read_exact sets error_text (printf -v)
-exit_code="$(failure_exit_code "$error_text")" || done_here
+read_exact_line exit_code failure_exit_code "$error_text" || done_here
 read_exact check_command jq -j '.tool_input.command // empty' <<<"$payload" 2>/dev/null || done_here
 # shellcheck disable=SC2154 # read_exact sets check_command (printf -v)
 # A status that reports the launch, not the check (126/127, or flock's own
