@@ -322,8 +322,25 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         let Some(extractor) = self.autograph.as_ref() else {
             return;
         };
-        let Ok(mut extraction) = extractor.extract_graph(fact) else {
-            return;
+        let mut extraction = match extractor.extract_graph(fact) {
+            Ok(extraction) => extraction,
+            Err(err) => {
+                // The same "never silent" contract the wiring stages keep:
+                // a failed extraction — a truncated reply, a dead backend —
+                // is counted and logged, not left indistinguishable from a
+                // passage that stated nothing.
+                self.count_failed_enrichment(true);
+                #[cfg(feature = "mcp")]
+                tracing::warn!(
+                    fact_id,
+                    error = %err,
+                    "autograph extraction failed: the fact is stored with no derived \
+                     structure; re-remembering it retries the extraction"
+                );
+                #[cfg(not(feature = "mcp"))]
+                let _ = err;
+                return;
+            }
         };
         // Privacy invariant: autograph derives structure FROM a stored fact, so
         // if the fact no longer exists, none of its derived structure may be
