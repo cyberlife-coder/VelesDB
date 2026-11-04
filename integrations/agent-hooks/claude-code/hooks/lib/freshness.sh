@@ -34,11 +34,11 @@ VELESDB_MCP_URL="${VELESDB_MCP_URL:-https://127.0.0.1:18090/mcp}"
 # Version string the daemon answers with, or empty if it cannot be reached.
 veles_running_version() {
   local body
-  body=$(curl -sk --max-time 3 "$VELESDB_MCP_URL" \
+  read_exact body curl -sk --max-time 3 "$VELESDB_MCP_URL" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"freshness","version":"1"}}}' \
-    2>/dev/null) || return 0
+    2>/dev/null || return 0
   # Anchored on the server NAME so a version string belonging to anything
   # else in the envelope (protocol, client echo) can never be mistaken for
   # the daemon's. The trailing quote is stripped with a second `grep -o`
@@ -56,9 +56,9 @@ veles_running_version() {
 # offline session must behave exactly like an up-to-date one.
 veles_latest_version() {
   local now cached_at
-  now=$(date +%s)
+  read_exact_line now date +%s
   if [ -f "$VELESDB_FRESHNESS_CACHE" ]; then
-    cached_at=$(sed -n '1p' "$VELESDB_FRESHNESS_CACHE" 2>/dev/null)
+    read_exact_line cached_at sed -n '1p' "$VELESDB_FRESHNESS_CACHE" 2>/dev/null
     # This line is whatever the file under HOME holds, and shell arithmetic
     # evaluates what it reads: a first line `PATH[$(cmd)]` would run cmd. Only
     # a decimal timestamp (is_decimal, lib/common.sh) no later than now is a
@@ -75,9 +75,9 @@ veles_latest_version() {
     https://crates.io/api/v1/crates/velesdb-memory 2>/dev/null \
     | grep -o '"max_version":"[0-9][0-9.]*"' \
     | grep -o '[0-9][0-9.]*' \
-    | head -1) || return 0
+    | head -1) || return 0  # exact-read-ok: a version string, digits and dots
   [ -z "${latest:-}" ] && return 0
-  mkdir -p "$(dirname "$VELESDB_FRESHNESS_CACHE")" 2>/dev/null || true
+  mkdir -p "$(dirname "$VELESDB_FRESHNESS_CACHE")" 2>/dev/null || true  # exact-read-ok: a path under the state directory this library owns
   printf '%s\n%s\n' "$now" "$latest" > "$VELESDB_FRESHNESS_CACHE" 2>/dev/null || true
   printf '%s' "$latest"
 }
@@ -88,16 +88,16 @@ veles_latest_version() {
 veles_version_lt() {
   [ "$1" = "$2" ] && return 1
   local smallest
-  smallest=$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)
+  smallest=$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)  # exact-read-ok: a version string, digits and dots
   [ "$smallest" = "$1" ]
 }
 
 # The guidance line, or nothing.
 veles_freshness_notice() {
   local running latest
-  running=$(veles_running_version) || return 0
+  read_exact_line running veles_running_version || return 0
   [ -z "${running:-}" ] && return 0
-  latest=$(veles_latest_version) || return 0
+  read_exact_line latest veles_latest_version || return 0
   [ -z "${latest:-}" ] && return 0
   veles_version_lt "$running" "$latest" || return 0
   # SC2016: the backticks below are markdown for the model reading this line,
@@ -105,5 +105,5 @@ veles_freshness_notice() {
   # substituted by printf rather than by the shell.
   # shellcheck disable=SC2016
   printf 'velesdb-memory freshness: the running daemon is %s, but %s is published. Bring it up to date EARLY in this session (before writing memories, so the session benefits from the fixes) by running `%s/update-daemon.sh` with VELESDB_REPO pointing at the source tree, then confirm the version it reports. The script installs from that tree, restarts the daemon, and verifies over the wire.' \
-    "$running" "$latest" "$VELESDB_FRESHNESS_SCRIPT_DIR"
+    "$running" "$latest" "$VELESDB_FRESHNESS_SCRIPT_DIR"  # exact-read-ok: the backticks are literal text printed for a model
 }

@@ -39,6 +39,7 @@ pub(super) fn generate_body(
     model: &str,
     prompt: &str,
     schema: &serde_json::Value,
+    max_tokens: u32,
 ) -> serde_json::Value {
     serde_json::json!({
         "model": model,
@@ -55,7 +56,7 @@ pub(super) fn generate_body(
         // cost, not the generation. Shares the embedder's knob so one setting
         // governs every Ollama call the daemon makes.
         "keep_alive": crate::embedder::keep_alive(),
-        "options": { "temperature": 0, "num_predict": MAX_GENERATION_TOKENS },
+        "options": { "temperature": 0, "num_predict": max_tokens },
     })
 }
 
