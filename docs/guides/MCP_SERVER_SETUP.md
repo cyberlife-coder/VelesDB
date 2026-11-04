@@ -849,6 +849,14 @@ not sent. A value that is not valid JSON, or not a JSON object, stops the daemon
 at startup with an error naming the variable; the `ollama` backend does not read
 it. The value is kept out of logs and `Debug` output.
 
+`VELESDB_MEMORY_EXTRACTOR_MAX_TOKENS` (optional) caps how many tokens a reply
+may generate — sent as `num_predict` to `ollama` and `max_tokens` to `openai`.
+The built-in 512 fits the facts a short passage serializes; a richer passage's
+reply hits the cap and is cut mid-JSON, which surfaces as a parse failure.
+Raise it for longer passages. Unset or blank keeps the default; a value that
+is not a positive integer stops the daemon at startup with an error naming the
+variable.
+
 `VELESDB_MEMORY_EXTRACTOR` is the per-daemon **default**, not a session-wide
 lock. Each `remember_extracted` call may pass `extractor: "outline"`,
 `"ollama"`, or `"openai"`. The offline `outline` backend is always available;
