@@ -44,7 +44,10 @@ impl Collection {
                 let vw = normalized_vector_weight(fc);
                 self.hybrid_search_default(vector_query, text_query, k, Some(vw), filter)
             }
-            FusionStrategyType::Maximum | FusionStrategyType::Average | FusionStrategyType::Rsf => {
+            FusionStrategyType::Maximum
+            | FusionStrategyType::Average
+            | FusionStrategyType::Rsf
+            | FusionStrategyType::WeightedRrf => {
                 let strategy = score_fusion_strategy(fc);
                 self.hybrid_search_score_fused(vector_query, text_query, k, &strategy, filter)
             }
@@ -96,7 +99,10 @@ impl Collection {
                     anchor_ids,
                 )
             }
-            FusionStrategyType::Maximum | FusionStrategyType::Average | FusionStrategyType::Rsf => {
+            FusionStrategyType::Maximum
+            | FusionStrategyType::Average
+            | FusionStrategyType::Rsf
+            | FusionStrategyType::WeightedRrf => {
                 let strategy = score_fusion_strategy(fc);
                 self.anchored_hybrid_score_fused(vector_query, text_query, k, &strategy, anchor_ids)
             }
@@ -267,6 +273,14 @@ fn score_fusion_strategy(fc: &FusionClause) -> FusionStrategy {
                 dense_weight: 0.5,
                 sparse_weight: 0.5,
             })
+        }
+        FusionStrategyType::WeightedRrf => {
+            let dw = fc.dense_weight.unwrap_or(0.5);
+            let sw = fc.sparse_weight.unwrap_or(0.5);
+            #[allow(clippy::cast_precision_loss)]
+            let k = fc.k.unwrap_or(60) as f32;
+            FusionStrategy::weighted_rrf(vec![dw, sw], k)
+                .unwrap_or_else(|_| FusionStrategy::rrf_default())
         }
         _ => FusionStrategy::Average,
     }

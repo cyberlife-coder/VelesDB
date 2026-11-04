@@ -175,6 +175,23 @@ class FusionStrategy:
         ...
 
     @staticmethod
+    def weighted_rrf(weights: List[float], k: float = 60.0) -> "FusionStrategy":
+        """Create a Weighted Reciprocal Rank Fusion strategy.
+
+        Like ``rrf`` but with an explicit weight per query vector — for
+        hybrid branches whose retrieval precision differs.
+        score = Σᵢ weights[i] / (k + rank_i), 0-based ranks.
+
+        Args:
+            weights: One weight per query vector, in vector order
+            k: Ranking constant (default: 60)
+
+        Raises:
+            ValueError: If a weight is negative/non-finite or k <= 0
+        """
+        ...
+
+    @staticmethod
     def from_name(
         name: str,
         *,
@@ -184,16 +201,20 @@ class FusionStrategy:
         hit_weight: Optional[float] = None,
         dense_weight: Optional[float] = None,
         sparse_weight: Optional[float] = None,
+        weights: Optional[List[float]] = None,
     ) -> "FusionStrategy":
         """Create the strategy a name stands for, through velesdb-core's grammar.
 
-        Names: ``rrf``, ``average`` (``avg``), ``maximum`` (``max``),
-        ``weighted``, ``relative_score`` (``rsf``), case-insensitive. A
-        parameter left out takes core's default (k=60; 0.6/0.3/0.1;
-        0.5/0.5); a single ``relative_score`` weight implies the other.
+        Names: ``rrf``, ``weighted_rrf``, ``average`` (``avg``), ``maximum``
+        (``max``), ``weighted``, ``relative_score`` (``rsf``),
+        case-insensitive. A parameter left out takes core's default
+        (k=60; 0.6/0.3/0.1; 0.5/0.5); a single ``relative_score`` weight
+        implies the other. ``weighted_rrf`` requires ``weights`` — one per
+        query vector.
 
         Raises:
-            ValueError: If the name is unknown or the weights are invalid
+            ValueError: If the name is unknown, weights are invalid, or a
+                required parameter is missing
         """
         ...
 

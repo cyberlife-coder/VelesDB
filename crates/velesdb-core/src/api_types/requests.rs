@@ -223,20 +223,26 @@ impl SparseVectorInput {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct FusionRequest {
-    /// Fusion strategy: "rrf", "rsf" (alias "`relative_score`"),
-    /// "average" (alias "avg"), "maximum" (alias "max"), or "weighted",
-    /// case-insensitive — the grammar of `FusionStrategy::from_name`.
+    /// Fusion strategy: "rrf", "`weighted_rrf`", "rsf" (alias
+    /// "`relative_score`"), "average" (alias "avg"), "maximum" (alias
+    /// "max"), or "weighted", case-insensitive — the grammar of
+    /// `FusionStrategy::from_name`.
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
-    /// RRF k parameter (only for strategy = "rrf", default 60).
+    /// RRF k parameter (only for strategy = "rrf" or "`weighted_rrf`",
+    /// default 60).
     #[serde(default)]
     pub k: Option<u32>,
-    /// Dense weight (only for strategy = "rsf", default 0.5, or the
-    /// complement of `sparse_w` when only that one is given).
+    /// Dense weight (for strategy = "rsf", default 0.5, or the
+    /// complement of `sparse_w` when only that one is given; for
+    /// "`weighted_rrf`", the dense branch's weight — both weights
+    /// required).
     #[serde(default)]
     pub dense_w: Option<f32>,
-    /// Sparse weight (only for strategy = "rsf", default 0.5, or the
-    /// complement of `dense_w` when only that one is given).
+    /// Sparse weight (for strategy = "rsf", default 0.5, or the
+    /// complement of `dense_w` when only that one is given; for
+    /// "`weighted_rrf`", the sparse branch's weight — both weights
+    /// required).
     #[serde(default)]
     pub sparse_w: Option<f32>,
     /// Weighted fusion: weight applied to the average score component
@@ -455,11 +461,17 @@ pub struct MultiQuerySearchRequest {
     #[cfg_attr(feature = "openapi", schema(example = 10))]
     pub top_k: usize,
     /// Fusion strategy: "average" (alias "avg"), "maximum" (alias "max"),
-    /// "rrf", "weighted", or "`relative_score`" (alias "rsf"),
-    /// case-insensitive — the grammar of `FusionStrategy::from_name`.
+    /// "rrf", "`weighted_rrf`", "weighted", or "`relative_score`" (alias
+    /// "rsf"), case-insensitive — the grammar of
+    /// `FusionStrategy::from_name`.
     #[serde(default = "default_fusion_strategy")]
     #[cfg_attr(feature = "openapi", schema(example = "rrf"))]
     pub strategy: String,
+    /// `weighted_rrf` only: one weight per query vector, in vector order —
+    /// the parameter the strategy cannot default. Ignored by every other
+    /// strategy, like the scalar weight fields.
+    #[serde(default)]
+    pub branch_weights: Option<Vec<f32>>,
     /// RRF k parameter (only used when strategy = "rrf").
     #[serde(default = "default_rrf_k")]
     #[cfg_attr(feature = "openapi", schema(example = 60))]

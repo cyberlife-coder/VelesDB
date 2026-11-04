@@ -172,14 +172,62 @@ fn an_unknown_name_is_refused_with_the_accepted_names() {
     }
 }
 
-/// The grammar is exact: no trimming, no prefix match, and the
-/// `weighted_rrf` strategy, which needs one weight per branch, has no name.
+/// The grammar is exact: no trimming, no prefix match.
 #[test]
 fn near_misses_are_refused() {
-    for name in ["", " rrf", "rrf ", "r", "weighted_rrf", "averages"] {
+    for name in ["", " rrf", "rrf ", "r", "weightedrrf", "averages"] {
         assert!(
             matches!(parse(name), Err(FusionError::UnknownStrategy { .. })),
             "'{name}' must be refused"
         );
     }
+}
+
+/// `weighted_rrf` is the one named strategy that cannot default its
+/// parameters: the weights travel the `from_name_with_weights` channel,
+/// and naming the strategy without them is the named error, not an
+/// `UnknownStrategy`.
+#[test]
+fn weighted_rrf_needs_its_weights() {
+    let no_weights =
+        FusionStrategy::from_name_with_weights("weighted_rrf", FusionParams::default(), None);
+    assert!(matches!(
+        no_weights,
+        Err(FusionError::MissingWeights { .. })
+    ));
+    let empty =
+        FusionStrategy::from_name_with_weights("weighted_rrf", FusionParams::default(), Some(&[]));
+    assert!(matches!(empty, Err(FusionError::MissingWeights { .. })));
+}
+
+#[test]
+fn weighted_rrf_reads_one_weight_per_branch_and_rrf_k() {
+    let parsed = FusionStrategy::from_name_with_weights(
+        "weighted_rrf",
+        FusionParams::default().with_rrf_k(Some(10)),
+        Some(&[0.7, 0.3]),
+    );
+    let expected = FusionStrategy::weighted_rrf(vec![0.7, 0.3], 10.0);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn weighted_rrf_weights_default_k_is_the_shared_one() {
+    let parsed = FusionStrategy::from_name_with_weights(
+        "Weighted_RRF",
+        FusionParams::default(),
+        Some(&[1.0, 1.0]),
+    );
+    let expected = FusionStrategy::weighted_rrf(vec![1.0, 1.0], DEFAULT_RRF_K as f32);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn weights_named_for_another_strategy_are_ignored() {
+    // The scalar-param rule — a field the named strategy does not read is
+    // ignored — applies to the weights channel too: forwarding a whole
+    // request body must not break `rrf`.
+    let parsed =
+        FusionStrategy::from_name_with_weights("rrf", FusionParams::default(), Some(&[0.5, 0.5]));
+    assert_eq!(parsed, Ok(FusionStrategy::rrf_default()));
 }

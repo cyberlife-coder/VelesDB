@@ -149,6 +149,33 @@ impl FusionStrategy {
         Self::relative_score(dense_weight, sparse_weight)
     }
 
+    /// Create a Weighted Reciprocal Rank Fusion strategy.
+    ///
+    /// Like ``rrf`` but with an explicit weight per query vector — the right
+    /// strategy for hybrid branches whose retrieval precision differs
+    /// (e.g. trusting a dense branch twice as much as a text branch).
+    /// score = Σᵢ weights[i] / (k + rank_i), 0-based ranks.
+    ///
+    /// Args:
+    ///     weights: One weight per query vector, in vector order
+    ///     k: Ranking constant (default: 60)
+    ///
+    /// Returns:
+    ///     FusionStrategy: Weighted RRF fusion strategy
+    ///
+    /// Raises:
+    ///     ValueError: If a weight is negative/non-finite or k <= 0
+    ///
+    /// Example:
+    ///     >>> strategy = FusionStrategy.weighted_rrf([0.7, 0.3])
+    #[staticmethod]
+    #[pyo3(signature = (weights, k = 60.0))]
+    fn weighted_rrf(weights: Vec<f32>, k: f32) -> PyResult<Self> {
+        CoreFusionStrategy::weighted_rrf(weights, k)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(format!("{e}")))
+    }
+
     /// Create the fusion strategy a name stands for.
     ///
     /// The name grammar is velesdb-core's, the one the REST server, the CLI,
@@ -184,8 +211,10 @@ impl FusionStrategy {
         max_weight = None,
         hit_weight = None,
         dense_weight = None,
-        sparse_weight = None
+        sparse_weight = None,
+        weights = None
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn from_name(
         name: &str,
         k: Option<u32>,
@@ -194,6 +223,7 @@ impl FusionStrategy {
         hit_weight: Option<f32>,
         dense_weight: Option<f32>,
         sparse_weight: Option<f32>,
+        weights: Option<Vec<f32>>,
     ) -> PyResult<Self> {
         let params = FusionParams::default()
             .with_rrf_k(k)
@@ -202,7 +232,7 @@ impl FusionStrategy {
             .with_hit_weight(hit_weight)
             .with_dense_weight(dense_weight)
             .with_sparse_weight(sparse_weight);
-        CoreFusionStrategy::from_name(name, params)
+        CoreFusionStrategy::from_name_with_weights(name, params, weights.as_deref())
             .map(|inner| Self { inner })
             .map_err(|e| PyValueError::new_err(format!("{e}")))
     }
@@ -241,6 +271,9 @@ impl FusionStrategy {
             CoreFusionStrategy::Average => "FusionStrategy.average()".to_string(),
             CoreFusionStrategy::Maximum => "FusionStrategy.maximum()".to_string(),
             CoreFusionStrategy::RRF { k } => format!("FusionStrategy.rrf(k={k})"),
+            CoreFusionStrategy::WeightedRRF { weights, k } => {
+                format!("FusionStrategy.weighted_rrf(weights={weights:?}, k={k})")
+            }
             CoreFusionStrategy::Weighted {
                 avg_weight,
                 max_weight,

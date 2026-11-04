@@ -35,6 +35,18 @@ use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_co
 pub(super) fn build_fusion_strategy(
     req: &MultiQuerySearchRequest,
 ) -> Result<velesdb_core::FusionStrategy, String> {
+    if req.strategy.eq_ignore_ascii_case("weighted_rrf")
+        && req
+            .branch_weights
+            .as_ref()
+            .is_some_and(|w| w.len() != req.vectors.len())
+    {
+        return Err(format!(
+            "weighted_rrf requires one weight per query vector: {} weights for {} vectors",
+            req.branch_weights.as_ref().map_or(0, Vec::len),
+            req.vectors.len(),
+        ));
+    }
     let params = velesdb_core::FusionParams::default()
         .with_rrf_k(Some(req.rrf_k))
         .with_avg_weight(Some(req.avg_weight))
@@ -42,7 +54,12 @@ pub(super) fn build_fusion_strategy(
         .with_hit_weight(Some(req.hit_weight))
         .with_dense_weight(Some(req.dense_weight))
         .with_sparse_weight(Some(req.sparse_weight));
-    velesdb_core::FusionStrategy::from_name(&req.strategy, params).map_err(|e| e.to_string())
+    velesdb_core::FusionStrategy::from_name_with_weights(
+        &req.strategy,
+        params,
+        req.branch_weights.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Parse the fusion strategy the request asks for, returning a 400 response

@@ -42,6 +42,15 @@ pub enum FusionError {
         /// Number of branches passed to fuse.
         branches: usize,
     },
+    /// A strategy name that requires weights was given none.
+    ///
+    /// `weighted_rrf` is the only named strategy whose weights have no
+    /// default: it needs exactly one per branch, and the branch count is not
+    /// known until fuse time.
+    MissingWeights {
+        /// The name as the caller gave it.
+        name: String,
+    },
     /// A strategy name [`FusionStrategy::from_name`] does not know.
     UnknownStrategy {
         /// The name as the caller gave it.
@@ -71,6 +80,10 @@ impl std::fmt::Display for FusionError {
             } => write!(
                 f,
                 "fuse_with_directions requires one direction per branch: {directions} directions for {branches} branches",
+            ),
+            Self::MissingWeights { name } => write!(
+                f,
+                "'{name}' requires one weight per branch and none were provided",
             ),
             Self::UnknownStrategy { name } => write!(
                 f,
