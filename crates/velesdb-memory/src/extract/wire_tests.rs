@@ -11,7 +11,7 @@ use crate::extract::reply::extraction_from_reply;
 /// every stub-backed test would stay green, because no stub reads it.
 #[test]
 fn the_graph_call_constrains_decoding_with_the_extraction_schema() {
-    let body = generate_body("qwen3:14b", "passage", &extraction_schema());
+    let body = generate_body("qwen3:14b", "passage", &extraction_schema(), 512);
     assert_eq!(
         body["format"],
         extraction_schema(),
@@ -25,9 +25,18 @@ fn the_graph_call_constrains_decoding_with_the_extraction_schema() {
 /// serve both.
 #[test]
 fn the_fact_only_call_constrains_decoding_with_the_array_schema() {
-    let body = generate_body("qwen3:14b", "passage", &fact_list_schema());
+    let body = generate_body("qwen3:14b", "passage", &fact_list_schema(), 512);
     assert_eq!(body["format"]["type"], "array");
     assert_eq!(body["format"]["items"], fact_item_schema());
+}
+
+/// The caller's ceiling lands in the body verbatim — a knob the daemon can
+/// raise for richer passages, and a test pins so a refactor cannot silently
+/// restore the built-in default.
+#[test]
+fn the_reply_budget_is_the_callers_not_the_defaults() {
+    let body = generate_body("qwen3:14b", "passage", &extraction_schema(), 2048);
+    assert_eq!(body["options"]["num_predict"], 2048);
 }
 
 /// The schema and the parser are one contract stated twice. A reply that
