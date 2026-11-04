@@ -4,7 +4,9 @@
 
 use super::prompt::{build_graph_prompt, build_prompt};
 use super::reply::{extraction_from_reply, facts_from_reply};
-use super::wire::{MAX_GENERATION_TOKENS, REQUEST_TIMEOUT_SECS};
+use super::wire::{
+    extraction_schema, fact_list_schema, MAX_GENERATION_TOKENS, REQUEST_TIMEOUT_SECS,
+};
 use super::{ExtractError, ExtractedFact, Extraction, Extractor};
 
 /// Extracts through any **OpenAI-compatible** `/v1/chat/completions` endpoint.
@@ -84,11 +86,12 @@ impl OpenAiExtractor {
     }
 
     /// POST one prompt and return the assistant's reply.
-    fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
+    fn generate(&self, prompt: &str, schema: &serde_json::Value) -> Result<String, ExtractError> {
         let body = crate::openai::chat_body(
             &self.model,
             prompt,
             MAX_GENERATION_TOKENS,
+            schema,
             self.chat_template_kwargs.as_ref(),
         );
         let payload = self
@@ -114,11 +117,11 @@ impl OpenAiExtractor {
 
 impl Extractor for OpenAiExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        facts_from_reply(&self.generate(&build_prompt(text))?)
+        facts_from_reply(&self.generate(&build_prompt(text), &fact_list_schema())?)
     }
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
-        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
+        extraction_from_reply(&self.generate(&build_graph_prompt(text), &extraction_schema())?)
     }
 }
 
