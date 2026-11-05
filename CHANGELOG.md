@@ -58,6 +58,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb-skills.tar.gz` release archive, and pointed at as a user-chosen
   option from the `velesdb-memory` skill's backend-selection notes.
 
+### Changed
+
+- **Sparse search: `MaxScore` DAAT retired from production routing** (#2177).
+  The op-count probe measured it strictly dominated at every corpus size —
+  14–43× the linear scan's per-query cost below 100k docs, ~13× at 400k,
+  78× at 1.1M–1.5M on the skewed queries it exists for — so `sparse_search`
+  now always runs the linear scan (dense or hash-map accumulator chosen on
+  doc-id space). `maxscore_search` remains reachable under `internal-bench`
+  and test seams only, for re-measurement; results are unchanged (the
+  parity tests pin top-k equivalence with brute force either way).
+
 ### Fixed
 
 - **TypeScript SDK: one error code per bad input, on both backends** (#2307).
