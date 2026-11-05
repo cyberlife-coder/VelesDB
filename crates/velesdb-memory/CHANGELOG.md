@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open (naming both configurations and the migration path) instead of
   silently serving nonsense recall. No binding API change.
 
+- **BREAKING (MCP wire only): every memory id is now a decimal string, not a JSON number** (#1468 follow-up).
+  `id`, `edge_id`, `from`, `to`, `target_id` in tool *results* (`remember`, `recall`,
+  `recall_where`, `recall_fused`, `list_memories`, `relate`, `forget`, `feedback`,
+  `why`, `entity`, `save_working_context`) serialize as strings, and their
+  `outputSchema` advertises `"type": "string"`. A raw JSON number above 2^53 was
+  rounded by float-lossy clients and rejected outright by strict parsers (the
+  result of `recall` failed to parse in Vibe with `exceeds safe integer domain`).
+  The `*_str` twin fields are unchanged and carry the same value. Migration:
+  read `id` (or `id_str`) as a string; inputs still accept number or string.
+  The Rust API (`MemoryService`) is untouched — domain types keep `u64` — and
+  the Node/Python/WASM/TS surfaces already spoke decimal strings, so only raw
+  MCP clients that parsed `id` as a number need to switch to the string form.
+  The context compiler's `decisions[].fragment_id` keeps its recorded numeric
+  default; `policy.ids_as_strings` still stringifies it on demand.
 - **The OpenAI-compatible extractor constrains decoding** (#1944).
   `OpenAiExtractor` sends the prompt's reply contract as `response_format` —
   the OpenAI-protocol spelling (`json_schema`, `strict`) of the `format` the

@@ -202,7 +202,7 @@ impl McpServer {
             memories: memories
                 .into_iter()
                 .map(|memory| ListedMemoryDto {
-                    id: memory.id,
+                    id: memory.id.to_string(),
                     id_str: memory.id.to_string(),
                     content: memory.content,
                     metadata: memory.metadata,

@@ -4,9 +4,15 @@
 //! here, split out of [`super`] (`mcp.rs`) so that file stays focused on the
 //! server and tool wiring.
 //!
-//! The `..._str` id twins ([`RecollectionDto::id_str`] and friends) are a
-//! **wire concern of this MCP layer only** (issue #1468: a u64 id above 2^53
-//! is rounded by float-lossy JSON clients): the domain types in
+//! Ids cross the MCP wire **as decimal strings only** (issue #1468: a raw
+//! JSON number above 2^53 is rounded by float-lossy clients and rejected
+//! outright by strict parsers, so the numeric form never leaves the
+//! process): every output id field carries
+//! `#[serde(serialize_with = "crate::wire::serialize_id_as_string")]` plus
+//! `#[schemars(with = "String")]` so the advertised schema matches the wire,
+//! and a `..._str` twin field documents the same value for relaying.
+//!
+//! This is a **wire concern of this MCP layer only**: the domain types in
 //! [`crate::model`] stay untouched — no extra field, no changed constructor —
 //! so the crate's public Rust API is unchanged and library consumers
 //! (bindings, crates.io users) see no breakage. Where a tool used to
@@ -62,11 +68,12 @@ pub(super) struct RememberParams {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RememberResult {
-    /// Stable id assigned to the remembered fact.
-    pub(super) id: u64,
-    /// Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/
-    /// `feedback`, never `id` itself: a u64 above 2^53 loses precision
-    /// through a float-lossy JSON client (#1468). `id` is unchanged.
+    /// Stable id assigned to the remembered fact — a decimal string on the
+    /// wire (#1468: a raw number above 2^53 is rounded or rejected by JSON
+    /// clients).
+    pub(super) id: String,
+    /// Decimal-string twin of `id` — same value, kept as the documented
+    /// relay field for `relate`/`forget`/`feedback` (#1468).
     pub(super) id_str: String,
 }
 
@@ -102,11 +109,10 @@ pub(super) struct RecallParams {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RecollectionDto {
-    /// Stable id of the memory.
-    pub(super) id: u64,
-    /// Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/
-    /// `feedback`, never `id` itself: a u64 above 2^53 loses precision
-    /// through a float-lossy JSON client (#1468). `id` is unchanged.
+    /// Stable id of the memory — a decimal string on the wire (#1468).
+    pub(super) id: String,
+    /// Decimal-string twin of `id` — same value, the documented relay field
+    /// for `relate`/`forget`/`feedback` (#1468).
     pub(super) id_str: String,
     /// Similarity score (higher is closer).
     pub(super) score: f32,
@@ -127,7 +133,7 @@ pub(super) struct RecollectionDto {
 impl From<Recollection> for RecollectionDto {
     fn from(memory: Recollection) -> Self {
         Self {
-            id: memory.id,
+            id: memory.id.to_string(),
             id_str: memory.id.to_string(),
             score: memory.score,
             content: memory.content,
@@ -331,8 +337,8 @@ pub(super) struct RelateParams {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct RelateResult {
-    /// Id of the created edge.
-    pub(super) edge_id: u64,
+    /// Id of the created edge — a decimal string on the wire (#1468).
+    pub(super) edge_id: String,
     /// Decimal-string twin of `edge_id` (issue #1468) — see
     /// [`RememberResult::id_str`].
     pub(super) edge_id_str: String,
@@ -384,8 +390,9 @@ pub(super) struct ForgetParams {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ForgetResult {
-    /// Id that was requested for deletion.
-    pub(super) id: u64,
+    /// Id that was requested for deletion — a decimal string on the wire
+    /// (#1468).
+    pub(super) id: String,
     /// Decimal-string twin of `id` (issue #1468) — see
     /// [`RememberResult::id_str`].
     pub(super) id_str: String,
@@ -415,8 +422,8 @@ pub(super) struct FeedbackParams {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct FeedbackResult {
-    /// Id of the reinforced memory.
-    pub(super) id: u64,
+    /// Id of the reinforced memory — a decimal string on the wire (#1468).
+    pub(super) id: String,
     /// Decimal-string twin of `id` (issue #1468) — see
     /// [`RememberResult::id_str`].
     pub(super) id_str: String,
@@ -444,8 +451,8 @@ pub(super) struct WhyParams {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct MemoryNodeDto {
-    /// Stable id of the memory.
-    pub(super) id: u64,
+    /// Stable id of the memory — a decimal string on the wire (#1468).
+    pub(super) id: String,
     /// Decimal-string twin of `id` (issue #1468) — see
     /// [`RecollectionDto::id_str`].
     pub(super) id_str: String,
@@ -458,7 +465,7 @@ pub(super) struct MemoryNodeDto {
 impl From<MemoryNode> for MemoryNodeDto {
     fn from(node: MemoryNode) -> Self {
         Self {
-            id: node.id,
+            id: node.id.to_string(),
             id_str: node.id.to_string(),
             content: node.content,
             hop: node.hop,
@@ -471,13 +478,13 @@ impl From<MemoryNode> for MemoryNodeDto {
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct MemoryEdgeDto {
-    /// Source memory id.
-    pub(super) from: u64,
+    /// Source memory id — a decimal string on the wire (#1468).
+    pub(super) from: String,
     /// Decimal-string twin of `from` (issue #1468) — see
     /// [`RecollectionDto::id_str`].
     pub(super) from_str: String,
-    /// Target memory id.
-    pub(super) to: u64,
+    /// Target memory id — a decimal string on the wire (#1468).
+    pub(super) to: String,
     /// Decimal-string twin of `to` (issue #1468) — see
     /// [`RecollectionDto::id_str`].
     pub(super) to_str: String,
@@ -488,9 +495,9 @@ pub(super) struct MemoryEdgeDto {
 impl From<MemoryEdge> for MemoryEdgeDto {
     fn from(edge: MemoryEdge) -> Self {
         Self {
-            from: edge.from,
+            from: edge.from.to_string(),
             from_str: edge.from.to_string(),
-            to: edge.to,
+            to: edge.to.to_string(),
             to_str: edge.to.to_string(),
             relation: edge.relation,
         }
@@ -511,8 +518,9 @@ pub(super) struct EntityParams {
 pub(super) struct EntityRelationDto {
     /// The edge label the passage stated (e.g. `"pere de"`, `"soeur de"`).
     pub(super) predicate: String,
-    /// Stable id of the entity (or fact) on the far end.
-    pub(super) target_id: u64,
+    /// Stable id of the entity (or fact) on the far end — a decimal string
+    /// on the wire (#1468).
+    pub(super) target_id: String,
     /// Decimal-string twin of `target_id` (issue #1468).
     pub(super) target_id_str: String,
     /// Stored content of the far end — for an entity, `Entity: <name>`.
@@ -523,7 +531,7 @@ impl From<EntityRelation> for EntityRelationDto {
     fn from(relation: EntityRelation) -> Self {
         Self {
             predicate: relation.predicate,
-            target_id: relation.target_id,
+            target_id: relation.target_id.to_string(),
             target_id_str: relation.target_id.to_string(),
             target: relation.target,
         }
@@ -538,8 +546,9 @@ impl From<EntityRelation> for EntityRelationDto {
 pub(super) struct EntityProfileDto {
     /// Whether an entity is known under that name at all.
     pub(super) found: bool,
-    /// Stable, content-addressed id of the entity (`0` when not found).
-    pub(super) id: u64,
+    /// Stable, content-addressed id of the entity (`0` when not found) — a
+    /// decimal string on the wire (#1468).
+    pub(super) id: String,
     /// Decimal-string twin of `id` (issue #1468).
     pub(super) id_str: String,
     /// Canonical (trimmed, lowercased) entity name. Always filled in — on a
@@ -577,7 +586,7 @@ impl EntityProfileDto {
         let Some(profile) = profile else {
             return Self {
                 found: false,
-                id: 0,
+                id: "0".to_string(),
                 id_str: "0".to_string(),
                 name: canonical_entity_name(queried),
                 attributes: Metadata::new(),
@@ -589,7 +598,7 @@ impl EntityProfileDto {
         };
         Self {
             found: true,
-            id: profile.id,
+            id: profile.id.to_string(),
             id_str: profile.id.to_string(),
             name: profile.name,
             attributes: profile.attributes,
@@ -802,7 +811,7 @@ pub(super) struct ListMemoriesParams {
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct ListedMemoryDto {
     /// Stable id of the memory.
-    pub(super) id: u64,
+    pub(super) id: String,
     /// Decimal-string twin of `id` (issue #1468) — see
     /// [`RememberResult::id_str`].
     pub(super) id_str: String,
