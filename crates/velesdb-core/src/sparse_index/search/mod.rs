@@ -1,8 +1,8 @@
 //! Sparse inner-product search: linear scan, dense or hash-map accumulator.
 //!
 //! Provides inner-product ANN search over a [`SparseInvertedIndex`]. There
-//! is exactly one production strategy — [`strategy::linear_scan_search`],
-//! which picks a dense `f32` accumulator inside [`MAX_DENSE_ACCUMULATOR`]
+//! is exactly one production strategy — `strategy::linear_scan_search`,
+//! which picks a dense `f32` accumulator inside `MAX_DENSE_ACCUMULATOR`
 //! and a hash map above it.
 //!
 //! `MaxScore` DAAT used to be the routing alternative for large corpora.
