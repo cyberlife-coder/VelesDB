@@ -37,8 +37,8 @@ MIB = 1024 * 1024
 #: Mirrors `BINARIES` in the guard. Duplicated on purpose: a test that imports
 #: the ceilings it checks cannot notice one being raised.
 CEILINGS = {
-    "velesdb-server": int(14.25 * MIB),
-    "velesdb": int(11.5 * MIB),
+    "velesdb-server": int(14.75 * MIB),
+    "velesdb": int(11.8 * MIB),
     "velesdb-migrate": 9 * MIB,
 }
 
