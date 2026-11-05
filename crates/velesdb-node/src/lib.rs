@@ -209,7 +209,8 @@ impl NodeMemoryService {
         let (emb, embedder_model, embedder_semantic) =
             build_embedder(embedder.as_deref(), ollama_url, ollama_model)?;
         let embedder_dimension = emb.dimension();
-        let svc = MemoryService::open(&path, emb).map_err(to_napi_err)?;
+        let svc = MemoryService::open_with_model_name(&path, emb, &embedder_model)
+            .map_err(to_napi_err)?;
         let svc = match quality {
             Some(quality) => svc.with_search_quality(quality),
             None => svc,

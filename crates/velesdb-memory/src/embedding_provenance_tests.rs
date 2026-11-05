@@ -178,3 +178,53 @@ fn each_failure_of_the_record_has_its_own_class() {
         "{unwritable}"
     );
 }
+
+/// `MemoryService::open_with_model_name` is the library-side contract the
+/// daemon applies at startup: embedded callers and bindings get the same
+/// guard instead of discovering a model change as silent nonsense recall.
+#[test]
+fn open_with_model_name_stamps_a_fresh_store() {
+    let dir = store_dir();
+    let _svc =
+        crate::MemoryService::open_with_model_name(dir.path(), crate::HashEmbedder::new(4), "m-a")
+            .expect("open with model name");
+    assert_eq!(
+        read(dir.path()).expect("read"),
+        Some(EmbeddingProvenance::new("m-a", 4)),
+        "a fresh store must carry the model that opened it"
+    );
+}
+
+#[test]
+fn open_with_model_name_refuses_a_different_model() {
+    let dir = store_dir();
+    write(dir.path(), &EmbeddingProvenance::new("m-a", 4)).expect("seed record");
+    let err =
+        crate::MemoryService::open_with_model_name(dir.path(), crate::HashEmbedder::new(4), "m-b")
+            .err()
+            .expect("a different model is refused, not silently swapped");
+    assert!(
+        matches!(
+            err,
+            crate::MemoryError::Provenance(ProvenanceError::ModelMismatch { .. })
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn record_if_empty_never_stamps_over_facts() {
+    // The trust argument: a record written over existing data would certify a
+    // model that may not have produced it, and every later check would trust
+    // the lie. Only an empty store gets stamped.
+    let dir = store_dir();
+    let store = crate::NativeStore::open(dir.path(), 4).expect("open store");
+    crate::FactStore::store(&store, 1, "a fact", &[0.1, 0.2, 0.3, 0.4]).expect("store fact");
+    record_if_empty(dir.path(), &store, "m-a", 4)
+        .expect("a populated store is a no-op, not an error");
+    assert_eq!(
+        read(dir.path()).expect("read"),
+        None,
+        "no record may be written over existing facts"
+    );
+}

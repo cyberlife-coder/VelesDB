@@ -271,6 +271,38 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
         })
     }
 
+    /// Open like [`Self::open`], additionally checking the store's recorded
+    /// embedding model against `model` and writing the record for a fresh
+    /// store — the provenance contract the daemon's startup applies
+    /// (`daemon_startup`), exposed so embedded callers and bindings get the
+    /// same protection instead of discovering a model change as silent
+    /// nonsense recall.
+    ///
+    /// The record is written only when the store holds no facts —
+    /// [`embedding_provenance::record_if_empty`] documents why anything else
+    /// would lie.
+    ///
+    /// # Errors
+    /// [`MemoryError::Provenance`] wraps a mismatched or unreadable record and
+    /// a failed record write; [`MemoryError`] otherwise as [`Self::open`].
+    ///
+    /// [`embedding_provenance::record_if_empty`]: crate::embedding_provenance::record_if_empty
+    pub fn open_with_model_name<P: AsRef<Path>>(
+        path: P,
+        embedder: E,
+        model: &str,
+    ) -> Result<Self, MemoryError> {
+        let dir = path.as_ref();
+        let dimension = embedder.dimension();
+        let recorded = crate::embedding_provenance::read(dir)?;
+        crate::embedding_provenance::check(recorded.as_ref(), model, dimension)?;
+        let service = Self::open(dir, embedder)?;
+        if recorded.is_none() {
+            crate::embedding_provenance::record_if_empty(dir, &service.store, model, dimension)?;
+        }
+        Ok(service)
+    }
+
     /// Run recall's vector search at `quality` instead of the collection's
     /// runtime quality. See [`NativeStore::with_search_quality`].
     #[must_use]
