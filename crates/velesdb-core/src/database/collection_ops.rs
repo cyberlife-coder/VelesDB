@@ -26,7 +26,7 @@ impl Database {
             return Err(Error::CollectionExists(name.to_string()));
         }
 
-        let collection_path = self.data_dir.join(name);
+        let collection_path = self.collection_dir(name)?;
         if collection_path.exists() {
             return Err(Error::CollectionExists(name.to_string()));
         }
@@ -386,7 +386,7 @@ impl Database {
             return Err(Error::CollectionNotFound(name.to_string()));
         }
 
-        let collection_path = self.data_dir.join(name);
+        let collection_path = self.collection_dir(name)?;
         if collection_path.exists() {
             std::fs::remove_dir_all(&collection_path)?;
         }
@@ -450,7 +450,7 @@ impl Database {
         if crate::validation::validate_collection_name(name).is_err() {
             return None;
         }
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name).ok()?;
         let config_path = path.join("config.json");
         if !config_path.exists() {
             return None;

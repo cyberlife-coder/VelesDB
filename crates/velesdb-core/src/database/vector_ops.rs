@@ -110,7 +110,7 @@ impl Database {
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
         self.enforce_vector_dimension_limit(dimension)?;
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name)?;
         // #2087: no per-collection HNSW argument here, so the `[hnsw]` section
         // is the strongest level that applies. An untouched section resolves
         // to `None` and takes the original constructor, so this path is
@@ -156,7 +156,7 @@ impl Database {
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
         self.enforce_vector_dimension_limit(dimension)?;
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name)?;
         // #2087: each argument is resolved on its own — a caller that pins
         // only `m` still picks up `ef_construction` from `[hnsw]`.
         //
@@ -216,7 +216,7 @@ impl Database {
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
         self.enforce_vector_dimension_limit(dimension)?;
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name)?;
         let coll = VectorCollection::create_with_params(
             path,
             dimension,
@@ -289,7 +289,7 @@ impl Database {
         if cfg.graph_schema.is_some() || cfg.metadata_only {
             return None;
         }
-        let coll = VectorCollection::open(self.data_dir.join(name)).ok()?;
+        let coll = VectorCollection::open(self.collection_dir(name).ok()?).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
         self.admit_collection(&coll.inner, || {
             self.vector_colls
