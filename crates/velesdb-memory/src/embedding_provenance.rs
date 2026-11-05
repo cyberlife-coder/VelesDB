@@ -176,7 +176,7 @@ pub fn write(store_dir: &Path, provenance: &EmbeddingProvenance) -> Result<(), P
 /// a false provenance that every later [`check`] would trust.
 ///
 /// # Errors
-/// Forwards [`write`]'s — the caller decides what a failed record means. The
+/// Forwards [`write()`]'s — the caller decides what a failed record means. The
 /// daemon warns and starts anyway (the store works without it); a library
 /// caller may prefer to propagate.
 #[cfg(feature = "persistence")]
