@@ -534,7 +534,7 @@ Multi-query fusion search for RAG pipelines using Multiple Query Generation (MQG
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `k` | `number` | `10` | Number of results |
-| `fusion` | `'rrf' \| 'average' \| 'maximum' \| 'weighted' \| 'relative_score'` | `'rrf'` | Fusion strategy |
+| `fusion` | `'rrf' \| 'weighted_rrf' \| 'average' \| 'maximum' \| 'weighted' \| 'relative_score'` | `'rrf'` | Fusion strategy |
 | `fusionParams` | `object` | `{ k: 60 }` | Strategy-specific parameters |
 | `filter` | `object` | - | Payload filter expression |
 
@@ -559,9 +559,16 @@ const results = await db.multiQuerySearch('docs', [emb1, emb2], {
   fusion: 'relative_score',
   fusionParams: { denseWeight: 0.7, sparseWeight: 0.3 }
 });
+
+// Weighted RRF — rank fusion with one weight per query vector
+const results = await db.multiQuerySearch('docs', [emb1, emb2], {
+  k: 10,
+  fusion: 'weighted_rrf',
+  fusionParams: { branchWeights: [0.7, 0.3], k: 60 }
+});
 ```
 
-> **WASM backend:** all five strategies run. `weighted` takes `avgWeight`, `maxWeight` and `hitWeight` together: pass all three, or none for core's defaults. A partial set is refused, because the binding cannot fill in the rest, and so is a set core would reject (a negative or non-finite weight, or a sum more than 0.001 from 1.0, computed in f32 as core computes it), with `BAD_REQUEST`. A field the chosen strategy never reads is ignored, as core ignores it, except `k`, which must be an integer from 0 to 2^32 - 1 under every strategy, as REST's `u32` `rrf_k` must (`BAD_REQUEST` otherwise). Every weight given, `avgWeight`, `maxWeight`, `hitWeight`, `denseWeight` or `sparseWeight`, must be a finite number under every strategy too, as REST's `f32` fields must (`BAD_REQUEST` otherwise); a weight passed as `null` is refused as well, since the REST backend sends it as JSON `null`. TypeScript callers pass the canonical names of `FusionStrategy`; from untyped (JavaScript) callers, the runtime reads a name as core does, in any case and with the aliases `avg`, `max` and `rsf`. `null` or absent means `rrf`, and an unknown name, or any other value that is not a string, is refused with `BAD_REQUEST`. A vector list outside core's 1-to-10 range is refused with `BAD_REQUEST` — by the client, or by either backend on a direct call. WASM `relative_score` averages the query branches with equal weight, so under `relative_score` `denseWeight` and `sparseWeight` are refused with `NOT_SUPPORTED`, and so is a `filter`. Every query vector must have the collection's dimension: a short one is refused with `DIMENSION_MISMATCH`, never padded. `db.capabilities().multiQueryFusionParams` lists the `fusionParams` fields a backend applies.
+> **WASM backend:** all six strategies run. `weighted_rrf` takes `branchWeights`, one weight per query vector — the one fusion parameter with no default: absent or a count that does not match the vector list is refused (`BAD_REQUEST`), as REST refuses it. `weighted` takes `avgWeight`, `maxWeight` and `hitWeight` together: pass all three, or none for core's defaults. A partial set is refused, because the binding cannot fill in the rest, and so is a set core would reject (a negative or non-finite weight, or a sum more than 0.001 from 1.0, computed in f32 as core computes it), with `BAD_REQUEST`. A field the chosen strategy never reads is ignored, as core ignores it, except `k`, which must be an integer from 0 to 2^32 - 1 under every strategy, as REST's `u32` `rrf_k` must (`BAD_REQUEST` otherwise). Every weight given, `avgWeight`, `maxWeight`, `hitWeight`, `denseWeight` or `sparseWeight`, must be a finite number under every strategy too, as REST's `f32` fields must (`BAD_REQUEST` otherwise); a weight passed as `null` is refused as well, since the REST backend sends it as JSON `null`. TypeScript callers pass the canonical names of `FusionStrategy`; from untyped (JavaScript) callers, the runtime reads a name as core does, in any case and with the aliases `avg`, `max` and `rsf`. `null` or absent means `rrf`, and an unknown name, or any other value that is not a string, is refused with `BAD_REQUEST`. A vector list outside core's 1-to-10 range is refused with `BAD_REQUEST` — by the client, or by either backend on a direct call. WASM `relative_score` averages the query branches with equal weight, so under `relative_score` `denseWeight` and `sparseWeight` are refused with `NOT_SUPPORTED`, and so is a `filter`. Every query vector must have the collection's dimension: a short one is refused with `DIMENSION_MISMATCH`, never padded. `db.capabilities().multiQueryFusionParams` lists the `fusionParams` fields a backend applies.
 
 #### Named sparse indexes — `sparseIndexName` vs `sparseSearchNamed()`
 

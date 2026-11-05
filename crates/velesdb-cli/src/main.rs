@@ -261,6 +261,7 @@ fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
             top_k,
             strategy,
             rrf_k,
+            branch_weights,
             format,
         } => handlers::handle_multi_search(
             &path,
@@ -269,6 +270,7 @@ fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
             top_k,
             &strategy,
             rrf_k,
+            branch_weights.as_deref(),
             &format,
         ),
         QueryCommands::BatchSearch {

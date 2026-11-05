@@ -129,6 +129,22 @@ describe('REST ↔ WASM error-code parity (#2307)', () => {
         label: 'fusionParams.avgWeight: NaN',
         options: { fusion: 'weighted', fusionParams: { avgWeight: Number.NaN } },
       },
+      {
+        label: 'fusionParams.branchWeights: "x"',
+        options: { fusionParams: { branchWeights: 'x' } },
+      },
+      {
+        label: 'fusionParams.branchWeights: [0.5, NaN]',
+        options: { fusionParams: { branchWeights: [0.5, Number.NaN] } },
+      },
+      {
+        label: 'weighted_rrf without branchWeights',
+        options: { fusion: 'weighted_rrf' },
+      },
+      {
+        label: 'weighted_rrf with two weights for one vector',
+        options: { fusion: 'weighted_rrf', fusionParams: { branchWeights: [0.5, 0.5] } },
+      },
     ])('$label gives BAD_REQUEST on REST (422) and on WASM (local), never UNKNOWN_ERROR', async ({ options }) => {
       // REST: axum refuses the body before the handler runs → plain-text 422.
       mockFetch.mockResolvedValueOnce(DESERIALIZATION_422);

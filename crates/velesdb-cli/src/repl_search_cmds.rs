@@ -112,11 +112,14 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
         Err(e) => return CommandResult::Error(e),
     };
 
-    let strategy =
-        match crate::handlers::parse_fusion_strategy(&strategy_str, velesdb_core::DEFAULT_RRF_K) {
-            Ok(strategy) => strategy,
-            Err(e) => return CommandResult::Error(e.to_string()),
-        };
+    let strategy = match crate::handlers::parse_fusion_strategy(
+        &strategy_str,
+        velesdb_core::DEFAULT_RRF_K,
+        None,
+    ) {
+        Ok(strategy) => strategy,
+        Err(e) => return CommandResult::Error(e.to_string()),
+    };
 
     match db.get_vector_collection(name) {
         Some(col) => {

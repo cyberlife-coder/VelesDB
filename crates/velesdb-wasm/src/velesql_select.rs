@@ -253,20 +253,22 @@ fn execute_vector_search(
     collect_vector_rows(&scored, &borrowed, &filters, params)
 }
 
-/// Rejects weight-sensitive fusion strategies (`weighted` / `rsf`) on a
-/// single-vector NEAR. WASM has no BM25/graph branch to fuse against, so these
-/// strategies would otherwise fuse the real vector ranking against a synthetic
-/// constant-1.0 branch — meaningless rankings. `rrf` / `maximum` / `average`
-/// preserve the vector order under a constant second branch and are left as a
-/// (now hard-filtered) no-op for demo parity (#9a).
+/// Rejects weight-sensitive fusion strategies (`weighted` / `weighted_rrf` /
+/// `rsf`) on a single-vector NEAR. WASM has no BM25/graph branch to fuse
+/// against, so these strategies would otherwise fuse the real vector ranking
+/// against a synthetic constant-1.0 branch — meaningless rankings. `rrf` /
+/// `maximum` / `average` preserve the vector order under a constant second
+/// branch and are left as a (now hard-filtered) no-op for demo parity (#9a).
 fn reject_single_branch_weighted_fusion(
     clause: &velesdb_core::velesql::FusionClause,
 ) -> Result<(), String> {
     use velesdb_core::velesql::FusionStrategyType;
     match clause.strategy {
-        FusionStrategyType::Weighted | FusionStrategyType::Rsf => Err(
-            "USING FUSION(strategy='weighted'|'rsf') requires two scored branches; a \
-             single-vector NEAR has none in WASM (no BM25/graph scoring). Use a \
+        FusionStrategyType::Weighted
+        | FusionStrategyType::WeightedRrf
+        | FusionStrategyType::Rsf => Err(
+            "USING FUSION(strategy='weighted'|'weighted_rrf'|'rsf') requires two scored \
+             branches; a single-vector NEAR has none in WASM (no BM25/graph scoring). Use a \
              metadata filter without FUSION, or 'rrf'."
                 .to_string(),
         ),

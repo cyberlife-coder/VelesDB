@@ -110,6 +110,7 @@ impl Parser {
         match name.to_lowercase().as_str() {
             "rrf" => Ok(crate::velesql::FusionStrategyType::Rrf),
             "weighted" => Ok(crate::velesql::FusionStrategyType::Weighted),
+            "weighted_rrf" => Ok(crate::velesql::FusionStrategyType::WeightedRrf),
             "maximum" => Ok(crate::velesql::FusionStrategyType::Maximum),
             "rsf" | "relative_score" => Ok(crate::velesql::FusionStrategyType::Rsf),
             "average" => Ok(crate::velesql::FusionStrategyType::Average),
@@ -119,7 +120,7 @@ impl Parser {
                 other.to_string(),
                 format!(
                     "Unknown USING FUSION strategy '{other}'. Valid strategies: rrf, weighted, \
-                     maximum, rsf (relative_score), average"
+                     weighted_rrf, maximum, rsf (relative_score), average"
                 ),
             )),
         }

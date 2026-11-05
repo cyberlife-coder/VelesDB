@@ -10,13 +10,13 @@ use velesdb_core::{FusionStrategy, DEFAULT_RRF_K};
 
 #[test]
 fn weighted_is_cores_canonical_default() {
-    let strategy = parse_fusion_strategy("weighted", DEFAULT_RRF_K).expect("weighted parses");
+    let strategy = parse_fusion_strategy("weighted", DEFAULT_RRF_K, None).expect("weighted parses");
     assert_eq!(strategy, FusionStrategy::weighted_default());
 }
 
 #[test]
 fn rrf_takes_the_flag_k() {
-    let strategy = parse_fusion_strategy("rrf", 30).expect("rrf parses");
+    let strategy = parse_fusion_strategy("rrf", 30, None).expect("rrf parses");
     assert_eq!(strategy, FusionStrategy::RRF { k: 30 });
 }
 
@@ -30,15 +30,37 @@ fn aliases_and_case_follow_core() {
             FusionStrategy::relative_score(0.5, 0.5).expect("valid"),
         ),
     ] {
-        let strategy = parse_fusion_strategy(name, DEFAULT_RRF_K)
+        let strategy = parse_fusion_strategy(name, DEFAULT_RRF_K, None)
             .unwrap_or_else(|e| panic!("'{name}' must parse: {e}"));
         assert_eq!(strategy, expected, "'{name}'");
     }
 }
 
 #[test]
+fn weighted_rrf_reads_the_flag_weights_and_k() {
+    let strategy = parse_fusion_strategy("weighted_rrf", 10, Some(&[0.7, 0.3]))
+        .expect("weighted_rrf with weights parses");
+    assert_eq!(
+        strategy,
+        FusionStrategy::weighted_rrf(vec![0.7, 0.3], 10.0).expect("valid")
+    );
+}
+
+#[test]
+fn weighted_rrf_without_weights_reports_cores_message() {
+    let error =
+        parse_fusion_strategy("weighted_rrf", DEFAULT_RRF_K, None).expect_err("must be refused");
+    assert!(
+        error
+            .to_string()
+            .contains("'weighted_rrf' requires one weight per branch"),
+        "{error}"
+    );
+}
+
+#[test]
 fn an_unknown_name_reports_cores_message() {
-    let error = parse_fusion_strategy("nope", DEFAULT_RRF_K).expect_err("must be refused");
+    let error = parse_fusion_strategy("nope", DEFAULT_RRF_K, None).expect_err("must be refused");
     assert!(
         error.to_string().contains("Unknown fusion strategy 'nope'"),
         "{error}"

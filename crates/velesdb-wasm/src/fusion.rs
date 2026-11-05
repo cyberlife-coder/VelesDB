@@ -60,6 +60,7 @@ pub fn fuse_results(
     strategy: &str,
     rrf_k: u32,
     weights: Option<(f32, f32, f32)>,
+    branch_weights: Option<&[f32]>,
 ) -> Result<Vec<(u64, f32)>, String> {
     let (avg_weight, max_weight, hit_weight) = match weights {
         Some((avg, max, hit)) => (Some(avg), Some(max), Some(hit)),
@@ -70,7 +71,9 @@ pub fn fuse_results(
         .with_avg_weight(avg_weight)
         .with_max_weight(max_weight)
         .with_hit_weight(hit_weight);
-    match FusionStrategy::from_name(strategy, params).map_err(|e| e.to_string())? {
+    match FusionStrategy::from_name_with_weights(strategy, params, branch_weights)
+        .map_err(|e| e.to_string())?
+    {
         // The N-branch aggregation stays local (D005); see the module doc.
         FusionStrategy::RelativeScore { .. } => Ok(fuse_relative_score(all_results)),
         core_strategy => fuse_with_core(all_results, &core_strategy),
