@@ -9,9 +9,10 @@ use rustc_hash::FxHashMap;
 
 use super::super::inverted_index::SparseInvertedIndex;
 use super::super::types::{PostingEntry, ScoredDoc, SparseVector};
+use super::scoring::{count_ops, extract_sorted_results};
+#[cfg(any(test, feature = "internal-bench"))]
 use super::scoring::{
-    count_ops, extract_sorted_results, find_min_essential_doc_id, find_split, prepare_term_data,
-    score_document, PreparedTerms,
+    find_min_essential_doc_id, find_split, prepare_term_data, score_document, PreparedTerms,
 };
 use super::MAX_DENSE_ACCUMULATOR;
 
@@ -30,6 +31,11 @@ fn top_k_heap(k: usize) -> BinaryHeap<Reverse<ScoredDoc>> {
 }
 
 /// `MaxScore` DAAT search over the inverted index.
+///
+/// Retired from production routing (#2177 — measured strictly dominated at
+/// every corpus size, 78× the scan's op count at 1.1M); reachable only
+/// from tests and the `internal-bench` seam for re-measurement.
+#[cfg(any(test, feature = "internal-bench"))]
 pub(crate) fn maxscore_search(
     index: &SparseInvertedIndex,
     query: &SparseVector,
