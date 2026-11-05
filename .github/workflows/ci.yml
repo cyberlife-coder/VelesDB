@@ -936,6 +936,16 @@ jobs:
       # the flag is dropped and cargo-semver-checks reads the two versions as
       # they are; when the index cannot be read it stays, the safe default.
       - name: Check public API against the last published release
+        env:
+          # cargo-semver-checks builds each crate's rustdoc in a temporary
+          # project that resolves dependencies fresh — the workspace
+          # Cargo.lock does not apply. Without fallback, a newly published
+          # transitive whose rust-version exceeds our pinned toolchain (e.g.
+          # generator 0.8.12 requiring rustc 1.95 on our 1.90) is selected
+          # and fails the resolve, even though the committed lockfile pins a
+          # compatible version. `fallback` restores MSRV-aware resolution
+          # for those generated projects.
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
         run: |
           workspace="$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "velesdb-core") | .version')"
