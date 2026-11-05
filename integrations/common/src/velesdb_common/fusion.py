@@ -40,6 +40,7 @@ _FROM_NAME_PARAMS = (
     "hit_weight",
     "dense_weight",
     "sparse_weight",
+    "weights",
 )
 
 
@@ -66,12 +67,14 @@ def build_fusion_strategy(
 
     Args:
         fusion: Fusion strategy name, read with velesdb-core's grammar:
-            ``"rrf"``, ``"average"`` (``"avg"``), ``"maximum"`` (``"max"``),
-            ``"weighted"`` or ``"relative_score"`` (``"rsf"``),
-            case-insensitive.
+            ``"rrf"``, ``"weighted_rrf"``, ``"average"`` (``"avg"``),
+            ``"maximum"`` (``"max"``), ``"weighted"`` or
+            ``"relative_score"`` (``"rsf"``), case-insensitive.
         fusion_params: Optional parameters for the chosen strategy:
 
             - ``"rrf"``: ``{"k": 60}`` (default k=60)
+            - ``"weighted_rrf"``: ``{"weights": [0.7, 0.3]}`` — required,
+              one weight per query vector; ``{"k": 60}`` also applies
             - ``"weighted"``: ``{"avg_weight": 0.6, "max_weight": 0.3,
               "hit_weight": 0.1}``
             - ``"relative_score"`` / ``"rsf"``: ``{"dense_weight": 0.5,

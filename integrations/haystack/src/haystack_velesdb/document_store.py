@@ -747,7 +747,7 @@ class VelesDBDocumentStore(CollectionAdminMixin):
                 keeps (``average``, ``maximum`` or ``weighted`` over a distance
                 metric) is mapped to ``1 / (1 + d)`` either way.
             fusion: Optional fusion strategy name applied to the ranking —
-                one of ``"average"``, ``"maximum"``, ``"rrf"``,
+                one of ``"average"``, ``"maximum"``, ``"rrf"``, ``"weighted_rrf"``,
                 ``"weighted"``, ``"relative_score"`` / ``"rsf"``. When set,
                 the query is ranked through the chosen
                 :class:`velesdb.FusionStrategy`, which changes the result
