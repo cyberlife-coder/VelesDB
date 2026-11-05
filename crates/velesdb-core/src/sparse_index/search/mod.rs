@@ -6,14 +6,14 @@
 //! and a hash map above it.
 //!
 //! `MaxScore` DAAT used to be the routing alternative for large corpora.
-//! Every regime measured shows it strictly dominated (#2177): 14–43× the
-//! linear scan's per-query cost below 100k docs, ~13× at 400k, and **78×**
-//! at 1.1M–1.5M on the skewed SPLADE-shaped queries it exists for — with
-//! the ratio still growing. The op-count probe explains why: it scores the
-//! same candidate union the scan visits (it prunes no candidates) but pays
-//! cursor bookkeeping and a per-candidate min-scan over the essential
-//! lists, ~100–280 elementary ops per posting where the scan pays ~1. With
-//! no crossover anywhere, the router had no second destination left, so
+//! The scan measured 14–43× faster than `MaxScore` at the former 100k
+//! boundary: crossing 100k docs cost **43×** per query on
+//! uniform queries and **14×** on skewed SPLADE-shaped ones, with the
+//! ratio stayed flat (~13×) in a crossover sweep up to 400k docs and
+//! still ~13× ahead at 400k (#2177). The op-count probe then measured
+//! **78×** at 1.1M–1.5M — it scores the same candidate union the scan
+//! visits (it prunes nothing) but pays ~100–280 elementary ops per
+//! posting where the scan pays ~1. With no crossover anywhere,
 //! `maxscore_search` survives only under the `internal-bench` and test
 //! seams — kept to be re-measured if a workload ever moves the ratio
 //! toward 1×.
