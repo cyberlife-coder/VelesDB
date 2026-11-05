@@ -16,7 +16,7 @@
 //! posting where the scan pays ~1. With no crossover anywhere,
 //! `maxscore_search` survives only under the `internal-bench` and test
 //! seams — kept to be re-measured if a workload ever moves the ratio
-//! toward 1×.
+//! toward parity.
 
 #![allow(clippy::cast_precision_loss)]
 

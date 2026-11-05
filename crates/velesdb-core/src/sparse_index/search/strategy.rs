@@ -33,8 +33,9 @@ fn top_k_heap(k: usize) -> BinaryHeap<Reverse<ScoredDoc>> {
 /// `MaxScore` DAAT search over the inverted index.
 ///
 /// Retired from production routing (#2177 — measured strictly dominated at
-/// every corpus size, 78× the scan's op count at 1.1M); reachable only
-/// from tests and the `internal-bench` seam for re-measurement.
+/// every corpus size; the figures live in the `search` module doc);
+/// reachable only from tests and the `internal-bench` seam for
+/// re-measurement.
 #[cfg(any(test, feature = "internal-bench"))]
 pub(crate) fn maxscore_search(
     index: &SparseInvertedIndex,
