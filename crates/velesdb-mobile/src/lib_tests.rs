@@ -758,21 +758,21 @@ fn test_untrained_storage_modes_full_upsert_flow() {
 #[test]
 fn test_fusion_strategy_average_conversion() {
     let strategy = FusionStrategy::Average;
-    let core: CoreFusionStrategy = strategy.into();
+    let core: CoreFusionStrategy = strategy.try_into().unwrap();
     assert!(matches!(core, CoreFusionStrategy::Average));
 }
 
 #[test]
 fn test_fusion_strategy_maximum_conversion() {
     let strategy = FusionStrategy::Maximum;
-    let core: CoreFusionStrategy = strategy.into();
+    let core: CoreFusionStrategy = strategy.try_into().unwrap();
     assert!(matches!(core, CoreFusionStrategy::Maximum));
 }
 
 #[test]
 fn test_fusion_strategy_rrf_conversion() {
     let strategy = FusionStrategy::Rrf { k: 30 };
-    let core: CoreFusionStrategy = strategy.into();
+    let core: CoreFusionStrategy = strategy.try_into().unwrap();
     assert!(matches!(core, CoreFusionStrategy::RRF { k: 30 }));
 }
 
@@ -783,7 +783,7 @@ fn test_fusion_strategy_weighted_conversion() {
         max_weight: 0.3,
         hit_weight: 0.2,
     };
-    let core: CoreFusionStrategy = strategy.into();
+    let core: CoreFusionStrategy = strategy.try_into().unwrap();
     let CoreFusionStrategy::Weighted {
         avg_weight,
         max_weight,
@@ -795,6 +795,38 @@ fn test_fusion_strategy_weighted_conversion() {
     assert!((avg_weight - 0.5).abs() < f32::EPSILON);
     assert!((max_weight - 0.3).abs() < f32::EPSILON);
     assert!((hit_weight - 0.2).abs() < f32::EPSILON);
+}
+
+#[test]
+fn test_fusion_strategy_weighted_rrf_conversion() {
+    let strategy = FusionStrategy::WeightedRrf {
+        weights: vec![0.7, 0.3],
+        k: 60.0,
+    };
+    let core: CoreFusionStrategy = strategy.try_into().unwrap();
+    assert_eq!(
+        core,
+        CoreFusionStrategy::weighted_rrf(vec![0.7, 0.3], 60.0).unwrap()
+    );
+}
+
+#[test]
+fn test_fusion_strategy_weighted_rrf_refuses_invalid() {
+    for strategy in [
+        FusionStrategy::WeightedRrf {
+            weights: vec![-0.1, 1.1],
+            k: 60.0,
+        },
+        FusionStrategy::WeightedRrf {
+            weights: vec![0.5, 0.5],
+            k: 0.0,
+        },
+    ] {
+        assert!(
+            CoreFusionStrategy::try_from(strategy.clone()).is_err(),
+            "core's validating ctor must refuse {strategy:?}"
+        );
+    }
 }
 
 #[test]
@@ -1026,6 +1058,10 @@ fn test_multi_query_search_all_strategies() {
             avg_weight: 0.5,
             max_weight: 0.3,
             hit_weight: 0.2,
+        },
+        FusionStrategy::WeightedRrf {
+            weights: vec![0.7, 0.3],
+            k: 60.0,
         },
     ];
 

@@ -228,6 +228,39 @@ fn test_parse_fusion_strategy_refuses_invalid_weights() {
     assert!(error.to_string().contains("sum to 1.0"), "{error}");
 }
 
+/// `weighted_rrf`'s per-branch weights ride `params` under any of the three
+/// key spellings, and `k` reads through the same `rrf_k` path `rrf` uses.
+#[test]
+fn test_parse_fusion_strategy_weighted_rrf() {
+    use velesdb_core::fusion::FusionStrategy;
+
+    for key in ["weights", "branch_weights", "branchWeights"] {
+        let params = serde_json::json!({ key: [0.7, 0.3] });
+        assert_eq!(
+            parse_fusion_strategy("weighted_rrf", Some(&params))
+                .unwrap_or_else(|e| panic!("test: '{key}' must parse: {e}")),
+            FusionStrategy::weighted_rrf(vec![0.7, 0.3], 60.0).expect("test: valid"),
+            "'{key}'"
+        );
+    }
+
+    let params = serde_json::json!({ "weights": [0.7, 0.3], "k": 10 });
+    assert_eq!(
+        parse_fusion_strategy("weighted_rrf", Some(&params)).expect("test: weighted_rrf with k"),
+        FusionStrategy::weighted_rrf(vec![0.7, 0.3], 10.0).expect("test: valid")
+    );
+}
+
+#[test]
+fn test_parse_fusion_strategy_weighted_rrf_missing_weights() {
+    let error = parse_fusion_strategy("weighted_rrf", None)
+        .expect_err("test: weighted_rrf without weights must be refused");
+    assert!(
+        error.to_string().contains("one weight per branch"),
+        "{error}"
+    );
+}
+
 // =====================================================================
 // require_collection type-check tests
 // =====================================================================

@@ -37,9 +37,22 @@ fn build_strategy(clause: &FusionClause) -> FusionStrategy {
         FusionStrategyType::Maximum => FusionStrategy::Maximum,
         FusionStrategyType::Average => FusionStrategy::Average,
         FusionStrategyType::Weighted => build_weighted(clause),
+        FusionStrategyType::WeightedRrf => build_weighted_rrf(clause),
         FusionStrategyType::Rsf => build_rsf(clause),
         _ => FusionStrategy::rrf_default(),
     }
+}
+
+/// `weighted_rrf` over the two branches, as core's
+/// `score_fusion_strategy` builds it: `dense_weight`/`sparse_weight` are
+/// the two per-branch weights, `k` the RRF smoothing constant.
+fn build_weighted_rrf(clause: &FusionClause) -> FusionStrategy {
+    let dense = clause.dense_weight.unwrap_or(0.5);
+    let sparse = clause.sparse_weight.unwrap_or(0.5);
+    #[allow(clippy::cast_precision_loss)]
+    let k = clause.k.unwrap_or(60) as f32;
+    FusionStrategy::weighted_rrf(vec![dense, sparse], k)
+        .unwrap_or_else(|_| FusionStrategy::rrf_default())
 }
 
 fn build_weighted(clause: &FusionClause) -> FusionStrategy {

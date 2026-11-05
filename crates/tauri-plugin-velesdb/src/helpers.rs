@@ -52,11 +52,31 @@ fn extract_weight(params: Option<&serde_json::Value>, camel: &str, snake: &str) 
         .map(|weight| weight as f32)
 }
 
+/// Extracts a named f64 array param from JSON — `weighted_rrf`'s per-branch
+/// `weights`, the one fusion parameter that is not a scalar. Accepts the
+/// `weights`/`branch_weights`/`branchWeights` keys; `None` when absent, so
+/// core reports the missing weights itself.
+#[allow(clippy::cast_possible_truncation)]
+// Reason: JSON f64 → f32 for weights; values are small config numbers (0.0-1.0).
+fn extract_weights(params: Option<&serde_json::Value>) -> Option<Vec<f32>> {
+    ["weights", "branch_weights", "branchWeights"]
+        .iter()
+        .find_map(|key| params.and_then(|p| p.get(key)))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|item| item.as_f64().map(|weight| weight as f32))
+                .collect()
+        })
+}
+
 /// Parses fusion strategy from string and optional params.
 ///
 /// The name, its aliases, the case rule and the default of every parameter
 /// `params` leaves out are core's grammar
-/// ([`velesdb_core::FusionStrategy::from_name`]), so a strategy reads the same
+/// ([`velesdb_core::FusionStrategy::from_name_with_weights`], which also
+/// carries `weighted_rrf`'s per-branch weights), so a strategy reads the same
 /// here as on every other surface, and its weights are validated when it is
 /// built.
 ///
@@ -84,8 +104,12 @@ pub fn parse_fusion_strategy(
         .with_hit_weight(extract_weight(params, "hitWeight", "hit_weight"))
         .with_dense_weight(extract_weight(params, "denseWeight", "dense_weight"))
         .with_sparse_weight(extract_weight(params, "sparseWeight", "sparse_weight"));
-    velesdb_core::FusionStrategy::from_name(fusion, fusion_params)
-        .map_err(|e| Error::InvalidConfig(e.to_string()))
+    velesdb_core::FusionStrategy::from_name_with_weights(
+        fusion,
+        fusion_params,
+        extract_weights(params).as_deref(),
+    )
+    .map_err(|e| Error::InvalidConfig(e.to_string()))
 }
 
 /// Parses a sparse vector from JSON string-keyed map to core `SparseVector`.

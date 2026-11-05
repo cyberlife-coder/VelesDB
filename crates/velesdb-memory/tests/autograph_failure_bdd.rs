@@ -284,3 +284,53 @@ fn a_successful_enrichment_is_not_counted_as_failed() {
     );
     assert_eq!(svc.autograph_dropped(), 0, "and it was not dropped either");
 }
+
+/// An extractor whose `extract_graph` always fails — the failure BEFORE any
+/// wiring stage: a truncated reply, a dead backend. Until the failure was
+/// counted, this path dropped with `let _` like the early wiring code did —
+/// invisible to `autograph_failed` and indistinguishable, on `memory_status`,
+/// from a passage that stated nothing.
+struct FailingExtractor;
+
+impl Extractor for FailingExtractor {
+    fn extract(&self, _text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
+        Err(ExtractError::Backend(
+            "simulated: the backend is down".to_owned(),
+        ))
+    }
+    fn extract_graph(&self, _text: &str) -> Result<Extraction, ExtractError> {
+        Err(ExtractError::Backend(
+            "simulated: the backend is down".to_owned(),
+        ))
+    }
+}
+
+#[test]
+fn an_extraction_failure_is_counted_and_the_fact_is_still_stored() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = NativeStore::open(dir.path(), DEFAULT_DIMENSION).expect("open native store");
+    let svc = MemoryService::with_store(store, HashEmbedder::new(DEFAULT_DIMENSION))
+        .with_autograph(Arc::new(FailingExtractor));
+    // No worker spawned: autograph runs INLINE, so the count is observable
+    // as soon as `remember` returns.
+    assert_eq!(svc.autograph_failed(), 0);
+
+    svc.remember("Alice moved to Paris in 2024.", &[], None)
+        .expect("the fact is stored even though its extraction fails");
+
+    assert_eq!(
+        svc.autograph_failed(),
+        1,
+        "the failed extraction is counted — never silent"
+    );
+    assert_eq!(
+        svc.autograph_dropped(),
+        0,
+        "the job RAN and failed; drops and failures stay distinct"
+    );
+    assert_eq!(
+        svc.fact_count(),
+        1,
+        "a failed extraction never loses the fact itself"
+    );
+}

@@ -101,18 +101,23 @@ let strategy = FusionStrategy::relative_score(0.7, 0.3)?;
 ## Fusion strategies, and where each one is reachable
 
 A surface that takes the strategy by name reads it with
-`FusionStrategy::from_name(name, FusionParams)`: `rrf`, `average` (`avg`),
-`maximum` (`max`), `weighted`, `relative_score` (`rsf`), case-insensitive, with
-core's defaults for any parameter left out (`DEFAULT_RRF_K`,
-`DEFAULT_WEIGHTED_*`, `DEFAULT_RELATIVE_SCORE_*`). REST, the CLI, Tauri, WASM and
-Python (`FusionStrategy.from_name`) all go through it, so a name means the same
+`FusionStrategy::from_name_with_weights(name, FusionParams, weights)` — the
+`weights` channel exists because `FusionParams` is `Copy` and cannot hold
+`weighted_rrf`'s one weight per branch, the one fusion parameter with no
+default. The names are `rrf`, `weighted_rrf`, `average` (`avg`), `maximum`
+(`max`), `weighted`, `relative_score` (`rsf`), case-insensitive, with core's
+defaults for any parameter left out (`DEFAULT_RRF_K`, `DEFAULT_WEIGHTED_*`,
+`DEFAULT_RELATIVE_SCORE_*`) and `FusionError::MissingWeights` for
+`weighted_rrf` given none. REST, the CLI, Tauri, WASM and Python
+(`FusionStrategy.from_name`) all go through it, so a name means the same
 thing everywhere. VelesQL's `USING FUSION` clause has its own grammar, in the
 table below.
 
-`FusionStrategy` has six variants. Five of them are reachable from every
-surface this project ships. **`WeightedRRF` is reachable only from the Rust
-embedding API**, and that asymmetry is not a design decision anyone recorded —
-it is measured here so nobody discovers it by grepping (#2095).
+`FusionStrategy` has six variants, and all six are reachable from every
+surface this project ships. `WeightedRRF` was the last one out — reachable
+only from the Rust embedding API, an asymmetry no design decision had
+recorded — until #2369 carried it through the same name grammar under the
+name `weighted_rrf`.
 
 | Variant | Rust embedding | REST | VelesQL | Python | Swift / Kotlin | WASM / TS SDK | Tauri |
 |---|---|---|---|---|---|---|---|
@@ -121,15 +126,24 @@ it is measured here so nobody discovers it by grepping (#2095).
 | `RRF { k }` | yes | `rrf` | `RRF` | `FusionStrategy.rrf()` | yes | `rrf` | `rrf` |
 | `Weighted { .. }` | yes | `weighted` | `WEIGHTED` | `FusionStrategy.weighted()` | yes | `weighted` | `weighted` |
 | `RelativeScore { .. }` | yes | `relative_score` | `RSF` | `FusionStrategy.relative_score()` | yes | `relative_score` / `rsf` | `relative_score` / `rsf` |
-| `WeightedRRF { weights, k }` | **yes** | **no** | **no** | **no** | **no** | **no** | **no** |
+| `WeightedRRF { weights, k }` | yes | `weighted_rrf` + `branch_weights` | `weighted_rrf` (`dense_weight`/`sparse_weight`) | `FusionStrategy.weighted_rrf()` | `WeightedRrf { weights, k }` | `weighted_rrf` + `branchWeights` | `weighted_rrf` + `weights` key |
 
-That last row matters more than a missing enum arm usually would. `WeightedRRF`
-is the variant the engine's own documentation calls *"the correct strategy for
-hybrid dense + text search where branches carry different retrieval precision
-characteristics"* — which is the subject of this very guide. Unlike
-[`RRF`](#hybrid-dense--sparse-with-rrf-fusion) it takes per-branch weights and
-0-based ranks, so a caller who needs one branch to count for more than another
-cannot express it outside Rust.
+The per-branch weights each surface spells its own way: `branch_weights` on
+`/search/multi` (one per query vector, in vector order — the server refuses a
+count mismatch with a 400), `dense_w`/`sparse_w` on the hybrid `FusionRequest`
+and `dense_weight`/`sparse_weight` in `USING FUSION` for the two-branch
+dense + sparse case, the `weights` static-method argument or `from_name`
+kwarg on Python, the `weights` argument of `multi_query_search` on WASM,
+`fusionParams.branchWeights` on the TS SDK, `WeightedRrf { weights, k }` on
+mobile, a `weights`/`branch_weights`/`branchWeights` key in Tauri's
+`fusion_params`, and `--branch-weights` on the CLI's `search` subcommand.
+
+`WeightedRRF` is the variant the engine's own documentation calls *"the
+correct strategy for hybrid dense + text search where branches carry
+different retrieval precision characteristics"* — which is the subject of
+this very guide. Unlike [`RRF`](#hybrid-dense--sparse-with-rrf-fusion) it
+takes per-branch weights and 0-based ranks, so a caller who needs one branch
+to count for more than another can express it on every surface.
 
 An embedder writes it directly:
 
@@ -137,10 +151,20 @@ An embedder writes it directly:
 use velesdb_core::FusionStrategy;
 
 // Dense retrieval trusted twice as much as the text branch, k = 60.
-let strategy = FusionStrategy::WeightedRRF { weights: vec![2.0, 1.0], k: 60.0 };
+let strategy = FusionStrategy::weighted_rrf(vec![2.0, 1.0], 60.0)?;
 ```
 
-Everyone else has `RRF { k }`, which weights every branch equally.
+Over REST, the same call is:
+
+```json
+{
+  "vectors": [[0.1, 0.9, 0.0], [0.0, 0.2, 0.8]],
+  "top_k": 10,
+  "strategy": "weighted_rrf",
+  "branch_weights": [2.0, 1.0],
+  "rrf_k": 60
+}
+```
 
 ## Types and methods
 

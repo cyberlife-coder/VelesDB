@@ -7,6 +7,26 @@
 // The `openapi` feature is enabled in this crate, providing ToSchema derives.
 pub use velesdb_core::api_types::*;
 
+/// `/search/multi`'s request: core's `MultiQuerySearchRequest`
+/// plus the `branch_weights` `weighted_rrf` reads.
+///
+/// Kept server-side on purpose: the core DTO is a published,
+/// externally-constructible struct, so a new pub field would break
+/// downstream struct literals — the semver gate refuses it
+/// (`constructible_struct_adds_field`). `#[serde(flatten)]` keeps the wire
+/// body byte-identical.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct MultiQuerySearchRequestWithWeights {
+    /// Every field core's DTO declares.
+    #[serde(flatten)]
+    pub base: velesdb_core::api_types::MultiQuerySearchRequest,
+    /// `weighted_rrf` only: one weight per query vector, in vector order —
+    /// the parameter the strategy cannot default. Ignored by every other
+    /// strategy, like the scalar weight fields.
+    #[serde(default)]
+    pub branch_weights: Option<Vec<f32>>,
+}
+
 /// The plain-text `422` axum answers for a request body it cannot deserialise.
 ///
 /// The `Json<T>` extractor rejects a malformed body **before the handler

@@ -390,13 +390,18 @@ pub enum QueryCommands {
         #[arg(short = 'k', long, default_value = "10")]
         top_k: usize,
 
-        /// Fusion strategy (average/avg, maximum/max, rrf, weighted, relative_score/rsf)
+        /// Fusion strategy (average/avg, maximum/max, rrf, weighted_rrf, weighted, relative_score/rsf)
         #[arg(short, long, default_value = "rrf")]
         strategy: String,
 
-        /// RRF k parameter (only for rrf strategy)
+        /// RRF k parameter (only for rrf and weighted_rrf strategies)
         #[arg(long, default_value = "60")]
         rrf_k: u32,
+
+        /// Per-branch weights for weighted_rrf, comma-separated, one per
+        /// query vector (e.g. '0.7,0.3')
+        #[arg(long, value_delimiter = ',')]
+        branch_weights: Option<Vec<f32>>,
 
         /// Output format (table, json)
         #[arg(short, long, default_value = "table")]

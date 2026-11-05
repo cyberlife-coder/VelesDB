@@ -59,7 +59,13 @@ export interface SearchOptions {
 }
 
 /** Fusion strategy for multi-query search */
-export type FusionStrategy = 'rrf' | 'average' | 'maximum' | 'weighted' | 'relative_score';
+export type FusionStrategy =
+  | 'rrf'
+  | 'weighted_rrf'
+  | 'average'
+  | 'maximum'
+  | 'weighted'
+  | 'relative_score';
 
 /** Parameters of a multi-query fusion strategy. */
 export interface FusionParams {
@@ -75,6 +81,11 @@ export interface FusionParams {
   denseWeight?: number;
   /** Relative score fusion: sparse vector weight (default: 0.5) */
   sparseWeight?: number;
+  /**
+   * Weighted RRF: one weight per query vector, in vector order. Required
+   * under `weighted_rrf` — the one fusion parameter that has no default.
+   */
+  branchWeights?: number[];
 }
 
 /** Name of one {@link FusionParams} field. */

@@ -165,13 +165,20 @@ const FILTERED_CALLS: Record<string, Call> = {
  * multi-query call passes, so `reachesBinding` can only find them.
  */
 const WEIGHTED_VALUES = { avgWeight: 0.5, maxWeight: 0.375, hitWeight: 0.125 };
-const FUSION_PARAMS: Record<string, { fusion: string; fusionParams: Record<string, number> }> = {
+const FUSION_PARAMS: Record<
+  string,
+  { fusion: string; fusionParams: Record<string, number | number[]> }
+> = {
   k: { fusion: 'rrf', fusionParams: { k: 37 } },
   avgWeight: { fusion: 'weighted', fusionParams: WEIGHTED_VALUES },
   maxWeight: { fusion: 'weighted', fusionParams: WEIGHTED_VALUES },
   hitWeight: { fusion: 'weighted', fusionParams: WEIGHTED_VALUES },
   denseWeight: { fusion: 'relative_score', fusionParams: { denseWeight: 0.75 } },
   sparseWeight: { fusion: 'relative_score', fusionParams: { sparseWeight: 0.625 } },
+  // `weighted_rrf` takes one weight per query vector, and the probe calls
+  // with one vector — a single weight reaches the binding's `weights` arg.
+  // 0.875 is exact in f32, so it survives the Float32Array round-trip.
+  branchWeights: { fusion: 'weighted_rrf', fusionParams: { branchWeights: [0.875] } },
 };
 
 /** A `createCollection` setting for each `CollectionConfig` field, and how to see it applied. */
@@ -277,9 +284,12 @@ const LIST_PROBES: Record<ListCapability, (value: string) => Probe> = {
     option(entryFor(FILTERED_CALLS, 'filteredSearch', op), reachesBinding(FILTER)),
   multiQueryFusionParams: (name) => {
     const { fusion, fusionParams } = entryFor(FUSION_PARAMS, 'multiQueryFusionParams', name);
+    const wanted = fusionParams[name];
+    // `branchWeights` reaches the binding as a Float32Array, which
+    // `bindingArgs` flattens back to its elements.
     return option(
       (b) => b.multiQuerySearch(C, [V], { fusion: fusion as never, fusionParams }),
-      reachesBinding(fusionParams[name])
+      reachesBinding(Array.isArray(wanted) ? wanted[0] : wanted)
     );
   },
   storageModes: (mode) =>

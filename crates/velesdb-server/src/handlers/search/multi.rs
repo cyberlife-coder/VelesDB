@@ -8,7 +8,9 @@ use axum::{
 };
 use std::sync::Arc;
 
-use crate::types::{ErrorResponse, MultiQuerySearchRequest, SearchIdsResponse, SearchResponse};
+use crate::types::{
+    ErrorResponse, MultiQuerySearchRequestWithWeights, SearchIdsResponse, SearchResponse,
+};
 use crate::AppState;
 
 use super::outcome::{finish_search_ids_with_cb, finish_search_with_cb, read_refused};
@@ -33,16 +35,33 @@ use crate::handlers::helpers::{apply_pre_check, extract_client_id, get_vector_co
 /// reached the fusion kernel and came back as a silently wrong ranking
 /// instead of an error (#2095).
 pub(super) fn build_fusion_strategy(
-    req: &MultiQuerySearchRequest,
+    req: &MultiQuerySearchRequestWithWeights,
 ) -> Result<velesdb_core::FusionStrategy, String> {
+    if req.base.strategy.eq_ignore_ascii_case("weighted_rrf")
+        && req
+            .branch_weights
+            .as_ref()
+            .is_some_and(|w| w.len() != req.base.vectors.len())
+    {
+        return Err(format!(
+            "weighted_rrf requires one weight per query vector: {} weights for {} vectors",
+            req.branch_weights.as_ref().map_or(0, Vec::len),
+            req.base.vectors.len(),
+        ));
+    }
     let params = velesdb_core::FusionParams::default()
-        .with_rrf_k(Some(req.rrf_k))
-        .with_avg_weight(Some(req.avg_weight))
-        .with_max_weight(Some(req.max_weight))
-        .with_hit_weight(Some(req.hit_weight))
-        .with_dense_weight(Some(req.dense_weight))
-        .with_sparse_weight(Some(req.sparse_weight));
-    velesdb_core::FusionStrategy::from_name(&req.strategy, params).map_err(|e| e.to_string())
+        .with_rrf_k(Some(req.base.rrf_k))
+        .with_avg_weight(Some(req.base.avg_weight))
+        .with_max_weight(Some(req.base.max_weight))
+        .with_hit_weight(Some(req.base.hit_weight))
+        .with_dense_weight(Some(req.base.dense_weight))
+        .with_sparse_weight(Some(req.base.sparse_weight));
+    velesdb_core::FusionStrategy::from_name_with_weights(
+        &req.base.strategy,
+        params,
+        req.branch_weights.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Parse the fusion strategy the request asks for, returning a 400 response
@@ -50,7 +69,7 @@ pub(super) fn build_fusion_strategy(
 /// strategy refuses.
 #[allow(clippy::result_large_err)]
 fn parse_fusion_strategy(
-    req: &MultiQuerySearchRequest,
+    req: &MultiQuerySearchRequestWithWeights,
     state: &AppState,
 ) -> Result<velesdb_core::FusionStrategy, axum::response::Response> {
     build_fusion_strategy(req).map_err(|error| {
@@ -97,7 +116,7 @@ fn prepare_multi_query(
     state: &AppState,
     headers: &axum::http::HeaderMap,
     name: &str,
-    req: &MultiQuerySearchRequest,
+    req: &MultiQuerySearchRequestWithWeights,
 ) -> Result<
     (
         velesdb_core::collection::VectorCollection,
@@ -122,7 +141,7 @@ fn prepare_multi_query(
     let strategy = parse_fusion_strategy(req, state)?;
 
     let expected_dimension = collection.config().dimension;
-    validate_query_vectors(state, name, expected_dimension, &req.vectors)?;
+    validate_query_vectors(state, name, expected_dimension, &req.base.vectors)?;
 
     Ok((collection, strategy))
 }
@@ -133,7 +152,7 @@ fn prepare_multi_query(
     path = "/collections/{name}/search/multi",
     tag = "search",
     params(("name" = String, Path, description = "Collection name")),
-    request_body = MultiQuerySearchRequest,
+    request_body = MultiQuerySearchRequestWithWeights,
     responses(
         (status = 200, description = "Multi-query search results", body = SearchResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
@@ -149,7 +168,7 @@ pub async fn multi_query_search(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Path(name): Path<String>,
-    Json(req): Json<MultiQuerySearchRequest>,
+    Json(req): Json<MultiQuerySearchRequestWithWeights>,
 ) -> impl IntoResponse {
     let (collection, strategy) = match prepare_multi_query(&state, &headers, &name, &req) {
         Ok(v) => v,
@@ -163,7 +182,7 @@ pub async fn multi_query_search(
     // `test_multi_query_search_with_filter_excludes_nonmatching_points`
     // and `test_multi_query_search_with_invalid_filter_returns_400`
     // (F-04).
-    let filter = match req.filter.as_ref() {
+    let filter = match req.base.filter.as_ref() {
         Some(filter_json) => match parse_filter_or_400(filter_json, &state.onboarding_metrics) {
             Ok(f) => Some(f),
             Err(resp) => {
@@ -197,8 +216,8 @@ pub async fn multi_query_search(
     // view inside, because `spawn_blocking` requires a 'static closure
     // and borrowed slice references cannot cross the boundary.
     let collection_for_work = collection.clone();
-    let vectors = req.vectors;
-    let top_k = req.top_k;
+    let vectors = req.base.vectors;
+    let top_k = req.base.top_k;
 
     let work_result = run_blocking_search(move || {
         let query_refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();
@@ -227,7 +246,7 @@ pub async fn multi_query_search(
     path = "/collections/{name}/search/multi/ids",
     tag = "search",
     params(("name" = String, Path, description = "Collection name")),
-    request_body = MultiQuerySearchRequest,
+    request_body = MultiQuerySearchRequestWithWeights,
     responses(
         (status = 200, description = "Multi-query ids-only results", body = SearchIdsResponse),
         (status = 429, description = "The client's rate limit", body = ErrorResponse),
@@ -243,7 +262,7 @@ pub async fn multi_query_search_ids(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Path(name): Path<String>,
-    Json(req): Json<MultiQuerySearchRequest>,
+    Json(req): Json<MultiQuerySearchRequestWithWeights>,
 ) -> impl IntoResponse {
     let (collection, strategy) = match prepare_multi_query(&state, &headers, &name, &req) {
         Ok(v) => v,
@@ -252,7 +271,7 @@ pub async fn multi_query_search_ids(
 
     // The ids-only fusion kernel has no filter parameter. Reject filters
     // explicitly rather than silently returning unfiltered results.
-    if req.filter.is_some() {
+    if req.base.filter.is_some() {
         state.operational_metrics.inc_errors();
         return (
             StatusCode::BAD_REQUEST,
@@ -279,8 +298,8 @@ pub async fn multi_query_search_ids(
 
     let start = std::time::Instant::now();
     let collection_for_work = collection.clone();
-    let vectors = req.vectors;
-    let top_k = req.top_k;
+    let vectors = req.base.vectors;
+    let top_k = req.base.top_k;
 
     let work_result = run_blocking_search(move || {
         let query_refs: Vec<&[f32]> = vectors.iter().map(Vec::as_slice).collect();

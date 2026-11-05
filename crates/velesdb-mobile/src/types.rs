@@ -292,11 +292,34 @@ pub enum FusionStrategy {
         /// Weight for the sparse branch (0.0-1.0).
         sparse_weight: f32,
     },
+    /// Weighted Reciprocal Rank Fusion with one weight per query branch.
+    ///
+    /// Score = Σᵢ `weights[i]` / (`rank_i` + `k`), where `rank_i` is the
+    /// document's 0-based rank in branch `i`. `weights` must hold exactly one
+    /// entry per vector passed to `multi_query_search`, checked at fuse time.
+    WeightedRrf {
+        /// Per-branch weights (non-negative, finite); count must equal the
+        /// number of query vectors.
+        weights: Vec<f32>,
+        /// Smoothing constant (default: 60.0). Higher values dampen the
+        /// advantage of the top rank.
+        k: f32,
+    },
 }
 
-impl From<FusionStrategy> for CoreFusionStrategy {
-    fn from(strategy: FusionStrategy) -> Self {
-        match strategy {
+impl TryFrom<FusionStrategy> for CoreFusionStrategy {
+    type Error = VelesError;
+
+    /// Fallible: `WeightedRrf` is built through core's validating
+    /// [`CoreFusionStrategy::weighted_rrf`], so a Swift/Kotlin caller cannot
+    /// reach fusion with a negative weight or a non-positive `k`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VelesError::Database`] when a `WeightedRrf` weight or `k`
+    /// fails core's validation (non-finite, negative, `k` ≤ 0).
+    fn try_from(strategy: FusionStrategy) -> Result<Self, Self::Error> {
+        let core = match strategy {
             FusionStrategy::Average => CoreFusionStrategy::Average,
             FusionStrategy::Maximum => CoreFusionStrategy::Maximum,
             FusionStrategy::Rrf { k } => CoreFusionStrategy::RRF { k },
@@ -316,7 +339,12 @@ impl From<FusionStrategy> for CoreFusionStrategy {
                 dense_weight,
                 sparse_weight,
             },
-        }
+            FusionStrategy::WeightedRrf { weights, k } => {
+                CoreFusionStrategy::weighted_rrf(weights, k)
+                    .map_err(|e| VelesError::database(e.to_string()))?
+            }
+        };
+        Ok(core)
     }
 }
 

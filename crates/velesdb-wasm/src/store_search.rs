@@ -242,7 +242,27 @@ pub fn multi_query_search_impl(
 ) -> Result<JsValue, JsValue> {
     validate_multi_vector_len(vectors.len(), num_vectors, dimension)
         .map_err(|e| JsValue::from_str(&e))?;
-    let weights = weighted_weights_from_slice(weights)?;
+    // `weights` is strategy-conditional: `"weighted"` reads its
+    // [avg, max, hit] triple, `"weighted_rrf"` reads one weight per
+    // query vector, and every other strategy ignores it.
+    let (weights, branch_weights) = if strategy.eq_ignore_ascii_case("weighted_rrf") {
+        let branch_weights = match weights {
+            Some(w) if w.len() == num_vectors => Some(w),
+            Some(w) => {
+                return Err(JsValue::from_str(&format!(
+                    "weighted_rrf fusion expects one weight per query vector: {} weights for {} vectors",
+                    w.len(),
+                    num_vectors
+                )))
+            }
+            // `None` reaches core as missing weights — the named refusal,
+            // not an invented default.
+            None => None,
+        };
+        (None, branch_weights)
+    } else {
+        (weighted_weights_from_slice(weights)?, None)
+    };
 
     let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
 
@@ -250,8 +270,14 @@ pub fn multi_query_search_impl(
         all_results.push(top_k(query, ids, data, dimension, metric, k * 2));
     }
 
-    let fused = fusion::fuse_results(&all_results, strategy, rrf_k.unwrap_or(60), weights)
-        .map_err(|e| JsValue::from_str(&e))?;
+    let fused = fusion::fuse_results(
+        &all_results,
+        strategy,
+        rrf_k.unwrap_or(60),
+        weights,
+        branch_weights,
+    )
+    .map_err(|e| JsValue::from_str(&e))?;
     let fused: Vec<(u64, f32)> = fused.into_iter().take(k).collect();
 
     to_js(&fused)

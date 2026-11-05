@@ -111,7 +111,7 @@ impl VelesCollection {
         }
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
-        let core_strategy: CoreFusionStrategy = strategy.into();
+        let core_strategy: CoreFusionStrategy = strategy.try_into()?;
 
         // Consult the read gate, then AND any observer scope filter into the
         // fusion leaf (which accepts a metadata filter) so narrowing is
@@ -151,7 +151,7 @@ impl VelesCollection {
         }
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
-        let core_strategy: CoreFusionStrategy = strategy.into();
+        let core_strategy: CoreFusionStrategy = strategy.try_into()?;
 
         // Ids/scores-only results carry no payload, so an observer scope filter
         // cannot be enforced on them: consult the gate and fail closed rather
@@ -198,7 +198,7 @@ impl VelesCollection {
             .map_err(|e| VelesError::database(format!("Invalid filter JSON: {e}")))?;
 
         let query_refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
-        let core_strategy: CoreFusionStrategy = strategy.into();
+        let core_strategy: CoreFusionStrategy = strategy.try_into()?;
 
         // Consult the read gate and AND any observer scope filter into the
         // caller filter (narrow-only) before running (audit F-5.4, #1392).
