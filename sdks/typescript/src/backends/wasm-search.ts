@@ -704,10 +704,10 @@ export async function wasmMultiQuerySearch(
  */
 // Every optional tail anchors on a literal token (`limit`, `;`), so a run of
 // spaces has exactly one split point and a near-miss fails in linear time:
-// `;?` is a single literal, not a whitespace quantifier the spaces could
-// split across in two ways the way `(?:\s*;)?\s*$` did.
+// in `(?:;\s*)?` the `;` is mandatory, so the two whitespace spans can never
+// match the same characters — unlike `;?` between two `\s*`.
 const PURE_NEAR_QUERY =
-  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?\s*;?\s*$/i;
+  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?\s*(?:;\s*)?$/i;
 
 /**
  * The pure-NEAR shape with a LIMIT token that failed the grammar above:
@@ -720,7 +720,7 @@ const PURE_NEAR_QUERY =
  * with no value at all.
  */
 const PURE_NEAR_BAD_LIMIT =
-  /^\s*select\s+\*\s+from\s+[a-z_]\w*\s+where\s+vector\s+near\s+\$[a-z_]\w*\s+limit\s+([^\s;]+)\s*;?\s*$/i;
+  /^\s*select\s+\*\s+from\s+[a-z_]\w*\s+where\s+vector\s+near\s+\$[a-z_]\w*\s+limit\s+([^\s;]+)\s*(?:;\s*)?$/i;
 
 interface PureNearQuery {
   /** Collection named in the FROM clause. */
