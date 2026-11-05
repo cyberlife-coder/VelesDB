@@ -163,6 +163,37 @@ pub fn write(store_dir: &Path, provenance: &EmbeddingProvenance) -> Result<(), P
     std::fs::write(store_dir.join(PROVENANCE_FILE), body).map_err(ProvenanceError::Write)
 }
 
+/// Record which embedding model filled this store — **only when it holds no
+/// facts**.
+///
+/// The emptiness test is what makes the record trustworthy, and it is
+/// semantic rather than filesystem-shaped on purpose: "the directory looks
+/// new" is defeated by a config file sitting beside the store, or by a
+/// `.DS_Store` a file browser dropped in it. "No fact is stored" is the thing
+/// that actually matters — with zero vectors, there is nothing that could have
+/// come from a different model, so writing the record states something true.
+/// Over existing data it would not: one open with the wrong model would carve
+/// a false provenance that every later [`check`] would trust.
+///
+/// # Errors
+/// Forwards [`write()`]'s — the caller decides what a failed record means. The
+/// daemon warns and starts anyway (the store works without it); a library
+/// caller may prefer to propagate.
+#[cfg(feature = "persistence")]
+pub fn record_if_empty(
+    store_dir: &Path,
+    store: &crate::storage::NativeStore,
+    model: &str,
+    dimension: usize,
+) -> Result<(), ProvenanceError> {
+    use crate::FactStore as _;
+
+    if store.count() != 0 {
+        return Ok(());
+    }
+    write(store_dir, &EmbeddingProvenance::new(model, dimension))
+}
+
 /// Compare what the store recorded against what the daemon is configured for.
 ///
 /// `stored` is `None` for a store that predates the record; there is then

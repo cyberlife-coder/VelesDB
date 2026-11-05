@@ -9,7 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`MemoryService::open_with_model_name` — the daemon's embedding-provenance
+  contract for embedded callers and bindings.** `open` checks nothing about
+  which model filled a store: it never did, because it has no model name to
+  check against — the provenance record lived in the daemon's startup, so a
+  store opened through `MemoryService::open` directly (the Python and Node
+  bindings, every embedded use) never got recorded and never got checked. The
+  new constructor reads the record, refuses a mismatch, and stamps a fresh
+  store, exactly like the daemon — `embedding_provenance::record_if_empty`
+  now carries the write-only-when-empty semantics for both call sites.
+
 ### Changed
+
+- **The Python and Node bindings check and record embedding provenance at
+  open.** Both already know the model they configured — they now pass it to
+  `open_with_model_name`, so a store filled by a different model raises at
+  open (naming both configurations and the migration path) instead of
+  silently serving nonsense recall. No binding API change.
 
 - **The OpenAI-compatible extractor constrains decoding** (#1944).
   `OpenAiExtractor` sends the prompt's reply contract as `response_format` —
