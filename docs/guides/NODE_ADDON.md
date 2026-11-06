@@ -322,4 +322,4 @@ silently reduced instead.
 
 ---
 
-Last updated: 2026-08-09 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-08-09 · Applies to: velesdb-core 8.1.0

@@ -599,4 +599,4 @@ None of these truncates to `k`: they score exactly the slices they are given.
 
 ---
 
-Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.1.0
