@@ -59,7 +59,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-#: Assistant identities. Whole-word, case-insensitive.
+#: Assistant identities. Whole-word, case-insensitive. `mistral`/`vibe`
+#: were added after an audit found the harness this repository is developed
+#: with was itself unlisted — the rule names every assistant, including
+#: the one appending the footer.
 ASSISTANT_IDENTITIES = (
     "claude",
     "anthropic",
@@ -72,6 +75,8 @@ ASSISTANT_IDENTITIES = (
     "gemini",
     "gpt-4",
     "gpt-5",
+    "mistral",
+    "vibe",
     "llm",
     "ai-assistant",
     "assistant",
@@ -138,7 +143,7 @@ TRAILER_PATTERNS = (
     r"^\s*(?:Claude|Codex|Copilot|Cursor|Devin)[-_ ]Session:",
     r"^\s*Signed-off-by:.*(?:{assistants})",
     r"^\s*Assisted[-_ ]by:.*(?:{assistants})",
-    r"^\s*Generated[-_ ]with:?.*(?:{assistants})",
+    r"^\s*Generated[-_ ](?:with|by):?.*(?:{assistants})",
     r"🤖\s*Generated with",
     r"claude\.ai/code",
 )
