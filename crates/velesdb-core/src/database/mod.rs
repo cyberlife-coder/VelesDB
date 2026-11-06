@@ -321,6 +321,26 @@ impl Database {
         &self.data_dir
     }
 
+    /// Returns the on-disk directory for a validated collection `name`.
+    ///
+    /// Every `data_dir.join(name)` in this module goes through here, so
+    /// [`crate::validation::validate_collection_name`] sits at the join
+    /// itself — no path reaches the filesystem on a caller's word that
+    /// validation already ran upstream. The post-join parent comparison
+    /// is the containment barrier the validation alone does not
+    /// spell out.
+    pub(super) fn collection_dir(&self, name: &str) -> Result<std::path::PathBuf> {
+        crate::validation::validate_collection_name(name)?;
+        let candidate = self.data_dir.join(name);
+        if candidate.parent() != Some(self.data_dir.as_path()) {
+            return Err(crate::error::Error::InvalidCollectionName {
+                name: name.to_string(),
+                reason: "resolves outside the database directory".to_string(),
+            });
+        }
+        Ok(candidate)
+    }
+
     /// Returns the current DDL schema version counter.
     #[must_use]
     pub fn schema_version(&self) -> u64 {

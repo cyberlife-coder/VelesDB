@@ -81,7 +81,7 @@ impl Database {
             return Ok(Some(stats));
         }
 
-        let stats_path = self.data_dir.join(name).join("collection.stats.json");
+        let stats_path = self.collection_dir(name)?.join("collection.stats.json");
         if !stats_path.exists() {
             return Ok(None);
         }
