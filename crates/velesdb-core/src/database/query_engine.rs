@@ -7,7 +7,7 @@ use crate::velesql::{
 };
 use crate::{Error, Result, SearchResult};
 
-use super::read_authorization::{narrow_where, AuthorizedQuery};
+use super::read_authorization::{narrow_where, AuthorizedQuery, GateDecisions};
 use super::Database;
 
 /// Outcome of the non-VelesQL read gate ([`Database::read_gate_raw`]).
@@ -271,8 +271,38 @@ impl Database {
         &self,
         query: &crate::velesql::Query,
     ) -> Result<crate::velesql::QueryPlan> {
+        self.explain_query_with_params(query, &std::collections::HashMap::new())
+    }
+
+    /// [`explain_query`](Self::explain_query) with the caller's statement
+    /// params, so a read whose target rides in `params` — a `MATCH` addressed
+    /// through `_collection` rather than the statement text — is gated on the
+    /// collection it actually reads (issue #2598).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`explain_query`](Self::explain_query).
+    pub fn explain_query_with_params(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<crate::velesql::QueryPlan> {
+        self.explain_query_ctx(query, params, &GateDecisions::default())
+    }
+
+    /// [`explain_query`](Self::explain_query) with the caller's params (so a
+    /// `_collection`-addressed inner query is decided on the collection it
+    /// actually reads) and the statement's decision memo (issue #2588), so the
+    /// `EXPLAIN` statement executor and `EXPLAIN ANALYZE` replay the gate's
+    /// answers instead of consulting the observer a second time.
+    pub(super) fn explain_query_ctx(
+        &self,
+        query: &crate::velesql::Query,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
+    ) -> Result<crate::velesql::QueryPlan> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
-        self.authorize_unscoped_statement(query, &std::collections::HashMap::new())?;
+        self.authorize_unscoped_statement(query, params, decisions)?;
 
         let plan_key = self.build_plan_key(query);
 
@@ -339,10 +369,14 @@ impl Database {
     ) -> Result<ExplainOutput> {
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
 
-        let plan = self.explain_query(query)?;
+        // One memo for the plan read and the executed read: EXPLAIN ANALYZE
+        // is a single statement, so each collection it reads is decided once
+        // (issue #2588).
+        let decisions = GateDecisions::default();
+        let plan = self.explain_query_ctx(query, params, &decisions)?;
         let start = std::time::Instant::now();
         let (results, nodes, edges, executed_strategy) =
-            self.execute_query_counted(query, params)?;
+            self.execute_query_counted(query, params, &decisions)?;
         let stats = ActualStats::from_counted(results.len() as u64, start.elapsed(), nodes, edges)
             .with_executed_filter_strategy(executed_strategy);
         let node_stats = crate::velesql::build_leaf_node_stats(
@@ -382,26 +416,36 @@ impl Database {
         // after the data-plane op completes. Resolving the `Cow` to a `&Query`
         // (via deref coercion on `&gated`) keeps the timing in one place rather
         // than duplicated across the borrowed / owned arms.
-        self.execute_query_gated(query, params, None)
+        self.execute_query_gated(query, params, None, &GateDecisions::default())
     }
 
     /// Shared pre-flight + execution used by both the plain path and the
     /// EXPLAIN ANALYZE counted path, so the two can never drift: scalar
     /// subquery resolution, validation, the read-path gate, then the timed
     /// execution — with an optional executed-strategy probe threaded to the
-    /// base-collection call.
-    fn execute_query_gated(
+    /// base-collection call. `decisions` is the statement's gate memo
+    /// (issue #2588): subqueries resolved below record into it, so a subquery
+    /// on the outer statement's own collection is decided once.
+    pub(super) fn execute_query_gated(
         &self,
         query: &crate::velesql::Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
+        decisions: &GateDecisions,
     ) -> Result<Vec<SearchResult>> {
-        if let Some(rewritten) = self.resolve_subqueries(query, params)? {
-            return self.execute_query_gated(&rewritten, params, probe);
+        if let Some(rewritten) = self.resolve_subqueries(query, params, decisions)? {
+            return self.execute_query_gated(&rewritten, params, probe, decisions);
         }
         crate::velesql::QueryValidator::validate(query).map_err(|e| Error::Query(e.to_string()))?;
-        let authorized = self.authorize_statement(query, params)?;
-        self.execute_query_timed(&authorized, params, probe)
+        let authorized = self.authorize_statement(query, params, decisions)?;
+        let mut results = self.execute_query_timed(&authorized, params, probe, decisions)?;
+        // `search.max_results` is the deployment-wide ceiling on the rows one
+        // query hands back (#2591). It clamps here, at the outermost boundary,
+        // rather than inside the engine: compound operands, JOIN stages and
+        // MATCH candidate pools keep their own fetch windows, and only what
+        // the caller receives is bounded.
+        results.truncate(self.config.search.max_results);
+        Ok(results)
     }
 
     /// Executes the resolved (post-gate) query and fires the `on_query`
@@ -423,12 +467,14 @@ impl Database {
         authorized: &AuthorizedQuery<'_>,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
+        decisions: &GateDecisions,
     ) -> Result<Vec<SearchResult>> {
         let Some(observer) = self.observer.as_ref() else {
-            return self.execute_query_inner(authorized, params, probe); // zero-overhead fast path
+            return self.execute_query_inner(authorized, params, probe, decisions);
+            // zero-overhead fast path
         };
         let started = std::time::Instant::now();
-        let results = self.execute_query_inner(authorized, params, probe)?;
+        let results = self.execute_query_inner(authorized, params, probe, decisions)?;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
         // Report the collection the gate decided on — `select.from` is ""
         // for a MATCH addressed through `_collection`, which is exactly the
@@ -520,7 +566,7 @@ impl Database {
         query: &'q crate::velesql::Query,
         params: &'q std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<std::borrow::Cow<'q, crate::velesql::Query>> {
-        self.authorize_statement(query, params)
+        self.authorize_statement(query, params, &GateDecisions::default())
             .map(AuthorizedQuery::into_query)
     }
 
@@ -547,9 +593,10 @@ impl Database {
         authorized: &AuthorizedQuery<'_>,
         params: &std::collections::HashMap<String, serde_json::Value>,
         probe: Option<&crate::database::StrategyProbeSlot>,
+        decisions: &GateDecisions,
     ) -> Result<Vec<SearchResult>> {
         let query = authorized.query();
-        if let Some(results) = self.dispatch_non_select(authorized, params)? {
+        if let Some(results) = self.dispatch_non_select(authorized, params, decisions)? {
             return Ok(results);
         }
 
@@ -587,12 +634,15 @@ impl Database {
         &self,
         authorized: &AuthorizedQuery<'_>,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
     ) -> Result<Option<Vec<SearchResult>>> {
         // Classify the statement type (at most one is Some).
         let stmt_type = classify_statement(authorized.query());
         match stmt_type {
             StatementType::Admin(admin) => Ok(Some(self.execute_admin(admin)?)),
-            StatementType::Introspection(intro) => Ok(Some(self.execute_introspection(intro)?)),
+            StatementType::Introspection(intro) => {
+                Ok(Some(self.execute_introspection(intro, params, decisions)?))
+            }
             StatementType::Ddl(ddl) => Ok(Some(self.execute_ddl(ddl)?)),
             StatementType::Train(train) => Ok(Some(self.execute_train(train)?)),
             StatementType::Dml(dml) => Ok(Some(self.execute_dml(dml, params)?)),
@@ -627,6 +677,10 @@ impl Database {
         if let Some(mc) = &query.match_clause {
             self.enrich_match_results_cross_collection(mc, &mut results);
         }
+        // MATCH `RETURN` has no implicit LIMIT — `search.max_results` is the
+        // ceiling that bounds it (#2591), applied post-enrichment so the
+        // merged payload columns cannot move a row past the cut.
+        results.truncate(self.config.search.max_results);
         Ok((results, nodes_visited, edges_traversed))
     }
 
@@ -638,6 +692,7 @@ impl Database {
         &self,
         query: &Query,
         params: &std::collections::HashMap<String, serde_json::Value>,
+        decisions: &GateDecisions,
     ) -> Result<(
         Vec<SearchResult>,
         u64,
@@ -647,8 +702,9 @@ impl Database {
         if query.is_match_query() {
             // The MATCH executor takes only an admitted statement, so this
             // counted path (EXPLAIN ANALYZE) passes the same gate as
-            // `execute_query`.
-            let authorized = self.authorize_statement(query, params)?;
+            // `execute_query` — replaying the plan phase's answers through
+            // `decisions` rather than consulting a second time (issue #2588).
+            let authorized = self.authorize_statement(query, params, decisions)?;
             let (results, nodes, edges) = self.execute_match_routed(&authorized, params)?;
             return Ok((results, nodes, edges, None));
         }
@@ -657,7 +713,7 @@ impl Database {
         // base-collection call so EXPLAIN ANALYZE reports the ran strategy.
         let slot: crate::database::StrategyProbeSlot =
             std::sync::Arc::new(crate::guardrails::ExecutedStrategyCell::default());
-        let results = self.execute_query_gated(query, params, Some(&slot))?;
+        let results = self.execute_query_gated(query, params, Some(&slot), decisions)?;
         Ok((results, 0, 0, slot.get()))
     }
 

@@ -138,7 +138,8 @@ fn passing_ids(
 
 /// Maps a `NEAR_FUSED` [`FusionConfig`] to a [`FusionStrategy`], mirroring
 /// core's `fused_config_to_strategy`: `average` / `maximum` map directly,
-/// everything else (incl. `weighted` / `rsf` / unknown) falls back to `rrf`.
+/// everything else (incl. `weighted` / `weighted_rrf` / `rsf` / unknown)
+/// falls back to `rrf`.
 fn config_to_strategy(config: &FusionConfig) -> FusionStrategy {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let k = config.params.get("k").map_or(60, |v| *v as u32);

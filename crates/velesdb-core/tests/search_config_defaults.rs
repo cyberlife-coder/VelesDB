@@ -210,9 +210,9 @@ fn a_per_query_ef_is_independent_of_the_configured_default() {
 /// This refused at load until the seven-lens review (#2246): a TOML accepted by
 /// v6.0.0 then failed `Database::open`, a breaking change shipped under
 /// `### Added`. The concern behind the refusal is kept -- a filtered search's
-/// bitmap pre-filter never reads the configured quality, so a global `Perfect`
-/// would scan on some queries and traverse on others -- by never letting the
-/// default resolve to it.
+/// bitmap pre-filter traverses the graph even at `Perfect` (its index call has
+/// no exhaustive-scan arm), so a global `Perfect` would scan on some queries
+/// and traverse on others -- by never letting the default resolve to it.
 ///
 /// Asserted on the resolution because
 /// `a_configured_ef_search_reaches_an_unqualified_search` already proves the
@@ -230,7 +230,7 @@ fn perfect_as_a_global_default_still_opens_and_resolves_to_accurate() {
     assert_eq!(
         config.search.resolved_quality(),
         velesdb_core::SearchQuality::Accurate,
-        "a global `perfect` must resolve to `accurate`: the bitmap pre-filter never reads it"
+        "a global `perfect` must resolve to `accurate`: the bitmap pre-filter traverses, it does not scan"
     );
 
     config.search.default_mode = SearchMode::Balanced;
@@ -586,4 +586,79 @@ fn a_configured_ef_search_reaches_a_graph_collection_embedding_search() {
         some_query_disagrees(&low, &high),
         "search_by_embedding must follow the configured ef_search, not a hard-coded Balanced"
     );
+}
+
+/// The secondary-index bitmap pre-filter of a metadata-filtered `NEAR` reads
+/// the configured `[search]` quality (#2430), where `WITH` names none of
+/// `mode` / `ef_search` / `rerank` — no `WITH` at all, or only `timeout_ms`.
+///
+/// `cat` is indexed where the filtered case of
+/// `a_configured_ef_search_reaches_a_near_query_naming_no_quality` leaves it
+/// unindexed, so `build_prefilter_bitmap` resolves the `cat` predicate and the
+/// query runs the bitmap branch of `search_with_optional_bitmap` — the branch
+/// that computed its own `ef_search = candidates_k.max(k * 10)` (#2430).
+///
+/// The `EXPLAIN ANALYZE` assertion is the control that the branch ran: a
+/// bitmap miss would send the same query down the post-filter fallback, which
+/// follows `[search]` already and would pass the comparisons without the
+/// branch under test ever executing.
+#[test]
+fn a_configured_ef_search_reaches_the_bitmap_prefiltered_near_query() {
+    let dir = tempfile::TempDir::new().expect("test: tempdir");
+    {
+        let collection = seeded_hard(&dir, VelesConfig::default());
+        collection.create_index("cat").expect("test: index cat");
+        collection
+            .flush_full()
+            .expect("test: persist the index both opens will read");
+    }
+    // `WIDE_K`, not `K`, and `IN` with 16 values, not `cat = 0`: the structural
+    // selectivity estimate (Eq = 0.1, IN = 0.05/value capped at 0.8) drives
+    // `candidates_k`, which floors `Custom(ef)`'s ef at `ef.max(candidates_k)`
+    // scaled. `cat = 0` fetches 500 candidates, so even `LOW_EF` runs at
+    // ef = 1000 — already exact on this corpus at k = 10, and at k = 50, so
+    // both configs agree on every query (measured: the assert below failed
+    // vacuously at LIMIT 10 and LIMIT 50 with `cat = 0`). Sixteen values give
+    // 0.8, a 63-candidate fetch and ef = 126 under `LOW_EF`, narrow enough for
+    // the two configured defaults to answer differently.
+    let sql = format!(
+        "SELECT * FROM docs WHERE vector NEAR $v \
+         AND cat IN (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15) \
+         LIMIT {WIDE_K}"
+    );
+
+    let (db, _collection) = reopened(&dir, VelesConfig::default());
+    let parsed = velesdb_core::velesql::Parser::parse(&sql).expect("test: parse");
+    let params = HashMap::from([("v".to_string(), serde_json::json!(vector(0)))]);
+    let stats = db
+        .explain_analyze_query(&parsed, &params)
+        .expect("test: explain analyze")
+        .actual_stats
+        .expect("test: ANALYZE carries actual stats");
+    assert_eq!(
+        stats.executed_filter_strategy,
+        Some(velesdb_core::velesql::FilterStrategy::PreFilter),
+        "CONTROL: the query must run the bitmap pre-filter branch, or the \
+         comparisons below exercised the post-filter fallback, which already \
+         followed [search]"
+    );
+    drop(db);
+
+    for with in ["", " WITH (timeout_ms=60000)"] {
+        let query = format!("{sql}{with}");
+        let (low, high) = answers_under_both_efs(
+            |config| reopened(&dir, config),
+            |collection, q| {
+                let params = HashMap::from([("v".to_string(), serde_json::json!(q))]);
+                ids(&collection
+                    .execute_query_str(&query, &params)
+                    .expect("test: filtered NEAR query"))
+            },
+        );
+        assert!(
+            some_query_disagrees(&low, &high),
+            "a filtered NEAR on an indexed field with '{with}' must follow the \
+             configured ef_search, not its own candidates_k.max(k * 10)"
+        );
+    }
 }

@@ -13,7 +13,15 @@
 
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { VelesDB } from '../src/client';
-import type { QueryResponse } from '../src/types';
+import type { QueryApiResponse, QueryResponse, QueryResult } from '../src/types';
+
+/** Narrow the query() union to the row-returning shape these mocks produce. */
+function rows(response: QueryApiResponse): QueryResult[] {
+  if (!('results' in response)) {
+    throw new Error('expected a QueryResponse carrying results');
+  }
+  return response.results;
+}
 
 describe('VelesQL v2.0', () => {
   let db: VelesDB;
@@ -51,8 +59,8 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products GROUP BY category',
         undefined
       );
-      expect(result.results).toBeDefined();
-      expect(result.results.length).toBe(2);
+      expect(rows(result)).toBeDefined();
+      expect(rows(result).length).toBe(2);
     });
 
     it('should execute GROUP BY with multiple aggregates', async () => {
@@ -66,7 +74,7 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*), SUM(price), AVG(rating) FROM products GROUP BY category',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute GROUP BY with MIN/MAX', async () => {
@@ -80,7 +88,7 @@ describe('VelesQL v2.0', () => {
         'SELECT category, MIN(price), MAX(price) FROM products GROUP BY category',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 
@@ -96,7 +104,7 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 5',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute HAVING with AND operator', async () => {
@@ -110,7 +118,7 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*), AVG(price) FROM products GROUP BY category HAVING COUNT(*) > 5 AND AVG(price) > 50',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute HAVING with OR operator', async () => {
@@ -124,7 +132,7 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products GROUP BY category HAVING COUNT(*) > 10 OR COUNT(*) < 2',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 
@@ -140,7 +148,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM products ORDER BY price DESC',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute ORDER BY with multiple columns', async () => {
@@ -154,7 +162,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM products ORDER BY category ASC, price DESC',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute ORDER BY with similarity function', async () => {
@@ -170,7 +178,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM docs ORDER BY similarity(vector, $v) DESC LIMIT 10',
         { v: queryVector }
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 
@@ -186,7 +194,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM orders JOIN customers ON orders.customer_id = customers.id',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute JOIN with alias', async () => {
@@ -200,7 +208,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM orders JOIN customers AS c ON orders.customer_id = c.id',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute JOIN with WHERE clause', async () => {
@@ -215,7 +223,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM orders JOIN customers AS c ON orders.customer_id = c.id WHERE status = $status',
         { status: 'active' }
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 
@@ -231,7 +239,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM active_users UNION SELECT * FROM archived_users',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute UNION ALL', async () => {
@@ -245,7 +253,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM active_users UNION ALL SELECT * FROM archived_users',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute INTERSECT', async () => {
@@ -259,7 +267,7 @@ describe('VelesQL v2.0', () => {
         'SELECT id FROM premium_users INTERSECT SELECT id FROM active_users',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute EXCEPT', async () => {
@@ -273,7 +281,7 @@ describe('VelesQL v2.0', () => {
         'SELECT id FROM all_users EXCEPT SELECT id FROM banned_users',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 
@@ -289,7 +297,7 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products WITH (max_groups = 100) GROUP BY category',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute WITH group_limit', async () => {
@@ -303,7 +311,7 @@ describe('VelesQL v2.0', () => {
         'SELECT category, COUNT(*) FROM products WITH (group_limit = 50) GROUP BY category',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 
@@ -319,7 +327,7 @@ describe('VelesQL v2.0', () => {
         'SELECT * FROM docs USING FUSION LIMIT 20',
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute with FUSION RRF strategy', async () => {
@@ -333,7 +341,7 @@ describe('VelesQL v2.0', () => {
         "SELECT * FROM docs USING FUSION(strategy = 'rrf', k = 60) LIMIT 20",
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute with FUSION weighted strategy', async () => {
@@ -347,7 +355,7 @@ describe('VelesQL v2.0', () => {
         "SELECT * FROM docs USING FUSION(strategy = 'weighted', vector_weight = 0.7, graph_weight = 0.3) LIMIT 20",
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
 
     it('should execute with FUSION maximum strategy', async () => {
@@ -361,7 +369,7 @@ describe('VelesQL v2.0', () => {
         "SELECT * FROM docs USING FUSION(strategy = 'maximum') LIMIT 20",
         undefined
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 
@@ -377,8 +385,8 @@ describe('VelesQL v2.0', () => {
       const result = await db.query('orders', sql);
 
       expect(mockQuery).toHaveBeenCalledWith('orders', sql, undefined);
-      expect(result.results).toBeDefined();
-      expect(result.results.length).toBe(2);
+      expect(rows(result)).toBeDefined();
+      expect(rows(result).length).toBe(2);
     });
 
     it('should execute semantic search with aggregation', async () => {
@@ -399,7 +407,7 @@ describe('VelesQL v2.0', () => {
         expect.stringContaining('GROUP BY category'),
         { v: queryVector }
       );
-      expect(result.results).toBeDefined();
+      expect(rows(result)).toBeDefined();
     });
   });
 });

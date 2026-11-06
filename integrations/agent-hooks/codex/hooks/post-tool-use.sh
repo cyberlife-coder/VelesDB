@@ -9,12 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: a li
 source "$SCRIPT_DIR/lib/common.sh"
 
 require_jq
-payload="$(read_stdin_payload)"
+read_exact payload read_stdin_payload
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
 # The tool name is read once, here: the recall check and the working-context
 # recording both take it, so neither parses the payload for it again.
-tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"  # exact-read-ok: a tool name is one word, never a line
 [ -n "$cwd" ] || cwd="$PWD"
 
 resolve_config "$cwd"

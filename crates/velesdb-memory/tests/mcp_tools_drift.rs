@@ -27,10 +27,14 @@
 //!
 //! ## Why no `#[ignore]`
 //!
-//! `generate_openapi_spec_files` must be `#[ignore]`d because the workspace
-//! test sweep runs it under a feature set that legitimately changes the
-//! schema. The equivalent hazard here is real but currently empty, and the
-//! distinction is worth writing down rather than rounding off.
+//! `generate_openapi_spec_files` answers the equivalent hazard with the same
+//! mechanism as the `cfg` below: the workspace test sweep runs under a
+//! feature set that legitimately changes the published document (no
+//! `openapi`, and the spec loses the `oneOf` id schemas), so since #2592 it
+//! is gated on the two features that move the document — `openapi` +
+//! `prometheus` — rather than `#[ignore]`d. Here the hazard is real but
+//! currently empty, and the distinction is worth writing down rather than
+//! rounding off.
 //!
 //! The `cfg` below is a CONJUNCTION, not an equality: every SUPERSET of
 //! `mcp` + `context` + `persistence` satisfies it too — so "under any other

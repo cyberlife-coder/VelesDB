@@ -46,6 +46,11 @@ const PAIRS = [
     copy: join(NODE_SKILLS_DIR, 'velesdb-context-optimizer'),
   },
   {
+    name: 'velesdb-extract-outline',
+    source: join(REPO_ROOT, 'skills', 'velesdb-extract-outline'),
+    copy: join(NODE_SKILLS_DIR, 'velesdb-extract-outline'),
+  },
+  {
     name: 'velesdb-learning-loop',
     source: join(REPO_ROOT, 'skills', 'velesdb-learning-loop'),
     copy: join(NODE_SKILLS_DIR, 'velesdb-learning-loop'),

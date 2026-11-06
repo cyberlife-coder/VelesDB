@@ -1,9 +1,22 @@
-//! DAAT `MaxScore` sparse search with linear scan fallback.
+//! Sparse inner-product search: linear scan, dense or hash-map accumulator.
 //!
-//! Provides inner-product ANN search over a [`SparseInvertedIndex`].
-//! `MaxScore` partitions query terms into essential/non-essential sets for
-//! early termination. A linear scan fallback handles high-coverage queries
-//! where `MaxScore` overhead exceeds its benefit.
+//! Provides inner-product ANN search over a [`SparseInvertedIndex`]. There
+//! is exactly one production strategy — `strategy::linear_scan_search`,
+//! which picks a dense `f32` accumulator inside `MAX_DENSE_ACCUMULATOR`
+//! and a hash map above it.
+//!
+//! `MaxScore` DAAT used to be the routing alternative for large corpora.
+//! The scan measured 14–43× faster than `MaxScore` at the former 100k
+//! boundary: crossing 100k docs cost **43×** per query on
+//! uniform queries and **14×** on skewed SPLADE-shaped ones, with the
+//! ratio stayed flat (~13×) in a crossover sweep up to 400k docs and
+//! still ~13× ahead at 400k (#2177). The op-count probe then measured
+//! **78×** at 1.1M–1.5M — it scores the same candidate union the scan
+//! visits (it prunes nothing) but pays ~100–280 elementary ops per
+//! posting where the scan pays ~1. With no crossover anywhere,
+//! `maxscore_search` survives only under the `internal-bench` and test
+//! seams — kept to be re-measured if a workload ever moves the ratio
+//! toward parity.
 
 #![allow(clippy::cast_precision_loss)]
 
@@ -15,34 +28,9 @@ mod bmw_parity_tests;
 
 use super::inverted_index::SparseInvertedIndex;
 use super::types::{ScoredDoc, SparseVector};
-use strategy::{linear_scan_search, maxscore_search};
-
-/// When total posting list length exceeds this fraction of
-/// `doc_count * num_query_terms`, the linear scan fallback is used.
-const FULL_SCAN_THRESHOLD: f32 = 0.3;
-
-/// Doc-count threshold below which the linear scan path is preferred
-/// unconditionally.
-///
-/// Tied to [`MAX_DENSE_ACCUMULATOR`]: the whole regime where the linear
-/// scan gets its dense accumulator is routed to it (#2177). The old value
-/// of `100_000` created a cliff at the boundary — measured with the
-/// `sparse_posting_scale` bench (both query shapes, two passes each,
-/// checksums stable): crossing 100k docs cost **43×** per query on
-/// uniform queries and **14×** on skewed SPLADE-shaped ones, and the
-/// ratio stayed flat (~13×) in a crossover sweep up to 400k docs — there
-/// is no crossover inside the dense regime. The mechanism (confirmed by
-/// an operation-count probe on #2177): this `MaxScore` implementation
-/// scores the same candidate union a linear scan visits — it prunes no
-/// candidates, but pays cursor bookkeeping and a per-candidate min-scan
-/// over the essential lists, ~100–280 elementary ops per posting where
-/// the linear scan pays ~1.
-///
-/// Beyond this threshold (non-compact doc-id spaces above it, too) the
-/// coverage heuristic below still chooses between DAAT and linear scan;
-/// whether `MaxScore` earns its keep past 1M docs is unmeasured — see
-/// #2177 for the retirement question.
-const SMALL_CORPUS_LINEAR_THRESHOLD: u64 = MAX_DENSE_ACCUMULATOR;
+use strategy::linear_scan_search;
+#[cfg(feature = "internal-bench")]
+use strategy::maxscore_search;
 
 /// Maximum doc ID for which we use a dense accumulator array.
 /// Above this threshold we fall back to a hash map.
@@ -56,18 +44,10 @@ const MAX_DENSE_ACCUMULATOR: u64 = 1_000_000;
 
 /// Searches the sparse inverted index for the top-k documents by inner product.
 ///
-/// Routing strategy (in order):
-/// 1. Corpora in the dense-accumulator regime
-///    (`doc_count <= SMALL_CORPUS_LINEAR_THRESHOLD`) always use linear
-///    scan — measured 14–43× faster than `MaxScore` at the former 100k
-///    boundary and still ~13× ahead at 400k (#2177).
-/// 2. Queries with any negative weight use linear scan (the `MaxScore` upper
-///    bound is only valid for non-negative query / document weights — see
-///    CRITICAL-1 below).
-/// 3. Queries whose coverage (`total_postings / (doc_count * nnz)`) exceeds
-///    `FULL_SCAN_THRESHOLD` use linear scan because DAAT pruning would
-///    contribute little.
-/// 4. Otherwise, `MaxScore` DAAT with early termination.
+/// Always the linear scan — the only strategy left after the `MaxScore`
+/// retirement (#2177): it handled every regime the router used to dispatch,
+/// negative query weights included, and picks its accumulator on the
+/// doc-id space itself.
 #[must_use]
 pub fn sparse_search(
     index: &SparseInvertedIndex,
@@ -77,34 +57,7 @@ pub fn sparse_search(
     if k == 0 || query.is_empty() || index.doc_count() == 0 {
         return Vec::new();
     }
-
-    let doc_count = index.doc_count();
-
-    // CRITICAL-1: MaxScore DAAT computes upper bounds as
-    // `query_weight.abs() * max_doc_weight`, which is incorrect when query
-    // weights are negative and document weights are also negative (the inner
-    // product can be positive but the bound treats it as zero-or-negative
-    // contribution). Fall back to linear scan for any query with negative weights.
-    let has_negative_weight = query.values.iter().any(|&w| w < 0.0);
-
-    // Dense-regime fast path: the linear scan's accumulator pays ~1
-    // elementary op per posting where this MaxScore pays ~100-280 (#2177).
-    if doc_count <= SMALL_CORPUS_LINEAR_THRESHOLD || has_negative_weight {
-        return linear_scan_search(index, query, k);
-    }
-
-    // Coverage heuristic for large corpora: linear scan still wins when the
-    // query terms cover a large slice of the index.
-    let mut total_postings: usize = 0;
-    for &term_id in &query.indices {
-        total_postings += index.posting_count(term_id);
-    }
-    let coverage_threshold = FULL_SCAN_THRESHOLD * doc_count as f32 * query.nnz() as f32;
-    if (total_postings as f32) > coverage_threshold {
-        linear_scan_search(index, query, k)
-    } else {
-        maxscore_search(index, query, k)
-    }
+    linear_scan_search(index, query, k)
 }
 
 /// Searches the sparse inverted index with an optional post-filter.

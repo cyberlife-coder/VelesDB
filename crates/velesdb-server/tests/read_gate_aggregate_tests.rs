@@ -22,7 +22,7 @@ use common::create_full_app;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
-use velesdb_core::observer::{AccessDecision, AccessScope, QueryAccessContext};
+use velesdb_core::observer::{AccessDecision, AccessScope, QueryAccessContext, QueryOperationKind};
 use velesdb_core::velesql::Parser;
 use velesdb_core::DatabaseObserver;
 
@@ -65,6 +65,22 @@ impl DatabaseObserver for PolicyObserver {
             }
             _ => AccessDecision::Allow,
         })
+    }
+}
+
+/// Denies only `VectorSearch` reads on `items`; every other operation and
+/// collection is allowed — including `Select` on `items` itself.
+#[derive(Default)]
+struct KindObserver;
+
+impl DatabaseObserver for KindObserver {
+    fn on_query_request(&self, ctx: &QueryAccessContext) -> velesdb_core::Result<AccessDecision> {
+        if ctx.collection == "items" && ctx.operation == QueryOperationKind::VectorSearch {
+            return Ok(AccessDecision::Deny(velesdb_core::Error::Query(
+                "vector reads denied by governance policy".to_string(),
+            )));
+        }
+        Ok(AccessDecision::Allow)
     }
 }
 
@@ -351,6 +367,80 @@ async fn plan_only_explain_honours_the_read_gate() {
     // `/query/explain` answers a client's failure `422` by contract, so the
     // scope refusal carries that status rather than `400 VELES-009`.
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// GIVEN an observer that denies `VectorSearch` reads of `items` but allows
+///      `Select` on it — a refusal the endpoint's own `Select`-keyed check
+///      cannot see, only the in-core gate can
+/// WHEN a plan-only `/query/explain` of a NEAR query runs
+/// THEN the denial surfaces as an error status — never a fallback plan
+///      payload with HTTP 200 the caller cannot tell from a real one (#2587).
+#[tokio::test]
+async fn plan_only_explain_propagates_a_denial_the_select_check_missed() {
+    let dir = TempDir::new().expect("test: dir");
+    let db = velesdb_core::Database::open_with_observer(dir.path(), Arc::new(KindObserver))
+        .expect("test: open db");
+    let (app, _state) = create_full_app(db);
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/collections",
+        Some(json!({"name": "items", "dimension": 4, "metric": "cosine"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let explain = || json!({"query": "SELECT * FROM items WHERE vector NEAR $v LIMIT 3", "analyze": false, "params": {}});
+
+    // A plain SELECT explain is allowed — the observer denies vector reads only.
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/query/explain",
+        Some(
+            json!({"query": "SELECT * FROM items WHERE cat = 'a'", "analyze": false, "params": {}}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "allowed SELECT explain: {body}");
+
+    let (status, body) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    assert!(
+        !status.is_success(),
+        "denied vector EXPLAIN must refuse, got {status}: {body}"
+    );
+    assert!(
+        body.to_string().contains("vector reads denied"),
+        "{status}: {body}"
+    );
+}
+
+/// GIVEN the observer denies `items`
+/// WHEN a plan-only `/query/explain` of a `MATCH` whose target arrives in the
+///      `_collection` param runs
+/// THEN the gate is consulted on the traversal target and the denial is an
+///      error — never a `200` plan payload (#2598): the plan-only path used to
+///      gate with empty params, so the `_collection` target was never asked
+///      about.
+#[tokio::test]
+async fn plan_only_explain_gates_a_match_addressed_by_the_collection_param() {
+    let (_dir, app, observer) = setup().await;
+    let explain = || json!({"query": "MATCH (a)-[:KNOWS]->(b) RETURN a, b LIMIT 10", "analyze": false, "params": {"_collection": "items"}});
+
+    let (status, body) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    assert_eq!(status, StatusCode::OK, "allowed MATCH explain: {body}");
+
+    observer.set(Rule::Deny);
+    let (status, body) = send(&app, "POST", "/query/explain", Some(explain())).await;
+    assert!(
+        !status.is_success(),
+        "denied MATCH explain must refuse, got {status}: {body}"
+    );
+    assert!(
+        body.to_string()
+            .contains("read denied by governance policy"),
+        "{status}: {body}"
+    );
 }
 
 /// GIVEN the observer denies `items` — wait: stream is graph; use a graph coll.

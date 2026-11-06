@@ -89,12 +89,33 @@ const _: () = assert!(
 ///
 /// - Empty name `""` -> `"sparse"` (backward compat with unprefixed files)
 /// - Named `"title"` -> `"sparse-title"`
+///
+/// The `sparse-` glue is *not* the traversal guard — it only happens to keep a
+/// hostile name's first component inside `dir`. The guard is
+/// [`crate::validation::validate_sparse_index_name`], applied at the ingest
+/// boundary (`validate_vector_upsert_batch`, so no invalid name can sit in the
+/// `sparse_indexes` map these prefixes are derived from) and re-applied in the
+/// `pub` entry points below. Keep it in place before trusting this join.
 fn sparse_file_prefix(name: &str) -> String {
     if name.is_empty() {
-        "sparse".to_string()
-    } else {
-        format!("sparse-{name}")
+        return "sparse".to_string();
     }
+    // Belt-and-braces sanitization at the join itself: the Result-returning
+    // entry points reject invalid names through `validate_sparse_index_name`,
+    // but `needs_compaction` and `wal_path_for_name` are infallible, so any
+    // character outside the validated charset is replaced rather than let a
+    // separator or traversal component reach the filesystem.
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("sparse-{safe}")
 }
 
 /// Returns `true` when `name`'s index has changes its snapshot lacks.
@@ -120,6 +141,7 @@ pub fn needs_compaction(dir: &Path, name: &str) -> bool {
 ///
 /// Returns an error if disk writes fail.
 pub fn compact_named(dir: &Path, name: &str, index: &SparseInvertedIndex) -> Result<()> {
+    crate::validation::validate_sparse_index_name(name)?;
     let prefix = sparse_file_prefix(name);
     compact_with_prefix(dir, &prefix, index)
 }
@@ -130,6 +152,7 @@ pub fn compact_named(dir: &Path, name: &str, index: &SparseInvertedIndex) -> Res
 ///
 /// Returns an error if files exist but are corrupt.
 pub fn load_named_from_disk(dir: &Path, name: &str) -> Result<Option<SparseInvertedIndex>> {
+    crate::validation::validate_sparse_index_name(name)?;
     let prefix = sparse_file_prefix(name);
     load_from_disk_with_prefix(dir, &prefix)
 }

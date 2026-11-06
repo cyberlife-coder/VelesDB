@@ -18,13 +18,17 @@
 //! # Pipeline
 //!
 //! 1. **Format detection** (`detect_and_segment`): `jsonl` when every
-//!    non-empty line parses as a `{role, content}` JSON object, `plain`
-//!    otherwise. A caller-forced format that does not parse is a hard error —
-//!    never a silent fallback to the other format — surfaced as
+//!    non-empty line parses as JSON, `plain` otherwise. A turn line is
+//!    either a flat `{role, content}` object or the harness envelope
+//!    `{type, message: {role, content}}`; any other JSON line is a
+//!    bookkeeping record kept verbatim, role-less. A caller-forced format
+//!    that does not parse is a hard error — never a silent fallback to the
+//!    other format — surfaced as
 //!    [`crate::error::MemoryError::SegmentationError`] (a FORMAT failure,
 //!    distinct from a budget/cap breach; see below).
-//! 2. **Turns**: `jsonl` — one line, one turn, `role` taken directly from the
-//!    parsed JSON. `plain` — a CLOSED table of markers (`"System:"`,
+//! 2. **Turns**: `jsonl` — one line, one turn, `role` taken from the
+//!    parsed JSON (`message.role` for an envelope, `None` for a
+//!    bookkeeping record). `plain` — a CLOSED table of markers (`"System:"`,
 //!    `"User:"`, `"Human:"`, `"Assistant:"`, `"AI:"`, `"Tool:"`,
 //!    `"### User"`, `"### Assistant"`), first match at the start of a line
 //!    opens a new turn; a transcript with no marker at all is one turn with
@@ -91,8 +95,10 @@ pub enum SegmentFormat {
     /// Force plain-text, marker-based turn splitting — a transcript that
     /// happens to also be valid JSONL is still segmented as plain text.
     Plain,
-    /// Force one-line-one-turn JSONL parsing — a line that does not parse as
-    /// a `{role, content}` object is a hard error, never a silent fallback.
+    /// Force one-line-one-turn JSONL parsing — a line that does not parse
+    /// as JSON is a hard error, never a silent fallback. Turn lines are
+    /// `{role, content}` objects or `{type, message: {role, content}}`
+    /// harness envelopes; any other JSON line is a role-less verbatim turn.
     Jsonl,
 }
 
@@ -209,8 +215,8 @@ pub struct SegmentationOutcome {
 /// [`MAX_FRAGMENT_BYTES`], or when the segment count after merging still
 /// exceeds [`MAX_FRAGMENTS`] — all genuine budget/cap breaches.
 /// [`MemoryError::SegmentationError`] when [`SegmentFormat::Jsonl`] is forced
-/// but a line does not parse as a `{role, content}` object — a FORMAT
-/// failure, not a budget breach (issue #1516, m2).
+/// but a line does not parse as JSON — a FORMAT failure, not a budget
+/// breach (issue #1516, m2).
 pub fn segment_transcript(
     text: &str,
     policy: &SegmentationPolicy,
@@ -290,14 +296,84 @@ fn detect_and_segment(
 
 // --- JSONL -------------------------------------------------------------------
 
-/// One JSONL line's required shape. Both fields are mandatory: a line
-/// missing either — or not a JSON object at all — fails to parse, which
-/// `detect_and_segment` treats as "not jsonl" in [`SegmentFormat::Auto`]
-/// and as a hard error under a forced [`SegmentFormat::Jsonl`].
+/// One JSONL line's recognized shapes, tried in order. A line missing all
+/// of them but still valid JSON is [`Self::Other`], never a parse failure:
+/// a file whose every non-empty line parses as JSON IS jsonl — declaring
+/// it "not jsonl" is what let a real agent-harness transcript collapse into
+/// a single roleless `plain` turn under [`SegmentFormat::Auto`] (issue
+/// #2357). Only a line that is not valid JSON at all fails to parse, which
+/// `detect_and_segment` treats as "not jsonl" in `Auto` and as a hard error
+/// under a forced [`SegmentFormat::Jsonl`].
 #[derive(Deserialize)]
-struct JsonlLine {
+#[serde(untagged)]
+enum JsonlLine {
+    /// The flat shape this tool documented first: `{"role": …, "content":
+    /// …}` — `content` a string or a block array, decoded by
+    /// [`jsonl_content_text`].
+    Flat { role: String, content: Value },
+    /// The envelope every real agent harness writes: `{"type": …,
+    /// "message": {"role": …, "content": …}}` — the turn's role and content
+    /// live inside `message`, and whatever else the line carries (`uuid`,
+    /// timestamps, `parentUuid`) is bookkeeping, not turn content.
+    Envelope { message: EnvelopeMessage },
+    /// Any other JSON value — a harness bookkeeping record (a compaction
+    /// `summary`, a `file-history-snapshot`, a queue operation): kept as a
+    /// role-less turn with its `content`/`summary` payload extracted, or
+    /// the line verbatim when it carries neither. Its bytes are real
+    /// transcript content — dropping them or erroring on them would break
+    /// every transcript that interleaves such records with turns.
+    Other(Value),
+}
+
+/// The `message` field of a [`JsonlLine::Envelope`] — the turn itself.
+#[derive(Deserialize)]
+struct EnvelopeMessage {
     role: String,
-    content: String,
+    content: Value,
+}
+
+/// The text one `content` value carries: a string is itself; an array of
+/// content blocks joins each block's text with a newline; anything else
+/// (a bare object, a number) is [`jsonl_block_text`] on it. Verbatim
+/// always — a `content` the shape table does not know is still content.
+fn jsonl_content_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .map(jsonl_block_text)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => jsonl_block_text(other),
+    }
+}
+
+/// The text of one content block: a bare string is itself; an object with
+/// a `text` or `thinking` string field contributes that field; anything
+/// else — a `tool_use` carrying its name and input, a `tool_result`, an
+/// image reference — is kept as compact JSON. A block with no extractable
+/// text is still evidence a tool ran; serializing it beats dropping it.
+fn jsonl_block_text(block: &Value) -> String {
+    if let Some(text) = block.as_str() {
+        return text.to_owned();
+    }
+    block
+        .get("text")
+        .or_else(|| block.get("thinking"))
+        .and_then(Value::as_str)
+        .map_or_else(|| block.to_string(), str::to_owned)
+}
+
+/// The text of a [`JsonlLine::Other`] record: its `content` or `summary`
+/// payload when it carries one (a `{"type":"system","content":…}` boundary
+/// line, a `{"type":"summary","summary":…}` compaction record), else the
+/// whole value verbatim — never dropped, never invented.
+fn jsonl_other_text(value: &Value) -> String {
+    let payload = value
+        .get("content")
+        .or_else(|| value.get("summary"))
+        .unwrap_or(value);
+    jsonl_content_text(payload)
 }
 
 /// Parse every non-blank line of `text` as one JSONL turn. A wholly empty
@@ -313,6 +389,9 @@ struct JsonlLine {
 /// `Err` names the first (1-based) offending LINE — not turn — number: the
 /// first failure short-circuits, so a caller forcing `jsonl` on a bad
 /// transcript gets an actionable pointer instead of a generic "not jsonl".
+/// A line fails only when it is not valid JSON at all — every JSON line
+/// matches a [`JsonlLine`] variant, so a file that fails here is genuinely
+/// not JSONL, not merely a shape this parser did not expect.
 fn jsonl_pieces(text: &str) -> Result<Vec<RawPiece>, String> {
     let mut pieces: Vec<RawPiece> = Vec::new();
     let mut pending_prefix_start: Option<usize> = None;
@@ -330,19 +409,22 @@ fn jsonl_pieces(text: &str) -> Result<Vec<RawPiece>, String> {
             }
             continue;
         }
-        let parsed: JsonlLine = serde_json::from_str(trimmed).map_err(|err| {
-            format!(
-                "jsonl line {}: not a valid {{role, content}} object: {err}",
-                line_index + 1
-            )
-        })?;
+        let parsed: JsonlLine = serde_json::from_str(trimmed)
+            .map_err(|err| format!("jsonl line {}: not valid JSON: {err}", line_index + 1))?;
+        let (role, content) = match parsed {
+            JsonlLine::Flat { role, content } => (Some(role), jsonl_content_text(&content)),
+            JsonlLine::Envelope { message } => {
+                (Some(message.role), jsonl_content_text(&message.content))
+            }
+            JsonlLine::Other(value) => (None, jsonl_other_text(&value)),
+        };
         let piece_start = pending_prefix_start.take().unwrap_or(start);
         pieces.push(RawPiece {
             kind: SegmentKind::Body,
             range: piece_start..cursor,
             turn,
-            role: Some(parsed.role),
-            content_override: Some(parsed.content),
+            role,
+            content_override: Some(content),
         });
         turn += 1;
     }

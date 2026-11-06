@@ -8,7 +8,7 @@ info:
   license:
     name: VelesDB Core License 1.0
     url: https://github.com/cyberlife-coder/VelesDB/blob/main/LICENSE
-  version: 8.0.0
+  version: 8.1.0
 servers:
 - url: /
   description: Local server
@@ -1965,7 +1965,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MultiQuerySearchRequest"
+              $ref: "#/components/schemas/MultiQuerySearchRequestWithWeights"
         required: true
       responses:
         "200":
@@ -2024,7 +2024,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/MultiQuerySearchRequest"
+              $ref: "#/components/schemas/MultiQuerySearchRequestWithWeights"
         required: true
       responses:
         "200":
@@ -3247,7 +3247,7 @@ components:
           - number
           - "null"
           format: float
-          description: "Dense weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `sparse_w` when only that one is given)."
+          description: "Dense weight (for strategy = \"rsf\", default 0.5, or the\ncomplement of `sparse_w` when only that one is given; for\n\"`weighted_rrf`\", the dense branch's weight — both weights\nrequired)."
         hit_w:
           type:
           - number
@@ -3259,7 +3259,7 @@ components:
           - integer
           - "null"
           format: int32
-          description: RRF k parameter (only for strategy = "rrf", default 60).
+          description: "RRF k parameter (only for strategy = \"rrf\" or \"`weighted_rrf`\",\ndefault 60)."
           minimum: 0
         max_w:
           type:
@@ -3272,10 +3272,10 @@ components:
           - number
           - "null"
           format: float
-          description: "Sparse weight (only for strategy = \"rsf\", default 0.5, or the\ncomplement of `dense_w` when only that one is given)."
+          description: "Sparse weight (for strategy = \"rsf\", default 0.5, or the\ncomplement of `dense_w` when only that one is given; for\n\"`weighted_rrf`\", the sparse branch's weight — both weights\nrequired)."
         strategy:
           type: string
-          description: "Fusion strategy: \"rrf\", \"rsf\" (alias \"`relative_score`\"),\n\"average\" (alias \"avg\"), \"maximum\" (alias \"max\"), or \"weighted\",\ncase-insensitive — the grammar of `FusionStrategy::from_name`."
+          description: "Fusion strategy: \"rrf\", \"`weighted_rrf`\", \"rsf\" (alias\n\"`relative_score`\"), \"average\" (alias \"avg\"), \"maximum\" (alias\n\"max\"), or \"weighted\", case-insensitive — the grammar of\n`FusionStrategy::from_name`."
           example: rrf
     GraphSearchRequest:
       type: object
@@ -3690,7 +3690,7 @@ components:
           example: 0.5
         strategy:
           type: string
-          description: "Fusion strategy: \"average\" (alias \"avg\"), \"maximum\" (alias \"max\"),\n\"rrf\", \"weighted\", or \"`relative_score`\" (alias \"rsf\"),\ncase-insensitive — the grammar of `FusionStrategy::from_name`."
+          description: "Fusion strategy: \"average\" (alias \"avg\"), \"maximum\" (alias \"max\"),\n\"rrf\", \"`weighted_rrf`\", \"weighted\", or \"`relative_score`\" (alias\n\"rsf\"), case-insensitive — the grammar of\n`FusionStrategy::from_name`."
           example: rrf
         top_k:
           type: integer
@@ -3705,6 +3705,21 @@ components:
               type: number
               format: float
           description: List of query vectors.
+    MultiQuerySearchRequestWithWeights:
+      allOf:
+      - $ref: "#/components/schemas/MultiQuerySearchRequest"
+        description: Every field core's DTO declares.
+      - type: object
+        properties:
+          branch_weights:
+            type:
+            - array
+            - "null"
+            items:
+              type: number
+              format: float
+            description: "`weighted_rrf` only: one weight per query vector, in vector order —\nthe parameter the strategy cannot default. Ignored by every other\nstrategy, like the scalar weight fields."
+      description: "`/search/multi`'s request: core's `MultiQuerySearchRequest`\nplus the `branch_weights` `weighted_rrf` reads.\n\nKept server-side on purpose: the core DTO is a published,\nexternally-constructible struct, so a new pub field would break\ndownstream struct literals — the semver gate refuses it\n(`constructible_struct_adds_field`). `#[serde(flatten)]` keeps the wire\nbody byte-identical."
     NodeListResponse:
       type: object
       description: Response containing all node IDs in the graph.

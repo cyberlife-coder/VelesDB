@@ -126,8 +126,21 @@ fn validate_fusion_weights(fc: &super::ast::FusionClause) -> Result<(), Validati
     match fc.strategy {
         FusionStrategyType::Rsf => validate_rsf_weights(fc),
         FusionStrategyType::Weighted => validate_weighted_weights(fc),
+        FusionStrategyType::WeightedRrf => validate_weighted_rrf_weights(fc),
         _ => Ok(()),
     }
+}
+
+/// Weighted-RRF per-branch weights must be non-negative — rank multipliers
+/// carry no sum constraint, but a negative one flips a branch's
+/// contribution, which is never what `weighted_rrf` names.
+fn validate_weighted_rrf_weights(fc: &super::ast::FusionClause) -> Result<(), ValidationError> {
+    reject_negative_pair(
+        "USING FUSION(strategy='weighted_rrf')",
+        fc.dense_weight.unwrap_or(0.5),
+        fc.sparse_weight.unwrap_or(0.5),
+        "weighted_rrf dense_weight/sparse_weight",
+    )
 }
 
 /// RSF dense/sparse weights must sum to ~1.0 and be non-negative.
@@ -201,7 +214,7 @@ fn fused_strategy_is_rejected(cond: &Condition) -> bool {
         Condition::VectorFusedSearch(v) => {
             matches!(
                 v.fusion.strategy.to_lowercase().as_str(),
-                "weighted" | "rsf"
+                "weighted" | "weighted_rrf" | "rsf"
             )
         }
         Condition::And(l, r) | Condition::Or(l, r) => {

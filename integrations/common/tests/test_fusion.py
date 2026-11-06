@@ -102,6 +102,23 @@ def test_the_name_is_read_by_cores_grammar_when_the_binding_has_it(monkeypatch):
     assert _RecordingStrategy.calls == [("AVG", {"k": 30, "dense_weight": 0.7})]
 
 
+def test_weighted_rrf_weights_reach_from_name(monkeypatch):
+    """``weighted_rrf`` is useless without its per-vector weights — the
+    param filter must not drop them on the floor."""
+    _RecordingStrategy.calls = []
+    _fake_velesdb(monkeypatch, _RecordingStrategy)
+
+    built = build_fusion_strategy(
+        "weighted_rrf", {"weights": [0.7, 0.3], "k": 30, "unrelated": 1}
+    )
+
+    assert built == (
+        "from_name",
+        "weighted_rrf",
+        {"k": 30, "weights": [0.7, 0.3]},
+    )
+
+
 def test_an_older_binding_falls_back_to_the_literal_dispatch(monkeypatch):
     class _OldStrategy:
         @staticmethod

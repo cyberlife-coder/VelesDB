@@ -1607,7 +1607,7 @@ test('memoryStatus reports the hash default as NOT semantic, with counts', async
   const before = await svc.memoryStatus()
   assert.equal(before.embedder.model, 'hash')
   assert.equal(before.embedder.semantic, false, 'hash is lexical, and the status says so')
-  assert.equal(before.provenance.recorded, false, 'no daemon wrote a provenance record here')
+  assert.equal(before.provenance.recorded, true, 'the binding stamps the model it opened with')
   assert.equal(before.extraction.configured, false, 'nothing is pre-attached in the binding')
   assert.equal(before.memory.facts, 0)
   assert.equal(before.memory.edges, 0)

@@ -8,9 +8,23 @@ use crate::point::SearchResult;
 use super::VectorCollection;
 
 impl VectorCollection {
+    /// `k` clamped to the configured `search.max_results` ceiling (#2591).
+    ///
+    /// `usize::MAX` (a no-op clamp) unless a `Database` pushed a cap at open —
+    /// a direct `VectorCollection::create`/`open` caller keeps the full `k`.
+    /// Row-returning query surfaces (`execute_query`, `execute_match`, ...)
+    /// instead truncate their result vector to the same value, so compound
+    /// operands and MATCH candidate pools keep their own fetch windows inside
+    /// the engine.
+    fn capped_k(&self, k: usize) -> usize {
+        k.min(self.inner.runtime_max_results())
+    }
+
     /// Performs kNN vector search using the HNSW index.
     ///
-    /// Returns the `k` nearest neighbors ordered by ascending distance.
+    /// Returns the `k` nearest neighbors ordered by ascending distance,
+    /// at most `search.max_results` rows when the collection was opened
+    /// through a `Database` carrying that config.
     ///
     /// # Errors
     ///
@@ -29,7 +43,7 @@ impl VectorCollection {
     /// # Ok::<(), velesdb_core::Error>(())
     /// ```
     pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<SearchResult>> {
-        self.inner.search(query, k)
+        self.inner.search(query, self.capped_k(k))
     }
 
     /// Performs full-text BM25 search over indexed payload fields.
@@ -49,7 +63,7 @@ impl VectorCollection {
     /// # Ok::<(), velesdb_core::Error>(())
     /// ```
     pub fn text_search(&self, query: &str, k: usize) -> Result<Vec<SearchResult>> {
-        self.inner.text_search(query, k)
+        self.inner.text_search(query, self.capped_k(k))
     }
 
     /// Performs kNN search with an explicit `ef_search` override.
@@ -65,7 +79,8 @@ impl VectorCollection {
         k: usize,
         ef_search: usize,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.search_with_ef(query, k, ef_search)
+        self.inner
+            .search_with_ef(query, self.capped_k(k), ef_search)
     }
 
     /// Performs kNN search with a specific [`crate::SearchQuality`] profile.
@@ -83,10 +98,14 @@ impl VectorCollection {
         k: usize,
         quality: crate::SearchQuality,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.search_with_quality(query, k, quality)
+        self.inner
+            .search_with_quality(query, self.capped_k(k), quality)
     }
 
     /// Performs kNN search with a metadata filter applied post-retrieval.
+    ///
+    /// Runs at the collection's configured search quality; to tune the
+    /// filtered walk use [`Self::search_with_quality_and_filter`].
     ///
     /// # Errors
     ///
@@ -98,7 +117,34 @@ impl VectorCollection {
         k: usize,
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.search_with_filter(query, k, filter)
+        self.inner
+            .search_with_filter(query, self.capped_k(k), filter)
+    }
+
+    /// Performs kNN search with a [`crate::SearchQuality`] profile and a
+    /// metadata filter.
+    ///
+    /// The filtered counterpart of [`Self::search_with_quality`]: the profile
+    /// shapes the candidate walk the filter then narrows, where
+    /// [`Self::search_with_filter`] always runs the configured default. An
+    /// explicit `ef_search` travels as [`crate::SearchQuality::Custom`].
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if the filter references an unsupported field type.
+    /// - Returns [`Error::GuardRail`](crate::error::Error::GuardRail) when
+    ///   `quality` is [`crate::SearchQuality::Perfect`] and the collection
+    ///   exceeds the configured `max_perfect_mode_vectors` cap.
+    pub fn search_with_quality_and_filter(
+        &self,
+        query: &[f32],
+        k: usize,
+        quality: crate::SearchQuality,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner
+            .search_with_quality_and_filter(query, self.capped_k(k), quality, filter)
     }
 
     /// Returns [`crate::ScoredResult`] pairs without payload hydration.
@@ -113,7 +159,7 @@ impl VectorCollection {
         query: &[f32],
         k: usize,
     ) -> Result<Vec<crate::scored_result::ScoredResult>> {
-        self.inner.search_ids(query, k)
+        self.inner.search_ids(query, self.capped_k(k))
     }
 
     /// Full-text search with metadata filter.
@@ -127,7 +173,8 @@ impl VectorCollection {
         k: usize,
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.text_search_with_filter(query, k, filter)
+        self.inner
+            .text_search_with_filter(query, self.capped_k(k), filter)
     }
 
     /// Performs hybrid search combining vector kNN and BM25 full-text via RRF fusion.
@@ -155,7 +202,8 @@ impl VectorCollection {
         k: usize,
         alpha: Option<f32>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.hybrid_search(vector, text, k, alpha, None)
+        self.inner
+            .hybrid_search(vector, text, self.capped_k(k), alpha, None)
     }
 
     /// Performs hybrid search (vector + BM25) with a metadata filter.
@@ -173,7 +221,7 @@ impl VectorCollection {
         filter: &crate::filter::Filter,
     ) -> Result<Vec<SearchResult>> {
         self.inner
-            .hybrid_search_with_filter(vector, text, k, alpha, filter, None)
+            .hybrid_search_with_filter(vector, text, self.capped_k(k), alpha, filter, None)
     }
 
     /// Performs batch kNN search with per-query metadata filters.
@@ -207,7 +255,8 @@ impl VectorCollection {
         k: usize,
         filters: &[Option<crate::filter::Filter>],
     ) -> Result<Vec<Vec<SearchResult>>> {
-        self.inner.search_batch_with_filters(queries, k, filters)
+        self.inner
+            .search_batch_with_filters(queries, self.capped_k(k), filters)
     }
 
     /// Performs batch kNN search without filters, optimized for throughput.
@@ -236,7 +285,7 @@ impl VectorCollection {
         queries: &[&[f32]],
         k: usize,
     ) -> Result<Vec<Vec<SearchResult>>> {
-        self.inner.search_batch_parallel(queries, k)
+        self.inner.search_batch_parallel(queries, self.capped_k(k))
     }
 
     /// Performs multi-query search fusing results from multiple query vectors.
@@ -252,7 +301,8 @@ impl VectorCollection {
         strategy: crate::fusion::FusionStrategy,
         filter: Option<&crate::filter::Filter>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.multi_query_search(queries, k, strategy, filter)
+        self.inner
+            .multi_query_search(queries, self.capped_k(k), strategy, filter)
     }
 
     /// Performs multi-query search returning only IDs and fused scores.
@@ -267,7 +317,8 @@ impl VectorCollection {
         k: usize,
         strategy: crate::fusion::FusionStrategy,
     ) -> Result<Vec<(u64, f32)>> {
-        self.inner.multi_query_search_ids(queries, k, strategy)
+        self.inner
+            .multi_query_search_ids(queries, self.capped_k(k), strategy)
     }
 
     /// Performs sparse-only search on the named index.
@@ -281,6 +332,7 @@ impl VectorCollection {
         k: usize,
         index_name: &str,
     ) -> Result<Vec<SearchResult>> {
+        let k = self.capped_k(k);
         let indexes = self.inner.query.sparse_indexes.read();
         let index = indexes.get(index_name).ok_or_else(|| {
             crate::error::Error::Config(format!(
@@ -343,7 +395,7 @@ impl VectorCollection {
         self.inner.hybrid_sparse_search_inner(
             dense_vector,
             sparse_query,
-            k,
+            self.capped_k(k),
             strategy,
             filter,
             index_name,
@@ -361,7 +413,11 @@ impl VectorCollection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> crate::error::Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
-        self.inner.execute_match(match_clause, params)
+        let mut results = self.inner.execute_match(match_clause, params)?;
+        // `search.max_results` bounds the RETURN set (#2591); the executor's
+        // own post-sort LIMIT ran upstream.
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a MATCH query with vector similarity filtering.
@@ -376,8 +432,14 @@ impl VectorCollection {
         threshold: f32,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> crate::error::Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
-        self.inner
-            .execute_match_with_similarity(match_clause, query_vector, threshold, params)
+        let mut results = self.inner.execute_match_with_similarity(
+            match_clause,
+            query_vector,
+            threshold,
+            params,
+        )?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a MATCH query through the cost-based planner, returning ordered
@@ -394,7 +456,9 @@ impl VectorCollection {
         match_clause: &crate::velesql::MatchClause,
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> crate::error::Result<Vec<crate::collection::search::query::match_exec::MatchResult>> {
-        self.inner.match_query_ordered(match_clause, params)
+        let mut results = self.inner.match_query_ordered(match_clause, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes an aggregation query (GROUP BY / COUNT / SUM / AVG / MIN / MAX).
@@ -425,7 +489,9 @@ impl VectorCollection {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query(query, params)
+        let mut results = self.inner.execute_query(query, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a query with instrumentation and returns plan + actual stats.
@@ -510,7 +576,9 @@ impl VectorCollection {
         sql: &str,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query_str(sql, params)
+        let mut results = self.inner.execute_query_str(sql, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Reorders HNSW graph nodes in BFS traversal order for improved cache locality.

@@ -460,9 +460,12 @@ class SearchOpsMixin:
         Args:
             query_embeddings: List of query embedding vectors.
             similarity_top_k: Number of results to return.
-            fusion: Fusion strategy ("rrf", "average", "maximum", "weighted").
+            fusion: Fusion strategy ("rrf", "weighted_rrf", "average",
+                "maximum", "weighted", "relative_score"/"rsf").
             fusion_params: Parameters for fusion strategy:
                 - RRF: {"k": 60} (default k=60)
+                - WeightedRRF: {"weights": [0.7, 0.3]} — required, one per
+                  query vector; "k" also applies
                 - Weighted: {"avg_weight": 0.6, "max_weight": 0.3, "hit_weight": 0.1}
             **kwargs: Additional arguments.
 

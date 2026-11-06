@@ -81,12 +81,13 @@ pub fn sparse_insert_batch(index: &SparseInvertedIndex, docs: &[(u64, SparseVect
 
 /// Runs the linear-scan strategy directly, bypassing `sparse_search`'s router.
 ///
-/// `sparse_search` picks a strategy from `doc_count`, so it cannot be asked
-/// for the other one at a given corpus size — which is exactly what #2177's
-/// open question needs: above `SMALL_CORPUS_LINEAR_THRESHOLD`, does
-/// `maxscore_search` beat the linear scan, or has it only ever been the
-/// unmeasured branch? These two entry points let a harness score the same
-/// corpus and the same query both ways and compare the work.
+/// `sparse_search` routes every query to the linear scan since the
+/// `MaxScore` retirement (#2177: measured strictly dominated at every
+/// corpus size — the figures live in `sparse_index::search`'s module doc).
+/// These two entry points let a harness score the same corpus and the
+/// same query both ways — the seam that produced the retiring
+/// measurement, kept so the question can be re-measured if a workload
+/// ever moves the ratio toward parity.
 ///
 /// A benchmark-only seam, like `HnswIndex::search_raw` under `bench-sift1m`:
 /// not part of the stable API, and the router stays the only way in for

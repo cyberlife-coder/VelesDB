@@ -15,8 +15,9 @@ use super::strategy::{
 };
 
 /// The names [`FusionStrategy::from_name`] accepts, as its refusal lists them.
-pub(super) const FUSION_STRATEGY_NAMES: &str = "'rrf', 'rsf' (alias: 'relative_score'), \
-     'average' (alias: 'avg'), 'maximum' (alias: 'max'), 'weighted'";
+pub(super) const FUSION_STRATEGY_NAMES: &str = "'rrf', 'weighted_rrf', \
+     'rsf' (alias: 'relative_score'), 'average' (alias: 'avg'), \
+     'maximum' (alias: 'max'), 'weighted'";
 
 /// The parameters a strategy name may carry, for [`FusionStrategy::from_name`].
 ///
@@ -110,25 +111,60 @@ impl FusionStrategy {
     /// | Name | Aliases | Parameters (default) |
     /// |---|---|---|
     /// | `rrf` | — | `rrf_k` ([`DEFAULT_RRF_K`]) |
+    /// | `weighted_rrf` | — | `rrf_k` ([`DEFAULT_RRF_K`]) + one weight per branch, passed to [`from_name_with_weights`] |
     /// | `average` | `avg` | — |
     /// | `maximum` | `max` | — |
     /// | `weighted` | — | `avg_weight`, `max_weight`, `hit_weight` (the `DEFAULT_WEIGHTED_*` constants, each on its own) |
     /// | `relative_score` | `rsf` | `dense_weight`, `sparse_weight` (0.5 / 0.5; one given alone implies its complement) |
     ///
     /// Names are case-insensitive and otherwise exact: no trimming, no prefix.
-    /// [`FusionStrategy::WeightedRRF`] has no name, since it needs one weight
-    /// per branch.
     ///
     /// # Errors
     ///
     /// Returns [`FusionError::UnknownStrategy`] for a name outside the table,
+    /// [`FusionError::MissingWeights`] for `weighted_rrf` without weights,
     /// and the error of [`FusionStrategy::weighted`] or
     /// [`FusionStrategy::relative_score`] for weights they refuse.
+    ///
+    /// [`from_name_with_weights`]: FusionStrategy::from_name_with_weights
     pub fn from_name(name: &str, params: FusionParams) -> Result<Self, FusionError> {
+        Self::from_name_with_weights(name, params, None)
+    }
+
+    /// Builds the strategy a name stands for, with `params` filling its scalar
+    /// parameters and `weights` carrying `weighted_rrf`'s per-branch weights.
+    ///
+    /// `weights` is the companion channel the vector parameter needs:
+    /// [`FusionParams`] stays `Copy`, so it cannot hold the per-branch
+    /// vector — the one parameter `weighted_rrf` cannot default. As with
+    /// scalar params, weights a named strategy does not read are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Same contract as [`FusionStrategy::from_name`].
+    // `rrf_k` is a rank offset in the same magnitude as `RRF`'s `u32` k —
+    // far below 2^24, so the u32→f32 widening is exact.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn from_name_with_weights(
+        name: &str,
+        params: FusionParams,
+        weights: Option<&[f32]>,
+    ) -> Result<Self, FusionError> {
         match name.to_lowercase().as_str() {
             "rrf" => Ok(Self::RRF {
                 k: params.rrf_k.unwrap_or(DEFAULT_RRF_K),
             }),
+            "weighted_rrf" => {
+                let weights = weights.filter(|w| !w.is_empty()).ok_or_else(|| {
+                    FusionError::MissingWeights {
+                        name: name.to_string(),
+                    }
+                })?;
+                Self::weighted_rrf(
+                    weights.to_vec(),
+                    params.rrf_k.unwrap_or(DEFAULT_RRF_K) as f32,
+                )
+            }
             "average" | "avg" => Ok(Self::Average),
             "maximum" | "max" => Ok(Self::Maximum),
             "weighted" => Self::weighted(

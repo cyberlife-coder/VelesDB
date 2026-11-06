@@ -307,9 +307,13 @@ fn a_worker_failure_is_recorded_on_the_job_for_migration_status() {
 /// assert without a subscriber; the property pinned is that failing to
 /// record is itself survivable and non-destructive.
 ///
-/// The workspace is parked and a plain FILE put in its place, so both the
-/// load and any staged write fail with "not a directory". (A read-only
-/// directory would not do: the suite runs as root in CI containers, and root
+/// A directory is created at the staging name inside the workspace, so the
+/// save's staging recovery refuses it. Parking the workspace and occupying
+/// the path — the old mechanism — cannot make the store unreachable
+/// anymore: since #2408 the store resolves every name through the directory
+/// descriptor it pinned at create, so the blockade has to sit *inside* the
+/// directory the store actually resolves against. (A read-only directory
+/// would not do either: the suite runs as root in CI containers, and root
 /// ignores permission bits.)
 #[test]
 fn a_worker_failure_that_cannot_be_recorded_does_not_panic_or_corrupt_the_record() {
@@ -320,12 +324,10 @@ fn a_worker_failure_that_cannot_be_recorded_does_not_panic_or_corrupt_the_record
     let store = super::job_state::JobStore::create(&workspace, &record).expect("create");
     let before = std::fs::read(store.path_for_test()).expect("read record");
 
-    let parked = dir.path().join("parked");
-    std::fs::rename(&workspace, &parked).expect("park the workspace");
-    std::fs::write(&workspace, b"not a directory").expect("occupy the path");
+    let blocked = workspace.join("online-migration-job.json.tmp");
+    std::fs::create_dir(&blocked).expect("block the staging name");
     super::manager::persist_worker_error(&store, &crate::migration::capture("the worker died"));
-    std::fs::remove_file(&workspace).expect("free the path");
-    std::fs::rename(&parked, &workspace).expect("restore the workspace");
+    std::fs::remove_dir(&blocked).expect("clear the staging name");
 
     let after = std::fs::read(store.path_for_test()).expect("read record");
     assert_eq!(

@@ -77,7 +77,7 @@ fn test_fuse_results_rrf() {
     let results2 = vec![(2, 0.95), (1, 0.85), (4, 0.6)];
     let all_results = vec![results1, results2];
 
-    let fused = fusion::fuse_results(&all_results, "rrf", 60, None).unwrap();
+    let fused = fusion::fuse_results(&all_results, "rrf", 60, None, None).unwrap();
     let top_ids: Vec<u64> = fused.iter().take(2).map(|(id, _)| *id).collect();
     // IDs 1 and 2 appear in both lists; 3 and 4 in only one -> 1 and 2 must rank top-2.
     assert!(
@@ -105,7 +105,7 @@ fn test_fuse_results_average() {
     let results2 = vec![(1, 0.7), (2, 0.6)];
     let all_results = vec![results1, results2];
 
-    let fused = fusion::fuse_results(&all_results, "average", 60, None).unwrap();
+    let fused = fusion::fuse_results(&all_results, "average", 60, None, None).unwrap();
     assert_eq!(fused.len(), 2);
     // ID 1: (0.9 + 0.7) / 2 = 0.8
     // ID 2: (0.8 + 0.6) / 2 = 0.7
@@ -119,7 +119,7 @@ fn test_fuse_results_maximum() {
     let results2 = vec![(1, 0.7), (2, 0.8)];
     let all_results = vec![results1, results2];
 
-    let fused = fusion::fuse_results(&all_results, "maximum", 60, None).unwrap();
+    let fused = fusion::fuse_results(&all_results, "maximum", 60, None, None).unwrap();
     // ID 1: max(0.9, 0.7) = 0.9
     // ID 2: max(0.5, 0.8) = 0.8
     let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
@@ -131,7 +131,7 @@ fn test_fuse_results_maximum() {
 #[test]
 fn test_fuse_results_empty() {
     let all_results: Vec<Vec<(u64, f32)>> = vec![];
-    let fused = fusion::fuse_results(&all_results, "rrf", 60, None).unwrap();
+    let fused = fusion::fuse_results(&all_results, "rrf", 60, None, None).unwrap();
     assert!(fused.is_empty());
 }
 
@@ -182,6 +182,39 @@ fn test_wasm_sparse_search_no_index_error() {
         err.unwrap_err().contains("sparse index"),
         "error should mention the missing sparse index"
     );
+}
+
+#[test]
+fn test_wasm_sparse_remove() {
+    // sparse_remove drops a doc's postings (#2287): after removal the doc
+    // no longer matches, and removing it again reports it absent.
+    let mut store = store_new::create_store(4, DistanceMetric::Cosine, StorageMode::Full);
+    store
+        .sparse_insert(1, &[10, 20], &[1.0, 0.5])
+        .expect("test: sparse_insert doc 1");
+    store
+        .sparse_insert(2, &[10], &[0.8])
+        .expect("test: sparse_insert doc 2");
+
+    assert!(
+        store.sparse_remove(1),
+        "removing a present doc returns true"
+    );
+    assert!(!store.sparse_remove(1), "double-remove reports absence");
+
+    let results = store
+        .search_sparse_scored(&[10, 20], &[1.0, 1.0], 10)
+        .expect("test: search_sparse after removal");
+    assert_eq!(results.len(), 1, "only the surviving doc matches");
+    assert_eq!(results[0].doc_id(), 2);
+}
+
+#[test]
+fn test_wasm_sparse_remove_no_index() {
+    // Removing from a store that never got a sparse vector is a no-op
+    // reporting absence, not an error.
+    let mut store = store_new::create_store(4, DistanceMetric::Cosine, StorageMode::Full);
+    assert!(!store.sparse_remove(1));
 }
 
 // =============================================================================

@@ -154,13 +154,9 @@ pub(crate) fn record_embedding_model(
     model: &str,
     dimension: usize,
 ) {
-    use velesdb_memory::embedding_provenance::{write, EmbeddingProvenance};
-    use velesdb_memory::FactStore as _;
-
-    if store.count() != 0 {
-        return;
-    }
-    if let Err(err) = write(store_dir, &EmbeddingProvenance::new(model, dimension)) {
+    if let Err(err) =
+        velesdb_memory::embedding_provenance::record_if_empty(store_dir, store, model, dimension)
+    {
         if std::env::var_os("VELESDB_MEMORY_QUIET").is_none() {
             eprintln!(
                 "[velesdb-memory] could not record the embedding model ({err}) — the store works, \

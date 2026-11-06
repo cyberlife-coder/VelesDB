@@ -202,6 +202,44 @@ fn a_symlinked_workspace_is_refused_by_every_entry_point() {
     assert_eq!(std::fs::read_dir(&real).expect("real").count(), 0);
 }
 
+/// #2408: a workspace swapped for another directory after `create` must not
+/// be followed — the store resolves `JOB_FILE`/`STAGING_FILE` through the
+/// directory descriptor it pinned at open, so `load` and `save` keep landing
+/// in the original workspace inode and write nothing into the swapped-in
+/// directory.
+#[cfg(unix)]
+#[test]
+fn a_workspace_swapped_after_open_is_never_followed() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).expect("workspace");
+    let record = record(root.path());
+    let store = JobStore::create(&workspace, &record).expect("create job");
+
+    let foreign = root.path().join("foreign");
+    std::fs::create_dir(&foreign).expect("foreign");
+    let moved = root.path().join("moved");
+    std::fs::rename(&workspace, &moved).expect("move workspace aside");
+    symlink(&foreign, &workspace).expect("swap in a foreign directory");
+
+    assert_eq!(
+        store.load().expect("load from the pinned workspace"),
+        record
+    );
+    let mut next = record.clone();
+    next.transition(JobPhase::Capturing).expect("transition");
+    store.save(&next).expect("save into the pinned workspace");
+
+    assert_eq!(
+        std::fs::read_dir(&foreign).expect("foreign").count(),
+        0,
+        "nothing may be written into the swapped-in directory"
+    );
+    assert_eq!(store.load().expect("load"), next);
+}
+
 #[test]
 fn a_missing_workspace_names_the_online_migration_store() {
     let root = tempfile::tempdir().expect("root");

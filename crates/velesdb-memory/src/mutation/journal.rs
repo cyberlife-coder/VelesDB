@@ -1,10 +1,12 @@
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(all(test, unix))]
+use std::path::PathBuf;
 
 use parking_lot::Mutex;
 
-use super::atomic_file::open_regular_file;
+use super::atomic_file::StoreDir;
 use super::{DirtyKey, MutationObserver};
 use crate::migration::capture;
 use crate::MemoryError;
@@ -12,7 +14,6 @@ use crate::MemoryError;
 mod format;
 mod identity;
 mod io;
-mod platform;
 
 use identity::validate_epoch_id;
 pub(crate) use identity::{CutoverIdentity, EpochIdentity};
@@ -23,7 +24,6 @@ use format::{
 };
 pub(super) use format::{JournalRecord, RECORD_BYTES};
 use io::{append_synced, write_compacted};
-use platform::{durability_barrier, promote};
 
 pub(super) const JOURNAL_FILE: &str = "online-migration-dirty.journal";
 const STAGING_FILE: &str = "online-migration-dirty.journal.tmp";
@@ -45,8 +45,13 @@ struct LoadedJournal {
 }
 
 pub(crate) struct DirtyJournal {
-    workspace: PathBuf,
-    path: PathBuf,
+    /// The workspace, pinned by an open directory descriptor at `open`
+    /// (#2408): every staging/publish/sync operation resolves a bare file
+    /// name against it, so a directory swapped in afterwards cannot be
+    /// followed. The journal file itself resolves by name exactly once, at
+    /// `open` — afterwards `inner.file` is the only handle it is reached
+    /// through (#2407).
+    dir: StoreDir,
     max_bytes: u64,
     inner: Mutex<JournalInner>,
     #[cfg(test)]
@@ -67,13 +72,13 @@ impl DirtyJournal {
         identity: &EpochIdentity,
         max_bytes: u64,
     ) -> Result<Self, MemoryError> {
-        let path = prepare_journal(workspace, identity)?;
-        let loaded = load_journal(&path)?;
+        let dir = StoreDir::open(workspace, "journal")?;
+        let file = open_or_create_journal(&dir, identity)?;
+        let loaded = load_journal(file)?;
         verify_identity(&loaded.header, identity)?;
         validate_capacity(loaded.header_bytes, max_bytes)?;
         Ok(Self {
-            workspace: workspace.to_owned(),
-            path,
+            dir,
             max_bytes,
             inner: Mutex::new(JournalInner {
                 file: Some(loaded.file),
@@ -117,7 +122,7 @@ impl DirtyJournal {
     }
 
     pub(crate) fn workspace(&self) -> &Path {
-        &self.workspace
+        self.dir.path()
     }
 
     pub(crate) fn records_after(
@@ -125,14 +130,22 @@ impl DirtyJournal {
         sequence: u64,
         limit: usize,
     ) -> Result<Vec<JournalRecord>, MemoryError> {
-        let inner = self.inner.lock();
+        let mut inner = self.inner.lock();
         ensure_healthy(&inner)?;
-        let mut options = OpenOptions::new();
-        options.read(true);
-        let mut file = open_regular_file(&self.path, "journal", options)?;
-        file.seek(SeekFrom::Start(inner.header_bytes))
+        // The already-held handle, never a reopen of `JOURNAL_FILE` by name:
+        // a link planted at that name after `open` intercepts nothing
+        // (#2407), and a workspace swapped after `open` cannot be followed
+        // through a descriptor that is already open (#2408). Appends always
+        // re-seek to the end, so reading here cannot disturb the write
+        // position.
+        let header_bytes = inner.header_bytes;
+        let file = inner
+            .file
+            .as_mut()
+            .ok_or_else(|| capture("journal handle is closed"))?;
+        file.seek(SeekFrom::Start(header_bytes))
             .map_err(|err| capture(format!("cannot seek journal: {err}")))?;
-        read_records(&mut file, sequence, limit.min(MAX_READ_BATCH))
+        read_records(file, sequence, limit.min(MAX_READ_BATCH))
     }
 
     pub(crate) fn compact_through(&self, watermark: u64) -> Result<(), MemoryError> {
@@ -153,12 +166,18 @@ impl DirtyJournal {
 
     fn compact_locked(&self, inner: &mut JournalInner, watermark: u64) -> Result<(), MemoryError> {
         let next_header = next_header(&inner.header, watermark)?;
-        let staging = self.workspace.join(STAGING_FILE);
+        // The compaction reads the current journal through the descriptor
+        // already held, never by name — same carry as `records_after`
+        // (#2407).
+        let input = inner
+            .file
+            .as_mut()
+            .ok_or_else(|| capture("journal handle is closed"))?;
         let (compacted, header_bytes) =
-            write_compacted(&self.path, &staging, &next_header, watermark, |point| {
+            write_compacted(&self.dir, input, &next_header, watermark, |point| {
                 self.maybe_fail(point)
             })?;
-        self.publish_compaction(inner, &staging, compacted, next_header, header_bytes)
+        self.publish_compaction(inner, compacted, next_header, header_bytes)
     }
 
     /// Publishes `compacted` over the journal path and keeps that same handle
@@ -168,18 +187,19 @@ impl DirtyJournal {
     fn publish_compaction(
         &self,
         inner: &mut JournalInner,
-        staging: &Path,
         compacted: File,
         next_header: JournalHeader,
         header_bytes: u64,
     ) -> Result<(), MemoryError> {
         self.maybe_fail(FaultPoint::BeforeCompactionReplace)?;
         inner.file.take();
-        promote(staging, &self.path)
+        self.dir
+            .promote(STAGING_FILE, JOURNAL_FILE)
             .map_err(|err| capture(format!("cannot replace journal generation: {err}")))?;
         self.maybe_fail(FaultPoint::AfterCompactionReplace)?;
         self.maybe_fail(FaultPoint::BeforeDirectorySync)?;
-        durability_barrier(&self.workspace)
+        self.dir
+            .sync()
             .map_err(|err| capture(format!("cannot sync journal directory: {err}")))?;
         self.maybe_fail(FaultPoint::AfterDirectorySync)?;
         inner.file = Some(compacted);
@@ -234,9 +254,10 @@ impl DirtyJournal {
         let mut swap_at = self.swap_at.lock();
         if swap_at.as_ref().is_some_and(|(at, _)| *at == point as u8) {
             let (_, victim) = swap_at.take().expect("checked above");
-            std::fs::remove_file(&self.path)
+            let journal_path = self.dir.path().join(JOURNAL_FILE);
+            std::fs::remove_file(&journal_path)
                 .map_err(|err| capture(format!("test: cannot remove journal path: {err}")))?;
-            std::os::unix::fs::symlink(&victim, &self.path)
+            std::os::unix::fs::symlink(&victim, &journal_path)
                 .map_err(|err| capture(format!("test: cannot plant swap symlink: {err}")))?;
         }
         Ok(())
@@ -290,25 +311,20 @@ pub(super) enum FaultPoint {
     AfterDirectorySync = 10,
 }
 
-fn prepare_journal(workspace: &Path, identity: &EpochIdentity) -> Result<PathBuf, MemoryError> {
-    validate_workspace(workspace)?;
-    let path = workspace.join(JOURNAL_FILE);
-    recover_staging(workspace, &path)?;
-    if !path_entry_exists(&path)? {
-        create_journal(workspace, identity)?;
+fn open_or_create_journal(dir: &StoreDir, identity: &EpochIdentity) -> Result<File, MemoryError> {
+    recover_staging(dir)?;
+    if dir.exists(JOURNAL_FILE)? {
+        // `StoreDir::open_regular_file` checks the handle it just opened —
+        // not a separate `stat` of the name — so no `validate_regular` step
+        // precedes it: a second check would only restate the same race.
+        return dir.open_regular_file(JOURNAL_FILE, "journal");
     }
-    // No `validate_regular_file` here: `load_journal`, called right after
-    // this returns, opens the same path through `open_regular_file`, whose
-    // check reads the handle it just opened rather than a separate `stat` of
-    // the path — a second check here would only restate the same race this
-    // PR removes, one call site up.
-    Ok(path)
+    create_journal(dir, identity)
 }
 
-fn load_journal(path: &Path) -> Result<LoadedJournal, MemoryError> {
-    let mut options = OpenOptions::new();
-    options.read(true).write(true);
-    let mut file = open_regular_file(path, "journal", options)?;
+fn load_journal(mut file: File) -> Result<LoadedJournal, MemoryError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|err| capture(format!("cannot seek journal: {err}")))?;
     let (header, header_bytes) = read_header(&mut file)?;
     let (last_sequence, valid_len) = scan_records(&mut file, &header, header_bytes)?;
     recover_torn_tail(&mut file, valid_len)?;
@@ -377,75 +393,44 @@ fn ensure_append_fits(file: &File, max_bytes: u64) -> Result<(), MemoryError> {
     Ok(())
 }
 
-fn create_journal(workspace: &Path, identity: &EpochIdentity) -> Result<(), MemoryError> {
-    let staging = workspace.join(STAGING_FILE);
-    let final_path = workspace.join(JOURNAL_FILE);
+fn create_journal(dir: &StoreDir, identity: &EpochIdentity) -> Result<File, MemoryError> {
     let header = JournalHeader {
         format_version: FORMAT_VERSION,
         generation: 0,
         compacted_through: 0,
         identity: identity.clone(),
     };
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&staging)
+    let mut file = dir
+        .create_new(STAGING_FILE, 0o666)
         .map_err(|err| capture(format!("cannot create journal staging file: {err}")))?;
     write_header(&mut file, &header)?;
     file.flush()
         .map_err(|err| capture(format!("cannot flush journal header: {err}")))?;
     file.sync_all()
         .map_err(|err| capture(format!("cannot sync journal header: {err}")))?;
-    drop(file);
-    promote(&staging, &final_path)
+    // The staging handle IS the journal inode: `promote` renames it in
+    // place, so the handle stays live and nothing reopens the name
+    // afterwards (#2407).
+    dir.promote(STAGING_FILE, JOURNAL_FILE)
         .map_err(|err| capture(format!("cannot publish journal: {err}")))?;
-    durability_barrier(workspace)
-        .map_err(|err| capture(format!("cannot sync journal directory: {err}")))
+    dir.sync()
+        .map_err(|err| capture(format!("cannot sync journal directory: {err}")))?;
+    Ok(file)
 }
 
-fn validate_workspace(workspace: &Path) -> Result<(), MemoryError> {
-    let metadata = std::fs::symlink_metadata(workspace)
-        .map_err(|err| capture(format!("cannot inspect journal workspace: {err}")))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(capture("journal workspace must be a real directory"));
-    }
-    Ok(())
-}
-
-fn validate_regular_file(path: &Path) -> Result<(), MemoryError> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|err| capture(format!("cannot inspect journal file: {err}")))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(capture("journal path must be a regular file"));
-    }
-    Ok(())
-}
-
-fn recover_staging(workspace: &Path, final_path: &Path) -> Result<(), MemoryError> {
-    let staging = workspace.join(STAGING_FILE);
-    if !path_entry_exists(&staging)? {
+fn recover_staging(dir: &StoreDir) -> Result<(), MemoryError> {
+    if !dir.exists(STAGING_FILE)? {
         return Ok(());
     }
-    if path_entry_exists(final_path)? {
-        validate_regular_file(final_path)?;
+    if dir.exists(JOURNAL_FILE)? {
+        dir.validate_regular(JOURNAL_FILE, "journal")?;
     }
-    validate_regular_file(&staging)?;
-    std::fs::remove_file(&staging).map_err(|err| {
+    dir.validate_regular(STAGING_FILE, "journal")?;
+    dir.remove(STAGING_FILE).map_err(|err| {
         capture(format!(
             "cannot remove interrupted compaction staging file: {err}"
         ))
     })
-}
-
-fn path_entry_exists(path: &Path) -> Result<bool, MemoryError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(capture(format!(
-            "cannot inspect {}: {error}",
-            path.display()
-        ))),
-    }
 }
 
 fn ensure_healthy(inner: &JournalInner) -> Result<(), MemoryError> {

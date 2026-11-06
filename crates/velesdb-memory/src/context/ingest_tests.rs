@@ -68,6 +68,30 @@ fn ingest_disabled_without_roots() {
     assert!(matches!(err, MemoryError::IngestDisabled), "{err:?}");
 }
 
+/// The disabled message may name `VELESDB_MEMORY_INGEST_ROOTS` only on a
+/// build where configuring it is possible — the same gate
+/// `AnchorError::Disabled`'s producer carries — and must never read as an
+/// instruction the caller can execute: the variable is server-startup
+/// configuration, and the caller this error reaches (a model, through an
+/// MCP tool) cannot set it (issue #2357).
+#[test]
+fn ingest_disabled_names_a_remedy_only_where_one_exists() {
+    let message = MemoryError::IngestDisabled.to_string();
+    if cfg!(all(feature = "context", not(target_arch = "wasm32"))) {
+        assert!(message.contains("VELESDB_MEMORY_INGEST_ROOTS"), "{message}");
+        assert!(
+            !message.starts_with("path ingestion is disabled: set VELESDB_MEMORY_INGEST_ROOTS"),
+            "the caller cannot set a server-startup variable: {message}"
+        );
+    } else {
+        assert!(
+            !message.contains("VELESDB_MEMORY_INGEST_ROOTS"),
+            "a build that can configure no ingest roots must not name the variable: {message}"
+        );
+    }
+    assert!(message.contains("inline"), "{message}");
+}
+
 #[test]
 fn ingest_rejects_relative_path() {
     let dir = tempfile::TempDir::new().expect("tempdir");

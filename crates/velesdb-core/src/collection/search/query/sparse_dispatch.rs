@@ -218,11 +218,15 @@ impl Collection {
                     },
                     FusionStrategyType::Average => crate::fusion::FusionStrategy::Average,
                     FusionStrategyType::Maximum => crate::fusion::FusionStrategy::Maximum,
-                    FusionStrategyType::Weighted => {
-                        // 'weighted' = weighted Reciprocal Rank Fusion over the two
-                        // branches (branch 0 = dense NEAR, branch 1 = sparse), honoring
-                        // the dense_w/sparse_w from the FUSION clause. Falls back to RRF
-                        // on a validation error (e.g. a negative weight).
+                    FusionStrategyType::Weighted | FusionStrategyType::WeightedRrf => {
+                        // 'weighted' and 'weighted_rrf' both build weighted
+                        // Reciprocal Rank Fusion over the two branches
+                        // (branch 0 = dense NEAR, branch 1 = sparse),
+                        // honoring the dense_w/sparse_w from the FUSION
+                        // clause. 'weighted_rrf' is simply the honest name of
+                        // the math 'weighted' has always run here. Falls back
+                        // to RRF on a validation error (e.g. a negative
+                        // weight).
                         let dw = fc.dense_weight.unwrap_or(0.5);
                         let sw = fc.sparse_weight.unwrap_or(0.5);
                         #[allow(clippy::cast_precision_loss)]

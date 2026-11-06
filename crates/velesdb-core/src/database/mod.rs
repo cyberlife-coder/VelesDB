@@ -58,6 +58,8 @@ mod database_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod ddl_executor_tests;
 #[cfg(all(test, feature = "persistence"))]
+mod gated_search_tests;
+#[cfg(all(test, feature = "persistence"))]
 mod graph_ops_tests;
 #[cfg(all(test, feature = "persistence"))]
 mod guardrails_wiring_tests;
@@ -143,7 +145,8 @@ pub struct Database {
     /// [`Database::update_guardrails`] replaces it and pushes it to every
     /// registered collection; every registration path pushes it to the
     /// collection it admits (`Database::admit_collection`). **Not persisted**
-    /// — a reopened database starts from `QueryLimits::default()`.
+    /// — a reopened database starts from `QueryLimits::default()` with its
+    /// `timeout_ms` seeded from `[search].query_timeout_ms` (#2087).
     ///
     /// Lock order: taken *before* the three registries, on both sides. The
     /// update holds it for write while it reads them; a registration holds it
@@ -261,6 +264,11 @@ impl Database {
             "SIMD features detected - direct dispatch enabled"
         );
 
+        // The global guard-rails seed their timeout from `[search]` — the
+        // entry was parsed, validated and never read until now (#2087).
+        // `update_guardrails` still overrides it at runtime. Read before
+        // `config` moves into its `Arc`.
+        let seeded_timeout_ms = config.search.query_timeout_ms;
         let db = Self {
             data_dir,
             _lock_file: lock_file,
@@ -273,7 +281,10 @@ impl Database {
             schema_version: std::sync::atomic::AtomicU64::new(0),
             compiled_plan_cache: crate::cache::CompiledPlanCache::new(1_000, 10_000),
             join_store_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
-            guardrail_limits: parking_lot::RwLock::new(crate::guardrails::QueryLimits::default()),
+            guardrail_limits: parking_lot::RwLock::new(crate::guardrails::QueryLimits {
+                timeout_ms: seeded_timeout_ms,
+                ..crate::guardrails::QueryLimits::default()
+            }),
         };
 
         // Auto-load all existing collections from disk (replaces manual load_collections()).
@@ -308,6 +319,26 @@ impl Database {
     #[must_use]
     pub fn data_dir(&self) -> &std::path::Path {
         &self.data_dir
+    }
+
+    /// Returns the on-disk directory for a validated collection `name`.
+    ///
+    /// Every `data_dir.join(name)` in this module goes through here, so
+    /// [`crate::validation::validate_collection_name`] sits at the join
+    /// itself — no path reaches the filesystem on a caller's word that
+    /// validation already ran upstream. The post-join parent comparison
+    /// is the containment barrier the validation alone does not
+    /// spell out.
+    pub(super) fn collection_dir(&self, name: &str) -> Result<std::path::PathBuf> {
+        crate::validation::validate_collection_name(name)?;
+        let candidate = self.data_dir.join(name);
+        if candidate.parent() != Some(self.data_dir.as_path()) {
+            return Err(crate::error::Error::InvalidCollectionName {
+                name: name.to_string(),
+                reason: "resolves outside the database directory".to_string(),
+            });
+        }
+        Ok(candidate)
     }
 
     /// Returns the current DDL schema version counter.

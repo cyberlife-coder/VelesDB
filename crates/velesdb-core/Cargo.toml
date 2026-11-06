@@ -68,7 +68,7 @@ optional = true
 # reaches. The `derive` feature stays behind `gpu` so a non-GPU build does not
 # pull in the proc-macro for `Pod`/`Zeroable` impls it never writes.
 [dependencies.bytemuck]
-version = "1.22.0"
+version = "1.25.2"
 
 [dependencies.half]
 version = "2.5.0"

@@ -27,6 +27,7 @@ impl Database {
             name,
             crate::observer::QueryOperationKind::Select,
             "collection statistics",
+            &super::read_authorization::GateDecisions::default(),
         )?;
 
         let collection = self.resolve_collection(name)?;
@@ -80,7 +81,7 @@ impl Database {
             return Ok(Some(stats));
         }
 
-        let stats_path = self.data_dir.join(name).join("collection.stats.json");
+        let stats_path = self.collection_dir(name)?.join("collection.stats.json");
         if !stats_path.exists() {
             return Ok(None);
         }

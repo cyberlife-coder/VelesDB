@@ -12,11 +12,11 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "VelesDB learning-loop guard: jq is unavailable, so repository policy and same-session recall cannot be verified. Install jq before retrying apply_patch." >&2
   exit 2
 fi
-payload="$(read_stdin_payload)"
-tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+read_exact payload read_stdin_payload
+tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null || true)"  # exact-read-ok: a tool name is one word, never a line
 read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
 read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
-patch="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+read_exact_line patch jq -r '.tool_input.command // empty' <<<"$payload" 2>/dev/null || patch=""
 
 [ "$tool_name" = "apply_patch" ] || { echo '{}'; exit 0; }
 [ -n "$cwd" ] || cwd="$PWD"
@@ -97,7 +97,7 @@ while IFS= read -r target_path; do # exact-read-ok: one patch header per line, s
     echo "VelesDB learning-loop guard: run a velesdb-memory recall_fused for every opted-in repository touched by this patch and wait for its successful result. A timeout or failed recall does not unlock apply_patch." >&2
     exit 2
   fi
-  record="$(project_record)"
+  record="$(project_record)"  # exact-read-ok: project_record emits one compact object through jq -cn
   dirty_projects="$(jq -cn \
     --argjson projects "$dirty_projects" \
     --argjson record "$record" \
@@ -112,7 +112,7 @@ if [ "$needs_checkpoint" = "true" ]; then
     echo "VelesDB learning-loop guard: private hook-state storage is unsafe or unavailable; apply_patch remains refused." >&2
     exit 2
   fi
-  while IFS= read -r record; do
+  while IFS= read -r record; do  # exact-read-ok: jq -c emits one compact record per line
     # shellcheck disable=SC2154 # read_exact sets dirty_dir (printf -v)
     if ! record_project_json "$dirty_dir" "$record"; then
       echo "VelesDB learning-loop guard: could not persist every edited repository identity; apply_patch remains refused." >&2

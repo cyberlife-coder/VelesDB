@@ -281,7 +281,7 @@ async fn auto_detect_and_generate(
     use velesdb_migrate::connectors::create_connector;
 
     println!("🔍 Auto-detecting schema from {} source...", source_type);
-    println!("   URL: {}", url);
+    println!("   URL: {}", velesdb_migrate::redact::redact_url(url));
     println!("   Collection: {}", collection);
 
     let source_config = build_source_config(source_type, url, collection, api_key)?;

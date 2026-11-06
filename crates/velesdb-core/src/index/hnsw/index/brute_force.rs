@@ -39,8 +39,13 @@ impl HnswIndex {
 
         let inner = self.inner.read();
         let results = inner.with_contiguous_vectors(|vectors| {
-            let mut scored: Vec<ScoredResult> =
-                Vec::with_capacity(usize::try_from(allowed_ids.len()).unwrap_or(k));
+            // `allowed_ids` can hold up to u32::MAX entries, far more than
+            // `vectors` ever stores — unmapped ids are skipped, so the
+            // vector count bounds both the result and the reservation.
+            let capacity = usize::try_from(allowed_ids.len())
+                .unwrap_or(usize::MAX)
+                .min(vectors.len());
+            let mut scored: Vec<ScoredResult> = Vec::with_capacity(capacity);
 
             // Scan bitmap IDs (u32 range).
             self.score_bitmap_ids(query, allowed_ids, vectors, &mut scored);

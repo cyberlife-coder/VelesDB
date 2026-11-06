@@ -234,7 +234,14 @@ class ReleaseTagWorkflowContractTests(unittest.TestCase):
         self.assertIn("git push origin vX.Y.Z", self.release_doc)
         self.assertIn("tag-release.yml", self.release_doc)
         self.assertIn("solution de repli", self.release_doc.lower())
-        self.assertIn("--include-ignored", self.release_doc)
+        # The regeneration command's load-bearing part: the env var is what
+        # makes generate_openapi_spec_files WRITE the snapshots rather than
+        # only compare — without it the release leaves the spec at the old
+        # version and the openapi-drift gate fails on the release PR.
+        self.assertIn(
+            "UPDATE_OPENAPI_SNAPSHOT=1 cargo test -p velesdb-server --features openapi",
+            self.release_doc,
+        )
 
     def test_release_guide_documents_the_memory_train_fallback(self) -> None:
         """`develop` alone is already in the guide, so pin the branch the tag is checked against."""

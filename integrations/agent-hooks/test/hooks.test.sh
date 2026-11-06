@@ -6,11 +6,15 @@
 # the exact JSON shape the script prints back.
 #
 # Run: bash test/hooks.test.sh   (exit 0 = all good, exit 1 = a check failed)
+# shellcheck source-path=SCRIPTDIR
+# ^ the `source=` directives below name paths relative to this file, so the
+#   harness's own shellcheck run must resolve them against the directory the
+#   file sits in, not the caller's cwd: without this, `shellcheck -x` passes
+#   from test/ and fails SC1091 from anywhere else.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HOOKS_DIR="$ROOT/claude-code/hooks"
-WINDSURF_HOOKS_DIR="$ROOT/windsurf/hooks"
+REPO_ROOT="$(cd "$ROOT/../.." && pwd)"
 
 FAILED=0
 
@@ -54,7 +58,7 @@ fi
 # helper that calls a hook for its caller passes the caller's line,
 # `"${BASH_LINENO[0]}"`: its own `$LINENO` would name the helper's line, the
 # same for every call.
-hook_exited() { fail "the hook called at line $1 exits 0 (got $2)"; }
+hook_exited() { fail "the hook called at line $1 should exit 0 (got $2)"; }
 
 # Assert that a block of text injected into a MODEL's context describes
 # load_working_context's return value correctly.
@@ -92,7 +96,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 TMP_TEST_DIR="$(mktemp -d)"
-# shellcheck disable=SC2329 # invoked indirectly via `trap ... EXIT` below
+# shellcheck disable=SC2317,SC2329 # invoked indirectly via `trap ... EXIT` below
 cleanup() {
   local job
   for job in $(jobs -p); do kill "$job" 2>/dev/null || true; done
@@ -106,6 +110,42 @@ export TMPDIR="$TMP_TEST_DIR/tmp"
 mkdir -p "$TMPDIR"
 HOOK_STATE_DIR="$TMPDIR/velesdb-agent-hooks-${UID}"
 mkdir -m 700 "$HOOK_STATE_DIR"
+
+# HOME and the VELESDB_* environment are ambient state too, and the hooks
+# consult both. session-start.sh's freshness check probes the daemon at
+# VELESDB_MCP_URL — whose default is the machine's real loopback server — then
+# reads and writes $HOME/.velesdb-memory/.latest-version, and every
+# VELESDB_HOOK_* knob silently retunes a check below (a developer who exports
+# VELESDB_HOOK_MIN_BYTES=1 would watch "below the threshold" checks compile).
+# Isolate all of it: a HOME the hooks may write freely, a daemon URL refused
+# at once so the freshness probe costs no curl timeout and no network, and no
+# inherited knob. VELESDB_MEMORY_BIN_REAL alone survives: it is CI's
+# deliberate handle for the real-binary contract further down.
+REAL_HOME="$HOME"
+export HOME="$TMP_TEST_DIR/home"
+mkdir -p "$HOME"
+for ambient in $(env | sed -n 's/^\(VELESDB_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  [ "$ambient" = "VELESDB_MEMORY_BIN_REAL" ] || unset "$ambient"
+done
+export VELESDB_MCP_URL="http://127.0.0.1:9/mcp"
+# The clock the end-of-suite sandbox check compares the real HOME's freshness
+# cache against: anything newer than this marker was written during the run.
+REAL_HOME_MARKER="$TMP_TEST_DIR/real-home-marker"
+touch "$REAL_HOME_MARKER"
+
+# The hooks under test run from STAGED trees, not the repository: since
+# #2337 no host directory ships its own lib/common.sh — each is composed
+# from shared/hooks/lib/common.sh at install time, and the staged tree is
+# exactly what an install lays down. That is also the living proof that an
+# installed tree works with the composition source absent: nothing under
+# STAGED_ROOT can reach back into shared/.
+STAGED_ROOT="$TMP_TEST_DIR/staged"
+python3 "$REPO_ROOT/scripts/sync-agent-hooks.py" --stage "$STAGED_ROOT" \
+  || { echo "staging the hook trees failed" >&2; exit 1; }
+HOOKS_DIR="$STAGED_ROOT/claude-code"
+WINDSURF_HOOKS_DIR="$STAGED_ROOT/windsurf"
+CODEX_HOOKS_DIR="$STAGED_ROOT/codex"
+SHARED_LIB="$ROOT/shared/hooks/lib/common.sh"
 
 # An archived original is the only recovery path for a memoryless
 # `compile-stdin` result. Session startup must therefore never age it out behind
@@ -240,6 +280,40 @@ else
   fail "PreCompact: second call in same session passes through ({})"
 fi
 
+# A payload carrying transcript_path (every real PreCompact payload does)
+# gets it named in the reason, together with the ingest-roots constraint —
+# a harness transcript lives under ~/.claude/projects, normally outside
+# VELESDB_MEMORY_INGEST_ROOTS, so pointing the model at the raw path without
+# the constraint mandates a call the allowlist refuses (#2357).
+pre_compact_path_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "${SESSION_ID}-path" --arg tp "/tmp/fake-harness/transcript.jsonl" \
+  '{session_id: $sid, transcript_path: $tp, cwd: $cwd, hook_event_name: "PreCompact", trigger: "auto"}')"
+
+pre_compact_path_out="$(bash "$HOOKS_DIR/pre-compact.sh" <<<"$pre_compact_path_payload")" || hook_exited "$LINENO" "$?"
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.decision == "block"' >/dev/null; then
+  pass "PreCompact: a transcript_path payload still blocks the first call"
+else
+  fail "PreCompact: a transcript_path payload still blocks the first call"
+fi
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.reason | contains("/tmp/fake-harness/transcript.jsonl")' >/dev/null; then
+  pass "PreCompact: reason names the payload's transcript_path"
+else
+  fail "PreCompact: reason names the payload's transcript_path"
+fi
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.reason | contains("VELESDB_MEMORY_INGEST_ROOTS")' >/dev/null; then
+  pass "PreCompact: reason surfaces the ingest-roots constraint"
+else
+  fail "PreCompact: reason surfaces the ingest-roots constraint"
+fi
+
+if printf '%s' "$pre_compact_path_out" | jq -e '.reason | contains("transcript")' >/dev/null; then
+  pass "PreCompact: reason offers the inline transcript fallback"
+else
+  fail "PreCompact: reason offers the inline transcript fallback"
+fi
+
 # ---------------------------------------------------------------------------
 # Defaults when no .velesdb-hooks.json is present
 # ---------------------------------------------------------------------------
@@ -324,6 +398,26 @@ else
   fail "SessionStart: a freshness cache stamped later than now is a miss"
 fi
 
+# The checks above override HOME per call; every OTHER hook call in this file
+# inherits the ambient environment, so that is what must be proven sandboxed.
+# The same freshness run without the override must land its cache write — the
+# only thing a hook ever writes under HOME — inside the sandbox exported at
+# the top. A dropped export would send this write to the real HOME and leave
+# the sandbox empty.
+# The path is the literal sandbox, not "$HOME/…": a check that derives its
+# expectation from the variable under test cannot tell sandbox from real.
+ambient_cache="$TMP_TEST_DIR/home/.velesdb-memory/.latest-version"
+rm -f "$ambient_cache"
+ambient_fresh_out="$(PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
+  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+if [ -f "$ambient_cache" ] \
+  && printf '%s' "$ambient_fresh_out" | jq -e \
+    '.hookSpecificOutput.additionalContext | contains("but 9.9.9 is published")' >/dev/null; then
+  pass "Harness: a hook's ambient HOME is the sandbox — its freshness write landed inside TMPDIR"
+else
+  fail "Harness: a hook's ambient HOME is the sandbox — its freshness write landed inside TMPDIR"
+fi
+
 # ---------------------------------------------------------------------------
 # Windsurf pre_user_prompt — first call with a trajectory_id reminds, second
 # call with the SAME trajectory_id is silent (single-event fold of the
@@ -389,7 +483,6 @@ fi
 # asserts the scripts' decision logic against that contract — it does not and
 # cannot prove that a real Codex build sends exactly these fields.
 # ---------------------------------------------------------------------------
-CODEX_HOOKS_DIR="$ROOT/codex/hooks"
 CODEX_SESSION_ID="test-codex-session-$$"
 
 codex_session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$CODEX_SESSION_ID" \
@@ -1049,19 +1142,21 @@ else
 fi
 
 # The watchdogs count wall-clock seconds, not rounds of `sleep 0.1`. A shim
-# makes each of those rounds last 0.5 s, as a loaded machine does, and the
-# binary exits 8 s after printing its result. A 2 s watchdog cuts it short
-# within 3.5 s; counting rounds would wait 20 of them, 10 s, and ship.
+# makes each of those rounds last a whole second, as a loaded machine does,
+# and the binary exits 15 s after printing its result. A 2 s watchdog cuts it
+# short within ~5 s — a scheduler stall would have to hold this process for
+# ~10 s straight to ship the late exit — while counting the 20 rounds a
+# round-based bound would need waits 20 s and lets the exit ship.
 SLOW_SLEEP_DIR="$FAKE_BIN_DIR/slow-sleep"
 mkdir -p "$SLOW_SLEEP_DIR"
 cat > "$SLOW_SLEEP_DIR/sleep" <<'SHIM'
 #!/usr/bin/env bash
-if [ "$*" = 0.1 ]; then exec /bin/sleep 0.5; fi
+if [ "$*" = 0.1 ]; then exec /bin/sleep 1; fi
 exec /bin/sleep "$@"
 SHIM
 chmod +x "$SLOW_SLEEP_DIR/sleep"
 wall_out="$(env "${COMPILE_TIMEOUTS[@]}" PATH="$SLOW_SLEEP_DIR:$PATH" VELESDB_HOOK_COMPILE_TIMEOUT=2 \
-    FAKE_EXIT_AFTER=8 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-late-exit" \
+    FAKE_EXIT_AFTER=15 VELESDB_MEMORY_BIN="$FAKE_BIN_DIR/fake-late-exit" \
     bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
     <<<"$(post_tool_payload "Bash" "wall-clock-watchdog" "$big_output")")" || hook_exited "$LINENO" "$?"
 if [ "$(printf '%s' "$wall_out" | jq -c .)" = "{}" ]; then
@@ -1076,7 +1171,7 @@ fi
 # ---------------------------------------------------------------------------
 # Runs "$@" in a subshell that has sourced the hooks' shared library.
 with_hook_lib() (
-  # shellcheck source=../claude-code/hooks/lib/common.sh
+  # shellcheck source=../shared/hooks/lib/common.sh
   . "$HOOKS_DIR/lib/common.sh"
   "$@"
 )
@@ -1087,7 +1182,7 @@ watchdog_out="$TMP_TEST_DIR/watchdog-out"
 # redirected explicitly. Bash 3.2, the stock macOS one, does so even when a
 # pipe feeds the function, as post-tool-use.sh feeds the compiler; bash 5 does
 # so when a here-string feeds it, which is how Linux sees the same regression.
-# shellcheck disable=SC2329 # invoked through with_hook_lib
+# shellcheck disable=SC2317,SC2329 # invoked through with_hook_lib
 pipe_into_watchdog() { printf '%s' "$1" | run_with_watchdog 5 "$watchdog_out" cat; }
 if with_hook_lib pipe_into_watchdog 'piped input' \
   && [ "$(cat "$watchdog_out")" = "piped input" ]; then
@@ -1125,9 +1220,9 @@ expiry_is 2 expired
 # The loop must ask that function. Stubbed to answer "expired" at once, it
 # ends a 5 s command at its first poll, and the stub has been handed the bound.
 watchdog_asked="$TMP_TEST_DIR/watchdog-asked"
-# shellcheck disable=SC2329 # invoked through with_hook_lib
+# shellcheck disable=SC2317,SC2329 # invoked through with_hook_lib
 ask_a_stubbed_watchdog() {
-  # shellcheck disable=SC2329 # invoked by run_with_watchdog
+  # shellcheck disable=SC2317,SC2329 # invoked by run_with_watchdog
   watchdog_expired() { printf '%s\n' "$3" > "$watchdog_asked"; return 0; }
   run_with_watchdog 60 "$watchdog_out" sleep 5
 }
@@ -1219,10 +1314,20 @@ fi
 # installed, don't fail the suite over its absence)
 # ---------------------------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-  if shipped_hook_files "$ROOT" | xargs -0 shellcheck; then
+  if { shipped_hook_files "$STAGED_ROOT"; printf '%s\0' "$SHARED_LIB"; } | xargs -0 shellcheck; then
     pass "shellcheck: hook scripts are clean"
   else
     fail "shellcheck: hook scripts are clean"
+  fi
+  # The harness checks itself too, from a working directory that is not its
+  # own, so a `source=` path that only resolves from some cwd fails here
+  # rather than on the first reviewer who runs it from the root. `-x` follows
+  # the directives into the library they name; `source-path=SCRIPTDIR` at the
+  # top of this file is what makes that resolution cwd-independent.
+  if (cd / && shellcheck -x "$ROOT/test/hooks.test.sh"); then
+    pass "shellcheck: the harness itself is clean from a foreign cwd"
+  else
+    fail "shellcheck: the harness itself is clean from a foreign cwd"
   fi
 else
   echo "note - shellcheck not installed, skipping static analysis check"
@@ -2027,7 +2132,7 @@ while IFS= read -r -d '' readers_lib; do
   case "$readers_lib" in
     */lib/common.sh) readers_libs+=("$readers_lib") ;;
   esac
-done < <(shipped_hook_files "$ROOT")
+done < <(shipped_hook_files "$ROOT"; shipped_hook_files "$STAGED_ROOT")
 readers_bad=""
 if [ "${#readers_libs[@]}" -lt 2 ]; then
   readers_bad=" fewer than two lib/common.sh found, so nothing is compared"
@@ -2057,20 +2162,22 @@ for hook in post-tool-use session-start stop; do
 done
 helper_lines=""
 report="$(wc_call "$EXITING_HOOKS_DIR" exiting "$WC_SAVE" test-project x "$WC_SAVED")"; line=$LINENO
-grep -qF "line $line exits 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_call: $report;"
+grep -qF "line $line should exit 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_call: $report;"
 report="$(wc_context "$EXITING_HOOKS_DIR" exiting startup)"; line=$LINENO
-grep -qF "line $line exits 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_context: $report;"
+grep -qF "line $line should exit 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_context: $report;"
 report="$(wc_reason "$EXITING_HOOKS_DIR" stop exiting)"; line=$LINENO
-grep -qF "line $line exits 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_reason: $report;"
+grep -qF "line $line should exit 0 (got 3)" <<<"$report" || helper_lines="$helper_lines wc_reason: $report;"
 if [ -z "$helper_lines" ]; then
   pass "Harness: a helper names its caller's line when a hook exits non-zero"
 else
   fail "Harness: a helper names its caller's line when a hook exits non-zero:$helper_lines"
 fi
 
-# No hook reads a path, a project or a session inexactly: `$(…)` and backticks
-# strip every trailing newline, and `read` stops at the first one, so a hook
-# would name, compare or mark another repository than the one it read.
+
+# No hook lands outside bytes on a shell name inexactly: `$(…)` and backticks
+# strip every trailing newline, and `read`, `mapfile`, `readarray` and `select`
+# stop at the first one, so a hook would name, compare or mark another
+# repository than the one it read.
 #
 # THIS GUARD IS A WHITELIST, and that inversion is the whole point. Every round
 # before this one wrote a scanner that tried to RECOGNISE a bad read, and each
@@ -2078,66 +2185,66 @@ fi
 # (`jq -r`, which the code had already stopped using), then ten COMMANDS, then
 # ASSIGNMENT SYNTAX (`NAME=`, `read `), then three named VALUE SOURCES — which
 # omitted the pipe, so `cat "$1" | { read -r project_root; }` passed the guard
-# while truncating at the first newline. A hand-written recogniser of a real
-# language never converges. So nothing below enumerates what is bad.
+# while truncating at the first newline — and last a VARIABLE-NAME FAMILY, the
+# path/project/session/root/cwd names a value could land on, which a path in
+# `repo`, `worktree`, `file` or `branch` simply walked around (#2338). A
+# hand-written recogniser of a real language never converges, and a list of
+# names is just one more recogniser. So nothing below names a variable at all.
 #
-# A variable whose name is in the path/project/session/root/cwd family may be
-# SET only by one of three forms, and each is a proof at the site:
+# What the rule keys on instead is the MECHANISM that lands outside bytes on a
+# name, and that set is closed:
+#   * a command substitution or a backtick, wherever it sits on the line — in
+#     code or inside quotes, since `eval`, `trap`, `printf %b` and friends
+#     turn text back into code — refused whatever the variable is called;
+#   * one of the stdin consumers (`read`, `mapfile`, `readarray`, `select`,
+#     `coproc`) written as a word of the statement — `cat "$1" | { read -r x; }`,
+#     `while IFS= read -r x`, `mapfile -t x < f` — refused whatever feeds it,
+#     so no block has to be joined to its `done` and no redirection has to be
+#     recognised at all. That is a list of builtins, a closed set — not a list
+#     of spellings.
+# `$((…))` arithmetic is not a substitution: it expands a number this process
+# computed, so `depth=$((depth + 1))` stays ordinary code.
+#
+# The approved forms are each a proof at the site:
 #   1. `read_exact NAME …` or `read_exact_line NAME …`, the readers that keep
 #      every byte;
-#   2. an assignment whose right-hand side brings in no value from outside this
-#      process — no command substitution, no backtick, no redirection, no pipe;
-#   3. a line saying, with `# exact-read-ok: <why>`, why this value cannot lose
-#      a byte. A bootstrap reason is not such a proof.
-# Anything else is refused, WITHOUT the guard knowing how the value arrives.
-# The unknown spelling is refused by default instead of missed by default.
+#   2. a line saying, with `# exact-read-ok: <why>`, why this value cannot
+#      lose a byte — compact JSON is one line, `-j` prints no separator, a
+#      checksum or a timestamp is digits, a literal `$(` in a printed string
+#      is prose. A bootstrap reason is not such a proof;
+#   3. anything bringing in no value from outside this process — no
+#      substitution, no stdin read — needs no proof at all.
 #
-# That also dissolves the line/block problem rather than parsing around it: a
-# `while IFS= read -r project_root; do … done < <(cat "$1")` is refused at the
-# `read`, whatever feeds it, so no block has to be joined to its `done` and no
-# redirection has to be recognised at all.
-#
-# What the guard must still see is where a value CAN land on a name, and that is
+# What the guard must still see is what is code and what is a value source,
 # read off shell text — which is why the normalisation is a quoting lexer and
 # not a pair of substitutions. Quoting is a CLOSED grammar (code, '…', "…",
 # `…`, $( … )) where "a bad read" is an open one, so erasing what is inside
-# quotes is what keeps an English sentence, a jq program or a heredoc body from
-# reading as a variable being set. The previous `gsub(/'[^']*'/,"")` paired
-# apostrophes blindly: in `echo "don't"; project_root="$(cat "$1")" # the repo's
-# root` it ate the substitution between two English apostrophes and allowed the
-# line. The lexer below tracks state instead, across lines, and the fixture
-# table asserts that case.
+# quotes is what keeps an English sentence, a jq program or a heredoc body
+# from reading as a variable being set. The previous `gsub(/'[^']*'/,"")`
+# paired apostrophes blindly: in `echo "don't"; project_root="$(cat "$1")" #
+# the repo's root` it ate the substitution between two English apostrophes
+# and allowed the line. The lexer below tracks state instead, across lines,
+# and the fixture table asserts that case.
 #
-# A second, narrower rule survives unchanged beside the whitelist: a
-# substitution that reads one of the family's JSON fields is refused even when
-# the variable it lands in is named nothing in particular, because there the
-# name gives nothing away.
+# What this still does not see, stated plainly: a `read` or a substitution
+# spelled inside a quoted string that becomes code only elsewhere — `eval
+# "read x"` reads as prose to the reader arm — and a `source` of a file this
+# tree does not ship. Both were out of the name family's reach too.
 # shellcheck disable=SC2016 # regular expressions, not expansions
-EXACT_SUBST_NAME='[a-z_]*(project|session|root|cwd|dir|path|target|candidate|link|current|marker)[a-z0-9_]*'
-# A name a value can land on: `=` follows it, which covers `NAME=`, `NAME+=`,
-# `NAME[i]=` and `${NAME:=…}`. The prefix class keeps an option (`--dir=`) and a
-# field (`.path=`) from reading as one.
-EXACT_SUBST_ASSIGN="(^|[^-._\$[:alnum:]])${EXACT_SUBST_NAME}(\\\\[[^]]*\\\\])?[+:]?=([^=]|\$)"
-# …or the name handed to something as a bare word, which is how EVERY builtin
-# and every function that writes through a name receives it, whether or not
-# anyone has written that one yet.
-EXACT_SUBST_WORD="(^|[[:space:]])${EXACT_SUBST_NAME}([[:space:]]|\$)"
-# A value arriving from outside this process. `<` covers `<`, `<<`, `<<<` and
-# `< <(…)` alike, and `|` is the pipe the enumerations kept missing.
-# Backslashes are doubled throughout: awk unescapes a `-v` value once before the
-# regex engine sees it.
-EXACT_SUBST_SOURCE='(\\$\\(|`|<|\\|)'
+EXACT_SUBST_SUBST='(\\$\\([^(]|`)'
+# A builtin that lands outside bytes on a name, written as a delimited word so
+# `read_exact`, `bread` or `x=read` are not words of it. `coproc` names the
+# channel its command's bytes arrive on.
+EXACT_SUBST_READER='(^|[[:space:];{(|&])(read|mapfile|readarray|select|coproc)([[:space:];|})]|$)'
 # Words that introduce a command instead of being one, so that the command of a
 # statement is found and its own name is never mistaken for a value's target.
 EXACT_SUBST_KEYWORD='^(if|then|elif|else|while|until|for|do|done|case|esac|time|!|command|builtin|exec|local|declare|export|readonly|typeset|nohup)[ \t]+'
-EXACT_SUBST_ANY='(\\$\\(|`|<[[:space:]]*\\(|(^|[^<])<[[:space:]]*[^<[:space:]])'
-EXACT_SUBST_FIELD="${EXACT_SUBST_ANY}[^\`]*\\\\.[[:space:]]*\\\\[?[[:space:]]*\"?(project|session|root|cwd|file_path)([^_A-Za-z]|\$)"
-EXACT_SUBST_CHECK="Harness: no shipped hook sets a path, project or session outside the approved forms"
+EXACT_SUBST_CHECK="Harness: no shipped hook lands an outside value on a shell name outside the approved forms"
 
 # The scanner, as one awk pass: erase what is inside quotes and comments, join a
 # `\`-continued statement and skip a heredoc body, honour `# exact-read-ok:`,
-# refuse a family JSON field read through a substitution, then hold every
-# statement of the line to the whitelist.
+# then refuse any statement carrying a substitution or a stdin consumer.
+# shellcheck disable=SC2016 # an awk program in single quotes, not expansions
 EXACT_SUBST_AWK='
 # blank(TEXT): TEXT with the contents of every quoted run replaced by spaces and
 # any comment removed, so what remains is code at the same offsets. Quote state
@@ -2175,13 +2282,9 @@ heredoc != "" { if ($0 ~ heredoc) heredoc = ""; next }
 {
   code = blank($0)
   raw = raw_joined $0
-  # The field arm stays a PHYSICAL-line rule. It reads the raw text, because the
-  # jq field it looks for lives inside single quotes, and only as far as the code
-  # of this line goes, so a comment mentioning filter.project is prose. Judging
-  # it per statement would refuse every multi-line jq program that inspects
-  # .project, which is most of them.
+  # The exemption marker lives in the comment, which blank() set aside — a
+  # `# exact-read-ok:` inside a string or in prose cannot exempt anything.
   if (index(comment, "exact-read-ok: ")) exempt = 1
-  else if (tolower(substr($0, 1, length(code))) ~ field) fieldhit = 1
   # A trailing `\` continues the statement unless it sits inside single quotes,
   # where it is a literal backslash; and a statement is not finished while a
   # quote is still open, so a multi-line jq program is one statement and carries
@@ -2189,7 +2292,6 @@ heredoc != "" { if ($0 ~ heredoc) heredoc = ""; next }
   if ((stack[depth] != "S" && $0 ~ /\\$/) || depth > 0) { raw_joined = raw "\n"; code_joined = code_joined code "\n"; next }
   code = code_joined code; code_joined = ""; raw_joined = ""
   ok = exempt; exempt = 0
-  hit = fieldhit; fieldhit = 0
   # A heredoc opens where `<<` survives in CODE and a tag follows it; `<<<` has
   # no tag and is a here-string this process already holds.
   if (match(code, /<<-?[ \t]*/)) {
@@ -2198,15 +2300,13 @@ heredoc != "" { if ($0 ~ heredoc) heredoc = ""; next }
     if (match(tag, /^[A-Za-z_][A-Za-z0-9_]*/)) heredoc = "^[ \t]*" substr(tag, 1, RLENGTH) "[ \t]*$"
   }
   if (ok) next
-  if (hit) { print raw; next }
   low = tolower(substr(raw, 1, length(code)))
-  # One statement at a time. The bare-word arm reads CODE, where a name can only
-  # be a name. The assignment arm reads the NAME in the raw text at the same
-  # offsets, because `eval "project_root=$(…)"` and `: "${cwd_path:=$(…)}"` spell
-  # it inside a quoted run that becomes code later — but it reads the VALUE
-  # SOURCE in the code, so that a `|` inside a quoted awk program is text and not
-  # a pipe. blank() emits one character per character consumed, so the two slices
-  # line up.
+  # One statement at a time. The substitution arm reads the RAW slice of the
+  # statement, quotes included — a $( inside single quotes is text today and
+  # code the day an eval or a trap runs it, so both are refused — while the
+  # stdin arm reads CODE, where `read` inside a string is prose and must not
+  # be a finding. blank() emits one character per character consumed, so the
+  # two slices line up.
   pos = 1; ncode = length(code)
   while (pos <= ncode) {
     tail = substr(code, pos)
@@ -2220,25 +2320,23 @@ heredoc != "" { if ($0 ~ heredoc) heredoc = ""; next }
     while (match(s, kw)) s = substr(s, RLENGTH + 1)
     cmd = s; sub(/[ \t].*/, "", cmd)
     if (cmd == "read_exact" || cmd == "read_exact_line") continue
-    rest = s; sub(/^[^ \t]*/, "", rest)
-    if (rest ~ word) { print raw; next }
-    if (sraw ~ assign && scode ~ source) { print raw; next }
+    if (sraw ~ subst) { print raw; next }
+    if (scode ~ reader) { print raw; next }
   }
 }'
 
-# inexact_substitution_reads ROOT: every line of ROOT's shipped hooks that sets
-# a path, a project or a session outside the approved forms, as ` <file>:
-# <line>;` each. Prints nothing when the tree is clean. The files come from
-# shipped_hook_files, so this scans whatever the tree holds.
+# inexact_substitution_reads ROOT: every line of ROOT's shipped hooks that
+# lands an outside value on a shell name outside the approved forms, as
+# ` <file>: <line>;` each. Prints nothing when the tree is clean. The files
+# come from shipped_hook_files, so this scans whatever the tree holds.
 inexact_substitution_reads() {
   local exact_root="$1"
   local exact_file exact_line
   while IFS= read -r -d '' exact_file; do
     while IFS= read -r exact_line; do
       printf ' %s: %s;' "${exact_file#"$exact_root"/}" "$exact_line"
-    done < <(awk -v assign="$EXACT_SUBST_ASSIGN" -v word="$EXACT_SUBST_WORD" \
-      -v source="$EXACT_SUBST_SOURCE" -v kw="$EXACT_SUBST_KEYWORD" \
-      -v field="$EXACT_SUBST_FIELD" "$EXACT_SUBST_AWK" "$exact_file")
+    done < <(awk -v subst="$EXACT_SUBST_SUBST" -v reader="$EXACT_SUBST_READER" \
+      -v kw="$EXACT_SUBST_KEYWORD" "$EXACT_SUBST_AWK" "$exact_file")
   done < <(shipped_hook_files "$exact_root")
 }
 
@@ -2255,6 +2353,7 @@ fi
 # every shipped host" would again be true only for the hosts listed today.
 EXACT_SUBST_TREE="$TMP_TEST_DIR/new-host"
 EXACT_SUBST_NEW_HOST='cursor/hooks/stop.sh'
+# shellcheck disable=SC2016 # fixture text written to a probe hook, not expanded
 EXACT_SUBST_NEW_LINE='project_root="$(jq -r .root "$1")"'
 mkdir -p "$EXACT_SUBST_TREE/${EXACT_SUBST_NEW_HOST%/*}" "$EXACT_SUBST_TREE/test"
 printf '#!/usr/bin/env bash\n%s\n' "$EXACT_SUBST_NEW_LINE" > "$EXACT_SUBST_TREE/$EXACT_SUBST_NEW_HOST"
@@ -2292,14 +2391,31 @@ fi
 # read no longer has to sit on the read's own line for the guard to see it,
 # because the guard does not look at the redirection at all.
 #
-# The first block is what round 17's rule shipped green. Its condition 1 listed
-# three value sources and omitted the pipe, so every piped read below truncated
-# at the first newline while the harness reported ok; its rule was per line, so
-# the same read passed by moving its `< "$1"` to the `done`; and its
-# `gsub(/'[^']*'/,"")` paired apostrophes blindly, so a substitution between two
-# English apostrophes was deleted before the rule ever saw it.
+# The first block is what the rule shipped green before the mechanism rule:
+# a substitution assigned to a name OUTSIDE the path/project/session/root/cwd
+# family was never looked at, so `archive`, `repo`, `worktree`, `file` and
+# `branch` below all printed `allowed`; a `$(` inside single quotes read as
+# text and `let`'s spaced `=` as no assignment; and `set --` carries no name
+# at all. None of them is a variable-name question any more.
 # shellcheck disable=SC2016 # fixture text handed to the rule, never expanded
 EXACT_SUBST_REFUSED=(
+  # The name family is gone: a path or an id under ANY name is refused the
+  # same — these are the names the issue's own escape list used.
+  'repo="$(pwd)"'
+  'worktree="$(git rev-parse --show-toplevel)"'
+  'file="$(mktemp)"'
+  'branch="$(git branch --show-current)"'
+  'archive="$(mktemp -d)"'
+  'value=`cat "$1"`'
+  'cat "$1" | { read -r value; }'
+  'while IFS= read -r line; do :; done < "$1"'
+  'mapfile -t items < "$1"'
+  # The four spellings the name family let through (#2338): an out-of-family
+  # name, a `$(` inside single quotes, a spaced `=`, and no name at all.
+  'adopted="$(adopted_session_for "$1")"'
+  'trap '"'"'project_root="$(pwd)"'"'"' EXIT'
+  'let "marker_path = $(cat "$1")"'
+  'set -- $(cat "$1")'
   # A pipe is a value source. `printf 'a\nb\n' | { read -r project_root; }`
   # really yields `got=[a]`: the truncation this guard exists to stop.
   'cat "$1" | { read -r project_root; }'
@@ -2360,12 +2476,14 @@ EXACT_SUBST_ALLOWED=(
   'session_dir=""'
   'project_root="$OTHER_ROOT"'
   '[ -n "$cwd" ] || cwd="$PWD"'
-  'record_project_json "$1" "$(project_record)"'
+  'record_project_json "$1" "$(project_record)" # exact-read-ok: project_record emits one compact object through jq -cn'
   'read_exact_line record jq -cn --arg project "$project" '"'"'{project: $project}'"'"''
-  'printf '"'"'run `%s/update-daemon.sh` EARLY in this session'"'"' "$dir"'
+  'printf '"'"'run `%s/update-daemon.sh` EARLY in this session'"'"' "$dir" # exact-read-ok: the backticks are literal text printed for a model'
   'echo "the private hook-state directory holds this session'"'"'s marker" >&2'
   'reason="Keep the session open, repair the per-user state directory, and retry."'
   'case "$target_path" in /*) :;; esac'
+  'grep -rn "read" "$1"'
+  'depth=$((depth + 1))'
   'cat <<EOF
 call load_working_context(project="$PROJECT", session="$SESSION") first
 EOF'
@@ -2576,6 +2694,20 @@ if [ -z "$direct_git" ]; then
   pass "Evidence: every hook git call goes through safe_git"
 else
   fail "Evidence: every hook git call goes through safe_git:$direct_git"
+fi
+
+# The sandbox exported at the top is asserted, not assumed. The one hook path
+# that writes under HOME is session-start.sh's freshness check
+# ($HOME/.velesdb-memory/.latest-version), and this suite ran SessionStart
+# dozens of times: had HOME not been sandboxed, every one of them would have
+# read or rewritten the user's real cache. Require that file to be absent or
+# untouched since before the run — a content compare would miss a rewrite of
+# identical bytes, so the marker carries the clock.
+real_cache="$REAL_HOME/.velesdb-memory/.latest-version"
+if [ ! -e "$real_cache" ] || [ ! "$real_cache" -nt "$REAL_HOME_MARKER" ]; then
+  pass "Harness: the hooks' HOME is the sandbox — the real freshness cache was never touched"
+else
+  fail "Harness: the hooks' HOME is the sandbox — $real_cache was written during the run"
 fi
 
 if [ "$FAILED" -ne 0 ]; then

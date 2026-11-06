@@ -171,40 +171,29 @@ impl Collection {
             crate::error::Error::Serialization(format!("failed to serialize stats: {e}"))
         })?;
 
-        let tmp_path = stats_path.with_file_name(".stats.json.tmp");
-        std::fs::write(&tmp_path, serialized)?;
-
-        if let Err(e) = std::fs::rename(&tmp_path, &stats_path) {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(e.into());
-        }
+        // `atomic_write` gives the temp file an fsync before the rename and
+        // the directory an fsync after it — the earlier `std::fs::write` +
+        // bare rename did neither, so the "persisted" stats could vanish on
+        // power loss (audit #2590).
+        crate::storage::atomic_write::atomic_write(&stats_path, &serialized)?;
 
         Ok(())
     }
 
-    /// Writes `CollectionStats` back to disk atomically.
+    /// Writes `CollectionStats` back to disk atomically and durably.
     ///
-    /// Serialises to a temporary file in the same directory, then renames over
-    /// the target path. On most file-systems `rename` is atomic, so a crash
-    /// mid-write cannot leave a corrupted JSON file. If the rename fails the
-    /// temporary file is cleaned up on a best-effort basis.
+    /// Goes through `crate::storage::atomic_write` (write-tmp + fsync +
+    /// rename + dir fsync), so a crash mid-write cannot leave a corrupted
+    /// JSON file and a committed write survives a power loss. Best-effort:
+    /// failures are logged, not propagated — the histogram is derived data.
     fn write_persisted_stats(stats_path: &std::path::Path, stats: &CollectionStats) {
         let Ok(serialized) = serde_json::to_vec_pretty(stats) else {
             tracing::warn!("Failed to serialize stats for histogram update");
             return;
         };
 
-        let tmp_path = stats_path.with_file_name(".stats.json.tmp");
-
-        if let Err(e) = std::fs::write(&tmp_path, serialized) {
-            tracing::warn!("Failed to write temp stats file: {e}");
-            return;
-        }
-
-        if let Err(e) = std::fs::rename(&tmp_path, stats_path) {
-            tracing::warn!("Failed to rename temp stats file: {e}");
-            // Best-effort cleanup of the orphaned temp file.
-            let _ = std::fs::remove_file(&tmp_path);
+        if let Err(e) = crate::storage::atomic_write::atomic_write(stats_path, &serialized) {
+            tracing::warn!("Failed to persist stats file: {e}");
         }
     }
 }
@@ -219,3 +208,7 @@ fn payload_value_to_f64(value: &serde_json::Value) -> Option<f64> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "crud_histogram_tests.rs"]
+mod crud_histogram_tests;

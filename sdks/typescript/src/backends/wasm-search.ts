@@ -274,10 +274,13 @@ function validateSearchInputs(
   k: unknown,
   vectorCount?: { readonly min: number; readonly max: number }
 ): number {
-  if (vectorCount && (vectors.length < vectorCount.min || vectors.length > vectorCount.max)) {
+  // `vectors` is typed, but an untyped caller can hand the multi-query path
+  // anything: count a non-array as none rather than read `.length` off it.
+  const count = Array.isArray(vectors) ? vectors.length : 0;
+  if (vectorCount && (count < vectorCount.min || count > vectorCount.max)) {
     throw new VelesDBError(
       `a multi-query search takes ${vectorCount.min} to ${vectorCount.max} vectors, as core's ` +
-        `does; got ${vectors.length}`,
+        `does; got ${Array.isArray(vectors) ? count : describeValue(vectors)}`,
       'BAD_REQUEST'
     );
   }
@@ -459,6 +462,7 @@ const FUSION_WEIGHTS = [...WEIGHTED_TRIPLE, 'denseWeight', 'sparseWeight'] as co
  */
 const FUSION_PARAMS_READ: Readonly<Record<FusionStrategy, readonly FusionParamName[]>> = {
   rrf: ['k'],
+  weighted_rrf: ['k', 'branchWeights'],
   weighted: WEIGHTED_TRIPLE,
   relative_score: ['denseWeight', 'sparseWeight'],
   average: [],
@@ -472,6 +476,7 @@ const FUSION_PARAMS_READ: Readonly<Record<FusionStrategy, readonly FusionParamNa
  */
 const FUSION_STRATEGY_NAMES: ReadonlyMap<string, FusionStrategy> = new Map([
   ['rrf', 'rrf'],
+  ['weighted_rrf', 'weighted_rrf'],
   ['average', 'average'],
   ['avg', 'average'],
   ['maximum', 'maximum'],
@@ -495,7 +500,7 @@ function canonicalStrategy(name: unknown): FusionStrategy {
     const named = typeof name === 'string' ? `'${name}'` : `of type ${typeof name}`;
     throw new VelesDBError(
       `Unknown fusion strategy ${named}: core accepts average (avg), maximum (max), ` +
-        'rrf, weighted and relative_score (rsf), in any case',
+        'rrf, weighted_rrf, weighted and relative_score (rsf), in any case',
       'BAD_REQUEST'
     );
   }
@@ -556,7 +561,8 @@ function validateWeightedTriple(weights: readonly number[]): void {
  */
 function wasmFusionArgs(
   strategy: FusionStrategy,
-  params: FusionParams | undefined
+  params: FusionParams | undefined,
+  numVectors: number
 ): {
   rrfK: number;
   weights: Float32Array | null;
@@ -568,12 +574,34 @@ function wasmFusionArgs(
       requireFiniteNumber(`fusionParams.${name}`, weight);
     }
   }
-  const read: FusionParams = {};
+  // `branchWeights` is the one non-scalar field: an array of finite numbers,
+  // as REST's `branch_weights: Vec<f32>` requires, whichever strategy reads
+  // it. `null` counts as absent, as REST's `Option<Vec<f32>>` reads it.
+  const branchWeights = params?.branchWeights;
+  if (isSet(branchWeights)) {
+    if (!Array.isArray(branchWeights)) {
+      throw new VelesDBError(
+        `fusionParams.branchWeights must be an array of finite numbers; ` +
+          `got ${describeValue(branchWeights)}`,
+        'BAD_REQUEST'
+      );
+    }
+    branchWeights.forEach((weight, index) =>
+      requireFiniteNumber(`fusionParams.branchWeights[${index}]`, weight)
+    );
+  }
+  const read: Partial<Record<FusionParamName, unknown>> = {};
   for (const name of FUSION_PARAMS_READ[strategy]) {
     read[name] = params?.[name];
   }
   requireWasmFieldsListed('multiQueryFusionParams', 'multiQuerySearch fusionParams', read);
-  const weights = WEIGHTED_TRIPLE.map((name) => read[name]).filter(isSet);
+  if (strategy === 'weighted_rrf') {
+    return { rrfK, weights: weightedRrfWeights(branchWeights, numVectors) };
+  }
+  const weights =
+    strategy === 'weighted'
+      ? WEIGHTED_TRIPLE.map((name) => params?.[name]).filter(isSet)
+      : [];
   if (weights.length === 0) {
     return { rrfK, weights: null };
   }
@@ -586,6 +614,34 @@ function wasmFusionArgs(
   }
   validateWeightedTriple(weights);
   return { rrfK, weights: new Float32Array(weights) };
+}
+
+/**
+ * `weighted_rrf`'s per-branch weights as the binding's `weights` argument —
+ * one per query vector, the arity velesdb-server's `build_fusion_strategy`
+ * refuses a mismatch on and velesdb-wasm's `multi_query_search` re-checks.
+ * The two refusals run here too, as the weighted triple's do, because the
+ * binding reports its own as a bare string.
+ */
+function weightedRrfWeights(
+  branchWeights: number[] | null | undefined,
+  numVectors: number
+): Float32Array {
+  if (!isSet(branchWeights)) {
+    throw new VelesDBError(
+      'multiQuerySearch weighted_rrf fusion: branchWeights requires one weight per ' +
+        'query vector and none were provided',
+      'BAD_REQUEST'
+    );
+  }
+  if (branchWeights.length !== numVectors) {
+    throw new VelesDBError(
+      `weighted_rrf requires one weight per query vector: ` +
+        `${branchWeights.length} weights for ${numVectors} vectors`,
+      'BAD_REQUEST'
+    );
+  }
+  return new Float32Array(branchWeights);
 }
 
 export async function wasmMultiQuerySearch(
@@ -601,7 +657,7 @@ export async function wasmMultiQuerySearch(
   const k = validateSearchInputs(collection, vectors, options?.k ?? 10, MULTI_QUERY_VECTORS);
   requireWasmFilterSupport('multiQuerySearch', options?.filter);
   const strategy = canonicalStrategy(options?.fusion ?? 'rrf');
-  const { rrfK, weights } = wasmFusionArgs(strategy, options?.fusionParams);
+  const { rrfK, weights } = wasmFusionArgs(strategy, options?.fusionParams, vectors.length);
   if (k <= 0) {
     return [];
   }
@@ -646,11 +702,25 @@ export async function wasmMultiQuerySearch(
  * operations, FUSION, …) must be rejected loudly instead of silently
  * dropping clauses and returning unfiltered neighbours.
  */
-// No two quantifiers over whitespace are adjacent: each optional tail starts on
-// a token (`limit`, `;`), so the engine has one way to split a run of spaces
-// and a near-miss fails in linear time.
+// Every optional tail anchors on a literal token (`limit`, `;`), so a run of
+// spaces has exactly one split point and a near-miss fails in linear time:
+// in `(?:;\s*)?` the `;` is mandatory, so the two whitespace spans can never
+// match the same characters — unlike `;?` between two `\s*`.
 const PURE_NEAR_QUERY =
-  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?(?:\s*;)?\s*$/i;
+  /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?\s*(?:;\s*)?$/i;
+
+/**
+ * The pure-NEAR shape with a LIMIT token that failed the grammar above:
+ * `LIMIT -1`, `LIMIT +5`, `LIMIT 1e3`, `LIMIT abc`. Read only when
+ * `PURE_NEAR_QUERY` did not match, so it fires exactly where the statement
+ * is one bad u64 away from supported — a value *every* backend refuses
+ * (core's parser reads LIMIT as a u64 and answers a caller error), never on
+ * a clause WASM does not evaluate: `LIMIT 10 OFFSET 5` leaves a second
+ * token after the value and stays `NOT_SUPPORTED`, as does a bare `LIMIT`
+ * with no value at all.
+ */
+const PURE_NEAR_BAD_LIMIT =
+  /^\s*select\s+\*\s+from\s+[a-z_]\w*\s+where\s+vector\s+near\s+\$[a-z_]\w*\s+limit\s+([^\s;]+)\s*(?:;\s*)?$/i;
 
 interface PureNearQuery {
   /** Collection named in the FROM clause. */
@@ -664,10 +734,21 @@ interface PureNearQuery {
 /** The largest `LIMIT` core's parser takes: it reads the value as a u64 (`velesql/parser/helpers.rs`). */
 const LARGEST_U64 = 2n ** 64n - 1n;
 
-/** Parse `queryString` against the pure-NEAR shape or throw `NOT_SUPPORTED`. */
+/**
+ * Parse `queryString` against the pure-NEAR shape: `BAD_REQUEST` for a
+ * LIMIT value core's u64 parser refuses, `NOT_SUPPORTED` for every other
+ * clause beyond the shape.
+ */
 function parsePureNearQuery(queryString: string): PureNearQuery {
   const match = PURE_NEAR_QUERY.exec(queryString);
   if (!match) {
+    const badLimit = PURE_NEAR_BAD_LIMIT.exec(queryString);
+    if (badLimit) {
+      throw new VelesDBError(
+        `Invalid LIMIT value '${badLimit[1]}': core's parser reads LIMIT as a u64`,
+        'BAD_REQUEST'
+      );
+    }
     throw new VelesDBError(
       'The WASM backend only executes pure top-k NEAR queries of the form ' +
         '"SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]". ' +

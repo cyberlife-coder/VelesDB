@@ -26,7 +26,7 @@ impl Database {
             return Err(Error::CollectionExists(name.to_string()));
         }
 
-        let collection_path = self.data_dir.join(name);
+        let collection_path = self.collection_dir(name)?;
         if collection_path.exists() {
             return Err(Error::CollectionExists(name.to_string()));
         }
@@ -69,8 +69,9 @@ impl Database {
         ));
         // `[search]` alongside `[limits]`, same contract: resolved here because
         // `Database` is the only component holding a `VelesConfig`, pushed on
-        // every open, never persisted (#2087).
+        // every open, never persisted (#2087 quality, #2591 result ceiling).
         coll.set_runtime_search_quality(self.config.search.resolved_quality());
+        coll.set_runtime_max_results(self.config.search.max_results);
     }
 
     /// Admits a collection into a typed registry: pushes the live runtime
@@ -385,7 +386,7 @@ impl Database {
             return Err(Error::CollectionNotFound(name.to_string()));
         }
 
-        let collection_path = self.data_dir.join(name);
+        let collection_path = self.collection_dir(name)?;
         if collection_path.exists() {
             std::fs::remove_dir_all(&collection_path)?;
         }
@@ -449,7 +450,7 @@ impl Database {
         if crate::validation::validate_collection_name(name).is_err() {
             return None;
         }
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name).ok()?;
         let config_path = path.join("config.json");
         if !config_path.exists() {
             return None;
@@ -553,6 +554,7 @@ impl Database {
             name,
             crate::observer::QueryOperationKind::Select,
             "collection diagnostics",
+            &super::read_authorization::GateDecisions::default(),
         )?;
         if let Some(c) = self.get_vector_collection(name) {
             return Ok(c.diagnostics());

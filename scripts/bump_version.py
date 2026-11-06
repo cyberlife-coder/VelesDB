@@ -10,7 +10,7 @@ the new version.
 `docs/openapi.{json,yaml}` are intentionally NOT rewritten here — they are
 generated from the crate version. Regenerate them after bumping Cargo.toml with:
 
-    cargo test -p velesdb-server --features openapi generate_openapi_spec_files -- --test-threads=1
+    UPDATE_OPENAPI_SNAPSHOT=1 cargo test -p velesdb-server --features openapi generate_openapi_spec_files
 
 Usage:
     python3 scripts/bump_version.py 1.17.0 [2026-06-05]

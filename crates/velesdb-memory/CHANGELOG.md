@@ -9,7 +9,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> Targets velesdb-memory 0.17.0.
+## [0.17.1] - 2026-11-06
+
+### Added
+
+- **`MemoryService::open_with_model_name` — the daemon's embedding-provenance
+  contract for embedded callers and bindings.** `open` checks nothing about
+  which model filled a store: it never did, because it has no model name to
+  check against — the provenance record lived in the daemon's startup, so a
+  store opened through `MemoryService::open` directly (the Python and Node
+  bindings, every embedded use) never got recorded and never got checked. The
+  new constructor reads the record, refuses a mismatch, and stamps a fresh
+  store, exactly like the daemon — `embedding_provenance::record_if_empty`
+  now carries the write-only-when-empty semantics for both call sites.
+
+### Changed
+
+- **The Python and Node bindings check and record embedding provenance at
+  open.** Both already know the model they configured — they now pass it to
+  `open_with_model_name`, so a store filled by a different model raises at
+  open (naming both configurations and the migration path) instead of
+  silently serving nonsense recall. No binding API change.
+
+- **The OpenAI-compatible extractor constrains decoding** (#1944).
+  `OpenAiExtractor` sends the prompt's reply contract as `response_format` —
+  the OpenAI-protocol spelling (`json_schema`, `strict`) of the `format` the
+  Ollama extractor has sent since 5.1.0. The fact-only call carries the array
+  schema, the graph call the object schema — the same two contracts
+  `extract::wire` states for Ollama, so a reply that satisfies one is a reply
+  the parser reads. Strict mode requires every object level closed, so
+  `additionalProperties: false` is added at the protocol edge rather than in
+  the canonical schema, where Ollama's grammar needs none. A server that does
+  not know `response_format` keeps answering as before; one that rejects it
+  reports the refusal instead of silently unconstrained output.
+- **The extraction reply budget is configurable** as
+  `VELESDB_MEMORY_EXTRACTOR_MAX_TOKENS` — a positive integer, sent as
+  `num_predict` to Ollama and `max_tokens` to an OpenAI-compatible server.
+  The built-in 512-token ceiling fits the facts a short passage serializes;
+  a richer passage's reply hits it and is cut mid-JSON, which surfaces as a
+  parse failure rather than extracted facts. Raise the variable for those
+  passages; unset or blank keeps the default, an invalid value stops
+  startup like every other `VELESDB_MEMORY_*` numeric setting.
+
+### Fixed
+
+- **`compile_transcript` reads real agent-harness JSONL.** The JSONL
+  segmenter now accepts the `{type, message: {role, content}}` envelope
+  every harness writes (content a string or a block array — `text`/
+  `thinking` blocks contribute their field, other blocks stay as compact
+  JSON), keeps any other JSON line as a role-less verbatim turn, and —
+  under `format: "auto"` — detects JSONL whenever every non-empty line
+  parses as JSON. Previously an envelope transcript was judged "not JSONL",
+  silently fell back to `plain`, and produced one roleless turn covering
+  the whole file — a wrong segmentation, or a payload-cap error once the
+  file topped the fragment limit (#2357).
+- **`IngestDisabled` no longer prescribes a knob the caller cannot turn.**
+  The message now states that `VELESDB_MEMORY_INGEST_ROOTS` is operator-side
+  startup configuration (a request cannot enable it) and names the
+  applicable remedy — passing `content`/`transcript` inline; on builds that
+  can configure no ingest roots at all it names no variable (#2357).
+
+## [0.17.0] - 2026-11-02
+
+> **BREAKING for Rust callers (0.x minor).** `velesdb-memory` now builds
+> against `velesdb-core` 8.0.0, where 0.16.0 built against 7.1.x. Two variants
+> of `MemoryError` carry core types: `Storage` holds a `velesdb_core::Error`
+> and `Memory` an `AgentMemoryError`. A crate that names or matches either has
+> to depend on `velesdb-core` 8 as well; the breaking changes of that major are
+> in [`docs/guides/MIGRATION_v8.0.0.md`](../../docs/guides/MIGRATION_v8.0.0.md).
+> The `migrate-embeddings` argument parsers return `MigrateUsageError` /
+> `StrategyError` instead of `String`, and a malformed
+> `VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS` is a typed `SettingError`;
+> each change is listed under *Changed* with the form a caller migrates to. The
+> anchor API introduced below settles on `AnchorSet` — `remember_anchored`
+> takes `Option<&AnchorSet>` and `AnchorProbe` gains a required `root()` — the
+> form listed under *Changed*, so a caller on a 0.17.0 draft build has the same
+> migration path.
+>
+> Nothing changes on disk: a store written by 0.16.0 opens unchanged — file
+> anchors are additive metadata a 0.16.0 store cannot carry — and the daemon,
+> the MCP tools and the bindings behave as before.
 
 ### Added
 

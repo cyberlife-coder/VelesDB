@@ -452,9 +452,10 @@ WASM**, plus more scalar cases the CLI runs too:
 - `fusion_cases` F001–F006: `NEAR_FUSED` with the default, `rrf` (with an
   explicit `k`), `average` and `maximum` strategies, with a metadata filter,
   and with a trailing `USING FUSION` clause; ids and fused scores.
-- `rejected_cases` R001–R015: queries both engines must refuse, each with the
-  `expected_code` both must report — `NEAR_FUSED` with `weighted`/`rsf` and
-  `USING FUSION` over a single `NEAR` (V012), a MATCH `ORDER BY` of an
+- `rejected_cases` R001–R016: queries both engines must refuse, each with the
+  `expected_code` both must report — `NEAR_FUSED` with
+  `weighted`/`weighted_rrf`/`rsf` and `USING FUSION` over a single `NEAR`
+  (V012), a MATCH `ORDER BY` of an
   aggregate or a bare name (R005–R009, V015), a `GROUP BY` ordered by an
   aggregate the SELECT does not list (R010, V016), output columns sharing
   a name, an aggregate named `score` in a vector `GROUP BY` included
@@ -522,7 +523,8 @@ silently relied upon:
 - ~~D010~~ — **fixed 2026-10-29**: the WASM executor now runs core's
   `QueryValidator`, so it refuses `USING FUSION` over a single `NEAR` and
   `NEAR_FUSED` with `weighted`/`rsf` (V012) instead of answering them. Locked
-  by `rejected_cases` R001–R004.
+  by `rejected_cases` R001–R004 (plus R016 for `weighted_rrf`, which #2369
+  added to the same rejection).
 - ~~D011~~ — **fixed 2026-10-29**: a WASM `similarity()` threshold without
   `NEAR` ranks the rows by that similarity and carries it as their score
   (`near_cases` N009–N012).
@@ -536,7 +538,7 @@ silently relied upon:
 
 The enforced Codacy metric is **per-function**: cyclomatic complexity ≤ 8 and function NLOC ≤ 50. There is no hard file-length gate — a file can be large yet fully compliant if it is a set of small functions or is comment-dense. So raw line count is not, by itself, a violation.
 
-Several production files exceed ~900 raw lines (e.g. `simd_native/x86_avx512.rs` ≈ 1469 raw / ~944 NLOC — dominated by per-intrinsic `// SAFETY:` blocks; `tauri-plugin-velesdb/src/{types,commands}.rs`; `velesdb-python/src/{agent.rs, collection/search.rs}`; `velesql/.../match_dispatch.rs`; `velesdb-server/src/config.rs`). They fall into two buckets:
+Several production files exceed ~900 raw lines (e.g. `tauri-plugin-velesdb/src/{types,commands}.rs`; `velesdb-python/src/{agent.rs, collection/search.rs}`; `velesql/.../match_dispatch.rs`; `velesdb-server/src/config.rs`). They fall into two buckets:
 
 - **Covered by an exclusion**: the tauri-plugin files via the `crates/tauri-plugin-velesdb/src/**` lizard glob.
 - **Compliant without an exclusion**: the rest — their individual functions stay within CC ≤ 8 / NLOC ≤ 50, which is why `main` ships Codacy-green. They are intentionally **not** added to `.codacy.yml`, because a blanket file exclusion would suppress genuine future per-function findings in them.

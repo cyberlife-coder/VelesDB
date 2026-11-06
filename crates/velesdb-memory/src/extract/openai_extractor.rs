@@ -4,7 +4,9 @@
 
 use super::prompt::{build_graph_prompt, build_prompt};
 use super::reply::{extraction_from_reply, facts_from_reply};
-use super::wire::{MAX_GENERATION_TOKENS, REQUEST_TIMEOUT_SECS};
+use super::wire::{
+    extraction_schema, fact_list_schema, MAX_GENERATION_TOKENS, REQUEST_TIMEOUT_SECS,
+};
 use super::{ExtractError, ExtractedFact, Extraction, Extractor};
 
 /// Extracts through any **OpenAI-compatible** `/v1/chat/completions` endpoint.
@@ -16,6 +18,7 @@ pub struct OpenAiExtractor {
     client: crate::http_client::HttpJsonClient,
     model: String,
     chat_template_kwargs: Option<serde_json::Value>,
+    max_generation_tokens: u32,
 }
 
 /// Hand-written for the reason [`crate::http_client::Auth`]'s is: the template
@@ -32,6 +35,7 @@ impl std::fmt::Debug for OpenAiExtractor {
                 "chat_template_kwargs",
                 &self.chat_template_kwargs.as_ref().map(|_| "<redacted>"),
             )
+            .field("max_generation_tokens", &self.max_generation_tokens)
             .finish()
     }
 }
@@ -61,7 +65,19 @@ impl OpenAiExtractor {
             ),
             model: model.into(),
             chat_template_kwargs: None,
+            max_generation_tokens: MAX_GENERATION_TOKENS,
         }
+    }
+
+    /// Cap the tokens a reply may generate, sent as `max_tokens`. The
+    /// default is `MAX_GENERATION_TOKENS`; raise it for passages that hold
+    /// more facts than the default's reply budget can serialize — a reply
+    /// that hits the cap is truncated mid-JSON and fails parsing instead of
+    /// extracting what fit.
+    #[must_use]
+    pub fn with_max_generation_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_generation_tokens = max_tokens;
+        self
     }
 
     /// Send `kwargs` as the chat body's `chat_template_kwargs` on every call.
@@ -84,11 +100,12 @@ impl OpenAiExtractor {
     }
 
     /// POST one prompt and return the assistant's reply.
-    fn generate(&self, prompt: &str) -> Result<String, ExtractError> {
+    fn generate(&self, prompt: &str, schema: &serde_json::Value) -> Result<String, ExtractError> {
         let body = crate::openai::chat_body(
             &self.model,
             prompt,
-            MAX_GENERATION_TOKENS,
+            self.max_generation_tokens,
+            schema,
             self.chat_template_kwargs.as_ref(),
         );
         let payload = self
@@ -114,11 +131,11 @@ impl OpenAiExtractor {
 
 impl Extractor for OpenAiExtractor {
     fn extract(&self, text: &str) -> Result<Vec<ExtractedFact>, ExtractError> {
-        facts_from_reply(&self.generate(&build_prompt(text))?)
+        facts_from_reply(&self.generate(&build_prompt(text), &fact_list_schema())?)
     }
 
     fn extract_graph(&self, text: &str) -> Result<Extraction, ExtractError> {
-        extraction_from_reply(&self.generate(&build_graph_prompt(text))?)
+        extraction_from_reply(&self.generate(&build_graph_prompt(text), &extraction_schema())?)
     }
 }
 

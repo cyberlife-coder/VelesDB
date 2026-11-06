@@ -63,6 +63,10 @@ SKILL_PAIRS: "tuple[tuple[str, str], ...]" = (
         "crates/velesdb-node/skills/velesdb-context-optimizer",
     ),
     (
+        "skills/velesdb-extract-outline",
+        "crates/velesdb-node/skills/velesdb-extract-outline",
+    ),
+    (
         "skills/velesdb-learning-loop",
         "crates/velesdb-node/skills/velesdb-learning-loop",
     ),

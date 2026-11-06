@@ -263,6 +263,19 @@
             "--files",
             "{root}/src/lib.rs"
           ]
+        },
+        {
+          "vector": "an unsafe fn whose item header carries neither a `# Safety` doc section nor an attached `// SAFETY:` comment (#2396)",
+          "files": {
+            "src/lib.rs": "unsafe fn deref(p: *const u8) -> u8 {\n    // SAFETY: the caller upholds the invariants below.\n    // - p is non-null and points to an initialised byte\n    // Reason: the caller owns the dereference contract.\n    unsafe { *p }\n}\n"
+          },
+          "accepts": {
+            "src/lib.rs": "/// Deref a raw pointer.\n///\n/// # Safety\n/// `p` must be non-null and point to an initialised byte.\nunsafe fn deref(p: *const u8) -> u8 {\n    // SAFETY: the caller upholds the invariants below.\n    // - p is non-null and points to an initialised byte\n    // Reason: the caller owns the dereference contract.\n    unsafe { *p }\n}\n"
+          },
+          "argv": [
+            "--files",
+            "{root}/src/lib.rs"
+          ]
         }
       ],
       "blind_spot": {

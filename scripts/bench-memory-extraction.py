@@ -629,8 +629,11 @@ def extractor_token() -> str:
 class OpenAiBackend:
     """The `openai` extractor path: an OpenAI-compatible server such as omlx.
 
-    The body is what `openai::chat_body` builds — same temperature, same cap.
-    Anything else measures a request velesdb-memory never sends.
+    The body is what `openai::chat_body` builds — same temperature, same cap,
+    same strict `json_schema` `response_format` (#1944). Anything else
+    measures a request velesdb-memory never sends. The schema carried is the
+    bench's `EXTRACTION_SCHEMA`, the approximation the GitHub Models probe
+    measured: the crate's own adds a `facts` array the scorer does not read.
     """
 
     def __init__(self, base_url: str, model: str, token: str, cap: int) -> None:
@@ -645,7 +648,20 @@ class OpenAiBackend:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
             "max_tokens": self.cap,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "extraction", "strict": True,
+                                "schema": strict_object_schema(EXTRACTION_SCHEMA)},
+            },
         }
+        # The product forwards the operator's
+        # VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS on every call (e.g.
+        # {"enable_thinking": false} to keep a thinking model's budget for the
+        # reply); the bench reads the same variable so a run measures what the
+        # configured daemon would send — never a bench-only variant.
+        kwargs = os.environ.get("VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS")
+        if kwargs:
+            body["chat_template_kwargs"] = json.loads(kwargs)
         started = time.monotonic()
         response = http_json(f"{self.base_url}/v1/chat/completions", body, self.token,
                              timeout=generation_timeout(self.cap))
@@ -663,13 +679,17 @@ class OpenAiBackend:
 
     def settings(self) -> dict:
         """Same contract as the ollama backend — see its `settings`."""
+        kwargs = os.environ.get("VELESDB_MEMORY_EXTRACTOR_CHAT_TEMPLATE_KWARGS")
         return {
             "backend": "openai",
-            # This path sends no schema at all: the crate's OpenAI-compatible
-            # extractor has no `format` equivalent wired (#1944), so a run here
-            # is unconstrained by construction rather than by choice.
-            "constrained": False,
-            "schema_required": None,
+            "chat_template_kwargs": json.loads(kwargs) if kwargs else None,
+            # The crate's extractor constrains every call (`response_format`,
+            # strict `json_schema`, #1944): the product has no unconstrained
+            # arm, so a faithful run reports that rather than implying a knob
+            # that does not exist.
+            "constrained": True,
+            "response_format": "json_schema",
+            "schema_required": EXTRACTION_SCHEMA["required"],
             "temperature": 0,
             "max_tokens": self.cap,
         }
@@ -679,7 +699,27 @@ class OpenAiBackend:
         return unasked_runtime([self.model], NOT_ASKED_REASON.format("openai"))
 
     def residency(self) -> dict:
-        return http_json(f"{self.base_url}/v1/models/status", token=self.token, timeout=30)
+        """What the server reports as loaded — when it has a residency API at all.
+
+        omlx answers `/v1/models/status`. A plain OpenAI-compatible server
+        (llama-server, vLLM) has no such endpoint: every model it serves is
+        loaded by construction, so a 404 there says nothing about the model
+        and everything about the API. Fall back to the standard `/v1/models`
+        listing and mark the record — `preflight` reads the mark to tell "the
+        check does not apply" apart from "the check failed".
+        """
+        try:
+            return http_json(f"{self.base_url}/v1/models/status", token=self.token, timeout=30)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+        listing = http_json(f"{self.base_url}/v1/models", token=self.token, timeout=30)
+        models = [
+            {"id": entry.get("id"), "name": entry.get("id"), "loaded": True}
+            for entry in listing.get("data") or []
+            if isinstance(entry, dict) and entry.get("id")
+        ]
+        return {"models": models, "residency_api": False}
 
     def set_loaded(self, model: str, loaded: bool) -> None:
         """Bring the model to the requested residency, which may already hold.
@@ -781,12 +821,15 @@ class GitHubModelsBackend:
         CI they are context, not results (#1949 discipline: quality counts
         only).
 
-    The `response_format` arm is the probe #1944 exists for: `off` sends the
-    body `openai::chat_body` builds today; `json_object` asks for
-    syntactically valid JSON; `json_schema` sends the crate's schema in
-    strict mode. 429s are retried with the server's own `Retry-After` and
-    counted on the record, because a free-tier probe that silently waited
-    would publish latencies it never measured.
+    The `response_format` arm is the probe #1944 existed for, and its result
+    shipped: `json_schema` is the strict constrained shape `openai::chat_body`
+    now builds (on the bench's `EXTRACTION_SCHEMA` — the crate's own adds a
+    `facts` array the scorer does not read); `json_object` asks for
+    syntactically valid JSON and `off` leaves the request unconstrained —
+    both kept as declared arms for paired comparison against the shipped
+    wiring. 429s are retried with the server's own `Retry-After` and counted
+    on the record, because a free-tier probe that silently waited would
+    publish latencies it never measured.
     """
 
     hosted = True
@@ -890,8 +933,8 @@ DEFAULT_NUM_CTX = 2048
 # all — structurally impossible rather than merely discouraged.
 #
 # `value` stays string-or-number on purpose. Forcing a number would also force
-# the numeric-attribute oracle to pass, so the variant would be scoring its own
-# constraint instead of the model.
+# the numeric-attribute oracle to pass, so a constrained run would be scoring
+# its own constraint instead of the model.
 EXTRACTION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1055,9 +1098,10 @@ class OllamaBackend:
         self.cap = cap
         self.keep_alive = keep_alive
         self.num_ctx = num_ctx
-        # Constrained decoding is a DECLARED variant, never the reference: the
-        # product sends no `format` today, and a bench that quietly enabled it
-        # would measure something velesdb-memory does not do.
+        # Constrained decoding is what the product does on every call since
+        # 5.1.0 (#1944): passing the schema here is the faithful run, and a
+        # run WITHOUT it is now the declared variant — it measures a request
+        # velesdb-memory no longer sends.
         self.schema = schema
 
     def _options(self) -> dict:
@@ -2893,8 +2937,15 @@ def preflight(residency: dict, model: str) -> dict:
     model for a cable.
     """
     record = model_record(residency, model)
-    backing = storage_backing(record.get("model_path"))
-    if record and not backing.get("reachable"):
+    if residency.get("residency_api") is False:
+        # A server with no residency endpoint cannot report where weights sit,
+        # so there is nothing for the reachability check to check — that is an
+        # n/a, not a failure.
+        backing = {"path": None, "reachable": None,
+                   "reason": "server exposes no residency API"}
+    else:
+        backing = storage_backing(record.get("model_path"))
+    if record and backing.get("reachable") is False:
         raise RuntimeError(
             f"{model}: weights unreachable at {backing.get('path')} "
             f"({backing.get('reason')}) — this is a storage problem, not a model result"
@@ -3069,20 +3120,22 @@ def _add_model_arguments(parser: argparse.ArgumentParser, config_required: bool)
                              "Omit it to measure models, which wants every case")
     parser.add_argument("--constrained", action="store_true",
                         help="ollama only: constrain decoding to the extraction "
-                             "schema. A DECLARED VARIANT, never the reference — "
-                             "velesdb-memory sends no `format` today, so a run "
-                             "with this flag measures a product that does not "
-                             "exist yet, and its numbers belong in their own column")
+                             "schema. Since 5.1.0 the product sends `format` on "
+                             "every call (#1944), so this flag is the faithful "
+                             "run — a run WITHOUT it is the declared variant "
+                             "measuring a product that does not exist, and its "
+                             "numbers belong in their own column")
     parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX, dest="num_ctx",
                         help="ollama context window, stated rather than inherited "
                              "from the host's VRAM (its default varies 4k/32k/256k "
                              "by card, which makes runs incomparable across machines)")
     parser.add_argument("--response-format", choices=["off", "json_object", "json_schema"],
                         default="off", dest="response_format",
-                        help="github-models only: the #1944 probe arm. `off` sends the "
-                             "body `openai::chat_body` builds today; the other two are "
-                             "DECLARED VARIANTS measuring a wiring the crate does not "
-                             "have yet, and their numbers belong in their own column")
+                        help="github-models only: the #1944 probe arm, whose result "
+                             "shipped — `json_schema` is the strict shape "
+                             "`openai::chat_body` now builds. `off` and `json_object` "
+                             "remain DECLARED VARIANTS for paired comparison, and "
+                             "their numbers belong in their own column")
     parser.add_argument("--request-delay", type=float, default=0.0, dest="request_delay",
                         help="github-models only: seconds slept before each request, so "
                              "a free-tier per-minute quota shapes pacing instead of "

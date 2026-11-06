@@ -332,14 +332,17 @@ fn test_max_layers_reported_alongside_a_configured_wired_knob() {
 /// `default_mode` is applied would train its reader to ignore the whole line,
 /// which is the failure `test_max_layers_reported_alongside_a_configured_wired_knob`
 /// guards against one section over.
+///
+/// The probe knob is `storage.storage_mode` now: `query_timeout_ms` joined
+/// the wired set under #2087, so only the storage field is left to prove
+/// the field-by-field reporting still fires.
 #[test]
 fn test_search_and_storage_are_both_reported_by_field() {
     let mut config = VelesConfig::default();
-    config.search.max_results = 42;
     config.storage.storage_mode = "memory".to_string();
     assert_eq!(
         config.inert_engine_entries(),
-        vec!["search.max_results", "storage.storage_mode"],
+        vec!["storage.storage_mode"],
         "only the knobs that still do nothing may be named"
     );
 }
@@ -347,15 +350,20 @@ fn test_search_and_storage_are_both_reported_by_field() {
 /// Setting a WIRED `[search]` knob must report nothing at all.
 ///
 /// The complement of the test above: without it, an `inert_engine_entries`
-/// that had simply stopped looking at `[search]` would satisfy both.
+/// that had simply stopped looking at `[search]` would satisfy both. The probe
+/// set is all four wired knobs — `default_mode`, `ef_search` and
+/// `query_timeout_ms` (#2087), `max_results` (#2591).
 #[test]
 fn test_a_configured_wired_search_knob_is_not_reported() {
     let mut config = VelesConfig::default();
     config.search.default_mode = crate::config::SearchMode::Accurate;
     config.search.ef_search = Some(321);
+    config.search.max_results = 42;
+    config.search.query_timeout_ms = 5;
     assert!(
         config.inert_engine_entries().is_empty(),
-        "default_mode and ef_search reach the engine; naming them would be a false warning"
+        "default_mode, ef_search, max_results and query_timeout_ms reach the \
+         engine; naming them would be a false warning"
     );
 }
 

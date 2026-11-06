@@ -6,7 +6,6 @@
 
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -195,23 +194,13 @@ fn lock_exclusive(path: &Path, wait: Duration) -> Option<std::fs::File> {
     }
 }
 
-/// Writes a fresh id to a temporary file, flushes it to disk, and renames it
-/// over `path`, so a reader sees the old file or the complete new one.
-fn write_new(dir: &Path, path: &Path) -> Option<String> {
+/// Writes a fresh id through `atomic_write` (temp file + fsync + rename +
+/// directory fsync), so a reader sees the old file or the complete new one
+/// and a committed rename survives a power loss (audit #2590).
+fn write_new(_dir: &Path, path: &Path) -> Option<String> {
     let id = new_id();
-    let temporary = dir.join(format!(".{FILE_NAME}.{id}.tmp"));
-    write_synced(&temporary, &format!("{id}\n")).ok()?;
-    if std::fs::rename(&temporary, path).is_err() {
-        let _ = std::fs::remove_file(&temporary);
-        return None;
-    }
+    crate::storage::atomic_write::atomic_write(path, format!("{id}\n").as_bytes()).ok()?;
     Some(id)
-}
-
-fn write_synced(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut file = std::fs::File::create(path)?;
-    file.write_all(content.as_bytes())?;
-    file.sync_all()
 }
 
 /// The id of the first directory that can hold one, else a fresh id that

@@ -588,6 +588,14 @@ class RealWorkflowTests(unittest.TestCase):
         self.assertIn("mcp-doc-contract", self.needs)
         self.assertIn("mcp-doc-contract", self.chain)
 
+    def test_the_openapi_drift_gate_is_required(self) -> None:
+        # Same reason as the mcp-doc-contract pin above: the generic
+        # invariants would stay green if the job were dropped from `needs`
+        # and the chain in the same edit.
+        self.assertIn("openapi-drift", job_names(self.text))
+        self.assertIn("openapi-drift", self.needs)
+        self.assertIn("openapi-drift", self.chain)
+
     def test_the_needs_list_is_not_empty(self) -> None:
         self.assertTrue(self.needs, "`CI Success` needs nothing — it gates nothing")
 
@@ -695,6 +703,58 @@ class BlockingBehaviourTests(unittest.TestCase):
                 self.assertNotIn("--mode warn", line)
                 self.assertNotIn("|| true", line)
                 self.assertNotIn("continue-on-error", line)
+
+
+class OpenApiDriftStepTests(unittest.TestCase):
+    """The openapi-drift step must RUN the generator, and prove it did.
+
+    `generate_openapi_spec_files` is cfg-gated on `openapi` + `prometheus`
+    — the only features that move the published document — so under
+    `--features openapi` it is an ordinary test (#2592). `cargo test`
+    exits 0 when its filter matches nothing, so an invocation that reaches
+    no test greens while the spec drifts. Two shapes do exactly that:
+    passing `--ignored` (the test is ignored no longer, so the flag now
+    filters it OUT) and renaming the function without updating the filter.
+    The step is pinned against both: the exact-name filter and the
+    run-summary assertion are what make the job's green mean "regenerated
+    and compared", not "ran nothing".
+    """
+
+    def setUp(self) -> None:
+        self.text = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.block = strip_comments(job_block(self.text, "openapi-drift"))
+
+    def test_the_step_invokes_the_generator_by_its_exact_name(self) -> None:
+        self.assertIn("tests::generate_openapi_spec_files -- --exact", self.block)
+
+    def test_the_invocation_carries_no_ignored_flag(self) -> None:
+        run_lines = [
+            line
+            for line in self.block.split("\n")
+            if "generate_openapi_spec_files" in line
+        ]
+        self.assertTrue(run_lines, "the openapi-drift job names no generator test")
+        for line in run_lines:
+            with self.subTest(line=line):
+                self.assertNotIn("--ignored", line)
+                self.assertNotIn("--include-ignored", line)
+
+    def test_the_step_fails_when_zero_tests_ran(self) -> None:
+        # The proof the gate fired: the summary line cargo prints only when a
+        # test actually ran. Dropping this grep puts the vacuous-green shape
+        # back — a `cargo test` that matched nothing still exits 0.
+        self.assertIn('grep -q "test result: ok. 1 passed"', self.block)
+
+    def test_the_regen_pipe_cannot_swallow_a_test_failure(self) -> None:
+        # `cargo test … | tee` under the default `bash -e` discards cargo's
+        # exit status — the binary-size job's shipped shape, which this very
+        # suite exists because of.
+        self.assertIn("set -o pipefail", self.block)
+
+    def test_the_committed_files_remain_the_comparator(self) -> None:
+        self.assertIn(
+            "git diff --exit-code docs/openapi.json docs/openapi.yaml", self.block
+        )
 
 
 class DisarmTests(unittest.TestCase):
@@ -2510,6 +2570,29 @@ class TypeScriptSdkIsLintedTests(unittest.TestCase):
         """`eslint src` left tests/ unlinted, 7 errors deep (#2364)."""
         targets = self.package.get("scripts", {}).get("lint", "").split()[1:]
         self.assertLessEqual({"src", "tests"}, set(targets), f"lint targets: {targets}")
+
+    def test_the_typecheck_script_covers_the_tests_too(self) -> None:
+        """`tsc --noEmit` reads tsconfig.json, which excludes tests/, and vitest
+        transpiles with esbuild, which strips types without checking them -- so
+        tests/ was linted but never type-checked, 141 errors deep (#2393). The
+        fix compiles the suite under tsconfig.eslint.json; this pins both ends
+        of that wiring: the script names the project, and the project still
+        includes tests/."""
+        script = self.package.get("scripts", {}).get("typecheck", "")
+        self.assertIn(
+            "tsconfig.eslint.json",
+            script,
+            f"`npm run typecheck` no longer compiles the project that covers "
+            f"tests/ ({script!r}), so test files merge type-unsafe again",
+        )
+        project = json.loads(
+            (TS_SDK_PACKAGE.parent / "tsconfig.eslint.json").read_text(encoding="utf-8")
+        )
+        include = project.get("include", [])
+        self.assertTrue(
+            any("tests" in entry for entry in include),
+            f"tsconfig.eslint.json no longer includes tests/: {include}",
+        )
 
     def test_the_parser_refuses_a_job_that_lost_the_step(self) -> None:
         """The positive control, on the shape this replaces."""

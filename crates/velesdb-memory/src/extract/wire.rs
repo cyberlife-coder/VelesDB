@@ -6,8 +6,8 @@
 //! request envelope and the schemas that constrain its decoding. It is not
 //! everything that leaves the process — the prompts leave too, and stay in
 //! `extract.rs` beside the parser, because they are what this crate wants said
-//! to any backend: the OpenAI-compatible extractor sends the same prompts, in
-//! an envelope `crate::openai` builds, and no schema.
+//! to any backend: the OpenAI-compatible extractor sends the same prompts and
+//! the same schemas, in the `response_format` envelope `crate::openai` builds.
 //!
 //! Each schema still sits beside nothing else, which is the point — it is one
 //! contract stated twice, once for the sampler and once for the reader, and
@@ -27,6 +27,12 @@ pub(super) const REQUEST_TIMEOUT_SECS: u64 = 300;
 /// sentence's worth of triples needs, and turns the worst case into a
 /// bounded one instead of a tuning knob callers have to discover by timing
 /// out.
+///
+/// "Comfortably above" holds for a non-reasoning model: the uncensored
+/// measurement on #1956 read p95 = 162 completion tokens, p99 = 554. A
+/// thinking model burns the cap in its chain of thought before emitting
+/// JSON (72% truncation at any plausible cap) — for those, the fix is
+/// `chat_template_kwargs = {"enable_thinking": false}`, not a higher cap.
 pub(super) const MAX_GENERATION_TOKENS: u32 = 512;
 
 /// The body of one `/api/generate` call, built where a test can read it.
@@ -39,6 +45,7 @@ pub(super) fn generate_body(
     model: &str,
     prompt: &str,
     schema: &serde_json::Value,
+    max_tokens: u32,
 ) -> serde_json::Value {
     serde_json::json!({
         "model": model,
@@ -55,7 +62,7 @@ pub(super) fn generate_body(
         // cost, not the generation. Shares the embedder's knob so one setting
         // governs every Ollama call the daemon makes.
         "keep_alive": crate::embedder::keep_alive(),
-        "options": { "temperature": 0, "num_predict": MAX_GENERATION_TOKENS },
+        "options": { "temperature": 0, "num_predict": max_tokens },
     })
 }
 

@@ -163,6 +163,40 @@ fn a_symlinked_workspace_is_refused_by_the_controller() {
     assert_eq!(fs::read_dir(&real).expect("real").count(), 0);
 }
 
+/// #2408: a workspace swapped for another directory after `open` must not be
+/// followed — the store resolves every later name through the directory
+/// descriptor it pinned at open, so a `save` keeps landing in the original
+/// workspace inode and writes nothing into the swapped-in directory.
+#[cfg(unix)]
+#[test]
+fn a_workspace_swapped_after_open_is_not_followed_by_save() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root");
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let mut controller = ConvergenceController::open(&workspace, EPOCH, config()).expect("open");
+
+    let foreign = root.path().join("foreign");
+    fs::create_dir(&foreign).expect("foreign");
+    let moved = root.path().join("moved");
+    fs::rename(&workspace, &moved).expect("move workspace aside");
+    symlink(&foreign, &workspace).expect("swap in a foreign directory");
+
+    controller
+        .observe(sample(0, 10, 10))
+        .expect("observe saves into the pinned workspace");
+
+    assert_eq!(
+        fs::read_dir(&foreign).expect("foreign").count(),
+        0,
+        "nothing may be written into the swapped-in directory"
+    );
+    let bytes = fs::read(moved.join(STATE_FILE)).expect("pinned state");
+    let saved: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(saved["samples"].as_array().map(Vec::len), Some(1));
+}
+
 #[cfg(unix)]
 #[test]
 fn failed_persistence_does_not_advance_in_memory_state_or_touch_target() {

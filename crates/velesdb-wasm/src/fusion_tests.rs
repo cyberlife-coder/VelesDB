@@ -7,7 +7,7 @@ fn test_fuse_rrf_basic() {
         vec![(2, 1.0), (1, 0.5), (4, 0.3)],
     ];
 
-    let fused = fuse_results(&results, "rrf", 60, None).unwrap();
+    let fused = fuse_results(&results, "rrf", 60, None, None).unwrap();
 
     // ID 1 and 2 should be at top (appear in both lists)
     assert!(fused.len() >= 2);
@@ -19,7 +19,7 @@ fn test_fuse_rrf_basic() {
 fn test_fuse_average() {
     let results = vec![vec![(1, 0.8), (2, 0.6)], vec![(1, 0.6), (2, 0.8)]];
 
-    let fused = fuse_results(&results, "average", 60, None).unwrap();
+    let fused = fuse_results(&results, "average", 60, None, None).unwrap();
 
     // Both should have average 0.7
     for (_, score) in &fused {
@@ -31,7 +31,7 @@ fn test_fuse_average() {
 fn test_fuse_maximum() {
     let results = vec![vec![(1, 0.9), (2, 0.5)], vec![(1, 0.3), (2, 0.8)]];
 
-    let fused = fuse_results(&results, "maximum", 60, None).unwrap();
+    let fused = fuse_results(&results, "maximum", 60, None, None).unwrap();
 
     let id1_score = fused.iter().find(|(id, _)| *id == 1).map(|(_, s)| *s);
     let id2_score = fused.iter().find(|(id, _)| *id == 2).map(|(_, s)| *s);
@@ -43,14 +43,14 @@ fn test_fuse_maximum() {
 #[test]
 fn test_fuse_empty() {
     let results: Vec<Vec<(u64, f32)>> = vec![];
-    let fused = fuse_results(&results, "rrf", 60, None).unwrap();
+    let fused = fuse_results(&results, "rrf", 60, None, None).unwrap();
     assert!(fused.is_empty());
 }
 
 #[test]
 fn test_fuse_single_query() {
     let results = vec![vec![(1, 0.9), (2, 0.8)]];
-    let fused = fuse_results(&results, "rrf", 60, None).unwrap();
+    let fused = fuse_results(&results, "rrf", 60, None, None).unwrap();
 
     assert_eq!(fused.len(), 2);
     assert_eq!(fused[0].0, 1); // Higher RRF score (rank 0)
@@ -62,7 +62,7 @@ fn test_fuse_single_query() {
 fn test_fuse_weighted_uses_core_canonical_defaults() {
     let results = vec![vec![(1, 0.8), (2, 0.6)], vec![(1, 0.6), (2, 0.8)]];
 
-    let fused = fuse_results(&results, "weighted", 60, None).unwrap();
+    let fused = fuse_results(&results, "weighted", 60, None, None).unwrap();
 
     // Both docs appear in 2/2 queries => hit_ratio = 1.0
     // ID 1: avg=0.7, max=0.8 => 0.6*0.7 + 0.3*0.8 + 0.1*1.0 = 0.76
@@ -83,7 +83,7 @@ fn test_fuse_weighted_default_matches_explicit_core_constants() {
         vec![(1, 0.6), (2, 0.8), (3, 0.1)],
     ];
 
-    let via_default = fuse_results(&results, "weighted", 60, None).unwrap();
+    let via_default = fuse_results(&results, "weighted", 60, None, None).unwrap();
     let via_explicit_constants = fuse_results(
         &results,
         "weighted",
@@ -93,6 +93,7 @@ fn test_fuse_weighted_default_matches_explicit_core_constants() {
             velesdb_core::fusion::DEFAULT_WEIGHTED_MAX_WEIGHT,
             velesdb_core::fusion::DEFAULT_WEIGHTED_HIT_WEIGHT,
         )),
+        None,
     )
     .unwrap();
 
@@ -110,7 +111,7 @@ fn test_fuse_weighted_accepts_caller_supplied_weights() {
     let results = vec![vec![(1, 0.8), (2, 0.6)], vec![(1, 0.6), (2, 0.8)]];
 
     // avg_weight=1.0, others 0 => fused score reduces to the plain average.
-    let fused = fuse_results(&results, "weighted", 60, Some((1.0, 0.0, 0.0))).unwrap();
+    let fused = fuse_results(&results, "weighted", 60, Some((1.0, 0.0, 0.0)), None).unwrap();
     assert_eq!(fused.len(), 2);
     for (_, score) in &fused {
         assert!((score - 0.7).abs() < 0.01);
@@ -122,7 +123,7 @@ fn test_fuse_weighted_accepts_caller_supplied_weights() {
 #[test]
 fn test_fuse_weighted_rejects_invalid_caller_weights() {
     let results = vec![vec![(1, 0.8), (2, 0.6)]];
-    let err = fuse_results(&results, "weighted", 60, Some((0.9, 0.9, 0.9))).unwrap_err();
+    let err = fuse_results(&results, "weighted", 60, Some((0.9, 0.9, 0.9)), None).unwrap_err();
     assert!(
         err.contains("sum to 1.0"),
         "expected a weight-sum validation error, got: {err}"
@@ -133,7 +134,7 @@ fn test_fuse_weighted_rejects_invalid_caller_weights() {
 fn test_fuse_relative_score() {
     let results = vec![vec![(1, 0.9), (2, 0.1)], vec![(1, 0.5), (2, 0.5)]];
 
-    let fused = fuse_results(&results, "relative_score", 60, None).unwrap();
+    let fused = fuse_results(&results, "relative_score", 60, None, None).unwrap();
 
     // Query 0: range=0.8, ID 1 norm=(0.9-0.1)/0.8=1.0, ID 2 norm=0.0
     // Query 1: range=0, both get 0.5 (default when range==0, matches core)
@@ -148,7 +149,7 @@ fn test_fuse_relative_score() {
 #[test]
 fn test_fuse_rsf_alias() {
     let results = vec![vec![(1, 0.9), (2, 0.1)]];
-    let fused = fuse_results(&results, "rsf", 60, None).unwrap();
+    let fused = fuse_results(&results, "rsf", 60, None, None).unwrap();
     // "rsf" should behave like "relative_score"
     assert_eq!(fused.len(), 2);
 }
@@ -173,7 +174,7 @@ fn test_rsf_n_branch_diverges_from_core_relative_score() {
         vec![(3, 1.0), (1, 0.0)],
     ];
 
-    let wasm_order: Vec<u64> = fuse_results(&input, "relative_score", 60, None)
+    let wasm_order: Vec<u64> = fuse_results(&input, "relative_score", 60, None, None)
         .unwrap()
         .into_iter()
         .map(|(id, _)| id)
@@ -218,7 +219,7 @@ fn test_fuse_relative_score_equal_scores_default_half() {
     // All scores identical within each branch → range ≈ 0
     let results = vec![vec![(1, 0.7), (2, 0.7)], vec![(1, 0.3), (2, 0.3)]];
 
-    let fused = fuse_results(&results, "relative_score", 60, None).unwrap();
+    let fused = fuse_results(&results, "relative_score", 60, None, None).unwrap();
 
     // Both branches collapse to 0.5 per document → avg = 0.5
     assert_eq!(fused.len(), 2);
@@ -233,7 +234,7 @@ fn test_fuse_relative_score_equal_scores_default_half() {
 #[test]
 fn test_fuse_unknown_strategy_returns_error() {
     let results = vec![vec![(1, 0.9), (2, 0.8)]];
-    let err = fuse_results(&results, "typo_strategy", 60, None).unwrap_err();
+    let err = fuse_results(&results, "typo_strategy", 60, None, None).unwrap_err();
     assert!(
         err.contains("Unknown fusion strategy"),
         "expected descriptive error, got: {err}"
@@ -285,7 +286,7 @@ fn test_fuse_results_matches_core_ordering() {
 
     for input in &inputs {
         for (name, strategy) in &cases {
-            let wasm = canonical(fuse_results(input, name, 60, None).unwrap());
+            let wasm = canonical(fuse_results(input, name, 60, None, None).unwrap());
             let core = canonical(strategy.fuse(input.clone()).unwrap());
             assert_eq!(
                 wasm, core,
@@ -315,7 +316,7 @@ fn test_relative_score_normalization_delegates_to_core_min_max_normalize() {
         let expected = velesdb_core::fusion::min_max_normalize(branch);
 
         let wasm_single_branch =
-            fuse_results(&[branch.to_vec()], "relative_score", 60, None).unwrap();
+            fuse_results(&[branch.to_vec()], "relative_score", 60, None, None).unwrap();
 
         assert_eq!(
             wasm_single_branch.len(),
@@ -343,7 +344,7 @@ fn test_fused_ties_are_ordered_by_ascending_id() {
     let results = vec![branch.clone(), branch];
     let ascending: Vec<u64> = (0..32).collect();
     for strategy in ["average", "maximum", "relative_score"] {
-        let fused = fuse_results(&results, strategy, 60, None).unwrap();
+        let fused = fuse_results(&results, strategy, 60, None, None).unwrap();
         let ids: Vec<u64> = fused.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, ascending, "{strategy}");
     }

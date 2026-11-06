@@ -3146,6 +3146,55 @@ fn test_ids_exceeding_u32_max_pass_through() {
     }
 }
 
+#[test]
+fn test_filtered_special_qualities_keep_the_bitmap_contract() {
+    // #2268: Perfect, Adaptive and AutoTune must not be flattened into a
+    // single-ef pass — and the bitmap contract must survive the dispatch.
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
+    for i in 0u64..30 {
+        #[allow(clippy::cast_precision_loss)]
+        let v = vec![i as f32 * 0.05, 1.0 - i as f32 * 0.02, 0.5];
+        index.insert(i, &v);
+    }
+
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for i in 0u32..12 {
+        bitmap.insert(i);
+    }
+    let query = [0.5, 0.9, 0.5];
+
+    for quality in [
+        SearchQuality::Perfect,
+        SearchQuality::Adaptive {
+            min_ef: 16,
+            max_ef: 512,
+        },
+        SearchQuality::AutoTune,
+    ] {
+        let results = index
+            .search_with_quality_and_bitmap(&query, 5, quality, &bitmap)
+            .unwrap();
+        assert!(!results.is_empty(), "{quality:?} must return results");
+        assert!(
+            results.iter().all(|r| r.id < 12),
+            "{quality:?} leaked a filtered id: {:?}",
+            results.iter().map(|r| r.id).collect::<Vec<_>>()
+        );
+    }
+
+    // Perfect under bitmap must answer with the exact scan, not an
+    // approximate pass: its result equals full_scan_with_bitmap's.
+    let filtered = index
+        .search_with_quality_and_bitmap(&query, 5, SearchQuality::Perfect, &bitmap)
+        .unwrap();
+    let exact = index.full_scan_with_bitmap(&query, 5, &bitmap).unwrap();
+    assert_eq!(
+        filtered.iter().map(|r| r.id).collect::<Vec<_>>(),
+        exact.iter().map(|r| r.id).collect::<Vec<_>>(),
+        "filtered Perfect must match the exact bitmap scan"
+    );
+}
+
 #[cfg(test)]
 mod bitmap_property_tests {
     use super::*;
@@ -4607,6 +4656,78 @@ fn reorder_waits_for_the_maintenance_lock() {
              claims, and a vacuum's swap can be renumbered under it"
         );
     });
+}
+
+/// A renumber landing between `brute_force_search_rayon`'s vector snapshot
+/// and its id resolution must never relabel a slot it scored (#2607).
+///
+/// The scan snapshots the contiguous slab under `inner.read()` and resolves
+/// `mappings.get_id` on the way out. Resolved after the guard drops, a
+/// `reorder_for_locality` — or a vacuum's swap, which renumbers under the
+/// same write side — in between answers "which id is slot i" in the new
+/// numbering for a snapshot taken in the old: every moved slot comes back
+/// scored under another id's vector. The `scan_window` seam parks a whole
+/// reorder in that window, deterministically, on a thread of its own — the
+/// hook runs on the scanning thread, inside the scan.
+///
+/// The check is per result: an exhaustive (`Perfect`) scan returns every
+/// slot, and each `(id, score)` pair must carry the distance to `id`'s own
+/// vector — a stale slot's score names the vector the slot held when the
+/// snapshot ran, not the id the renumbered mappings now give it.
+#[test]
+fn a_reorder_in_the_scan_window_never_mislabels_a_vector() {
+    let index = std::sync::Arc::new(wide_index_with_base(RENUMBERED));
+    let window = super::index::scan_window::install({
+        let index = std::sync::Arc::clone(&index);
+        move || {
+            let index = std::sync::Arc::clone(&index);
+            std::thread::spawn(move || index.reorder_for_locality())
+                .join()
+                .expect("test: the reorder thread panicked")
+                .expect("test: reorder");
+        }
+    });
+
+    let query = wide_vector(7);
+    let hits = index
+        .search_with_quality(&query, RENUMBERED as usize, SearchQuality::Perfect)
+        .expect("test: exact search");
+    drop(window);
+
+    // Positive control, as in
+    // `reordering_renumbers_the_slots_and_the_mappings_follow`: a reorder
+    // that renumbered nothing gives the window nothing to show.
+    assert!(
+        (0..RENUMBERED).any(|id| index.mappings.get_idx(id) != Some(id as usize)),
+        "the reorder renumbered nothing"
+    );
+    assert_eq!(
+        hits.len(),
+        RENUMBERED as usize,
+        "an exact scan over a full-mapped index returns every slot"
+    );
+    let mislabeled: Vec<u64> = hits
+        .iter()
+        .filter(|hit| {
+            // Bitwise on purpose: the same `compute_distance` on the same two
+            // vectors is deterministic, so an id carrying its own vector's
+            // score compares exactly.
+            hit.score.to_bits()
+                != index
+                    .compute_distance(&query, &wide_vector(hit.id))
+                    .to_bits()
+        })
+        .map(|hit| hit.id)
+        .collect();
+    assert!(
+        mislabeled.is_empty(),
+        "{} of {} results carry another vector's score (first {:?}): the \
+         scan resolved ids against the post-reorder numbering on a \
+         pre-reorder vector snapshot",
+        mislabeled.len(),
+        hits.len(),
+        mislabeled.first()
+    );
 }
 
 // =========================================================================

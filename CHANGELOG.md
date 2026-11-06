@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.1.0] - 2026-11-06
+
+### Added
+
+- **`FusionStrategy::WeightedRRF` is reachable on every surface**
+  (closes #2369). The variant was reachable only by embedding the Rust
+  crate: core's name grammar refused `weighted_rrf` because its one weight
+  per branch cannot ride the scalar `FusionParams`. A companion channel
+  fixes that — `FusionStrategy::from_name_with_weights(name, params,
+  weights)` keeps `params` `Copy` and refuses the name without weights as
+  `FusionError::MissingWeights` rather than inventing a default, while
+  weights a strategy does not read are ignored like its other scalars. Every
+  name-reading surface went through it: REST `/search/multi` gains a
+  `branch_weights` field (arity-checked against the vector count with a
+  400), the hybrid `FusionRequest` and VelesQL
+  `USING FUSION (strategy='weighted_rrf')` read `dense_w`/`sparse_w` /
+  `dense_weight`/`sparse_weight` as the two branch weights — the same math
+  `weighted` already ran there — Python grows
+  `FusionStrategy.weighted_rrf(weights, k)` and a `weights` kwarg on
+  `from_name`, WASM's `multi_query_search` interprets its `weights` argument
+  per strategy name (and its VelesQL executor builds the two-branch
+  `weighted_rrf` like core's), mobile exposes `WeightedRrf { weights, k }`
+  through a `TryFrom` running core's validating constructor, Tauri reads a
+  `weights`/`branch_weights`/`branchWeights` key in `fusion_params`, the
+  CLI's `search` takes `--branch-weights` and the TypeScript SDK sends
+  `fusionParams.branchWeights` as REST's `branch_weights` or the WASM
+  `weights` argument. `NEAR_FUSED` keeps refusing `weighted_rrf` (V012),
+  like `weighted`/`rsf`, pinned by conformance case R016.
+- **Filtered search now honours `ef_search` and quality presets end to end
+  (closes #2302).** Core gains
+  `VectorCollection::search_with_quality_and_filter` — the filtered
+  counterpart of `search_with_quality`, routing through the same
+  quality-aware dispatch `WITH (mode=…, ef_search=…)` reaches — and the read
+  gate's `run_dense` no longer drops `ef`/`quality` when a caller or scope
+  filter is present (`ef` resolves to `SearchQuality::Custom` and still wins
+  over `quality`). The Python binding exposes it as
+  `Collection.search_with_quality_and_filter(vector, top_k=10, filter=None,
+  ef_search=None, quality=None, *, principal=None, tenant=None)`; existing
+  method signatures are unchanged. The LangChain integration routes
+  `ef_search`/`search_quality` + `filter` through it instead of refusing:
+  `similarity_search_with_ef(query, ef_search=…, filter=…)` now runs the
+  filtered search at the requested `ef_search`. REST `/search` picks the same
+  behaviour up through `GatedRead::Dense`, retiring the "mode/ef_search
+  ignored when a filter is present" limitation on that path.
+- **`velesdb-extract-outline` agent skill** (#1957). A fourth managed skill
+  that documents the `outline` extractor's `fact:`/`edge:`/`attr:` directive
+  grammar, so the agent itself performs the extraction for
+  `remember_extracted(extractor="outline")` — the option a user picks for
+  no-LLM setups and models too small to hold the generative extraction
+  contract. Registered for install (`sync-skills.py`), npm bundling and the
+  `velesdb-skills.tar.gz` release archive, and pointed at as a user-chosen
+  option from the `velesdb-memory` skill's backend-selection notes.
+
+### Changed
+
+- **Sparse search: `MaxScore` DAAT retired from production routing** (#2177).
+  The op-count probe measured it strictly dominated at every corpus size —
+  14–43× the linear scan's per-query cost below 100k docs, ~13× at 400k,
+  78× at 1.1M–1.5M on the skewed queries it exists for — so `sparse_search`
+  now always runs the linear scan (dense or hash-map accumulator chosen on
+  doc-id space). `maxscore_search` remains reachable under `internal-bench`
+  and test seams only, for re-measurement; results are unchanged (the
+  parity tests pin top-k equivalence with brute force either way).
+
+### Fixed
+
+- **TypeScript SDK: one error code per bad input, on both backends** (#2307).
+  A type-level bad value over REST (a negative or fractional `top_k`, a
+  string `rrf_k`, a `null` fusion weight, a non-string `fusion` strategy)
+  fails axum's body deserialization, which answers a plain-text `422` with no
+  JSON code — the SDK surfaced `UNKNOWN_ERROR` where the WASM backend gives
+  `BAD_REQUEST` for the same input. `422` now maps to `BAD_REQUEST`, the code
+  every such refusal means. `db.multiQuerySearch([])` was `VALIDATION_ERROR`
+  at the client layer while the WASM backend answered `BAD_REQUEST`; the
+  client guard and both backends now refuse an out-of-range vector count
+  (core's 1-to-10) with `BAD_REQUEST`, and a direct `RestBackend` call
+  refuses it before any request leaves. The WASM `query` path names a LIMIT
+  token core's u64 parser refuses (`LIMIT -1`, `+5`, `1e3`) `BAD_REQUEST`
+  rather than `NOT_SUPPORTED`, which stays for clauses WASM does not
+  evaluate. And `velesql().nearFused()`/`fusion()` refuse a non-string
+  strategy with `BAD_REQUEST` instead of coercing it — a bare `TypeError`
+  on a prototype-less object.
+- **The read gate consults the observer once per `(collection, operation)`
+  per statement** (#2588). A statement that fans out internally — a
+  self-JOIN, a `UNION`/`INTERSECT`/`EXCEPT` over one collection, a `MATCH`
+  naming the same `@collection` twice or annotating its own target, a scalar
+  subquery on the outer statement's collection, and `EXPLAIN`/`EXPLAIN
+  ANALYZE` (whose plan read preceded the row read through a second gate
+  pass) — consulted `DatabaseObserver::on_query_request` twice for the same
+  collection, double-counting one logical query for logging and metering
+  observers. The first answer is now memoized for the statement's lifetime
+  and replayed; denials still abort on first sight and scope filters still
+  fold into each consumer's own `WHERE`.
+- `search.max_results` is now applied as the ceiling on the rows a single
+  caller-visible search or query returns (#2591). The key used to be parsed,
+  validated, and ignored: a `search(query, k)` above the ceiling, a filtered
+  search, a batch or multi-query search, `scroll_batch`, and every `VelesQL`
+  statement — `SELECT`, `MATCH` `RETURN` (which has no implicit LIMIT), and
+  compounds — could return more rows than configured. `k`/`LIMIT` values
+  below the ceiling still win, and a `Collection` opened directly (no
+  `Database` config) stays unbounded. `scroll_batch` pages are bounded by the
+  same ceiling, so callers paging with a larger `batch_size` receive smaller
+  pages — issue more `scroll_batch` calls to cover the same range.
+- **core: the secondary-index bitmap pre-filter of a metadata-filtered `NEAR`
+  takes the configured `[search]` quality (#2430).** A filtered `NEAR` whose
+  condition resolves through a `CREATE INDEX` bitmap, naming no quality of its
+  own — no `WITH`, or a `WITH` that sets none of `mode` / `ef_search` /
+  `rerank` — ran its HNSW walk at a self-computed
+  `ef_search = candidates_k.max(k * 10)`, ignoring `default_mode` and
+  `ef_search`. It now runs `search_with_quality_and_bitmap` at the
+  collection's runtime quality — the same call the `WITH (ef_search = N)`
+  branch of the same query already took. With a non-default `[search]` this
+  query shape's results change; a default config still resolves to `Balanced`.
+  This was the last entry point the #2430 audit listed.
+- **A plan-only `EXPLAIN` of a `MATCH` addressed through `_collection` now
+  consults the read gate on the traversal target** (#2598).
+  `Database::explain_query` gated with empty params, so a `MATCH` whose
+  target collection rides in the `_collection` parameter — how
+  `POST /query/explain` addresses a top-level `MATCH` — was decided on no
+  collection at all: a denial of the traversed collection still answered
+  HTTP 200 with a plan. The new `Database::explain_query_with_params` carries
+  the caller's params into the gate, and the REST plan path uses it; a denial
+  now surfaces as an error and an inapplicable scope is refused, matching
+  what `execute_query` has answered for the same statement since the read
+  gate landed.
+
 ## [8.0.0] - 2026-11-02
 
 > **MAJOR release.** The breaking changes and how to move past each one are in

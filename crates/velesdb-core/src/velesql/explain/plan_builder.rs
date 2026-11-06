@@ -276,6 +276,7 @@ impl QueryPlan {
         let strategy = match fc.strategy {
             crate::velesql::ast::FusionStrategyType::Rrf => "RRF",
             crate::velesql::ast::FusionStrategyType::Weighted => "Weighted",
+            crate::velesql::ast::FusionStrategyType::WeightedRrf => "WeightedRRF",
             crate::velesql::ast::FusionStrategyType::Maximum => "Maximum",
             crate::velesql::ast::FusionStrategyType::Rsf => "RSF",
             crate::velesql::ast::FusionStrategyType::Average => "Average",

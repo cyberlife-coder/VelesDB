@@ -54,12 +54,18 @@ A VelesQL statement can read several collections, and each is decided on its
 own: the collection it targets (its `FROM`, or the `_collection` parameter a
 `MATCH` or an aggregate can be sent with), every `UNION` / `INTERSECT` /
 `EXCEPT` operand, every JOIN's secondary collection, every `@collection` a
-`MATCH` node is enriched from, and every scalar subquery's collection. A scope
-on the target or on an operand joins that select's `WHERE`, so `COUNT`,
-`SUM`, `GROUP BY` and `HAVING` see only the scoped rows. A traversal, a JOIN's
-secondary side, `@collection` enrichment and `SELECT EDGES` have no row filter
-to compose a scope into: a scope with a filter on one of them refuses the
-statement with `Error::Config` (`VELES-009`) rather than run it unscoped.
+`MATCH` node is enriched from, and every scalar subquery's collection. Each
+`(collection, operation)` pair is consulted **once per statement**: a
+self-JOIN, a `UNION` over one collection, a repeated `@collection`, a
+subquery on the outer collection, or the plan read an `EXPLAIN` /
+`EXPLAIN ANALYZE` makes before the row read replays the first answer instead
+of asking again, so a logging or metering observer never double-counts one
+logical query. A scope on the target or on an operand joins that select's
+`WHERE`, so `COUNT`, `SUM`, `GROUP BY` and `HAVING` see only the scoped rows.
+A traversal, a JOIN's secondary side, `@collection` enrichment and
+`SELECT EDGES` have no row filter to compose a scope into: a scope with a
+filter on one of them refuses the statement with `Error::Config` (`VELES-009`)
+rather than run it unscoped.
 
 Its `Err` channel is for a failure of the observer itself; a refusal is a
 `Deny`. `QueryAccessContext` carries the `collection`, the `operation`
@@ -593,4 +599,4 @@ None of these truncates to `k`: they score exactly the slices they are given.
 
 ---
 
-Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.1.0

@@ -50,6 +50,7 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste: proc-macro transitive of the demo's Tauri stack, unmaintained, no successor" },
     { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive in the demo, unmaintained" },
     { id = "RUSTSEC-2026-0105", reason = "core2: demo transitive, unmaintained and all versions yanked" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils: futures-util/hyper transitive in the demo's Tauri stack, unmaintained, no fix released" },
 
     # ── Tauri non-GTK3 transitives ────────────────────────────────────
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: tauri build-time transitive, unmaintained" },

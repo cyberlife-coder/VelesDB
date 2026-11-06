@@ -4376,6 +4376,64 @@ async fn test_explain_analyze_match_flags_approximate_traversal_counters() {
     );
 }
 
+#[tokio::test]
+async fn test_explain_analyze_execution_failure_surfaces_error_status() {
+    // Issue #2587: an EXPLAIN ANALYZE whose execution fails must answer an
+    // error status — never a plan-shaped payload with HTTP 200 that the
+    // caller cannot tell from a successful analysis.
+    let temp_dir = TempDir::new().unwrap();
+    let app = create_test_app(&temp_dir);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/collections")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({ "name": "explain_fail", "dimension": 4, "metric": "cosine" })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // `$v` is never bound: the query validates but fails at execution time.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/query/explain")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "query": "SELECT * FROM explain_fail WHERE vector NEAR $v LIMIT 3",
+                        "analyze": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        !status.is_success(),
+        "a failed EXPLAIN ANALYZE must not answer 2xx, got {status}: {json}"
+    );
+    assert!(
+        json["error"]["code"].is_string(),
+        "the failure must carry the VelesQL error shape, not a plan: {json}"
+    );
+}
+
 // ============================================================================
 // GuardRails — rate limit (429)
 // ============================================================================

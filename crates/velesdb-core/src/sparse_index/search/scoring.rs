@@ -8,8 +8,12 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use super::super::inverted_index::SparseInvertedIndex;
-use super::super::types::{PostingEntry, ScoredDoc, SparseVector};
+use super::super::types::ScoredDoc;
+#[cfg(any(test, feature = "internal-bench"))]
+use super::super::{
+    inverted_index::SparseInvertedIndex,
+    types::{PostingEntry, SparseVector},
+};
 
 /// Records `n` posting inspections when the bench counter is compiled in.
 ///
@@ -25,6 +29,7 @@ pub(crate) fn count_ops(n: u64) {
 }
 
 /// Records the probes a `binary_search` over `len` entries performs.
+#[cfg(any(test, feature = "internal-bench"))]
 #[inline]
 pub(crate) fn count_binary_search(len: usize) {
     #[cfg(feature = "internal-bench")]
@@ -35,6 +40,7 @@ pub(crate) fn count_binary_search(len: usize) {
 
 /// Collects posting lists for each query term, along with query weight and
 /// the global max document weight for that term.
+#[cfg(any(test, feature = "internal-bench"))]
 pub(crate) struct TermPostings {
     pub query_weight: f32,
     pub max_doc_weight: f32,
@@ -42,6 +48,7 @@ pub(crate) struct TermPostings {
 }
 
 /// Prepared term data with precomputed upper-bound prefix sums for `MaxScore`.
+#[cfg(any(test, feature = "internal-bench"))]
 pub(crate) struct PreparedTerms {
     pub terms: Vec<TermPostings>,
     /// `upper_bound[i]` = cumulative max contribution of terms `0..=i`.
@@ -52,6 +59,7 @@ pub(crate) struct PreparedTerms {
 /// ascending, and computes upper-bound prefix sums.
 ///
 /// Returns `None` when no query term has any postings.
+#[cfg(any(test, feature = "internal-bench"))]
 pub(crate) fn prepare_term_data(
     index: &SparseInvertedIndex,
     query: &SparseVector,
@@ -95,6 +103,7 @@ pub(crate) fn prepare_term_data(
 /// Scores a single document by combining essential term contributions (at
 /// cursor positions matching `doc_id`) and non-essential term contributions
 /// (via binary search).
+#[cfg(any(test, feature = "internal-bench"))]
 pub(crate) fn score_document(
     term_data: &[TermPostings],
     cursors: &mut [usize],
@@ -128,6 +137,7 @@ pub(crate) fn score_document(
 }
 
 /// Finds the smallest `doc_id` among essential posting lists (from `split..n_terms`).
+#[cfg(any(test, feature = "internal-bench"))]
 pub(crate) fn find_min_essential_doc_id(
     term_data: &[TermPostings],
     cursors: &[usize],
@@ -146,6 +156,7 @@ pub(crate) fn find_min_essential_doc_id(
 
 /// Finds the split index: smallest i where `upper_bound[i] >= threshold`.
 /// Returns `upper_bound.len()` if no such index exists (all terms are non-essential).
+#[cfg(any(test, feature = "internal-bench"))]
 pub(crate) fn find_split(upper_bound: &[f32], threshold: f32) -> usize {
     for (i, &ub) in upper_bound.iter().enumerate() {
         if ub >= threshold {

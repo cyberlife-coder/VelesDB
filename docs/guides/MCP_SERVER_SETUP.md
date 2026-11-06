@@ -193,6 +193,19 @@ cp -r skills/velesdb-learning-loop ~/.claude/skills/
 
 → [`skills/velesdb-learning-loop/SKILL.md`](../../skills/velesdb-learning-loop/SKILL.md)
 
+A fourth, **`velesdb-extract-outline`**, is the one to reach for when no
+generative extraction backend is configured — a no-LLM setup, or a local
+model too small to hold the extraction contract. It teaches the agent to
+write the `outline` backend's `fact:`/`edge:`/`attr:` directives itself, so
+`remember_extracted` still builds the full entity graph with no model at
+all. It is an opt-in the user chooses, not a default:
+
+```bash
+cp -r skills/velesdb-extract-outline ~/.claude/skills/
+```
+
+→ [`skills/velesdb-extract-outline/SKILL.md`](../../skills/velesdb-extract-outline/SKILL.md)
+
 **No repo clone needed.** Every
 [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
 attaches `velesdb-skills.tar.gz` — every skill, one folder per skill at the
@@ -849,6 +862,14 @@ not sent. A value that is not valid JSON, or not a JSON object, stops the daemon
 at startup with an error naming the variable; the `ollama` backend does not read
 it. The value is kept out of logs and `Debug` output.
 
+`VELESDB_MEMORY_EXTRACTOR_MAX_TOKENS` (optional) caps how many tokens a reply
+may generate — sent as `num_predict` to `ollama` and `max_tokens` to `openai`.
+The built-in 512 fits the facts a short passage serializes; a richer passage's
+reply hits the cap and is cut mid-JSON, which surfaces as a parse failure.
+Raise it for longer passages. Unset or blank keeps the default; a value that
+is not a positive integer stops the daemon at startup with an error naming the
+variable.
+
 `VELESDB_MEMORY_EXTRACTOR` is the per-daemon **default**, not a session-wide
 lock. Each `remember_extracted` call may pass `extractor: "outline"`,
 `"ollama"`, or `"openai"`. The offline `outline` backend is always available;
@@ -911,4 +932,4 @@ trait and pass it to `MemoryService::remember_extracted` from Rust.
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-memory 0.16.0
+Last updated: 2026-11-02 · Applies to: velesdb-memory 0.17.1

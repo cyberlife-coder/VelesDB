@@ -116,10 +116,12 @@ describe('REST_CAPABILITIES — full-feature contract', () => {
       'hitWeight',
       'denseWeight',
       'sparseWeight',
+      'branchWeights',
     ]);
     expect([...REST_CAPABILITIES.velesqlFusionStrategies]).toEqual([
       'rrf',
       'weighted',
+      'weighted_rrf',
       'maximum',
       'rsf',
       'average',
@@ -154,6 +156,7 @@ describe('WASM_CAPABILITIES — focused subset', () => {
       'avgWeight',
       'maxWeight',
       'hitWeight',
+      'branchWeights',
     ]);
     expect(WASM_CAPABILITIES.namedSparseIndexes).toBe(false);
     expect(WASM_CAPABILITIES.idOnlySearch).toBe(false);

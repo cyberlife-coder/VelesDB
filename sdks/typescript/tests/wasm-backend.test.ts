@@ -4,7 +4,7 @@
  * Tests the WasmBackend class with mock WASM module
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
 import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
 import { FakeSparseIndex } from './helpers/fake-sparse-index';
@@ -14,7 +14,10 @@ class MockVectorStore {
   insert = vi.fn();
   insert_with_payload = vi.fn();
   insert_batch = vi.fn();
-  search = vi.fn(() => [[BigInt(1), 0.95], [BigInt(2), 0.85]]);
+  search = vi.fn((_q: Float32Array, _k: number) => [
+    [BigInt(1), 0.95],
+    [BigInt(2), 0.85],
+  ]);
   // The binding parses the preset, then runs the same brute-force search
   // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
   search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
@@ -32,8 +35,18 @@ class MockVectorStore {
   query = vi.fn(() => [
     { id: 1, a: 1 },
   ]);
-  multi_query_search = vi.fn(() => [[BigInt(1), 0.95]]);
-  remove = vi.fn(() => true);
+  // (flat, numVectors, k, strategy, rrfK, weights) — tests read calls[0][5].
+  multi_query_search = vi.fn(
+    (
+      _flat: Float32Array,
+      _numVectors: number,
+      _k: number,
+      _strategy: string,
+      _rrfK: number,
+      _weights: Float32Array | null
+    ) => [[BigInt(1), 0.95]]
+  );
+  remove = vi.fn((_id: bigint) => true);
   clear = vi.fn();
   reserve = vi.fn();
   free = vi.fn();
@@ -61,6 +74,30 @@ class MockVectorStore {
 
   static new_metadata_only(): MockVectorStore {
     return new MockVectorStore(0, 'cosine');
+  }
+}
+
+/**
+ * A store whose `sparse_remove` deletes postings, as velesdb-wasm does after
+ * 8.0.0 (#2287): the SDK then removes retired ids outright instead of
+ * tombstoning them. `MockVectorStore` itself models 8.0.0 — the published
+ * floor the SDK's dependency range still admits — which has no such method.
+ */
+class MockVectorStoreWithSparseRemove extends MockVectorStore {
+  sparse_remove = vi.fn((id: bigint) => this.sparse.remove(id));
+
+  static override new_with_mode(
+    dimension: number,
+    metric: string,
+    mode: string
+  ): MockVectorStoreWithSparseRemove {
+    const store = new MockVectorStoreWithSparseRemove(dimension, metric);
+    store.storage_mode = mode;
+    return store;
+  }
+
+  static override new_metadata_only(): MockVectorStoreWithSparseRemove {
+    return new MockVectorStoreWithSparseRemove(0, 'cosine');
   }
 }
 
@@ -334,7 +371,7 @@ describe('WasmBackend', () => {
     it('should search vectors', async () => {
       const results = await backend.search('vectors', [1.0, 0.0, 0.0, 0.0], { k: 2 });
       expect(results.length).toBe(2);
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.score).toBe(0.95);
     });
 
     it('should delete a vector', async () => {
@@ -352,7 +389,8 @@ describe('WasmBackend', () => {
 
       const collections = (backend as any).collections;
       const store = collections.get('vectors').store as MockVectorStore;
-      const lastRemoveArg = store.remove.mock.calls.at(-1)?.[0];
+      const calls = store.remove.mock.calls;
+      const lastRemoveArg = calls[calls.length - 1]?.[0];
       expect(lastRemoveArg).not.toBe(BigInt(123));
     });
   });
@@ -366,7 +404,7 @@ describe('WasmBackend', () => {
     it('should execute multi-query search', async () => {
       const results = await backend.multiQuerySearch('vectors', [[0.1, 0.2, 0.3, 0.4]]);
       expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.score).toBe(0.95);
     });
 
     it('should accept weighted fusion strategy', async () => {
@@ -383,10 +421,10 @@ describe('WasmBackend', () => {
       expect(store.multi_query_search).toHaveBeenCalledWith(
         expect.any(Float32Array), 1, 10, 'weighted', 60, expect.any(Float32Array),
       );
-      const weights = store.multi_query_search.mock.calls[0][5] as Float32Array;
+      const weights = store.multi_query_search.mock.calls[0]![5] as Float32Array;
       expect(Array.from(weights)).toEqual(Array.from(new Float32Array([0.6, 0.3, 0.1])));
       expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.95);
+      expect(results[0]!.score).toBe(0.95);
     });
   });
 
@@ -404,7 +442,7 @@ describe('WasmBackend', () => {
     it('supports hybrid search', async () => {
       const results = await backend.hybridSearch('vectors', [0.1, 0.2, 0.3, 0.4], 'query');
       expect(results.length).toBe(1);
-      expect(results[0].score).toBe(0.91);
+      expect(results[0]!.score).toBe(0.91);
     });
 
     it('supports query mapping', async () => {
@@ -668,6 +706,66 @@ describe('WasmBackend — upsert indexes sparse vectors; sparse search sees live
     await backend.delete('s', 1);
 
     expect(await hitIds({ 7: 1 }, 1)).toEqual(['2']);
+  });
+});
+
+describe('WasmBackend — a sparse_remove-capable binding deletes retired ids (#2287)', () => {
+  let backend: WasmBackend;
+  const hitIds = async (sparseVector: Record<number, number>, k = 10) =>
+    (await backend.search('s', [], { k, sparseVector })).map((r) => r.id);
+  const sparseStore = () =>
+    sparseIdsOf(backend, 's').store as MockVectorStoreWithSparseRemove;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockWasmModule.VectorStore = MockVectorStoreWithSparseRemove;
+    backend = new WasmBackend();
+    await backend.init();
+    await backend.createCollection('s', { dimension: 0 });
+  });
+
+  afterEach(() => {
+    mockWasmModule.VectorStore = MockVectorStore;
+  });
+
+  it("removes a deleted point's postings instead of tombstoning them", async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+    await backend.delete('s', 1);
+
+    const store = sparseStore();
+    expect(store.sparse_remove).toHaveBeenCalledTimes(1);
+    expect(store.sparse.size).toBe(0);
+    expect(sparseIdsOf(backend, 's').dead).toBe(0);
+    expect(await hitIds({ 7: 1 })).toEqual([]);
+  });
+
+  it('keeps the sparse entry count bounded by the live points', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+    await backend.upsert('s', { id: 2, vector: [], sparseVector: { 8: 1 } });
+    for (let i = 0; i < 50; i += 1) {
+      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1, [100 + i]: 1 } });
+    }
+
+    const store = sparseStore();
+    expect(store.sparse_remove).toHaveBeenCalledTimes(50);
+    expect(sparseIdsOf(backend, 's').dead).toBe(0);
+    // Point 1's latest vector holds 2 terms, point 2's holds 1: the index
+    // holds exactly the live postings, none of the 50 superseded vectors'.
+    expect(store.sparse.size).toBe(3);
+    expect(await hitIds({ 7: 1 })).toEqual(['1']);
+  });
+
+  it('never rebuilds nor frees the sparse store', async () => {
+    await backend.upsert('s', { id: 1, vector: [], sparseVector: { 7: 1 } });
+    const store = sparseIdsOf(backend, 's').store!;
+    for (let i = 0; i < 10; i += 1) {
+      await backend.upsert('s', { id: 1, vector: [], sparseVector: { 9: 1 } });
+    }
+
+    expect(sparseIdsOf(backend, 's').store).toBe(store);
+    expect(store.free).not.toHaveBeenCalled();
+    expect(await hitIds({ 7: 1 })).toEqual([]);
+    expect(await hitIds({ 9: 1 })).toEqual(['1']);
   });
 });
 

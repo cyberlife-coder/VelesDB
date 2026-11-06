@@ -86,4 +86,26 @@ mod tests {
             "forged section length must yield CorruptedData, got {result:?}"
         );
     }
+
+    /// Audit #2590: `save_snapshot_to_file` must go through the shared
+    /// `atomic_write` barriers — a fault at the parent-directory fsync
+    /// must fail the save (a barrier not wired would pass vacuously),
+    /// and the plain path must round-trip.
+    #[test]
+    fn test_save_snapshot_to_file_reaches_dir_fsync() {
+        use crate::storage::atomic_write::{AtomicWriteBoundary, FaultGuard};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("snapshot_00000001.vamm");
+        let state = MemoryState::default();
+
+        let guard = FaultGuard::inject(AtomicWriteBoundary::ParentDirectorySync);
+        let result = save_snapshot_to_file(&path, &state);
+        drop(guard);
+        assert!(result.is_err(), "the dir-fsync barrier must be in-path");
+
+        save_snapshot_to_file(&path, &state).expect("clean save");
+        let loaded = load_snapshot_from_file(&path).expect("load back");
+        assert!(loaded.semantic.is_empty());
+    }
 }

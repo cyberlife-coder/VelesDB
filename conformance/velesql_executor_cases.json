@@ -757,6 +757,12 @@
       "expected_code": "V018",
       "query": "SELECT COUNT(*) AS n FROM docs HAVING COUNT(*) > 1",
       "note": "HAVING requires GROUP BY in both engines (WASM filtered the single implicit group)"
+    },
+    {
+      "id": "R016",
+      "expected_code": "V012",
+      "query": "SELECT * FROM docs WHERE vector NEAR_FUSED [$a, $b] USING FUSION 'weighted_rrf' LIMIT 5",
+      "note": "NEAR_FUSED refuses weighted_rrf like weighted/rsf: a per-branch-weighted fusion is ill-defined over homogeneous query vectors (V012); #2369 added the name to the same rejection list"
     }
   ],
   "dml_cases": [

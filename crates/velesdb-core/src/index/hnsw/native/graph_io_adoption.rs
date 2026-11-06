@@ -8,7 +8,6 @@
 
 use super::{DistanceEngine, NativeHnsw, VECTORS_FORMAT_VERSION};
 use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
 
 impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
@@ -40,7 +39,9 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
         vectors.flush_backing().map_err(std::io::Error::other)?;
         let mut file = OpenOptions::new().write(true).open(vectors_path)?;
         Self::write_vectors_header(&mut file, count, dimension, unit_norm)?;
-        file.flush()
+        // `File::flush` is a no-op — the header is only durable after an
+        // fsync (audit #2590).
+        file.sync_all()
     }
 
     /// A copy of `storage`, slot for slot, in the arena this graph would have

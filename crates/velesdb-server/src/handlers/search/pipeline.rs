@@ -135,6 +135,7 @@ pub(crate) fn resolve_sparse_input(
 /// | Strategy | Aliases | Parameters |
 /// |---|---|---|
 /// | RRF | `rrf` | `k` (default 60) |
+/// | Weighted RRF | `weighted_rrf` | `k` (default 60) + `dense_w`, `sparse_w` as the two per-branch weights (both required) |
 /// | Relative Score | `rsf`, `relative_score` | `dense_w`, `sparse_w` (default 0.5 / 0.5; one alone implies its complement) |
 /// | Average | `average`, `avg` | — |
 /// | Maximum | `maximum`, `max` | — |
@@ -159,16 +160,26 @@ pub(crate) fn parse_fusion_strategy(
         .with_hit_weight(f.hit_w)
         .with_dense_weight(f.dense_w)
         .with_sparse_weight(f.sparse_w);
-    velesdb_core::FusionStrategy::from_name(&f.strategy, params).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-                code: None,
-            }),
-        )
-            .into_response()
-    })
+    // On the two-branch hybrid path the `dense_w`/`sparse_w` pair is already
+    // per-branch weights, so `weighted_rrf` reads them directly — both are
+    // required, and a missing one surfaces as the core `MissingWeights`
+    // refusal rather than an invented default.
+    let weights: Option<Vec<f32>> = if f.strategy.eq_ignore_ascii_case("weighted_rrf") {
+        f.dense_w.zip(f.sparse_w).map(|(d, s)| vec![d, s])
+    } else {
+        None
+    };
+    velesdb_core::FusionStrategy::from_name_with_weights(&f.strategy, params, weights.as_deref())
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                    code: None,
+                }),
+            )
+                .into_response()
+        })
 }
 
 /// Parses a search request's `mode`, or counts a request error and answers
@@ -238,9 +249,9 @@ pub(crate) fn execute_dense_search(
     }
 
     // Parse the optional metadata filter up front so the search can be routed
-    // through the governed facade. Known limitation (#457): when a filter is
-    // present, mode/ef_search are ignored (search_with_filter takes no quality
-    // parameter yet) — `gated_search` preserves that same precedence.
+    // through the governed facade. A filter no longer drops mode/ef_search:
+    // `gated_search` resolves them onto the filtered-quality leaf, `ef`
+    // winning over `mode` the way `QuerySearchOptions::resolved_quality` does.
     let filter = match req.filter {
         Some(ref filter_json) => Some(parse_filter_or_400(filter_json, &state.onboarding_metrics)?),
         None => None,

@@ -111,6 +111,7 @@ export const FUSION_PARAM_NAMES = everyMemberOf<FusionParamName>()([
   'hitWeight',
   'denseWeight',
   'sparseWeight',
+  'branchWeights',
 ]);
 
 /** Every storage mode. */
@@ -136,6 +137,7 @@ export const COLLECTION_CONFIG_FIELDS = everyMemberOf<keyof CollectionConfig>()(
 const VELESQL_FUSION_STRATEGIES: readonly string[] = Object.freeze([
   'rrf',
   'weighted',
+  'weighted_rrf',
   'maximum',
   'rsf',
   'average',
@@ -324,14 +326,17 @@ export const WASM_CAPABILITIES: Readonly<CapabilityMap> = Object.freeze({
   // `text_search`, `hybrid_search` and `multi_query_search` take no filter,
   // and the id-only, named-sparse and scroll entry points are not implemented.
   filteredSearch: Object.freeze<FilteredSearchOperation[]>(['search', 'searchBatch']),
-  // velesdb-wasm's `multi_query_search` takes `rrf_k` and the weighted
-  // `[avg, max, hit]` triple. Its `relative_score` averages the query
-  // branches with equal weight, so it has no use for dense/sparse weights.
+  // velesdb-wasm's `multi_query_search` takes `rrf_k`, the weighted
+  // `[avg, max, hit]` triple, and `weighted_rrf`'s one weight per query
+  // vector — the two travel the same `weights` argument. Its `relative_score`
+  // averages the query branches with equal weight, so it has no use for
+  // dense/sparse weights.
   multiQueryFusionParams: Object.freeze<FusionParamName[]>([
     'k',
     'avgWeight',
     'maxWeight',
     'hitWeight',
+    'branchWeights',
   ]),
   namedSparseIndexes: false,
   idOnlySearch: false,

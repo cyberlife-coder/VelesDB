@@ -125,16 +125,21 @@ impl SearchMode {
 
 /// Search configuration section.
 ///
-/// **Half applied.** `default_mode` and `ef_search` reach the engine since
+/// **Applied.** `default_mode` and `ef_search` reach the engine since
 /// #2087: an unqualified `search()` resolves through
 /// [`SearchConfig::resolved_quality`], with `ef_search` winning over
 /// `default_mode` when both are set.
 ///
-/// `max_results` and `query_timeout_ms` are still inert and still warned about
-/// by [`VelesConfig::validate`], field by field. They are not oversights:
-/// clamping a caller's `LIMIT` silently is a footgun and erroring is a breaking
-/// change under a *default* config, while a query timeout is a feature the
-/// engine does not have. Both need a decision, not plumbing.
+/// `max_results` is the deployment-wide ceiling on the rows a single
+/// caller-visible search or query hands back (#2591): every k-based search
+/// entry point clamps `k` to it, and every `VelesQL` query — `SELECT`, `MATCH`
+/// `RETURN`, compounds — truncates its final row set to it. The clamp sits at
+/// the outermost boundary (typed collection wrappers, `Database`), so engine
+/// internals — compound operands, MATCH candidate pools, union legs — keep
+/// their own fetch windows. A caller `k`/`LIMIT` below the ceiling still wins.
+///
+/// `query_timeout_ms` seeds the guard-rail timeout at `Database` open
+/// (#2087) — `0` disables it, any positive value caps query execution.
 ///
 /// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
 /// working mechanism and continue to win over anything here.
@@ -145,7 +150,8 @@ pub struct SearchConfig {
     pub default_mode: SearchMode,
     /// Override `ef_search` (if set, overrides mode).
     pub ef_search: Option<usize>,
-    /// Maximum results per query.
+    /// Maximum rows a single caller-visible search or query may return;
+    /// applied as a ceiling over `k`/`LIMIT` (#2591).
     pub max_results: usize,
     /// Query timeout in milliseconds.
     pub query_timeout_ms: u64,
@@ -167,10 +173,10 @@ impl SearchConfig {
     /// `Perfect` itself is applied as `Accurate` here. A per-query `Perfect` is
     /// an exhaustive scan capped by `enforce_perfect_mode_limit`; as a global
     /// default it could not be applied at all: a filtered search's bitmap
-    /// pre-filter never reads the configured quality — it traverses the graph at
-    /// its own ef — so a `perfect` default would scan on some queries and
-    /// traverse on others. `VelesConfig::validate` warns when this downgrade
-    /// happens rather than failing the load.
+    /// pre-filter has no exhaustive-scan arm — `search_with_quality_and_bitmap`
+    /// traverses the graph at `Perfect`'s ef — so a `perfect` default would
+    /// scan on some queries and traverse on others. `VelesConfig::validate`
+    /// warns when this downgrade happens rather than failing the load.
     ///
     /// Available only with the `persistence` feature, the only build that
     /// exports [`SearchQuality`](crate::SearchQuality).
@@ -180,9 +186,10 @@ impl SearchConfig {
         self.ef_search.map_or_else(
             || match self.default_mode {
                 // Applied as `Accurate`, and warned about at load by
-                // `validate()`: a filtered search's bitmap pre-filter never
-                // reads this quality, so a global `Perfect` would scan on some
-                // queries and traverse on others (see the doc above).
+                // `validate()`: a filtered search's bitmap pre-filter
+                // traverses rather than scans, so a global `Perfect` would
+                // scan on some queries and traverse on others (see the doc
+                // above).
                 SearchMode::Perfect => crate::SearchQuality::Accurate,
                 mode => mode.quality(),
             },

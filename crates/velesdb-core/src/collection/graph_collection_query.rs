@@ -19,7 +19,11 @@ impl GraphCollection {
         query: &crate::velesql::Query,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query(query, params)
+        // `search.max_results` bounds the caller-visible row count (#2591);
+        // `usize::MAX` when no `Database` pushed a cap at open.
+        let mut results = self.inner.execute_query(query, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a query with instrumentation and returns plan + actual stats.
@@ -48,7 +52,9 @@ impl GraphCollection {
         sql: &str,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<SearchResult>> {
-        self.inner.execute_query_str(sql, params)
+        let mut results = self.inner.execute_query_str(sql, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a MATCH graph pattern query.
@@ -61,7 +67,9 @@ impl GraphCollection {
         match_clause: &crate::velesql::MatchClause,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        self.inner.execute_match(match_clause, params)
+        let mut results = self.inner.execute_match(match_clause, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a MATCH query with vector similarity scoring.
@@ -76,12 +84,14 @@ impl GraphCollection {
         similarity_threshold: f32,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        self.inner.execute_match_with_similarity(
+        let mut results = self.inner.execute_match_with_similarity(
             match_clause,
             query_vector,
             similarity_threshold,
             params,
-        )
+        )?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 
     /// Executes a MATCH query through the cost-based planner, returning ordered
@@ -100,6 +110,8 @@ impl GraphCollection {
         match_clause: &crate::velesql::MatchClause,
         params: &HashMap<String, serde_json::Value>,
     ) -> Result<Vec<MatchResult>> {
-        self.inner.match_query_ordered(match_clause, params)
+        let mut results = self.inner.match_query_ordered(match_clause, params)?;
+        results.truncate(self.inner.runtime_max_results());
+        Ok(results)
     }
 }

@@ -195,9 +195,9 @@ describe('getEdges', () => {
 
     const edges = await getEdges(transport, 'kg');
 
-    expect(edges[0].id).toBe(largeId);
-    expect(edges[0].source).toBe(largeId);
-    expect(edges[0].target).toBe('9007199254740995');
+    expect(edges[0]!.id).toBe(largeId);
+    expect(edges[0]!.source).toBe(largeId);
+    expect(edges[0]!.target).toBe('9007199254740995');
   });
 
   it('passes through numeric ids unchanged', async () => {
@@ -417,10 +417,10 @@ describe('createGraphCollection', () => {
     expect(call[2]).toMatchObject({ metric: 'cosine' });
   });
 
-  it.each([
+  it.each<[string, GraphCollectionConfig]>([
     ['nodeTypes', { nodeTypes: [{ name: 'Person' }] }],
     ['edgeTypes', { edgeTypes: [{ name: 'KNOWS', fromType: 'Person', toType: 'Person' }] }],
-  ] as const)(
+  ])(
     'refuses %s on a schemaless graph, where core would ignore them',
     async (_name, config) => {
       const transport = buildTransport();

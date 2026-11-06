@@ -75,6 +75,8 @@ pub mod pipeline_graph;
 #[allow(clippy::pedantic)]
 pub(crate) mod pipeline_points;
 #[allow(clippy::pedantic)]
+pub mod redact;
+#[allow(clippy::pedantic)]
 pub mod retry;
 #[allow(clippy::pedantic)]
 mod source_builders;

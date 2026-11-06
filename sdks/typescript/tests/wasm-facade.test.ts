@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WasmBackend } from '../src/backends/wasm';
 import { VelesDB } from '../src/client';
-import { VelesDBError, NotFoundError, ConnectionError, ValidationError } from '../src/types';
+import { VelesDBError, NotFoundError, ConnectionError } from '../src/types';
 
 // Mock WASM module — minimal surface for a collection that can report
 // "is_empty" and accept a flush no-op.
@@ -23,7 +23,7 @@ class MockVectorStore {
   remove = vi.fn(() => true);
   get = vi.fn(() => null);
   free = vi.fn();
-  search = vi.fn(() => []);
+  search = vi.fn((_q: Float32Array, _k: number) => [] as [bigint, number][]);
   // The binding parses the preset, then runs the same brute-force search
   // (`search_with_quality` in velesdb-wasm's `vector_store.rs`).
   search_with_quality = vi.fn((q: Float32Array, k: number) => this.search(q, k));
@@ -203,9 +203,7 @@ describe('WasmBackend — stub delegations (rejections)', () => {
       () =>
         backend.storeSemanticFact('c', {
           id: 'a',
-          subject: 's',
-          relation: 'r',
-          object: 'o',
+          text: 's',
           embedding: [0.1],
         }),
     ],
@@ -218,8 +216,9 @@ describe('WasmBackend — stub delegations (rejections)', () => {
       () =>
         backend.recordEpisodicEvent('c', {
           id: 'e',
+          eventType: 'e',
           timestamp: 0,
-          description: 'd',
+          data: {},
           embedding: [0.1],
         }),
     ],
@@ -233,7 +232,7 @@ describe('WasmBackend — stub delegations (rejections)', () => {
         backend.storeProceduralPattern('c', {
           id: 'p',
           name: 'n',
-          actions: [],
+          steps: [],
           embedding: [0.1],
         }),
     ],
@@ -291,8 +290,8 @@ describe('WasmBackend — stub delegations (rejections)', () => {
   );
 });
 
-describe('VelesDB.multiQuerySearch over WASM — the client refuses an empty list first (#2095)', () => {
-  it('throws VALIDATION_ERROR, as before, and the WASM backend never sees the call', async () => {
+describe('VelesDB.multiQuerySearch over WASM — the client refuses an empty list first (#2307)', () => {
+  it('throws BAD_REQUEST, the code the backend would give, and the WASM backend never sees the call', async () => {
     const db = new VelesDB({ backend: 'wasm' });
     await db.init();
     await db.createCollection('c', { dimension: 2, metric: 'cosine' });
@@ -303,8 +302,8 @@ describe('VelesDB.multiQuerySearch over WASM — the client refuses an empty lis
       (error: unknown) => error
     );
 
-    expect(outcome).toBeInstanceOf(ValidationError);
-    expect((outcome as ValidationError).code).toBe('VALIDATION_ERROR');
+    expect(outcome).toBeInstanceOf(VelesDBError);
+    expect((outcome as VelesDBError).code).toBe('BAD_REQUEST');
     expect(backendCall).not.toHaveBeenCalled();
     backendCall.mockRestore();
   });

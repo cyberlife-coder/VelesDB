@@ -28,6 +28,7 @@ machine, same toolchain, x86_64-unknown-linux-gnu:
 
     v5.2.0 (shipped)   velesdb-server 13.68 MiB   velesdb 10.99 MiB   migrate 8.58 MiB
     v6.0.0             velesdb-server 13.68 MiB   velesdb 11.04 MiB   migrate 8.62 MiB
+    8.0.0 dev          velesdb 11.51 MiB (gate measurement on the release cut)
 
 The already-published 5.2.0 build exceeded two of the old ceilings by the same
 margin 6.0.0 does; 6.0.0 adds 6 KB to the server binary, 0.04 %. The values
@@ -63,7 +64,10 @@ BINARIES = [
     # index v2, the point-id bitmap prefilter) — no dependency changed in
     # either. Ceiling = measured + ~2.5 %.
     ("velesdb-server", 14.75 * MIB),
-    ("velesdb", 11.5 * MIB),  # measured 11.04 MiB at 6.0.0, 10.99 at 5.2.0
+    # Measured 11.51 MiB on the 8.0.0 release cut — the major's accumulated
+    # feature surface added ~0.47 MiB over 6.0.0's 11.04 across the dev
+    # cycle. Ceiling = measured + ~2.5 %.
+    ("velesdb", 11.8 * MIB),  # was 11.04 MiB at 6.0.0, 10.99 at 5.2.0
     # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
     # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.
     # The +1.0 MiB is the parser itself, not the integration: stripped build of

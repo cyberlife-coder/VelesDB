@@ -354,6 +354,15 @@ def validate_storage_mode(mode: str) -> str:
     return canonical
 
 
+# Reserved Windows device names — same list as
+# velesdb-core::is_windows_reserved (CON..COM9, LPT1..LPT9).
+_WINDOWS_RESERVED_NAMES = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{i}" for i in range(1, 10)]
+    + [f"LPT{i}" for i in range(1, 10)]
+)
+
+
 def validate_collection_name(name: str) -> str:
     """Validate collection name.
 
@@ -372,13 +381,19 @@ def validate_collection_name(name: str) -> str:
         )
     if not name:
         raise SecurityError("Collection name cannot be empty")
-    if len(name) > 256:
-        raise SecurityError("Collection name exceeds maximum length of 256")
-    # Only allow alphanumeric, underscore, hyphen
-    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+    # Mirrors velesdb-core::validate_collection_name: 128 chars, no leading
+    # hyphen, no Windows reserved device name — the engine rejects all three
+    # at write time, so a client must not admit them either.
+    if len(name) > 128:
+        raise SecurityError("Collection name exceeds maximum length of 128")
+    if not re.match(r"^[a-zA-Z0-9_][a-zA-Z0-9_-]*$", name):
         raise SecurityError(
             "Collection name can only contain alphanumeric characters, "
-            "underscores, and hyphens"
+            "underscores, and hyphens, and cannot start with a hyphen"
+        )
+    if name.upper() in _WINDOWS_RESERVED_NAMES:
+        raise SecurityError(
+            f"Collection name {name!r} is a Windows reserved device name"
         )
     return name
 

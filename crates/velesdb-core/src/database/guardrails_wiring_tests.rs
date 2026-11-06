@@ -118,6 +118,29 @@ fn guardrail_limits_reads_back_the_last_update() {
     assert_eq!(db.guardrail_limits().timeout_ms, 1_234);
 }
 
+/// `[search].query_timeout_ms` seeds the global guard-rails at open (#2087):
+/// the entry was parsed, validated and never read before this wiring.
+#[test]
+fn a_configured_query_timeout_reaches_the_guard_rails() {
+    let dir = tempdir().unwrap();
+    let mut config = crate::config::VelesConfig::default();
+    config.search.query_timeout_ms = 7_777;
+    let db = Database::open_with_config(dir.path(), config).unwrap();
+
+    assert_eq!(db.guardrail_limits().timeout_ms, 7_777);
+
+    // A collection admitted afterwards carries the seeded timeout on its own
+    // rails — the path `admit_collection` pushes it through.
+    db.create_collection("docs", 4, DistanceMetric::Cosine)
+        .unwrap();
+    let coll = db.get_vector_collection("docs").unwrap();
+    assert_eq!(coll.guard_rails().limits().timeout_ms, 7_777);
+
+    // The runtime override still wins, as `update_guardrails` always did.
+    db.update_guardrails(&QueryLimits::default().with_timeout_ms(42));
+    assert_eq!(coll.guard_rails().limits().timeout_ms, 42);
+}
+
 #[test]
 fn update_guardrails_with_merges_into_the_live_limits() {
     let dir = tempdir().unwrap();

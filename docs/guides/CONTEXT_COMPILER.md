@@ -503,10 +503,17 @@ before compilation ever sees it as one oversized fragment.
 
 **Format detection** (`segmentation.format`, default `auto`):
 
-- **`jsonl`** — one line, one turn; each line must parse as a
-  `{"role": …, "content": …}` JSON object. A blank line never opens a turn of
-  its own (its bytes fold into the surrounding turn), so a JSONL transcript
-  that merely uses blank lines as separators still parses.
+- **`jsonl`** — one line, one turn; each non-empty line must parse as JSON.
+  A turn line is either a flat `{"role": …, "content": …}` object or the
+  agent-harness envelope wrapping a turn — `type` at top level, the turn's
+  `role`/`content` inside `message` — where `content` is a string or an
+  array of content blocks (a `text`/`thinking` block contributes its field;
+  any other block, e.g. a `tool_use`, is kept as compact JSON). A JSON line
+  matching neither shape is a bookkeeping record — kept as a role-less turn
+  with its `content`/`summary` payload, or verbatim when it carries
+  neither. A blank line never opens a turn of its own (its bytes fold into
+  the surrounding turn), so a JSONL transcript that merely uses blank lines
+  as separators still parses.
 - **`plain`** — turns are opened by the first match of a **closed** table of
   markers at the start of a line, checked in order: `System:`, `User:`,
   `Human:`, `Assistant:`, `AI:`, `Tool:`, `### User`, `### Assistant`. A
@@ -516,9 +523,10 @@ before compilation ever sees it as one oversized fragment.
   segmentation beats configurable-but-fragile marker matching. Force `plain`
   when a transcript would otherwise trip a false positive, or fall back to
   `compile_context` with hand-built fragments for full control.
-- **`auto`** (default) — tries `jsonl` first, falls back to `plain` when the
-  transcript does not parse as JSONL. A caller-forced format that fails to
-  parse is a **hard error**, never a silent fallback to the other format.
+- **`auto`** (default) — tries `jsonl` first, falls back to `plain` only
+  when some non-empty line is not valid JSON at all. A caller-forced format
+  that fails to parse is a **hard error**, never a silent fallback to the
+  other format.
 
 Within each `plain` turn, content is cut into sub-segments: a fenced code
 block becomes an atomic `code` segment (never split, exactly like
@@ -541,10 +549,12 @@ prefix without hand-annotating it.
 range, and the `fragment_id` the segment carries into `context.decisions`.
 **Two documented edge cases:**
 
-- **Segmentation failures reuse `compile_context`'s error taxonomy.** An
-  unsplittable fence over 1 MiB, a forced `jsonl` format that fails to parse,
-  or too many fragments after merging all surface as `ContextOverLimit` with a
-  segmentation-specific message — deliberately no new error variant.
+- **Segmentation failures reuse `compile_context`'s error taxonomy, except
+  format failures.** An unsplittable fence over 1 MiB or too many fragments
+  after merging surfaces as `ContextOverLimit` — a genuine budget/cap
+  breach. A forced `jsonl` format that fails to parse surfaces as the
+  distinct `SegmentationError` instead, so a malformed-input refusal is
+  never mistaken for a size breach.
 - **A single JSONL line whose decoded content alone exceeds 1 MiB** is
   re-split into several sub-1-MiB segments, but every child segment reports a
   proportional, non-overlapping share of the original line's raw span rather
@@ -846,4 +856,4 @@ skill teaches an agent the full workflow — including when *not* to compress.
 
 ---
 
-Last updated: 2026-10-28 · Applies to: velesdb-memory 0.16.0
+Last updated: 2026-11-02 · Applies to: velesdb-memory 0.17.1
