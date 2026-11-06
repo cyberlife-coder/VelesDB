@@ -91,7 +91,7 @@ The `velesdb-migrate` sub-crate ships a migration toolkit covering 10 source con
 
 A dedicated `macos-13` (Intel x86_64) matrix entry was added briefly in v1.14.4 (PR #738) but the GitHub-hosted `macos-13` runner availability proved unreliable: one v1.14.4 publish attempt left the wheel-build job queued for over 9 hours without a runner being assigned, blocking the rest of the release pipeline. The entry was removed in v1.14.5 to keep the release pipeline reliable.
 
-**Current state**: the PyPI matrix now builds a single `universal2` macOS wheel on `macos-14` (arm64 + x86_64 slices in one artifact), so Intel Macs are covered without the unreliable `macos-13` runner. Building from source (`pip install velesdb --no-binary :all:` with a Rust toolchain) also remains available for native x86_64 builds.
+**Current state**: the PyPI matrix builds a single `universal2` macOS wheel on `macos-latest` (arm64 + x86_64 slices in one artifact — the `macos-14` label was retired by GitHub on 2026-11-02), so Intel Macs are covered without the unreliable `macos-13` runner. Building from source (`pip install velesdb --no-binary :all:` with a Rust toolchain) also remains available for native x86_64 builds.
 
 ---
 
