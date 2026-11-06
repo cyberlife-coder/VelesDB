@@ -145,7 +145,8 @@ pub struct Database {
     /// [`Database::update_guardrails`] replaces it and pushes it to every
     /// registered collection; every registration path pushes it to the
     /// collection it admits (`Database::admit_collection`). **Not persisted**
-    /// — a reopened database starts from `QueryLimits::default()`.
+    /// — a reopened database starts from `QueryLimits::default()` with its
+    /// `timeout_ms` seeded from `[search].query_timeout_ms` (#2087).
     ///
     /// Lock order: taken *before* the three registries, on both sides. The
     /// update holds it for write while it reads them; a registration holds it
@@ -263,6 +264,11 @@ impl Database {
             "SIMD features detected - direct dispatch enabled"
         );
 
+        // The global guard-rails seed their timeout from `[search]` — the
+        // entry was parsed, validated and never read until now (#2087).
+        // `update_guardrails` still overrides it at runtime. Read before
+        // `config` moves into its `Arc`.
+        let seeded_timeout_ms = config.search.query_timeout_ms;
         let db = Self {
             data_dir,
             _lock_file: lock_file,
@@ -275,7 +281,10 @@ impl Database {
             schema_version: std::sync::atomic::AtomicU64::new(0),
             compiled_plan_cache: crate::cache::CompiledPlanCache::new(1_000, 10_000),
             join_store_cache: parking_lot::RwLock::new(std::collections::HashMap::new()),
-            guardrail_limits: parking_lot::RwLock::new(crate::guardrails::QueryLimits::default()),
+            guardrail_limits: parking_lot::RwLock::new(crate::guardrails::QueryLimits {
+                timeout_ms: seeded_timeout_ms,
+                ..crate::guardrails::QueryLimits::default()
+            }),
         };
 
         // Auto-load all existing collections from disk (replaces manual load_collections()).
