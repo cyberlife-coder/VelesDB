@@ -243,12 +243,54 @@ impl HnswIndex {
     ) -> crate::error::Result<Vec<ScoredResult>> {
         self.validate_dimension(query)?;
 
-        let ef_search = quality.ef_search_for_scale(k, self.len());
+        // Special-quality modes must not be flattened into a single ef pass
+        // (#2268): Perfect and small collections get the filtered exact scan,
+        // Adaptive and AutoTune get the two-phase escalation — filtered, so
+        // an escalated phase still respects `allowed_ids`.
+        if matches!(quality, SearchQuality::Perfect)
+            || (self.len() <= 100 && self.enable_vector_storage && self.graph_vector_count() > 0)
+        {
+            return self.full_scan_with_bitmap(query, k, allowed_ids);
+        }
+        let ef_search = if let SearchQuality::Adaptive { min_ef, .. } = quality {
+            min_ef.max(k)
+        } else if matches!(quality, SearchQuality::AutoTune) {
+            crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k).0
+        } else {
+            quality.ef_search_for_scale(k, self.len())
+        };
+        let max_ef = match quality {
+            SearchQuality::Adaptive { max_ef, .. } => max_ef,
+            SearchQuality::AutoTune => {
+                crate::index::hnsw::auto_ef::auto_ef_range(self.len(), self.dimension, k).1
+            }
+            _ => ef_search,
+        };
         // Over-fetch to compensate for bitmap filtering
         let candidates_k = k.saturating_mul(4).max(ef_search);
 
         let mut results =
             self.search_hnsw_only_filtered(query, candidates_k, ef_search, allowed_ids);
+
+        // Adaptive/AutoTune phase 2: a scattered spread marks the query as
+        // hard, so ef widens the same way the unfiltered path escalates —
+        // filtered, because the bitmap contract must survive escalation.
+        if max_ef > ef_search && results.len() >= 2 {
+            let score_a = results.first().map_or(0.0, |r| r.score);
+            let score_b = results.last().map_or(0.0, |r| r.score);
+            if should_escalate(self.metric, score_a, score_b) {
+                let escalated_ef = ef_search.saturating_mul(2).min(max_ef);
+                if escalated_ef > ef_search {
+                    let escalated_k = candidates_k.saturating_mul(2).min(10_000);
+                    results = self.search_hnsw_only_filtered(
+                        query,
+                        escalated_k,
+                        escalated_ef,
+                        allowed_ids,
+                    );
+                }
+            }
+        }
 
         // Adaptive retry: if too few results survived the bitmap filter,
         // double the candidate pool AND the ef budget, then retry once.
