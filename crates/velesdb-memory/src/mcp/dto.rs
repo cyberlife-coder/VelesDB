@@ -7,9 +7,8 @@
 //! Ids cross the MCP wire **as decimal strings only** (issue #1468: a raw
 //! JSON number above 2^53 is rounded by float-lossy clients and rejected
 //! outright by strict parsers, so the numeric form never leaves the
-//! process): every output id field carries
-//! `#[serde(serialize_with = "crate::wire::serialize_id_as_string")]` plus
-//! `#[schemars(with = "String")]` so the advertised schema matches the wire,
+//! process): every output id field is typed `String` at the DTO layer — the
+//! wire value and the advertised outputSchema are both `"type": "string"` —
 //! and a `..._str` twin field documents the same value for relaying.
 //!
 //! This is a **wire concern of this MCP layer only**: the domain types in
@@ -694,9 +693,11 @@ pub(super) struct ExtractionJobStatusResult {
     pub(super) request_id: String,
     /// One of `accepted`, `running`, `committed`, or `failed`.
     pub(super) state: ExtractionJobState,
-    /// Stored fact ids after commit; empty while pending or failed.
-    pub(super) ids: Vec<u64>,
-    /// Decimal-string twins of `ids` for float-lossy JSON clients.
+    /// Stored fact ids after commit, as decimal strings on the wire (#1468);
+    /// empty while pending or failed.
+    pub(super) ids: Vec<String>,
+    /// Decimal-string twins of `ids` — same values, kept as the documented
+    /// relay fields.
     pub(super) ids_str: Vec<String>,
     /// Extracted facts dropped for exceeding the embeddable cap, present only
     /// after commit.

@@ -32,10 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently serving nonsense recall. No binding API change.
 
 - **BREAKING (MCP wire only): every memory id is now a decimal string, not a JSON number** (#1468 follow-up).
-  `id`, `edge_id`, `from`, `to`, `target_id` in tool *results* (`remember`, `recall`,
-  `recall_where`, `recall_fused`, `list_memories`, `relate`, `forget`, `feedback`,
-  `why`, `entity`, `save_working_context`) serialize as strings, and their
-  `outputSchema` advertises `"type": "string"`. A raw JSON number above 2^53 was
+  `id`, `edge_id`, `from`, `to`, `target_id`, `ids` in tool *results* (`remember`,
+  `recall`, `recall_where`, `recall_fused`, `list_memories`, `relate`, `forget`,
+  `feedback`, `why`, `entity`, `save_working_context`, `extraction_status`)
+  serialize as strings, and their `outputSchema` advertises `"type": "string"`. A raw JSON number above 2^53 was
   rounded by float-lossy clients and rejected outright by strict parsers (the
   result of `recall` failed to parse in Vibe with `exceeds safe integer domain`).
   The `*_str` twin fields are unchanged and carry the same value. Migration:

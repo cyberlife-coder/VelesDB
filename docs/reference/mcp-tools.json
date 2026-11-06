@@ -1969,7 +1969,7 @@
       }
     },
     {
-      "description": "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` and their u64-safe decimal `ids_str` twins, `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null.",
+      "description": "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` as decimal strings (the `ids_str` twin carries the same values), `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -1995,15 +1995,14 @@
             ]
           },
           "ids": {
-            "description": "Stored fact ids after commit; empty while pending or failed.",
+            "description": "Stored fact ids after commit, as decimal strings on the wire (#1468);\nempty while pending or failed.",
             "items": {
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             },
             "type": "array"
           },
           "ids_str": {
-            "description": "Decimal-string twins of `ids` for float-lossy JSON clients.",
+            "description": "Decimal-string twins of `ids` — same values, kept as the documented\nrelay fields.",
             "items": {
               "type": "string"
             },
