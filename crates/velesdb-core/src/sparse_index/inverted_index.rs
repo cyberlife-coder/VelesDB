@@ -287,10 +287,10 @@ impl SparseInvertedIndex {
 
     /// Returns the approximate document count in this index.
     ///
-    /// Uses `Relaxed` ordering intentionally: this count is only used for the
-    /// heuristic branch selection between `MaxScore` and linear scan in search.
-    /// Stale counts cause at most a suboptimal algorithm choice, not incorrect
-    /// results. Actual mutations are protected by write locks on the segments.
+    /// Uses `Relaxed` ordering intentionally: readers only need it for
+    /// emptiness checks and sizing hints — a stale count changes at most an
+    /// estimate, never a result. Actual mutations are protected by write
+    /// locks on the segments.
     #[must_use]
     pub fn doc_count(&self) -> u64 {
         self.doc_count.load(Ordering::Relaxed)

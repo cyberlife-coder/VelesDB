@@ -1,6 +1,6 @@
 {
   "name": "@wiscale/velesdb-sdk",
-  "version": "8.0.0",
+  "version": "8.1.0",
   "description": "VelesDB TypeScript SDK: The Local Vector Database for AI & RAG. Sub-millisecond semantic search in Browser & Node.js.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -63,7 +63,7 @@
     "eslint": "^10.4.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.0.0",
-    "tsup": "^8.0.0",
+    "tsup": "^9.0.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.0.0",
     "vitest": "^5.0.1"

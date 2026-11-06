@@ -3146,6 +3146,55 @@ fn test_ids_exceeding_u32_max_pass_through() {
     }
 }
 
+#[test]
+fn test_filtered_special_qualities_keep_the_bitmap_contract() {
+    // #2268: Perfect, Adaptive and AutoTune must not be flattened into a
+    // single-ef pass — and the bitmap contract must survive the dispatch.
+    let index = HnswIndex::new(3, DistanceMetric::Cosine).unwrap();
+    for i in 0u64..30 {
+        #[allow(clippy::cast_precision_loss)]
+        let v = vec![i as f32 * 0.05, 1.0 - i as f32 * 0.02, 0.5];
+        index.insert(i, &v);
+    }
+
+    let mut bitmap = roaring::RoaringBitmap::new();
+    for i in 0u32..12 {
+        bitmap.insert(i);
+    }
+    let query = [0.5, 0.9, 0.5];
+
+    for quality in [
+        SearchQuality::Perfect,
+        SearchQuality::Adaptive {
+            min_ef: 16,
+            max_ef: 512,
+        },
+        SearchQuality::AutoTune,
+    ] {
+        let results = index
+            .search_with_quality_and_bitmap(&query, 5, quality, &bitmap)
+            .unwrap();
+        assert!(!results.is_empty(), "{quality:?} must return results");
+        assert!(
+            results.iter().all(|r| r.id < 12),
+            "{quality:?} leaked a filtered id: {:?}",
+            results.iter().map(|r| r.id).collect::<Vec<_>>()
+        );
+    }
+
+    // Perfect under bitmap must answer with the exact scan, not an
+    // approximate pass: its result equals full_scan_with_bitmap's.
+    let filtered = index
+        .search_with_quality_and_bitmap(&query, 5, SearchQuality::Perfect, &bitmap)
+        .unwrap();
+    let exact = index.full_scan_with_bitmap(&query, 5, &bitmap).unwrap();
+    assert_eq!(
+        filtered.iter().map(|r| r.id).collect::<Vec<_>>(),
+        exact.iter().map(|r| r.id).collect::<Vec<_>>(),
+        "filtered Perfect must match the exact bitmap scan"
+    );
+}
+
 #[cfg(test)]
 mod bitmap_property_tests {
     use super::*;

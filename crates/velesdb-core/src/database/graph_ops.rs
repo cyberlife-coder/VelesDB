@@ -18,7 +18,7 @@ impl Database {
         schema: crate::collection::GraphSchema,
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name)?;
         let coll =
             GraphCollection::create(path, name, None, DistanceMetric::Cosine, schema.clone())?;
         self.register_graph_collection(name, &coll, None, DistanceMetric::Cosine, &schema);
@@ -48,7 +48,7 @@ impl Database {
     ) -> Result<()> {
         self.ensure_collection_name_available(name)?;
         self.enforce_vector_dimension_limit(dimension)?;
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name)?;
         // #2087: node embeddings mean a real HNSW index, so the `[hnsw]`
         // section applies here exactly as it does to a vector collection.
         let params = self.resolve_hnsw_params(dimension, None, None);
@@ -76,7 +76,7 @@ impl Database {
         if let Some(d) = dimension {
             self.enforce_vector_dimension_limit(d)?;
         }
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name)?;
         // #2087: only a graph collection that carries embeddings has an HNSW
         // index to configure; without a dimension there is nothing to apply.
         let params = dimension.and_then(|d| self.resolve_hnsw_params(d, None, None));
@@ -145,7 +145,7 @@ impl Database {
     fn open_graph_collection_from_disk(&self, name: &str) -> Option<GraphCollection> {
         let cfg = self.read_collection_config(name)?;
         cfg.graph_schema.as_ref()?;
-        let coll = GraphCollection::open(self.data_dir.join(name)).ok()?;
+        let coll = GraphCollection::open(self.collection_dir(name).ok()?).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
         self.admit_collection(&coll.inner, || {
             self.graph_colls

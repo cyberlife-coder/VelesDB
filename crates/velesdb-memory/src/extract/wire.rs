@@ -27,6 +27,12 @@ pub(super) const REQUEST_TIMEOUT_SECS: u64 = 300;
 /// sentence's worth of triples needs, and turns the worst case into a
 /// bounded one instead of a tuning knob callers have to discover by timing
 /// out.
+///
+/// "Comfortably above" holds for a non-reasoning model: the uncensored
+/// measurement on #1956 read p95 = 162 completion tokens, p99 = 554. A
+/// thinking model burns the cap in its chain of thought before emitting
+/// JSON (72% truncation at any plausible cap) — for those, the fix is
+/// `chat_template_kwargs = {"enable_thinking": false}`, not a higher cap.
 pub(super) const MAX_GENERATION_TOKENS: u32 = 512;
 
 /// The body of one `/api/generate` call, built where a test can read it.

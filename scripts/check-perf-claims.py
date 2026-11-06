@@ -43,9 +43,19 @@ _MIN_LABEL_TOKENS = 2
 
 # Words that are purely dimensional / numeric qualifiers — labels consisting
 # only of these (after normalisation) are discarded as too ambiguous.
-_NOISE_ONLY_RE = re.compile(
-    r"^(\d+[a-z]*\s*)*$"  # purely numeric tokens like "768d", "128", "10k"
-)
+_NUMERIC_TOKEN_RE = re.compile(r"\d+[a-z]*")
+
+
+def _is_noise_only(text: str) -> bool:
+    r"""True when every token is purely numeric (``768d``, ``128``, ``10k``).
+
+    Checked per token rather than one nested quantifier over the whole
+    string — the old ``^(\d+[a-z]*\s*)*$`` backtracked exponentially on a
+    run of digits followed by a non-match.
+    """
+    return all(
+        _NUMERIC_TOKEN_RE.fullmatch(token) for token in text.split()
+    )
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -103,7 +113,7 @@ def _is_quality_label(normalised: str) -> bool:
     if len(tokens) < _MIN_LABEL_TOKENS:
         return False
     joined = " ".join(tokens)
-    if _NOISE_ONLY_RE.match(joined):
+    if _is_noise_only(joined):
         return False
     return True
 

@@ -84,10 +84,10 @@ impl VelesConfig {
         Ok(())
     }
 
-    /// `storage.storage_mode` and `[search]`'s `query_timeout_ms` are parsed
-    /// and validated but not applied (issue #2087); `[search]`'s
-    /// `default_mode`, `ef_search` and `max_results` are applied since (#2087,
-    /// #2591).
+    /// `storage.storage_mode`, `hnsw.max_layers` and `[quantization]` are
+    /// parsed and validated but not applied (issue #2087); `[search]`'s
+    /// `default_mode`, `ef_search`, `query_timeout_ms` and `max_results` are
+    /// applied since (#2087, #2591).
     /// Warn — rather than reject — when a config sets an inert entry away from
     /// its default, so existing files keep loading while no deployment
     /// silently believes those knobs work.
@@ -167,10 +167,6 @@ impl VelesConfig {
         // #2591 wired `max_results`: reporting the whole section would fire on
         // knobs that now work, which is how a warning trains its readers to
         // ignore it.
-        let search_default = crate::config::SearchConfig::default();
-        if self.search.query_timeout_ms != search_default.query_timeout_ms {
-            inert.push("search.query_timeout_ms");
-        }
         if self.hnsw.max_layers != crate::config::HnswConfig::default().max_layers {
             inert.push("hnsw.max_layers");
         }

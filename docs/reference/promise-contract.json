@@ -4236,6 +4236,18 @@
       "last_updated": "2026-09-13"
     },
     {
+      "id": "rustdoc_sparse_78x_at_1m",
+      "file": "crates/velesdb-core/src/sparse_index/search/mod.rs",
+      "must_contain": "**78×** at 1.1M–1.5M",
+      "validation_command": "cargo bench -p velesdb-core --bench sparse_posting_scale",
+      "executable": false,
+      "source": "#2177 disposition (2026-11-04): the op-count probe (tests/sparse_strategy_crossover.rs, internal-bench) measured maxscore_search at 78x the linear scan's elementary work at 1.1M and 1.5M docs on the skewed SPLADE shape, ratio growing with corpus size — the measurement that retired MaxScore from production routing.",
+      "measured_on": "2026-11-04 (date of the #2177 disposition comment recording the probe run)",
+      "measured_machine": "local dev machine (disposition does not name it)",
+      "measured_version": "8.0.0",
+      "last_updated": "2026-11-05"
+    },
+    {
       "id": "rustdoc_memory_release_gain_6pct",
       "file": "crates/velesdb-memory/src/migration/tests/performance.rs",
       "must_contain": "(`--release` gains ~6%)",

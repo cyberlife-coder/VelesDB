@@ -138,9 +138,8 @@ impl SearchMode {
 /// internals — compound operands, MATCH candidate pools, union legs — keep
 /// their own fetch windows. A caller `k`/`LIMIT` below the ceiling still wins.
 ///
-/// `query_timeout_ms` is still inert and still warned about by
-/// [`VelesConfig::validate`]: a query timeout is a feature the engine does
-/// not have. It needs a decision, not plumbing.
+/// `query_timeout_ms` seeds the guard-rail timeout at `Database` open
+/// (#2087) — `0` disables it, any positive value caps query execution.
 ///
 /// Per-query runtime overrides (`WITH (ef_search = N)`) are a separate,
 /// working mechanism and continue to win over anything here.
