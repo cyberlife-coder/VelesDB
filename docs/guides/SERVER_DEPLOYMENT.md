@@ -280,4 +280,4 @@ Every key, its range and its precedence: [CONFIGURATION.md](CONFIGURATION.md#sec
 
 ---
 
-Last updated: 2026-10-30 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.1.0

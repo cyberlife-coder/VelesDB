@@ -230,4 +230,4 @@ lock-free entry-point reads (a small lock serializes its rare promotions).
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.0.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.1.0
