@@ -8,6 +8,7 @@ from velesdb_common.security import (
     SecurityError,
     validate_text,
     validate_search_quality,
+    validate_collection_name,
     ALLOWED_CONDITION_TYPES,
     ALLOWED_METRICS,
     ALLOWED_STORAGE_MODES,
@@ -344,3 +345,18 @@ def test_search_quality_without_the_core_parser_is_left_to_the_binding(monkeypat
     assert validate_search_quality("Custom:8") == "custom:8"
     with pytest.raises(SecurityError, match="must be a string"):
         validate_search_quality(42)
+
+
+def test_collection_name_matches_the_core_validator():
+    """Parity with velesdb-core::validate_collection_name — 128-char cap,
+    no leading hyphen, no Windows reserved device name (#2095 finding B)."""
+    assert validate_collection_name("docs_v2-9x") == "docs_v2-9x"
+    assert validate_collection_name("a" * 128) == "a" * 128
+    with pytest.raises(SecurityError, match="128"):
+        validate_collection_name("a" * 129)
+    with pytest.raises(SecurityError, match="cannot start with a hyphen"):
+        validate_collection_name("-docs")
+    with pytest.raises(SecurityError, match="Windows reserved"):
+        validate_collection_name("con")
+    with pytest.raises(SecurityError, match="cannot be empty"):
+        validate_collection_name("")
