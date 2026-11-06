@@ -174,7 +174,7 @@ unversioned `/…` form is kept for backward compatibility — its responses car
 | Windows x86_64 (MSVC) | Supported | Portable `.zip`; no signed MSI installer yet |
 | Docker | Supported | Repository `Dockerfile`: `rust:bookworm` builder running the toolchain `rust-toolchain.toml` pins, `debian:bookworm-slim` runtime, non-root user, port 8080 |
 | Rust toolchain | 1.90 or later | Workspace MSRV, for `cargo install` and source builds |
-| `velesdb-core` | 8.0.0 | Same workspace version; non-optional dependency with `openapi` + `persistence` enabled |
+| `velesdb-core` | 8.1.0 | Same workspace version; non-optional dependency with `openapi` + `persistence` enabled |
 | HTTP clients | Any | Plain JSON over HTTP/1.1, described by an OpenAPI 3.0 document |
 
 ## Troubleshooting
@@ -194,4 +194,4 @@ VelesDB Core License 1.0 — see [LICENSE](../../LICENSE).
 
 ---
 
-`velesdb-server v8.0.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 8.0.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-server v8.1.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 8.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
