@@ -45,13 +45,13 @@ velesdb-memory = { path = "../velesdb-memory", default-features = false, feature
 # unlinkable. It moves to the `extension-module` feature below, which `default`
 # turns on — so every existing build (maturin, pip, `cargo check --workspace`)
 # is unchanged, and only `--no-default-features` opts into a linkable harness.
-pyo3 = { version = "0.29", features = [
+pyo3 = { version = "0.30", features = [
     "multiple-pymethods",
     "abi3-py39",
     "generate-import-lib",
 ] }
 serde_json = { workspace = true }
-numpy = "0.29"
+numpy = "0.30"
 parking_lot = "0.12"
 # Hosts the background streaming-ingestion drain task (Collection.enable_streaming).
 # The Python process has no ambient Tokio runtime, so the bindings provide a
