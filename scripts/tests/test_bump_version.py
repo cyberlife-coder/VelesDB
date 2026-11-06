@@ -114,7 +114,10 @@ class OutsideWorkspaceLockfileTests(unittest.TestCase):
 
     def test_the_lockfiles_built_outside_the_workspace_are_policed(self) -> None:
         guarded = {path for path, fmt in guard.TARGETS if fmt == "cargo_lock_core"}
-        self.assertEqual(guarded, OUTSIDE_WORKSPACE_LOCKS)
+        # The workspace root lockfile is guarded (and bumper-written) too, but
+        # it is not "built outside the workspace" — the rest must match exactly.
+        self.assertEqual(guarded - {"Cargo.lock"}, OUTSIDE_WORKSPACE_LOCKS)
+        self.assertIn("Cargo.lock", guarded)
 
     def _bump(self, text: str) -> "tuple[int, str]":
         with tempfile.TemporaryDirectory() as tmp:
