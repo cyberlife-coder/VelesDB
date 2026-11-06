@@ -376,7 +376,7 @@
                                 <p class="text-sm text-slate-400">${parseInt(doc.pages)} pages, ${parseInt(doc.chunks)} chunks</p>
                             </div>
                         </div>
-                        <button onclick="deleteDocument('${escapeHtml(doc.name).replace(/'/g, '\\\'')}')" 
+                        <button onclick="deleteDocument('${escapeHtml(doc.name).replace(/\\/g, '\\\\').replace(/'/g, '\\\'')}')" 
                                 class="delete-btn p-2 text-red-500 hover:bg-red-500/20 rounded-lg transition-colors"
                                 title="Delete document">
                             <i data-lucide="trash-2" class="w-4 h-4"></i>
