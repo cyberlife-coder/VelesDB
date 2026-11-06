@@ -98,10 +98,24 @@ const _: () = assert!(
 /// `pub` entry points below. Keep it in place before trusting this join.
 fn sparse_file_prefix(name: &str) -> String {
     if name.is_empty() {
-        "sparse".to_string()
-    } else {
-        format!("sparse-{name}")
+        return "sparse".to_string();
     }
+    // Belt-and-braces sanitization at the join itself: the Result-returning
+    // entry points reject invalid names through `validate_sparse_index_name`,
+    // but `needs_compaction` and `wal_path_for_name` are infallible, so any
+    // character outside the validated charset is replaced rather than let a
+    // separator or traversal component reach the filesystem.
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("sparse-{safe}")
 }
 
 /// Returns `true` when `name`'s index has changes its snapshot lacks.

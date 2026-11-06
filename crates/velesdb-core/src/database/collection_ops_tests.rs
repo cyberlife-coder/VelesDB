@@ -586,3 +586,22 @@ fn test_create_with_params_duplicate_returns_collection_exists() {
         .unwrap_err();
     assert!(matches!(err, crate::Error::CollectionExists(_)));
 }
+
+/// `collection_dir` is the join-site barrier: validated names land inside
+/// `data_dir`, anything else is refused at the join rather than trusted
+/// from an upstream check.
+#[test]
+fn collection_dir_refuses_names_that_escape_data_dir() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(dir.path()).unwrap();
+
+    assert!(db.collection_dir("docs").is_ok());
+    assert!(db.collection_dir("docs-v2_ok").is_ok());
+
+    for bad in ["../evil", "a/b", ".", "..", "a\\b", "-leading"] {
+        assert!(
+            db.collection_dir(bad).is_err(),
+            "collection_dir must refuse {bad:?}"
+        );
+    }
+}

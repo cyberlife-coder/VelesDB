@@ -13,7 +13,7 @@ impl Database {
     /// Returns an error if a collection with the same name already exists.
     pub fn create_metadata_collection(&self, name: &str) -> Result<()> {
         self.ensure_collection_name_available(name)?;
-        let path = self.data_dir.join(name);
+        let path = self.collection_dir(name)?;
         let coll = MetadataCollection::create(path, name)?;
         // Parity item E: thread the live LimitsConfig caps into the collection.
         self.admit_collection(&coll.inner, || {
@@ -56,7 +56,7 @@ impl Database {
         if !cfg.metadata_only {
             return None;
         }
-        let coll = MetadataCollection::open(self.data_dir.join(name)).ok()?;
+        let coll = MetadataCollection::open(self.collection_dir(name).ok()?).ok()?;
         // Parity item E: re-push runtime limits on disk-open (not persisted).
         self.admit_collection(&coll.inner, || {
             self.metadata_colls
