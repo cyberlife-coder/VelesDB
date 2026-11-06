@@ -79,7 +79,11 @@ async fn why_one_hop(srv: &McpServer) -> (Vec<u64>, usize) {
         }))
         .await
         .expect("why");
-    let ids: Vec<u64> = why.nodes.iter().map(|n| n.id).collect();
+    let ids: Vec<u64> = why
+        .nodes
+        .iter()
+        .map(|n| n.id.parse().expect("wire id is a decimal string"))
+        .collect();
     (ids, why.edges.len())
 }
 
@@ -128,7 +132,7 @@ async fn feedback_tool_reinforces_and_returns_confidence() {
 
     let Json(up) = srv
         .feedback(Parameters(FeedbackParams {
-            id: stored.id,
+            id: stored.id.parse().expect("wire id is a decimal string"),
             success: true,
         }))
         .await
@@ -138,7 +142,7 @@ async fn feedback_tool_reinforces_and_returns_confidence() {
 
     let Json(down) = srv
         .feedback(Parameters(FeedbackParams {
-            id: stored.id,
+            id: stored.id.parse().expect("wire id is a decimal string"),
             success: false,
         }))
         .await
@@ -184,15 +188,22 @@ async fn why_returns_the_connected_subgraph() {
         .await
         .expect("remember pr");
     srv.relate(Parameters(RelateParams {
-        from: decision.id,
-        to: pr.id,
+        from: decision.id.parse().expect("wire id is a decimal string"),
+        to: pr.id.parse().expect("wire id is a decimal string"),
         relation: "decided_in".to_owned(),
     }))
     .await
     .expect("relate");
 
     let (ids, edges) = why_one_hop(&srv).await;
-    assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
+    assert!(
+        ids.contains(
+            &decision
+                .id
+                .parse::<u64>()
+                .expect("wire id is a decimal string")
+        ) && ids.contains(&pr.id.parse::<u64>().expect("wire id is a decimal string"))
+    );
     assert_eq!(edges, 1);
 }
 
@@ -212,7 +223,9 @@ async fn forget_removes_a_memory_through_the_server() {
         .expect("remember");
 
     let Json(forgotten) = srv
-        .forget(Parameters(ForgetParams { id: stored.id }))
+        .forget(Parameters(ForgetParams {
+            id: stored.id.parse().expect("wire id is a decimal string"),
+        }))
         .await
         .expect("forget");
     assert!(forgotten.found, "an existing memory must report found=true");
@@ -263,7 +276,7 @@ async fn remember_links_are_traversable_by_why() {
         .remember(Parameters(RememberParams {
             fact: DECISION.to_owned(),
             links: vec![Link {
-                target: pr.id,
+                target: pr.id.parse().expect("wire id is a decimal string"),
                 relation: "decided_in".to_owned(),
             }],
             metadata: None,
@@ -275,7 +288,14 @@ async fn remember_links_are_traversable_by_why() {
         .expect("remember decision with link");
 
     let (ids, _) = why_one_hop(&srv).await;
-    assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
+    assert!(
+        ids.contains(
+            &decision
+                .id
+                .parse::<u64>()
+                .expect("wire id is a decimal string")
+        ) && ids.contains(&pr.id.parse::<u64>().expect("wire id is a decimal string"))
+    );
 }
 
 #[tokio::test]
@@ -505,7 +525,7 @@ async fn relate_to_unknown_endpoint_returns_invalid_params_not_internal_error() 
     // the id rather than retry a phantom internal error.
     let err = srv
         .relate(Parameters(RelateParams {
-            from: stored.id,
+            from: stored.id.parse().expect("wire id is a decimal string"),
             to: 9_999_999,
             relation: "references".to_owned(),
         }))
@@ -564,7 +584,7 @@ async fn entity_miss_echoes_the_canonical_queried_name() {
         profile.name, "zzz personne inexistante",
         "a miss must echo the queried name, canonicalized like a hit's"
     );
-    assert_eq!(profile.id, 0, "a miss still reports no id");
+    assert_eq!(profile.id, "0", "a miss still reports no id");
 }
 
 #[tokio::test]
@@ -588,7 +608,7 @@ async fn recall_fused_folds_in_a_graph_reached_fact() {
         .remember(Parameters(RememberParams {
             fact: "the on-call rotation moved to Tuesdays".to_owned(),
             links: vec![Link {
-                target: anchor.id,
+                target: anchor.id.parse().expect("wire id is a decimal string"),
                 relation: "context".to_owned(),
             }],
             metadata: None,
@@ -731,7 +751,7 @@ async fn recall_fused_survives_a_non_finite_graph_boost() {
         .remember(Parameters(RememberParams {
             fact: "the on-call rotation moved to Tuesdays".to_owned(),
             links: vec![Link {
-                target: anchor.id,
+                target: anchor.id.parse().expect("wire id is a decimal string"),
                 relation: "context".to_owned(),
             }],
             metadata: None,
@@ -1142,8 +1162,8 @@ async fn relate_with_empty_relation_returns_invalid_params() {
         .expect("remember B");
     let err = srv
         .relate(Parameters(RelateParams {
-            from: a.id,
-            to: b.id,
+            from: a.id.parse().expect("wire id is a decimal string"),
+            to: b.id.parse().expect("wire id is a decimal string"),
             relation: String::new(),
         }))
         .await
@@ -1354,8 +1374,8 @@ async fn remember_recall_relate_forget_feedback_responses_echo_an_id_str_twin() 
         .expect("remember pr");
     let Json(relate_res) = srv
         .relate(Parameters(RelateParams {
-            from: remembered.id,
-            to: pr.id,
+            from: remembered.id.parse().expect("wire id is a decimal string"),
+            to: pr.id.parse().expect("wire id is a decimal string"),
             relation: "decided_in".to_owned(),
         }))
         .await
@@ -1364,7 +1384,7 @@ async fn remember_recall_relate_forget_feedback_responses_echo_an_id_str_twin() 
 
     let Json(feedback_res) = srv
         .feedback(Parameters(FeedbackParams {
-            id: remembered.id,
+            id: remembered.id.parse().expect("wire id is a decimal string"),
             success: true,
         }))
         .await
@@ -1372,7 +1392,9 @@ async fn remember_recall_relate_forget_feedback_responses_echo_an_id_str_twin() 
     assert_eq!(feedback_res.id_str, feedback_res.id.to_string());
 
     let Json(forget_res) = srv
-        .forget(Parameters(ForgetParams { id: pr.id }))
+        .forget(Parameters(ForgetParams {
+            id: pr.id.parse().expect("wire id is a decimal string"),
+        }))
         .await
         .expect("forget");
     assert_eq!(forget_res.id_str, forget_res.id.to_string());
@@ -1404,8 +1426,8 @@ async fn why_response_echoes_id_str_and_from_to_str_on_nodes_and_edges() {
         .await
         .expect("remember pr");
     srv.relate(Parameters(RelateParams {
-        from: decision.id,
-        to: pr.id,
+        from: decision.id.parse().expect("wire id is a decimal string"),
+        to: pr.id.parse().expect("wire id is a decimal string"),
         relation: "decided_in".to_owned(),
     }))
     .await
@@ -1494,11 +1516,15 @@ async fn relate_by_wrong_numeric_id_fails_but_id_str_round_trip_succeeds() {
 
     // Stand-in for a float-lossy client rounding the id on the way out and
     // back in: the perturbed id was never stored, so relate must reject it.
-    let wrong_from = decision.id + 1_000_003;
+    let wrong_from = decision
+        .id
+        .parse::<u64>()
+        .expect("wire id is a decimal string")
+        + 1_000_003;
     let err = srv
         .relate(Parameters(RelateParams {
             from: wrong_from,
-            to: pr.id,
+            to: pr.id.parse().expect("wire id is a decimal string"),
             relation: "decided_in".to_owned(),
         }))
         .await
@@ -1518,7 +1544,14 @@ async fn relate_by_wrong_numeric_id_fails_but_id_str_round_trip_succeeds() {
         .expect("relate via id_str must succeed");
 
     let (ids, edges) = why_one_hop(&srv).await;
-    assert!(ids.contains(&decision.id) && ids.contains(&pr.id));
+    assert!(
+        ids.contains(
+            &decision
+                .id
+                .parse::<u64>()
+                .expect("wire id is a decimal string")
+        ) && ids.contains(&pr.id.parse::<u64>().expect("wire id is a decimal string"))
+    );
     assert_eq!(edges, 1);
 }
 
@@ -1802,8 +1835,8 @@ async fn unrelate_tool_removes_the_edge_and_is_idempotent() {
         .await
         .expect("remember b");
     srv.relate(Parameters(RelateParams {
-        from: a.id,
-        to: b.id,
+        from: a.id.parse().expect("wire id is a decimal string"),
+        to: b.id.parse().expect("wire id is a decimal string"),
         relation: "caused_by".to_owned(),
     }))
     .await
@@ -1811,8 +1844,8 @@ async fn unrelate_tool_removes_the_edge_and_is_idempotent() {
 
     let Json(res) = srv
         .unrelate(Parameters(UnrelateParams {
-            from: a.id,
-            to: b.id,
+            from: a.id.parse().expect("wire id is a decimal string"),
+            to: b.id.parse().expect("wire id is a decimal string"),
             relation: "caused_by".to_owned(),
         }))
         .await
@@ -1822,8 +1855,8 @@ async fn unrelate_tool_removes_the_edge_and_is_idempotent() {
 
     let Json(res) = srv
         .unrelate(Parameters(UnrelateParams {
-            from: a.id,
-            to: b.id,
+            from: a.id.parse().expect("wire id is a decimal string"),
+            to: b.id.parse().expect("wire id is a decimal string"),
             relation: "caused_by".to_owned(),
         }))
         .await
@@ -1851,8 +1884,8 @@ async fn unrelate_refuses_a_self_loop_as_invalid_params() {
         .expect("remember");
     let err = srv
         .unrelate(Parameters(UnrelateParams {
-            from: a.id,
-            to: a.id,
+            from: a.id.parse().expect("wire id is a decimal string"),
+            to: a.id.parse().expect("wire id is a decimal string"),
             relation: "supports".to_owned(),
         }))
         .await

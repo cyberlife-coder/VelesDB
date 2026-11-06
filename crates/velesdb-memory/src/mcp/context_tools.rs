@@ -192,11 +192,12 @@ pub(super) struct SaveWorkingContextParams {
 #[derive(Debug, serde::Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
 pub(super) struct SaveWorkingContextResult {
-    /// Id of the stored system fact backing this working context.
-    pub id: u64,
-    /// Decimal-string twin of `id` (same contract as `remember`'s). The id
-    /// is content-addressed (FNV-1a 64), past 2^53 — relay THIS to
-    /// `forget`/`feedback`, never `id`.
+    /// Id of the stored system fact backing this working context — a
+    /// decimal string on the wire (#1468: content-addressed FNV-1a 64 ids
+    /// are past 2^53).
+    pub id: String,
+    /// Decimal-string twin of `id` (same contract as `remember`'s) — same
+    /// value, kept as the documented relay field for `forget`/`feedback`.
     pub id_str: String,
 }
 
@@ -296,7 +297,10 @@ pub(super) struct SegmentInfo {
     pub byte_end: usize,
     /// The id this segment's fragment carries into `context.decisions` —
     /// content-addressed, same formula as every other `compile_context`
-    /// fragment with no caller-supplied `id`.
+    /// fragment with no caller-supplied `id`. Numeric by default like every
+    /// `decisions` id (the `ids_as_strings` policy stringifies it for
+    /// u64-unsafe clients) — this surface's wire form is a recorded decision,
+    /// kept consistent with [`crate::context::model::ContextDecision`].
     pub fragment_id: u64,
 }
 
@@ -626,7 +630,7 @@ impl McpServer {
         .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(SaveWorkingContextResult {
-            id,
+            id: id.to_string(),
             id_str: id.to_string(),
         }))
     }

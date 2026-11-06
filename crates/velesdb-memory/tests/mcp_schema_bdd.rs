@@ -1308,12 +1308,11 @@ async fn no_integer_slot_hides_the_string_id_contract() {
 // declare, en typant un id `["integer", "string"]` en sortie
 // (`widen_id_properties`) et en l'annoncant `string` en entree.
 
-/// Un slot nomme : ou il est, ce qu'il annonce, et la fratrie ou il vit.
+/// Un slot nomme : ou il est, ce qu'il annonce.
 struct NamedSlot {
     path: String,
     name: String,
     slot: Value,
-    siblings: BTreeSet<String>,
 }
 
 fn named_slots(schema: &Value) -> Vec<NamedSlot> {
@@ -1327,14 +1326,12 @@ fn walk_named_slots(node: &Value, path: &str, found: &mut Vec<NamedSlot>) {
         return;
     };
     if let Some(Value::Object(properties)) = map.get("properties") {
-        let siblings: BTreeSet<String> = properties.keys().cloned().collect();
         for (name, slot) in properties {
             let child = format!("{path}.{name}");
             found.push(NamedSlot {
                 path: child.clone(),
                 name: name.clone(),
                 slot: slot.clone(),
-                siblings: siblings.clone(),
             });
             walk_named_slots(slot, &child, found);
         }
@@ -1461,20 +1458,18 @@ async fn every_input_slot_named_for_an_id_announces_the_string_form() {
 }
 
 /// The OTHER leg: if a caller may only SEND an id as a string, it must be
-/// able to READ one exactly.
-///
-/// `save_working_context` returned `{"id": <u64>}` and nothing else, while
-/// `forget`/`feedback` announce `id` as a `string`: on a float-lossy client
-/// the number is already rounded when it arrives, so there was no way to
-/// build the string the input schema demands. Every other tool returning an
-/// id already carried the `_str` twin — this rule is what makes that
-/// convention enforceable instead of remembered.
+/// able to READ one exactly — so a result slot answering under a name the
+/// input side wants as a string must itself announce `string`, never a bare
+/// `integer` (#1468: a raw JSON number above 2^53 is rounded by float-lossy
+/// clients and rejected outright by strict parsers, which is exactly what
+/// happened to Vibe before ids went string-only on the wire). The `*_str`
+/// twins remain as the documented relay fields.
 ///
 /// Still no list: the id names come from the INPUT side (a name announced
 /// `string` there is one a caller must relay), and the requirement lands on
-/// the OUTPUT slots that answer under the same name as an `integer`.
+/// the OUTPUT slots that answer under the same name.
 #[tokio::test]
-async fn every_lossy_id_in_a_result_offers_its_exact_string_twin() {
+async fn every_id_in_a_result_is_a_string_where_the_input_side_wants_one() {
     let (_store, client) = connected().await;
     let tools = client.list_all_tools().await.expect("list tools");
 
@@ -1494,32 +1489,34 @@ async fn every_lossy_id_in_a_result_offers_its_exact_string_twin() {
             continue;
         };
         for slot in named_slots(&Value::Object((**output).clone())) {
-            if !relayed_as_strings.contains(&slot.name) || !announces_exactly(&slot.slot, "integer")
-            {
+            if !relayed_as_strings.contains(&slot.name) {
                 continue;
             }
-            probed += 1;
-            let twin = format!("{}_str", slot.name);
-            if !slot.siblings.contains(&twin) {
+            // A bare `integer` is the bug class (#1468): a raw number above
+            // 2^53 is rounded or rejected by JSON clients. A `string` is the
+            // fixed wire form. Unions (e.g. the context compiler's
+            // `ids_as_strings` opt-in) are a recorded decision, not flagged.
+            if announces_exactly(&slot.slot, "integer") {
                 lossy.push(format!(
-                    "  {} {} has no `{twin}` beside it",
+                    "  {} {} answers an id as a bare `integer` while the input side accepts only the decimal string",
                     tool.name, slot.path
                 ));
+            } else if announces_exactly(&slot.slot, "string") {
+                probed += 1;
             }
         }
     }
 
     assert!(
         probed > 0,
-        "no result answers an integer under a name the input side wants as a string — \
+        "no result slot answers an id as a string the input side wants as a string — \
          a green run would prove nothing"
     );
     assert!(
         lossy.is_empty(),
-        "{} of {probed} result slot(s) hand back an id as a bare `integer` while the input side \
-         accepts only the decimal string. A float-lossy client rounds the number on arrival and \
-         can no longer build the string the schema asks for — add the `_str` twin, as \
-         `RememberResult`, `ForgetResult` and `why`'s nodes already do:\n{}",
+        "{} of {probed} result slot(s) hand back an id as a non-string scalar while the input side \
+         accepts only the decimal string. A raw JSON number above 2^53 is rounded by float-lossy \
+         clients and rejected by strict parsers (#1468) — the wire form must be a string:\n{}",
         lossy.len(),
         lossy.join("\n")
     );

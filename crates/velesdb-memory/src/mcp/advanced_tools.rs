@@ -136,7 +136,7 @@ impl McpServer {
     #[tool(
         name = "extraction_status",
         output_schema = crate::schema::wire_safe_output_schema::<ExtractionJobStatusResult>(),
-        description = "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` and their u64-safe decimal `ids_str` twins, `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null."
+        description = "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` as decimal strings (the `ids_str` twin carries the same values), `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null."
     )]
     pub(super) async fn extraction_status(
         &self,
@@ -157,7 +157,8 @@ impl McpServer {
             || (Vec::new(), None),
             |outcome| (outcome.ids, Some(outcome.skipped_over_cap)),
         );
-        let ids_str = ids.iter().map(u64::to_string).collect();
+        let ids: Vec<String> = ids.iter().map(u64::to_string).collect();
+        let ids_str = ids.clone();
         Ok(Json(ExtractionJobStatusResult {
             request_id: view.request_id,
             state: view.state,
@@ -202,7 +203,7 @@ impl McpServer {
             memories: memories
                 .into_iter()
                 .map(|memory| ListedMemoryDto {
-                    id: memory.id,
+                    id: memory.id.to_string(),
                     id_str: memory.id.to_string(),
                     content: memory.content,
                     metadata: memory.metadata,
