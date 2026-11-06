@@ -79,15 +79,19 @@ ASSISTANT_IDENTITIES = (
 
 #: The commit through which bot authorship is forgiven, and not one commit
 #: further. 173 commits reachable from `develop` are authored by
-#: `dependabot[bot]` and one by `github-actions[bot]`; five of those are not
+#: `dependabot[bot]` and two by `github-actions[bot]`; five of those are not
 #: on `main` yet, so a guard that simply
 #: refused every `[bot]` would fail the next back-merge pull request and block
 #: the release. Rewriting that history is not proposed -- the same situation
 #: with the historical assistant identity was settled with `.mailmap` plus a
 #: forward-looking guard (#1122). The amnesty is therefore pinned to one SHA
 #: rather than left to grow with the branch: every commit written after this
-#: one is judged, whoever wrote it (#2336).
-GRANDFATHERED_THROUGH = "3a4d42cd01741c9b51a1003f9db1e02f099f214c"
+#: one is judged, whoever wrote it (#2336). The pin moved once, to
+#: `56bd0144b`: a release back-merge (#2581) was squash-merged through the
+#: GitHub UI before the contributor rule was enforced on merges, and the
+#: commit is published history that cannot be unpublished — the guard's own
+#: reason for an amnesty rather than a rewrite.
+GRANDFATHERED_THROUGH = "56bd0144bc79f35f9b7e1e50f44cb82420b66c0d"
 
 #: Every `[bot]` identity is refused. The contributor rule admits no exception:
 #: the author and committer of a commit are the human maintainer, so a
