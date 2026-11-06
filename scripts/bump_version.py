@@ -77,6 +77,12 @@ TARGETS: "list[tuple[str, str]]" = [
     ("demos/rag-pdf-demo/pyproject.toml", "toml"),
     ("sdks/typescript/package.json", "json"),
     ("sdks/typescript/package-lock.json", "npm_lock"),
+    # The workspace root lockfile itself: rewriting its `velesdb-core` entry at
+    # bump time keeps `cargo ... --locked` green without waiting for the next
+    # build to refresh it, and check-version-sync's `cargo_lock_core` entry on
+    # the same file polices it (the memory/node entries ride MEMORY_TARGETS on
+    # the guard side only — no memory bumper exists to write them).
+    ("Cargo.lock", "cargo_lock_core"),
     # The lockfiles of the crates built OUTSIDE the workspace (the fuzz targets,
     # the Rust examples, the Tauri demo) pin velesdb-core by path, so each
     # records its version. `cargo build` at the root refreshes only the root

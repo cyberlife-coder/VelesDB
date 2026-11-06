@@ -70,6 +70,13 @@ TARGETS: "list[tuple[str, str]]" = [
     # in root Cargo.toml. Not under [workspace.package], so the cargo-version
     # reader never saw it; found stale at 1.16.0 during the v1.17.0 audit.
     ("Cargo.toml", "cargo_dep_pin"),
+    # The workspace root lockfile itself: a version bump that lands without a
+    # `cargo update -w` leaves every workspace crate's lock entry stale, and
+    # `cargo publish --locked`/`cargo build --locked` then refuse the release.
+    # Exactly what failed the velesdb-memory-v0.17.1 tag workflow (memory/node
+    # entries still at 0.17.0 — see MEMORY_TARGETS below); the core entry is
+    # the workspace sweep's canary for the same class.
+    ("Cargo.lock", "cargo_lock_core"),
     # The lockfiles of the crates built OUTSIDE the workspace (the fuzz targets,
     # the Rust examples, the Tauri demo) pin velesdb-core by path, so each
     # records its version. `cargo build` at the root refreshes only the root
@@ -229,6 +236,15 @@ MEMORY_TARGETS: "list[tuple[str, str]]" = [
     # (found announcing v0.11.2 in a 0.12.0 tree). velesdb-node's footer is
     # already policed above by the two-version `node_readme_stamp` reader.
     ("crates/velesdb-memory/README.md", "crate_footer_stamp"),
+    # The workspace root lockfile records `velesdb-memory` and `velesdb-node`
+    # (which versions in lock-step) at their own independent versions, and
+    # nothing rewrote them at the 0.17.0 -> 0.17.1 bump: release-memory.yml's
+    # `cargo package --locked` refused the tag because the manifest said
+    # 0.17.1 while Cargo.lock still said 0.17.0 (#2649). These are the two
+    # entries that failed — the workspace sweep's `cargo_lock_core` above
+    # would not have caught it because the core entry was already correct.
+    ("Cargo.lock", "cargo_lock_memory"),
+    ("Cargo.lock", "cargo_lock_node"),
 ]
 
 
@@ -470,13 +486,28 @@ def _read_npm_lock_pkg_version(path: Path) -> str:
     return str(root_pkg["version"])
 
 
+def _read_cargo_lock_pkg(path: Path, package: str) -> str:
+    """Read one package's version recorded in a lockfile."""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(rf'name = "{re.escape(package)}"\nversion = "(\d+\.\d+\.\d+)"', text)
+    if not match:
+        raise RuntimeError(f"No {package} package in {path}")
+    return match.group(1)
+
+
 def _read_cargo_lock_core(path: Path) -> str:
     """Read the `velesdb-core` package version recorded in a lockfile."""
-    text = path.read_text(encoding="utf-8")
-    match = re.search(r'name = "velesdb-core"\nversion = "(\d+\.\d+\.\d+)"', text)
-    if not match:
-        raise RuntimeError(f"No velesdb-core package in {path}")
-    return match.group(1)
+    return _read_cargo_lock_pkg(path, "velesdb-core")
+
+
+def _read_cargo_lock_memory(path: Path) -> str:
+    """Read the `velesdb-memory` package version recorded in a lockfile."""
+    return _read_cargo_lock_pkg(path, "velesdb-memory")
+
+
+def _read_cargo_lock_node(path: Path) -> str:
+    """Read the `velesdb-node` package version recorded in a lockfile."""
+    return _read_cargo_lock_pkg(path, "velesdb-node")
 
 
 def _read_cargo_dep_pin(path: Path) -> str:
@@ -662,6 +693,8 @@ _READERS = {
     "cargo_dep_pin": _read_cargo_dep_pin,
     "pip_common_floor": _read_pip_common_floor,
     "cargo_lock_core": _read_cargo_lock_core,
+    "cargo_lock_memory": _read_cargo_lock_memory,
+    "cargo_lock_node": _read_cargo_lock_node,
     "deb_download_path": _read_deb_download_path,
     "md_version_label": _read_md_version_label,
     "mcp_server_json": _read_mcp_server_json_versions,
