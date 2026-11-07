@@ -380,9 +380,10 @@ Other verified clients: Cursor, Cline, Zed, opencode, Devin CLI.
   would be a strange neighbor on a developer machine. The same applies to
   the Node binding (`@wiscale/velesdb-memory-node`), which wraps this crate
   and is forbidden a direct `velesdb-core` dependency by its license
-  boundary. If a measured memory workload ever demands it, the path is a
-  `gpu` passthrough feature here first — reopen the discussion with that
-  measurement in hand (#1965).
+  boundary. An opt-in `gpu` passthrough feature now exists for bindings
+  consumers (`velesdb-memory/gpu` → `velesdb-core/gpu`); the daemon's
+  default is unchanged, and revisiting that default still requires the
+  measurement (#1965).
 
 ## Troubleshooting
 
