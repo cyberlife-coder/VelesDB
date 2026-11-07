@@ -24,7 +24,7 @@ each guide links back.
 |-------|-------------|
 | [Core: public API map](./CORE_API_MAP.md) | Where to find what in `velesdb_core` — an import map, not a signature reference |
 | [Core: collections and metrics](./CORE_COLLECTIONS_AND_METRICS.md) | The collection model: distance metrics, payloads, storage modes and their memory trade-offs |
-| [Core: VelesQL reference](./CORE_VELESQL_REFERENCE.md) | The SQL-like language across the vector, graph and columnar engines |
+| [Core: VelesQL quick reference](./CORE_VELESQL_REFERENCE.md) | The SQL-like language across the vector, graph and columnar engines — common statements; canonical grammar in `docs/VELESQL_SPEC.md` |
 | [Core: sparse vectors and fusion](./CORE_SPARSE_AND_FUSION.md) | Named sparse vectors (SPLADE, BM25, tag sets) beside dense embeddings, and result fusion |
 | [Core: streaming inserts](./CORE_STREAMING_INSERTS.md) | Bounded-channel ingestion and backpressure for continuously arriving data |
 | [Core: query plan cache](./CORE_QUERY_PLAN_CACHE.md) | The two-tier LRU plan cache that lets repeated queries skip parsing and planning |

@@ -4,7 +4,7 @@
 //!
 //! # Why this file exists — root cause found and fixed in `velesdb-core`
 //!
-//! (see `.investigation/http-deadlock-2026-07-22/` in `velesdb-core`'s repo
+//! (see `crates/velesdb-core/tests/tokio_blocking_lock_contention_repro.rs`
 //! for the full trail)
 //!
 //! Two bugs in `velesdb-core`'s `Collection` locking contributed to the

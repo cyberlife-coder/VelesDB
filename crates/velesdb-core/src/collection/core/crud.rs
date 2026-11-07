@@ -150,9 +150,8 @@ impl Collection {
     /// Payload and vector writes run **sequentially**. They previously ran
     /// concurrently via `rayon::join` (Issue #424); that was reverted because
     /// it deadlocked the whole process under concurrent multi-caller load —
-    /// see the deadlock investigation archived at
-    /// `.investigation/http-deadlock-2026-07-22/` for the full evidence trail
-    /// (stack samples, isolated reproduction, mechanism).
+    /// see `tests/tokio_blocking_lock_contention_repro.rs` for the isolated
+    /// reproduction and mechanism.
     ///
     /// `rayon::join`, called here from a foreign thread (i.e. a
     /// `tokio::task::spawn_blocking` worker, not a rayon pool thread —

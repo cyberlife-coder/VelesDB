@@ -635,9 +635,8 @@ FAKE
 
 # Behaves like a corpus the compiler cannot fit without dropping something it
 # classifies as CRITICAL — a code fence, an exact value, a URL. No budget
-# rescues it; the real 584 KB thread-stack sample under
-# .investigation/http-deadlock-2026-07-22/ measures `high` at 2 000, 4 000,
-# 8 000 and 16 000.
+# rescues it; a real 584 KB thread-stack sample measured `high` at 2 000,
+# 4 000, 8 000 and 16 000.
 cat > "$FAKE_BIN_DIR/fake-high" <<'FAKE'
 #!/usr/bin/env bash
 cat >/dev/null
