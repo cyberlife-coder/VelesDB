@@ -444,6 +444,12 @@ pub struct HybridSearchRequest {
     #[serde(default = "default_vector_weight")]
     #[cfg_attr(feature = "openapi", schema(example = 0.5))]
     pub vector_weight: f32,
+    /// Optional reciprocal-rank-fusion constant (engine default when omitted).
+    /// Lower values amplify rank differences between the vector and text
+    /// branches.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(example = 60))]
+    pub rrf_k: Option<u32>,
     /// Optional metadata filter.
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(schema_with = metadata_filter_schema))]

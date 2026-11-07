@@ -335,6 +335,7 @@ pub async fn hybrid_search(
         query,
         top_k,
         vector_weight,
+        rrf_k,
         filter,
     } = req;
 
@@ -347,6 +348,7 @@ pub async fn hybrid_search(
             text: &query,
             k: top_k,
             alpha: Some(vector_weight),
+            rrf_k,
             filter: filter.as_ref(),
         };
         state_for_work

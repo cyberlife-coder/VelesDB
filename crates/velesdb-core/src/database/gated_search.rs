@@ -68,6 +68,8 @@ pub enum GatedRead<'a> {
         k: usize,
         /// Optional dense/text blend factor.
         alpha: Option<f32>,
+        /// Optional reciprocal-rank-fusion constant (`None` = engine default).
+        rrf_k: Option<u32>,
         /// Optional caller metadata filter.
         filter: Option<&'a Filter>,
     },
@@ -166,10 +168,11 @@ fn dispatch_gated_read(
             text,
             k,
             alpha,
+            rrf_k,
             filter,
         } => match and_filters(filter, scope_filter) {
-            Some(f) => coll.hybrid_search_with_filter(vector, text, k, alpha, &f),
-            None => coll.hybrid_search(vector, text, k, alpha),
+            Some(f) => coll.hybrid_search_with_rrf_and_filter(vector, text, k, alpha, rrf_k, &f),
+            None => coll.hybrid_search_with_rrf(vector, text, k, alpha, rrf_k),
         },
     }
 }

@@ -377,6 +377,7 @@ impl Collection {
                         text: &query_owned,
                         k: top_k,
                         alpha: Some(vector_weight),
+                        rrf_k: None,
                         filter: filter_obj.as_ref(),
                     },
                 )

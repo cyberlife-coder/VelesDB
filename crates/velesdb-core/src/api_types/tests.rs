@@ -122,6 +122,17 @@ fn deserialize_hybrid_search_request() {
 }
 
 #[test]
+fn deserialize_hybrid_search_request_rrf_k() {
+    let input = json!({
+        "vector": [0.5, 0.6],
+        "query": "vector database",
+        "rrf_k": 30
+    });
+    let req: HybridSearchRequest = serde_json::from_value(input).unwrap();
+    assert_eq!(req.rrf_k, Some(30));
+}
+
+#[test]
 fn deserialize_hybrid_search_request_defaults() {
     let input = json!({
         "vector": [1.0],
@@ -130,6 +141,7 @@ fn deserialize_hybrid_search_request_defaults() {
     let req: HybridSearchRequest = serde_json::from_value(input).unwrap();
     assert_eq!(req.top_k, 10);
     assert!((req.vector_weight - 0.5).abs() < f32::EPSILON);
+    assert_eq!(req.rrf_k, None);
     assert_eq!(req.filter, None);
 }
 

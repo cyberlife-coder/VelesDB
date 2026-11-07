@@ -5278,6 +5278,16 @@
             "description": "Text query for BM25 search.",
             "example": "rust programming"
           },
+          "rrf_k": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Optional reciprocal-rank-fusion constant (engine default when omitted).\nLower values amplify rank differences between the vector and text\nbranches.",
+            "example": 60,
+            "minimum": 0
+          },
           "top_k": {
             "type": "integer",
             "description": "Number of results to return.",
