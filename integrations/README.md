@@ -13,8 +13,9 @@ exercise rather than a porting project.
 | **LangChain** | [`langchain-velesdb`](langchain) | `VectorStore` (`add_texts`, `similarity_search`, `similarity_search_with_score`, `delete`) | `pip install langchain-velesdb` |
 | **LlamaIndex** | [`llama-index-vector-stores-velesdb`](llamaindex) | `VectorStore` (`add`, `query`, `delete`) | `pip install llama-index-vector-stores-velesdb` |
 | **Haystack 2.x** | [`haystack-velesdb`](haystack) | `DocumentStore` (`write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, `delete_documents`) | `pip install haystack-velesdb` |
+| **LangGraph** | [`langgraph-velesdb`](langgraph) | `make_memory_tools` — agent memory tools (`remember`, `recall`, `recall_where`, `recall_fused`, `relate`, `forget`, `feedback`, `why`, `save_working_context`, `load_working_context`) | `pip install langgraph-velesdb` |
 
-All three connectors share the same VelesDB persistence layer
+The three RAG connectors share the same VelesDB persistence layer
 (`velesdb` Python wheel, PyO3 bindings), but each one stores documents under
 its **own payload schema** — a collection populated through one framework is
 **not** transparently readable by the other two:

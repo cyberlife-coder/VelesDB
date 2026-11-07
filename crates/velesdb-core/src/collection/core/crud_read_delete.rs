@@ -35,7 +35,7 @@ impl Collection {
     /// memory snapshots: filtering them out would hide unswept expired points
     /// after a restart, so `auto_expire` could never reclaim their storage.
     ///
-    /// # Lock order (Issue: ABBA deadlock, see `.investigation/http-deadlock-2026-07-22/`)
+    /// # Lock order (Issue: ABBA deadlock, repro `tests/tokio_blocking_lock_contention_repro.rs`)
     ///
     /// Acquires `vector_storage` (rank 2) before `payload_storage` (rank 3),
     /// matching [`Collection::search`]. This

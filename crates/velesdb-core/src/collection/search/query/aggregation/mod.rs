@@ -134,7 +134,7 @@ impl Collection {
     /// Runs the ungrouped aggregation scan (parallel or sequential).
     // Both storage guards are lent by reference into MatchStorageGuards and
     // read throughout the scan, including the rayon parallel path. Order is
-    // the decree recorded below; see .investigation/http-deadlock-2026-07-22/.
+    // the decree recorded below; see tests/tokio_blocking_lock_contention_repro.rs.
     #[expect(clippy::significant_drop_tightening)]
     fn run_ungrouped_aggregation(
         &self,
@@ -152,7 +152,7 @@ impl Collection {
 
         // LOCK ORDER: metric snapshot (config, rank 1) first, then
         // vector_storage(2) before payload_storage(3) — the pair was
-        // reversed here. See .investigation/http-deadlock-2026-07-22/. This
+        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs. This
         // site also feeds `aggregate_parallel`, which scans under these guards
         // on `pools::on_guarded_pool`, never the global rayon pool.
         let metric = self.storage.config.read().metric;

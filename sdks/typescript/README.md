@@ -10,7 +10,7 @@ Official TypeScript SDK for [VelesDB](https://github.com/cyberlife-coder/VelesDB
 
 - **Agent memory works over REST.** `searchSemanticMemory`, `recallEpisodicEvents`, `matchProceduralPatterns`, `recallRecent` and `recallOlderThan` sent a flat `{ _memory_type: ... }` filter that velesdb-server refuses with a `400`; they now send core's `{ condition: ... }` shape, and `recallRecent`/`recallOlderThan` let the server apply the timestamp window. `recallRecent(since)` is now exclusive (`timestamp > since`), as core's `episodic.recent()` is.
 - **A filter must be core-shaped on both backends.** A flat field map such as `{ category: 'tech' }` is refused with `VALIDATION_ERROR` before it leaves the SDK. REST used to answer it with a `400`; WASM read it as "no filter" and returned unfiltered results. Build filters with `f.*` (see [Filters](#filters)).
-- **No option the server drops.** Removed: `SearchOptions.includeVectors` and `SearchResult.vector` (no search returns vectors; read one with `get()`), `query()`'s `options` argument and `QueryOptions` (`/query` takes no per-query timeout or stream; the server's timeout is its guard-rails `timeoutMs`), the `includeVectors` and `queryOptions` capabilities, `CollectionConfig.description` (core has no collection description), `HnswParams.storageMode` (use `CollectionConfig.storageMode`), and the traversal `cursor` / `nextCursor` (core has no traversal cursor). `createGraphCollection`'s `schemaMode` now reaches the server, as core's `graph_schema`, with new `nodeTypes`/`edgeTypes`; its `dimension` and `metric` take effect with velesdb-server 8.0.0, which ships with this SDK.
+- **No option the server drops.** Removed: `SearchOptions.includeVectors` and `SearchResult.vector` (no search returns vectors; read one with `get()`), `query()`'s `options` argument and `QueryOptions` (`/query` takes no per-query timeout or stream; the server's timeout is its guard-rails `timeoutMs`), the `includeVectors` and `queryOptions` capabilities, `CollectionConfig.description` (core has no collection description), `HnswParams.storageMode` (use `CollectionConfig.storageMode`), and the traversal `cursor` / `nextCursor` (core has no traversal cursor). `createGraphCollection`'s `schemaMode` now reaches the server, as core's `graph_schema`, with new `nodeTypes`/`edgeTypes`; its `dimension` and `metric` take effect since velesdb-server 8.0.0 — earlier servers ignore them for `collection_type: 'graph'`.
 - **`textSearch` returns `TextSearchResult[]` with `score: number | null`.** The WASM backend's match is an unranked substring match, so its `score` is `null` (in 7.1.0 the call threw on any match); REST still returns the BM25 score. Handle `null` before sorting on it.
 - **The WASM backend creates `pq` and `rabitq` collections**, returning core's results for every storage mode.
 - **Node.js 22 or later** (`engines.node`): the version CI builds and tests on. Node 18 and 20 are end-of-life.
@@ -58,7 +58,7 @@ On Node.js the WASM backend's `init()` reads `velesdb_wasm_bg.wasm` from disk wi
 
 The WASM backend runs entirely in-process -- no server required. Ideal for browser apps, prototyping, and edge deployments.
 
-> **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` 8.0.0 or later, the version this SDK release pins. velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0).
+> **Binding version:** the WASM backend reads its results from `@wiscale/velesdb-wasm` since 8.0.0, the floor this SDK release pins (`^8.0.0` in `package.json`). velesdb-wasm 6.x and 7.x return `textSearch`, `hybridSearch`, filtered `search` and `get` records as ES2015 `Map`s, which the SDK cannot read: those calls throw on any row (#2332, fixed in velesdb-wasm 8.0.0).
 
 ```typescript
 import { VelesDB } from '@wiscale/velesdb-sdk';
@@ -317,7 +317,7 @@ Property types are core's `ValueType`: `'string'`, `'integer'`, `'float'`,
 `VALIDATION_ERROR`, since core would ignore them. The WASM backend has no graph
 collections and refuses `createGraphCollection` with `NOT_SUPPORTED`. Over
 REST, `dimension` and `metric` give the graph's nodes embeddings; they take
-effect with velesdb-server 8.0.0, which ships with this SDK (earlier servers
+effect since velesdb-server 8.0.0 (earlier servers
 ignore them for `collection_type: 'graph'`).
 
 #### `db.createMetadataCollection(name)`
@@ -416,7 +416,7 @@ Vector similarity search.
 | `sparseVector` | `Record<number, number>` | - | Sparse vector for hybrid sparse+dense search |
 | `quality` | `SearchQuality` | - | Search quality mode (e.g., `'fast'`, `'balanced'`, `'custom:256'`, `'adaptive:32:512'`) |
 
-> **WASM backend:** `filter` applies to dense search only (filtered results need velesdb-wasm 8.0.0, see [Binding version](#wasm-backend-browser--nodejs)). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so is `sparseIndexName`; neither is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`).
+> **WASM backend:** `filter` applies to dense search only (filtered results need the fix shipped in velesdb-wasm 8.0.0, see [Binding version](#wasm-backend-browser--nodejs)). Combined with `sparseVector` it is refused with `NOT_SUPPORTED`, and so is `sparseIndexName`; neither is silently ignored. `quality` goes to velesdb-wasm's own parser, so a preset it cannot read (`fast`, `balanced`, `accurate`, `perfect`, `autotune`, `custom:<ef>`, `adaptive:<min_ef>:<max_ef>`) is refused with `BAD_REQUEST` instead of being accepted and dropped — and `searchBatch` refuses in its pre-loop, before any entry searches. A preset it can read has nothing to tune, since WASM search scans every stored vector; as core states of the same field on REST, it "applies only to a dense search with neither a `filter` nor `ef_search`", so a filtered or sparse-only search validates the preset without applying it. `k` must be an integer from 0 to 2^32 - 1: non-negative as core's is, and at most 2^32 - 1 because velesdb-wasm's `usize` is 32-bit (`BAD_REQUEST` otherwise, a value that is not a number included); 0 returns nothing. `db.capabilities()` reports each case (`filteredSearch`, `namedSparseIndexes`).
 
 ```typescript
 const results = await db.search('docs', queryVector, {
@@ -510,7 +510,7 @@ Full-text search using BM25 scoring.
 const results = await db.textSearch('docs', 'machine learning', { k: 10 });
 ```
 
-> **WASM backend:** the WASM build has no BM25 index. A `filter` is refused with `NOT_SUPPORTED` rather than return rows the filter excludes (`db.capabilities().filteredSearch` does not list `'textSearch'`). It matches substrings case-insensitively and ranks nothing, so each result's `score` is `null` (`TextSearchResult.score` is `number | null`) and rows come in insertion order. Needs velesdb-wasm 8.0.0 (#2332).
+> **WASM backend:** the WASM build has no BM25 index. A `filter` is refused with `NOT_SUPPORTED` rather than return rows the filter excludes (`db.capabilities().filteredSearch` does not list `'textSearch'`). It matches substrings case-insensitively and ranks nothing, so each result's `score` is `null` (`TextSearchResult.score` is `number | null`) and rows come in insertion order. Needs the fix shipped in velesdb-wasm 8.0.0 (#2332).
 
 #### `db.hybridSearch(collection, vector, textQuery, options?)`
 
@@ -525,7 +525,7 @@ const results = await db.hybridSearch(
 );
 ```
 
-> **WASM backend:** a `filter` is refused with `NOT_SUPPORTED`, and a `vectorWeight` that is not a finite number with `BAD_REQUEST`, as REST refuses it. Needs velesdb-wasm 8.0.0 (#2332).
+> **WASM backend:** a `filter` is refused with `NOT_SUPPORTED`, and a `vectorWeight` that is not a finite number with `BAD_REQUEST`, as REST refuses it. Needs the fix shipped in velesdb-wasm 8.0.0 (#2332).
 
 #### `db.multiQuerySearch(collection, vectors, options?)`
 
