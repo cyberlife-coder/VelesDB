@@ -250,6 +250,12 @@ extractor-http = ["dep:ureq"]
 # same implementation gates and dependencies.
 ollama = ["embedder-http"]
 extract = ["extractor-http"]
+# Opt-in passthrough to core's wgpu paths (PQ k-means, HNSW traversal) for
+# library consumers — the Node binding's `gpu` resolves through here because
+# its license boundary (ci.yml's "License/dependency boundary gate") forbids
+# it a direct velesdb-core dependency. Off by default: the shipped daemon
+# stays GPU-free by design (README "Known limits", #1965).
+gpu = ["velesdb-core/gpu"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
