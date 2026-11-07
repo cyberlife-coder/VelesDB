@@ -26,16 +26,16 @@ Status, not aspiration. ✅ = shipped here and asserted by
 [`test/hooks.test.sh`](test/hooks.test.sh) · ⚠️ = shipped but weaker than the
 Claude Code equivalent · ❌ = not shipped, with the reason spelled out.
 
-| Loop step | Claude Code | Windsurf | Codex CLI |
-|---|---|---|---|
-| Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ✅ `codex/hooks/session-start.sh` on `SessionStart`, via `additionalContext` |
-| Save/checkpoint working context | ✅ first Stop plus every later covered edit batch when opted in; otherwise the first Stop keeps the legacy save reminder | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ same session-and-edit checkpoint as Claude; otherwise the first Stop keeps the legacy save reminder |
-| Require successful recall before the first repository edit | ✅ `pre-tool-use.sh` refuses `Edit`/`Write`; `post-tool-use.sh` marks only a successful VelesDB recall | ❌ not implemented | ✅ `codex/hooks/pre-tool-use.sh` refuses `apply_patch`; its PostToolUse partner applies the same success rule |
-| Name the exact memories recall returned in the Stop checklist | ✅ `post-tool-use.sh` records the ids of every successful `recall`, `recall_where`, `recall_fused` and `why`, with the server's `stale` verdict — only where the learning loop is opted in; `stop.sh` names them | ❌ not implemented | ✅ same, through `codex/hooks/post-tool-use.sh`, whose matcher already covers those tools |
-| Check outcomes as feedback evidence (test, build, lint) | ✅ `post-tool-use.sh` (exit 0) and `post-tool-use-failure.sh` (`Exit code N`) record a single check command; `stop.sh` lists one that failed then passed, or still fails | ❌ not implemented | ❌ **not shipped.** The PostToolUse matcher is limited to VelesDB tools, and the shape a Codex shell result reports its exit status in has not been measured here. Wiring it on an assumed field would record outcomes nobody verified |
-| Reverts as feedback evidence | ✅ `stop.sh` reads git, in each repository the checkpoint names, for commits since the window `session-start.sh` opened whose message reverts another | ❌ not implemented | ✅ same, read at `Stop`, so it needs no shell payload |
-| Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ⚠️ **no pre-compaction hook is possible.** `PreCompact`/`PostCompact` support neither `additionalContext` nor a documented `decision`/`reason`, so nothing a hook prints there reaches the model. `codex/hooks/session-start.sh` compensates *after the fact* on `source == "compact"` |
-| Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext`, or `decision: "block"` to substitute feedback for the result, but documents no equivalent of `updatedToolOutput` — it cannot hand back a *compiled* version of the real output |
+| Loop step | Claude Code | Windsurf | Codex CLI | Devin CLI |
+|---|---|---|---|---|
+| Load working context at session start | ✅ `session-start.sh` on `SessionStart` | ⚠️ `pre-user-prompt.sh` on `pre_user_prompt`, once per `trajectory_id` — advisory text, see the delivery caveat below | ✅ `codex/hooks/session-start.sh` on `SessionStart`, via `additionalContext` | ✅ `devin/hooks/session-start.sh` on `SessionStart`, via `additionalContext`; `first_context_emit` dedupes the .claude pickup's second emit |
+| Save/checkpoint working context | ✅ first Stop plus every later covered edit batch when opted in; otherwise the first Stop keeps the legacy save reminder | ⚠️ no end-of-session event is used: the *same* first-prompt reminder also asks for the save, hours in advance | ✅ same session-and-edit checkpoint as Claude; otherwise the first Stop keeps the legacy save reminder | ✅ same session-and-edit checkpoint as Claude, sharing the claude sentinel namespace so the .claude pickup's `stop.sh` cannot double the checklist |
+| Require successful recall before the first repository edit | ✅ `pre-tool-use.sh` refuses `Edit`/`Write`; `post-tool-use.sh` marks only a successful VelesDB recall | ❌ not implemented | ✅ `codex/hooks/pre-tool-use.sh` refuses `apply_patch`; its PostToolUse partner applies the same success rule | ✅ `devin/hooks/pre-tool-use.sh` refuses `edit`/`write`/`notebook_edit`; its PostToolUse partner applies the same success rule |
+| Name the exact memories recall returned in the Stop checklist | ✅ `post-tool-use.sh` records the ids of every successful `recall`, `recall_where`, `recall_fused` and `why`, with the server's `stale` verdict — only where the learning loop is opted in; `stop.sh` names them | ❌ not implemented | ✅ same, through `codex/hooks/post-tool-use.sh`, whose matcher already covers those tools | ✅ same, through `devin/hooks/post-tool-use.sh` reading the `{success, output, error}` response shape |
+| Check outcomes as feedback evidence (test, build, lint) | ✅ `post-tool-use.sh` (exit 0) and `post-tool-use-failure.sh` (`Exit code N`) record a single check command; `stop.sh` lists one that failed then passed, or still fails | ❌ not implemented | ❌ **not shipped.** The PostToolUse matcher is limited to VelesDB tools, and the shape a Codex shell result reports its exit status in has not been measured here. Wiring it on an assumed field would record outcomes nobody verified | ✅ `devin/hooks/post-tool-use.sh` reads the trailing `Exit code[: ]N` line of an `exec` result — one PostToolUse event covers pass and fail, so Devin needs one script where Claude needs two |
+| Reverts as feedback evidence | ✅ `stop.sh` reads git, in each repository the checkpoint names, for commits since the window `session-start.sh` opened whose message reverts another | ❌ not implemented | ✅ same, read at `Stop`, so it needs no shell payload | ✅ same, read at `Stop` |
+| Compile the transcript before compaction | ✅ `pre-compact.sh` on `PreCompact` | ❌ Windsurf documents no compaction event. A VERIFIER: whether Cascade compacts at all in a way any hook can observe | ⚠️ **no pre-compaction hook is possible.** `PreCompact`/`PostCompact` support neither `additionalContext` nor a documented `decision`/`reason`, so nothing a hook prints there reaches the model. `codex/hooks/session-start.sh` compensates *after the fact* on `source == "compact"` | ⚠️ **no pre-compaction hook exists.** Devin fires `PostCompaction` *after* the compactor ran, so `devin/hooks/post-compaction.sh` inverts the design: instead of getting a save in first, it nudges the reload and the durable remembers the summary could not hold |
+| Replace an oversized tool result | ✅ `post-tool-use.sh` via `hookSpecificOutput.updatedToolOutput` | ❌ **API gap.** Windsurf post-hooks cannot alter or block a result — "post-hooks cannot block since the action has already occurred" — and no documented field replaces one | ❌ **API gap as documented.** Codex `PostToolUse` can add `additionalContext`, or `decision: "block"` to substitute feedback for the result, but documents no equivalent of `updatedToolOutput` — it cannot hand back a *compiled* version of the real output | ❌ **API gap as documented.** Devin `PostToolUse` supports `additionalContext` and `updatedInput`, but documents no equivalent of `updatedToolOutput` |
 
 ### Why the Windsurf gap is smaller than it looks — and the caveat that matters more
 
@@ -289,6 +289,35 @@ and the full rationale for the remaining tool-output gap are in
 Same `.velesdb-hooks.json` config format as Claude Code (below); the Codex
 payload documents `cwd` as a common field, so the walk-up lookup works from
 the payload rather than from a `$PWD` fallback.
+
+## Install — Devin CLI
+
+```bash
+python3 scripts/sync-agent-hooks.py --install --client devin
+```
+
+The installer lays the five scripts under `~/.config/devin/hooks/velesdb-memory/`
+and reconciles only entries whose command contains that path inside the
+`"hooks"` key of `~/.config/devin/config.json`; foreign hooks — including the
+ones Devin picks up from `~/.claude/settings.json` — remain untouched. Use
+`--client all` to reconcile every supported client together.
+
+Devin CLI **also reads `.claude/settings.json` hooks** (when
+`read_config_from.claude` is enabled, the default), so a session can run both
+the Claude-registered scripts and these. The devin set is built for that
+overlap: `first_context_emit` silences the second identical SessionStart
+nudge, and `stop.sh` deliberately shares the claude sentinel namespace so the
+second Stop hook sees the first's checklist marker instead of blocking twice.
+
+Two payload differences shape the scripts: Devin's `tool_response` is
+`{success, output, error}` (the shared library reads that shape everywhere it
+reads the Claude/Codex ones), and hooks get the project directory as
+`DEVIN_PROJECT_DIR` in the environment rather than a payload `cwd`. Devin has
+no `PreCompact` — `post-compaction.sh` runs on `PostCompaction` instead, and
+no `PostToolUseFailure` — one `PostToolUse` carries both pass and fail.
+
+The ready-made [`devin/hooks.v1.json`](devin/hooks.v1.json) is also a valid
+project-level `.devin/hooks.v1.json` for a per-repo install.
 
 ## The structural constraint that shapes this whole design
 

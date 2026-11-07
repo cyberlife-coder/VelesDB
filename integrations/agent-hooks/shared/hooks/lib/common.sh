@@ -11,6 +11,10 @@
 # Shared helpers for the VelesDB Windsurf hooks.
 # Sourced by pre-user-prompt.sh — not meant to be run directly.
 # <<< only
+# >>> only: devin
+# Shared helpers for the VelesDB Devin CLI hooks.
+# Sourced by all five event hooks — not meant to be run directly.
+# <<< only
 #
 # Composed for one host from
 # integrations/agent-hooks/shared/hooks/lib/common.sh by
@@ -33,7 +37,7 @@ physical_policy_start() {
   [ -d "$candidate" ] || return 1
   physical_dir "$candidate"
 }
-# >>> only: claude-code codex
+# >>> only: claude-code codex devin
 
 resolve_final_symlink() {
   local current="$1"
@@ -64,7 +68,7 @@ require_jq() {
   fi
 }
 
-# >>> only: claude-code codex
+# >>> only: claude-code codex devin
 # resolve_config CWD
 # Walks up from CWD looking for a .velesdb-hooks.json file (project root
 # convention). Sets PROJECT, SESSION, CONFIG_ROOT and ENFORCE_LEARNING_LOOP
@@ -156,7 +160,7 @@ resolve_config() {
   fi
 }
 # <<< only
-# >>> only: claude-code codex
+# >>> only: claude-code codex devin
 
 # learning_loop_enabled: true only for a project that explicitly opted in.
 # The hooks are installed user-wide, so a missing or malformed project config
@@ -173,7 +177,7 @@ learning_marker_identity() {
 }
 # <<< only
 
-# >>> only: claude-code
+# >>> only: claude-code devin
 
 # successful_memory_recall PAYLOAD
 # A recall counts only after a VelesDB MCP tool returned a successful result.
@@ -442,7 +446,26 @@ private_temp_file() {
 touch_private_marker() {
   write_private_marker "$1" ""
 }
-# >>> only: claude-code codex
+
+# first_context_emit KIND SESSION_ID EMITTER: true unless a DIFFERENT emitter
+# already emitted this kind for this session. Two hook registries can feed
+# one host session — Devin loads its own hooks AND a .claude/settings.json
+# pickup — so a SessionStart or compaction nudge would otherwise reach the
+# model twice. The marker records who emitted: a repeat by the SAME emitter
+# is a legitimately re-fired event, not a duplicate of itself, and emits.
+first_context_emit() {
+  local sentinel
+  local holder
+  read_exact sentinel sentinel_path "ctx-emit" "$1"$'\n'"$2" || return 1
+  if [ -e "$sentinel" ] || [ -L "$sentinel" ]; then
+    valid_private_marker "$sentinel" || return 1
+    read_exact_line holder cat "$sentinel" || return 1
+    [ "$holder" != "$3" ] && return 1
+    return 0
+  fi
+  write_private_marker "$sentinel" "$3"
+}
+# >>> only: claude-code codex devin
 
 # Alias named for record callers.
 write_json_atomically() {
@@ -538,7 +561,7 @@ physical_dir() {
   (cd "$1" 2>/dev/null && pwd -P)
 }
 # <<< END readers: shared byte for byte with every other host's lib/common.sh; test/hooks.test.sh checks it.
-# >>> only: claude-code codex
+# >>> only: claude-code codex devin
 
 # valid_project_record FILE: FILE holds exactly one pending/dirty record. jq
 # reads every JSON value in a file, and `jq -e` judges only the last, so a file
@@ -648,7 +671,13 @@ successful_tool_response() {
     .tool_response
     | if (type == "array") then any(.[]; text_block)
       elif (type == "object") then
-        ((.content? | type) == "array") and any(.content[]; text_block) and no_error
+        # Devin reports {success, output, error}: the boolean is the host
+        # verdict itself, no content array exists to inspect.
+        if ((.success? | type) == "boolean") then
+          (.success == true) and ((.error? // null) == null)
+        else
+          ((.content? | type) == "array") and any(.content[]; text_block) and no_error
+        end
       elif (type == "string") then
         (fromjson? // null)
         | (type == "object") and (length > 0) and no_error
@@ -665,6 +694,7 @@ working_context_found() {
     [ .tool_response
       | if (type == "string") then .
         elif (type == "array") then (.[] | select(type == "object" and .type == "text") | .text)
+        elif (type == "object" and (.output? | type) == "string") then .output
         else (.content[]? | select(type == "object" and .type == "text") | .text) end
       | fromjson? | select(type == "object") | .found ]
     | any(. == true)
@@ -909,6 +939,7 @@ TOOL_RESULT_OBJECT='
   .tool_response
   | if (type == "string") then (fromjson? // null)
     elif (type == "array") then (first(.[] | text_object) // null)
+    elif (type == "object" and (.output? | type) == "string") then (.output | fromjson? // null)
     elif (type == "object") then
       (if ((.structuredContent? | type) == "object") then .structuredContent
        else (first(.content[]? | text_object) // null) end)
