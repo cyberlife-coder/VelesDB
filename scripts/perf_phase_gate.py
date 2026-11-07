@@ -348,20 +348,16 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # capture
     cap_parser = subparsers.add_parser("capture", help="Capture benchmark results")
     cap_parser.add_argument("--phase", required=True, help="Phase ID (1, 2, 3, 4, 5A, 5B, 5C, 6)")
     cap_parser.add_argument("--stage", required=True, choices=["before", "after"])
 
-    # compare
     cmp_parser = subparsers.add_parser("compare", help="Compare before/after")
     cmp_parser.add_argument("--phase", required=True)
 
-    # gate
     gate_parser = subparsers.add_parser("gate", help="Full gate check (capture after + compare)")
     gate_parser.add_argument("--phase", required=True)
 
-    # summary
     subparsers.add_parser("summary", help="Show all phases status")
 
     args = parser.parse_args()
