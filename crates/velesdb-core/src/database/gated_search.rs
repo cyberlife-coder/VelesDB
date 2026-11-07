@@ -68,8 +68,6 @@ pub enum GatedRead<'a> {
         k: usize,
         /// Optional dense/text blend factor.
         alpha: Option<f32>,
-        /// Optional reciprocal-rank-fusion constant (`None` = engine default).
-        rrf_k: Option<u32>,
         /// Optional caller metadata filter.
         filter: Option<&'a Filter>,
     },
@@ -143,6 +141,7 @@ fn dispatch_gated_read(
     coll: &VectorCollection,
     read: GatedRead<'_>,
     scope_filter: Option<Filter>,
+    rrf_k: Option<u32>,
 ) -> Result<Vec<SearchResult>> {
     match read {
         GatedRead::Dense {
@@ -168,7 +167,6 @@ fn dispatch_gated_read(
             text,
             k,
             alpha,
-            rrf_k,
             filter,
         } => match and_filters(filter, scope_filter) {
             Some(f) => coll.hybrid_search_with_rrf_and_filter(vector, text, k, alpha, rrf_k, &f),
@@ -263,6 +261,24 @@ impl Database {
         tenant_hint: Option<&str>,
         read: GatedRead<'_>,
     ) -> Result<Result<Vec<SearchResult>>> {
+        self.gated_search_outcome_with_rrf(collection, principal, tenant_hint, read, None)
+    }
+
+    /// [`gated_search`](Self::gated_search) carrying a reciprocal-rank-fusion
+    /// constant, applied only when `read` is [`GatedRead::Hybrid`] — the enum
+    /// itself cannot grow the field without a major version bump.
+    ///
+    /// # Errors
+    ///
+    /// Identical to [`gated_search_outcome`](Self::gated_search_outcome).
+    pub fn gated_search_outcome_with_rrf(
+        &self,
+        collection: &str,
+        principal: Option<&str>,
+        tenant_hint: Option<&str>,
+        read: GatedRead<'_>,
+        rrf_k: Option<u32>,
+    ) -> Result<Result<Vec<SearchResult>>> {
         let scope_filter =
             match self.read_gate_raw(collection, read.operation_kind(), principal, tenant_hint)? {
                 RawGateOutcome::Allow => None,
@@ -273,6 +289,6 @@ impl Database {
         Ok(self
             .get_vector_collection(collection)
             .ok_or_else(|| Error::CollectionNotFound(collection.to_string()))
-            .and_then(|coll| dispatch_gated_read(&coll, read, scope_filter)))
+            .and_then(|coll| dispatch_gated_read(&coll, read, scope_filter, rrf_k)))
     }
 }

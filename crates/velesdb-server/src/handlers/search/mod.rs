@@ -9,6 +9,9 @@ mod workers;
 #[cfg(test)]
 #[path = "build_fusion_strategy_tests.rs"]
 mod build_fusion_strategy_tests;
+#[cfg(test)]
+#[path = "hybrid_rrf_k_request_tests.rs"]
+mod hybrid_rrf_k_request_tests;
 
 use axum::{
     extract::{Path, State},
@@ -20,7 +23,8 @@ use std::sync::Arc;
 use velesdb_core::collection::VectorCollection;
 
 use crate::types::{
-    HybridSearchRequest, SearchIdsResponse, SearchRequest, SearchResponse, TextSearchRequest,
+    HybridSearchRequest, HybridSearchRequestWithRrf, SearchIdsResponse, SearchRequest,
+    SearchResponse, TextSearchRequest,
 };
 use crate::AppState;
 
@@ -286,7 +290,7 @@ pub async fn text_search(
     params(
         ("name" = String, Path, description = "Collection name")
     ),
-    request_body = HybridSearchRequest,
+    request_body = HybridSearchRequestWithRrf,
     responses(
         (status = 200, description = "Hybrid search results", body = SearchResponse),
         (status = 429, description = "The client's rate limit", body = crate::types::ErrorResponse),
@@ -302,7 +306,7 @@ pub async fn hybrid_search(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Path(name): Path<String>,
-    Json(req): Json<HybridSearchRequest>,
+    Json(req): Json<HybridSearchRequestWithRrf>,
 ) -> impl IntoResponse {
     let collection = match search_preamble(&state, &name) {
         Ok(c) => c,
@@ -319,7 +323,9 @@ pub async fn hybrid_search(
     let start = std::time::Instant::now();
 
     let expected_dimension = collection.config().dimension;
-    if let Err(error) = validate_query_dimension(&state, &name, expected_dimension, &req.vector) {
+    if let Err(error) =
+        validate_query_dimension(&state, &name, expected_dimension, &req.base.vector)
+    {
         state.operational_metrics.inc_errors();
         return (StatusCode::BAD_REQUEST, Json(error)).into_response();
     }
@@ -330,14 +336,14 @@ pub async fn hybrid_search(
     // runtime stays responsive.
     let state_for_work = Arc::clone(&state);
     let name_for_work = name.clone();
+    let HybridSearchRequestWithRrf { base, rrf_k } = req;
     let HybridSearchRequest {
         vector,
         query,
         top_k,
         vector_weight,
-        rrf_k,
         filter,
-    } = req;
+    } = base;
 
     // Route through the control-plane read gate (CORE-1/CORE-2). No observer ⇒
     // single `Option` check then the same hybrid leaf (zero overhead).
@@ -348,12 +354,11 @@ pub async fn hybrid_search(
             text: &query,
             k: top_k,
             alpha: Some(vector_weight),
-            rrf_k,
             filter: filter.as_ref(),
         };
         state_for_work
             .db
-            .gated_search_outcome(&name_for_work, None, None, read)
+            .gated_search_outcome_with_rrf(&name_for_work, None, None, read, rrf_k)
             .map_err(|refusal| read_refused(&refusal))
     })
     .await;

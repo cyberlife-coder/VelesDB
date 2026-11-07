@@ -27,6 +27,24 @@ pub struct MultiQuerySearchRequestWithWeights {
     pub branch_weights: Option<Vec<f32>>,
 }
 
+/// `/search/hybrid`'s request: core's `HybridSearchRequest` plus `rrf_k`.
+///
+/// Kept server-side for the same reason as `MultiQuerySearchRequestWithWeights`:
+/// the core DTO is published and externally constructible, so a new pub
+/// field is a major bump — `#[serde(flatten)]` keeps the wire body identical.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct HybridSearchRequestWithRrf {
+    /// Every field core's DTO declares.
+    #[serde(flatten)]
+    pub base: velesdb_core::api_types::HybridSearchRequest,
+    /// Optional reciprocal-rank-fusion constant (engine default when omitted).
+    /// Lower values amplify rank differences between the vector and text
+    /// branches.
+    #[serde(default)]
+    #[schema(example = 60)]
+    pub rrf_k: Option<u32>,
+}
+
 /// The plain-text `422` axum answers for a request body it cannot deserialise.
 ///
 /// The `Json<T>` extractor rejects a malformed body **before the handler

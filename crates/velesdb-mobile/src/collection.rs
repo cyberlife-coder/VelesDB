@@ -336,7 +336,6 @@ impl VelesCollection {
                 text: &text_query,
                 k: usize::try_from(limit).unwrap_or(usize::MAX),
                 alpha: Some(vector_weight),
-                rrf_k: None,
                 filter: None,
             },
         )?;
@@ -499,7 +498,6 @@ impl VelesCollection {
                 text: &text_query,
                 k: usize::try_from(limit).unwrap_or(usize::MAX),
                 alpha: Some(vector_weight),
-                rrf_k: None,
                 filter: Some(&filter),
             },
         )?;
