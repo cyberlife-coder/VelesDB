@@ -609,6 +609,15 @@ jobs:
       - name: Test the deferred-removal guard
         run: python3 -m unittest scripts.tests.test_check_deferred_removals
 
+      # ERROR_CODES.md is a second source of truth for the VELES-XXX and
+      # E0XX codes error.rs declares — two sources, nothing comparing them
+      # (parity audit 2026-08-21, section D). This is the comparison.
+      - name: Error codes documented match the declared set
+        run: python3 scripts/check-error-codes.py
+
+      - name: Test the error-codes guard
+        run: python3 -m unittest scripts.tests.test_check_error_codes
+
       # `local-ci.sh` n'est pas lance ici — il REJOUE ce job, l'executer dedans
       # serait circulaire. Sa suite, elle, doit tourner : elle epingle deux
       # defauts qu'il a deja eus, dont un faux vert (zero etape traitee

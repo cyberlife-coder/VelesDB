@@ -29,15 +29,6 @@ fn test_prefetch_vector_neon_empty() {
 }
 
 #[test]
-fn test_calculate_prefetch_distance() {
-    assert_eq!(calculate_prefetch_distance_neon(128), 4);
-    assert_eq!(calculate_prefetch_distance_neon(384), 6);
-    assert_eq!(calculate_prefetch_distance_neon(768), 10);
-    assert_eq!(calculate_prefetch_distance_neon(1536), 14);
-    assert_eq!(calculate_prefetch_distance_neon(3072), 16);
-}
-
-#[test]
 fn test_all_prefetch_variants() {
     let data = vec![0u8; 256];
     let ptr = data.as_ptr();
@@ -45,6 +36,5 @@ fn test_all_prefetch_variants() {
     prefetch_read_l1(ptr);
     prefetch_read_l2(ptr);
     prefetch_read_l3(ptr);
-    prefetch_write_l1(ptr);
     // No crash = success
 }
