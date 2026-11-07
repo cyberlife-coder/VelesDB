@@ -52,10 +52,6 @@
 //!    `Collection` that acquired both locks — see the fix commits for the
 //!    full list.
 //!
-//! See `.investigation/http-deadlock-2026-07-22/` for the archived stack
-//! samples and the original PR-level reproduction that started this
-//! investigation.
-//!
 //! # Why `tokio::task::spawn_blocking` and not `std::thread::spawn`
 //!
 //! `crates/velesdb-core/tests/stress_concurrency_tests.rs` already stresses

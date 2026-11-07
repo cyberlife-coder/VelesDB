@@ -59,6 +59,7 @@ Each binding has its own reference guide; the
 | Python | [API reference](./guides/PYTHON_API_REFERENCE.md) |
 | WASM (browser) | [JavaScript API](./guides/WASM_API.md) |
 | Node.js | [Addon reference](./guides/NODE_ADDON.md) |
+| TypeScript SDK | [SDK reference](../sdks/typescript/README.md) |
 | Mobile (Swift / Kotlin) | [Mobile API](./guides/MOBILE_API.md) |
 | Server (REST) | [REST tour](./guides/SERVER_REST_TOUR.md) |
 | Tauri plugin | [Plugin reference](./guides/TAURI_PLUGIN_REFERENCE.md) |
