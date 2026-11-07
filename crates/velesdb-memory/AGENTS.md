@@ -17,7 +17,7 @@ is the contract; this file holds what only applies here.
   cargo check -p velesdb-memory --no-default-features --features context
   cargo check -p velesdb-memory
   cargo check -p velesdb-memory --no-default-features --features mcp,persistence
-  for feat in mcp http context persistence embedder-http extractor-http ollama extract; do
+  for feat in mcp http context persistence embedder-http extractor-http ollama extract gpu; do
     cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
   done
   ```
