@@ -1033,6 +1033,7 @@ class RealRepositoryTests(unittest.TestCase):
                 "integrations/agent-hooks/codex/README.md",
                 "integrations/agent-hooks/codex/hooks/session-start.sh",
                 "integrations/agent-hooks/windsurf/hooks/pre-user-prompt.sh",
+                "integrations/agent-hooks/devin/hooks/session-start.sh",
                 "integrations/langgraph/README.md",
                 "integrations/langgraph/src/langgraph_velesdb/tools.py",
                 "sdks/typescript/src/memory.ts",
@@ -1096,14 +1097,15 @@ class RealRepositoryTests(unittest.TestCase):
         self.assertEqual(pinned, expected)
 
     def test_the_session_hooks_are_swept(self) -> None:
-        # The prompt text injected into EVERY Claude Code / Codex / Windsurf
-        # session — the surface a model reads most often, and the one the
+        # The prompt text injected into EVERY Claude Code / Codex / Windsurf /
+        # Devin session — the surface a model reads most often, and the one the
         # original globs (*.md, *.py, *.ts) could not see at all.
         swept = {cmdc.rel(REPO_ROOT, path) for path in cmdc.surface_files(REPO_ROOT)}
         for hook in (
             "integrations/agent-hooks/claude-code/hooks/session-start.sh",
             "integrations/agent-hooks/codex/hooks/session-start.sh",
             "integrations/agent-hooks/windsurf/hooks/pre-user-prompt.sh",
+            "integrations/agent-hooks/devin/hooks/session-start.sh",
         ):
             with self.subTest(hook=hook):
                 self.assertIn(hook, swept)
