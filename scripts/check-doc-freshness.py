@@ -88,8 +88,8 @@ VERSION_SCAN_EXCLUDED_NAMES = re.compile(r"^(MIGRATION_v|CHANGELOG)", re.IGNOREC
 # Vendored/installed trees: their READMEs describe someone else's package
 # version, and the sweep reads the filesystem (not the git index), so a
 # populated `node_modules` under sdks/typescript would bury every real
-# finding. CI never sees these — a clean checkout has none — but local-ci.sh
-# runs the guard where `npm install` has already run.
+# finding. CI never sees these — a clean checkout has none — but the local-ci
+# replay runs the guard where `npm install` has already run.
 VERSION_SCAN_EXCLUDED_DIR_NAMES: "frozenset[str]" = frozenset(
     {"node_modules", ".venv", "venv", "site-packages"}
 )
