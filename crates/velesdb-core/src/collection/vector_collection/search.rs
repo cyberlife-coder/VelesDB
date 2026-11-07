@@ -224,6 +224,52 @@ impl VectorCollection {
             .hybrid_search_with_filter(vector, text, self.capped_k(k), alpha, filter, None)
     }
 
+    /// Performs hybrid search (vector + BM25) with an explicit RRF constant.
+    ///
+    /// `rrf_k` is the reciprocal-rank-fusion constant: lower values amplify
+    /// rank differences between the dense and text branches. `None` uses the
+    /// engine default (60).
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if text indexing or storage retrieval fails.
+    pub fn hybrid_search_with_rrf(
+        &self,
+        vector: &[f32],
+        text: &str,
+        k: usize,
+        alpha: Option<f32>,
+        rrf_k: Option<u32>,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner
+            .hybrid_search(vector, text, self.capped_k(k), alpha, rrf_k)
+    }
+
+    /// Performs hybrid search (vector + BM25) with a metadata filter and an
+    /// explicit RRF constant.
+    ///
+    /// `rrf_k` is the reciprocal-rank-fusion constant: lower values amplify
+    /// rank differences between the dense and text branches. `None` uses the
+    /// engine default (60).
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if the query dimension does not match the collection.
+    /// - Returns an error if text indexing, storage, or filtering fails.
+    pub fn hybrid_search_with_rrf_and_filter(
+        &self,
+        vector: &[f32],
+        text: &str,
+        k: usize,
+        alpha: Option<f32>,
+        rrf_k: Option<u32>,
+        filter: &crate::filter::Filter,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner
+            .hybrid_search_with_filter(vector, text, self.capped_k(k), alpha, filter, rrf_k)
+    }
+
     /// Performs batch kNN search with per-query metadata filters.
     ///
     /// Each query in `queries` is paired with the filter at the same index in
