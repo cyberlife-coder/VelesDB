@@ -215,7 +215,7 @@ jobs:
       - name: Check each velesdb-memory feature in isolation
         run: |
           set -eu
-          for feat in mcp http context persistence embedder-http extractor-http ollama extract; do
+          for feat in mcp http context persistence embedder-http extractor-http ollama extract gpu; do
             echo "::group::--features $feat"
             cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
             echo "::endgroup::"

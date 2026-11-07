@@ -45,5 +45,11 @@ serde_json = { workspace = true }
 [build-dependencies]
 napi-build = "2"
 
+[features]
+# Parity with velesdb-python's `gpu` opt-in (#1965). Forwarded through
+# velesdb-memory — never `velesdb-core/gpu` here: the ci.yml
+# "License/dependency boundary gate" refuses a direct velesdb-core dep.
+gpu = ["velesdb-memory/gpu"]
+
 [lints]
 workspace = true
