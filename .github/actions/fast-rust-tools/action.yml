@@ -1,0 +1,45 @@
+name: Fast Rust build tools (sccache + mold)
+description: >-
+  Installs sccache (shared object cache, GHA backend) and mold (fast linker),
+  then wires the environment for every later cargo invocation in the calling
+  job. Ubuntu runners only — callers that set their own RUSTFLAGS keep the
+  workflow's -Dwarnings requirement and lose only the linker flag for that
+  step, which is correct, not a break.
+runs:
+  using: composite
+  steps:
+    - name: Install mold
+      shell: bash
+      env:
+        RUSTUP_AUTO_INSTALL: "0"
+      run: sudo apt-get install -y mold
+
+    - name: Install sccache
+      shell: bash
+      env:
+        RUSTUP_AUTO_INSTALL: "0"
+      run: |
+        # Pinned release tarball, musl static build — no cargo install (~2 min
+        # of compile avoided on every job). musl keeps it glibc-version-proof.
+        curl -sSfL \
+          https://github.com/mozilla/sccache/releases/download/v0.10.0/sccache-v0.10.0-x86_64-unknown-linux-musl.tar.gz \
+          | tar -xz --strip-components=1 -C /tmp \
+            sccache-v0.10.0-x86_64-unknown-linux-musl/sccache
+        install -m 755 /tmp/sccache "$HOME/.cargo/bin/sccache"
+        sccache --version
+
+    - name: Wire sccache + mold into the job environment
+      shell: bash
+      env:
+        RUSTUP_AUTO_INSTALL: "0"
+        SCCACHE_IDLE_TIMEOUT: "0"
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        # The daemon idles out after 600s of no compiles — during a long
+        # serial test run it exits and the client's respawn then fails on
+        # the GHA backend config. Zero disables the idle shutdown; the job
+        # teardown reaps the daemon anyway.
+        echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
+        echo "RUSTFLAGS=-Dwarnings -Clink-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+        sccache --start-server
