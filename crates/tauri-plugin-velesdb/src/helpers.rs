@@ -154,9 +154,14 @@ pub fn map_core_results(
 
 /// Looks up a collection by name, returning a typed error on miss.
 ///
-/// Returns a `VectorCollection` only if the underlying collection is
-/// actually a vector collection. Returns [`Error::InvalidConfig`] if the
-/// collection exists but is a graph or metadata collection.
+/// Every known variant is accepted: graph and metadata collections are
+/// re-wrapped through `into_vector_view`, the purely structural re-wrap
+/// the Python binding uses for the same purpose — so data-plane commands
+/// (points, scroll, flush, guardrails, …) work on any creatable
+/// collection. Vector-semantic operations stay guarded by the engine
+/// itself (a metadata collection reports dimension 0, so a dense query
+/// still fails its dimension check). An unknown future variant keeps
+/// the previous rejection shape.
 pub fn require_collection(
     db: &velesdb_core::Database,
     name: &str,
@@ -164,8 +169,17 @@ pub fn require_collection(
     let any_coll = db
         .get_any_collection(name)
         .ok_or_else(|| Error::CollectionNotFound(name.to_string()))?;
-    any_coll.into_vector().map_err(|_other_variant| {
-        Error::InvalidConfig(format!("Collection '{name}' is not a vector collection"))
+    Ok(match any_coll {
+        velesdb_core::AnyCollection::Vector(c) => c,
+        velesdb_core::AnyCollection::Graph(g) => g.into_vector_view(),
+        velesdb_core::AnyCollection::Metadata(m) => m.into_vector_view(),
+        // `AnyCollection` is `#[non_exhaustive]`; a variant added later has
+        // no vector view to offer.
+        _ => {
+            return Err(Error::InvalidConfig(format!(
+                "Collection '{name}' is not a supported collection kind"
+            )));
+        }
     })
 }
 
