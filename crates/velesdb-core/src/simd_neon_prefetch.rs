@@ -90,25 +90,6 @@ pub fn prefetch_read_l3(ptr: *const u8) {
     }
 }
 
-/// Prefetch data for writing into L1 cache.
-///
-/// Use this when you know you'll be writing to the data soon.
-#[cfg(target_arch = "aarch64")]
-#[inline]
-pub fn prefetch_write_l1(ptr: *const u8) {
-    // SAFETY: `asm!(prfm ...)` emits a write-prefetch hint only.
-    // - Condition 1: This does not perform a memory store.
-    // - Condition 2: Calling convention is preserved by `nostack` and `preserves_flags`.
-    // SAFETY: We need explicit store-intent prefetch on aarch64.
-    unsafe {
-        core::arch::asm!(
-            "prfm pstl1keep, [{ptr}]",
-            ptr = in(reg) ptr,
-            options(nostack, preserves_flags)
-        );
-    }
-}
-
 /// Prefetch a vector (f32 slice) for reading into L1 cache.
 ///
 /// Uses 128-byte stride to match Apple Silicon cache lines (M1-M4).
@@ -167,22 +148,6 @@ pub fn prefetch_vector_neon(vector: &[f32]) {
 ///
 /// # Formula
 ///
-/// The prefetch distance is calculated to hide memory latency:
-/// - Small vectors (≤128D): 4 vectors ahead
-/// - Medium vectors (129-512D): 6-8 vectors ahead
-/// - Large vectors (513-1024D): 10-12 vectors ahead
-/// - Very large vectors (>1024D): 14-16 vectors ahead
-#[must_use]
-#[inline]
-pub fn calculate_prefetch_distance_neon(dimension: usize) -> usize {
-    match dimension {
-        0..=128 => 4,
-        129..=384 => 6,
-        385..=768 => 10,
-        769..=1536 => 14,
-        _ => 16,
-    }
-}
 
 // Fallback implementations for non-ARM64 targets
 
@@ -200,11 +165,6 @@ pub fn prefetch_read_l2(_ptr: *const u8) {}
 #[cfg(not(target_arch = "aarch64"))]
 #[inline]
 pub fn prefetch_read_l3(_ptr: *const u8) {}
-
-/// No-op prefetch for non-ARM64 targets.
-#[cfg(not(target_arch = "aarch64"))]
-#[inline]
-pub fn prefetch_write_l1(_ptr: *const u8) {}
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
