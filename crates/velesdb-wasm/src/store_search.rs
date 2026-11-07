@@ -158,19 +158,22 @@ pub fn text_search_impl(
     to_js(&results)
 }
 
-/// Hybrid vector + text search.
+/// Scored `(id, combined_score, payload)` triples behind
+/// [`hybrid_search_impl`] — native-typed so host tests can pin the exact
+/// browser-store contract without a `JsValue` (which needs the wasm32
+/// runtime).
 #[allow(clippy::too_many_arguments)]
-pub fn hybrid_search_impl(
+pub fn hybrid_search_scored<'a>(
     query_vector: &[f32],
     text_query: &str,
     ids: &[u64],
     data: &[f32],
-    payloads: &[Option<serde_json::Value>],
+    payloads: &'a [Option<serde_json::Value>],
     dimension: usize,
     metric: DistanceMetric,
     k: usize,
     vector_weight: Option<f32>,
-) -> Result<JsValue, JsValue> {
+) -> Vec<(u64, f32, Option<&'a serde_json::Value>)> {
     let v_weight = vector_weight.unwrap_or(0.5).clamp(0.0, 1.0);
     let t_weight = 1.0 - v_weight;
     let text_query_lower = text_query.to_lowercase();
@@ -203,8 +206,33 @@ pub fn hybrid_search_impl(
 
     sort_scored_triples(&mut results, true);
     results.truncate(k);
+    results
+}
 
-    scored_triples_to_js(results)
+/// Hybrid vector + text search.
+#[allow(clippy::too_many_arguments)]
+pub fn hybrid_search_impl(
+    query_vector: &[f32],
+    text_query: &str,
+    ids: &[u64],
+    data: &[f32],
+    payloads: &[Option<serde_json::Value>],
+    dimension: usize,
+    metric: DistanceMetric,
+    k: usize,
+    vector_weight: Option<f32>,
+) -> Result<JsValue, JsValue> {
+    scored_triples_to_js(hybrid_search_scored(
+        query_vector,
+        text_query,
+        ids,
+        data,
+        payloads,
+        dimension,
+        metric,
+        k,
+        vector_weight,
+    ))
 }
 
 /// Converts an optional flat `[avg_weight, max_weight, hit_weight]` slice

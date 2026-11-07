@@ -223,6 +223,10 @@ mod velesql_exec_graph_tests;
 mod velesql_executor_conformance_tests;
 
 #[cfg(test)]
+#[path = "search_fidelity_conformance_tests.rs"]
+mod search_fidelity_conformance_tests;
+
+#[cfg(test)]
 #[path = "coverage_v3_tests.rs"]
 mod coverage_v3_tests;
 
