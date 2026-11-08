@@ -153,6 +153,21 @@ impl<T> Masked<T> {
             None
         }
     }
+
+    /// The dense value slice. `values()[i]` is meaningful only when `i` is
+    /// set in [`validity`](Self::validity) — invalid slots hold a never-read
+    /// filler and must not be interpreted.
+    #[must_use]
+    pub fn values(&self) -> &[T] {
+        &self.values
+    }
+
+    /// Bitmap of valid (non-null) row indices — presence-of-record. Set bits
+    /// always index into [`values`](Self::values).
+    #[must_use]
+    pub fn validity(&self) -> &RoaringBitmap {
+        &self.validity
+    }
 }
 
 impl<T> Masked<T> {

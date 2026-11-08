@@ -115,6 +115,11 @@ impl ColumnStore {
     /// Live, non-null rows of the `GeoPoint` column `column` whose point
     /// satisfies `keep`; no row when the column is missing or not a
     /// `GeoPoint` column.
+    ///
+    /// Borrows `validity` and `deletion_bitmap` directly — a `take(0)` caller
+    /// (`geo_bbox_rows` on inverted bounds) still yields nothing without
+    /// reading a single row. Each visited row costs a dense `values[idx]`
+    /// read plus `keep`.
     fn geo_rows<'a>(
         &'a self,
         column: &'a str,
@@ -124,10 +129,16 @@ impl ColumnStore {
             Some(TypedColumn::GeoPoint(col)) => Some(col),
             _ => None,
         };
-        (0..col.map_or(0, Masked::len)).filter_map(move |idx| {
-            let (lat, lng) = *col.and_then(|c| c.get(idx))?;
-            (keep(lat, lng) && !self.is_row_deleted_bitmap(idx)).then_some(idx)
+        let values = col.map_or(&[][..], Masked::values);
+        col.map(move |c| {
+            c.validity().iter().filter_map(move |idx| {
+                let (lat, lng) = values[idx as usize];
+                (keep(lat, lng) && !self.is_row_deleted_bitmap(idx as usize))
+                    .then_some(idx as usize)
+            })
         })
+        .into_iter()
+        .flatten()
     }
 
     /// Returns row indices where the GeoPoint falls within the bounding box (inclusive).
