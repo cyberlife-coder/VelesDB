@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Devin CLI SessionStart hook: tell the model to resume its working context —
+# the session this conversation last saved, else the one it last loaded, else
+# the configured one.
+#
+# Why a hook and not a second velesdb-memory process: the store is
+# mono-process (flock). The MCP server already running inside this Devin
+# session holds the lock, so this script cannot open the store itself — it
+# can only steer the model to call the *session's own* MCP tool. See
+# integrations/agent-hooks/README.md for the full constraint writeup.
+#
+# Devin reads .claude/settings.json hooks too, so a Claude-registered copy of
+# session-start.sh can fire in the same session. first_context_emit makes the
+# second emission a no-op instead of a duplicated nudge.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: a line below sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib/freshness.sh
+source "$SCRIPT_DIR/lib/freshness.sh"
+
+require_jq
+
+read_exact payload read_stdin_payload
+# Devin does not document a cwd field; its hooks get DEVIN_PROJECT_DIR in the
+# environment instead. A payload cwd, when present, still wins.
+# shellcheck disable=SC2154 # read_exact sets payload (printf -v)
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
+read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
+source_kind="$(printf '%s' "$payload" | jq -r '.source // empty' 2>/dev/null || true)" # exact-read-ok: a word from the payload schema
+if [ -z "$cwd" ]; then
+  cwd="${DEVIN_PROJECT_DIR:-$PWD}"
+fi
+
+resolve_config "$cwd"
+# Drop evidence of sessions idle past the bound (lib/common.sh): records a
+# dead session left behind never reach a checkpoint otherwise.
+prune_stale_evidence || true
+# Open the window a later Stop reads reverts from (lib/common.sh); kept when
+# this is a resume or a post-compaction start of the same session.
+if [ -n "$session_id" ] \
+  && read_exact evidence_since sentinel_path "evidence-since" "$session_id"; then
+  # shellcheck disable=SC2154 # read_exact sets evidence_since (printf -v)
+  open_evidence_window "$evidence_since" || true
+fi
+session_note=""
+if adopt_working_session "$session_id" any; then
+  session_note=", the session this conversation last saved (else the one it last loaded),"
+fi
+
+context="Session memory (velesdb-memory): call load_working_context(project=\"$PROJECT\", session=\"$SESSION\")$session_note as your first action, unless you already loaded it earlier this session. It restores the prior distilled state (goal, constraints, verified facts, decisions, pending actions) left by save_working_context, so work continues instead of re-deriving context from scratch. load_working_context returns {found, working, other_sessions}: read 'working' for the state. If 'found' is false, nothing was saved under that EXACT project+session — but check 'other_sessions' before starting fresh: a similarly-named session listed there means the session id was a typo, not a new task. 'other_sessions' is filled in on a hit too, so if one of them looks more like the session you meant, you may have just resumed the wrong work. Reinforcement loop: send feedback(id_str, true|false) on a recalled memory only when an observed outcome shows its effect — a check that failed and passed once you applied it, a revert of the change it advised — and name that outcome; never score a memory on your own impression that it helped. The Stop checklist names the exact memories your recalls returned and the outcomes the hooks observed. A recall result marked stale means an anchored file changed: re-verify that memory before relying on it."
+
+if [ "$source_kind" = "compact" ]; then
+  context="$context This session was just compacted, which discarded what an earlier load restored: call it again now, even if you already did."
+fi
+
+# A daemon behind the published release is worth one line, and only when it
+# is true: an up-to-date session sees nothing. Best-effort by construction —
+# `|| true` because no version check may ever cost the user a session start.
+freshness="$(veles_freshness_notice 2>/dev/null || true)" # exact-read-ok: a one-line notice printed without a trailing newline
+if [ -n "${freshness:-}" ]; then
+  context="$context
+
+$freshness"
+fi
+
+# The second registry's copy of this hook loses the emit race and stays
+# silent — the model already got the identical nudge once. The project is
+# part of the kind: a SessionStart that names another project is a different
+# nudge, not a repeat of this one.
+if [ -n "$session_id" ] \
+  && ! first_context_emit "session-start-$source_kind-$PROJECT" "$session_id" devin; then
+  echo '{}'
+  exit 0
+fi
+
+jq -n --arg ctx "$context" \
+  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'

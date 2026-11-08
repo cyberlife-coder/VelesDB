@@ -61,5 +61,16 @@ if [ -n "${freshness:-}" ]; then
 $freshness"
 fi
 
+# Devin runs .claude/settings.json hooks AND its own velesdb set, so one host
+# session can fire this hook twice. The loser of the emit race stays silent —
+# the model already got the identical nudge once (lib/common.sh). The project
+# is part of the kind: a SessionStart naming another project is a different
+# nudge, not a repeat of this one.
+if [ -n "$session_id" ] \
+  && ! first_context_emit "session-start-$source_kind-$PROJECT" "$session_id" claude-code; then
+  echo '{}'
+  exit 0
+fi
+
 jq -n --arg ctx "$context" \
   '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'

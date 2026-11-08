@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# Devin CLI Stop hook: continue once with the learning-loop checklist on the
+# first Stop of an opted-in session and again after every later covered edit
+# batch. The edit marker is consumed before the continuation, so its next
+# Stop passes. Repositories without enforcement retain the older
+# once-per-session save reminder.
+#
+# The record and sentinel names are deliberately the claude-code set's, not a
+# devin-* namespace: Devin also runs the .claude/settings.json copies of
+# these hooks, and two scripts writing to ONE namespace make whichever Stop
+# hook runs second see the markers the first just wrote — one checklist, not
+# two. The record content is identical either way.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # exact-read-ok: a line below sources lib/ from this value, so a byte lost here fails loudly instead of naming another tree
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=./lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf '%s\n' '{"decision":"block","reason":"VelesDB learning-loop checkpoint cannot be verified because jq is unavailable. Restore jq on PATH, then retry Stop; do not finish while an edit queue may be pending."}'
+  exit 0
+fi
+
+read_exact payload read_stdin_payload
+# shellcheck disable=SC2154 # read_exact sets payload (printf -v)
+read_exact session_id jq -j '.session_id // empty' <<<"$payload" 2>/dev/null || session_id=""
+read_exact cwd jq -j '.cwd // empty' <<<"$payload" 2>/dev/null || cwd=""
+
+if [ -z "$cwd" ]; then
+  cwd="${DEVIN_PROJECT_DIR:-$PWD}"
+fi
+if [ -z "$session_id" ]; then
+  session_id="unknown-session"
+fi
+
+resolve_config "$cwd"
+adopt_working_session "$session_id" save || true
+
+if ! read_exact dirty_dir record_dir_path "learning-dirty" "$session_id" \
+  || ! read_exact generic_sentinel sentinel_path "stop" "$session_id" \
+  || ! read_exact checkpoint_manifest sentinel_path "learning-checkpoint-manifest" "$session_id" \
+  || ! read_exact recalled_dir record_dir_path "recalled-memories" "$session_id" \
+  || ! read_exact checks_dir record_dir_path "check-outcomes" "$session_id" \
+  || ! read_exact evidence_since sentinel_path "evidence-since" "$session_id"; then
+  reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry Stop."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
+
+# A pending manifest means the previous Stop had captured every repository but
+# did not durably acknowledge emitting its checklist (for example, the hook
+# was interrupted between record cleanup and process exit). Re-emit the exact
+# batch before doing anything else. A delivered manifest is the next Stop's
+# acknowledgement and can be consumed before checking for a newer edit batch.
+# shellcheck disable=SC2154 # read_exact sets checkpoint_manifest (printf -v)
+if valid_private_marker "$checkpoint_manifest"; then
+  if ! valid_checkpoint_manifest "$checkpoint_manifest"; then
+    reason="VelesDB checkpoint manifest is malformed. Keep the session open, inspect $checkpoint_manifest, and retry Stop; no captured repository identity was discarded."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  read_exact_line manifest_state jq -r '.state' "$checkpoint_manifest"
+  if [ "$manifest_state" = "pending" ]; then
+    targets="$(jq -c '.targets' "$checkpoint_manifest")" # exact-read-ok: compact JSON, whose own newline is the only one
+    read_exact feedback feedback_step "$(jq -c '.evidence // {recalled: [], checks: [], reverts: []}' "$checkpoint_manifest")"  # exact-read-ok: compact JSON inside, whose own newline is the only one
+    reason="Before finishing, complete the VelesDB learning loop for every repository in this recovered batch ($targets): 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause and each incident to its root cause with outgoing relations; $feedback Then call save_working_context for every listed project/session with its distilled state and stop."
+    response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')"  # exact-read-ok: compact JSON, whose own newline is the only one
+    delivered_manifest="$(jq -c '.state = "delivered"' "$checkpoint_manifest")"  # exact-read-ok: compact JSON, whose own newline is the only one
+    printf '%s\n' "$response"
+    write_private_marker "$checkpoint_manifest" "$delivered_manifest" || true
+    exit 0
+  fi
+  if ! rm -f "$checkpoint_manifest"; then
+    reason="VelesDB could not acknowledge a delivered checkpoint manifest. Keep the session open and retry Stop; the captured identities remain at $checkpoint_manifest."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+elif [ -e "$checkpoint_manifest" ] || [ -L "$checkpoint_manifest" ]; then
+  reason="VelesDB checkpoint manifest is linked or malformed. Keep the session open, inspect $checkpoint_manifest, and retry Stop."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
+
+# Edit targets can live outside the host cwd. The dirty queue is therefore
+# session-wide and carries each resolved repository identity into Stop.
+dirty_records=()
+dirty_invalid="false"
+# shellcheck disable=SC2154 # read_exact sets dirty_dir (printf -v)
+if [ -L "$dirty_dir" ]; then
+  dirty_invalid="true"
+elif [ -d "$dirty_dir" ]; then
+  for record_file in "$dirty_dir"/*.json; do
+    [ -e "$record_file" ] || [ -L "$record_file" ] || continue
+    if ! [ -f "$record_file" ] || [ -L "$record_file" ] \
+      || ! valid_project_record "$record_file"; then
+      dirty_invalid="true"
+      break
+    fi
+    canonical="$(jq -c '{project, session, root}' "$record_file")" # exact-read-ok: compact JSON, whose own newline is the only one
+    if [ "${record_file##*/}" != "$(safe_marker_key "$canonical").json" ]; then  # exact-read-ok: a checksum
+      dirty_invalid="true"
+      break
+    fi
+    dirty_records+=("$record_file")
+  done
+elif [ -e "$dirty_dir" ]; then
+  dirty_invalid="true"
+fi
+if [ "$dirty_invalid" = "true" ]; then
+  reason="VelesDB learning-loop checkpoint metadata is malformed or linked. Keep the session open, inspect $dirty_dir, restore valid private records, and retry Stop; no pending repository identity was discarded."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
+if [ "${#dirty_records[@]}" -gt 0 ]; then
+  targets="$(jq -sc '[.[] | {project, session, root}]' "${dirty_records[@]}")" # exact-read-ok: compact JSON, whose own newline is the only one
+  # Each repository is named with the working context this conversation last
+  # saved for it, else with the session PreToolUse froze into its record: the
+  # checklist asks for a save, so a session it only loaded is never named.
+  if read_exact adopted_targets adopt_batch_sessions "$session_id" "$targets"; then
+    # shellcheck disable=SC2154 # read_exact sets adopted_targets (printf -v)
+    targets="$adopted_targets"
+  fi
+  # shellcheck disable=SC2154 # read_exact sets recalled_dir, checks_dir and evidence_since (printf -v)
+  if ! collect_learning_evidence "$recalled_dir" "$checks_dir" "$evidence_since" "$targets"; then
+    reason="VelesDB learning evidence is malformed or linked. Keep the session open, inspect $recalled_dir and $checks_dir, restore valid private records, and retry Stop; no evidence or pending repository identity was discarded."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  read_exact feedback feedback_step "$LEARNING_EVIDENCE"
+  for record_file in "${dirty_records[@]}"; do
+    # shellcheck disable=SC2154 # read_exact sets root (printf -v)
+    if ! read_exact root jq -j '.root' "$record_file" \
+      || ! read_exact checkpoint_marker sentinel_path "stop" "$session_id"$'\n'"$root" \
+      || ! touch_private_marker "$checkpoint_marker"; then
+      reason="VelesDB could not persist a repository checkpoint marker. Keep the session open and retry Stop; the edit queue remains intact at $dirty_dir."
+      jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+      exit 0
+    fi
+  done
+  # shellcheck disable=SC2154 # read_exact sets generic_sentinel (printf -v)
+  if ! touch_private_marker "$generic_sentinel"; then
+    reason="VelesDB could not persist the continuation marker. Keep the session open and retry Stop; the edit queue remains intact at $dirty_dir."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  read_exact_line pending_manifest jq -cn --argjson targets "$targets" \
+    --argjson evidence "$LEARNING_EVIDENCE" '{state: "pending", targets: $targets, evidence: $evidence}'
+  # shellcheck disable=SC2154 # read_exact_line sets pending_manifest (printf -v)
+  if ! write_private_marker "$checkpoint_manifest" "$pending_manifest"; then
+    reason="VelesDB could not persist the complete checkpoint manifest. Keep the session open and retry Stop; the edit queue remains intact at $dirty_dir."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  reason="Before finishing, complete the VelesDB learning loop for every edited repository in this batch ($targets): 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause and each incident to its root cause with outgoing relations; $feedback Then call save_working_context for every listed project/session with its distilled state and stop."
+  failure_reason="$reason Storage warning: at least one checkpoint record could not be consumed; keep the session open after completing the checklist, inspect $dirty_dir, and retry Stop."
+  if ! response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')" \
+    || ! failure_response="$(jq -n --arg reason "$failure_reason" '{decision: "block", reason: $reason}')"; then  # exact-read-ok: compact JSON, whose own newline is the only one
+    reason="VelesDB could not encode the repository checklist. Keep the session open and retry Stop; the edit records remain at $dirty_dir."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  # The manifest now holds the evidence, so naming it consumes it.
+  if ! consume_learning_evidence "$evidence_since"; then
+    printf '%s\n' "$failure_response"
+    exit 0
+  fi
+  for record_file in "${dirty_records[@]}"; do
+    if ! rm -f "$record_file"; then
+      printf '%s\n' "$failure_response"
+      exit 0
+    fi
+  done
+  rmdir "$dirty_dir" 2>/dev/null || true
+  delivered_manifest="$(printf '%s' "$pending_manifest" | jq -c '.state = "delivered"')"  # exact-read-ok: compact JSON, whose own newline is the only one
+  printf '%s\n' "$response"
+  write_private_marker "$checkpoint_manifest" "$delivered_manifest" || true
+  exit 0
+fi
+
+if learning_loop_enabled; then
+  learning_marker_identity marker_id "$session_id" # exact-read-ok: printf -v from arguments this process already holds; nothing is read
+  # shellcheck disable=SC2154 # learning_marker_identity sets marker_id (printf -v)
+  if ! read_exact sentinel sentinel_path "stop" "$marker_id"; then
+    reason="VelesDB private hook-state storage is unsafe or unavailable. Keep the session open, repair the per-user state directory, and retry Stop."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  # shellcheck disable=SC2154 # read_exact sets sentinel (printf -v)
+  if valid_private_marker "$sentinel"; then
+    echo '{}'
+    exit 0
+  fi
+  if [ -e "$sentinel" ] || [ -L "$sentinel" ]; then
+    reason="VelesDB repository Stop marker is linked or malformed. Keep the session open, repair the private hook-state directory, and retry Stop."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  read_exact_line current_targets jq -c '[.]' <<<"$(project_record)" || current_targets='[]'
+  # shellcheck disable=SC2154 # read_exact_line sets current_targets (printf -v)
+  if ! collect_learning_evidence "$recalled_dir" "$checks_dir" "$evidence_since" "$current_targets"; then
+    reason="VelesDB learning evidence is malformed or linked. Keep the session open, inspect $recalled_dir and $checks_dir, restore valid private records, and retry Stop; no evidence was discarded."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  if ! touch_private_marker "$sentinel" \
+    || ! touch_private_marker "$generic_sentinel"; then
+    reason="VelesDB could not persist the Stop continuation marker. Keep the session open, inspect the private hook-state directory, and retry Stop."
+    jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+    exit 0
+  fi
+  # A continuation may resume outside this repository; suppress the generic
+  # reminder there without granting another opted-in repository's sentinel.
+  read_exact feedback feedback_step "$LEARNING_EVIDENCE"
+  reason="Before finishing, complete the VelesDB learning loop: 1. Recall prior patterns; 2. Decision: remember each non-trivial decision; 3. Causality: relate each decision to its cause and each incident to its root cause with outgoing relations; $feedback Then call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") with the distilled state and stop."
+  response="$(jq -n --arg reason "$reason" '{decision: "block", reason: $reason}')"  # exact-read-ok: compact JSON, whose own newline is the only one
+  if ! evidence_present "$LEARNING_EVIDENCE"; then
+    printf '%s\n' "$response"
+    exit 0
+  fi
+  # Evidence is consumed only once a pending manifest holds it, so an
+  # interrupted Stop re-emits the same memories and outcomes.
+  # shellcheck disable=SC2016 # the names inside the jq program are jq's, not the shell's
+  read_exact_line pending_manifest jq -cn --argjson targets "$current_targets" \
+    --argjson evidence "$LEARNING_EVIDENCE" '{state: "pending", targets: $targets, evidence: $evidence}'
+  if ! write_private_marker "$checkpoint_manifest" "$pending_manifest" \
+    || ! consume_learning_evidence "$evidence_since"; then
+    printf '%s\n' "$response"
+    exit 0
+  fi
+  printf '%s\n' "$response"
+  write_private_marker "$checkpoint_manifest" "$(printf '%s' "$pending_manifest" | jq -c '.state = "delivered"')" || true  # exact-read-ok: compact JSON, whose own newline is the only one
+  exit 0
+fi
+
+if valid_private_marker "$generic_sentinel"; then
+  # Already reminded this session — let Claude stop normally.
+  echo '{}'
+  exit 0
+fi
+if [ -e "$generic_sentinel" ] || [ -L "$generic_sentinel" ]; then
+  reason="VelesDB Stop marker is linked or malformed. Keep the session open, repair the private hook-state directory, and retry Stop."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
+
+if ! touch_private_marker "$generic_sentinel"; then
+  reason="VelesDB could not persist the Stop continuation marker. Keep the session open, inspect the private hook-state directory, and retry Stop."
+  jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'
+  exit 0
+fi
+reason="Before finishing: call save_working_context(project=\"$PROJECT\", session=\"$SESSION\") via velesdb-memory with the distilled state (goal, key decisions, verified facts, pending actions), then stop."
+
+jq -n --arg reason "$reason" '{decision: "block", reason: $reason}'

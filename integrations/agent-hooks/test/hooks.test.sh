@@ -145,6 +145,7 @@ python3 "$REPO_ROOT/scripts/sync-agent-hooks.py" --stage "$STAGED_ROOT" \
 HOOKS_DIR="$STAGED_ROOT/claude-code"
 WINDSURF_HOOKS_DIR="$STAGED_ROOT/windsurf"
 CODEX_HOOKS_DIR="$STAGED_ROOT/codex"
+DEVIN_HOOKS_DIR="$STAGED_ROOT/devin"
 SHARED_LIB="$ROOT/shared/hooks/lib/common.sh"
 
 # An archived original is the only recovery path for a memoryless
@@ -365,7 +366,8 @@ fresh_evaluated="$TMP_TEST_DIR/freshness-cache-was-evaluated"
 # the evaluation before its subscript ran, and PATH is always set.
 printf '%s\n%s\n' "PATH[\$(touch $fresh_evaluated)]" 8.8.8 > "$fresh_cache"
 fresh_out="$(HOME="$FRESH_HOME" PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
-  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+  bash "$HOOKS_DIR/session-start.sh" <<<"$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-fresh-miss" \
+    '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')")" || hook_exited "$LINENO" "$?"
 if [ ! -e "$fresh_evaluated" ]; then
   pass "SessionStart: the freshness cache's first line is never evaluated as arithmetic"
 else
@@ -380,7 +382,8 @@ fi
 # The control: a fresh timestamp is still a hit, and its version is reported.
 printf '%s\n%s\n' "$(date +%s)" 8.8.8 > "$fresh_cache"
 fresh_hit_out="$(HOME="$FRESH_HOME" PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
-  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+  bash "$HOOKS_DIR/session-start.sh" <<<"$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-fresh-hit" \
+    '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')")" || hook_exited "$LINENO" "$?"
 if printf '%s' "$fresh_hit_out" | jq -e '.hookSpecificOutput.additionalContext | contains("but 8.8.8 is published")' >/dev/null; then
   pass "SessionStart: a fresh freshness cache is still read"
 else
@@ -391,7 +394,8 @@ fi
 # any TTL, and the cache would stay a hit forever.
 printf '%s\n%s\n' 9999999999 8.8.8 > "$fresh_cache"
 fresh_future_out="$(HOME="$FRESH_HOME" PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
-  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+  bash "$HOOKS_DIR/session-start.sh" <<<"$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-fresh-future" \
+    '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')")" || hook_exited "$LINENO" "$?"
 if printf '%s' "$fresh_future_out" | jq -e '.hookSpecificOutput.additionalContext | contains("but 9.9.9 is published")' >/dev/null; then
   pass "SessionStart: a freshness cache stamped later than now is a miss"
 else
@@ -409,7 +413,8 @@ fi
 ambient_cache="$TMP_TEST_DIR/home/.velesdb-memory/.latest-version"
 rm -f "$ambient_cache"
 ambient_fresh_out="$(PATH="$FRESH_BIN:$PATH" VELESDB_MCP_URL=http://daemon.invalid/mcp \
-  bash "$HOOKS_DIR/session-start.sh" <<<"$session_start_payload")" || hook_exited "$LINENO" "$?"
+  bash "$HOOKS_DIR/session-start.sh" <<<"$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$SESSION_ID-fresh-ambient" \
+    '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')")" || hook_exited "$LINENO" "$?"
 if [ -f "$ambient_cache" ] \
   && printf '%s' "$ambient_fresh_out" | jq -e \
     '.hookSpecificOutput.additionalContext | contains("but 9.9.9 is published")' >/dev/null; then
@@ -565,6 +570,178 @@ if printf '%s' "$codex_no_config_out" | jq -e '.hookSpecificOutput.additionalCon
   pass "Codex SessionStart: falls back to basename(cwd) + \"rolling\" with no config file"
 else
   fail "Codex SessionStart: falls back to basename(cwd) + \"rolling\" with no config file"
+fi
+
+# ---------------------------------------------------------------------------
+# Devin CLI hooks
+#
+# The synthetic payloads below model what Devin's hook documentation
+# (cli/extensibility/hooks) declares: session_id, source on SessionStart,
+# tool_name/tool_input, `tool_response` as {success, output, error}, and
+# DEVIN_PROJECT_DIR in the environment rather than a payload cwd. Same
+# contract caveat as every harness here: the scripts' decision logic is
+# asserted against the documented shape, not against a real Devin build.
+# ---------------------------------------------------------------------------
+DEVIN_SESSION_ID="test-devin-session-$$"
+# The edit guard, recall evidence and check outcomes are all gated on the
+# learning loop, so the devin block drives them against an opted-in project —
+# $PROJECT_DIR only carries {project, session}.
+DEVIN_OPTIN_DIR="$TMP_TEST_DIR/devin-optin"
+mkdir -p "$DEVIN_OPTIN_DIR/src"
+printf '{"project": "test-project", "session": "rolling", "enforce_learning_loop": true}\n' \
+  > "$DEVIN_OPTIN_DIR/.velesdb-hooks.json"
+
+devin_session_start_payload="$(jq -n --arg sid "$DEVIN_SESSION_ID" \
+  '{session_id: $sid, hook_event_name: "SessionStart", source: "startup"}')"
+
+devin_session_start_out="$(DEVIN_PROJECT_DIR="$PROJECT_DIR" bash "$DEVIN_HOOKS_DIR/session-start.sh" <<<"$devin_session_start_payload")" || hook_exited "$LINENO" "$?"
+
+if printf '%s' "$devin_session_start_out" | jq -e '.hookSpecificOutput.additionalContext | contains("load_working_context") and contains("test-project")' >/dev/null; then
+  pass "Devin SessionStart: additionalContext asks for load_working_context on the configured project"
+else
+  fail "Devin SessionStart: additionalContext asks for load_working_context on the configured project"
+fi
+
+# A DIFFERENT emitter for the same (session, source, project) — the .claude
+# pickup's copy of session-start.sh — must stay silent after devin's emit:
+# that second nudge is the duplicate first_context_emit exists to remove.
+DEVIN_SESSION_ID="test-devin-session-$$"
+
+claude_session_start_payload="$(jq -n --arg cwd "$PROJECT_DIR" --arg sid "$DEVIN_SESSION_ID" \
+  '{session_id: $sid, cwd: $cwd, hook_event_name: "SessionStart", source: "startup"}')"
+claude_ss_after_devin="$(bash "$HOOKS_DIR/session-start.sh" <<<"$claude_session_start_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$claude_ss_after_devin" | jq -e '. == {}' >/dev/null; then
+  pass "Devin SessionStart: the .claude emitter is silent after devin's emit"
+else
+  fail "Devin SessionStart: the .claude emitter is silent after devin's emit"
+fi
+
+# The SAME emitter firing again is a legitimately re-fired event, not a
+# duplicate of itself: it still emits.
+devin_session_start_out_2="$(DEVIN_PROJECT_DIR="$PROJECT_DIR" bash "$DEVIN_HOOKS_DIR/session-start.sh" <<<"$devin_session_start_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_session_start_out_2" | jq -e '.hookSpecificOutput.additionalContext != null' >/dev/null; then
+  pass "Devin SessionStart: same-emitter refire still emits"
+else
+  fail "Devin SessionStart: same-emitter refire still emits"
+fi
+
+# The learning-loop guard: an edit is refused until a successful recall.
+devin_edit_payload="$(jq -n --arg sid "$DEVIN_SESSION_ID" --arg f "$DEVIN_OPTIN_DIR/src/main.rs" \
+  '{session_id: $sid, tool_name: "edit", tool_input: {file_path: $f}}')"
+
+devin_edit_out_1="$(DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/pre-tool-use.sh" <<<"$devin_edit_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_edit_out_1" | jq -e '.decision == "block" and (.reason | contains("recall"))' >/dev/null; then
+  pass "Devin PreToolUse: first edit before recall is blocked with a reason"
+else
+  fail "Devin PreToolUse: first edit before recall is blocked with a reason"
+fi
+
+# A successful recall in Devin's {success, output, error} shape unlocks the
+# edit — the object branch the shared library added for this host.
+devin_recall_payload="$(jq -n --arg sid "$DEVIN_SESSION_ID" \
+  '{session_id: $sid, tool_name: "mcp__velesdb-memory__recall",
+    tool_input: {query: "test"},
+    tool_response: {success: true,
+      output: "{\"memories\":[{\"id\":123,\"id_str\":\"123\"}],\"edges\":[]}",
+      error: null}}')"
+DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/post-tool-use.sh" <<<"$devin_recall_payload" >/dev/null || hook_exited "$LINENO" "$?"
+
+devin_edit_out_2="$(DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/pre-tool-use.sh" <<<"$devin_edit_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_edit_out_2" | jq -e '. == {}' >/dev/null; then
+  pass "Devin PreToolUse: edit passes after a successful recall"
+else
+  fail "Devin PreToolUse: edit passes after a successful recall"
+fi
+
+# A failed recall ({success:false}) must NOT unlock the edit.
+DEVIN_FAILSID="test-devin-fail-$$"
+devin_fail_recall="$(jq -n --arg sid "$DEVIN_FAILSID" \
+  '{session_id: $sid, tool_name: "mcp__velesdb-memory__recall",
+    tool_input: {query: "test"},
+    tool_response: {success: false, output: "", error: "connection refused"}}')"
+DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/post-tool-use.sh" <<<"$devin_fail_recall" >/dev/null
+devin_fail_edit_payload="$(jq -n --arg sid "$DEVIN_FAILSID" --arg f "$DEVIN_OPTIN_DIR/src/main.rs" \
+  '{session_id: $sid, tool_name: "edit", tool_input: {file_path: $f}}')"
+devin_fail_edit_out="$(DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/pre-tool-use.sh" <<<"$devin_fail_edit_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_fail_edit_out" | jq -e '.decision == "block"' >/dev/null; then
+  pass "Devin PreToolUse: a failed recall does not unlock the edit"
+else
+  fail "Devin PreToolUse: a failed recall does not unlock the edit"
+fi
+
+# exec check outcomes: a trailing "Exit code[: ]N" line is the verdict.
+DEVIN_CHECKSID="test-devin-check-$$"
+devin_check_fail="$(jq -n --arg sid "$DEVIN_CHECKSID" \
+  '{session_id: $sid, tool_name: "exec",
+    tool_input: {command: "cargo test -p velesdb-core", timeout: 60},
+    tool_response: {success: false, output: "failures: 1\n\nExit code: 101", error: null}}')"
+DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/post-tool-use.sh" <<<"$devin_check_fail" >/dev/null
+
+devin_checks_dir="$(find "$HOOK_STATE_DIR" -maxdepth 1 -type d -name "check-outcomes-*.records" -newer "$REAL_HOME_MARKER" 2>/dev/null | head -n 1)"
+if [ -n "$devin_checks_dir" ] && find "$devin_checks_dir" -name "*.failed.json" | grep -q .; then
+  pass "Devin PostToolUse: failed exec check records a .failed outcome"
+else
+  fail "Devin PostToolUse: failed exec check records a .failed outcome"
+fi
+
+devin_check_pass="$(jq -n --arg sid "$DEVIN_CHECKSID" \
+  '{session_id: $sid, tool_name: "exec",
+    tool_input: {command: "cargo test -p velesdb-core", timeout: 60},
+    tool_response: {success: true, output: "test result: ok\n\nExit code: 0", error: null}}')"
+DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/post-tool-use.sh" <<<"$devin_check_pass" >/dev/null
+
+if [ -n "$devin_checks_dir" ] && find "$devin_checks_dir" -name "*.last.json" -exec grep -l '"status":"pass"' {} + | grep -q .; then
+  pass "Devin PostToolUse: passed exec check records a .last pass outcome"
+else
+  fail "Devin PostToolUse: passed exec check records a .last pass outcome"
+fi
+
+# A result with no exit-status line — killed, timed out, backgrounded — is no
+# outcome at all.
+devin_nocode="$(jq -n --arg sid "test-devin-nocode-$$" \
+  '{session_id: $sid, tool_name: "exec",
+    tool_input: {command: "cargo test -p velesdb-core", timeout: 0},
+    tool_response: {success: true, output: "running in background", error: null}}')"
+devin_nocode_records_before="$(find "$HOOK_STATE_DIR" -name "*.last.json" 2>/dev/null | wc -l | tr -d ' ')"
+DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/post-tool-use.sh" <<<"$devin_nocode" >/dev/null
+devin_nocode_records_after="$(find "$HOOK_STATE_DIR" -name "*.last.json" 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$devin_nocode_records_before" = "$devin_nocode_records_after" ]; then
+  pass "Devin PostToolUse: backgrounded/no-status exec records no check outcome"
+else
+  fail "Devin PostToolUse: backgrounded/no-status exec records no check outcome"
+fi
+
+# PostCompaction emits the reload + durable-remember nudge.
+devin_compact_out="$(DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/post-compaction.sh" <<<"$(jq -n --arg sid "$DEVIN_SESSION_ID" '{session_id: $sid, hook_event_name: "PostCompaction", summary: "condensed"}')")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_compact_out" | jq -e '.hookSpecificOutput.additionalContext | contains("load_working_context") and contains("remember")' >/dev/null; then
+  pass "Devin PostCompaction: nudges reload + durable remembers after compaction"
+else
+  fail "Devin PostCompaction: nudges reload + durable remembers after compaction"
+fi
+
+# A second compaction is a fresh loss and nudges again — not deduplicated.
+devin_compact_out_2="$(DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/post-compaction.sh" <<<"$(jq -n --arg sid "$DEVIN_SESSION_ID" '{session_id: $sid, hook_event_name: "PostCompaction", summary: "condensed again"}')")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_compact_out_2" | jq -e '.hookSpecificOutput.additionalContext != null' >/dev/null; then
+  pass "Devin PostCompaction: a second compaction nudges again"
+else
+  fail "Devin PostCompaction: a second compaction nudges again"
+fi
+
+# Stop: the shared sentinel namespace makes the FIRST blocker's marker the
+# second hook's pass — one checklist even when the .claude pickup also fires.
+devin_stop_payload="$(jq -n --arg sid "$DEVIN_SESSION_ID" \
+  '{session_id: $sid, hook_event_name: "Stop", stop_hook_active: false}')"
+devin_stop_out_1="$(DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/stop.sh" <<<"$devin_stop_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_stop_out_1" | jq -e '.decision == "block"' >/dev/null; then
+  pass "Devin Stop: first call blocks with the learning-loop checklist"
+else
+  fail "Devin Stop: first call blocks with the learning-loop checklist"
+fi
+devin_stop_out_2="$(DEVIN_PROJECT_DIR="$DEVIN_OPTIN_DIR" bash "$DEVIN_HOOKS_DIR/stop.sh" <<<"$devin_stop_payload")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$devin_stop_out_2" | jq -e '. == {}' >/dev/null; then
+  pass "Devin Stop: second call in same session passes through ({})"
+else
+  fail "Devin Stop: second call in same session passes through ({})"
 fi
 
 # ---------------------------------------------------------------------------
