@@ -328,7 +328,7 @@ impl DistanceEngine {
     /// Computes Jaccard similarity with the pre-resolved kernel.
     ///
     /// Clamped to the declared `[0, 1]` range: the engine resolves a raw
-    /// kernel pointer, bypassing [`DistanceMetric::calculate`] where the bound
+    /// kernel pointer, bypassing [`crate::DistanceMetric::calculate`] where the bound
     /// is enforced — an engine caller must not see a different score than
     /// `calculate` on the same pair (#2095).
     #[allow(clippy::inline_always)]
