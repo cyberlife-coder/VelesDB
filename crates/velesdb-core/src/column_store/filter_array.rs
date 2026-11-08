@@ -11,11 +11,11 @@
 use roaring::RoaringBitmap;
 use smallvec::SmallVec;
 
-use super::types::{ColumnValue, TypedColumn};
+use super::types::{ColumnValue, Masked, TypedColumn};
 use super::ColumnStore;
 
 /// Storage container for array column rows: `Some(values)` when present, `None` when null.
-type ArrayRow = Option<SmallVec<[ColumnValue; 8]>>;
+type ArrayCell = SmallVec<[ColumnValue; 8]>;
 
 impl ColumnStore {
     /// Shared iteration template for all array-CONTAINS filter variants.
@@ -49,7 +49,7 @@ impl ColumnStore {
     /// function so callers don't need to capture the full `&self` and the borrow checker
     /// can see precisely which fields are read.
     fn iter_array_matches<P, M, T, C>(
-        data: &[ArrayRow],
+        data: &Masked<ArrayCell>,
         predicate: &P,
         deletion_bitmap: &RoaringBitmap,
         map_idx: M,
@@ -59,10 +59,9 @@ impl ColumnStore {
         M: Fn(usize) -> Option<T>,
         C: FromIterator<T>,
     {
-        data.iter()
-            .enumerate()
-            .filter_map(|(idx, row)| {
-                let arr = row.as_ref()?;
+        (0..data.len())
+            .filter_map(|idx| {
+                let arr = data.get(idx)?;
                 // Deleted rows live in `deletion_bitmap` (u32-indexed); indices that
                 // don't fit `u32` can never be tombstoned, so they count as live.
                 let deleted = u32::try_from(idx).is_ok_and(|i| deletion_bitmap.contains(i));

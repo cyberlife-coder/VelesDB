@@ -5,7 +5,7 @@
 
 use roaring::RoaringBitmap;
 
-use super::types::TypedColumn;
+use super::types::{Masked, TypedColumn};
 use super::ColumnStore;
 use crate::geo_distance::{distance_satisfies, great_circle_distance_m};
 
@@ -120,12 +120,12 @@ impl ColumnStore {
         column: &'a str,
         keep: impl Fn(f64, f64) -> bool + 'a,
     ) -> impl Iterator<Item = usize> + 'a {
-        let points = match self.columns.get(column) {
-            Some(TypedColumn::GeoPoint(col)) => col.as_slice(),
-            _ => &[],
+        let col = match self.columns.get(column) {
+            Some(TypedColumn::GeoPoint(col)) => Some(col),
+            _ => None,
         };
-        points.iter().enumerate().filter_map(move |(idx, point)| {
-            let (lat, lng) = (*point)?;
+        (0..col.map_or(0, Masked::len)).filter_map(move |idx| {
+            let (lat, lng) = *col.and_then(|c| c.get(idx))?;
             (keep(lat, lng) && !self.is_row_deleted_bitmap(idx)).then_some(idx)
         })
     }
