@@ -37,6 +37,7 @@
 pub(in crate::index::hnsw) mod arena_home;
 mod backend_adapter;
 mod batch_schedule;
+mod csr_adjacency;
 mod distance;
 mod graph;
 mod graph_io;

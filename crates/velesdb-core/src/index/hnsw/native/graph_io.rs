@@ -923,6 +923,12 @@ impl<D: DistanceEngine + Send + Sync> NativeHnsw<D> {
             }
             layers.push(layer);
         }
+        // Load populated layer 0 through the write path — publish its CSR
+        // snapshot once, up front, instead of letting the first threshold
+        // reader pay the O(N+E) rebuild (plan #2075 PR-A).
+        if let Some(base) = layers.first() {
+            base.rebuild_csr();
+        }
 
         Ok(layers)
     }
