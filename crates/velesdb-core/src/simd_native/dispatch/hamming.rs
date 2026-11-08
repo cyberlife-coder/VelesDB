@@ -22,12 +22,13 @@ pub fn hamming_distance_native(a: &[f32], b: &[f32]) -> f32 {
 
 /// Jaccard similarity with runtime SIMD dispatch.
 ///
-/// The result is clamped to the declared Jaccard range `[0, 1]`
-/// ([`DistanceMetric::score_range`](crate::DistanceMetric::score_range)). On
-/// in-contract (non-negative) input the kernels already produce a value inside
-/// it, so the clamp is the identity; on out-of-contract input it keeps
-/// `calculate` and every score path agreeing on the same bounded score —
-/// clamping at this dispatch seam covers every ISA kernel at once (#2095).
+/// Returns the raw `intersection / union` ratio, unclamped: on out-of-contract
+/// (negative-weight) input it can leave the metric's declared `[0, 1]` range.
+/// The range is enforced one layer up, on the score producers —
+/// [`DistanceMetric::calculate`](crate::DistanceMetric::calculate),
+/// [`DistanceEngine::jaccard`](super::DistanceEngine::jaccard) and the paths
+/// routing through `clamp_score` — so this function keeps its
+/// kernel-vs-f64-reference property contract (#2095).
 ///
 /// # Panics
 ///
@@ -42,7 +43,7 @@ pub fn jaccard_similarity_native(a: &[f32], b: &[f32]) -> f32 {
         a.len(),
         b.len()
     );
-    jaccard_simd(a, b).clamp(0.0, 1.0)
+    jaccard_simd(a, b)
 }
 
 /// F-08: Use cached `simd_level()` (OnceLock) instead of per-call `is_x86_feature_detected!`
