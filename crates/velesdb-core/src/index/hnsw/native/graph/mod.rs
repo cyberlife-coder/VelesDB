@@ -593,6 +593,16 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         result
     }
 
+    /// Forced layer-0 CSR rebuild after a batch insert (#2075): the O(N+E)
+    /// cost is amortized over the whole batch here instead of being paid by
+    /// the first reader past the dirty threshold.
+    #[inline]
+    pub(in crate::index::hnsw) fn rebuild_base_csr(&self) {
+        if let Some(base) = self.layers.read().first() {
+            base.rebuild_csr();
+        }
+    }
+
     /// Executes a closure with a layers read snapshot and tracked lock rank.
     // Its callers are crash recovery's `unlinked_nodes` (`persistence`) and the
     // GPU search (`gpu`); a build with neither has none.

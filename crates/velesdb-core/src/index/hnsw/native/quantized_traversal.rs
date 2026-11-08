@@ -88,11 +88,14 @@ impl<D: DistanceEngine, C: TraversalCodec> QuantizedPrecisionHnsw<D, C> {
         let mut current_dist =
             C::distance(quantizer, store, prepared, current).unwrap_or(C::MAX_DIST);
 
+        // One ArcSwap load for the whole traversal — the guard itself stays
+        // per-iteration so a writer can land between hops, as before.
+        let csr0 = self.inner.layers.read()[layer].csr_snapshot();
         loop {
             let mut improved = false;
             let layers = self.inner.layers.read();
-            let _ = layers[layer].with_neighbors(current, |neighbors| {
-                for &neighbor in neighbors {
+            let _ = layers[layer].with_neighbors_resolved(current, csr0.as_deref(), |neighbors| {
+                for neighbor in neighbors.iter() {
                     if let Some(dist) = C::distance(quantizer, store, prepared, neighbor) {
                         if dist < current_dist {
                             current = neighbor;
