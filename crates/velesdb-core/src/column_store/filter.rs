@@ -15,6 +15,21 @@ use super::ColumnStore;
 // Private scan helpers — eliminate duplication across Vec / bitmap / count
 // =========================================================================
 
+/// Borrows both bitmaps: iterates `validity`'s set bits ascending, dropping
+/// rows tombstoned in `deletion_bitmap` — one probe per valid row and zero
+/// allocation. The `0..len` + `Option` scan this replaces paid two bitmap
+/// probes plus an `Option` match per row; paying a `validity − deletion`
+/// copy instead measured slower at 10k–100k rows, where the copied bitmap
+/// evicts the values a dense scan then has to re-read.
+fn live_indices<'a>(
+    validity: &'a RoaringBitmap,
+    deletion_bitmap: &'a RoaringBitmap,
+) -> impl Iterator<Item = u32> + 'a {
+    validity
+        .iter()
+        .filter(move |&idx| !deletion_bitmap.contains(idx))
+}
+
 /// Scans an integer column, returning indices where `predicate(val)` is true.
 ///
 /// Excludes deleted rows. Used by `filter_eq_int`, `filter_gt_int`, etc.
@@ -26,12 +41,7 @@ fn scan_int_column(
     let Some(TypedColumn::Int(col)) = store.columns.get(column) else {
         return Vec::new();
     };
-    (0..col.len())
-        .filter(|&idx| {
-            matches!(col.get(idx), Some(&val) if predicate(val))
-                && !store.is_row_deleted_bitmap(idx)
-        })
-        .collect()
+    scan_cells_vec(col, &store.deletion_bitmap, predicate)
 }
 
 /// Scans a typed column slice, returning a `RoaringBitmap` of indices where
@@ -43,15 +53,35 @@ fn scan_cells_bitmap<T: Copy>(
     deletion_bitmap: &RoaringBitmap,
     predicate: impl Fn(T) -> bool,
 ) -> RoaringBitmap {
-    (0..cells.len())
-        .filter_map(|idx| match cells.get(idx) {
-            Some(&val) if predicate(val) => {
-                let idx = u32::try_from(idx).ok()?;
-                (!deletion_bitmap.contains(idx)).then_some(idx)
-            }
-            _ => None,
-        })
+    let values = cells.values();
+    live_indices(cells.validity(), deletion_bitmap)
+        .filter(|&idx| predicate(values[idx as usize]))
         .collect()
+}
+
+/// `Vec<usize>`-collecting variant of [`scan_cells_bitmap`].
+fn scan_cells_vec<T: Copy>(
+    cells: &Masked<T>,
+    deletion_bitmap: &RoaringBitmap,
+    predicate: impl Fn(T) -> bool,
+) -> Vec<usize> {
+    let values = cells.values();
+    live_indices(cells.validity(), deletion_bitmap)
+        .filter(|&idx| predicate(values[idx as usize]))
+        .map(|idx| idx as usize)
+        .collect()
+}
+
+/// Alloc-free counting variant of [`scan_cells_bitmap`].
+fn count_cells<T: Copy>(
+    cells: &Masked<T>,
+    deletion_bitmap: &RoaringBitmap,
+    predicate: impl Fn(T) -> bool,
+) -> usize {
+    let values = cells.values();
+    live_indices(cells.validity(), deletion_bitmap)
+        .filter(|&idx| predicate(values[idx as usize]))
+        .count()
 }
 
 /// Scans an integer column, returning a `RoaringBitmap` of matching indices.
@@ -93,9 +123,7 @@ fn scan_string_column(store: &ColumnStore, column: &str, target_id: StringId) ->
     let Some(TypedColumn::String(col)) = store.columns.get(column) else {
         return Vec::new();
     };
-    (0..col.len())
-        .filter(|&idx| col.get(idx) == Some(&target_id) && !store.is_row_deleted_bitmap(idx))
-        .collect()
+    scan_cells_vec(col, &store.deletion_bitmap, |id| id == target_id)
 }
 
 /// Scans a string column for rows whose interned id matches `target_id`,
@@ -184,10 +212,7 @@ impl ColumnStore {
         let Some(TypedColumn::Int(col)) = self.columns.get(column) else {
             return 0;
         };
-
-        (0..col.len())
-            .filter(|&idx| col.get(idx) == Some(&value) && !self.is_row_deleted_bitmap(idx))
-            .count()
+        count_cells(col, &self.deletion_bitmap, |v| v == value)
     }
 
     /// Counts rows matching equality on a string column. Excludes deleted rows.
@@ -200,10 +225,7 @@ impl ColumnStore {
         let Some(string_id) = self.string_table.get_id(value) else {
             return 0;
         };
-
-        (0..col.len())
-            .filter(|&idx| col.get(idx) == Some(&string_id) && !self.is_row_deleted_bitmap(idx))
-            .count()
+        count_cells(col, &self.deletion_bitmap, |id| id == string_id)
     }
 
     // =========================================================================
@@ -345,13 +367,9 @@ impl ColumnStore {
         col: &Masked<StringId>,
         predicate: impl Fn(&StringId) -> bool,
     ) -> RoaringBitmap {
-        (0..col.len())
-            .filter_map(|idx| match col.get(idx) {
-                Some(id) if predicate(id) && !self.is_row_deleted_bitmap(idx) => {
-                    u32::try_from(idx).ok()
-                }
-                _ => None,
-            })
+        let values = col.values();
+        live_indices(col.validity(), &self.deletion_bitmap)
+            .filter(|&idx| predicate(&values[idx as usize]))
             .collect()
     }
 
@@ -373,11 +391,10 @@ impl ColumnStore {
         col: &Masked<StringId>,
         predicate: impl Fn(&StringId) -> bool,
     ) -> Vec<usize> {
-        (0..col.len())
-            .filter(|&idx| {
-                matches!(col.get(idx), Some(id) if predicate(id))
-                    && !self.is_row_deleted_bitmap(idx)
-            })
+        let values = col.values();
+        live_indices(col.validity(), &self.deletion_bitmap)
+            .filter(|&idx| predicate(&values[idx as usize]))
+            .map(|idx| idx as usize)
             .collect()
     }
 }
