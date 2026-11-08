@@ -53,27 +53,19 @@ from velesdb.velesdb import (  # type: ignore[attr-defined]
     __version__,
     hash_id,
     metric_higher_is_better,
+    metric_normalize,
     validate_search_quality,
 )
 
 
-# Canonical metric names used by the Rust engine (DistanceMetric::canonical_name).
-# Maps common aliases to the canonical form so Python-side comparisons are
-# consistent regardless of which spelling the user provides.
-_METRIC_ALIASES: dict[str, str] = {
-    "dotproduct": "dot",
-    "dot_product": "dot",
-    "inner": "dot",
-    "ip": "dot",
-    "l2": "euclidean",
-    "cos": "cosine",
-}
-
-
 def _normalize_metric(m: str) -> str:
-    """Normalize a metric name to its canonical form."""
-    key = m.strip().lower()
-    return _METRIC_ALIASES.get(key, key)
+    """Normalize a metric name to its canonical form.
+
+    Delegates to the binding's ``metric_normalize``, which reads core's
+    ``DistanceMetric::parse_alias`` table — the one alias table, so an alias
+    core learns reaches this facade with the next wheel (#2095).
+    """
+    return metric_normalize(m)
 
 
 class GraphStore:

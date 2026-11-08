@@ -28,6 +28,19 @@ fn metric_higher_is_better(metric: &str) -> PyResult<bool> {
     Ok(crate::utils::parse_metric(metric)?.higher_is_better())
 }
 
+/// Normalizes a metric name to its canonical form through core's alias table
+/// ([`velesdb_core::DistanceMetric::parse_alias`] →
+/// [`canonical_name`](velesdb_core::DistanceMetric::canonical_name)) — the one
+/// table the engine reads, so an alias core learns reaches the pure-Python
+/// facade with the next wheel (#2095). Unknown names pass through unchanged:
+/// normalization is not validation, `create_collection` still rejects an
+/// unknown metric with core's own message.
+#[pyfunction]
+fn metric_normalize(name: &str) -> String {
+    let key = name.trim().to_lowercase();
+    velesdb_core::DistanceMetric::parse_alias(&key).map_or(key, |m| m.canonical_name().to_string())
+}
+
 /// Checks a search quality mode the way `Collection.search_with_quality`
 /// will read it: [`velesdb_core::api_types::parse_search_mode`], raising
 /// `ValueError` with core's message for a mode no search would accept.
@@ -40,6 +53,7 @@ fn validate_search_quality(mode: &str) -> PyResult<()> {
 pub fn register_contracts(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hash_id, m)?)?;
     m.add_function(wrap_pyfunction!(metric_higher_is_better, m)?)?;
+    m.add_function(wrap_pyfunction!(metric_normalize, m)?)?;
     m.add_function(wrap_pyfunction!(validate_search_quality, m)?)?;
     Ok(())
 }

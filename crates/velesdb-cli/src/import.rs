@@ -361,6 +361,20 @@ fn get_or_create_collection(
     storage_mode: StorageMode,
 ) -> Result<velesdb_core::VectorCollection> {
     if let Some(col) = db.get_vector_collection(name) {
+        // Reusing an existing collection: the import's --metric/--dimension
+        // describe the collection the caller expects, so a mismatch must be
+        // loud — silently importing into a differently-metric'd collection
+        // mis-maps the whole corpus (#2095).
+        anyhow::ensure!(
+            col.metric() == metric,
+            "Collection '{name}' already exists with metric {:?};              refusing to import with --metric {metric:?}",
+            col.metric()
+        );
+        anyhow::ensure!(
+            col.dimension() == dimension,
+            "Collection '{name}' already exists with dimension {};              refusing to import with --dimension {dimension}",
+            col.dimension()
+        );
         Ok(col)
     } else {
         db.create_vector_collection_with_options(name, dimension, metric, storage_mode)?;

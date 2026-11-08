@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "description": "VRB1 bulk-wire golden bytes (#2095 C4): fixed (ids, vectors, dim) batches and the exact byte strings velesdb_core::wire::vrb1::encode emits. The Rust codec test and the TS SDK encoder test both read this file, so the two encoders are pinned to the same octets rather than each to its own reading of the layout. Layout (little-endian): magic b'VRB1' (4) | count u32 (4) | dim u32 (4) | id_width u8=8 (1) | reserved (3) | ids u64[count] | vectors f32[count*dim].",
+  "cases": [
+    {
+      "id": "V001",
+      "ids": [
+        7,
+        42
+      ],
+      "vectors": [
+        1.0,
+        2.0,
+        3.0,
+        4.0
+      ],
+      "dimension": 2,
+      "note": "the same batch both sides already pin locally",
+      "expect_hex": "5652423102000000020000000800000007000000000000002a000000000000000000803f000000400000404000008040"
+    },
+    {
+      "id": "V002",
+      "ids": [
+        10,
+        20,
+        99
+      ],
+      "vectors": [
+        0.5,
+        -0.25,
+        3.75,
+        0.001,
+        -2.5,
+        0.125
+      ],
+      "dimension": 2,
+      "note": "non-trivial floats incl. a negative and a sub-unit decimal \u2014 LE f32 byte order is what drifts",
+      "expect_hex": "565242310300000002000000080000000a00000000000000140000000000000063000000000000000000003f000080be000070406f12833a000020c00000003e"
+    }
+  ]
+}

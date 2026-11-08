@@ -326,11 +326,17 @@ impl DistanceEngine {
     }
 
     /// Computes Jaccard similarity with the pre-resolved kernel.
+    ///
+    /// Clamped to the declared `[0, 1]` range for the same reason as
+    /// [`jaccard_similarity_native`]: the engine resolves a raw kernel pointer,
+    /// so the dispatch seam's clamp does not reach it, and an engine caller
+    /// must not see a different score than `calculate` on the same pair
+    /// (#2095).
     #[allow(clippy::inline_always)]
     #[inline(always)]
     #[must_use]
     pub fn jaccard(&self, a: &[f32], b: &[f32]) -> f32 {
-        self.dispatch(self.jaccard_fn, a, b)
+        self.dispatch(self.jaccard_fn, a, b).clamp(0.0, 1.0)
     }
 
     /// Returns the dimension this engine is specialized for.

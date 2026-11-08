@@ -296,3 +296,12 @@ fn test_require_collection_still_rejects_missing_collection() {
         "require_collection must still fail on a missing collection"
     );
 }
+
+#[cfg(not(feature = "persistence"))]
+#[test]
+fn reject_unsupported_quality_refuses_a_value_and_allows_none() {
+    // #2095/A5: under a persistence-less build a provided `quality` must be
+    // refused loudly, never dropped; absent is the only acceptable shape.
+    assert!(crate::helpers::reject_unsupported_quality(Some(&"fast".to_string())).is_err());
+    assert!(crate::helpers::reject_unsupported_quality(None).is_ok());
+}

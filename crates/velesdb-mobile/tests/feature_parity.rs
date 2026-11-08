@@ -137,3 +137,119 @@ fn mobile_storage_mode_conversions_are_exhaustive() {
         );
     }
 }
+
+/// All core `FusionStrategy` variants, in declaration order, with
+/// representative field values — the test below compares variant identity
+/// (and the fallible `WeightedRRF` constructor's output), not the values.
+/// A function, not a `const`: `WeightedRRF` owns a `Vec`, which a const
+/// cannot hold. Update when `velesdb_core::FusionStrategy` grows a variant;
+/// the enum is `#[non_exhaustive]`, so the panic arm in
+/// `assert_known_fusion_strategy` is what makes the drift loud at test time.
+fn core_fusion_strategies() -> Vec<velesdb_core::FusionStrategy> {
+    vec![
+        velesdb_core::FusionStrategy::Average,
+        velesdb_core::FusionStrategy::Maximum,
+        velesdb_core::FusionStrategy::RRF { k: 60 },
+        velesdb_core::FusionStrategy::Weighted {
+            avg_weight: 0.6,
+            max_weight: 0.3,
+            hit_weight: 0.1,
+        },
+        velesdb_core::FusionStrategy::RelativeScore {
+            dense_weight: 0.5,
+            sparse_weight: 0.5,
+        },
+        velesdb_core::FusionStrategy::WeightedRRF {
+            weights: vec![1.0],
+            k: 60.0,
+        },
+    ]
+}
+
+/// All mobile `FusionStrategy` variants, in declaration order.
+/// `WeightedRrf` mirrors core's `WeightedRRF` (the mobile enum spells it in
+/// camel case for the uniffi surface).
+fn mobile_fusion_strategies() -> Vec<velesdb_mobile::FusionStrategy> {
+    vec![
+        velesdb_mobile::FusionStrategy::Average,
+        velesdb_mobile::FusionStrategy::Maximum,
+        velesdb_mobile::FusionStrategy::Rrf { k: 60 },
+        velesdb_mobile::FusionStrategy::Weighted {
+            avg_weight: 0.6,
+            max_weight: 0.3,
+            hit_weight: 0.1,
+        },
+        velesdb_mobile::FusionStrategy::RelativeScore {
+            dense_weight: 0.5,
+            sparse_weight: 0.5,
+        },
+        velesdb_mobile::FusionStrategy::WeightedRrf {
+            weights: vec![1.0],
+            k: 60.0,
+        },
+    ]
+}
+
+/// Panics if `s` is a core `FusionStrategy` variant not yet mirrored in
+/// mobile. Compile-time exhaustiveness is impossible on a `#[non_exhaustive]`
+/// enum, so — as with `assert_known_distance_metric` — a panic arm is the
+/// practical guard (#2095: `WeightedRRF` lived in core for months before any
+/// other surface named it).
+fn assert_known_fusion_strategy(s: &velesdb_core::FusionStrategy) {
+    match s {
+        velesdb_core::FusionStrategy::Average
+        | velesdb_core::FusionStrategy::Maximum
+        | velesdb_core::FusionStrategy::RRF { .. }
+        | velesdb_core::FusionStrategy::Weighted { .. }
+        | velesdb_core::FusionStrategy::RelativeScore { .. }
+        | velesdb_core::FusionStrategy::WeightedRRF { .. } => {}
+        _ => panic!(
+            "new core FusionStrategy variant not yet mirrored in velesdb-mobile: {s:?}. \
+             Add it to crates/velesdb-mobile/src/types.rs."
+        ),
+    }
+}
+
+#[test]
+fn mobile_fusion_strategy_variant_count_matches_core() {
+    let mobile = mobile_fusion_strategies();
+    let core = core_fusion_strategies();
+    assert_eq!(
+        mobile.len(),
+        core.len(),
+        "velesdb-mobile FusionStrategy has {} variants but velesdb-core has {}. \
+         Add the missing variant to crates/velesdb-mobile/src/types.rs.",
+        mobile.len(),
+        core.len(),
+    );
+    // Runtime guard: panic if any known core variant is not in our
+    // `assert_known_fusion_strategy` match (catches the case where
+    // `core_fusion_strategies` is updated but the match arm is forgotten).
+    for s in &core {
+        assert_known_fusion_strategy(s);
+    }
+}
+
+#[test]
+fn mobile_fusion_strategy_conversions_are_exhaustive() {
+    // Guard against length mismatch: .zip() silently truncates, so an
+    // array-length divergence would cause the loop below to pass on a prefix.
+    let mobile = mobile_fusion_strategies();
+    let core_expected = core_fusion_strategies();
+    assert_eq!(
+        mobile.len(),
+        core_expected.len(),
+        "array length drift — update `core_fusion_strategies` to match the enum"
+    );
+    // Every mobile variant converts to the corresponding core variant. The
+    // conversion is `TryFrom` because `WeightedRrf` goes through core's
+    // validating constructor; these fixtures are all valid.
+    for (mobile, expected_core) in mobile.iter().zip(core_expected.iter()) {
+        let core = velesdb_core::FusionStrategy::try_from(mobile.clone())
+            .expect("fixture variant must convert");
+        assert_eq!(
+            &core, expected_core,
+            "mobile FusionStrategy conversion mismatch"
+        );
+    }
+}

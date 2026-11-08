@@ -45,19 +45,13 @@ pub fn to_links(links: Option<Vec<LinkJs>>) -> napi::Result<Vec<Link>> {
         .collect()
 }
 
-/// Parse the lowercase operator token (mirrors `ColumnOp`'s serde rename).
+/// Parse the lowercase operator token through `ColumnOp`'s own serde grammar
+/// (`#[serde(rename_all = "lowercase")]`), so an operator added to
+/// `velesdb-memory` is accepted here the day it exists upstream — a hand-copy
+/// of the rename table is how the binding drifted before (#2095).
 fn parse_op(op: &str) -> napi::Result<ColumnOp> {
-    match op {
-        "eq" => Ok(ColumnOp::Eq),
-        "ne" => Ok(ColumnOp::Ne),
-        "lt" => Ok(ColumnOp::Lt),
-        "le" => Ok(ColumnOp::Le),
-        "gt" => Ok(ColumnOp::Gt),
-        "ge" => Ok(ColumnOp::Ge),
-        other => Err(invalid_input(format!(
-            "invalid op '{other}' (expected eq|ne|lt|le|gt|ge)"
-        ))),
-    }
+    serde_json::from_value(Value::from(op))
+        .map_err(|_| invalid_input(format!("invalid op '{op}' (expected eq|ne|lt|le|gt|ge)")))
 }
 
 /// JS `[{field, op, value}]` → engine `Vec<ColumnFilter>`.
