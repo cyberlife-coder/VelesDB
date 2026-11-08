@@ -155,6 +155,31 @@ fn test_distance_l2_quantized_symmetry() {
 }
 
 #[test]
+fn test_distance_l2_quantized_matches_scalar_reference_all_lengths() {
+    // Parity guard for the chunked kernel (#1965): every length exercises a
+    // different main-loop/remainder split, including 0 and non-multiples of 8.
+    let quantizer =
+        ScalarQuantizer::train(&[&[0.0, 0.0], &[10.0, 10.0]]).expect("test: valid training data");
+    for len in 0usize..=40 {
+        let a: Vec<u8> = (0..len).map(|i| ((i * 37 + 11) % 251) as u8).collect();
+        let b: Vec<u8> = (0..len).map(|i| ((i * 91 + 7) % 251) as u8).collect();
+        let expected = a
+            .iter()
+            .zip(&b)
+            .map(|(&x, &y)| {
+                let d = i64::from(x) - i64::from(y);
+                (d * d) as u64
+            })
+            .sum::<u64>();
+        assert_eq!(
+            u64::from(quantizer.distance_l2_quantized_slice(&a, &b)),
+            expected,
+            "len {len}: chunked kernel must equal the scalar reference"
+        );
+    }
+}
+
+#[test]
 fn test_distance_l2_asymmetric_close_to_exact() {
     let v1 = vec![0.0; 128];
     let v2 = vec![10.0; 128];
