@@ -138,9 +138,10 @@ different counts, and nothing says what moved: none of the 26 screening files
 the two campaigns published records the Ollama version, or any decode option
 they ran with but the generation cap, and the 2 that hold their model's digest
 hold it by accident (#1949). Until a campaign that records them is run again,
-the tiers above are **unverified** beyond the machine that measured them. That
-re-run, with a declared `num_ctx`, is pending: it waits on #1956, and on the
-models being present on a machine that can run them.
+the tiers above are **unverified** beyond the machine that measured them. The
+bench now records all of it — server version, weights digests, decode options,
+host and commit — so a future run will be attributable; none is scheduled, and
+none is needed until a model choice depends on the numbers (#1949).
 
 If you need timings, run the bench on your own quiet machine. Numbers from
 someone else's hardware would not transfer anyway: what Metal does on unified
