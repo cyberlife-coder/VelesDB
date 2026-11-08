@@ -27,8 +27,7 @@ impl QueryPlan {
     /// instead surfaces a dedicated `Offset` step.
     #[must_use]
     pub fn to_plan_steps(&self) -> Vec<PlanStep> {
-        let mut flat = Vec::new();
-        Self::flatten_nodes(&self.root, &mut flat);
+        let flat = self.flattened_nodes();
         let offset = pagination_offset(&flat);
         let has_limit = flat.iter().any(|n| matches!(n, PlanNode::Limit(_)));
 
@@ -39,6 +38,14 @@ impl QueryPlan {
             }
         }
         steps
+    }
+
+    /// The plan's nodes in pipeline order, with nested `Sequence` nodes
+    /// expanded away — the same flat view `to_plan_steps` steps over.
+    pub(crate) fn flattened_nodes(&self) -> Vec<&PlanNode> {
+        let mut flat = Vec::new();
+        Self::flatten_nodes(&self.root, &mut flat);
+        flat
     }
 
     /// Collects nodes in pipeline order, expanding nested `Sequence` nodes.

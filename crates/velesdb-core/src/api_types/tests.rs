@@ -1200,3 +1200,81 @@ fn validate_search_quality_names_out_of_order_adaptive_bounds() {
     .unwrap_err();
     assert!(err.contains("512") && err.contains("32"), "{err}");
 }
+
+// ============================================================================
+// ExplainFeatures / ExplainCost ::from_plan — plan-single-sourced derivation
+// (#2678: the server must read what executes, not re-derive from the AST)
+// ============================================================================
+
+fn plan_for(sql: &str) -> crate::velesql::QueryPlan {
+    let query = crate::velesql::Parser::parse(sql).expect("test query parses");
+    crate::velesql::QueryPlan::from_query(&query)
+}
+
+#[test]
+fn explain_features_from_plan_plain_select_reports_only_the_limit() {
+    let f = super::ExplainFeatures::from_plan(&plan_for("SELECT * FROM docs LIMIT 10"));
+    assert!(!f.has_vector_search && !f.has_filter && !f.has_order_by);
+    assert!(!f.has_group_by && !f.has_aggregation && !f.has_join && !f.has_fusion);
+    assert_eq!(f.limit, Some(10));
+    assert_eq!(f.offset, None);
+}
+
+#[test]
+fn explain_features_from_plan_hides_the_implicit_default_limit() {
+    // No explicit LIMIT: the plan carries the engine default as `is_default`,
+    // which must stay invisible just as `select.limit == None` was.
+    let f = super::ExplainFeatures::from_plan(&plan_for("SELECT * FROM docs"));
+    assert_eq!(f.limit, None);
+}
+
+#[test]
+fn explain_cost_and_features_from_plan_vector_search() {
+    let plan = plan_for("SELECT * FROM docs WHERE vector NEAR $v LIMIT 10");
+    let f = super::ExplainFeatures::from_plan(&plan);
+    let c = super::ExplainCost::from_plan(&plan);
+    assert!(f.has_vector_search);
+    assert!(!f.has_filter);
+    assert!(c.uses_index);
+    assert_eq!(c.index_name.as_deref(), Some("HNSW"));
+    assert!((c.selectivity - 0.01).abs() < f64::EPSILON);
+    assert_eq!(c.complexity, "O(log n)");
+}
+
+#[test]
+fn explain_features_from_plan_vector_plus_predicates_reports_filter() {
+    // The parity fix: `NEAR $v AND <predicates>` executes a Filter step, so
+    // `has_filter` is true — the old AST-side copy said false here.
+    let plan = plan_for("SELECT * FROM docs WHERE vector NEAR $v AND category = 'a' LIMIT 5");
+    let f = super::ExplainFeatures::from_plan(&plan);
+    let c = super::ExplainCost::from_plan(&plan);
+    assert!(f.has_vector_search && f.has_filter);
+    assert_eq!(f.limit, Some(5));
+    // The Filter node's own estimate surfaces, not a stand-in constant.
+    assert!((c.selectivity - 0.5).abs() < f64::EPSILON);
+    assert!(c.uses_index);
+}
+
+#[test]
+fn explain_cost_from_plan_filtered_select_surfaces_filter_selectivity() {
+    let plan = plan_for("SELECT * FROM docs WHERE category = 'a' ORDER BY x LIMIT 3 OFFSET 2");
+    let f = super::ExplainFeatures::from_plan(&plan);
+    let c = super::ExplainCost::from_plan(&plan);
+    assert!(!f.has_vector_search && f.has_filter && f.has_order_by);
+    assert_eq!(f.limit, Some(3));
+    assert_eq!(f.offset, Some(2));
+    assert!((c.selectivity - 0.5).abs() < f64::EPSILON);
+    assert!(!c.uses_index);
+    assert_eq!(c.index_name, None);
+    assert_eq!(c.complexity, "O(n)");
+}
+
+#[test]
+fn explain_cost_from_plan_names_the_index_the_plan_uses() {
+    // A point-id lookup is invisible to a where-clause scan but the plan
+    // knows it answers without a scan.
+    let plan = plan_for("SELECT * FROM docs WHERE id = 42");
+    let c = super::ExplainCost::from_plan(&plan);
+    assert!(c.uses_index);
+    assert_eq!(c.index_name.as_deref(), Some("PointIdLookup"));
+}

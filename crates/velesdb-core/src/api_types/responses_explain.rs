@@ -219,3 +219,70 @@ pub struct ExplainFeatures {
     /// OFFSET value if present.
     pub offset: Option<u64>,
 }
+
+impl ExplainFeatures {
+    /// Derives the feature flags from the canonical
+    /// [`crate::velesql::QueryPlan`] — the single derivation every EXPLAIN
+    /// surface reads (#2678). Each flag answers to a plan node, so the flags
+    /// describe what executes rather than what the query text happens to
+    /// say: a `NEAR` combined with predicates reports `has_filter` because a
+    /// `Filter` step runs, and the implicit engine default `LIMIT` stays
+    /// invisible exactly as a statement-level inspection treats it.
+    #[must_use]
+    pub fn from_plan(plan: &crate::velesql::QueryPlan) -> Self {
+        use crate::velesql::PlanNode;
+        let nodes = plan.flattened_nodes();
+        let has = |pred: fn(&PlanNode) -> bool| nodes.iter().any(|n| pred(n));
+        Self {
+            has_vector_search: has(|n| matches!(n, PlanNode::VectorSearch(_))),
+            has_filter: has(|n| matches!(n, PlanNode::Filter(_))),
+            has_order_by: has(|n| matches!(n, PlanNode::Sort(_))),
+            has_group_by: has(|n| matches!(n, PlanNode::GroupBy(_))),
+            has_aggregation: has(|n| matches!(n, PlanNode::Aggregate(_))),
+            has_join: has(|n| matches!(n, PlanNode::Join(_))),
+            has_fusion: plan.fusion_info.is_some(),
+            limit: nodes.iter().find_map(|n| match n {
+                PlanNode::Limit(l) if !l.is_default => Some(l.count),
+                _ => None,
+            }),
+            offset: nodes.iter().find_map(|n| match n {
+                PlanNode::Offset(o) => Some(o.count),
+                _ => None,
+            }),
+        }
+    }
+}
+
+impl ExplainCost {
+    /// Derives the cost summary from the canonical
+    /// [`crate::velesql::QueryPlan`] (#2678): `uses_index`/`index_name` name
+    /// the index the plan actually uses — HNSW, a property index, or a
+    /// point-id lookup — and `selectivity` surfaces the `Filter` node's
+    /// estimate when the plan carries one. The historical `0.01`/`1.0`
+    /// stand-ins survive only where the plan holds no estimate at all.
+    #[must_use]
+    pub fn from_plan(plan: &crate::velesql::QueryPlan) -> Self {
+        use crate::velesql::PlanNode;
+        let nodes = plan.flattened_nodes();
+        let selectivity = nodes
+            .iter()
+            .find_map(|n| match n {
+                PlanNode::Filter(f) => Some(f.selectivity),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                if nodes.iter().any(|n| matches!(n, PlanNode::VectorSearch(_))) {
+                    0.01
+                } else {
+                    1.0
+                }
+            });
+        let uses_index = plan.index_used.is_some();
+        Self {
+            uses_index,
+            index_name: plan.index_used.as_ref().map(|t| t.as_str().to_string()),
+            selectivity,
+            complexity: if uses_index { "O(log n)" } else { "O(n)" }.to_string(),
+        }
+    }
+}
