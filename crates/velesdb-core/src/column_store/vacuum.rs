@@ -3,7 +3,7 @@
 //! Extracted from `mod.rs` for maintainability (04-06 module splitting).
 //! Handles tombstone removal, column compaction, and deletion bitmap operations.
 
-use super::types::{TypedColumn, VacuumConfig, VacuumStats};
+use super::types::{Masked, TypedColumn, VacuumConfig, VacuumStats};
 use super::ColumnStore;
 
 use roaring::RoaringBitmap;
@@ -17,33 +17,24 @@ fn is_deleted(deleted: &RoaringBitmap, idx: usize) -> bool {
     u32::try_from(idx).is_ok_and(|i| deleted.contains(i))
 }
 
-/// Filters a column vector, removing entries at deleted indices and counting reclaimed bytes.
-fn compact_vec<T: Copy>(data: &[T], deleted: &RoaringBitmap, element_bytes: u64) -> (Vec<T>, u64) {
-    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len() as usize));
-    let mut bytes_reclaimed = 0u64;
-    for (idx, value) in data.iter().enumerate() {
-        if is_deleted(deleted, idx) {
-            bytes_reclaimed += element_bytes;
-        } else {
-            new_data.push(*value);
-        }
-    }
-    (new_data, bytes_reclaimed)
-}
-
-/// Clone-based variant of `compact_vec` for non-Copy types (e.g., `SmallVec`).
-fn compact_vec_clone<T: Clone>(
-    data: &[T],
+/// Compacts a masked column, dropping entries at deleted indices and
+/// counting reclaimed bytes — values and the validity bitmap are remapped
+/// together (#2076 PR-D1).
+fn compact_masked<T: Clone>(
+    data: &Masked<T>,
     deleted: &RoaringBitmap,
     element_bytes: u64,
-) -> (Vec<T>, u64) {
-    let mut new_data = Vec::with_capacity(data.len().saturating_sub(deleted.len() as usize));
+) -> (Masked<T>, u64) {
+    let mut new_data = Masked::with_capacity(data.len().saturating_sub(deleted.len() as usize));
     let mut bytes_reclaimed = 0u64;
-    for (idx, value) in data.iter().enumerate() {
+    for (idx, value) in data.values.iter().enumerate() {
         if is_deleted(deleted, idx) {
             bytes_reclaimed += element_bytes;
         } else {
-            new_data.push(value.clone());
+            if data.is_valid(idx) {
+                new_data.validity.insert(new_data.values.len() as u32);
+            }
+            new_data.values.push(value.clone());
         }
     }
     (new_data, bytes_reclaimed)
@@ -151,26 +142,26 @@ impl ColumnStore {
     fn compact_column(column: &TypedColumn, deleted: &RoaringBitmap) -> (TypedColumn, u64) {
         match column {
             TypedColumn::Int(data) => {
-                let (new_data, bytes) = compact_vec(data, deleted, 8);
+                let (new_data, bytes) = compact_masked(data, deleted, 8);
                 (TypedColumn::Int(new_data), bytes)
             }
             TypedColumn::Float(data) => {
-                let (new_data, bytes) = compact_vec(data, deleted, 8);
+                let (new_data, bytes) = compact_masked(data, deleted, 8);
                 (TypedColumn::Float(new_data), bytes)
             }
             TypedColumn::String(data) => {
-                let (new_data, bytes) = compact_vec(data, deleted, 4);
+                let (new_data, bytes) = compact_masked(data, deleted, 4);
                 (TypedColumn::String(new_data), bytes)
             }
             TypedColumn::Bool(data) => {
-                let (new_data, bytes) = compact_vec(data, deleted, 1);
+                let (new_data, bytes) = compact_masked(data, deleted, 1);
                 (TypedColumn::Bool(new_data), bytes)
             }
             TypedColumn::Array {
                 element_type, data, ..
             } => {
                 // Estimate ~64 bytes per array cell (SmallVec overhead).
-                let (new_data, bytes) = compact_vec_clone(data, deleted, 64);
+                let (new_data, bytes) = compact_masked(data, deleted, 64);
                 (
                     TypedColumn::Array {
                         element_type: element_type.clone(),
@@ -180,7 +171,7 @@ impl ColumnStore {
                 )
             }
             TypedColumn::GeoPoint(data) => {
-                let (new_data, bytes) = compact_vec(data, deleted, 16);
+                let (new_data, bytes) = compact_masked(data, deleted, 16);
                 (TypedColumn::GeoPoint(new_data), bytes)
             }
         }

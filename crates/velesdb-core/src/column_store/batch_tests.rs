@@ -1,6 +1,6 @@
 //! Tests for `batch` module - Batch operations for ColumnStore.
 
-use super::{BatchUpdate, ColumnStore, ColumnType, ColumnValue, TypedColumn};
+use super::{BatchUpdate, ColumnStore, ColumnType, ColumnValue, Masked, TypedColumn};
 
 fn create_test_store() -> ColumnStore {
     let fields = [
@@ -122,20 +122,24 @@ fn test_expire_rows_empty() {
 
 #[test]
 fn test_column_type_name() {
+    use super::types::StringId;
     assert_eq!(
-        ColumnStore::column_type_name(&TypedColumn::Int(vec![])),
+        ColumnStore::column_type_name(&TypedColumn::Int(Masked::from_options(vec![]))),
         "Int"
     );
     assert_eq!(
-        ColumnStore::column_type_name(&TypedColumn::Float(vec![])),
+        ColumnStore::column_type_name(&TypedColumn::Float(Masked::from_options(vec![]))),
         "Float"
     );
     assert_eq!(
-        ColumnStore::column_type_name(&TypedColumn::String(vec![])),
+        ColumnStore::column_type_name(&TypedColumn::String(Masked::from_options_with(
+            vec![],
+            StringId(0)
+        ))),
         "String"
     );
     assert_eq!(
-        ColumnStore::column_type_name(&TypedColumn::Bool(vec![])),
+        ColumnStore::column_type_name(&TypedColumn::Bool(Masked::from_options(vec![]))),
         "Bool"
     );
 }
@@ -209,22 +213,22 @@ fn test_batch_update_column_not_found() {
 
 #[test]
 fn test_set_column_value_null() {
-    let mut col = TypedColumn::Int(vec![Some(1), Some(2)]);
+    let mut col = TypedColumn::Int(Masked::from_options(vec![Some(1), Some(2)]));
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Null);
     assert!(result.is_ok());
     if let TypedColumn::Int(vec) = col {
-        assert!(vec[0].is_none());
+        assert!(vec.get(0).is_none());
     }
 }
 
 #[test]
 fn test_set_column_value_float() {
-    let mut col = TypedColumn::Float(vec![Some(1.0), Some(2.0)]);
+    let mut col = TypedColumn::Float(Masked::from_options(vec![Some(1.0), Some(2.0)]));
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Float(3.5));
     assert!(result.is_ok());
     if let TypedColumn::Float(vec) = col {
-        assert_eq!(vec[0], Some(3.5));
-        assert_eq!(vec[1], Some(2.0)); // untouched cell preserved
+        assert_eq!(vec.get(0), Some(&3.5));
+        assert_eq!(vec.get(1), Some(&2.0)); // untouched cell preserved
     } else {
         panic!("expected Float column");
     }
@@ -232,12 +236,12 @@ fn test_set_column_value_float() {
 
 #[test]
 fn test_set_column_value_bool() {
-    let mut col = TypedColumn::Bool(vec![Some(true), Some(false)]);
+    let mut col = TypedColumn::Bool(Masked::from_options(vec![Some(true), Some(false)]));
     let result = ColumnStore::set_column_value(&mut col, 1, ColumnValue::Bool(true));
     assert!(result.is_ok());
     if let TypedColumn::Bool(vec) = col {
-        assert_eq!(vec[1], Some(true));
-        assert_eq!(vec[0], Some(true)); // untouched cell preserved
+        assert_eq!(vec.get(1), Some(&true));
+        assert_eq!(vec.get(0), Some(&true)); // untouched cell preserved
     } else {
         panic!("expected Bool column");
     }
@@ -245,18 +249,18 @@ fn test_set_column_value_bool() {
 
 #[test]
 fn test_set_column_value_out_of_bounds() {
-    let mut col = TypedColumn::Int(vec![Some(1)]);
+    let mut col = TypedColumn::Int(Masked::from_options(vec![Some(1)]));
     let result = ColumnStore::set_column_value(&mut col, 10, ColumnValue::Int(5));
     assert!(result.is_err());
 }
 
 #[test]
 fn test_set_column_value_null_float() {
-    let mut col = TypedColumn::Float(vec![Some(1.0)]);
+    let mut col = TypedColumn::Float(Masked::from_options(vec![Some(1.0)]));
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Null);
     assert!(result.is_ok());
     if let TypedColumn::Float(vec) = col {
-        assert!(vec[0].is_none());
+        assert!(vec.get(0).is_none());
     } else {
         panic!("expected Float column");
     }
@@ -264,21 +268,24 @@ fn test_set_column_value_null_float() {
 
 #[test]
 fn test_set_column_value_null_bool() {
-    let mut col = TypedColumn::Bool(vec![Some(true)]);
+    let mut col = TypedColumn::Bool(Masked::from_options(vec![Some(true)]));
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Null);
     assert!(result.is_ok());
     if let TypedColumn::Bool(vec) = col {
-        assert!(vec[0].is_none());
+        assert!(vec.get(0).is_none());
     }
 }
 
 #[test]
 fn test_set_column_value_null_string() {
     use super::types::StringId;
-    let mut col = TypedColumn::String(vec![Some(StringId(0))]);
+    let mut col = TypedColumn::String(Masked::from_options_with(
+        vec![Some(StringId(0))],
+        StringId(0),
+    ));
     let result = ColumnStore::set_column_value(&mut col, 0, ColumnValue::Null);
     assert!(result.is_ok());
     if let TypedColumn::String(vec) = col {
-        assert!(vec[0].is_none());
+        assert!(vec.get(0).is_none());
     }
 }

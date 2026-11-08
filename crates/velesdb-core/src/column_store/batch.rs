@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::coordinates;
 use super::types::{
     BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStoreError, ColumnValue, ExpireResult,
-    TypedColumn, UpsertResult,
+    Masked, TypedColumn, UpsertResult,
 };
 use super::ColumnStore;
 
@@ -329,14 +329,13 @@ impl ColumnStore {
 
     /// Sets an array column cell at `row_idx` with bounds checking.
     fn checked_set_array(
-        data: &mut [Option<smallvec::SmallVec<[ColumnValue; 8]>>],
+        data: &mut Masked<smallvec::SmallVec<[ColumnValue; 8]>>,
         row_idx: usize,
         arr: Vec<ColumnValue>,
     ) -> Result<(), ColumnStoreError> {
-        if row_idx >= data.len() {
+        if !data.set(row_idx, Some(smallvec::SmallVec::from_vec(arr))) {
             return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
         }
-        data[row_idx] = Some(smallvec::SmallVec::from_vec(arr));
         Ok(())
     }
 
@@ -346,16 +345,15 @@ impl ColumnStore {
     /// coordinate-range invariant lives: a GeoPoint cell cannot hold
     /// coordinates outside `[-90, 90] x [-180, 180]`, whichever path wrote it.
     fn checked_set_geopoint(
-        vec: &mut [Option<(f64, f64)>],
+        vec: &mut Masked<(f64, f64)>,
         row_idx: usize,
         lat: f64,
         lng: f64,
     ) -> Result<(), ColumnStoreError> {
         coordinates::validate_coordinates(lat, lng)?;
-        if row_idx >= vec.len() {
+        if !vec.set(row_idx, Some((lat, lng))) {
             return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
         }
-        vec[row_idx] = Some((lat, lng));
         Ok(())
     }
 
@@ -367,10 +365,9 @@ impl ColumnStore {
             TypedColumn::String(vec) => Self::checked_set(vec, row_idx, None),
             TypedColumn::Bool(vec) => Self::checked_set(vec, row_idx, None),
             TypedColumn::Array { data, .. } => {
-                if row_idx >= data.len() {
+                if !data.set(row_idx, None) {
                     return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
                 }
-                data[row_idx] = None;
                 Ok(())
             }
             TypedColumn::GeoPoint(vec) => Self::checked_set(vec, row_idx, None),
@@ -379,14 +376,13 @@ impl ColumnStore {
 
     /// Sets a value at `row_idx` with bounds checking.
     fn checked_set<T>(
-        vec: &mut [Option<T>],
+        vec: &mut Masked<T>,
         row_idx: usize,
         value: Option<T>,
     ) -> Result<(), ColumnStoreError> {
-        if row_idx >= vec.len() {
+        if !vec.set(row_idx, value) {
             return Err(ColumnStoreError::IndexOutOfBounds(row_idx));
         }
-        vec[row_idx] = value;
         Ok(())
     }
 

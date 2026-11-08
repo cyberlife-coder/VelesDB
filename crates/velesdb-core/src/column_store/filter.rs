@@ -8,7 +8,7 @@
 
 use roaring::RoaringBitmap;
 
-use super::types::{StringId, TypedColumn};
+use super::types::{Masked, StringId, TypedColumn};
 use super::ColumnStore;
 
 // =========================================================================
@@ -26,11 +26,10 @@ fn scan_int_column(
     let Some(TypedColumn::Int(col)) = store.columns.get(column) else {
         return Vec::new();
     };
-    col.iter()
-        .enumerate()
-        .filter_map(|(idx, v)| match v {
-            Some(val) if predicate(*val) && !store.is_row_deleted_bitmap(idx) => Some(idx),
-            _ => None,
+    (0..col.len())
+        .filter(|&idx| {
+            matches!(col.get(idx), Some(&val) if predicate(val))
+                && !store.is_row_deleted_bitmap(idx)
         })
         .collect()
 }
@@ -40,15 +39,13 @@ fn scan_int_column(
 ///
 /// Indices >= `u32::MAX` are safely skipped (not truncated).
 fn scan_cells_bitmap<T: Copy>(
-    cells: &[Option<T>],
+    cells: &Masked<T>,
     deletion_bitmap: &RoaringBitmap,
     predicate: impl Fn(T) -> bool,
 ) -> RoaringBitmap {
-    cells
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, v)| match v {
-            Some(val) if predicate(*val) => {
+    (0..cells.len())
+        .filter_map(|idx| match cells.get(idx) {
+            Some(&val) if predicate(val) => {
                 let idx = u32::try_from(idx).ok()?;
                 (!deletion_bitmap.contains(idx)).then_some(idx)
             }
@@ -96,15 +93,8 @@ fn scan_string_column(store: &ColumnStore, column: &str, target_id: StringId) ->
     let Some(TypedColumn::String(col)) = store.columns.get(column) else {
         return Vec::new();
     };
-    col.iter()
-        .enumerate()
-        .filter_map(|(idx, v)| {
-            if *v == Some(target_id) && !store.is_row_deleted_bitmap(idx) {
-                Some(idx)
-            } else {
-                None
-            }
-        })
+    (0..col.len())
+        .filter(|&idx| col.get(idx) == Some(&target_id) && !store.is_row_deleted_bitmap(idx))
         .collect()
 }
 
@@ -195,9 +185,8 @@ impl ColumnStore {
             return 0;
         };
 
-        col.iter()
-            .enumerate()
-            .filter(|(idx, v)| **v == Some(value) && !self.is_row_deleted_bitmap(*idx))
+        (0..col.len())
+            .filter(|&idx| col.get(idx) == Some(&value) && !self.is_row_deleted_bitmap(idx))
             .count()
     }
 
@@ -212,9 +201,8 @@ impl ColumnStore {
             return 0;
         };
 
-        col.iter()
-            .enumerate()
-            .filter(|(idx, v)| **v == Some(string_id) && !self.is_row_deleted_bitmap(*idx))
+        (0..col.len())
+            .filter(|&idx| col.get(idx) == Some(&string_id) && !self.is_row_deleted_bitmap(idx))
             .count()
     }
 
@@ -338,7 +326,7 @@ impl ColumnStore {
     /// Indices >= `u32::MAX` are safely skipped.
     fn scan_string_column_in_bitmap(
         &self,
-        col: &[Option<StringId>],
+        col: &Masked<StringId>,
         ids: &[StringId],
     ) -> RoaringBitmap {
         if ids.len() > 16 {
@@ -354,12 +342,11 @@ impl ColumnStore {
     /// Excludes deleted rows. Indices >= `u32::MAX` are safely skipped.
     fn filter_column_by_bitmap(
         &self,
-        col: &[Option<StringId>],
+        col: &Masked<StringId>,
         predicate: impl Fn(&StringId) -> bool,
     ) -> RoaringBitmap {
-        col.iter()
-            .enumerate()
-            .filter_map(|(idx, v)| match v {
+        (0..col.len())
+            .filter_map(|idx| match col.get(idx) {
                 Some(id) if predicate(id) && !self.is_row_deleted_bitmap(idx) => {
                     u32::try_from(idx).ok()
                 }
@@ -371,7 +358,7 @@ impl ColumnStore {
     /// Scans a string column for rows whose interned id is in `ids`.
     ///
     /// Uses a `FxHashSet` for large id lists (>16) and linear scan for small ones.
-    fn scan_string_column_in(&self, col: &[Option<StringId>], ids: &[StringId]) -> Vec<usize> {
+    fn scan_string_column_in(&self, col: &Masked<StringId>, ids: &[StringId]) -> Vec<usize> {
         if ids.len() > 16 {
             let id_set: rustc_hash::FxHashSet<StringId> = ids.iter().copied().collect();
             self.filter_column_by(col, |id| id_set.contains(id))
@@ -383,14 +370,13 @@ impl ColumnStore {
     /// Filters a string column by a predicate on the interned id, excluding deleted rows.
     fn filter_column_by(
         &self,
-        col: &[Option<StringId>],
+        col: &Masked<StringId>,
         predicate: impl Fn(&StringId) -> bool,
     ) -> Vec<usize> {
-        col.iter()
-            .enumerate()
-            .filter_map(|(idx, v)| match v {
-                Some(id) if predicate(id) && !self.is_row_deleted_bitmap(idx) => Some(idx),
-                _ => None,
+        (0..col.len())
+            .filter(|&idx| {
+                matches!(col.get(idx), Some(id) if predicate(id))
+                    && !self.is_row_deleted_bitmap(idx)
             })
             .collect()
     }
