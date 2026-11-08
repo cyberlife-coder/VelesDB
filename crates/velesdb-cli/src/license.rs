@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// License tier enumeration (must match velesdb-premium)
+/// License tier enumeration (must match velesdb-premium — pinned by
+/// the golden fixtures under `tests/fixtures/license/`, #2680)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LicenseTier {
     Professional,
@@ -32,7 +33,8 @@ impl std::fmt::Display for LicenseTier {
     }
 }
 
-/// Premium feature flags (must match velesdb-premium).
+/// Premium feature flags (must match velesdb-premium — pinned by
+/// the golden fixtures under `tests/fixtures/license/`, #2680).
 ///
 /// Only features that require a commercial license belong here.
 /// Features available in the open-source core (Hybrid Search, Advanced Filtering,
@@ -61,7 +63,8 @@ impl std::fmt::Display for PremiumFeature {
     }
 }
 
-/// Decoded license information (must match velesdb-premium)
+/// Decoded license information (must match velesdb-premium — pinned by
+/// the golden fixtures under `tests/fixtures/license/`, #2680)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicenseInfo {
     /// License key
@@ -72,8 +75,12 @@ pub struct LicenseInfo {
     pub organization: String,
     /// Expiration timestamp (Unix epoch)
     pub expires_at: u64,
-    /// Maximum number of instances (-1 = unlimited)
-    pub max_instances: i32,
+    /// Maximum number of instances.
+    ///
+    /// `-1` means unlimited (legacy CLI convention); velesdb-premium encodes
+    /// the same meaning as `u32::MAX`, which does not fit `i32` — the wider
+    /// `i64` accepts both sentinels.
+    pub max_instances: i64,
     /// Enabled premium features.
     ///
     /// Uses a lenient deserializer that silently skips unknown variants
@@ -117,8 +124,13 @@ impl LicenseInfo {
     /// Format expiration date as human-readable string
     pub fn expires_at_formatted(&self) -> String {
         use chrono::{DateTime, Utc};
-        #[allow(clippy::cast_possible_wrap)]
-        let timestamp = self.expires_at as i64;
+        // Perpetual licenses carry an `expires_at` beyond `i64::MAX`
+        // (canonically `u64::MAX`); velesdb-premium documents that display
+        // layers must render them as "never expires" — casting to `i64`
+        // would wrap to 1969.
+        let Ok(timestamp) = i64::try_from(self.expires_at) else {
+            return "Never".to_string();
+        };
         DateTime::<Utc>::from_timestamp(timestamp, 0).map_or_else(
             || "Unknown".to_string(),
             |dt| dt.format("%Y-%m-%d").to_string(),
@@ -241,7 +253,7 @@ pub fn display_license_info(info: &LicenseInfo) {
     println!(
         "  {} {}",
         "Max Instances:".cyan(),
-        if info.max_instances == -1 {
+        if info.max_instances < 0 || info.max_instances >= i64::from(u32::MAX) {
             "Unlimited".to_string()
         } else {
             info.max_instances.to_string()
