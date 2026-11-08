@@ -8,10 +8,10 @@ carry only in comments ("must match velesdb-premium"): a payload emitted by
 the premium `LicenseInfo`/`LicenseTier`/`PremiumFeature` serde must verify
 and decode here. If either side drifts, the tests in `license_tests.rs` fail.
 
-`issuer_public.key` is the verifying half of a fixture keypair minted with
+`issuer_public.b64` is the verifying half of a fixture keypair minted with
 `veles-license keygen`. The private half is **never** checked in — these
 payloads only need to verify, and no signing key may live in this tree.
-`wrong_issuer_public.key` belongs to an unrelated second keypair and feeds
+`wrong_issuer_public.b64` belongs to an unrelated second keypair and feeds
 the negative path. These are **not** production GetAppSuite signatures:
 what they pin is the schema contract, not issuer key identity.
 
@@ -37,13 +37,15 @@ $B sign --key /tmp/lic-fix/private.key --license perpetual.json  > golden_perpet
 ```
 
 Then copy the `.lic` files and the fresh `public.key` into this directory
-and delete the private key. If the schema change was intentional, update
+**renamed to `.b64`** (a `*.key` name collides with the standard global
+gitignore `*.key` pattern — `git add` skips it silently, which is exactly
+how this naming was chosen) and delete the private key. If the schema change was intentional, update
 the assertions in `crates/velesdb-cli/src/license_tests.rs`.
 
 ## Coverage
 
 Positive: `golden_professional`, `golden_team`, `golden_enterprise`,
 `golden_perpetual` — decoded and signature-verified against
-`issuer_public.key`. Negative: `expired.lic` (validly signed, rejected by
+`issuer_public.b64`. Negative: `expired.lic` (validly signed, rejected by
 `validate_license` as expired); tampered payload, wrong issuer key and
 truncated signature are constructed at test time from the golden bytes.

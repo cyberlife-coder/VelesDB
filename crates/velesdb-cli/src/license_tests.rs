@@ -146,8 +146,8 @@ fn test_signed_license_parse_invalid_base64() {
 // bytes the premium serializer emits must verify and decode here. If either
 // side's license types drift, they fail.
 
-const ISSUER_PUBKEY: &str = include_str!("../tests/fixtures/license/issuer_public.key");
-const WRONG_ISSUER_PUBKEY: &str = include_str!("../tests/fixtures/license/wrong_issuer_public.key");
+const ISSUER_PUBKEY: &str = include_str!("../tests/fixtures/license/issuer_public.b64");
+const WRONG_ISSUER_PUBKEY: &str = include_str!("../tests/fixtures/license/wrong_issuer_public.b64");
 const GOLDEN_PROFESSIONAL: &str = include_str!("../tests/fixtures/license/golden_professional.lic");
 const GOLDEN_TEAM: &str = include_str!("../tests/fixtures/license/golden_team.lic");
 const GOLDEN_ENTERPRISE: &str = include_str!("../tests/fixtures/license/golden_enterprise.lic");
