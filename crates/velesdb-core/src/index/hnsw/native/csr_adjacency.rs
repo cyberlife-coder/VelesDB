@@ -85,15 +85,46 @@ pub(crate) enum NeighborSlice<'a> {
     Live(&'a [NodeId]),
 }
 
+/// Iterator over a [`NeighborSlice`] — one variant match per `next()`,
+/// which a per-traversal hot loop predicts perfectly. A `chain`-shaped
+/// implementation measured measurably slower than this dispatch.
+pub(crate) enum NeighborIter<'a> {
+    /// `u32` ids from the flat snapshot, widened to `NodeId` on the fly.
+    Csr(std::slice::Iter<'a, u32>),
+    /// `NodeId` ids from the locked per-node list.
+    Live(std::slice::Iter<'a, NodeId>),
+}
+
+impl Iterator for NeighborIter<'_> {
+    type Item = NodeId;
+
+    #[inline]
+    fn next(&mut self) -> Option<NodeId> {
+        match self {
+            Self::Csr(iter) => iter.next().map(|&n| n as usize),
+            Self::Live(iter) => iter.next().copied(),
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Csr(iter) => iter.size_hint(),
+            Self::Live(iter) => iter.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for NeighborIter<'_> {}
+
 impl NeighborSlice<'_> {
     /// Iterates every neighbor as `NodeId`.
     #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = NodeId> + '_ {
-        let (csr, live): (&[u32], &[NodeId]) = match self {
-            Self::Csr(s) => (s, &[]),
-            Self::Live(s) => (&[], s),
-        };
-        csr.iter().map(|&n| n as usize).chain(live.iter().copied())
+    pub(crate) fn iter(&self) -> NeighborIter<'_> {
+        match self {
+            Self::Csr(s) => NeighborIter::Csr(s.iter()),
+            Self::Live(s) => NeighborIter::Live(s.iter()),
+        }
     }
 
     /// Number of neighbors in the list.
