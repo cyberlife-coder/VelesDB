@@ -170,9 +170,7 @@ impl HnswIndex {
         });
         // Batch placed: the O(N+E) CSR rebuild is amortized over the whole
         // batch here instead of being paid per read (plan #2075 PR-A).
-        if outcome.is_ok() {
-            inner.rebuild_base_csr();
-        }
+        inner.rebuild_base_csr_when(outcome.is_ok());
         drop(inner);
         outcome.map(|()| items.len())
     }

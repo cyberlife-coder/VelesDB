@@ -461,6 +461,14 @@ impl NativeHnswInner {
         }
     }
 
+    /// [`Self::rebuild_base_csr`] conditioned on the batch having placed —
+    /// keeps the branch out of `try_insert_batch`'s complexity budget.
+    pub(crate) fn rebuild_base_csr_when(&self, placed_ok: bool) {
+        if placed_ok {
+            self.rebuild_base_csr();
+        }
+    }
+
     /// Standard backend crosses the GPU threshold. `None` means "take the CPU
     /// path" — either the feature is off, the backend/scale does not qualify,
     /// or the GPU attempt failed and search falls through.
