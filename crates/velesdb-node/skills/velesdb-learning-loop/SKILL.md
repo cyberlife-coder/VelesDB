@@ -155,6 +155,34 @@ answer.
 If recall returns nothing, say so and proceed — never invent a memory to
 fill the gap.
 
+**Recall is not only for design.** Two other moments repay the call, both
+learned from incidents where skipping it cost real time:
+
+- **Before diagnosing a CI/check failure from scratch.** The failure mode
+  may already be a recorded incident — `recall("<failing gate or tool>
+  failure", filter={"project":"velesdb"})` takes seconds; re-deriving a
+  known root cause takes hours. A past incident records exactly this:
+  "the fix was already on file — recall BEFORE diagnosing."
+- **Before claiming a measurement or tuning win.** `recall` first: a
+  measured fact may already exist that contradicts the expected gain.
+
+### Timing rules that beat the checklist
+
+The mechanical gates cover recall-before-edit and the end-of-turn
+checklist. These moments are policy — nothing fires for them:
+
+- **remember at the confirmed root cause, not at session end.** When an
+  incident's cause is verified by a passing check, store it immediately
+  with its `caused_by` edge. Waiting for Stop risks compaction discarding
+  the detail that makes the fact precise — a fact written from a summary
+  is worse than none.
+- **feedback only on observed outcome** — a check that failed then passed
+  after applying the memory, a revert of what it advised. The Stop
+  checklist names the evidence; never score on impression.
+- **Devin CLI sessions** get the same hooks (recall-guard on `edit`/
+  `write`, evidence on `exec`, PostCompaction reload nudge) — see
+  `integrations/agent-hooks/devin/`.
+
 ### 2. Decision
 
 When the work selects an approach, accepts a compromise, rejects a plausible
