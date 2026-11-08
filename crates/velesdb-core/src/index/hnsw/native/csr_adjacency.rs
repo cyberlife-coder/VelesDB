@@ -45,13 +45,21 @@ impl CsrAdjacency {
     /// Flattens `lists` into one CSR snapshot, or `None` when any stored id
     /// exceeds `u32::MAX` — the overflow case stays on the lock path instead
     /// of publishing a truncated graph.
+    ///
+    /// Every per-node lock is taken with `try_read`, never `read`: a build
+    /// that *waits* on a neighbor list while the caller holds the `Layers`
+    /// read guard closes the same lock cycle #2293 documented (writer
+    /// carrying neighbor writes, blocked on `Layers`; reader holding
+    /// `Layers`, blocked on the neighbor). Any contention — or any rebuild
+    /// already in flight — returns `None` and readers take the authoritative
+    /// lock path instead.
     pub(crate) fn build(lists: &[RwLock<Vec<NodeId>>]) -> Option<Self> {
         let mut offsets = Vec::with_capacity(lists.len() + 1);
         let mut neighbors = Vec::new();
         offsets.push(0u32);
         for lock in lists {
             {
-                let list = lock.read();
+                let list = lock.try_read()?;
                 neighbors.reserve(list.len());
                 for &id in list.iter() {
                     neighbors.push(u32::try_from(id).ok()?);
@@ -189,7 +197,7 @@ impl CsrState {
         if self.pending_writes.load(Ordering::Acquire) < CSR_REBUILD_WRITE_THRESHOLD {
             return None;
         }
-        let _build = self.build_lock.lock();
+        let _build = self.build_lock.try_lock()?;
         if !self.dirty.load(Ordering::Acquire) {
             return self.snapshot.load_full();
         }

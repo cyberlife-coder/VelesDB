@@ -180,7 +180,13 @@ impl Layer {
         if !self.base {
             return;
         }
-        let _build = self.csr.build_lock.lock();
+        // Same non-blocking discipline as `fresh_snapshot`: a forced rebuild
+        // that *waited* on a contended neighbor lock could deadlock the
+        // caller (which may hold `Layers`). Contention leaves the snapshot
+        // dirty and readers fall back until the next rebuild point.
+        let Some(_build) = self.csr.build_lock.try_lock() else {
+            return;
+        };
         if let Some(snapshot) = CsrAdjacency::build(&self.neighbors) {
             self.csr.publish(snapshot);
         }
