@@ -48,6 +48,11 @@ impl ColumnStore {
     /// Inner loop shared by [`Self::filter_array_indices`]. Kept as a free associated
     /// function so callers don't need to capture the full `&self` and the borrow checker
     /// can see precisely which fields are read.
+    ///
+    /// Iterates `data.validity()`'s set bits, probing `deletion_bitmap` per
+    /// valid row, so each visited row costs a dense `values[idx]` read plus
+    /// the predicate — no `Option` match. Both bitmaps are `u32`-indexed,
+    /// which caps the store at ~4B rows, same as `deletion_bitmap` itself.
     fn iter_array_matches<P, M, T, C>(
         data: &Masked<ArrayCell>,
         predicate: &P,
@@ -59,14 +64,13 @@ impl ColumnStore {
         M: Fn(usize) -> Option<T>,
         C: FromIterator<T>,
     {
-        (0..data.len())
+        let values = data.values();
+        data.validity()
+            .iter()
             .filter_map(|idx| {
-                let arr = data.get(idx)?;
-                // Deleted rows live in `deletion_bitmap` (u32-indexed); indices that
-                // don't fit `u32` can never be tombstoned, so they count as live.
-                let deleted = u32::try_from(idx).is_ok_and(|i| deletion_bitmap.contains(i));
-                if predicate(arr) && !deleted {
-                    map_idx(idx)
+                let arr = &values[idx as usize];
+                if predicate(arr) && !deletion_bitmap.contains(idx) {
+                    map_idx(idx as usize)
                 } else {
                     None
                 }

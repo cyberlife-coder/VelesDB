@@ -59,6 +59,39 @@ fn generate_column_store(count: usize) -> ColumnStore {
     store
 }
 
+/// Generate a column store where `null_pct`% of rows are null on `price`.
+///
+/// Exercises the validity-bitmap scan path: at 0% every row is valid, at 90%
+/// the dense scan touches one live row in ten.
+fn generate_column_store_nulls(count: usize, null_pct: usize) -> ColumnStore {
+    let categories = ["tech", "science", "art", "sports", "music"];
+
+    let mut store =
+        ColumnStore::with_schema(&[("category", ColumnType::String), ("price", ColumnType::Int)]);
+
+    let cat_ids: Vec<_> = categories
+        .iter()
+        .map(|c| store.string_table_mut().intern(c))
+        .collect();
+
+    for i in 0..count {
+        let price = if i % 100 < null_pct {
+            ColumnValue::Null
+        } else {
+            ColumnValue::Int((i % 1000) as i64)
+        };
+        store.push_row(&[
+            (
+                "category",
+                ColumnValue::String(cat_ids[i % categories.len()]),
+            ),
+            ("price", price),
+        ]);
+    }
+
+    store
+}
+
 // =============================================================================
 // EQUALITY FILTER BENCHMARKS
 // =============================================================================
@@ -290,6 +323,45 @@ fn bench_bitmap_scaling(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// NULL-RATE SWEEP
+// =============================================================================
+
+/// Scan cost vs null fraction on the 100k bitmap path (#2076, PR-D3).
+///
+/// With the `Masked<T>` layout the `validity − deletion` difference skips null
+/// and tombstoned rows at container level, so the sweep should trend downward
+/// as nulls rise — unlike the old `Vec<Option<T>>` cell-by-cell scan, whose
+/// cost was flat in the null rate.
+fn bench_null_rate_sweep(c: &mut Criterion) {
+    let mut group = c.benchmark_group("null_rate_sweep");
+
+    for null_pct in &[0_usize, 10, 50, 90] {
+        let store = generate_column_store_nulls(100_000, *null_pct);
+
+        group.bench_with_input(
+            BenchmarkId::new("filter_eq_int_bitmap", null_pct),
+            null_pct,
+            |bencher, _| {
+                bencher.iter(|| {
+                    let bitmap = store.filter_eq_int_bitmap(black_box("price"), black_box(500));
+                    black_box(bitmap.len())
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("count_eq_int", null_pct),
+            null_pct,
+            |bencher, _| {
+                bencher.iter(|| black_box(store.count_eq_int(black_box("price"), black_box(500))));
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_filter_eq_string,
@@ -297,6 +369,7 @@ criterion_group!(
     bench_filter_range_int,
     bench_filter_in_string,
     bench_throughput_scaling,
-    bench_bitmap_scaling
+    bench_bitmap_scaling,
+    bench_null_rate_sweep
 );
 criterion_main!(benches);
