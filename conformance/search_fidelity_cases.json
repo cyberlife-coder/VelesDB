@@ -1,0 +1,84 @@
+{
+  "version": "1.0.0",
+  "description": "Cross-binding search fidelity net (issue #2095 item C): one deterministic dataset plus fixed queries run through THREE production surfaces — core `VectorCollection` (search / hybrid_search), the REST server (`/collections/{name}/search` and `/search/hybrid`), and the WASM `VectorStore` — pinning result ids AND scores. `expect_ids`/`expect_scores` are the canonical golden, recorded from velesdb-core. `score_tolerance` covers kernel-level float ordering (core SIMD sums in a different order than the WASM scalar `metric.calculate`), nothing wider. `expected_divergences` is the documented allowlist of known per-surface semantic gaps: each entry names the surface override carried in `surface_expect`, the reason, and the tracking item — when a fix lands and a surface starts returning the canonical golden, its override must be deleted and this entry with it. The dataset stays <= 10 points so core brute-forces and no HNSW build randomness can leak into the pins.",
+  "score_tolerance": 0.0001,
+  "dataset": {
+    "collection": "fidelity_docs",
+    "dimension": 4,
+    "metric": "cosine",
+    "points": [
+      { "id": 1, "vector": [1.0, 0.0, 0.0, 0.0], "payload": { "title": "rust systems programming guide", "category": "tech" } },
+      { "id": 2, "vector": [0.9, 0.1, 0.0, 0.0], "payload": { "title": "rust and cargo handbook", "category": "tech" } },
+      { "id": 3, "vector": [0.0, 1.0, 0.0, 0.0], "payload": { "title": "french cooking recipes", "category": "food" } },
+      { "id": 4, "vector": [0.7, 0.7, 0.0, 0.0], "payload": { "title": "rust for web services", "category": "tech" } },
+      { "id": 5, "vector": [0.0, 0.0, 1.0, 0.0], "payload": { "title": "gardening basics", "category": "home" } },
+      { "id": 6, "vector": [0.5, 0.5, 0.5, 0.5], "payload": { "title": "systems cooking fusion", "category": "misc" } }
+    ]
+  },
+  "extra_collections": [
+    {
+      "collection": "fidelity_l2",
+      "dimension": 4,
+      "metric": "euclidean",
+      "points": [
+        { "id": 1, "vector": [0.0, 0.0, 0.0, 0.0], "payload": { "title": "origin point", "category": "a" } },
+        { "id": 2, "vector": [1.0, 0.0, 0.0, 0.0], "payload": { "title": "one away on x", "category": "a" } },
+        { "id": 3, "vector": [0.0, 2.0, 0.0, 0.0], "payload": { "title": "two away on y", "category": "b" } },
+        { "id": 4, "vector": [1.0, 1.0, 0.0, 0.0], "payload": { "title": "diagonal", "category": "b" } }
+      ]
+    }
+  ],
+  "query_vectors": {
+    "q1": [1.0, 0.0, 0.0, 0.0],
+    "q2": [0.9, 0.1, 0.0, 0.0]
+  },
+  "cases": [
+    {
+      "id": "F001",
+      "kind": "near",
+      "collection": "fidelity_docs",
+      "vector": "q1",
+      "top_k": 3,
+      "expect_ids": [1, 2, 4],
+      "expect_scores": [1.0, 0.9938837, 0.7071068],
+      "note": "plain k-NN cosine: ranks the three x-axis-aligned docs in id order"
+    },
+    {
+      "id": "F002",
+      "kind": "near",
+      "collection": "fidelity_l2",
+      "vector": "q1",
+      "top_k": 3,
+      "expect_ids": [2, 1, 4],
+      "expect_scores": [0.0, 1.0, 1.0],
+      "note": "plain k-NN euclidean: distance family different from cosine, same id+score contract"
+    },
+    {
+      "id": "F003",
+      "kind": "hybrid_rrf",
+      "collection": "fidelity_docs",
+      "vector": "q2",
+      "text": "rust",
+      "top_k": 4,
+      "vector_weight": 0.5,
+      "rrf_k": 10,
+      "expect_ids": [1, 2, 4, 6],
+      "expect_scores": [0.095454544, 0.09166667, 0.08712122, 0.03846154],
+      "surface_expect": {
+        "wasm": {
+          "expect_ids": [2, 1, 4, 6],
+          "expect_scores": [1.0, 0.99694186, 0.8904344, 0.27607882]
+        }
+      },
+      "note": "BM25+dense RRF with rrf_k=10, weight 0.5 — REST takes the same rrf_k through HybridSearchRequestWithRrf"
+    }
+  ],
+  "expected_divergences": [
+    {
+      "case": "F003",
+      "surface": "wasm",
+      "issue": "#2095-A7",
+      "reason": "WASM `VectorStore::hybrid_search` is a raw-score linear blend over a binary substring text match and has no rrf_k parameter; core fuses BM25 and dense ranks by RRF. Its actual output is pinned under surface_expect.wasm so the divergence is netted, not merely documented."
+    }
+  ]
+}
