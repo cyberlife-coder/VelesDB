@@ -83,7 +83,7 @@ pub fn handle_import(
     database: &Path,
     collection: String,
     dimension: Option<usize>,
-    metric: MetricArg,
+    metric: Option<MetricArg>,
     storage_mode: StorageModeArg,
     id_column: String,
     vector_column: String,
@@ -94,7 +94,7 @@ pub fn handle_import(
     let config = import::ImportConfig {
         collection,
         dimension,
-        metric: metric.into(),
+        metric: metric.map(Into::into),
         storage_mode: storage_mode.into(),
         batch_size,
         id_column,
