@@ -72,6 +72,7 @@ direct use by end users.
 | `validate_text` | function | Sanitizes free-text query strings against injection patterns |
 | `validate_query` | function | Validates VelesQL query strings against length / character limits |
 | `validate_collection_name` | function | Alphanumeric + underscore, ≤ 64 chars |
+| `validate_column_name` | function | Column identifier charset (alphanumeric, `_`, `.` for nested paths) |
 | `validate_dimension` | function | Within `MIN_DIMENSION`..=`MAX_DIMENSION` |
 | `validate_metric` | function | Against `ALLOWED_METRICS` |
 | `validate_storage_mode` | function | Against `ALLOWED_STORAGE_MODES` / `STORAGE_MODE_ALIASES` |
@@ -81,6 +82,7 @@ direct use by end users.
 | `validate_timeout` | function | Timeout ms within sane bounds |
 | `validate_weight` | function | Fusion weight in `[0.0, 1.0]` |
 | `validate_sparse_vector` | function | Sparse pair list bounds |
+| `validate_named_sparse_vector` | function | Named sparse-index mapping (`{"bge_m3": {0: 1.5}}`) — index names and pair bounds |
 | `validate_search_quality` | function | A search quality mode, checked by velesdb-core's parser through `velesdb.validate_search_quality` (velesdb >= 8.0.0; an older wheel checks only the type and refuses a bad mode at search time) |
 
 **Security: constants**
