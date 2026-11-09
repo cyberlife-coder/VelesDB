@@ -415,6 +415,7 @@ impl VectorStore {
             .map_err(|e| JsValue::from_str(&e))?;
         store_search::batch_search_impl(
             vectors,
+            num_vectors,
             &self.ids,
             &self.data,
             self.dimension,
