@@ -51,7 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Haystack filter operator maps pinned to the core condition vocabulary**
   (#2095, #2675); residual single-sourcing findings closed (#2095, #2683).
 - **Tauri `require_collection` accepts every collection variant** (#2661).
-- **Three audit-proven breakages in `examples/` repaired** (#2700, #2701).
+- **Three audit-proven breakages in `examples/` repaired** (#2700, #2701);
+  the rag-pdf-demo FastAPI surface and the tauri-rag-app build (#2711,
+  #2715).
+- **Binding README drift corrected across the five binding crates** (#2697,
+  #2704); three missing routes and the `weighted_rrf` CLI strategy
+  documented (#2709, #2712); root README-vs-code drift fixed (#2708,
+  #2713); 11 proven-false claims fixed and `RELEASE.md` translated to
+  English (#2710, #2714).
 
 ### Performance
 
