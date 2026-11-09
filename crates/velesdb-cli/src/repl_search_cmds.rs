@@ -5,6 +5,7 @@
 use colored::Colorize;
 use velesdb_core::Database;
 
+use crate::repl::{OutputFormat, ReplConfig};
 use crate::repl_commands::{parse_flag, CommandResult};
 
 /// Display search results with a title header.
@@ -138,14 +139,32 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
     CommandResult::Continue
 }
 
-pub(crate) fn cmd_agent(_parts: &[&str]) -> CommandResult {
-    println!(
-        "\n{}\n\n  Agent memory management is available via the {} or {}.\n  \
-         See docs/guides/ for usage examples.\n",
-        "Agent Memory".bold().underline(),
-        "Python/TypeScript SDK".cyan(),
-        "REST API".cyan(),
-    );
+/// `.agent` bare prints the memory pointer; `.agent <question>` runs the
+/// bounded ReAct agent against the open database.
+pub(crate) fn cmd_agent(
+    db: &velesdb_core::Database,
+    config: &ReplConfig,
+    parts: &[&str],
+) -> CommandResult {
+    if parts.len() < 2 {
+        println!(
+            "\n{}\n\n  Agent memory management is available via the {} or {}.\n  \
+             Ask a question with {} — a bounded ReAct loop (max {} iterations,\n  \
+             whitelisted VelesQL tools, offline mode when no Ollama is reachable).\n",
+            "Agent Memory".bold().underline(),
+            "Python/TypeScript SDK".cyan(),
+            "REST API".cyan(),
+            ".agent <question>".yellow(),
+            crate::agent::MAX_ITERATIONS,
+        );
+        return CommandResult::Continue;
+    }
+    let report = crate::agent::run(db, &parts[1..].join(" "));
+    if matches!(config.format, OutputFormat::Json) {
+        println!("{}", crate::agent::report_json(&report));
+    } else {
+        crate::agent::print_report(&report);
+    }
     CommandResult::Continue
 }
 

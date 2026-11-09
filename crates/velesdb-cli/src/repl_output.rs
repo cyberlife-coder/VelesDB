@@ -180,7 +180,10 @@ pub fn print_help() {
             .yellow()
     );
     println!("  {}        Show query guard-rails", ".guardrails".yellow());
-    println!("  {}   Agent memory (preview)", ".agent [cmd]".yellow());
+    println!(
+        "  {}   ReAct agent (bounded, whitelisted tools)",
+        ".agent <q>".yellow()
+    );
     println!();
     println!("{}", "Graph Commands:".bold().underline());
     println!();

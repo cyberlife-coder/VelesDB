@@ -130,7 +130,7 @@ Per-Node Statistics:
 | `.sparse-search <col> <index> <json> [k]` | Sparse vector search. JSON format: `[[idx, weight], ...]`. Default k=10. |
 | `.hybrid-sparse <col> <dense> <sparse> [k] [--strategy rrf\|average\|max\|weighted\|relative_score] [--index <name>]` | Dense+sparse hybrid search with fusion. Default k=10, strategy=rrf. Strategy names follow core's grammar (`avg`, `max`, `rsf` aliases, any case); `weighted` uses core's 0.6 / 0.3 / 0.1. |
 | `.guardrails` | Display current query guard-rails (timeout, memory limit, rate limit, circuit breaker) |
-| `.agent [cmd]` | Agent memory commands (preview — not yet fully implemented in the CLI) |
+| `.agent <question>` | Bounded ReAct agent over whitelisted VelesQL tools (list / describe / search / hybrid / explain / aggregate / graph). Max 8 iterations, every step logged, answer cites the tool outputs used. Uses the Ollama backend when `VELESDB_AGENT_URL` (default `http://127.0.0.1:11434`) answers — model via `VELESDB_AGENT_MODEL` (default `qwen3:4b`); otherwise a documented deterministic offline router. No LLM is ever required. Bare `.agent` prints the agent-memory pointer. |
 
 ```
 velesdb> .sparse-search my_col sparse_idx [[42,0.8],[137,0.6],[891,0.3]] 10

@@ -78,6 +78,22 @@ pub enum Commands {
         #[command(subcommand)]
         action: IndexAction,
     },
+
+    /// Ask the bounded ReAct agent a question about this database
+    /// (max 8 iterations, whitelisted VelesQL tools; Ollama backend if
+    /// VELESDB_AGENT_URL answers, else deterministic offline mode)
+    Agent {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Natural-language question (trailing args, quoting optional)
+        #[arg(trailing_var_arg = true)]
+        question: Vec<String>,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 - [SIMD diagnostics](#simd-diagnostics)
 - [License management](#license-management)
 - [Shell completions](#shell-completions)
+- [Agent](#agent)
 - [Building the Debian package](#building-the-debian-package)
 - [Error reference](#error-reference)
 
@@ -520,6 +521,30 @@ velesdb completions powershell | Out-String | Invoke-Expression
 # Elvish
 velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
 ```
+
+---
+
+## Agent
+
+`velesdb agent` asks a natural-language question about a database through a
+bounded Reason→Act loop (max 8 iterations) over whitelisted VelesQL tools —
+`list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`, `graph`. Every
+iteration is logged (thought / action / observation) and the answer cites the
+tool outputs it used. The same loop is available in the REPL as
+`.agent <question>`.
+
+```bash
+velesdb agent ./data what collections exist
+velesdb agent ./data --format json "find documents about rust"
+```
+
+Backend: if an Ollama instance answers `GET $VELESDB_AGENT_URL/api/tags`
+(default `http://127.0.0.1:11434`), reasoning delegates to
+`$VELESDB_AGENT_MODEL` (default `qwen3:4b`) — same extractor-style contract
+`velesdb-memory` uses. When no LLM is reachable the agent runs a documented
+deterministic offline router over the same tools and says so in the transcript.
+No LLM is ever required; `--format json` prints the full transcript for
+scripting.
 
 ---
 
