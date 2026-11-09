@@ -1,6 +1,6 @@
 # VelesQL Ecosystem Parity Matrix
 
-Last updated: 2026-11-06 (v8.1.0 + unreleased fusion/search-mode grammar and fused score direction; velesdb-memory 0.17.1)
+Last updated: 2026-11-08 (v8.1.0 + unreleased fusion/search-mode grammar and fused score direction; velesdb-memory 0.17.1)
 
 This matrix tracks runtime contract and feature parity across the VelesDB ecosystem.
 
@@ -36,7 +36,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 | **Multi-Query Fusion** (RRF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Multi-Query Fusion** (RSF / Weighted) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Hybrid Search** (dense+sparse, dense+text) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
-| **Text Search BM25** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
+| **Text Search BM25** | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ |
 | **Sparse Vector Search** (sparse index) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Sparse Vector Search** (named indexes) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | ❌ |
 | **Graph Operations** (nodes, edges, traversal) | ✅ | ✅ | ✅ | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
@@ -67,6 +67,7 @@ Legend: ✅ full support | ⚠️ partial / limited | ❌ not supported | N/A no
 - **Hybrid Search (dense + sparse) — one fusion in core** (2026-10-29): `VectorCollection::hybrid_sparse_search` / `hybrid_sparse_search_filtered`, the entry point the server, CLI, Python, mobile and Tauri call, carried its own copy of the dense + sparse fusion without the #2102 score-direction alignment, so on a Euclidean or Hamming collection a score-level strategy ranked the farthest dense point first. It now delegates to `Collection::hybrid_sparse_search_inner`, the body the VelesQL `NEAR ... AND SPARSE_NEAR ...` path fuses through. On every one of those surfaces a dense vector of the wrong dimension fails with `DimensionMismatch` (VELES-004) and an unknown sparse index with `Sparse index '...' not found` (VELES-009), as the sparse-only search already did; both used to degrade to the other branch. WASM's in-memory `hybrid_search_fuse` is a separate path and unchanged.
 - **VelesQL `NEAR` under `OR`** (2026-10-29): core and WASM agree. `vector NEAR $v OR <metadata>` returns the NEAR ranking with NEAR scores and reads the rest of the WHERE with the NEAR leaf as TRUE — what the WASM executor already did, and what core's WHERE evaluator says. Core used to drop the NEAR hits. Executor fixture cases X021–X022 run on core, CLI and WASM.
 - **`NEAR_FUSED ... USING FUSION 'weighted'|'rsf'`** (known gap): core's validator rejects it with `V012`; the WASM executor does not run core's `QueryValidator` and executes it as `rrf` (`crates/velesdb-wasm/src/velesql_fused.rs`, `config_to_strategy`).
+- **Text Search BM25 (WASM)** (2026-11-08, #2681): ⚠️ substring match, not BM25. `VectorStore.textSearch` runs a case-insensitive substring scan over payload text and returns `score: null` (`crates/velesdb-wasm/src/text_search.rs`, `vector_store.rs`) — it selects documents without ranking them, where core runs a real BM25 index. The ranking divergence this creates on the hybrid path is pinned as expected divergence F003 in `conformance/search_fidelity_cases.json`. Mobile delegates to core BM25 and stays ✅; shipping a real BM25 index to the WASM store remains a product decision.
 - **Graph Operations (WASM)**: Basic node/edge CRUD is supported; multi-hop traversal and MATCH queries are limited.
 - **VelesQL (LangChain/LlamaIndex/Haystack)**: Pass-through to Python bindings works for simple queries; full parser integration is not surfaced in the integration API.
 - **Haystack DocumentStore protocol limits**: The Haystack 2.x `DocumentStore` ABC exposes `write_documents`, `filter_documents`, `embedding_retrieval`, `count_documents`, and `delete_documents`. Dense retrieval in pipelines ships as the dedicated `VelesDBEmbeddingRetriever` component (`integrations/haystack/src/haystack_velesdb/retriever.py`); BM25/hybrid retriever components remain a follow-up. Graph collections, agent memory, and sparse-named indexes are intentionally `N/A` because they have no idiomatic mapping in Haystack's protocol and are reachable through the raw `velesdb` Python wrapper if needed.
