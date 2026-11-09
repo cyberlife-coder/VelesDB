@@ -217,11 +217,13 @@ wheel covers Python 3.9 and later):
 | `RuntimeError` on `collection.stream_insert([...])` | streaming ingestion was never enabled | call `collection.enable_streaming(...)` first |
 | `FileNotFoundError` from `VelesConfigOptions.from_toml_path(...)` | config loading is fail-fast by design | check the path; malformed TOML or invalid values raise `ValueError` instead |
 
-All typed exceptions (`DimensionMismatchError`, `CollectionNotFoundError`,
-`CollectionExistsError`, `EdgeExistsError`, `DatabaseLockedError`,
-`VelesQLSyntaxError`, `VelesQLParameterError`) derive from `velesdb.VelesDBError`,
-so `except velesdb.VelesDBError` is a safe catch-all.
+The typed collection exceptions (`DimensionMismatchError`, `CollectionNotFoundError`,
+`CollectionExistsError`, `EdgeExistsError`, `DatabaseLockedError`) derive from
+`velesdb.VelesDBError`. The VelesQL parse exceptions (`VelesQLSyntaxError`,
+`VelesQLParameterError`) do not — they derive from `Exception` directly, so a
+catch-all needs `except (velesdb.VelesDBError, velesdb.VelesQLSyntaxError,
+velesdb.VelesQLParameterError)` or plain `except Exception`.
 
 ---
 
-`velesdb-python v8.1.0` · Last updated: 2026-10-29 · Applies to: velesdb-core 8.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-python v8.2.0` · Last updated: 2026-10-29 · Applies to: velesdb-core 8.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

@@ -13,6 +13,16 @@ members = [
     "crates/velesdb-node",
     "crates/velesdb-rustdoc-guard",
 ]
+# Bare `cargo build|check|test` covers the daily-engineering crates only —
+# the binding stacks (python/napi/uniffi/wasm/tauri) and migrate build on
+# demand via `-p` or are named one by one in CI. Published artifacts are
+# unaffected: releases build the named packages, never the default set.
+default-members = [
+    "crates/velesdb-core",
+    "crates/velesdb-server",
+    "crates/velesdb-cli",
+    "crates/velesdb-memory",
+]
 exclude = [
     "demos/tauri-rag-app/src-tauri",
     "examples/mini_recommender",
@@ -20,7 +30,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "8.1.0"
+version = "8.2.0"
 edition = "2021"
 rust-version = "1.90"
 license-file = "LICENSE"
@@ -90,7 +100,7 @@ base64 = "0.23.1"
 smallvec = { version = "1.14.0", features = ["serde"] }
 
 # Internal workspace crates
-velesdb-core = { path = "crates/velesdb-core", version = "8.1.0", default-features = false }
+velesdb-core = { path = "crates/velesdb-core", version = "8.2.0", default-features = false }
 
 [profile.release]
 lto = true

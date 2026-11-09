@@ -23,6 +23,7 @@ from velesdb_common.scores import (
     to_similarity,
 )
 from velesdb_common.security import (
+    ALLOWED_CONDITION_TYPES,
     validate_collection_name,
     validate_metric,
     validate_named_sparse_vector,
@@ -59,6 +60,21 @@ _HAYSTACK_LOGIC_TO_VELES: Dict[str, str] = {
     "OR": "or",
     "NOT": "not",
 }
+
+# The TARGET tags are not re-listed as free literals: every value in both
+# maps must be a member of ``ALLOWED_CONDITION_TYPES`` (single-sourced from
+# velesdb-core through ``velesdb_common``), which this import-time guard
+# enforces so the maps cannot drift from the engine's vocabulary — the same
+# guard ``llamaindex_velesdb.filter_ops`` already carries (#2095 item B).
+_UNKNOWN_CONDITION_TYPES = (
+    set(_HAYSTACK_COMPARISON_TO_VELES.values())
+    | set(_HAYSTACK_LOGIC_TO_VELES.values())
+) - ALLOWED_CONDITION_TYPES
+if _UNKNOWN_CONDITION_TYPES:
+    raise RuntimeError(
+        "haystack_velesdb emits condition types unknown to velesdb-core: "
+        f"{sorted(_UNKNOWN_CONDITION_TYPES)}"
+    )
 
 
 def _strip_meta_prefix(field: str) -> str:

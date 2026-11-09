@@ -134,3 +134,117 @@ fn test_signed_license_parse_invalid_base64() {
     let result = SignedLicense::parse("not-base64.also-not-base64");
     assert!(result.is_err());
 }
+
+// ==== Golden fixtures signed by the velesdb-premium issuer (#2680) ====
+//
+// The `.lic` payloads under `tests/fixtures/license/` were produced by the
+// actual premium issuer (`LicenseSigner` + premium `LicenseInfo` serde, via
+// the `veles-license` tool in velesdb-private) with a dedicated fixture
+// keypair; only its public half is checked in (see the README there for how
+// to regenerate). These tests pin mechanically what the `LicenseInfo`,
+// `LicenseTier` and `PremiumFeature` comments used to state in prose:
+// bytes the premium serializer emits must verify and decode here. If either
+// side's license types drift, they fail.
+
+const ISSUER_PUBKEY: &str = include_str!("../tests/fixtures/license/issuer_public.b64");
+const WRONG_ISSUER_PUBKEY: &str = include_str!("../tests/fixtures/license/wrong_issuer_public.b64");
+const GOLDEN_PROFESSIONAL: &str = include_str!("../tests/fixtures/license/golden_professional.lic");
+const GOLDEN_TEAM: &str = include_str!("../tests/fixtures/license/golden_team.lic");
+const GOLDEN_ENTERPRISE: &str = include_str!("../tests/fixtures/license/golden_enterprise.lic");
+const GOLDEN_PERPETUAL: &str = include_str!("../tests/fixtures/license/golden_perpetual.lic");
+const EXPIRED: &str = include_str!("../tests/fixtures/license/expired.lic");
+
+fn verify_golden(license: &str) -> LicenseInfo {
+    let signed = SignedLicense::parse(license.trim()).unwrap();
+    signed.verify_with_key(ISSUER_PUBKEY.trim()).unwrap();
+    signed.extract_info().unwrap()
+}
+
+#[test]
+fn test_golden_professional_verifies_with_all_features_lenient_dropped() {
+    let info = verify_golden(GOLDEN_PROFESSIONAL);
+    assert_eq!(info.tier, LicenseTier::Professional);
+    assert_eq!(info.organization, "VelesDB Golden Fixtures");
+    assert_eq!(info.expires_at, 4_102_444_799);
+    assert_eq!(info.max_instances, 1);
+    assert!(!info.is_expired());
+    // All 8 premium professional features are unknown to this mirror; the
+    // lenient deserializer drops them rather than rejecting the license.
+    assert!(info.features.is_empty());
+}
+
+#[test]
+fn test_golden_team_verifies_and_filters_to_known_features() {
+    let info = verify_golden(GOLDEN_TEAM);
+    assert_eq!(info.tier, LicenseTier::Team);
+    assert_eq!(info.max_instances, 5);
+    // 11 premium features signed; only the two this mirror knows survive.
+    assert_eq!(
+        info.features,
+        [PremiumFeature::Snapshots, PremiumFeature::EncryptionAtRest]
+    );
+}
+
+#[test]
+fn test_golden_enterprise_u32_max_instances_decodes() {
+    // Enterprise's default cap is `u32::MAX` (premium's "unlimited") — a
+    // value the previous `i32` field could not deserialize.
+    let info = verify_golden(GOLDEN_ENTERPRISE);
+    assert_eq!(info.tier, LicenseTier::Enterprise);
+    assert_eq!(info.max_instances, i64::from(u32::MAX));
+    assert_eq!(info.expires_at_formatted(), "2099-12-31");
+    assert_eq!(
+        info.features,
+        [
+            PremiumFeature::Snapshots,
+            PremiumFeature::EncryptionAtRest,
+            PremiumFeature::MultiTenancy,
+        ]
+    );
+}
+
+#[test]
+fn test_golden_perpetual_never_expires_or_wraps_to_1969() {
+    // Premium perpetual licenses carry `expires_at = u64::MAX`; the display
+    // contract requires "never expires", not a wrapped i64 cast to 1969.
+    let info = verify_golden(GOLDEN_PERPETUAL);
+    assert!(!info.is_expired());
+    assert_eq!(info.expires_at_formatted(), "Never");
+    assert_eq!(info.max_instances, i64::from(u32::MAX));
+}
+
+#[test]
+fn test_signed_expired_fixture_rejected_by_validate_license() {
+    let err = validate_license(EXPIRED.trim(), ISSUER_PUBKEY.trim()).unwrap_err();
+    assert!(
+        err.to_string().contains("expired"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_golden_fixture_tampered_payload_fails_verification() {
+    // Flip one byte inside the signed payload: the signature must no longer hold.
+    let mut parts = GOLDEN_TEAM.trim().split('.');
+    let payload_b64 = parts.next().unwrap();
+    let sig_b64 = parts.next().unwrap();
+    let mut payload = BASE64.decode(payload_b64).unwrap();
+    let mid = payload.len() / 2;
+    payload[mid] ^= 0x01;
+    let tampered = format!("{}.{}", BASE64.encode(&payload), sig_b64);
+    let signed = SignedLicense::parse(&tampered).unwrap();
+    assert!(signed.verify_with_key(ISSUER_PUBKEY.trim()).is_err());
+}
+
+#[test]
+fn test_golden_fixture_wrong_issuer_key_fails_verification() {
+    let signed = SignedLicense::parse(GOLDEN_TEAM.trim()).unwrap();
+    assert!(signed.verify_with_key(WRONG_ISSUER_PUBKEY.trim()).is_err());
+}
+
+#[test]
+fn test_golden_fixture_truncated_signature_rejected() {
+    let trimmed = GOLDEN_TEAM.trim();
+    let truncated = &trimmed[..trimmed.len() - 4];
+    assert!(SignedLicense::parse(truncated).is_err());
+}

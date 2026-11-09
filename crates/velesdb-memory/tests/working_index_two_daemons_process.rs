@@ -146,8 +146,8 @@ impl StdioDaemon {
             }),
         );
         assert!(
-            saved["id"].as_u64().is_some(),
-            "save must return the stored fact id, got: {saved}"
+            saved["id"].as_str().is_some(),
+            "save must return the stored fact id as a decimal string (#1468), got: {saved}"
         );
     }
 

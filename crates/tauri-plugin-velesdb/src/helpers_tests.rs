@@ -267,16 +267,41 @@ fn test_parse_fusion_strategy_weighted_rrf_missing_weights() {
 
 #[cfg(feature = "persistence")]
 #[test]
-fn test_require_collection_rejects_graph_collection() {
+fn test_require_collection_accepts_graph_and_metadata_via_vector_view() {
     let tmp = tempfile::TempDir::new().expect("test: create temp dir");
     let db = velesdb_core::Database::open(tmp.path().to_str().expect("test: path"))
         .expect("test: open db");
     db.create_graph_collection("kg", velesdb_core::GraphSchema::schemaless())
         .expect("test: create graph collection");
+    db.create_metadata_collection("meta")
+        .expect("test: create metadata collection");
 
-    let result = require_collection(&db, "kg");
+    for name in ["kg", "meta"] {
+        assert!(
+            require_collection(&db, name).is_ok(),
+            "require_collection must accept '{name}' through its vector view"
+        );
+    }
+}
+
+#[cfg(feature = "persistence")]
+#[test]
+fn test_require_collection_still_rejects_missing_collection() {
+    let tmp = tempfile::TempDir::new().expect("test: create temp dir");
+    let db = velesdb_core::Database::open(tmp.path().to_str().expect("test: path"))
+        .expect("test: open db");
+
     assert!(
-        result.is_err(),
-        "require_collection should reject graph collections"
+        require_collection(&db, "absent").is_err(),
+        "require_collection must still fail on a missing collection"
     );
+}
+
+#[cfg(not(feature = "persistence"))]
+#[test]
+fn reject_unsupported_quality_refuses_a_value_and_allows_none() {
+    // #2095/A5: under a persistence-less build a provided `quality` must be
+    // refused loudly, never dropped; absent is the only acceptable shape.
+    assert!(crate::helpers::reject_unsupported_quality(Some(&"fast".to_string())).is_err());
+    assert!(crate::helpers::reject_unsupported_quality(None).is_ok());
 }

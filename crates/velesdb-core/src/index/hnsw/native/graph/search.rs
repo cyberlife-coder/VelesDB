@@ -6,6 +6,7 @@ use super::super::ordered_float::OrderedFloat;
 use super::search_pools::should_prefetch;
 use super::search_state::{gather_unvisited_neighbors, process_batch_results, SearchState};
 use super::{NativeHnsw, NO_ENTRY_POINT};
+use crate::index::hnsw::native::csr_adjacency::NeighborSlice;
 use crate::perf_optimizations::ContiguousVectors;
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -399,9 +400,10 @@ impl<D: DistanceEngine> NativeHnsw<D> {
             let entry_vec = unsafe { vectors.get_unchecked(entry) };
             let mut best_dist = self.distance.distance(query, entry_vec);
 
+            let csr0 = layers[layer].csr_snapshot();
             loop {
                 let improved = layers[layer]
-                    .with_neighbors(best, |neighbors| {
+                    .with_neighbors_resolved(best, csr0.as_deref(), |neighbors| {
                         self.greedy_scan_with_prefetch(
                             query,
                             neighbors,
@@ -426,12 +428,12 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     /// Prefetch neighbor vectors into CPU cache ahead of access.
     #[inline]
     fn prefetch_neighbors(
-        neighbors: &[NodeId],
+        neighbors: NeighborSlice<'_>,
         vectors: &crate::perf_optimizations::ContiguousVectors,
         start: usize,
         count: usize,
     ) {
-        for &neighbor_id in neighbors.iter().skip(start).take(count) {
+        for neighbor_id in neighbors.iter().skip(start).take(count) {
             if neighbor_id < vectors.len() {
                 vectors.prefetch(neighbor_id);
             }
@@ -446,7 +448,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
     fn greedy_scan_with_prefetch(
         &self,
         query: &[f32],
-        neighbors: &[NodeId],
+        neighbors: NeighborSlice<'_>,
         vectors: &crate::perf_optimizations::ContiguousVectors,
         dimension: usize,
         prefetch_dist: usize,
@@ -461,7 +463,7 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         }
 
         let mut improved = false;
-        for (i, &neighbor) in neighbors.iter().enumerate() {
+        for (i, neighbor) in neighbors.iter().enumerate() {
             // Prefetch upcoming neighbor vectors while processing the current one.
             if use_prefetch && i + prefetch_dist < neighbors.len() {
                 Self::prefetch_neighbors(neighbors, vectors, i + prefetch_dist, 1);
@@ -677,13 +679,14 @@ impl<D: DistanceEngine> NativeHnsw<D> {
         stagnation_limit: usize,
         use_prefetch: bool,
     ) {
+        let csr0 = layers[layer].csr_snapshot();
         while let Some(Reverse((OrderedFloat(c_dist), c_node))) = state.candidates.pop() {
             if state.should_terminate(c_dist, ef, stagnation_limit) {
                 break;
             }
 
             let improved = layers[layer]
-                .with_neighbors(c_node, |neighbors| {
+                .with_neighbors_resolved(c_node, csr0.as_deref(), |neighbors| {
                     let batch = gather_unvisited_neighbors(
                         neighbors,
                         &mut state.visited,

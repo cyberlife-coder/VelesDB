@@ -1,0 +1,59 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash \"$HOME/.config/devin/hooks/velesdb-memory/session-start.sh\"",
+          "timeout": 10
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash \"$HOME/.config/devin/hooks/velesdb-memory/stop.sh\"",
+          "timeout": 10
+        }
+      ]
+    }
+  ],
+  "PostCompaction": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash \"$HOME/.config/devin/hooks/velesdb-memory/post-compaction.sh\"",
+          "timeout": 10
+        }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": "^(edit|write|notebook_edit|apply_patch|Edit|Write)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash \"$HOME/.config/devin/hooks/velesdb-memory/pre-tool-use.sh\"",
+          "timeout": 10
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "^(exec|mcp__velesdb[-_]memory__.*)$",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash \"$HOME/.config/devin/hooks/velesdb-memory/post-tool-use.sh\"",
+          "timeout": 10
+        }
+      ]
+    }
+  ]
+}

@@ -44,5 +44,9 @@ coverage.xml
 *.pdf
 sample_pdfs/
 
+# Runtime data created by the demo server
+rag-data/
+.coverage.*
+
 # Logs
 *.log

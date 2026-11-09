@@ -326,11 +326,16 @@ impl DistanceEngine {
     }
 
     /// Computes Jaccard similarity with the pre-resolved kernel.
+    ///
+    /// Clamped to the declared `[0, 1]` range: the engine resolves a raw
+    /// kernel pointer, bypassing [`crate::DistanceMetric::calculate`] where the bound
+    /// is enforced — an engine caller must not see a different score than
+    /// `calculate` on the same pair (#2095).
     #[allow(clippy::inline_always)]
     #[inline(always)]
     #[must_use]
     pub fn jaccard(&self, a: &[f32], b: &[f32]) -> f32 {
-        self.dispatch(self.jaccard_fn, a, b)
+        self.dispatch(self.jaccard_fn, a, b).clamp(0.0, 1.0)
     }
 
     /// Returns the dimension this engine is specialized for.

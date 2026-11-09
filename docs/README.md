@@ -59,6 +59,7 @@ Each binding has its own reference guide; the
 | Python | [API reference](./guides/PYTHON_API_REFERENCE.md) |
 | WASM (browser) | [JavaScript API](./guides/WASM_API.md) |
 | Node.js | [Addon reference](./guides/NODE_ADDON.md) |
+| TypeScript SDK | [SDK reference](../sdks/typescript/README.md) |
 | Mobile (Swift / Kotlin) | [Mobile API](./guides/MOBILE_API.md) |
 | Server (REST) | [REST tour](./guides/SERVER_REST_TOUR.md) |
 | Tauri plugin | [Plugin reference](./guides/TAURI_PLUGIN_REFERENCE.md) |
@@ -184,4 +185,4 @@ the remaining debt is. Read these when you need the *why* behind a behaviour.
 *VelesDB — the explainable, local-first memory engine for AI agents. (Microsecond vector search is the proof, not the pitch.)*
 
 ---
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.2.0

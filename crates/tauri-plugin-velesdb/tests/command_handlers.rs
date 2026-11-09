@@ -238,9 +238,10 @@ fn create_metadata_collection_and_upsert_metadata() {
     }))
     .expect("deserialize metadata point");
 
-    // upsert_metadata goes through `require_collection`, which only accepts
-    // vector collections — so a metadata-only target is rejected (error path).
-    let rejected = run(upsert_metadata(
+    // upsert_metadata reaches the metadata collection through
+    // `require_collection`, which re-wraps every variant into its vector
+    // view — a creatable collection accepts its own data plane.
+    let written = run(upsert_metadata(
         handle(&app),
         st(&app),
         UpsertMetadataRequest {
@@ -248,8 +249,8 @@ fn create_metadata_collection_and_upsert_metadata() {
             points: vec![m_point],
         },
     ))
-    .expect_err("metadata-only collection is not a vector collection");
-    assert_eq!(rejected.code, "VELES-009");
+    .expect("upsert_metadata into metadata collection");
+    assert_eq!(written, 1);
 
     // The success path: metadata-only points (no vector) into a vector
     // collection exercises the `coll.upsert_metadata` branch.

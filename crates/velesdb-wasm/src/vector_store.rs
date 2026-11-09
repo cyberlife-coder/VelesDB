@@ -415,6 +415,7 @@ impl VectorStore {
             .map_err(|e| JsValue::from_str(&e))?;
         store_search::batch_search_impl(
             vectors,
+            num_vectors,
             &self.ids,
             &self.data,
             self.dimension,
@@ -536,6 +537,32 @@ impl VectorStore {
     /// scores behind [`search`](Self::search) in every storage mode.
     pub(crate) fn search_scored(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
         store_search::top_k(query, &self.ids, &self.data, self.dimension, self.metric, k)
+    }
+
+    /// Top-`k` `(id, score)` pairs behind [`hybrid_search`](Self::hybrid_search)
+    /// — same linear vector+binary-text blend, without the `JsValue` boundary.
+    #[cfg(test)]
+    pub(crate) fn hybrid_search_scored(
+        &self,
+        query_vector: &[f32],
+        text_query: &str,
+        k: usize,
+        vector_weight: Option<f32>,
+    ) -> Vec<(u64, f32)> {
+        store_search::hybrid_search_scored(
+            query_vector,
+            text_query,
+            &self.ids,
+            &self.data,
+            &self.payloads,
+            self.dimension,
+            self.metric,
+            k,
+            vector_weight,
+        )
+        .into_iter()
+        .map(|(id, score, _)| (id, score))
+        .collect()
     }
 
     /// Scoring entry point behind [`search_sparse`](Self::search_sparse).

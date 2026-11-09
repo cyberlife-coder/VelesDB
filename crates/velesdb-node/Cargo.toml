@@ -2,7 +2,7 @@
 name = "velesdb-node"
 # Tracks velesdb-memory's independent cadence (the npm package version),
 # not the workspace 3.x engine line. Never crates.io-published (publish=false).
-version = "0.17.1"
+version = "0.18.0"
 # Never cargo-published: this cdylib ships to npm as @wiscale/velesdb-memory-node
 # per-platform prebuilds, not to crates.io.
 publish = false
@@ -44,6 +44,12 @@ serde_json = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"
+
+[features]
+# Parity with velesdb-python's `gpu` opt-in (#1965). Forwarded through
+# velesdb-memory — never `velesdb-core/gpu` here: the ci.yml
+# "License/dependency boundary gate" refuses a direct velesdb-core dep.
+gpu = ["velesdb-memory/gpu"]
 
 [lints]
 workspace = true

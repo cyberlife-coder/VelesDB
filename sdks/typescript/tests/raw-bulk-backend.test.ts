@@ -11,9 +11,26 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { encodeRawBulk, upsertBatchRaw, type RawBulkTransport } from '../src/backends/crud-backend';
 import { WasmBackend } from '../src/backends/wasm';
 import { VelesDBError, ValidationError } from '../src/types';
+
+interface Vrb1GoldenCase {
+  id: string;
+  ids: number[];
+  vectors: number[];
+  dimension: number;
+  expect_hex: string;
+}
+
+// Shared golden bytes (#2095 C4): velesdb-core's wire::vrb1::encode is pinned
+// to these same octets by crates/velesdb-core/tests/vrb1_golden_conformance.rs,
+// so the two encoders cannot drift without one side going red.
+const vrb1Golden: { cases: Vrb1GoldenCase[] } = JSON.parse(
+  readFileSync(path.resolve(__dirname, '../../../conformance/vrb1_golden.json'), 'utf8')
+);
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -87,6 +104,22 @@ describe('encodeRawBulk', () => {
   it('rejects mismatched ids/vectors lengths', () => {
     expect(() => encodeRawBulk([1, 2], [new Float32Array([1, 2])], 2)).toThrow(ValidationError);
   });
+});
+
+describe('encodeRawBulk vs core golden bytes (conformance/vrb1_golden.json)', () => {
+  for (const c of vrb1Golden.cases) {
+    it(`${c.id}: produces the exact bytes core's encoder emits`, () => {
+      // The fixture stores vectors flat (ids * dim), as core's codec takes
+      // them; the SDK encoder takes one vector per id.
+      const vectors: number[][] = [];
+      for (let i = 0; i < c.ids.length; i++) {
+        vectors.push(c.vectors.slice(i * c.dimension, (i + 1) * c.dimension));
+      }
+      const bytes = encodeRawBulk(c.ids, vectors, c.dimension);
+      const hex = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('hex');
+      expect(hex).toBe(c.expect_hex);
+    });
+  }
 });
 
 describe('upsertBatchRaw (REST)', () => {

@@ -80,6 +80,7 @@ REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / "integrations" / "agent-hooks" / "claude-code" / "hooks"
 CODEX_SOURCE = REPO / "integrations" / "agent-hooks" / "codex" / "hooks"
 WINDSURF_SOURCE = REPO / "integrations" / "agent-hooks" / "windsurf" / "hooks"
+DEVIN_SOURCE = REPO / "integrations" / "agent-hooks" / "devin" / "hooks"
 
 #: The one place the shared library lives. Each host's `lib/common.sh` is
 #: composed from it into the staged tree at install time, so the repository
@@ -93,7 +94,12 @@ ONLY_END = "# <<< only"
 #: Installer client -> host directory under `integrations/agent-hooks/`.
 #: `only:` regions name directories, not clients, so a marker's spelling is
 #: the same one a reader sees in the tree.
-HOST_DIRS = {"claude": "claude-code", "codex": "codex", "windsurf": "windsurf"}
+HOST_DIRS = {
+    "claude": "claude-code",
+    "codex": "codex",
+    "windsurf": "windsurf",
+    "devin": "devin",
+}
 
 #: The composed artefact every staged tree carries. Not committed per host:
 #: a copy under a host directory would be a second source of truth.
@@ -124,6 +130,18 @@ CODEX_HOOKS: "tuple[tuple[str, str], ...]" = (
 #: not the matcher/group/hooks nesting Claude Code and Codex share.
 WINDSURF_HOOKS: "tuple[tuple[str, str], ...]" = (
     ("pre_user_prompt", "pre-user-prompt.sh"),
+)
+
+#: Devin's registry is `~/.config/devin/config.json` under a top-level
+#: `hooks` key with the same group/matcher nesting Claude uses — but its
+#: lifecycle differs: no PreCompact (PostCompaction instead, after the fact)
+#: and no PostToolUseFailure (one PostToolUse carries `success`).
+DEVIN_HOOKS: "tuple[tuple[str, str], ...]" = (
+    ("SessionStart", "session-start.sh"),
+    ("Stop", "stop.sh"),
+    ("PostCompaction", "post-compaction.sh"),
+    ("PreToolUse", "pre-tool-use.sh"),
+    ("PostToolUse", "post-tool-use.sh"),
 )
 
 #: The installed directory name. Ownership is resolved from the client's
@@ -165,10 +183,25 @@ def windsurf_root() -> Path:
     return Path.home() / ".codeium" / "windsurf"
 
 
+def devin_root() -> Path:
+    """Devin's config home: `~/.config/devin` (`%APPDATA%\\devin` on Windows),
+    overridable for tests through DEVIN_CONFIG_HOME."""
+    override = os.environ.get("DEVIN_CONFIG_HOME")
+    if override:
+        root = Path(override).expanduser()
+        if not root.is_absolute():
+            raise SystemExit("DEVIN_CONFIG_HOME must be an absolute path")
+        return root
+    return Path.home() / ".config" / "devin"
+
+
 def client_root(client: str) -> Path:
-    return {"claude": claude_root, "codex": codex_root, "windsurf": windsurf_root}[
-        client
-    ]()
+    return {
+        "claude": claude_root,
+        "codex": codex_root,
+        "windsurf": windsurf_root,
+        "devin": devin_root,
+    }[client]()
 
 
 def source_for(client: str) -> Path:
@@ -176,6 +209,7 @@ def source_for(client: str) -> Path:
         "claude": SOURCE,
         "codex": CODEX_SOURCE,
         "windsurf": WINDSURF_SOURCE,
+        "devin": DEVIN_SOURCE,
     }[client]
 
 
@@ -184,6 +218,7 @@ def hooks_for(client: str) -> "tuple[tuple[str, str], ...]":
         "claude": HOOKS,
         "codex": CODEX_HOOKS,
         "windsurf": WINDSURF_HOOKS,
+        "devin": DEVIN_HOOKS,
     }[client]
 
 
@@ -193,13 +228,22 @@ def marker_for(client: str) -> str:
 
 def matcher_for(client: str, event: str) -> "str | None":
     if event == "PreToolUse":
-        return "^(Edit|Write)$" if client == "claude" else "^(apply_patch|Edit|Write)$"
+        if client == "claude":
+            return "^(Edit|Write)$"
+        if client == "devin":
+            return "^(edit|write|notebook_edit|apply_patch|Edit|Write)$"
+        return "^(apply_patch|Edit|Write)$"
     if client == "claude" and event == "PostToolUseFailure":
         # Only a failed shell command is a check outcome; every other tool's
         # failure costs the hook nothing.
         return "^Bash$"
     if client == "codex" and event == "PostToolUse":
         return "^mcp__velesdb[-_]memory__(recall|recall_fused|recall_where|compile_context|entity|why|save_working_context|load_working_context)$"
+    if client == "devin" and event == "PostToolUse":
+        # exec carries check outcomes; the velesdb-memory tools carry recall
+        # evidence and working-context sessions. Everything else is skipped
+        # before the hook spawns.
+        return "^(exec|mcp__velesdb[-_]memory__.*)$"
     return None
 
 
@@ -230,7 +274,15 @@ def hooks_write_target(client: str = "claude") -> Path:
 
 
 def settings_path(client: str = "claude") -> Path:
-    name = "settings.json" if client == "claude" else "hooks.json"
+    if client == "claude":
+        name = "settings.json"
+    elif client == "devin":
+        # Devin's hooks live under the top-level "hooks" key of its general
+        # config file, beside "agent", "mcp_config" etc. — not a dedicated
+        # registry.
+        name = "config.json"
+    else:
+        name = "hooks.json"
     return client_root(client) / name
 
 
@@ -284,6 +336,8 @@ def handler_for(event: str, script: str, client: str = "claude") -> dict:
     handler: dict = {"type": "command", "command": command_for(script, client)}
     if client == "codex":
         handler.update(timeout=10, statusMessage=CODEX_STATUS_MESSAGES[event])
+    elif client == "devin":
+        handler["timeout"] = 10
     return handler
 
 
@@ -791,14 +845,18 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="report, write nothing")
     parser.add_argument(
         "--client",
-        choices=("claude", "codex", "windsurf", "all"),
+        choices=("claude", "codex", "windsurf", "devin", "all"),
         default="claude",
         help="client to reconcile (default: claude)",
     )
     args = parser.parse_args(argv)
     if args.stage:
         return run_stage(Path(args.stage))
-    clients = ("claude", "codex", "windsurf") if args.client == "all" else (args.client,)
+    clients = (
+        ("claude", "codex", "windsurf", "devin")
+        if args.client == "all"
+        else (args.client,)
+    )
     results = []
     for client in clients:
         if len(clients) > 1:

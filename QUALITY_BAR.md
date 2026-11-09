@@ -4,7 +4,7 @@ This document specifies the **explicit, enforceable thresholds** below which Vel
 
 These gates are not aspirational. They are enforced via CI workflows, scripts, and explicit pre-merge protocols. Each gate listed here links to its enforcement mechanism so that the gate can be inspected, contested, or extended publicly.
 
-> **Last updated:** 2026-09-10 — applies to v8.x (workspace 8.1.0).
+> **Last updated:** 2026-11-09 — applies to v8.x (workspace 8.2.0).
 
 ---
 
@@ -22,7 +22,7 @@ These gates are not aspirational. They are enforced via CI workflows, scripts, a
 
 A pull request that breaks any of these gates **cannot be merged**. There are no waivers without a documented exception added to this file.
 
-**How "cannot be merged" is enforced:** both `develop` and `main` carry GitHub branch protection requiring the **`CI Success`** status check; force pushes are disabled on both branches. `CI Success` is a summary job, and the authoritative list of what it gates is its own `needs:` in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — read it there rather than trusting a copy. It currently stands at **27 entries, of which 26 are blocking** — `sonarcloud` is listed in `needs:` but deliberately not read by the chain, so it reports without gating: the build-and-test layer (lint, tests, security/cargo-deny, WASM, OpenAPI drift, VelesQL conformance, perf-smoke, the Python SDK and integrations, both Node binding suites) *and* the governance layer that polices this contract itself (`gate-contracts`, `doc-contract`, `promise-contract`, `mcp-doc-contract`, `production-gates`, `propagation-guard`, `binary-size`, `pr-governance`). This sentence used to enumerate eight of them, which read as the whole set and was not: the thirteen it omitted were, almost exactly, the guards. Gates 5–6 are enforced by Codacy Cloud; the official register of per-file complexity exceptions (each with a written rationale) is [`.codacy.yml`](.codacy.yml) — the bar is ≤ 8 / ≤ 50 everywhere outside that explicit whitelist. Gate 7 runs in `scripts/local-ci.ps1` and Codacy rather than as a GitHub Actions job.
+**How "cannot be merged" is enforced:** both `develop` and `main` carry GitHub branch protection requiring the **`CI Success`** status check; force pushes are disabled on both branches. `CI Success` is a summary job, and the authoritative list of what it gates is its own `needs:` in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — read it there rather than trusting a copy. It currently stands at **29 entries, of which 28 are blocking** — `sonarcloud` is listed in `needs:` but deliberately not read by the chain, so it reports without gating: the build-and-test layer (lint, tests, security/cargo-deny, semver checks, hygiene, WASM, the memory feature matrix, the internal-bench and drop-tightening checks, OpenAPI drift, VelesQL conformance, perf-smoke, the SIFT1M bench and fuzz compile checks, the public trait API surface, the `perf-gate-e2e` run, the Python SDK and integrations, both Node binding suites) *and* the governance layer that polices this contract itself (`gate-contracts`, `doc-contract`, `promise-contract`, `mcp-doc-contract`, `production-gates`, `propagation-guard`, `binary-size`, `pr-governance`). This sentence used to enumerate eight of them, which read as the whole set and was not: the thirteen it omitted were, almost exactly, the guards. Gates 5–6 are enforced by Codacy Cloud; the official register of per-file complexity exceptions (each with a written rationale) is [`.codacy.yml`](.codacy.yml) — the bar is ≤ 8 / ≤ 50 everywhere outside that explicit whitelist. Gate 7 runs in `scripts/local-ci.ps1` and Codacy rather than as a GitHub Actions job.
 
 ---
 
@@ -164,11 +164,9 @@ These are **not the same number** as the canonical 450 µs. The README explicitl
 
 | File | NLOC | Plan |
 |------|------|------|
-| `simd_native/x86_avx512.rs` | ~556 | Hamming/Jaccard split out into `x86_avx512/hamming_jaccard.rs` (#2396); intrinsics block remains dense |
-| `velesdb-server/src/config.rs` | 837 | Refactor pending |
-| `velesdb-migrate/src/pipeline.rs` | 806 | Refactor pending |
+| `simd_native/x86_avx512.rs` | ~563 | Hamming/Jaccard split out into `x86_avx512/hamming_jaccard.rs` (#2396); intrinsics block remains dense |
 
-These are tracked but do not block release because they are SIMD intrinsics blocks (function-level NLOC is fine; file-level breach is unavoidable for hand-written intrinsics).
+It is tracked but does not block release because it is a SIMD intrinsics block (function-level NLOC is fine; the file-level breach is unavoidable for hand-written intrinsics). `velesdb-server/src/config.rs` and `velesdb-migrate/src/pipeline.rs` crossed the same limit historically; both sit under 500 today (lizard, 2026-11-09: 393 and 477 NLOC).
 
 ---
 
@@ -197,7 +195,7 @@ These signals are tracked but do not block release individually:
 | BDD scenario coverage | All VelesQL syntax features | `crates/velesdb-core/tests/bdd/` |
 | Doctest compilation | All `pub fn` doctests compile | `cargo test --doc` in CI |
 | Promise contract sync | All numeric claims in README backed by benchmark commands | `scripts/check-promise-contract.py` in CI |
-| Binary size | `velesdb-server` ≤ 12 MiB, `velesdb` (CLI) ≤ 10 MiB, `velesdb-migrate` ≤ 9.9 MiB (stripped release) | `scripts/check_binary_size.py` in CI (Binary Size Gate job) |
+| Binary size | `velesdb-server` ≤ 14.75 MiB, `velesdb` (CLI) ≤ 11.8 MiB, `velesdb-migrate` ≤ 9.9 MiB (stripped release; ceilings re-baselined to measured size + ~2.5 % — the earlier 12/10/9 MiB figures were never enforced) | `scripts/check_binary_size.py` in CI (Binary Size Gate job) |
 | TODO governance | Every TODO/FIXME/HACK carries an issue tag: `[EPIC-XXX/US-YYY]`, `(PREFIX-NNN)` (e.g. `(EPIC-001)`, `(US-GRAPH-01)`), `#123`, or `#issue` | `scripts/check-todo-annotations.py` |
 | RUSTSEC | All advisories tracked or justified in `deny.toml` | `cargo deny check` in CI (Security Audit job) |
 | Untrusted-input hardening | Corrupt/oversized persisted artifacts (HNSW graph, PQ codebook, sparse, BM25, WAL) are rejected at load, not used to size allocations; WAL `Fsync` is durable before ack; config limits validated in loaders + on open | Regression suites: `storage/storage_reliability_tests.rs`, `index/hnsw/persistence_atomicity_tests.rs`, `quantization/pq_tests.rs`, `quantization/rabitq_tests.rs`, `index/sparse/persistence_tests.rs`, `index/bm25_tests.rs`, `config_tests.rs`, `velesql/parser/robustness_tests.rs` (gated by `cargo test`) |
@@ -213,7 +211,7 @@ These signals are tracked but do not block release individually:
 Before tagging any release (patch, minor, major), all of the following must be **green**:
 
 - [ ] Local: `cargo fmt --all -- --check`
-- [ ] Local: `cargo clippy --workspace --all-targets --features persistence,gpu,update-check --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic` (then `cargo clippy -p velesdb-node --lib` and `PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib`, each `-D warnings` — both are excluded above for link reasons)
+- [ ] Local: both workspace clippy passes CI runs — `cargo clippy --workspace --all-targets --features persistence,gpu,update-check,openapi,test-fault-injection --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc` **and** `--features persistence,update-check,internal-bench` with the same flags (then `cargo clippy -p velesdb-node --lib` and `PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib`, each `-D warnings` — both are excluded above for link reasons)
 - [ ] Local: `cargo test --workspace --features persistence,gpu,update-check --exclude velesdb-python -- --test-threads=1`
 - [ ] Local: `python scripts/check_prod_unwraps.py`
 - [ ] Local: `python scripts/check-promise-contract.py`

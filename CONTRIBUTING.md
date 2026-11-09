@@ -150,9 +150,13 @@ Run this sequence **before every push** (CI runs on every PR — running it loca
 # 1. Format
 cargo fmt --all
 
-# 2. Lint (strict — mirrors CI; node and python are linted separately, see AGENTS.md)
-cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
-  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
+# 2. Lint (strict — CI runs both workspace passes; node and python are linted separately, see AGENTS.md)
+cargo clippy --workspace --all-targets --features persistence,gpu,update-check,openapi,test-fault-injection \
+  --exclude velesdb-python --exclude velesdb-node \
+  -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
+cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \
+  --exclude velesdb-python --exclude velesdb-node \
+  -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
 # 3. Tests
 cargo test -p velesdb-core --features persistence -- --test-threads=1
@@ -231,9 +235,13 @@ cargo check --workspace --exclude tauri-plugin-velesdb --exclude tauri-rag-app
 cargo test --workspace --features persistence,gpu,update-check \
   --exclude velesdb-python -- --test-threads=1
 
-# Lint (strict — mirrors CI; node and python are linted separately, see AGENTS.md)
-cargo clippy --workspace --all-targets --features persistence,gpu,update-check \
-  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic
+# Lint (strict — CI runs both workspace passes; node and python are linted separately, see AGENTS.md)
+cargo clippy --workspace --all-targets --features persistence,gpu,update-check,openapi,test-fault-injection \
+  --exclude velesdb-python --exclude velesdb-node \
+  -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
+cargo clippy --workspace --all-targets --features persistence,update-check,internal-bench \
+  --exclude velesdb-python --exclude velesdb-node \
+  -- -D warnings -D clippy::pedantic -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
 # Run the server locally
 cargo run --bin velesdb-server -- --data-dir ./data
@@ -400,7 +408,7 @@ Contributors are recognized in:
 
 ## Release Process
 
-CI spans 21 workflow files; the merge gate is the **`CI Success`** summary job,
+CI spans 29 workflow files; the merge gate is the **`CI Success`** summary job,
 whose `needs:` list in [`ci.yml`](.github/workflows/ci.yml) is the authoritative
 inventory (mapped guard-by-guard in [`scripts/guards.json`](scripts/guards.json)).
 The three you interact with most:

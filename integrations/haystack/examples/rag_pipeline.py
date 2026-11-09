@@ -1,7 +1,11 @@
 """End-to-end RAG example: PDF ingestion and semantic search with VelesDB.
 
-Requires:
-    pip install haystack-ai haystack-velesdb sentence-transformers
+Requires (haystack-ai 2.x):
+    pip install "haystack-ai>=2,<3" haystack-velesdb sentence-transformers
+
+Requires (haystack-ai 3.x — the SentenceTransformers embedders moved out of
+core Haystack into their own integration package):
+    pip install haystack-ai haystack-velesdb sentence-transformers-haystack
 
 Usage:
     python rag_pipeline.py                  # uses built-in sample text
@@ -12,10 +16,17 @@ from __future__ import annotations
 import argparse
 
 from haystack import Pipeline
-from haystack.components.embedders import (
-    SentenceTransformersDocumentEmbedder,
-    SentenceTransformersTextEmbedder,
-)
+
+try:  # haystack-ai 2.x ships the embedders in core
+    from haystack.components.embedders import (
+        SentenceTransformersDocumentEmbedder,
+        SentenceTransformersTextEmbedder,
+    )
+except ImportError:  # haystack-ai 3.x: install sentence-transformers-haystack
+    from haystack_integrations.components.embedders.sentence_transformers import (
+        SentenceTransformersDocumentEmbedder,
+        SentenceTransformersTextEmbedder,
+    )
 from haystack.components.preprocessors import DocumentSplitter
 from haystack.components.writers import DocumentWriter
 from haystack.dataclasses import Document

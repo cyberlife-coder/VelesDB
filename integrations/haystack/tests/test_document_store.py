@@ -339,6 +339,16 @@ def _load_module() -> types.ModuleType:
     vc_sec.validate_metric = _passthrough  # type: ignore[attr-defined]
     vc_sec.validate_named_sparse_vector = _passthrough  # type: ignore[attr-defined]
     vc_sec.SecurityError = ValueError  # type: ignore[attr-defined]
+    # Mirrors velesdb_common.security._FALLBACK_CONDITION_TYPES: the store's
+    # import-time drift guard reads this set.
+    vc_sec.ALLOWED_CONDITION_TYPES = frozenset(  # type: ignore[attr-defined]
+        {
+            "eq", "neq", "gt", "gte", "lt", "lte", "in", "contains",
+            "is_null", "is_not_null", "and", "or", "not", "like", "ilike",
+            "array_contains", "array_contains_any", "array_contains_all",
+            "geo_distance", "geo_bbox",
+        }
+    )
     sys.modules["velesdb_common.security"] = vc_sec
 
     vc_fusion = types.ModuleType("velesdb_common.fusion")

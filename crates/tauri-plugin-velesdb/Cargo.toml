@@ -43,7 +43,7 @@ tokio = { version = "1.52", features = [
 tauri = { version = "2.12", default-features = false, features = ["test"] }
 
 [features]
-default = ["velesdb-core/default"]
+default = ["velesdb-core/default", "persistence"]
 bench-sift1m = ["velesdb-core/bench-sift1m"]
 ## Forwards the `velesdb-core/bytemuck` compatibility stub (see that crate's
 ## Cargo.toml) so this parity table stays a straight mirror, not an

@@ -1,9 +1,13 @@
-# Core: VelesQL reference
+# Core: VelesQL quick reference
 
 VelesQL is the SQL-like language that queries the three `velesdb-core` engines
 — vector (HNSW), graph (typed edges, `MATCH`) and columnar metadata — from a
 single statement. Parse with `velesdb_core::velesql::Parser` and execute with
 `Database::execute_query`.
+
+This page is a quick reference: it covers the common statements only. The
+canonical grammar — every clause, version gate and edge case — is
+[VELESQL_SPEC.md](../VELESQL_SPEC.md).
 
 Moved out of `crates/velesdb-core/README.md` to keep that file under the
 400-line documentation budget.
@@ -125,6 +129,7 @@ EXPLAIN SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10;
 
 ## See also
 
+- [VelesQL specification](../VELESQL_SPEC.md) — the canonical grammar
 - [velesdb-core README](../../crates/velesdb-core/README.md)
 - [Multi-model queries](./MULTIMODEL_QUERIES.md) — vector + graph + metadata in one statement
 - [Graph patterns](./GRAPH_PATTERNS.md) — `MATCH` recipes
@@ -132,4 +137,4 @@ EXPLAIN SELECT * FROM docs WHERE VECTOR NEAR $v LIMIT 10;
 
 ---
 
-Last updated: 2026-07-25 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 8.2.0

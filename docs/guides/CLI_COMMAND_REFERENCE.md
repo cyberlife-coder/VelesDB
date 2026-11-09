@@ -297,14 +297,16 @@ velesdb query explain ./data "SELECT * FROM docs LIMIT 10" --format json
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-k, --top-k` | `10` | Number of results to return |
-| `-s, --strategy` | `rrf` | Fusion strategy: `average`, `maximum`, `rrf`, `weighted`, `relative_score` |
-| `--rrf-k` | `60` | RRF k parameter (only used with the `rrf` strategy) |
+| `-s, --strategy` | `rrf` | Fusion strategy: `average`, `maximum`, `rrf`, `weighted_rrf`, `weighted`, `relative_score` |
+| `--rrf-k` | `60` | RRF k parameter (only used with the `rrf` and `weighted_rrf` strategies) |
+| `--branch-weights` | — | Per-branch weights for `weighted_rrf`, comma-separated, one per query vector (e.g. `'0.7,0.3'`) |
 | `-f, --format` | `table` | Output format (`table`, `json`) |
 
 Strategy aliases: `average` (also `avg`), `maximum` (also `max`), `rrf`
-(default), `weighted`, `relative_score` (also `rsf`), in any case — the name
-grammar of `velesdb_core::FusionStrategy::from_name`, shared with the server,
-Python, WASM and Tauri. The `weighted` strategy uses core's default weights
+(default), `weighted_rrf`, `weighted`, `relative_score` (also `rsf`), in any
+case — the name grammar of `velesdb_core::FusionStrategy::from_name`, shared
+with the server, Python, WASM and Tauri. `weighted_rrf` takes its per-branch
+weights from `--branch-weights`. The `weighted` strategy uses core's default weights
 (`avg_weight=0.6`, `max_weight=0.3`, `hit_weight=0.1`), the same as every other
 surface; they are not configurable from the CLI.
 
@@ -551,4 +553,4 @@ Numeric `VELES-*` codes are listed in
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-08-13 · Applies to: velesdb-core 8.2.0

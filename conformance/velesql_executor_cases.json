@@ -1198,6 +1198,21 @@
       "wasm_behavior": "RESOLVED: a DISTINCT without aggregates now goes through the plain SELECT pipeline and core's apply_distinct. It used to run in the aggregation pipeline, which ignored ORDER BY, had no default LIMIT, and keyed `DISTINCT *` on id and score so no row ever collapsed",
       "status": "resolved — projection_cases P001-P004 assert the projected rows on both engines",
       "evidence": "crates/velesdb-core/src/collection/search/query/distinct.rs: apply_distinct(); crates/velesdb-wasm/src/velesql_select.rs: finalize_plain()"
+    },
+    {
+      "id": "D013",
+      "area": "USING FUSION weight-sensitive strategies (WASM only)",
+      "core_behavior": "`USING FUSION (strategy='weighted'|'weighted_rrf'|'rsf')` executes over real scored branches (BM25 text MATCH, SPARSE_NEAR, graph) once core's QueryValidator counts two fusable branches",
+      "wasm_behavior": "refused outright by reject_single_branch_weighted_fusion (velesql_select.rs): WASM's only second branch is a synthetic constant-1.0 id-equality hit set, so a weight-sensitive fusion would rank noise; 'rrf'/'average'/'maximum' still execute over that synthetic branch as a hard-filtered no-op (demo parity). No core-answer/wasm-refuse pair is reachable in practice: the branch types that would make the strategies meaningful (MATCH BM25, SPARSE_NEAR) are unsupported in WASM WHERE evaluation and fail earlier. `multi_query_search` (the JS API, store_search.rs) DOES accept weighted_rrf via its `weights` argument — this refusal is VelesQL-surface only",
+      "status": "accepted — the refusal is the designed guard, not a missing feature (#2095 A3 residual audit, 2026-11-07)",
+      "evidence": "crates/velesdb-wasm/src/velesql_select.rs: reject_single_branch_weighted_fusion(); crates/velesdb-wasm/src/velesql_fusion.rs (synthetic payload branch); crates/velesdb-wasm/src/velesql_where.rs (MATCH BM25 unsupported); crates/velesdb-wasm/src/store_search.rs (weighted_rrf accepted on multi_query_search)"
+    },
+    {
+      "id": "D014",
+      "area": "JOIN column acceptance (issue #2049 indexed joins vs WASM nested loop)",
+      "core_behavior": "core's JOIN executor accepts the column-store primary key or a non-PK column carrying a B-tree secondary index (try_indexed_join, database/query_join.rs); an unindexed non-PK join column is refused at runtime",
+      "wasm_behavior": "the WASM executor's nested-loop join (velesql_join.rs) compares payload fields directly — any column joins, indexed or not, so a query core refuses for want of an index runs on WASM",
+      "status": "accepted — no join_case pins an indexed non-PK join because the fixture schema cannot declare a secondary index (extra_collections carry collection+dimension+metric+points only); the acceptance gap is recorded here so it cannot be silently widened, and core's own indexed-join behaviour is covered by query_join_tests.rs"
     }
   ]
 }

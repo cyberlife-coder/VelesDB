@@ -14,6 +14,13 @@
 //! - **L2**: Prefetch into L2 cache (medium speed, larger)
 //! - **L3**: Prefetch into L3 cache (slowest, largest)
 //!
+//! # Deprecation
+//!
+//! Restored to `pub` for the 8.2.0 minor bump after the `pub(crate)`
+//! narrowing in #2663: removing it outright is a semver-major change for
+//! aarch64 consumers. The module leaves the public API in 9.0.0 — new
+//! code must not depend on it.
+//!
 //! # Example
 //!
 //! ```ignore
@@ -56,6 +63,10 @@ pub fn prefetch_read_l1(ptr: *const u8) {
 ///
 /// Use this for data that will be accessed soon but not immediately.
 #[cfg(target_arch = "aarch64")]
+#[deprecated(
+    since = "8.2.0",
+    note = "internal prefetch helper; leaves the public API in 9.0.0"
+)]
 #[inline]
 pub fn prefetch_read_l2(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a prefetch hint only.
@@ -94,6 +105,10 @@ pub fn prefetch_read_l3(ptr: *const u8) {
 ///
 /// Use this when you know you'll be writing to the data soon.
 #[cfg(target_arch = "aarch64")]
+#[deprecated(
+    since = "8.2.0",
+    note = "internal prefetch helper; leaves the public API in 9.0.0"
+)]
 #[inline]
 pub fn prefetch_write_l1(ptr: *const u8) {
     // SAFETY: `asm!(prfm ...)` emits a write-prefetch hint only.
@@ -121,6 +136,7 @@ pub fn prefetch_write_l1(ptr: *const u8) {
 /// - 768D vector (3072B): covers 512B = 16.7%
 /// - 128D vector (512B): covers 384B = 75%
 #[cfg(target_arch = "aarch64")]
+#[allow(deprecated)] // calls deprecated helpers; module leaves the public API in 9.0.0
 #[inline]
 pub fn prefetch_vector_neon(vector: &[f32]) {
     // Apple Silicon (M1-M4) uses 128-byte cache lines.
@@ -172,6 +188,10 @@ pub fn prefetch_vector_neon(vector: &[f32]) {
 /// - Medium vectors (129-512D): 6-8 vectors ahead
 /// - Large vectors (513-1024D): 10-12 vectors ahead
 /// - Very large vectors (>1024D): 14-16 vectors ahead
+#[deprecated(
+    since = "8.2.0",
+    note = "internal prefetch helper; leaves the public API in 9.0.0"
+)]
 #[must_use]
 #[inline]
 pub fn calculate_prefetch_distance_neon(dimension: usize) -> usize {
@@ -193,6 +213,10 @@ pub fn prefetch_read_l1(_ptr: *const u8) {}
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
+#[deprecated(
+    since = "8.2.0",
+    note = "internal prefetch helper; leaves the public API in 9.0.0"
+)]
 #[inline]
 pub fn prefetch_read_l2(_ptr: *const u8) {}
 
@@ -203,6 +227,10 @@ pub fn prefetch_read_l3(_ptr: *const u8) {}
 
 /// No-op prefetch for non-ARM64 targets.
 #[cfg(not(target_arch = "aarch64"))]
+#[deprecated(
+    since = "8.2.0",
+    note = "internal prefetch helper; leaves the public API in 9.0.0"
+)]
 #[inline]
 pub fn prefetch_write_l1(_ptr: *const u8) {}
 

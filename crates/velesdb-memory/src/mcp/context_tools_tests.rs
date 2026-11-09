@@ -898,7 +898,13 @@ async fn test_save_working_context_tool_then_load_round_trips() {
         }))
         .await
         .expect("save_working_context");
-    assert!(save_result.id > 0);
+    assert!(
+        save_result
+            .id
+            .parse::<u64>()
+            .expect("wire id is a decimal string")
+            > 0
+    );
 
     // Then a later load (a fresh "session") recovers the exact same state —
     // this is the inter-session resumption the tool exists for.
@@ -1394,9 +1400,11 @@ async fn test_load_working_context_never_suggests_the_session_it_just_denied() {
         }))
         .await
         .expect("save_working_context");
-    srv.forget(Parameters(super::super::dto::ForgetParams { id: saved.id }))
-        .await
-        .expect("forget");
+    srv.forget(Parameters(super::super::dto::ForgetParams {
+        id: saved.id.parse().expect("wire id is a decimal string"),
+    }))
+    .await
+    .expect("forget");
 
     // When loading that same session back
     let Json(loaded) = srv
@@ -1437,9 +1445,11 @@ async fn test_list_working_contexts_drops_a_session_whose_context_is_gone() {
             // no longer has to trigger a side effect from a read path to
             // pass, which is the point — the guarantee holds on a cold
             // process that never loaded this session.
-            srv.forget(Parameters(super::super::dto::ForgetParams { id: saved.id }))
-                .await
-                .expect("forget");
+            srv.forget(Parameters(super::super::dto::ForgetParams {
+                id: saved.id.parse().expect("wire id is a decimal string"),
+            }))
+            .await
+            .expect("forget");
         }
     }
 

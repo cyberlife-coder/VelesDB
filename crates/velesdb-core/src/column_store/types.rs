@@ -1,5 +1,6 @@
 //! Types and enums for column store module.
 
+use roaring::RoaringBitmap;
 use smallvec::SmallVec;
 use thiserror::Error;
 
@@ -99,52 +100,187 @@ impl PartialEq for ColumnValue {
 
 impl Eq for ColumnValue {}
 
+/// Dense values plus a validity bitmap — the Arrow-style cell layout
+/// `TypedColumn` moved to (#2076, PR-D1): `values[i]` is meaningful only
+/// when `i` is set in `validity`; the slot is never read otherwise.
+///
+/// A null row stores the type's `Default` in `values` — the bitmap, not
+/// the value, is the source of truth for presence.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Masked<T> {
+    /// Dense values; garbage/`Default` at invalid positions.
+    pub(crate) values: Vec<T>,
+    /// Set bit = the row is valid (non-null).
+    pub(crate) validity: RoaringBitmap,
+}
+
+impl<T> Masked<T> {
+    /// Creates an empty masked column with the given capacity.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            values: Vec::with_capacity(capacity),
+            validity: RoaringBitmap::new(),
+        }
+    }
+
+    /// Number of rows (valid or not) — mirrors the old `Vec::len`.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// True when the column holds no row.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Whether row `idx` is valid (non-null). Out of bounds = invalid.
+    #[must_use]
+    pub fn is_valid(&self, idx: usize) -> bool {
+        self.validity.contains(idx as u32)
+    }
+
+    /// The row value if valid — the `Option`-shaped accessor the old
+    /// `Vec<Option<T>>` indexing exposed.
+    #[must_use]
+    pub fn get(&self, idx: usize) -> Option<&T> {
+        if self.is_valid(idx) {
+            self.values.get(idx)
+        } else {
+            None
+        }
+    }
+
+    /// The dense value slice. `values()[i]` is meaningful only when `i` is
+    /// set in [`validity`](Self::validity) — invalid slots hold a never-read
+    /// filler and must not be interpreted.
+    #[must_use]
+    pub fn values(&self) -> &[T] {
+        &self.values
+    }
+
+    /// Bitmap of valid (non-null) row indices — presence-of-record. Set bits
+    /// always index into [`values`](Self::values).
+    #[must_use]
+    pub fn validity(&self) -> &RoaringBitmap {
+        &self.validity
+    }
+}
+
+impl<T> Masked<T> {
+    /// Sets row `idx` in place: `Some` writes the value and sets the bit,
+    /// `None` clears the bit and leaves the slot stale (never read — the
+    /// bitmap is presence-of-record). Returns `false` out of bounds.
+    /// The old `vec[idx] = Option<T>` contract, with no filler needed.
+    pub(crate) fn set(&mut self, idx: usize, value: Option<T>) -> bool {
+        if idx >= self.values.len() {
+            return false;
+        }
+        if let Some(v) = value {
+            self.values[idx] = v;
+            self.validity.insert(idx as u32);
+        } else {
+            self.validity.remove(idx as u32);
+        }
+        true
+    }
+
+    /// Pushes one row: `Some` stores the value and sets the bit, `None`
+    /// stores `filler` and leaves the bit unset — the old
+    /// `Vec<Option<T>>::push(Option<T>)` contract. The filler is never
+    /// read (invalid positions are bitmap-gated), so any cheap value
+    /// does; callers with `T: Default` can use [`Self::push`] instead.
+    pub(crate) fn push_filled(&mut self, value: Option<T>, filler: T) {
+        if let Some(v) = value {
+            self.validity.insert(self.values.len() as u32);
+            self.values.push(v);
+        } else {
+            self.values.push(filler);
+        }
+    }
+}
+
+impl<T: Default> Masked<T> {
+    /// [`Self::push_filled`] with `T::default()` as the null filler.
+    pub(crate) fn push(&mut self, value: Option<T>) {
+        self.push_filled(value, T::default());
+    }
+}
+
+impl<T: Clone> Masked<T> {
+    /// [`Self::from_options`] with an explicit null filler — the variant
+    /// for types without a meaningful `Default` (`StringId` being the
+    /// first interned id, `StringId(0)` is a real string, not "empty").
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn from_options_with(cells: Vec<Option<T>>, filler: T) -> Self {
+        let mut col = Self::with_capacity(cells.len());
+        for cell in cells {
+            col.push_filled(cell, filler.clone());
+        }
+        col
+    }
+}
+
+impl<T: Default + Clone> Masked<T> {
+    /// Rebuilds a masked column from the `Vec<Option<T>>` shape — the
+    /// migration helper every construction site of the old layout takes.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn from_options(cells: Vec<Option<T>>) -> Self {
+        Self::from_options_with(cells, T::default())
+    }
+}
+
 /// A typed column storing values of a specific type.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TypedColumn {
     /// Integer column (i64)
-    Int(Vec<Option<i64>>),
+    Int(Masked<i64>),
     /// Float column (f64)
-    Float(Vec<Option<f64>>),
+    Float(Masked<f64>),
     /// String column (interned IDs)
-    String(Vec<Option<StringId>>),
+    String(Masked<StringId>),
     /// Boolean column
-    Bool(Vec<Option<bool>>),
+    Bool(Masked<bool>),
     /// Array column: each row is an optional `SmallVec` of scalar values.
     Array {
         /// Element type for this array column.
         element_type: ColumnType,
         /// Per-row array data (None = null row).
-        data: Vec<Option<SmallVec<[ColumnValue; 8]>>>,
+        data: Masked<SmallVec<[ColumnValue; 8]>>,
     },
     /// Geographic point column: each row is an optional `(lat, lng)` pair.
-    GeoPoint(Vec<Option<(f64, f64)>>),
+    GeoPoint(Masked<(f64, f64)>),
 }
 
 impl TypedColumn {
     /// Creates a new integer column with the given capacity.
     #[must_use]
     pub fn new_int(capacity: usize) -> Self {
-        Self::Int(Vec::with_capacity(capacity))
+        Self::Int(Masked::with_capacity(capacity))
     }
 
     /// Creates a new float column with the given capacity.
     #[must_use]
     pub fn new_float(capacity: usize) -> Self {
-        Self::Float(Vec::with_capacity(capacity))
+        Self::Float(Masked::with_capacity(capacity))
     }
 
     /// Creates a new string column with the given capacity.
     #[must_use]
     pub fn new_string(capacity: usize) -> Self {
-        Self::String(Vec::with_capacity(capacity))
+        Self::String(Masked::with_capacity(capacity))
     }
 
     /// Creates a new boolean column with the given capacity.
     #[must_use]
     pub fn new_bool(capacity: usize) -> Self {
-        Self::Bool(Vec::with_capacity(capacity))
+        Self::Bool(Masked::with_capacity(capacity))
     }
 
     /// Creates a new array column with the given element type and capacity.
@@ -152,14 +288,14 @@ impl TypedColumn {
     pub fn new_array(element_type: ColumnType, capacity: usize) -> Self {
         Self::Array {
             element_type,
-            data: Vec::with_capacity(capacity),
+            data: Masked::with_capacity(capacity),
         }
     }
 
     /// Creates a new geographic point column with the given capacity.
     #[must_use]
     pub fn new_geopoint(capacity: usize) -> Self {
-        Self::GeoPoint(Vec::with_capacity(capacity))
+        Self::GeoPoint(Masked::with_capacity(capacity))
     }
 
     /// Returns the number of values in the column.
@@ -186,7 +322,7 @@ impl TypedColumn {
         match self {
             Self::Int(v) => v.push(None),
             Self::Float(v) => v.push(None),
-            Self::String(v) => v.push(None),
+            Self::String(v) => v.push_filled(None, StringId(0)),
             Self::Bool(v) => v.push(None),
             Self::Array { data, .. } => data.push(None),
             Self::GeoPoint(v) => v.push(None),
@@ -201,7 +337,9 @@ impl TypedColumn {
         match (self, value) {
             (Self::Int(col), ColumnValue::Int(v)) => col.push(Some(*v)),
             (Self::Float(col), ColumnValue::Float(v)) => col.push(Some(*v)),
-            (Self::String(col), ColumnValue::String(id)) => col.push(Some(*id)),
+            (Self::String(col), ColumnValue::String(id)) => {
+                col.push_filled(Some(*id), StringId(0));
+            }
             (Self::Bool(col), ColumnValue::Bool(v)) => col.push(Some(*v)),
             (Self::Array { data, .. }, ColumnValue::Array(arr)) => {
                 data.push(Some(SmallVec::from_vec(arr.clone())));
@@ -223,18 +361,12 @@ impl TypedColumn {
     #[must_use]
     pub fn get_as_json_non_string(&self, row_idx: usize) -> Option<serde_json::Value> {
         match self {
-            Self::Int(v) => v
-                .get(row_idx)
-                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
-            Self::Float(v) => v
-                .get(row_idx)
-                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
-            Self::Bool(v) => v
-                .get(row_idx)
-                .and_then(|opt| opt.map(|v| serde_json::json!(v))),
+            Self::Int(v) => v.get(row_idx).map(|v| serde_json::json!(v)),
+            Self::Float(v) => v.get(row_idx).map(|v| serde_json::json!(v)),
+            Self::Bool(v) => v.get(row_idx).map(|v| serde_json::json!(v)),
             Self::GeoPoint(v) => v
                 .get(row_idx)
-                .and_then(|opt| opt.map(|(lat, lng)| serde_json::json!({"lat": lat, "lng": lng}))),
+                .map(|(lat, lng)| serde_json::json!({"lat": lat, "lng": lng})),
             Self::String(_) | Self::Array { .. } => None,
         }
     }

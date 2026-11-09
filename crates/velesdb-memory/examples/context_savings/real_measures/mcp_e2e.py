@@ -90,21 +90,21 @@ assert explain["rule_id"] in {"drop.duplicate", "preserve.default"}, explain
 savings = srv.call("context_savings", {"project": "veles"})
 assert savings["events"] == 1 and savings["tokens_saved"] > 0, savings
 
-# --- memory tools: id_str round-trip closes #1468 (float-lossy JSON ids) ----
+# --- memory tools: wire ids are decimal strings (#1468 follow-up) ----------
 # A float-lossy JSON client (JS `number`, Claude Code included) rounds a u64
 # id above 2^53 on the way out of a response and resubmits the rounded value
 # on the way in, so relate/forget/feedback fail with "memory does not exist".
-# The fix: every id also comes back as a decimal-string `..._str` twin, and
-# every id parameter accepts that string form. Proven here over the REAL
-# stdio JSON-RPC transport — relate is driven with the `id_str` STRINGS, not
-# the numeric `id` field, exactly as a fixed client must.
+# The fix: every id field IS a decimal string on the wire — `id_str` stays as
+# an unchanged twin — and every id parameter still accepts number or string.
+# Proven here over the REAL stdio JSON-RPC transport — relate is driven with
+# the string ids, exactly as a fixed client must.
 mem_a = srv.call("remember", {"fact": "we chose parking_lot to avoid lock poisoning"})
 mem_b = srv.call("remember", {"fact": "PR #42 swaps the mutex"})
-assert mem_a["id_str"] == str(mem_a["id"]), mem_a
-assert mem_b["id_str"] == str(mem_b["id"]), mem_b
+assert isinstance(mem_a["id"], str) and mem_a["id_str"] == mem_a["id"], mem_a
+assert isinstance(mem_b["id"], str) and mem_b["id_str"] == mem_b["id"], mem_b
 
 rel = srv.call("relate", {"from": mem_a["id_str"], "to": mem_b["id_str"], "relation": "decided_in"})
-assert rel["edge_id_str"] == str(rel["edge_id"]), rel
+assert isinstance(rel["edge_id"], str) and rel["edge_id_str"] == rel["edge_id"], rel
 
 why_mem = srv.call("why", {"decision": "parking_lot poisoning", "max_hops": 1})
 node_ids = {n["id"] for n in why_mem["nodes"]}
@@ -187,7 +187,7 @@ working = {"goal": "prove inter-session resumption over stdio",
            "pending_actions": ["load this back from a separate server process"]}
 saved = srv.call("save_working_context",
                  {"project": "veles", "session": "e2e-session", "working": working})
-assert saved["id"] > 0, saved
+assert isinstance(saved["id"], str) and int(saved["id"]) > 0, saved
 
 # list_working_contexts must discover the session just saved.
 listed = srv.call("list_working_contexts", {"project": "veles"})

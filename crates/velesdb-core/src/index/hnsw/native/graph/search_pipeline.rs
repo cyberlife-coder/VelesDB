@@ -25,6 +25,7 @@ use super::super::distance::{batch_distance_with_prefetch, DistanceEngine};
 use super::super::layer::{Layer, NodeId};
 use super::super::ordered_float::OrderedFloat;
 use super::search_state::{gather_unvisited_neighbors, process_batch_results, SearchState};
+use crate::index::hnsw::native::csr_adjacency::{CsrAdjacency, NeighborSlice};
 use crate::perf_optimizations::ContiguousVectors;
 use smallvec::SmallVec;
 use std::cmp::Reverse;
@@ -52,6 +53,7 @@ pub(in crate::index::hnsw::native::graph) fn search_layer_pipelined<D: DistanceE
     stagnation_limit: usize,
     use_prefetch: bool,
 ) {
+    let csr0 = layers[layer].csr_snapshot();
     while let Some(Reverse((OrderedFloat(c_dist), c_node))) = state.candidates.pop() {
         if state.should_terminate(c_dist, ef, stagnation_limit) {
             break;
@@ -67,6 +69,7 @@ pub(in crate::index::hnsw::native::graph) fn search_layer_pipelined<D: DistanceE
             layer,
             c_node,
             use_prefetch,
+            csr0.as_deref(),
         );
 
         state.update_stagnation(improved);
@@ -90,9 +93,10 @@ fn gather_prefetch_compute<D: DistanceEngine>(
     layer: usize,
     c_node: NodeId,
     use_prefetch: bool,
+    snapshot: Option<&CsrAdjacency>,
 ) -> bool {
     let batch = layers[layer]
-        .with_neighbors(c_node, |neighbors| {
+        .with_neighbors_resolved(c_node, snapshot, |neighbors| {
             gather_unvisited_neighbors(neighbors, &mut state.visited, vectors, use_prefetch)
         })
         .unwrap_or_default();
@@ -104,7 +108,7 @@ fn gather_prefetch_compute<D: DistanceEngine>(
     // Speculative prefetch: peek at the next candidate and prefetch
     // its neighbor vectors while we compute distances for `batch`.
     if use_prefetch {
-        prefetch_next_candidate(state, layers, layer, vectors);
+        prefetch_next_candidate(state, layers, layer, vectors, snapshot);
     }
 
     compute_and_process(distance, query, &batch, ef, state)
@@ -122,12 +126,13 @@ fn prefetch_next_candidate(
     layers: &[Layer],
     layer: usize,
     vectors: &ContiguousVectors,
+    snapshot: Option<&CsrAdjacency>,
 ) {
     let Some(Reverse((_, peek_node))) = state.candidates.peek() else {
         return;
     };
     let peek_node = *peek_node;
-    layers[layer].with_neighbors(peek_node, |neighbors| {
+    layers[layer].with_neighbors_resolved(peek_node, snapshot, |neighbors| {
         prefetch_neighbor_vectors(neighbors, vectors);
     });
 }
@@ -137,8 +142,8 @@ fn prefetch_next_candidate(
 /// Bounded by the neighbor list size (typically M=16..64), so the
 /// number of prefetch instructions is small and predictable.
 #[inline]
-fn prefetch_neighbor_vectors(neighbors: &[NodeId], vectors: &ContiguousVectors) {
-    for &neighbor in neighbors {
+fn prefetch_neighbor_vectors(neighbors: NeighborSlice<'_>, vectors: &ContiguousVectors) {
+    for neighbor in neighbors.iter() {
         vectors.prefetch(neighbor);
     }
 }

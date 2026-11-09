@@ -250,3 +250,44 @@ class CargoLockCoreVersionTests(unittest.TestCase):
     def test_a_lockfile_without_the_core_is_an_error_not_a_silent_skip(self) -> None:
         with self.assertRaises(RuntimeError):
             self._read('[[package]]\nname = "serde"\nversion = "1.0.200"\n')
+
+
+class CargoLockMemoryAndNodeVersionTests(unittest.TestCase):
+    """The workspace lockfile's independently-versioned crates are policed.
+
+    release-memory.yml `cargo package --locked` refused the 0.17.1 tag
+    because the manifest said 0.17.1 while the lockfile still said 0.17.0
+    (#2649). These assert both the parsing and the wiring — the cheapest way
+    to mute the gate would be deleting a registry entry.
+    """
+
+    TEXT = (
+        '[[package]]\nname = "velesdb-core"\nversion = "8.1.0"\n\n'
+        '[[package]]\nname = "velesdb-memory"\nversion = "0.17.1"\n\n'
+        '[[package]]\nname = "velesdb-node"\nversion = "0.17.1"\n'
+    )
+
+    def _read(self, fmt: str, text: str = TEXT) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "Cargo.lock"
+            lock.write_text(text, encoding="utf-8")
+            return cvs._READERS[fmt](lock)
+
+    def test_reads_the_memory_package_version(self) -> None:
+        self.assertEqual(self._read("cargo_lock_memory"), "0.17.1")
+
+    def test_reads_the_node_package_version(self) -> None:
+        self.assertEqual(self._read("cargo_lock_node"), "0.17.1")
+
+    def test_a_lockfile_without_the_package_is_an_error(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self._read("cargo_lock_memory", '[[package]]\nname = "serde"\nversion = "1.0.200"\n')
+
+    def test_the_root_lockfile_is_a_workspace_target(self) -> None:
+        self.assertIn(("Cargo.lock", "cargo_lock_core"), cvs.TARGETS)
+
+    def test_the_root_lockfile_is_a_memory_target(self) -> None:
+        self.assertIn(("Cargo.lock", "cargo_lock_memory"), cvs.MEMORY_TARGETS)
+
+    def test_the_root_lockfile_is_a_node_target(self) -> None:
+        self.assertIn(("Cargo.lock", "cargo_lock_node"), cvs.MEMORY_TARGETS)

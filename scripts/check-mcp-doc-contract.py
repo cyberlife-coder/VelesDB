@@ -366,13 +366,14 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
             "docs/guides/WASM_API.md",
             "docs/reference/ECOSYSTEM_PARITY.md",
             "docs/reference/MCP_TOOLS.md",
-            # The three agent hooks. Injected into the context of EVERY
-            # Claude Code / Codex / Windsurf session, so they are the surface
-            # a model reads most often, and they were outside the sweep.
+            # The four agent hooks. Injected into the context of EVERY
+            # Claude Code / Codex / Windsurf / Devin session, so they are the
+            # surface a model reads most often, and they were outside the sweep.
             "integrations/agent-hooks/claude-code/hooks/session-start.sh",
             "integrations/agent-hooks/codex/README.md",
             "integrations/agent-hooks/codex/hooks/session-start.sh",
             "integrations/agent-hooks/windsurf/hooks/pre-user-prompt.sh",
+            "integrations/agent-hooks/devin/hooks/session-start.sh",
             "integrations/langgraph/README.md",
             "integrations/langgraph/src/langgraph_velesdb/tools.py",
             "sdks/typescript/src/memory.ts",

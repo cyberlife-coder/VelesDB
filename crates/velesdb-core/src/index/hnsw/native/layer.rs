@@ -4,6 +4,9 @@
 
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+
+use super::csr_adjacency::{CsrAdjacency, CsrState, NeighborSlice};
 
 /// Unique identifier for a node in the graph.
 pub type NodeId = usize;
@@ -23,6 +26,10 @@ pub struct Layer {
     anchors: Vec<AtomicU32>,
     /// Whether this is the base layer, the one that records anchors.
     base: bool,
+    /// Flat CSR adjacency published for lock-free hot-path reads (#2075).
+    /// Empty on upper layers — only the base layer maintains it; the
+    /// `Vec<RwLock>` write side stays authoritative everywhere.
+    csr: CsrState,
 }
 
 impl Layer {
@@ -32,6 +39,7 @@ impl Layer {
             neighbors: (0..capacity).map(|_| RwLock::new(Vec::new())).collect(),
             anchors: Vec::new(),
             base: false,
+            csr: CsrState::default(),
         }
     }
 
@@ -42,6 +50,7 @@ impl Layer {
             neighbors: (0..capacity).map(|_| RwLock::new(Vec::new())).collect(),
             anchors: (0..capacity).map(|_| AtomicU32::new(NO_ANCHOR)).collect(),
             base: true,
+            csr: CsrState::default(),
         }
     }
 
@@ -137,7 +146,70 @@ impl Layer {
     pub(crate) fn set_neighbors(&self, node_id: NodeId, neighbors: Vec<NodeId>) {
         if node_id < self.neighbors.len() {
             *self.neighbors[node_id].write() = neighbors;
+            self.record_csr_writes(1);
         }
+    }
+
+    /// Marks `count` real adjacency mutations on the CSR state (base layer
+    /// only — upper layers keep `csr` empty, so this is a no-op there).
+    /// Batches must report their actual count, never a flat 1 (#905).
+    #[inline]
+    fn record_csr_writes(&self, count: u64) {
+        if self.base {
+            self.csr.record_writes(count);
+        }
+    }
+
+    /// The published CSR snapshot when it is safe to serve (base layer
+    /// only): `None` on upper layers, while never built, and while a
+    /// dirty-below-threshold rebuild is pending — callers fall back to the
+    /// lock path, which stays authoritative. At the threshold the reader
+    /// that observes it performs the rebuild under `build_lock`.
+    pub(crate) fn csr_snapshot(&self) -> Option<Arc<CsrAdjacency>> {
+        if self.base {
+            self.csr.fresh_snapshot(&self.neighbors)
+        } else {
+            None
+        }
+    }
+
+    /// Forced CSR rebuild (base layer only): end of `insert_batch_parallel`,
+    /// `remap_ids`, and graph load — the points where the O(N+E) cost is
+    /// amortized rather than paid per read.
+    pub(crate) fn rebuild_csr(&self) {
+        if !self.base {
+            return;
+        }
+        // Same non-blocking discipline as `fresh_snapshot`: a forced rebuild
+        // that *waited* on a contended neighbor lock could deadlock the
+        // caller (which may hold `Layers`). Contention leaves the snapshot
+        // dirty and readers fall back until the next rebuild point.
+        let Some(_build) = self.csr.build_lock.try_lock() else {
+            return;
+        };
+        if let Some(snapshot) = CsrAdjacency::build(&self.neighbors) {
+            self.csr.publish(snapshot);
+        }
+    }
+
+    /// Reads a node's adjacency through the fresh CSR `snapshot` when it
+    /// covers the node, else through the per-node lock — one entry point so
+    /// the search helpers keep a single `NeighborSlice` body. `snapshot` is
+    /// hoisted by the caller once per traversal (zero atomics per node);
+    /// pass `None` for upper layers.
+    #[inline]
+    pub(crate) fn with_neighbors_resolved<R>(
+        &self,
+        node_id: NodeId,
+        snapshot: Option<&CsrAdjacency>,
+        f: impl FnOnce(NeighborSlice<'_>) -> R,
+    ) -> Option<R> {
+        if let Some(csr) = snapshot {
+            if let Some(slice) = csr.neighbors(node_id) {
+                return Some(f(NeighborSlice::Csr(slice)));
+            }
+        }
+        self.with_neighbors(node_id, |ns| f(NeighborSlice::Live(ns)))
     }
 
     /// Mutates the neighbors for a node in-place under a single write lock.
@@ -149,7 +221,10 @@ impl Layer {
     ) -> Option<R> {
         if node_id < self.neighbors.len() {
             let mut guard = self.neighbors[node_id].write();
-            Some(f(&mut guard))
+            let result = f(&mut guard);
+            drop(guard);
+            self.record_csr_writes(1);
+            Some(result)
         } else {
             None
         }
@@ -214,6 +289,7 @@ impl Layer {
         }
 
         self.remap_anchors(old_to_new);
+        self.rebuild_csr();
     }
 
     /// Moves every anchor to its node's new id and renames the parent it

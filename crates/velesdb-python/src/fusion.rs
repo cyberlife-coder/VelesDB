@@ -179,10 +179,10 @@ impl FusionStrategy {
     /// Create the fusion strategy a name stands for.
     ///
     /// The name grammar is velesdb-core's, the one the REST server, the CLI,
-    /// the Tauri plugin and the WASM build read: ``rrf``, ``average``
-    /// (alias ``avg``), ``maximum`` (alias ``max``), ``weighted`` and
-    /// ``relative_score`` (alias ``rsf``), case-insensitive. A parameter left
-    /// out takes core's default; one the named strategy does not read is
+    /// the Tauri plugin and the WASM build read: ``rrf``, ``weighted_rrf``,
+    /// ``average`` (alias ``avg``), ``maximum`` (alias ``max``), ``weighted``
+    /// and ``relative_score`` (alias ``rsf``), case-insensitive. A parameter
+    /// left out takes core's default; one the named strategy does not read is
     /// ignored. A single ``relative_score`` weight implies the other.
     ///
     /// Args:
@@ -192,6 +192,8 @@ impl FusionStrategy {
     ///         (default: 0.6 / 0.3 / 0.1)
     ///     dense_weight, sparse_weight: ``relative_score`` weights
     ///         (default: 0.5 / 0.5)
+    ///     weights: ``weighted_rrf`` per-branch weights — required for that
+    ///         strategy, one weight per query vector in vector order
     ///
     /// Returns:
     ///     FusionStrategy: The named strategy

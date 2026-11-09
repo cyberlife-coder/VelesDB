@@ -10,6 +10,7 @@ use super::search_pools::{BitVecVisited, CANDIDATE_HEAP_POOL, POOL_MAX, RESULT_H
 use super::search_state::{gather_unvisited_neighbors, process_batch_results, SearchState};
 use super::{NativeHnsw, NO_ENTRY_POINT};
 use crate::distance::DistanceMetric;
+use crate::index::hnsw::native::csr_adjacency::NeighborSlice;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use std::cmp::Reverse;
@@ -202,8 +203,12 @@ fn test_gather_unvisited_neighbors_filters_visited() {
     visited.insert(1);
     visited.insert(3);
 
-    let unvisited: SmallVec<[(NodeId, &[f32]); 64]> =
-        gather_unvisited_neighbors(&neighbors, &mut visited, &vectors, false);
+    let unvisited: SmallVec<[(NodeId, &[f32]); 64]> = gather_unvisited_neighbors(
+        NeighborSlice::Live(&neighbors),
+        &mut visited,
+        &vectors,
+        false,
+    );
 
     let ids: Vec<NodeId> = unvisited.iter().map(|(id, _)| *id).collect();
     assert_eq!(ids.len(), 3, "should exclude 2 visited nodes");
@@ -232,7 +237,12 @@ fn test_gather_unvisited_neighbors_marks_visited() {
     let neighbors: Vec<NodeId> = vec![0, 1, 2];
     let mut visited = BitVecVisited::with_capacity(3);
 
-    let _unvisited = gather_unvisited_neighbors(&neighbors, &mut visited, &vectors, false);
+    let _unvisited = gather_unvisited_neighbors(
+        NeighborSlice::Live(&neighbors),
+        &mut visited,
+        &vectors,
+        false,
+    );
 
     // All returned neighbors should now be in the visited set
     assert!(visited.contains(0), "node 0 should be marked visited");
@@ -864,8 +874,18 @@ fn test_gather_unvisited_neighbors_with_prefetch() {
     visited_pf.insert(5);
     visited_pf.insert(8);
 
-    let batch_no_pf = gather_unvisited_neighbors(&neighbors, &mut visited_no_pf, &vectors, false);
-    let batch_pf = gather_unvisited_neighbors(&neighbors, &mut visited_pf, &vectors, true);
+    let batch_no_pf = gather_unvisited_neighbors(
+        NeighborSlice::Live(&neighbors),
+        &mut visited_no_pf,
+        &vectors,
+        false,
+    );
+    let batch_pf = gather_unvisited_neighbors(
+        NeighborSlice::Live(&neighbors),
+        &mut visited_pf,
+        &vectors,
+        true,
+    );
 
     // Both must return the same node IDs in the same order.
     let ids_no_pf: Vec<NodeId> = batch_no_pf.iter().map(|(id, _)| *id).collect();

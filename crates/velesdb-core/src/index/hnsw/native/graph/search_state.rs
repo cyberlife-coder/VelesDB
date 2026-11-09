@@ -12,6 +12,7 @@ use super::search_pools::{
     acquire_candidate_heap, acquire_result_heap, acquire_visited_set, release_candidate_heap,
     release_result_heap, release_visited_set, BitVecVisited, CandidateHeap, ResultHeap,
 };
+use crate::index::hnsw::native::csr_adjacency::NeighborSlice;
 use crate::perf_optimizations::ContiguousVectors;
 use smallvec::SmallVec;
 use std::cmp::Reverse;
@@ -181,7 +182,7 @@ const GATHER_PREFETCH_AHEAD: usize = 2;
 /// the `get_unchecked` calls.
 #[inline]
 pub(super) fn gather_unvisited_neighbors<'a>(
-    neighbors: &[NodeId],
+    neighbors: NeighborSlice<'_>,
     visited: &mut BitVecVisited,
     vectors: &'a ContiguousVectors,
     use_prefetch: bool,
@@ -190,16 +191,16 @@ pub(super) fn gather_unvisited_neighbors<'a>(
 
     // Speculatively prefetch the first GATHER_PREFETCH_AHEAD neighbor vectors.
     if use_prefetch {
-        for &neighbor in neighbors.iter().take(GATHER_PREFETCH_AHEAD) {
+        for neighbor in neighbors.iter().take(GATHER_PREFETCH_AHEAD) {
             vectors.prefetch(neighbor);
         }
     }
 
-    for (i, &neighbor) in neighbors.iter().enumerate() {
+    for (i, neighbor) in neighbors.iter().enumerate() {
         // Speculatively prefetch the vector GATHER_PREFETCH_AHEAD positions
         // ahead while processing the current neighbor.
         if use_prefetch {
-            if let Some(&ahead) = neighbors.get(i + GATHER_PREFETCH_AHEAD) {
+            if let Some(ahead) = neighbors.get(i + GATHER_PREFETCH_AHEAD) {
                 vectors.prefetch(ahead);
             }
         }

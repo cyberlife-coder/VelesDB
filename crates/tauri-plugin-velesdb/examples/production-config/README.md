@@ -39,7 +39,9 @@ another VelesDB component in a shared file is ignored, not rejected.
 ## Cargo features
 
 `default` pulls in `velesdb-core/default`, which includes `persistence` — mmap
-storage, WAL, and the streaming-insert commands. The other features (`gpu`,
+storage and WAL. The `stream_insert`/`enable_streaming` commands need the
+plugin's own `persistence` feature (`features = ["persistence"]`, 69 commands
+instead of 67). The other features (`gpu`,
 `openapi`, `update-check`, `loom`, `internal-bench`, `bench-sift1m`,
 `test-fault-injection`) forward to the matching `velesdb-core` feature.
 

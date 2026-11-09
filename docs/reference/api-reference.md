@@ -2,7 +2,7 @@
 
 Complete REST API documentation for VelesDB.
 
-> **Last updated**: 2026-10-31 (VelesDB v8.1.0). The machine-readable source of
+> **Last updated**: 2026-10-31 (VelesDB v8.2.0). The machine-readable source of
 > truth is [`docs/openapi.yaml`](../openapi.yaml), regenerated from the server's
 > annotated handlers and drift-checked in CI; this page is the human-readable
 > companion.
@@ -76,7 +76,7 @@ Check server health status.
 ```json
 {
   "status": "ok",
-  "version": "8.1.0"
+  "version": "8.2.0"
 }
 ```
 
@@ -255,10 +255,11 @@ deferred-indexing and async-index-builder settings. Returns a
 
 ### Collection health diagnostics
 
-Three read-only endpoints surface collection health for onboarding and
+Four read-only endpoints surface collection health for onboarding and
 troubleshooting, ordered cheapest to richest: `GET …/empty` (single boolean),
-`GET …/sanity` (live readiness + hints, no `ANALYZE` required), and
-`GET …/stats` (cached statistics from the last `ANALYZE`).
+`GET …/sanity` (live readiness + hints, no `ANALYZE` required),
+`GET …/diagnostics` (index-health verdict), and `GET …/stats` (cached
+statistics from the last `ANALYZE`).
 
 ### GET /collections/:name/empty
 
@@ -315,6 +316,26 @@ if the collection was never analyzed — run `POST /collections/:name/analyze` f
   "last_analyzed_epoch_ms": 1765500000000
 }
 ```
+
+### GET /collections/:name/diagnostics
+
+Health diagnostics for a collection — index readiness and point count —
+returned as a `CollectionDiagnosticsResponse`. Returns `404` when the
+collection does not exist.
+
+**Response (200):**
+```json
+{
+  "has_vectors": true,
+  "search_ready": true,
+  "dimension_configured": true,
+  "point_count": 50000,
+  "index_health": "healthy"
+}
+```
+
+`index_health` is `healthy`, `empty`, or `needs_rebuild`; when it is
+`needs_rebuild` an `index_health_detail` message is also returned.
 
 ### POST /collections/:name/analyze
 
@@ -1118,6 +1139,21 @@ Add edges between nodes.
 
 `id`, `source`, and `target` accept either JSON numbers or strings. Responses serialize graph IDs as strings to preserve full `u64` precision in JavaScript clients.
 
+### POST /collections/:name/graph/edges/batch
+
+Insert a batch of edges in one call. Accepts `{"edges": [...]}` where each
+element has the same shape as `POST .../graph/edges` (`id`, `source`,
+`target`, `label`, optional `properties`).
+
+**Response (201)** (`AddEdgesBatchResponse`):
+```json
+{
+  "added": 128
+}
+```
+
+`added` may be less than the number submitted when some edges are skipped.
+
 ### DELETE /collections/:name/graph/edges/:edge_id
 
 Remove an edge by ID. Returns `204` on success, `404` when the edge or
@@ -1328,6 +1364,20 @@ maintenance-oriented name. Blocking.
 Compact the vector storage: rewrites active vectors into a contiguous layout
 and reclaims disk space from deleted entries. Blocking; may involve significant
 I/O on large, fragmented collections.
+
+### POST /collections/:name/locality/reorder
+
+Reorder the HNSW adjacency lists and vector storage of a vector collection for
+cache locality, so nodes traversed together during search sit close in memory.
+No-op for collections with fewer than 1 000 points. Blocking.
+
+**Response (200):**
+```json
+{
+  "message": "Locality reordered",
+  "collection": "documents"
+}
+```
 
 ---
 

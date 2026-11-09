@@ -44,7 +44,18 @@ async function rememberDocs(mem) {
   for (const doc of docs) {
     const sections = splitSections(doc.title, doc.content)
     const ids = []
-    for (const s of sections) ids.push(await mem.remember(s))
+    // The engine caps remembered facts at 2048 bytes; a '## ' section can
+    // exceed that, so oversize sections split further at paragraph bounds.
+    for (const s of sections) {
+      let rest = s
+      while (rest.length > 1800) {
+        let cut = rest.lastIndexOf('\n\n', 1800)
+        if (cut < 900) cut = 1800
+        ids.push(await mem.remember(rest.slice(0, cut)))
+        rest = rest.slice(cut).trimStart()
+      }
+      ids.push(await mem.remember(rest))
+    }
     for (let i = 1; i < ids.length; i++) {
       await mem.relate(ids[i - 1], ids[i], 'followed_by')
     }

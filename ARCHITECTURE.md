@@ -2,7 +2,7 @@
 
 This document is the **15-minute read** an engineer or a technical due-diligence reviewer should start with. It tells you what VelesDB is, how it is shaped, and where to dig deeper.
 
-> **Last updated:** 2026-09-20 — applies to v8.x (workspace 8.1.0).
+> **Last updated:** 2026-11-09 — applies to v8.x (workspace 8.2.0).
 
 ---
 
@@ -69,7 +69,7 @@ For component-level box diagrams, see [`docs/reference/ARCHITECTURE.md`](docs/re
 
 ## The crates
 
-The workspace is laid out as ten crates with one-way dependencies (no cycles).
+The workspace is laid out as eleven crates with one-way dependencies (no cycles) — ten shippable artifacts plus `velesdb-rustdoc-guard`, a test-only crate that is never published.
 
 | Crate | Role | Public surface | Notes |
 |-------|------|---------------|-------|
@@ -80,11 +80,12 @@ The workspace is laid out as ten crates with one-way dependencies (no cycles).
 | **`velesdb-mobile`** | iOS / Android bindings via UniFFI. | Swift + Kotlin | One binding crate, two outputs. |
 | **`velesdb-cli`** | Interactive REPL for VelesQL. | Single binary | Wraps `velesdb-core`. |
 | **`velesdb-migrate`** | Migration tooling: import from Pinecone / Qdrant / Milvus / Weaviate / Chroma / Elasticsearch / Redis. | CLI tool | Strategic candidate to extract to a separate repo (tracked in ROADMAP.md, "Later"). |
-| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.x` cadence (currently 0.12.0). Depends on `velesdb-core` (not the engine's `4.x` line). |
+| **`velesdb-memory`** | Local-first MCP agent-memory server: the high-level `MemoryService` wedge (remember/recall/recall_where/relate/forget/why/remember_extracted) plus the deterministic context compiler (`compile_context` / `context_savings` / `explain_compilation` / `retrieve_context_source`). | MCP server + Rust/Python/Node API | Independent `0.x` cadence (currently 0.17.1). Depends on `velesdb-core` via the workspace version. |
 | **`velesdb-node`** | Node.js (napi-rs) binding of the memory wedge. | `@wiscale/velesdb-memory-node` (npm) | Depends on `velesdb-memory` only (never `velesdb-core` directly) — the license boundary. |
 | **`tauri-plugin-velesdb`** | Tauri desktop integration. | Plugin | Used by `demos/tauri-rag-app`. |
+| **`velesdb-rustdoc-guard`** | Test-only lint target: flags rustdoc link syntax left in the descriptions `velesdb-memory` (MCP schemas) and `velesdb-server` (OpenAPI) publish. | None (never published) | Dev-dependency of the two crates' test suites; the release sees nothing of it. |
 
-The dependency graph is strictly downward: `server`, `python`, `wasm`, `mobile`, `cli`, `migrate`, `memory`, `tauri-plugin` all depend on `velesdb-core` and never on each other. `velesdb-node` is the one exception by design — it depends only on `velesdb-memory` (which re-exposes memory semantics), keeping the raw engine behind the license boundary.
+The dependency graph is strictly downward: `server`, `python`, `wasm`, `mobile`, `cli`, `migrate`, `memory`, `tauri-plugin` all depend on `velesdb-core` and never on each other. `velesdb-node` is the one exception by design — it depends only on `velesdb-memory` (which re-exposes memory semantics), keeping the raw engine behind the license boundary. `velesdb-rustdoc-guard` sits outside this graph entirely: a dev-dependency of the `velesdb-memory` and `velesdb-server` test suites, shipped in no artifact.
 
 ---
 
@@ -172,7 +173,7 @@ These are intentional non-features. Each one keeps the engine simple at the cost
 - **No built-in embedding model.** Embedding is a model concern; you bring your own (sentence-transformers, OpenAI, Cohere, BGE, CLIP).
 - **No K8s operator / cloud-managed mode.** Conflicts with local-first. Run it on a server, on your laptop, in a container, in WASM, in a mobile app — all the same code.
 - **No reranker / LLM glue.** That's user space.
-- **No SQL OLTP/OLAP generalist queries.** We do vector + graph + columnstore. A `JOIN` between two arbitrary collections is on the roadmap (#513) but is not the focus.
+- **No SQL OLTP/OLAP generalist queries.** We do vector + graph + columnstore. `JOIN` is part of VelesQL (stable since 2.0: `INNER`; `LEFT`/`RIGHT`/`FULL OUTER` restricted to column-store primary-key joins; single-column `USING`) — a bounded surface, not a general relational engine ([`docs/VELESQL_SPEC.md`](docs/VELESQL_SPEC.md)).
 
 The full out-of-scope list is in [`ROADMAP.md`](ROADMAP.md).
 

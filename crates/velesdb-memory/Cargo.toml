@@ -2,7 +2,7 @@
 name = "velesdb-memory"
 # Independent of the workspace version: velesdb-memory is a young MCP wrapper
 # with its own release cadence, decoupled from the core engine's 3.x line.
-version = "0.17.1"
+version = "0.18.0"
 edition.workspace = true
 rust-version.workspace = true
 license-file = "../../LICENSE"
@@ -250,6 +250,12 @@ extractor-http = ["dep:ureq"]
 # same implementation gates and dependencies.
 ollama = ["embedder-http"]
 extract = ["extractor-http"]
+# Opt-in passthrough to core's wgpu paths (PQ k-means, HNSW traversal) for
+# library consumers — the Node binding's `gpu` resolves through here because
+# its license boundary (ci.yml's "License/dependency boundary gate") forbids
+# it a direct velesdb-core dependency. Off by default: the shipped daemon
+# stays GPU-free by design (README "Known limits", #1965).
+gpu = ["velesdb-core/gpu"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
@@ -298,7 +304,16 @@ rmcp = { version = "3.1", features = [
 # itself rather than only via rmcp's convenience constructors. `blocking` is
 # for tests/http_insecure_process.rs's synchronous polling of a spawned
 # subprocess (that test is plain `#[test]`, not `#[tokio::test]`).
-reqwest = { version = "0.13.2", features = ["blocking"] }
+# reqwest's `rustls` feature bundles the aws-lc provider; `rustls-no-provider`
+# gives the client machinery only, and rustls then resolves the `ring`
+# provider the rest of the workspace already enables — aws-lc-sys's C
+# build drops out of the graph.
+reqwest = { version = "0.13.2", default-features = false, features = [
+    "blocking",
+    "rustls-no-provider",
+    "charset",
+    "http2",
+] }
 
 [[bin]]
 name = "velesdb-memory"

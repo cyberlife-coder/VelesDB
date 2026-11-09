@@ -83,6 +83,7 @@ VelesDBVectorStore(
 - `add_texts(texts, metadatas=None, ids=None)` - Add texts to the store
 - `add_texts_bulk(texts, metadatas=None, ids=None)` - Bulk insert (faster for large batches)
 - `add_texts_streaming(texts, metadatas=None, ids=None, ...)` - Stream-insert via the bounded-channel ingestion pipeline (returns the list of inserted IDs)
+- `stream_insert(texts, metadatas=None, sparse_vectors=None, ids=None)` - Embed and send all texts through `Collection.stream_insert` in one call (append-only)
 - `delete(ids)` - Delete documents by ID
 - `get_by_ids(ids)` - Retrieve documents by their IDs
 - `flush()` - Flush pending changes to disk
@@ -101,7 +102,10 @@ VelesDBVectorStore(
 - `multi_query_search_with_score(queries, k=4, ...)` - Multi-query search with fused scores
 - `hybrid_search(query, k=4, vector_weight=0.5, filter=None)` - Hybrid vector+BM25 search
 - `text_search(query, k=4, filter=None)` - Full-text BM25 search
+- `contains_text_search(collection, column, keyword, k=10)` - VelesQL `CONTAINS_TEXT` substring search on a column
+- `similarity_search_ids(query, k=4, filter=None)` - Vector search returning only `{id, score}` pairs (core parity surface)
 - `query(query_str, params=None)` - Execute VelesQL query
+- `match_query(query_str, params=None)` - Execute a VelesQL `MATCH` query, results converted to LangChain `Document`s
 
 **Utilities:**
 - `as_retriever(**kwargs)` - Convert to LangChain retriever
@@ -302,6 +306,11 @@ store cannot return, is skipped and takes no slot. Seeds carry
 `graph_depth=0`; a neighbour carries its hops from the nearest seed as
 `graph_depth`, and no `relevance_score`: it was reached through the graph,
 not scored. `low_latency=True` returns the seeds only.
+
+`GraphQARetriever` (also exported) extends `GraphRetriever` for Q&A: it adds
+content-hash deduplication (`deduplicate=True`) and re-ranks results seeds
+first then by `graph_depth`, with a configurable `expansion_strategy`
+(`"breadth_first"` or `"depth_first"`).
 
 ## Features
 

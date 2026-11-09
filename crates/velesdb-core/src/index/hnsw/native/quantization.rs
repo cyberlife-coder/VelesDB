@@ -31,8 +31,10 @@ use std::sync::Arc;
 
 /// Computes L2 squared distance between two quantized vectors using SIMD.
 ///
-/// Uses 8-wide unrolling for better instruction-level parallelism.
-/// On x86_64 with AVX2, processes 32 bytes per iteration.
+/// Iterates `chunks_exact` over an asserted equal-length pair so LLVM drops
+/// every per-element bounds check and autovectorizes the hot loop (AVX2 on
+/// x86_64, NEON `smlal` on aarch64) — the indexed version stayed scalar on
+/// x86_64 and carried a bloated scalar tail on aarch64 (#1965).
 ///
 /// # Performance
 ///
@@ -40,54 +42,34 @@ use std::sync::Arc;
 /// - **Better SIMD utilization**: 32 int8 fit in 256-bit register vs 8 float32
 #[inline]
 fn distance_l2_quantized_simd(a: &[u8], b: &[u8]) -> u32 {
-    debug_assert_eq!(a.len(), b.len());
+    assert_eq!(a.len(), b.len());
 
-    // Process in chunks of 8 for better ILP (Instruction Level Parallelism)
-    let chunks = a.len() / 8;
-    let remainder = a.len() % 8;
-
-    let mut sum0: u32 = 0;
-    let mut sum1: u32 = 0;
-    let mut sum2: u32 = 0;
-    let mut sum3: u32 = 0;
-
-    // Main loop: 8-wide unrolling
-    for i in 0..chunks {
-        let base = i * 8;
-
-        // Unroll 8 iterations with 4 accumulators
-        let d0 = i32::from(a[base]) - i32::from(b[base]);
-        let d1 = i32::from(a[base + 1]) - i32::from(b[base + 1]);
-        let d2 = i32::from(a[base + 2]) - i32::from(b[base + 2]);
-        let d3 = i32::from(a[base + 3]) - i32::from(b[base + 3]);
-        let d4 = i32::from(a[base + 4]) - i32::from(b[base + 4]);
-        let d5 = i32::from(a[base + 5]) - i32::from(b[base + 5]);
-        let d6 = i32::from(a[base + 6]) - i32::from(b[base + 6]);
-        let d7 = i32::from(a[base + 7]) - i32::from(b[base + 7]);
-
-        // SAFETY (EPIC-032/US-007): d_i in [-255, 255], so d_i*d_i in [0, 65025]
-        // This is always non-negative and fits in u32 (max 4,294,967,295)
-        #[allow(clippy::cast_sign_loss)] // Proven non-negative: square of integer
-        {
-            sum0 += (d0 * d0) as u32 + (d4 * d4) as u32;
-            sum1 += (d1 * d1) as u32 + (d5 * d5) as u32;
-            sum2 += (d2 * d2) as u32 + (d6 * d6) as u32;
-            sum3 += (d3 * d3) as u32 + (d7 * d7) as u32;
+    // Same 4-accumulator ILP shape as the hand-unrolled loop: lane i of each
+    // 8-wide chunk lands in sums[i % 4], so results are bitwise-identical.
+    let mut sums = [0u32; 4];
+    let mut a_chunks = a.chunks_exact(8);
+    let mut b_chunks = b.chunks_exact(8);
+    for (ac, bc) in (&mut a_chunks).zip(&mut b_chunks) {
+        for (i, (&x, &y)) in ac.iter().zip(bc).enumerate() {
+            let d = i32::from(x) - i32::from(y);
+            // SAFETY (EPIC-032/US-007): d in [-255, 255], so d*d in [0, 65025]
+            // is always non-negative and fits in u32 (max 4,294,967,295)
+            #[allow(clippy::cast_sign_loss)] // Proven non-negative: square of integer
+            {
+                sums[i % 4] += (d * d) as u32;
+            }
         }
     }
-
-    // Handle remainder
-    let base = chunks * 8;
-    for i in 0..remainder {
-        let diff = i32::from(a[base + i]) - i32::from(b[base + i]);
-        // SAFETY (EPIC-032/US-007): diff in [-255, 255], diff*diff in [0, 65025]
+    for (&x, &y) in a_chunks.remainder().iter().zip(b_chunks.remainder()) {
+        let d = i32::from(x) - i32::from(y);
+        // SAFETY (EPIC-032/US-007): d in [-255, 255], d*d in [0, 65025]
         #[allow(clippy::cast_sign_loss)]
         {
-            sum0 += (diff * diff) as u32;
+            sums[0] += (d * d) as u32;
         }
     }
 
-    sum0 + sum1 + sum2 + sum3
+    sums.iter().sum()
 }
 
 /// Computes asymmetric L2 distance: float32 query vs quantized candidate.

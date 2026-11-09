@@ -80,7 +80,7 @@ impl Collection {
 
         // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
         // reversed here, an ABBA risk with Collection::search's canonical
-        // order. See .investigation/http-deadlock-2026-07-22/.
+        // order. See tests/tokio_blocking_lock_contention_repro.rs.
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
         let now_secs = now_unix_secs();

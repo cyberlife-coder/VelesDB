@@ -341,7 +341,7 @@ impl McpServer {
         .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(RememberResult {
-            id,
+            id: id.to_string(),
             id_str: id.to_string(),
         }))
     }
@@ -440,7 +440,7 @@ impl McpServer {
         .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(FeedbackResult {
-            id,
+            id: id.to_string(),
             id_str: id.to_string(),
             confidence,
         }))
@@ -468,7 +468,7 @@ impl McpServer {
         .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(RelateResult {
-            edge_id,
+            edge_id: edge_id.to_string(),
             edge_id_str: edge_id.to_string(),
         }))
     }
@@ -520,7 +520,7 @@ impl McpServer {
             .map_err(join_error)?
             .map_err(to_error)?;
         Ok(Json(ForgetResult {
-            id,
+            id: id.to_string(),
             id_str: id.to_string(),
             found,
         }))

@@ -1537,7 +1537,6 @@ fn test_streaming_enable_and_insert_roundtrip() {
         .unwrap();
     let col = db.get_collection("stream_rt".to_string()).unwrap().unwrap();
 
-    // enable with engine defaults
     col.enable_streaming(None).unwrap();
     // re-enable with an explicit config (replaces the ingester)
     col.enable_streaming(Some(MobileStreamingConfig {

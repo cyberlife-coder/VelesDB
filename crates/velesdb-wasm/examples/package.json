@@ -8,6 +8,6 @@
     "serve": "python3 -m http.server 8080"
   },
   "dependencies": {
-    "@wiscale/velesdb-wasm": "4.0.0"
+    "@wiscale/velesdb-wasm": "^8.0.0"
   }
 }

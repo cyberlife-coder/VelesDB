@@ -650,7 +650,8 @@
           "sources",
           "retrieval_handles",
           "insights",
-          "risk"
+          "risk",
+          "warnings"
         ],
         "type": "object"
       }
@@ -1261,7 +1262,8 @@
               "sources",
               "retrieval_handles",
               "insights",
-              "risk"
+              "risk",
+              "warnings"
             ],
             "type": "object"
           },
@@ -1310,7 +1312,7 @@
                       "type": "integer"
                     },
                     "fragment_id": {
-                      "description": "The id this segment's fragment carries into `context.decisions` —\ncontent-addressed, same formula as every other `compile_context`\nfragment with no caller-supplied `id`.",
+                      "description": "The id this segment's fragment carries into `context.decisions` —\ncontent-addressed, same formula as every other `compile_context`\nfragment with no caller-supplied `id`. Numeric by default like every\n`decisions` id (the `ids_as_strings` policy stringifies it for\nu64-unsafe clients) — this surface's wire form is a recorded decision,\nkept consistent with `crate::context::model::ContextDecision`.",
                       "minimum": 0,
                       "type": [
                         "integer",
@@ -1472,9 +1474,8 @@
             "type": "boolean"
           },
           "id": {
-            "description": "Stable, content-addressed id of the entity (`0` when not found).",
-            "minimum": 0,
-            "type": "integer"
+            "description": "Stable, content-addressed id of the entity (`0` when not found) — a\ndecimal string on the wire (#1468).",
+            "type": "string"
           },
           "id_str": {
             "description": "Decimal-string twin of `id` (issue #1468).",
@@ -1498,9 +1499,8 @@
                   "type": "string"
                 },
                 "target_id": {
-                  "description": "Stable id of the entity (or fact) on the far end.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Stable id of the entity (or fact) on the far end — a decimal string\non the wire (#1468).",
+                  "type": "string"
                 },
                 "target_id_str": {
                   "description": "Decimal-string twin of `target_id` (issue #1468).",
@@ -1531,9 +1531,8 @@
                   "type": "string"
                 },
                 "target_id": {
-                  "description": "Stable id of the entity (or fact) on the far end.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Stable id of the entity (or fact) on the far end — a decimal string\non the wire (#1468).",
+                  "type": "string"
                 },
                 "target_id_str": {
                   "description": "Decimal-string twin of `target_id` (issue #1468).",
@@ -1972,7 +1971,7 @@
       }
     },
     {
-      "description": "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` and their u64-safe decimal `ids_str` twins, `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null.",
+      "description": "Read one durable extraction job by the `request_id` returned from `remember_extracted`. Returns that `request_id`, its persisted `state` (`accepted`, `running`, `committed`, or `failed`), committed fact `ids` as decimal strings (the `ids_str` twin carries the same values), `skipped_over_cap` after commit, and `error` after failure. While accepted/running, `ids` and `ids_str` are empty and both optional terminal fields are null.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
@@ -1998,15 +1997,14 @@
             ]
           },
           "ids": {
-            "description": "Stored fact ids after commit; empty while pending or failed.",
+            "description": "Stored fact ids after commit, as decimal strings on the wire (#1468);\nempty while pending or failed.",
             "items": {
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             },
             "type": "array"
           },
           "ids_str": {
-            "description": "Decimal-string twins of `ids` for float-lossy JSON clients.",
+            "description": "Decimal-string twins of `ids` — same values, kept as the documented\nrelay fields.",
             "items": {
               "type": "string"
             },
@@ -2039,7 +2037,9 @@
           "request_id",
           "state",
           "ids",
-          "ids_str"
+          "ids_str",
+          "skipped_over_cap",
+          "error"
         ],
         "type": "object"
       }
@@ -2074,9 +2074,8 @@
             "type": "number"
           },
           "id": {
-            "description": "Id of the reinforced memory.",
-            "minimum": 0,
-            "type": "integer"
+            "description": "Id of the reinforced memory — a decimal string on the wire (#1468).",
+            "type": "string"
           },
           "id_str": {
             "description": "Decimal-string twin of `id` (issue #1468) — see\n`RememberResult::id_str`.",
@@ -2115,9 +2114,8 @@
             "type": "boolean"
           },
           "id": {
-            "description": "Id that was requested for deletion.",
-            "minimum": 0,
-            "type": "integer"
+            "description": "Id that was requested for deletion — a decimal string on the wire\n(#1468).",
+            "type": "string"
           },
           "id_str": {
             "description": "Decimal-string twin of `id` (issue #1468) — see\n`RememberResult::id_str`.",
@@ -2174,8 +2172,7 @@
                 },
                 "id": {
                   "description": "Stable id of the memory.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "string"
                 },
                 "id_str": {
                   "description": "Decimal-string twin of `id` (issue #1468) — see\n`RememberResult::id_str`.",
@@ -2193,7 +2190,8 @@
               "required": [
                 "id",
                 "id_str",
-                "content"
+                "content",
+                "metadata"
               ],
               "type": "object"
             },
@@ -2208,7 +2206,8 @@
           }
         },
         "required": [
-          "memories"
+          "memories",
+          "next_cursor"
         ],
         "type": "object"
       }
@@ -2554,6 +2553,14 @@
                     "type": "array"
                   }
                 },
+                "required": [
+                  "active_constraints",
+                  "verified_facts",
+                  "open_hypotheses",
+                  "decisions",
+                  "exact_evidence",
+                  "pending_actions"
+                ],
                 "type": "object"
               },
               {
@@ -2564,7 +2571,9 @@
           }
         },
         "required": [
-          "found"
+          "found",
+          "working",
+          "other_sessions"
         ],
         "type": "object"
       }
@@ -2605,6 +2614,11 @@
                 ]
               }
             },
+            "required": [
+              "model",
+              "dimension",
+              "semantic"
+            ],
             "type": "object"
           },
           "extraction": {
@@ -2655,7 +2669,8 @@
               }
             },
             "required": [
-              "facts"
+              "facts",
+              "edges"
             ],
             "type": "object"
           },
@@ -2683,7 +2698,9 @@
               }
             },
             "required": [
-              "recorded"
+              "recorded",
+              "model",
+              "dimension"
             ],
             "type": "object"
           }
@@ -2789,7 +2806,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -2822,6 +2841,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -2833,7 +2854,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -2930,7 +2952,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -2963,6 +2987,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -2974,7 +3000,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -3108,7 +3135,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -3141,6 +3170,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -3152,7 +3183,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -3249,7 +3281,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -3282,6 +3316,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -3293,7 +3329,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -3374,8 +3411,7 @@
                         }
                       },
                       "required": [
-                        "state",
-                        "changed"
+                        "state"
                       ],
                       "type": "object"
                     },
@@ -3386,12 +3422,11 @@
                   "description": "Present only on `recall` with `anchor_root`, for a fact remembered\nwith `anchors`: whether its anchored files still hold the bytes it was\nwritten against."
                 },
                 "id": {
-                  "description": "Stable id of the memory.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Stable id of the memory — a decimal string on the wire (#1468).",
+                  "type": "string"
                 },
                 "id_str": {
-                  "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (#1468). `id` is unchanged.",
+                  "description": "Decimal-string twin of `id` — same value, the documented relay field\nfor `relate`/`forget`/`feedback` (#1468).",
                   "type": "string"
                 },
                 "metadata": {
@@ -3523,8 +3558,7 @@
                         }
                       },
                       "required": [
-                        "state",
-                        "changed"
+                        "state"
                       ],
                       "type": "object"
                     },
@@ -3535,12 +3569,11 @@
                   "description": "Present only on `recall` with `anchor_root`, for a fact remembered\nwith `anchors`: whether its anchored files still hold the bytes it was\nwritten against."
                 },
                 "id": {
-                  "description": "Stable id of the memory.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Stable id of the memory — a decimal string on the wire (#1468).",
+                  "type": "string"
                 },
                 "id_str": {
-                  "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (#1468). `id` is unchanged.",
+                  "description": "Decimal-string twin of `id` — same value, the documented relay field\nfor `relate`/`forget`/`feedback` (#1468).",
                   "type": "string"
                 },
                 "metadata": {
@@ -3687,8 +3720,7 @@
                         }
                       },
                       "required": [
-                        "state",
-                        "changed"
+                        "state"
                       ],
                       "type": "object"
                     },
@@ -3699,12 +3731,11 @@
                   "description": "Present only on `recall` with `anchor_root`, for a fact remembered\nwith `anchors`: whether its anchored files still hold the bytes it was\nwritten against."
                 },
                 "id": {
-                  "description": "Stable id of the memory.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Stable id of the memory — a decimal string on the wire (#1468).",
+                  "type": "string"
                 },
                 "id_str": {
-                  "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (#1468). `id` is unchanged.",
+                  "description": "Decimal-string twin of `id` — same value, the documented relay field\nfor `relate`/`forget`/`feedback` (#1468).",
                   "type": "string"
                 },
                 "metadata": {
@@ -3768,9 +3799,8 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "edge_id": {
-            "description": "Id of the created edge.",
-            "minimum": 0,
-            "type": "integer"
+            "description": "Id of the created edge — a decimal string on the wire (#1468).",
+            "type": "string"
           },
           "edge_id_str": {
             "description": "Decimal-string twin of `edge_id` (issue #1468) — see\n`RememberResult::id_str`.",
@@ -3848,12 +3878,11 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "id": {
-            "description": "Stable id assigned to the remembered fact.",
-            "minimum": 0,
-            "type": "integer"
+            "description": "Stable id assigned to the remembered fact — a decimal string on the\nwire (#1468: a raw number above 2^53 is rounded or rejected by JSON\nclients).",
+            "type": "string"
           },
           "id_str": {
-            "description": "Decimal-string twin of `id` — always relay THIS to `relate`/`forget`/\n`feedback`, never `id` itself: a u64 above 2^53 loses precision\nthrough a float-lossy JSON client (#1468). `id` is unchanged.",
+            "description": "Decimal-string twin of `id` — same value, kept as the documented\nrelay field for `relate`/`forget`/`feedback` (#1468).",
             "type": "string"
           }
         },
@@ -4198,12 +4227,11 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
           "id": {
-            "description": "Id of the stored system fact backing this working context.",
-            "minimum": 0,
-            "type": "integer"
+            "description": "Id of the stored system fact backing this working context — a\ndecimal string on the wire (#1468: content-addressed FNV-1a 64 ids\nare past 2^53).",
+            "type": "string"
           },
           "id_str": {
-            "description": "Decimal-string twin of `id` (same contract as `remember`'s). The id\nis content-addressed (FNV-1a 64), past 2^53 — relay THIS to\n`forget`/`feedback`, never `id`.",
+            "description": "Decimal-string twin of `id` (same contract as `remember`'s) — same\nvalue, kept as the documented relay field for `forget`/`feedback`.",
             "type": "string"
           }
         },
@@ -4263,6 +4291,8 @@
           }
         },
         "required": [
+          "window",
+          "suggested_budget",
           "source"
         ],
         "type": "object"
@@ -4349,9 +4379,8 @@
               "description": "Wire shape of one edge in a `why` subgraph: `MemoryEdge` plus the\n`from_str`/`to_str` twins (issue #1468).",
               "properties": {
                 "from": {
-                  "description": "Source memory id.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Source memory id — a decimal string on the wire (#1468).",
+                  "type": "string"
                 },
                 "from_str": {
                   "description": "Decimal-string twin of `from` (issue #1468) — see\n`RecollectionDto::id_str`.",
@@ -4362,9 +4391,8 @@
                   "type": "string"
                 },
                 "to": {
-                  "description": "Target memory id.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Target memory id — a decimal string on the wire (#1468).",
+                  "type": "string"
                 },
                 "to_str": {
                   "description": "Decimal-string twin of `to` (issue #1468) — see\n`RecollectionDto::id_str`.",
@@ -4397,9 +4425,8 @@
                   "type": "integer"
                 },
                 "id": {
-                  "description": "Stable id of the memory.",
-                  "minimum": 0,
-                  "type": "integer"
+                  "description": "Stable id of the memory — a decimal string on the wire (#1468).",
+                  "type": "string"
                 },
                 "id_str": {
                   "description": "Decimal-string twin of `id` (issue #1468) — see\n`RecollectionDto::id_str`.",

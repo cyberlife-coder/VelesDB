@@ -59,6 +59,7 @@ mod graph;
 mod graph_persistence;
 mod graph_store;
 mod graph_worker_hints;
+mod guardrails;
 mod idb_helpers;
 mod js_value;
 /// WASM binding for `velesdb-memory`'s agent-memory wedge — see
@@ -221,6 +222,10 @@ mod velesql_exec_graph_tests;
 #[cfg(test)]
 #[path = "velesql_executor_conformance_tests.rs"]
 mod velesql_executor_conformance_tests;
+
+#[cfg(test)]
+#[path = "search_fidelity_conformance_tests.rs"]
+mod search_fidelity_conformance_tests;
 
 #[cfg(test)]
 #[path = "coverage_v3_tests.rs"]

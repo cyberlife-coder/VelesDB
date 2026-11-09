@@ -85,6 +85,15 @@ VERSION_SCAN_EXCLUDED_DIRS: "tuple[str, ...]" = (
 # Filename patterns that legitimately pin OLD versions wherever they live.
 VERSION_SCAN_EXCLUDED_NAMES = re.compile(r"^(MIGRATION_v|CHANGELOG)", re.IGNORECASE)
 
+# Vendored/installed trees: their READMEs describe someone else's package
+# version, and the sweep reads the filesystem (not the git index), so a
+# populated `node_modules` under sdks/typescript would bury every real
+# finding. CI never sees these — a clean checkout has none — but the local-ci
+# replay runs the guard where `npm install` has already run.
+VERSION_SCAN_EXCLUDED_DIR_NAMES: "frozenset[str]" = frozenset(
+    {"node_modules", ".venv", "venv", "site-packages"}
+)
+
 # Point-in-time measurements that deliberately preserve old package versions.
 # Their entry page must link to them with a freshness caveat; changing the
 # captured versions would falsify the historical result rather than freshen it.
@@ -338,9 +347,18 @@ def scanned_doc_files(root: Path) -> "list[Path]":
     # CHANGELOG.md matches VERSION_SCAN_EXCLUDED_NAMES, which is the only one
     # the widened sweep reports (13 entries, all of them past releases).
     candidates = sorted(root.glob("*.md")) + sorted((root / DOCS_DIRNAME).rglob("*.md"))
+    # The doc-bearing product directories carry the same claims — an SDK or
+    # integration README is the page its package registry sends a user to,
+    # and a stale pin there is just as published as one in docs/. Only
+    # directories that exist are swept: an absent one is nothing's business.
+    for dirname in ("sdks", "integrations", "demos", "benchmarks"):
+        if (root / dirname).is_dir():
+            candidates += sorted((root / dirname).rglob("*.md"))
     for path in candidates:
         relative = path.relative_to(root).as_posix()
         if relative in VERSION_SCAN_EXCLUDED_FILES:
+            continue
+        if VERSION_SCAN_EXCLUDED_DIR_NAMES.intersection(path.relative_to(root).parts):
             continue
         resolved = path.resolve()
         if any(resolved.is_relative_to(d) for d in excluded_dirs):

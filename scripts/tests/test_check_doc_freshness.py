@@ -529,3 +529,77 @@ class WorkspaceStampClaimTests(FreshnessGuardTestCase):
         }
         for name, found in seen.items():
             self.assertTrue(found, f"{name} carries no `workspace X.Y.Z` stamp the guard can read")
+
+
+class ProductDirectoriesAreSweptTests(FreshnessGuardTestCase):
+    """The `versions` sweep used to stop at root + docs/ + crates/*/README.md.
+
+    `sdks/`, `integrations/`, `demos/` and `benchmarks/` all carry READMEs a
+    package registry or a search result lands a user on — a stale version
+    claim there is just as published as one in docs/. Measured on the real
+    tree the moment the sweep widened: six stale `8.0.0` claims in
+    `sdks/typescript/README.md`, every other guard green.
+    """
+
+    def test_a_stale_claim_under_a_product_dir_is_refused(self) -> None:
+        self.write(
+            "sdks/typescript/README.md",
+            "# SDK\n\nInstall velesdb-server 1.2.3 for this guide.\n",
+        )
+        self.assertGuardFails("versions", "sdks/typescript/README.md", "1.2.3")
+
+    def test_every_product_dir_joins_the_sweep(self) -> None:
+        """A file added under a swept dir tomorrow must be inside the guard.
+
+        Directories that do not exist are skipped: an absent one is nothing's
+        business, so the sweep must not demand all four exist.
+        """
+        for rel in (
+            "sdks/typescript/README.md",
+            "integrations/langchain/README.md",
+            "demos/rag-pdf-demo/README.md",
+            "benchmarks/README.md",
+            "benchmarks/results/nested-report.md",
+        ):
+            self.write(rel, "# Page\n")
+        swept = {p.relative_to(self.tmp).as_posix() for p in cdf.scanned_doc_files(self.tmp)}
+        for rel in (
+            "sdks/typescript/README.md",
+            "integrations/langchain/README.md",
+            "demos/rag-pdf-demo/README.md",
+            "benchmarks/README.md",
+            "benchmarks/results/nested-report.md",
+        ):
+            self.assertIn(rel, swept)
+
+    def test_a_frozen_benchmark_report_keeps_its_measured_versions(self) -> None:
+        # A dated benchmark report states the versions its numbers were taken
+        # under — same exemption mechanism as docs/quickstart/timing-results.md,
+        # pre-registered in VERSION_SCAN_EXCLUDED_FILES.
+        self.write(
+            "benchmarks/results/2026-08-16-memory-extraction-report.md",
+            "Measured with velesdb-core@1.14.2 and published v1.14.2 packages.\n",
+        )
+        self.assertGuardPasses("versions")
+
+    def test_excluded_names_apply_in_the_new_dirs_too(self) -> None:
+        # CHANGELOG/MIGRATION files are historical wherever they live; the
+        # name exemption must not stop at docs/'s border.
+        stale = '```toml\nvelesdb-core = "1.7"\n```\n'
+        self.write("integrations/langchain/CHANGELOG.md", stale)
+        self.write("sdks/typescript/CHANGELOG.md", stale)
+        self.assertGuardPasses("versions")
+
+    def test_vendored_trees_inside_a_swept_dir_are_skipped(self) -> None:
+        # The sweep reads the filesystem, so a populated `node_modules` or
+        # virtualenv under a product dir would surface hundreds of READMEs
+        # describing OTHER packages' versions. sdks/typescript/node_modules
+        # exists in every checkout that has run `npm install`.
+        stale = "\nInstall velesdb-server 1.2.3 for this guide.\n"
+        self.write("sdks/typescript/node_modules/left-pad/README.md", stale)
+        self.write("integrations/langchain/.venv/lib/README.md", stale)
+        self.assertGuardPasses("versions")
+
+        # ...while the same claim one directory up is still refused.
+        self.write("sdks/typescript/README.md", f"# SDK\n{stale}")
+        self.assertGuardFails("versions", "sdks/typescript/README.md", "1.2.3")

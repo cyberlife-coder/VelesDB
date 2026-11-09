@@ -59,8 +59,8 @@ pub use filter_geo::{CompareOp, GeoBboxParams, GeoDistanceParams};
 pub use string_table::StringTable;
 pub use types::{
     AutoVacuumConfig, BatchUpdate, BatchUpdateResult, BatchUpsertResult, ColumnStoreError,
-    ColumnType, ColumnValue, ExpireResult, StringId, TypedColumn, UpsertResult, VacuumConfig,
-    VacuumStats,
+    ColumnType, ColumnValue, ExpireResult, Masked, StringId, TypedColumn, UpsertResult,
+    VacuumConfig, VacuumStats,
 };
 
 /// Column store for high-performance filtering.
@@ -307,9 +307,9 @@ impl ColumnStore {
         let col = self.columns.get(column)?;
         // String columns need special handling for intern-table resolution.
         if let TypedColumn::String(v) = col {
-            return v.get(row_idx).and_then(|opt| {
-                opt.and_then(|id| self.string_table.get(id).map(|s| serde_json::json!(s)))
-            });
+            return v
+                .get(row_idx)
+                .and_then(|id| self.string_table.get(*id).map(|s| serde_json::json!(s)));
         }
         // Array columns need special handling for string element resolution.
         if let TypedColumn::Array { data, .. } = col {
@@ -319,7 +319,7 @@ impl ColumnStore {
         if let TypedColumn::GeoPoint(v) = col {
             return v
                 .get(row_idx)
-                .and_then(|opt| opt.map(|(lat, lng)| serde_json::json!({"lat": lat, "lng": lng})));
+                .map(|(lat, lng)| serde_json::json!({"lat": lat, "lng": lng}));
         }
         col.get_as_json_non_string(row_idx)
     }
@@ -327,10 +327,10 @@ impl ColumnStore {
     /// Converts an array column cell to a JSON array, resolving string IDs.
     fn get_array_as_json(
         &self,
-        data: &[Option<smallvec::SmallVec<[ColumnValue; 8]>>],
+        data: &Masked<smallvec::SmallVec<[ColumnValue; 8]>>,
         row_idx: usize,
     ) -> Option<serde_json::Value> {
-        let arr = data.get(row_idx)?.as_ref()?;
+        let arr = data.get(row_idx)?;
         let json_arr: Vec<serde_json::Value> =
             arr.iter().map(|v| self.column_value_to_json(v)).collect();
         Some(serde_json::Value::Array(json_arr))

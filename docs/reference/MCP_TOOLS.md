@@ -118,7 +118,7 @@ remember { "fact": "we chose parking_lot to avoid lock poisoning",
            "metadata": { "project": "checkout" },
            "links":   [ { "target": "1234", "relation": "decided_in" } ],
            "ttl_seconds": 604800 }
-→ { "id": 9876543210, "id_str": "9876543210" }
+→ { "id": "9876543210", "id_str": "9876543210" }
 ```
 
 ### Automatic dating (`_veles_date`)
@@ -181,7 +181,7 @@ judge anchors.
 
 ```jsonc
 recall { "query": "billing retries", "k": 5, "filter": { "project": "checkout" } }
-→ { "memories": [ { "id": 9876543210, "id_str": "9876543210", "score": 0.59, "content": "…" } ] }
+→ { "memories": [ { "id": "9876543210", "id_str": "9876543210", "score": 0.59, "content": "…" } ] }
 ```
 
 ## `recall_where`
@@ -264,7 +264,7 @@ invisible to `why(that memory)`.
 
 ```jsonc
 relate { "from": "9876543210", "to": "1234", "relation": "depends_on" }
-→ { "edge_id": 42, "edge_id_str": "42" }
+→ { "edge_id": "42", "edge_id_str": "42" }
 ```
 
 ## `unrelate`
@@ -818,4 +818,4 @@ so the MCP taxonomy cannot drift from the bindings':
 
 ---
 
-Last updated: 2026-11-02 · Applies to: velesdb-memory 0.17.1
+Last updated: 2026-11-02 · Applies to: velesdb-memory 0.18.0

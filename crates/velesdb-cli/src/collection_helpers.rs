@@ -4,7 +4,9 @@
 //! (Vector, Graph, Metadata) so that CLI commands can display
 //! type-specific details and call the correct APIs.
 
-use velesdb_core::{Database, GraphCollection, MetadataCollection, VectorCollection};
+use velesdb_core::{
+    AnyCollection, Database, GraphCollection, MetadataCollection, VectorCollection,
+};
 
 /// A typed handle to one of the three collection kinds.
 pub enum TypedCollection {
@@ -15,20 +17,21 @@ pub enum TypedCollection {
 
 /// Resolves a collection name to its typed variant.
 ///
-/// Checks typed registries in order: Vector → Graph → Metadata.
+/// Delegates to core's [`Database::get_any_collection`], the one registry
+/// walk (Vector → Graph → Metadata) every surface shares. `AnyCollection` is
+/// `#[non_exhaustive]`: a variant core adds later maps to `None` here —
+/// matching the prior behaviour for a kind the CLI cannot dispatch — rather
+/// than being silently reachable.
+///
 /// Returns `None` if the collection does not exist in any registry.
 #[must_use]
 pub fn resolve_collection(db: &Database, name: &str) -> Option<TypedCollection> {
-    if let Some(c) = db.get_vector_collection(name) {
-        return Some(TypedCollection::Vector(c));
+    match db.get_any_collection(name)? {
+        AnyCollection::Vector(c) => Some(TypedCollection::Vector(c)),
+        AnyCollection::Graph(c) => Some(TypedCollection::Graph(c)),
+        AnyCollection::Metadata(c) => Some(TypedCollection::Metadata(c)),
+        _ => None,
     }
-    if let Some(c) = db.get_graph_collection(name) {
-        return Some(TypedCollection::Graph(c));
-    }
-    if let Some(c) = db.get_metadata_collection(name) {
-        return Some(TypedCollection::Metadata(c));
-    }
-    None
 }
 
 /// Returns a human-readable label for the collection type.
@@ -36,16 +39,12 @@ pub fn resolve_collection(db: &Database, name: &str) -> Option<TypedCollection> 
 /// Falls back to `"unknown"` if the collection is not found in any typed registry.
 #[must_use]
 pub fn collection_type_label(db: &Database, name: &str) -> &'static str {
-    if db.get_vector_collection(name).is_some() {
-        return "Vector";
+    match db.get_any_collection(name) {
+        Some(AnyCollection::Vector(_)) => "Vector",
+        Some(AnyCollection::Graph(_)) => "Graph",
+        Some(AnyCollection::Metadata(_)) => "Metadata",
+        _ => "unknown",
     }
-    if db.get_graph_collection(name).is_some() {
-        return "Graph";
-    }
-    if db.get_metadata_collection(name).is_some() {
-        return "Metadata";
-    }
-    "unknown"
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ This guide targets the **first-hour issues** new users commonly hit.
 
 VelesQL is SQL-like and vector/graph oriented. It is not a drop-in replacement for every relational SQL dialect.
 
-**Fix:** start from [VelesQL examples](VELESQL_SPEC.md#examples) and the [conformance test cases](../conformance/velesql_parser_cases.json), then adapt your SQL patterns incrementally.
+**Fix:** start from [VelesQL examples](VELESQL_SPEC.md#complete-examples) and the [conformance test cases](../conformance/velesql_parser_cases.json), then adapt your SQL patterns incrementally.
 
 ### 2) "I get empty results"
 
@@ -50,7 +50,7 @@ This is expected: results depend on hardware SIMD support, vector size, `ef_sear
 
 VelesQL est **SQL-like**, pas un clone exact de PostgreSQL/MySQL.
 
-**Correction :** partir des [exemples VelesQL](VELESQL_SPEC.md#examples) et des [cas de conformance](../conformance/velesql_parser_cases.json), puis adapter progressivement vos requêtes.
+**Correction :** partir des [exemples VelesQL](VELESQL_SPEC.md#complete-examples) et des [cas de conformance](../conformance/velesql_parser_cases.json), puis adapter progressivement vos requêtes.
 
 ### 2) « Ma requête ne retourne rien »
 
@@ -106,4 +106,4 @@ Normal : dépend du CPU, de `ef_search`, des filtres/payloads et du dataset.
 - [E-commerce Example](../examples/ecommerce_recommendation/) — Full Vector + Graph + Filter demo in Rust
 
 ---
-Last updated: 2026-07-25 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-07-25 · Applies to: velesdb-core 8.2.0

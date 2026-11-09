@@ -26,7 +26,9 @@ use crate::helpers::{self, BatchImporter};
 pub struct ImportConfig {
     pub collection: String,
     pub dimension: Option<usize>,
-    pub metric: DistanceMetric,
+    /// `None` when the caller did not name a metric: an existing
+    /// collection's own metric is then kept, and a new one gets cosine.
+    pub metric: Option<DistanceMetric>,
     pub storage_mode: StorageMode,
     pub batch_size: usize,
     pub id_column: String,
@@ -39,7 +41,7 @@ impl Default for ImportConfig {
         Self {
             collection: String::new(),
             dimension: None,
-            metric: DistanceMetric::Cosine,
+            metric: None,
             storage_mode: StorageMode::Full,
             batch_size: 1000,
             id_column: "id".to_string(),
@@ -357,13 +359,36 @@ fn get_or_create_collection(
     db: &Database,
     name: &str,
     dimension: usize,
-    metric: DistanceMetric,
+    metric: Option<DistanceMetric>,
     storage_mode: StorageMode,
 ) -> Result<velesdb_core::VectorCollection> {
     if let Some(col) = db.get_vector_collection(name) {
+        // Reusing an existing collection: an explicit --metric or
+        // --dimension describes the collection the caller expects, so a
+        // mismatch must be loud — silently importing into a
+        // differently-metric'd collection mis-maps the corpus (#2095). An
+        // absent --metric keeps whatever the collection already has: the
+        // default cosine must not be read as intent and refuse the import.
+        if let Some(metric) = metric {
+            anyhow::ensure!(
+                col.metric() == metric,
+                "Collection '{name}' already exists with metric {:?};                  refusing to import with --metric {metric:?}",
+                col.metric()
+            );
+        }
+        anyhow::ensure!(
+            col.dimension() == dimension,
+            "Collection '{name}' already exists with dimension {};              refusing to import with --dimension {dimension}",
+            col.dimension()
+        );
         Ok(col)
     } else {
-        db.create_vector_collection_with_options(name, dimension, metric, storage_mode)?;
+        db.create_vector_collection_with_options(
+            name,
+            dimension,
+            metric.unwrap_or(DistanceMetric::Cosine),
+            storage_mode,
+        )?;
         db.get_vector_collection(name)
             .context("Failed to get created collection")
     }

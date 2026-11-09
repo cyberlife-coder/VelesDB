@@ -452,6 +452,23 @@ impl NativeHnswInner {
 
     /// GPU routing policy shared by [`Self::search_auto`] and
     /// [`Self::search_resumable`]: attempts device layer-0 traversal when the
+    /// Forced layer-0 CSR rebuild after `insert_batch_parallel` (#2075).
+    /// Standard backend only — the quantized backends own a different
+    /// traversal path.
+    pub(crate) fn rebuild_base_csr(&self) {
+        if let HnswBackend::Standard(hnsw) = &self.backend {
+            hnsw.rebuild_base_csr();
+        }
+    }
+
+    /// [`Self::rebuild_base_csr`] conditioned on the batch having placed —
+    /// keeps the branch out of `try_insert_batch`'s complexity budget.
+    pub(crate) fn rebuild_base_csr_when(&self, placed_ok: bool) {
+        if placed_ok {
+            self.rebuild_base_csr();
+        }
+    }
+
     /// Standard backend crosses the GPU threshold. `None` means "take the CPU
     /// path" — either the feature is off, the backend/scale does not qualify,
     /// or the GPU attempt failed and search falls through.

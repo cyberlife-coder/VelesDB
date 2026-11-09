@@ -280,11 +280,14 @@ rag-pdf-demo/
 
 **VelesDB stores data on disk by default** - when you stop the demo, **all documents remain indexed** in:
 ```
-./rag-data/rag_documents/
-├── config.json      # Collection metadata
-├── vectors.dat      # Vector embeddings (16MB+)
-├── vectors.idx      # Vector index
-└── vectors.wal      # Write-ahead log
+./rag-data/
+├── velesdb.lock           # Single-writer lock
+└── rag_documents/
+    ├── config.json        # Collection metadata
+    ├── vectors.dat        # Vector embeddings
+    ├── vectors.wal        # Write-ahead log
+    ├── payloads.log       # Chunk payloads
+    └── bm25.wal           # Text-search index log
 ```
 
 ### 🧹 Complete Cleanup Options
@@ -336,8 +339,12 @@ import velesdb
 
 class VelesDBClient:
     def __init__(self, data_path: str | None = None, **_legacy_kwargs) -> None:
-        self._db = velesdb.Database(data_path or self._tmp_path())
-        self._collection = None  # opened lazily after a known dimension is set
+        # data_path=None falls back to a per-process temporary directory;
+        # the demo passes settings.velesdb_data_path ("./rag-data" by default).
+        if data_path is None:
+            self._tmpdir = tempfile.TemporaryDirectory()  # kept alive on self
+            data_path = self._tmpdir.name
+        self._db = velesdb.Database(data_path)
 ```
 
 VelesDB releases the GIL during every Rust call, so the FastAPI event loop

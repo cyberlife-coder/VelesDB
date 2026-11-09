@@ -170,7 +170,7 @@ impl Collection {
 
         // LOCK ORDER: metric snapshot (config, rank 1) first, then
         // vector_storage (2) before payload_storage (3) — the order a real
-        // HTTP deadlock was traced to (.investigation/http-deadlock-2026-07-22/).
+        // HTTP deadlock was traced to (tests/tokio_blocking_lock_contention_repro.rs).
         // The guards are then handed to the evaluator so a nested MATCH leaf
         // reuses them instead of re-acquiring the same locks mid-scan.
         let metric = self.storage.config.read().metric;
@@ -390,8 +390,8 @@ impl Collection {
     /// byte-identical to `execute_scan_query`.
     // vector_storage(2) before payload_storage(3), and held together for the
     // whole scan. This pair's order is not incidental: it was reversed here
-    // and caused the deadlock recorded in
-    // .investigation/http-deadlock-2026-07-22/. Tightening either guard
+    // and caused the deadlock reproduced by
+    // tests/tokio_blocking_lock_contention_repro.rs. Tightening either guard
     // reopens that ordering question, so both are held deliberately.
     #[expect(clippy::significant_drop_tightening)]
     pub(crate) fn execute_scan_query_tracked(
@@ -415,7 +415,7 @@ impl Collection {
 
         // Full sequential scan (slow fallback for non-indexed conditions).
         // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See .investigation/http-deadlock-2026-07-22/.
+        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
 
@@ -577,7 +577,7 @@ impl Collection {
         limit: usize,
     ) -> TrackedScan {
         // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See .investigation/http-deadlock-2026-07-22/.
+        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
         let mut scanned: usize = 0;

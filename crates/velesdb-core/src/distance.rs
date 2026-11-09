@@ -170,7 +170,12 @@ impl DistanceMetric {
             Self::Euclidean => simd_native::euclidean_native(a, b),
             Self::DotProduct => simd_native::dot_product_native(a, b),
             Self::Hamming => simd_native::hamming_distance_native(a, b),
-            Self::Jaccard => simd_native::jaccard_similarity_native(a, b),
+            // The kernels return the raw `intersection / union` ratio, which
+            // escapes the declared `[0, 1]` on out-of-contract (negative-weight)
+            // input; `calculate` is the metric-score layer, so the declared
+            // range is enforced here (#2095). The kernel itself stays raw —
+            // `simd_property_tests` pins it against an f64 reference.
+            Self::Jaccard => simd_native::jaccard_similarity_native(a, b).clamp(0.0, 1.0),
         }
     }
 

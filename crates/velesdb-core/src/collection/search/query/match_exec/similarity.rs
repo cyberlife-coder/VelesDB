@@ -331,7 +331,7 @@ impl Collection {
 
         // Hoist both storage locks once for the entire scoring loop.
         // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See .investigation/http-deadlock-2026-07-22/.
+        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
         let vector_storage = self.storage.vector_storage.read();
         let payload_guard = self.storage.payload_storage.read();
         let memo = super::PayloadMemo::new(&payload_guard);
@@ -499,7 +499,7 @@ impl Collection {
         match_results: Vec<MatchResult>,
     ) -> Result<Vec<SearchResult>> {
         // LOCK ORDER: vector_storage(2) before payload_storage(3) — was
-        // reversed here. See .investigation/http-deadlock-2026-07-22/.
+        // reversed here. See tests/tokio_blocking_lock_contention_repro.rs.
         let vector_storage = self.storage.vector_storage.read();
         let payload_storage = self.storage.payload_storage.read();
 

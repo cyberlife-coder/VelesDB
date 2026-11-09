@@ -38,6 +38,10 @@ Sources of truth:
 - Engine/runtime `VELES-XXX`: this document (and `crates/velesdb-core/src/error.rs`).
 - REST VelesQL `VELESQL_*`: `docs/reference/VELESQL_CONTRACT.md`.
 
+This document is a second source of truth for the first two schemes; it is
+drift-checked by `scripts/check-error-codes.py` (CI `lint` job), which fails
+on any code declared but undocumented or documented but undeclared.
+
 Which scheme is canonical for which surface:
 
 - A **VelesQL parse/validation failure** is reported with an `E0XX` code (parser-specific

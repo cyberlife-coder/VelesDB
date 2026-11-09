@@ -7,7 +7,9 @@ const PORT = Number(process.env.PORT ?? 3000);
 const VELESDB_URL = process.env.VELESDB_URL ?? "http://localhost:8080";
 
 const ingestSchema = z.object({
-  id: z.string().min(1).max(256).optional(),
+  // The REST backend only accepts numeric u64-compatible IDs (integer or
+  // decimal string), so the public schema restricts `id` to digits.
+  id: z.string().regex(/^\d+$/).max(20).optional(),
   text: z.string().min(1),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
@@ -29,7 +31,8 @@ async function main(): Promise<void> {
   app.post("/ingest", async (req, res, next) => {
     try {
       const body = ingestSchema.parse(req.body);
-      const id = body.id ?? crypto.randomUUID();
+      // Random u64 as a decimal string — the REST backend's accepted ID shape.
+      const id = body.id ?? String(crypto.getRandomValues(new BigUint64Array(1))[0]);
       await db.upsert(COLLECTION, {
         id,
         vector: embed(body.text),

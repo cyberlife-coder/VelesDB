@@ -22,6 +22,14 @@ pub fn hamming_distance_native(a: &[f32], b: &[f32]) -> f32 {
 
 /// Jaccard similarity with runtime SIMD dispatch.
 ///
+/// Returns the raw `intersection / union` ratio, unclamped: on out-of-contract
+/// (negative-weight) input it can leave the metric's declared `[0, 1]` range.
+/// The range is enforced one layer up, on the score producers —
+/// [`DistanceMetric::calculate`](crate::DistanceMetric::calculate),
+/// [`DistanceEngine::jaccard`](super::DistanceEngine::jaccard) and the paths
+/// routing through `clamp_score` — so this function keeps its
+/// kernel-vs-f64-reference property contract (#2095).
+///
 /// # Panics
 ///
 /// Panics if `a.len() != b.len()`.

@@ -117,7 +117,7 @@ Add a signing job between the build and the release creation:
 # .github/workflows/release.yml
 sign-release:
   name: Sign Release Binaries
-  needs: [validate, build-release]
+  needs: [validate, build]
   uses: ./.github/workflows/code-signing.yml
   secrets: inherit
 ```
@@ -125,10 +125,10 @@ sign-release:
 Then make the release job depend on it:
 
 ```yaml
-create-release:
+github-release:
   name: Create GitHub Release
   runs-on: ubuntu-latest
-  needs: [validate, build-release, sign-release]
+  needs: [validate, build, sign-release]
 ```
 
 ## 5. Manual test
@@ -298,4 +298,4 @@ Required secrets:
 
 ---
 
-Last updated: 2026-09-02 · Applies to: VelesDB 8.1.0
+Last updated: 2026-09-02 · Applies to: VelesDB 8.2.0

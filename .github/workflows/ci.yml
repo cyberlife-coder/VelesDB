@@ -153,6 +153,9 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
+
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
@@ -212,7 +215,7 @@ jobs:
       - name: Check each velesdb-memory feature in isolation
         run: |
           set -eu
-          for feat in mcp http context persistence embedder-http extractor-http ollama extract; do
+          for feat in mcp http context persistence embedder-http extractor-http ollama extract gpu; do
             echo "::group::--features $feat"
             cargo check -p velesdb-memory --no-default-features --features "$feat" --all-targets
             echo "::endgroup::"
@@ -609,6 +612,15 @@ jobs:
       - name: Test the deferred-removal guard
         run: python3 -m unittest scripts.tests.test_check_deferred_removals
 
+      # ERROR_CODES.md is a second source of truth for the VELES-XXX and
+      # E0XX codes error.rs declares — two sources, nothing comparing them
+      # (parity audit 2026-08-21, section D). This is the comparison.
+      - name: Error codes documented match the declared set
+        run: python3 scripts/check-error-codes.py
+
+      - name: Test the error-codes guard
+        run: python3 -m unittest scripts.tests.test_check_error_codes
+
       # `local-ci.sh` n'est pas lance ici — il REJOUE ce job, l'executer dedans
       # serait circulaire. Sa suite, elle, doit tourner : elle epingle deux
       # defauts qu'il a deja eus, dont un faux vert (zero etape traitee
@@ -679,6 +691,20 @@ jobs:
     name: Tests
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    # One leg per crate group: the workspace suite is serial (--test-threads=1
+    # is contract, tests share filesystem state) but legs run on separate
+    # runners, so wall-clock becomes the longest leg instead of the full sum.
+    # `needs: test` downstream keeps waiting for every leg automatically.
+    # fail-fast: false — one leg's failure must not cancel the others' signal.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { leg: core,       pkgs: "-p velesdb-core",   feat: "persistence,gpu,update-check" }
+          - { leg: server,     pkgs: "-p velesdb-server", feat: "persistence,gpu,update-check" }
+          - { leg: cli-mobile, pkgs: "-p velesdb-cli -p velesdb-mobile", feat: "gpu,update-check" }
+          - { leg: memory,     pkgs: "-p velesdb-memory", feat: "persistence" }
+          - { leg: rest,       pkgs: "-p velesdb-migrate -p velesdb-wasm -p tauri-plugin-velesdb -p velesdb-rustdoc-guard", feat: "" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -712,6 +738,9 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
+
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
@@ -724,9 +753,12 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Run tests
+        # matrix.feat resolves to the crate's own feature set; `rest` legs
+        # carry none (migrate/wasm/rustdoc-guard/tauri-plugin define none of
+        # persistence,gpu,update-check — tauri-plugin has its own features
+        # left at default, exactly as the old --workspace run did).
         run: |
-          cargo test --workspace --features persistence,gpu,update-check \
-            --exclude velesdb-python --exclude velesdb-node \
+          cargo test ${{ matrix.pkgs }} ${{ matrix.feat && format('--features {0}', matrix.feat) || '' }} \
             -- --test-threads=1
         env:
           RUST_TEST_THREADS: 1
@@ -748,6 +780,7 @@ jobs:
       # which here is the test binary), so pointing PYO3_PYTHON at the venv is
       # not enough — PYTHONPATH is what makes its site-packages visible.
       - name: Test velesdb-python (Rust unit tests)
+        if: matrix.leg == 'core'
         run: |
           python3 -m venv /tmp/velesdb-python-tests
           /tmp/velesdb-python-tests/bin/pip install --quiet --upgrade pip numpy
@@ -769,6 +802,7 @@ jobs:
       # The debug binary is already built by the workspace test compile above;
       # cargo build is a cache no-op that guarantees it exists.
       - name: MCP server e2e (stdio)
+        if: matrix.leg == 'core'
         run: |
           cargo build -p velesdb-memory
           python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py
@@ -779,6 +813,7 @@ jobs:
       # arbitrary installation on PATH. Missing or renamed `risk` is a hard
       # failure inside the harness, not a skip that reads like a pass.
       - name: Agent hook contract against current checkout binary
+        if: matrix.leg == 'core'
         run: bash integrations/agent-hooks/test/hooks.test.sh
         env:
           VELESDB_MEMORY_BIN_REAL: ${{ github.workspace }}/target/debug/velesdb-memory
@@ -795,6 +830,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - name: Install cargo-deny
         # Pinned, not floating: 0.19 and 0.20 disagree on where `--config`
@@ -895,6 +933,9 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "velesdb-semver-checks"
@@ -984,6 +1025,9 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
+
       - name: Install hygiene tools (prebuilt)
         uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
@@ -1028,6 +1072,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -1074,6 +1121,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -1216,6 +1266,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -1397,6 +1450,9 @@ jobs:
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
+
       # Installed on a step of its own, so the stable toolchain
       # rust-toolchain.toml pins stays the default for everything else here.
       # nightly: cargo-public-api reads rustdoc JSON, which is nightly-only.
@@ -1428,6 +1484,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -1468,6 +1527,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
@@ -1655,6 +1717,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - name: Cache Cargo registry
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1987,6 +2052,9 @@ jobs:
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

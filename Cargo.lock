@@ -789,9 +789,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chacha20"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -4782,9 +4782,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "3.8.0"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
+checksum = "d24a7e92f4bcaa36b97fa93c4fa7ca8f3e669eced949345b3462dba333c7f909"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -4804,6 +4804,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "sse-stream",
  "thiserror 2.0.21",
  "tokio",
@@ -4816,9 +4817,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.8.0"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b0748e054a5f5598b3213cf72099ae6b2745ba4d996c59ccf455150a7dbb839"
+checksum = "b3140f24a766f80f9ec1607bde85680959a69b83d46fa9ce87dadab7e67ab029"
 dependencies = [
  "darling 0.24.0",
  "proc-macro2",
@@ -5223,7 +5224,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a253edfdea34032da21af84e16fcc94f4c7a6ba237f9f3bc2dbf43cea8535c44"
 dependencies = [
  "annotate-snippets",
- "base64 0.23.1",
+ "base64 0.21.7",
  "encoding_rs_io",
  "granit-parser",
  "nohash-hasher",
@@ -5949,7 +5950,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-velesdb"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "dirs",
  "parking_lot",
@@ -6927,7 +6928,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "velesdb-cli"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -6952,7 +6953,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-core"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "arc-swap",
  "atomicwrites",
@@ -7002,7 +7003,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-memory"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "atomicwrites",
@@ -7044,7 +7045,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-migrate"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7071,7 +7072,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-mobile"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7084,7 +7085,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-node"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -7095,7 +7096,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-python"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "numpy",
  "parking_lot",
@@ -7108,7 +7109,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-rustdoc-guard"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "pulldown-cmark",
  "serde_json",
@@ -7116,7 +7117,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-server"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7147,7 +7148,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-wasm"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.3",

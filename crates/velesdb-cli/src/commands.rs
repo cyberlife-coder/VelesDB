@@ -207,9 +207,10 @@ pub enum DataCommands {
         #[arg(long)]
         dimension: Option<usize>,
 
-        /// Distance metric
-        #[arg(long, value_enum, default_value = "cosine")]
-        metric: MetricArg,
+        /// Distance metric — only checked when importing into an existing
+        /// collection; a new collection defaults to cosine
+        #[arg(long, value_enum)]
+        metric: Option<MetricArg>,
 
         /// Storage mode (full, sq8, binary)
         #[arg(long, value_enum, default_value = "full")]

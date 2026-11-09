@@ -5,7 +5,7 @@
 
 use roaring::RoaringBitmap;
 
-use super::types::TypedColumn;
+use super::types::{Masked, TypedColumn};
 use super::ColumnStore;
 use crate::geo_distance::{distance_satisfies, great_circle_distance_m};
 
@@ -115,18 +115,27 @@ impl ColumnStore {
     /// Live, non-null rows of the `GeoPoint` column `column` whose point
     /// satisfies `keep`; no row when the column is missing or not a
     /// `GeoPoint` column.
+    ///
+    /// Linear `0..len` walk — `RoaringBitmap::iter` measured slower at
+    /// 10k–100k rows (#2689). Stays lazy: a `take(0)` caller
+    /// (`geo_bbox_rows` on inverted bounds) still yields nothing without
+    /// reading a single row.
     fn geo_rows<'a>(
         &'a self,
         column: &'a str,
         keep: impl Fn(f64, f64) -> bool + 'a,
     ) -> impl Iterator<Item = usize> + 'a {
-        let points = match self.columns.get(column) {
-            Some(TypedColumn::GeoPoint(col)) => col.as_slice(),
-            _ => &[],
+        let col = match self.columns.get(column) {
+            Some(TypedColumn::GeoPoint(col)) => Some(col),
+            _ => None,
         };
-        points.iter().enumerate().filter_map(move |(idx, point)| {
-            let (lat, lng) = (*point)?;
-            (keep(lat, lng) && !self.is_row_deleted_bitmap(idx)).then_some(idx)
+        let values = col.map_or(&[][..], Masked::values);
+        (0..col.map_or(0, Masked::len)).filter(move |&idx| {
+            if !col.is_some_and(|c| c.is_valid(idx)) || self.is_row_deleted_bitmap(idx) {
+                return false;
+            }
+            let (lat, lng) = values[idx];
+            keep(lat, lng)
         })
     }
 
