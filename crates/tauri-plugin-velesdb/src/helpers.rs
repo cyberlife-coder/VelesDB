@@ -215,6 +215,23 @@ pub fn parse_filter(filter: &Option<serde_json::Value>) -> Result<Option<velesdb
     }
 }
 
+/// Refuses a `quality` argument a `persistence`-less build cannot honor.
+///
+/// The named quality modes resolve through the gated read paths, which are
+/// `persistence`-gated: dropping the parameter silently returned unranked
+/// results under a contract the caller asked for (#2095). A build without the
+/// feature answers the refusal loudly instead.
+#[cfg(not(feature = "persistence"))]
+pub fn reject_unsupported_quality(quality: Option<&String>) -> crate::error::Result<()> {
+    match quality {
+        Some(_) => Err(crate::error::Error::InvalidConfig(
+            "the `quality` parameter requires the `persistence` feature; this build              was compiled without it"
+                .into(),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Parses an optional search quality mode string into a [`SearchQuality`].
 ///
 /// Delegates to [`velesdb_core::api_types::parse_search_mode`], so a mode the

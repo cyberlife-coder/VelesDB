@@ -409,35 +409,35 @@ fn clamp_score_is_the_identity_on_real_calculate_output() {
     }
 }
 
-/// Jaccard's kernels do not enforce their own range on out-of-contract input.
+/// Jaccard's dispatch seam enforces the declared range on out-of-contract
+/// input.
 ///
 /// `jaccard_scalar` is `intersection / union` with no clamp, where
-/// `cosine_scalar` ends in `.clamp(-1.0, 1.0)` — the asymmetry is visible in
-/// the same file. Feed a negative weight (meaningless for a set-like metric,
-/// but nothing rejects it at insert) and `calculate` returns -1.0 while the
-/// HNSW graph path, which goes through `transform_score` -> `clamp_score`,
-/// returns 0.0. That is the same shape of path disagreement this module's
-/// score contract exists to prevent, one metric over.
+/// `cosine_scalar` ends in `.clamp(-1.0, 1.0)`. Feed a negative weight
+/// (meaningless for a set-like metric, but nothing rejects it at insert) and
+/// the kernels produce -1.0 — while `score_range` declares `[0, 1]`. Before
+/// the fix, `calculate` returned the raw kernel output and only the paths
+/// routing through `clamp_score` saw the floor, a path disagreement of the
+/// shape this module's score contract exists to prevent (#2095).
 ///
-/// Closing it means clamping inside the Jaccard kernels on all three ISAs
-/// (scalar, AVX2/AVX-512, NEON); this test pins the current behaviour so the
-/// gap is a live, named fact rather than a silent one, and fails loudly the
-/// moment someone fixes it.
+/// The clamp sits in `jaccard_similarity_native`, the single dispatch seam
+/// every ISA kernel (scalar, AVX2/AVX-512, NEON) is reached through, so this
+/// test passes on every architecture.
 #[test]
-fn jaccard_calculate_escapes_its_declared_range_on_negative_weights() {
+fn jaccard_calculate_stays_in_its_declared_range_on_negative_weights() {
     let positive = vec![1.0_f32, 0.0, 0.0];
     let negative = vec![-1.0_f32, 0.0, 0.0];
 
     let raw = DistanceMetric::Jaccard.calculate(&positive, &negative);
-    let (low, _) = DistanceMetric::Jaccard
+    let (low, high) = DistanceMetric::Jaccard
         .score_range()
         .expect("jaccard is bounded");
 
     assert!(
-        raw < low,
-        "expected the known unclamped kernel output below the declared floor {low}, got {raw}"
+        (low..=high).contains(&raw),
+        "expected the dispatch seam to clamp the kernel output into [{low}, {high}], got {raw}"
     );
-    // The declared contract still holds wherever `clamp_score` is applied,
-    // which is what every score-producing path now routes through.
-    assert!((DistanceMetric::Jaccard.clamp_score(raw) - low).abs() < f32::EPSILON);
+    // On out-of-contract input the clamp is the floor: every kernel produces
+    // a non-positive ratio on a positive-vs-negative pair.
+    assert!((raw - low).abs() < f32::EPSILON);
 }

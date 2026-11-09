@@ -59,7 +59,10 @@ async fn batch_search_per_query(
                 let quality = parse_search_quality(&s.quality)
                     .map_err(|e| crate::error::Error::InvalidConfig(e.to_string()))?;
                 #[cfg(not(feature = "persistence"))]
-                let quality: Option<()> = None;
+                let quality: Option<()> = {
+                    crate::helpers::reject_unsupported_quality(s.quality.as_ref())?;
+                    None
+                };
 
                 let search_results = if let Some(ref f) = filter {
                     coll.search_with_filter(&s.vector, s.top_k, f)?

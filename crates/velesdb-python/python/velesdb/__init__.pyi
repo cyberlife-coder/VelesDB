@@ -29,6 +29,12 @@ def metric_higher_is_better(metric: str) -> bool:
     Hamming (distances). Raises ``ValueError`` for an unknown metric."""
     ...
 
+def metric_normalize(name: str) -> str:
+    """Normalizes a metric name to its canonical form through core's alias
+    table (``DistanceMetric::parse_alias``). Unknown names pass through
+    unchanged — normalization is not validation."""
+    ...
+
 def validate_search_quality(mode: str) -> None:
     """Checks a search quality mode with core's parser, the one
     ``Collection.search_with_quality`` uses. Raises ``ValueError`` with
