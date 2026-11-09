@@ -423,6 +423,12 @@
           "markdownDescription": "Enables the default_window_icon command without any pre-configured scope."
         },
         {
+          "description": "Enables the exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:app:allow-exit",
+          "markdownDescription": "Enables the exit command without any pre-configured scope."
+        },
+        {
           "description": "Enables the fetch_data_store_identifiers command without any pre-configured scope.",
           "type": "string",
           "const": "core:app:allow-fetch-data-store-identifiers",
@@ -511,6 +517,12 @@
           "type": "string",
           "const": "core:app:deny-default-window-icon",
           "markdownDescription": "Denies the default_window_icon command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:app:deny-exit",
+          "markdownDescription": "Denies the exit command without any pre-configured scope."
         },
         {
           "description": "Denies the fetch_data_store_identifiers command without any pre-configured scope.",
@@ -1773,6 +1785,12 @@
           "markdownDescription": "Enables the set_fullscreen command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_fullscreen_on_monitor command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:window:allow-set-fullscreen-on-monitor",
+          "markdownDescription": "Enables the set_fullscreen_on_monitor command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_icon command without any pre-configured scope.",
           "type": "string",
           "const": "core:window:allow-set-icon",
@@ -2241,6 +2259,12 @@
           "markdownDescription": "Denies the set_fullscreen command without any pre-configured scope."
         },
         {
+          "description": "Denies the set_fullscreen_on_monitor command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:window:deny-set-fullscreen-on-monitor",
+          "markdownDescription": "Denies the set_fullscreen_on_monitor command without any pre-configured scope."
+        },
+        {
           "description": "Denies the set_icon command without any pre-configured scope.",
           "type": "string",
           "const": "core:window:deny-set-icon",
@@ -2469,10 +2493,10 @@
           "markdownDescription": "Denies the stdin_write command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-scroll-collection`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-sparse-search`\n- `allow-hybrid-sparse-search`\n- `allow-sparse-upsert`\n- `allow-train-pq`\n- `allow-stream-insert`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-episodic-record`\n- `allow-episodic-recent`\n- `allow-procedural-learn`\n- `allow-procedural-recall`\n- `allow-create-graph-collection`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`",
+          "description": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-compact-storage`\n- `allow-update-guardrails`\n- `allow-get-guardrails`\n- `allow-scroll-collection`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-search-ids`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-sparse-search`\n- `allow-hybrid-sparse-search`\n- `allow-sparse-upsert`\n- `allow-train-pq`\n- `allow-stream-insert`\n- `allow-enable-streaming`\n- `allow-semantic-store`\n- `allow-semantic-store-with-ttl`\n- `allow-semantic-query`\n- `allow-semantic-delete`\n- `allow-semantic-dimension`\n- `allow-semantic-serialize`\n- `allow-semantic-deserialize`\n- `allow-episodic-record`\n- `allow-episodic-recent`\n- `allow-episodic-recall-similar`\n- `allow-episodic-older-than`\n- `allow-episodic-delete`\n- `allow-episodic-serialize`\n- `allow-episodic-deserialize`\n- `allow-procedural-learn`\n- `allow-procedural-recall`\n- `allow-procedural-reinforce`\n- `allow-procedural-list-all`\n- `allow-procedural-delete`\n- `allow-procedural-serialize`\n- `allow-procedural-deserialize`\n- `allow-memory-set-ttl`\n- `allow-memory-auto-expire`\n- `allow-memory-evict-low-confidence`\n- `allow-memory-snapshot`\n- `allow-memory-load-latest-snapshot`\n- `allow-memory-load-snapshot-version`\n- `allow-memory-list-snapshot-versions`\n- `allow-memory-query-semantic`\n- `allow-memory-query-episodic`\n- `allow-memory-query-procedural`\n- `allow-create-graph-collection`\n- `allow-add-edge`\n- `allow-add-edges-batch`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`",
           "type": "string",
           "const": "velesdb:default",
-          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-scroll-collection`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-sparse-search`\n- `allow-hybrid-sparse-search`\n- `allow-sparse-upsert`\n- `allow-train-pq`\n- `allow-stream-insert`\n- `allow-semantic-store`\n- `allow-semantic-query`\n- `allow-episodic-record`\n- `allow-episodic-recent`\n- `allow-procedural-learn`\n- `allow-procedural-recall`\n- `allow-create-graph-collection`\n- `allow-add-edge`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`"
+          "markdownDescription": "Default permissions for VelesDB plugin - allows all database operations\n#### This default permission set includes:\n\n- `allow-create-collection`\n- `allow-create-metadata-collection`\n- `allow-delete-collection`\n- `allow-list-collections`\n- `allow-get-collection`\n- `allow-is-empty`\n- `allow-flush`\n- `allow-compact-storage`\n- `allow-update-guardrails`\n- `allow-get-guardrails`\n- `allow-scroll-collection`\n- `allow-upsert`\n- `allow-upsert-metadata`\n- `allow-get-points`\n- `allow-delete-points`\n- `allow-search`\n- `allow-search-ids`\n- `allow-batch-search`\n- `allow-text-search`\n- `allow-hybrid-search`\n- `allow-multi-query-search`\n- `allow-query`\n- `allow-sparse-search`\n- `allow-hybrid-sparse-search`\n- `allow-sparse-upsert`\n- `allow-train-pq`\n- `allow-stream-insert`\n- `allow-enable-streaming`\n- `allow-semantic-store`\n- `allow-semantic-store-with-ttl`\n- `allow-semantic-query`\n- `allow-semantic-delete`\n- `allow-semantic-dimension`\n- `allow-semantic-serialize`\n- `allow-semantic-deserialize`\n- `allow-episodic-record`\n- `allow-episodic-recent`\n- `allow-episodic-recall-similar`\n- `allow-episodic-older-than`\n- `allow-episodic-delete`\n- `allow-episodic-serialize`\n- `allow-episodic-deserialize`\n- `allow-procedural-learn`\n- `allow-procedural-recall`\n- `allow-procedural-reinforce`\n- `allow-procedural-list-all`\n- `allow-procedural-delete`\n- `allow-procedural-serialize`\n- `allow-procedural-deserialize`\n- `allow-memory-set-ttl`\n- `allow-memory-auto-expire`\n- `allow-memory-evict-low-confidence`\n- `allow-memory-snapshot`\n- `allow-memory-load-latest-snapshot`\n- `allow-memory-load-snapshot-version`\n- `allow-memory-list-snapshot-versions`\n- `allow-memory-query-semantic`\n- `allow-memory-query-episodic`\n- `allow-memory-query-procedural`\n- `allow-create-graph-collection`\n- `allow-add-edge`\n- `allow-add-edges-batch`\n- `allow-get-edges`\n- `allow-traverse-graph`\n- `allow-get-node-degree`\n- `allow-traverse-graph-parallel`\n- `allow-create-index`\n- `allow-drop-index`\n- `allow-list-indexes`"
         },
         {
           "description": "Enables the add_edge command without any pre-configured scope.",
@@ -2481,10 +2505,22 @@
           "markdownDescription": "Enables the add_edge command without any pre-configured scope."
         },
         {
+          "description": "Enables the add_edges_batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-add-edges-batch",
+          "markdownDescription": "Enables the add_edges_batch command without any pre-configured scope."
+        },
+        {
           "description": "Enables the batch_search command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-batch-search",
           "markdownDescription": "Enables the batch_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the compact_storage command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-compact-storage",
+          "markdownDescription": "Enables the compact_storage command without any pre-configured scope."
         },
         {
           "description": "Enables the create_collection command without any pre-configured scope.",
@@ -2529,6 +2565,36 @@
           "markdownDescription": "Enables the drop_index command without any pre-configured scope."
         },
         {
+          "description": "Enables the enable_streaming command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-enable-streaming",
+          "markdownDescription": "Enables the enable_streaming command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the episodic_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-episodic-delete",
+          "markdownDescription": "Enables the episodic_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the episodic_deserialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-episodic-deserialize",
+          "markdownDescription": "Enables the episodic_deserialize command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the episodic_older_than command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-episodic-older-than",
+          "markdownDescription": "Enables the episodic_older_than command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the episodic_recall_similar command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-episodic-recall-similar",
+          "markdownDescription": "Enables the episodic_recall_similar command without any pre-configured scope."
+        },
+        {
           "description": "Enables the episodic_recent command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-episodic-recent",
@@ -2539,6 +2605,12 @@
           "type": "string",
           "const": "velesdb:allow-episodic-record",
           "markdownDescription": "Enables the episodic_record command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the episodic_serialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-episodic-serialize",
+          "markdownDescription": "Enables the episodic_serialize command without any pre-configured scope."
         },
         {
           "description": "Enables the flush command without any pre-configured scope.",
@@ -2557,6 +2629,12 @@
           "type": "string",
           "const": "velesdb:allow-get-edges",
           "markdownDescription": "Enables the get_edges command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_guardrails command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-get-guardrails",
+          "markdownDescription": "Enables the get_guardrails command without any pre-configured scope."
         },
         {
           "description": "Enables the get_node_degree command without any pre-configured scope.",
@@ -2601,10 +2679,82 @@
           "markdownDescription": "Enables the list_indexes command without any pre-configured scope."
         },
         {
+          "description": "Enables the memory_auto_expire command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-auto-expire",
+          "markdownDescription": "Enables the memory_auto_expire command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_evict_low_confidence command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-evict-low-confidence",
+          "markdownDescription": "Enables the memory_evict_low_confidence command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_list_snapshot_versions command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-list-snapshot-versions",
+          "markdownDescription": "Enables the memory_list_snapshot_versions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_load_latest_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-load-latest-snapshot",
+          "markdownDescription": "Enables the memory_load_latest_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_load_snapshot_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-load-snapshot-version",
+          "markdownDescription": "Enables the memory_load_snapshot_version command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_query_episodic command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-query-episodic",
+          "markdownDescription": "Enables the memory_query_episodic command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_query_procedural command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-query-procedural",
+          "markdownDescription": "Enables the memory_query_procedural command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_query_semantic command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-query-semantic",
+          "markdownDescription": "Enables the memory_query_semantic command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_set_ttl command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-set-ttl",
+          "markdownDescription": "Enables the memory_set_ttl command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the memory_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-memory-snapshot",
+          "markdownDescription": "Enables the memory_snapshot command without any pre-configured scope."
+        },
+        {
           "description": "Enables the multi_query_search command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-multi-query-search",
           "markdownDescription": "Enables the multi_query_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the procedural_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-procedural-delete",
+          "markdownDescription": "Enables the procedural_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the procedural_deserialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-procedural-deserialize",
+          "markdownDescription": "Enables the procedural_deserialize command without any pre-configured scope."
         },
         {
           "description": "Enables the procedural_learn command without any pre-configured scope.",
@@ -2613,10 +2763,28 @@
           "markdownDescription": "Enables the procedural_learn command without any pre-configured scope."
         },
         {
+          "description": "Enables the procedural_list_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-procedural-list-all",
+          "markdownDescription": "Enables the procedural_list_all command without any pre-configured scope."
+        },
+        {
           "description": "Enables the procedural_recall command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-procedural-recall",
           "markdownDescription": "Enables the procedural_recall command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the procedural_reinforce command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-procedural-reinforce",
+          "markdownDescription": "Enables the procedural_reinforce command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the procedural_serialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-procedural-serialize",
+          "markdownDescription": "Enables the procedural_serialize command without any pre-configured scope."
         },
         {
           "description": "Enables the query command without any pre-configured scope.",
@@ -2637,16 +2805,52 @@
           "markdownDescription": "Enables the search command without any pre-configured scope."
         },
         {
+          "description": "Enables the search_ids command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-search-ids",
+          "markdownDescription": "Enables the search_ids command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the semantic_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-semantic-delete",
+          "markdownDescription": "Enables the semantic_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the semantic_deserialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-semantic-deserialize",
+          "markdownDescription": "Enables the semantic_deserialize command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the semantic_dimension command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-semantic-dimension",
+          "markdownDescription": "Enables the semantic_dimension command without any pre-configured scope."
+        },
+        {
           "description": "Enables the semantic_query command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-semantic-query",
           "markdownDescription": "Enables the semantic_query command without any pre-configured scope."
         },
         {
+          "description": "Enables the semantic_serialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-semantic-serialize",
+          "markdownDescription": "Enables the semantic_serialize command without any pre-configured scope."
+        },
+        {
           "description": "Enables the semantic_store command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-semantic-store",
           "markdownDescription": "Enables the semantic_store command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the semantic_store_with_ttl command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-semantic-store-with-ttl",
+          "markdownDescription": "Enables the semantic_store_with_ttl command without any pre-configured scope."
         },
         {
           "description": "Enables the sparse_search command without any pre-configured scope.",
@@ -2691,6 +2895,12 @@
           "markdownDescription": "Enables the traverse_graph_parallel command without any pre-configured scope."
         },
         {
+          "description": "Enables the update_guardrails command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:allow-update-guardrails",
+          "markdownDescription": "Enables the update_guardrails command without any pre-configured scope."
+        },
+        {
           "description": "Enables the upsert command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:allow-upsert",
@@ -2709,10 +2919,22 @@
           "markdownDescription": "Denies the add_edge command without any pre-configured scope."
         },
         {
+          "description": "Denies the add_edges_batch command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-add-edges-batch",
+          "markdownDescription": "Denies the add_edges_batch command without any pre-configured scope."
+        },
+        {
           "description": "Denies the batch_search command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-batch-search",
           "markdownDescription": "Denies the batch_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the compact_storage command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-compact-storage",
+          "markdownDescription": "Denies the compact_storage command without any pre-configured scope."
         },
         {
           "description": "Denies the create_collection command without any pre-configured scope.",
@@ -2757,6 +2979,36 @@
           "markdownDescription": "Denies the drop_index command without any pre-configured scope."
         },
         {
+          "description": "Denies the enable_streaming command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-enable-streaming",
+          "markdownDescription": "Denies the enable_streaming command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the episodic_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-episodic-delete",
+          "markdownDescription": "Denies the episodic_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the episodic_deserialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-episodic-deserialize",
+          "markdownDescription": "Denies the episodic_deserialize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the episodic_older_than command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-episodic-older-than",
+          "markdownDescription": "Denies the episodic_older_than command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the episodic_recall_similar command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-episodic-recall-similar",
+          "markdownDescription": "Denies the episodic_recall_similar command without any pre-configured scope."
+        },
+        {
           "description": "Denies the episodic_recent command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-episodic-recent",
@@ -2767,6 +3019,12 @@
           "type": "string",
           "const": "velesdb:deny-episodic-record",
           "markdownDescription": "Denies the episodic_record command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the episodic_serialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-episodic-serialize",
+          "markdownDescription": "Denies the episodic_serialize command without any pre-configured scope."
         },
         {
           "description": "Denies the flush command without any pre-configured scope.",
@@ -2785,6 +3043,12 @@
           "type": "string",
           "const": "velesdb:deny-get-edges",
           "markdownDescription": "Denies the get_edges command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_guardrails command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-get-guardrails",
+          "markdownDescription": "Denies the get_guardrails command without any pre-configured scope."
         },
         {
           "description": "Denies the get_node_degree command without any pre-configured scope.",
@@ -2829,10 +3093,82 @@
           "markdownDescription": "Denies the list_indexes command without any pre-configured scope."
         },
         {
+          "description": "Denies the memory_auto_expire command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-auto-expire",
+          "markdownDescription": "Denies the memory_auto_expire command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_evict_low_confidence command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-evict-low-confidence",
+          "markdownDescription": "Denies the memory_evict_low_confidence command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_list_snapshot_versions command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-list-snapshot-versions",
+          "markdownDescription": "Denies the memory_list_snapshot_versions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_load_latest_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-load-latest-snapshot",
+          "markdownDescription": "Denies the memory_load_latest_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_load_snapshot_version command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-load-snapshot-version",
+          "markdownDescription": "Denies the memory_load_snapshot_version command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_query_episodic command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-query-episodic",
+          "markdownDescription": "Denies the memory_query_episodic command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_query_procedural command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-query-procedural",
+          "markdownDescription": "Denies the memory_query_procedural command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_query_semantic command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-query-semantic",
+          "markdownDescription": "Denies the memory_query_semantic command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_set_ttl command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-set-ttl",
+          "markdownDescription": "Denies the memory_set_ttl command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the memory_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-memory-snapshot",
+          "markdownDescription": "Denies the memory_snapshot command without any pre-configured scope."
+        },
+        {
           "description": "Denies the multi_query_search command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-multi-query-search",
           "markdownDescription": "Denies the multi_query_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the procedural_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-procedural-delete",
+          "markdownDescription": "Denies the procedural_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the procedural_deserialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-procedural-deserialize",
+          "markdownDescription": "Denies the procedural_deserialize command without any pre-configured scope."
         },
         {
           "description": "Denies the procedural_learn command without any pre-configured scope.",
@@ -2841,10 +3177,28 @@
           "markdownDescription": "Denies the procedural_learn command without any pre-configured scope."
         },
         {
+          "description": "Denies the procedural_list_all command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-procedural-list-all",
+          "markdownDescription": "Denies the procedural_list_all command without any pre-configured scope."
+        },
+        {
           "description": "Denies the procedural_recall command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-procedural-recall",
           "markdownDescription": "Denies the procedural_recall command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the procedural_reinforce command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-procedural-reinforce",
+          "markdownDescription": "Denies the procedural_reinforce command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the procedural_serialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-procedural-serialize",
+          "markdownDescription": "Denies the procedural_serialize command without any pre-configured scope."
         },
         {
           "description": "Denies the query command without any pre-configured scope.",
@@ -2865,16 +3219,52 @@
           "markdownDescription": "Denies the search command without any pre-configured scope."
         },
         {
+          "description": "Denies the search_ids command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-search-ids",
+          "markdownDescription": "Denies the search_ids command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the semantic_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-semantic-delete",
+          "markdownDescription": "Denies the semantic_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the semantic_deserialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-semantic-deserialize",
+          "markdownDescription": "Denies the semantic_deserialize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the semantic_dimension command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-semantic-dimension",
+          "markdownDescription": "Denies the semantic_dimension command without any pre-configured scope."
+        },
+        {
           "description": "Denies the semantic_query command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-semantic-query",
           "markdownDescription": "Denies the semantic_query command without any pre-configured scope."
         },
         {
+          "description": "Denies the semantic_serialize command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-semantic-serialize",
+          "markdownDescription": "Denies the semantic_serialize command without any pre-configured scope."
+        },
+        {
           "description": "Denies the semantic_store command without any pre-configured scope.",
           "type": "string",
           "const": "velesdb:deny-semantic-store",
           "markdownDescription": "Denies the semantic_store command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the semantic_store_with_ttl command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-semantic-store-with-ttl",
+          "markdownDescription": "Denies the semantic_store_with_ttl command without any pre-configured scope."
         },
         {
           "description": "Denies the sparse_search command without any pre-configured scope.",
@@ -2917,6 +3307,12 @@
           "type": "string",
           "const": "velesdb:deny-traverse-graph-parallel",
           "markdownDescription": "Denies the traverse_graph_parallel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_guardrails command without any pre-configured scope.",
+          "type": "string",
+          "const": "velesdb:deny-update-guardrails",
+          "markdownDescription": "Denies the update_guardrails command without any pre-configured scope."
         },
         {
           "description": "Denies the upsert command without any pre-configured scope.",
