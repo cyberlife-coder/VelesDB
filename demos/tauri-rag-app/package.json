@@ -11,7 +11,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "lucide-react": "^1.22.0",
     "react": "^19.2.7",
@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.1",
-    "@tauri-apps/cli": "^2.11.4",
+    "@tauri-apps/cli": "^2.12.4",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

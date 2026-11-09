@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from .models import (
     HealthResponse,
@@ -33,7 +34,7 @@ async def lifespan(app: FastAPI):
     
     # Ensure collection exists on startup
     try:
-        await rag_engine.ensure_collection()
+        await run_in_threadpool(rag_engine.ensure_collection)
     except Exception as e:
         print(f"Warning: Could not connect to VelesDB: {e}")
     
@@ -90,7 +91,7 @@ async def health_check():
     if rag_engine is None:
         raise HTTPException(status_code=503, detail="Service not ready")
     
-    health = await rag_engine.health_check()
+    health = await run_in_threadpool(rag_engine.health_check)
     return HealthResponse(**health)
 
 
@@ -129,7 +130,7 @@ async def upload_document(file: UploadFile = File(...)):
         tmp_path = Path(tmp.name)
     
     try:
-        result = await rag_engine.ingest_document(tmp_path)
+        result = await run_in_threadpool(rag_engine.ingest_document, tmp_path)
         
         return UploadResponse(
             success=result["success"],
@@ -165,7 +166,8 @@ async def search_documents(request: SearchRequest):
         raise HTTPException(status_code=503, detail="Service not ready")
     
     try:
-        result = await rag_engine.search(
+        result = await run_in_threadpool(
+            rag_engine.search,
             query=request.query,
             top_k=request.top_k
         )
@@ -187,7 +189,7 @@ async def list_documents():
     if rag_engine is None:
         raise HTTPException(status_code=503, detail="Service not ready")
     
-    documents = await rag_engine.list_documents()
+    documents = await run_in_threadpool(rag_engine.list_documents)
     return {"documents": documents}
 
 
@@ -198,7 +200,7 @@ async def delete_document(document_name: str):
         raise HTTPException(status_code=503, detail="Service not ready")
     
     try:
-        result = await rag_engine.delete_document(document_name)
+        result = await run_in_threadpool(rag_engine.delete_document, document_name)
         return {"success": True, "deleted": result.get("deleted", 0)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -225,13 +227,13 @@ async def load_demo_data():
             content = doc["content"]
             
             # Skip if already loaded
-            existing_docs = await rag_engine.list_documents()
+            existing_docs = await run_in_threadpool(rag_engine.list_documents)
             if any(d["name"] == doc_name for d in existing_docs):
                 results.append({"name": doc_name, "status": "skipped", "reason": "already exists"})
                 continue
             
             # Ingest as text document
-            result = await rag_engine.ingest_text(content, doc_name)
+            result = await run_in_threadpool(rag_engine.ingest_text, content, doc_name)
             results.append({
                 "name": doc_name,
                 "status": "success" if result["success"] else "failed",
