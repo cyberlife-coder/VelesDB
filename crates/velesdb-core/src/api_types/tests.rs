@@ -1206,6 +1206,7 @@ fn validate_search_quality_names_out_of_order_adaptive_bounds() {
 // (#2678: the server must read what executes, not re-derive from the AST)
 // ============================================================================
 
+#[cfg(test)]
 fn plan_for(sql: &str) -> crate::velesql::QueryPlan {
     let query = crate::velesql::Parser::parse(sql).expect("test query parses");
     crate::velesql::QueryPlan::from_query(&query)
