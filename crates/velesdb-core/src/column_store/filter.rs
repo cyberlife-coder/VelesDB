@@ -15,19 +15,19 @@ use super::ColumnStore;
 // Private scan helpers — eliminate duplication across Vec / bitmap / count
 // =========================================================================
 
-/// Borrows both bitmaps: iterates `validity`'s set bits ascending, dropping
-/// rows tombstoned in `deletion_bitmap` — one probe per valid row and zero
-/// allocation. The `0..len` + `Option` scan this replaces paid two bitmap
-/// probes plus an `Option` match per row; paying a `validity − deletion`
-/// copy instead measured slower at 10k–100k rows, where the copied bitmap
-/// evicts the values a dense scan then has to re-read.
-fn live_indices<'a>(
-    validity: &'a RoaringBitmap,
+/// Iterates rows that are valid (bit set) and live (not tombstoned in
+/// `deletion_bitmap`): a linear `0..len` walk — the dense `values[idx]`
+/// reads behind it stay sequential, and no `Option` is built per row.
+/// Iterating `validity`'s set bits via `RoaringBitmap::iter` measured
+/// slower at 10k–100k rows (#2689): container iteration costs more than
+/// a Vec index walk plus the two per-row probes it replaces.
+fn live_indices<'a, T>(
+    cells: &'a Masked<T>,
     deletion_bitmap: &'a RoaringBitmap,
-) -> impl Iterator<Item = u32> + 'a {
-    validity
-        .iter()
-        .filter(move |&idx| !deletion_bitmap.contains(idx))
+) -> impl Iterator<Item = usize> + 'a {
+    (0..cells.len()).filter(move |&idx| {
+        cells.is_valid(idx) && u32::try_from(idx).is_ok_and(|i| !deletion_bitmap.contains(i))
+    })
 }
 
 /// Scans an integer column, returning indices where `predicate(val)` is true.
@@ -54,8 +54,9 @@ fn scan_cells_bitmap<T: Copy>(
     predicate: impl Fn(T) -> bool,
 ) -> RoaringBitmap {
     let values = cells.values();
-    live_indices(cells.validity(), deletion_bitmap)
-        .filter(|&idx| predicate(values[idx as usize]))
+    live_indices(cells, deletion_bitmap)
+        .filter(|&idx| predicate(values[idx]))
+        .map(|idx| idx as u32)
         .collect()
 }
 
@@ -66,9 +67,8 @@ fn scan_cells_vec<T: Copy>(
     predicate: impl Fn(T) -> bool,
 ) -> Vec<usize> {
     let values = cells.values();
-    live_indices(cells.validity(), deletion_bitmap)
-        .filter(|&idx| predicate(values[idx as usize]))
-        .map(|idx| idx as usize)
+    live_indices(cells, deletion_bitmap)
+        .filter(|&idx| predicate(values[idx]))
         .collect()
 }
 
@@ -79,8 +79,8 @@ fn count_cells<T: Copy>(
     predicate: impl Fn(T) -> bool,
 ) -> usize {
     let values = cells.values();
-    live_indices(cells.validity(), deletion_bitmap)
-        .filter(|&idx| predicate(values[idx as usize]))
+    live_indices(cells, deletion_bitmap)
+        .filter(|&idx| predicate(values[idx]))
         .count()
 }
 
@@ -368,8 +368,9 @@ impl ColumnStore {
         predicate: impl Fn(&StringId) -> bool,
     ) -> RoaringBitmap {
         let values = col.values();
-        live_indices(col.validity(), &self.deletion_bitmap)
-            .filter(|&idx| predicate(&values[idx as usize]))
+        live_indices(col, &self.deletion_bitmap)
+            .filter(|&idx| predicate(&values[idx]))
+            .map(|idx| idx as u32)
             .collect()
     }
 
@@ -392,9 +393,8 @@ impl ColumnStore {
         predicate: impl Fn(&StringId) -> bool,
     ) -> Vec<usize> {
         let values = col.values();
-        live_indices(col.validity(), &self.deletion_bitmap)
-            .filter(|&idx| predicate(&values[idx as usize]))
-            .map(|idx| idx as usize)
+        live_indices(col, &self.deletion_bitmap)
+            .filter(|&idx| predicate(&values[idx]))
             .collect()
     }
 }

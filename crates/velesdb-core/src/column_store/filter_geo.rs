@@ -116,10 +116,10 @@ impl ColumnStore {
     /// satisfies `keep`; no row when the column is missing or not a
     /// `GeoPoint` column.
     ///
-    /// Borrows `validity` and `deletion_bitmap` directly — a `take(0)` caller
+    /// Linear `0..len` walk — `RoaringBitmap::iter` measured slower at
+    /// 10k–100k rows (#2689). Stays lazy: a `take(0)` caller
     /// (`geo_bbox_rows` on inverted bounds) still yields nothing without
-    /// reading a single row. Each visited row costs a dense `values[idx]`
-    /// read plus `keep`.
+    /// reading a single row.
     fn geo_rows<'a>(
         &'a self,
         column: &'a str,
@@ -130,15 +130,13 @@ impl ColumnStore {
             _ => None,
         };
         let values = col.map_or(&[][..], Masked::values);
-        col.map(move |c| {
-            c.validity().iter().filter_map(move |idx| {
-                let (lat, lng) = values[idx as usize];
-                (keep(lat, lng) && !self.is_row_deleted_bitmap(idx as usize))
-                    .then_some(idx as usize)
-            })
+        (0..col.map_or(0, Masked::len)).filter(move |&idx| {
+            if !col.is_some_and(|c| c.is_valid(idx)) || self.is_row_deleted_bitmap(idx) {
+                return false;
+            }
+            let (lat, lng) = values[idx];
+            keep(lat, lng)
         })
-        .into_iter()
-        .flatten()
     }
 
     /// Returns row indices where the GeoPoint falls within the bounding box (inclusive).
