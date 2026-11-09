@@ -61,6 +61,9 @@ velesdb collection create ./data my_vectors \
 # Create a graph collection (schemaless)
 velesdb collection create-graph ./data my_graph
 
+# Create a graph collection with node embeddings — enables `graph search`
+velesdb collection create-graph ./data my_embedded_graph --dimension 384
+
 # Create a metadata-only collection (no vectors, no graph — structured payloads only)
 velesdb collection create-metadata ./data my_metadata
 
@@ -351,8 +354,12 @@ velesdb collection analyze ./data my_vectors --format json
 
 All graph subcommands take a database path and a graph collection name.
 
+Both endpoints of `add-edge` must already exist — store a payload (or an
+embedding) on each node first, otherwise the command fails with
+`[VELES-022] Node with ID '...' not found`.
+
 ```bash
-# Add an edge
+# Add an edge (nodes 100 and 200 already carry payloads — see store-payload below)
 velesdb graph add-edge ./data my_graph 1 100 200 "AUTHORED_BY"
 
 # List edges
@@ -375,6 +382,10 @@ velesdb graph neighbors ./data my_graph 100 --direction both --format json
 # Store payload on a graph node
 velesdb graph store-payload ./data my_graph 100 '{"name": "Alice", "role": "author"}'
 
+# Store payload + embedding on a node (embeddings-enabled graphs only)
+velesdb graph store-payload ./data my_embedded_graph 100 \
+  '{"name": "Alice"}' --vector '[0.1, 0.2, 0.3, ...]'
+
 # Retrieve node payload
 velesdb graph get-payload ./data my_graph 100
 
@@ -385,9 +396,10 @@ velesdb graph remove-edge ./data my_graph 1
 velesdb graph count ./data my_graph
 velesdb graph count ./data my_graph --format json
 
-# Search graph nodes by embedding similarity (requires a graph with embeddings)
-velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' -k 10
-velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' --format json
+# Search graph nodes by embedding similarity
+# (requires a graph created with `collection create-graph --dimension N`)
+velesdb graph search ./data my_embedded_graph '[0.1, 0.2, 0.3]' -k 10
+velesdb graph search ./data my_embedded_graph '[0.1, 0.2, 0.3]' --format json
 
 # List all nodes (paginated, 20 per page)
 velesdb graph nodes ./data my_graph

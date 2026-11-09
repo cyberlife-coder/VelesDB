@@ -31,16 +31,32 @@ pub fn handle_create_vector_collection(
 }
 
 /// Handles the `create-graph-collection` subcommand.
-pub fn handle_create_graph_collection(path: &Path, name: &str) -> Result<()> {
+pub fn handle_create_graph_collection(
+    path: &Path,
+    name: &str,
+    dimension: Option<usize>,
+    metric: MetricArg,
+) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
     let schema = velesdb_core::GraphSchema::schemaless();
-    db.create_graph_collection(name, schema)?;
-
-    println!(
-        "{} Graph collection '{}' created (schemaless)",
-        "\u{2705}".green(),
-        name.cyan(),
-    );
+    match dimension {
+        Some(d) => {
+            db.create_graph_collection_with_embeddings(name, schema, d, metric.into())?;
+            println!(
+                "{} Graph collection '{}' created (schemaless, embeddings {d}D)",
+                "\u{2705}".green(),
+                name.cyan(),
+            );
+        }
+        None => {
+            db.create_graph_collection(name, schema)?;
+            println!(
+                "{} Graph collection '{}' created (schemaless)",
+                "\u{2705}".green(),
+                name.cyan(),
+            );
+        }
+    }
     Ok(())
 }
 

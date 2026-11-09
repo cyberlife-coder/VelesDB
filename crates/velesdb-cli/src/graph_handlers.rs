@@ -175,11 +175,16 @@ pub(crate) fn handle_store_payload(
     collection: &str,
     node_id: u64,
     payload_str: &str,
+    vector: Option<String>,
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
     let payload: serde_json::Value = serde_json::from_str(payload_str)
         .map_err(|e| anyhow::anyhow!("Invalid JSON payload: {e}"))?;
-    col.upsert_node_payload(node_id, &payload)
+    let embedding: Option<Vec<f32>> = vector
+        .map(|v| serde_json::from_str(&v))
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("Invalid vector JSON: {e}"))?;
+    col.upsert_node(node_id, &payload, embedding)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     col.flush()
         .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;

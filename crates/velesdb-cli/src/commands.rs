@@ -117,6 +117,14 @@ pub enum CollectionCommands {
 
         /// Collection name
         name: String,
+
+        /// Node-embedding dimension; enables `graph search` on the collection
+        #[arg(short, long)]
+        dimension: Option<usize>,
+
+        /// Distance metric for node embeddings (cosine, euclidean, dot, hamming, jaccard)
+        #[arg(short, long, value_enum, default_value = "cosine")]
+        metric: MetricArg,
     },
 
     /// Create a metadata-only collection (no vectors)

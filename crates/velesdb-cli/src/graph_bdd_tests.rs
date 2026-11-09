@@ -424,6 +424,7 @@ fn test_store_payload_and_get_payload_roundtrip() {
         collection: "kg".to_string(),
         node_id: 42,
         payload: r#"{"name": "Alice", "age": 30}"#.to_string(),
+        vector: None,
     })
     .expect("store-payload should succeed");
 
@@ -446,6 +447,7 @@ fn test_store_payload_overwrites_existing() {
         collection: "kg".to_string(),
         node_id: 1,
         payload: r#"{"v": 1}"#.to_string(),
+        vector: None,
     })
     .expect("first store");
 
@@ -455,6 +457,7 @@ fn test_store_payload_overwrites_existing() {
         collection: "kg".to_string(),
         node_id: 1,
         payload: r#"{"v": 2}"#.to_string(),
+        vector: None,
     })
     .expect("second store");
 
@@ -479,6 +482,7 @@ fn test_store_payload_invalid_json_fails() {
         collection: "kg".to_string(),
         node_id: 1,
         payload: "not valid json".to_string(),
+        vector: None,
     });
 
     // THEN: error
