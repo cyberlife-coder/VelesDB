@@ -292,10 +292,18 @@ pub fn multi_query_search_impl(
         (weighted_weights_from_slice(weights)?, None)
     };
 
+    // `k * 2` wraps silently in release / panics in debug, and the retained
+    // `num_vectors × k` fan-out is caller-controlled — both bounded up front
+    // by the browser guardrails (#2679).
+    let fanout_k =
+        crate::guardrails::checked_fanout_k(k).map_err(|e| WasmError::from(e).into_js_value())?;
+    crate::guardrails::check_fanout_memory(num_vectors, fanout_k.min(ids.len()))
+        .map_err(|e| WasmError::from(e).into_js_value())?;
+
     let mut all_results: Vec<Vec<(u64, f32)>> = Vec::with_capacity(num_vectors);
 
     for query in vectors.chunks_exact(dimension) {
-        all_results.push(top_k(query, ids, data, dimension, metric, k * 2));
+        all_results.push(top_k(query, ids, data, dimension, metric, fanout_k));
     }
 
     let fused = fusion::fuse_results(
@@ -383,12 +391,17 @@ pub fn similarity_search_impl(
 /// Batch search for multiple vectors.
 pub fn batch_search_impl(
     vectors: &[f32],
+    num_vectors: usize,
     ids: &[u64],
     data: &[f32],
     dimension: usize,
     metric: crate::DistanceMetric,
     k: usize,
 ) -> Result<JsValue, JsValue> {
+    // Retained fan-out `num_vectors × k` is caller-controlled — bounded up
+    // front by the browser guardrails (#2679).
+    crate::guardrails::check_fanout_memory(num_vectors, k.min(ids.len()))
+        .map_err(|e| WasmError::from(e).into_js_value())?;
     let all_results: Vec<Vec<(u64, f32)>> = vectors
         .chunks_exact(dimension)
         .map(|query| top_k(query, ids, data, dimension, metric, k))

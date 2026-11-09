@@ -504,3 +504,60 @@ fn test_search_in_10k_vectors() {
         assert!(w[0].1 >= w[1].1, "results not sorted by descending score");
     }
 }
+
+// =============================================================================
+// Query guardrails (#2679) — FFI-channel wiring. `JsValue` error paths only
+// exist under a real JS runtime, so these live behind wasm_bindgen_test.
+// =============================================================================
+
+fn js_error_code(err: &JsValue) -> Option<String> {
+    js_sys::Reflect::get(err, &JsValue::from_str("code"))
+        .ok()
+        .and_then(|v| v.as_string())
+}
+
+#[wasm_bindgen_test]
+fn batch_search_refuses_caller_sized_fanout() {
+    // 1024 queries × 9000 retained rows × 16 B ≈ 141 MiB exceeds the
+    // 100 MiB WASM fan-out budget. The refusal is a structured JS `Error`
+    // whose non-enumerable `code` is core's VELES-027 tag.
+    let mut store = VectorStore::new(4, "cosine").unwrap();
+    let ids: Vec<u64> = (0..9000).collect();
+    let vectors = vec![0.0_f32; 9000 * 4];
+    store.insert_batch_raw(&ids, &vectors, 4).unwrap();
+
+    let queries = vec![0.0_f32; 1024 * 4];
+    let err = store.batch_search(&queries, 1024, 9000).unwrap_err();
+    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-027"));
+}
+
+#[wasm_bindgen_test]
+fn multi_query_search_refuses_wrapping_k() {
+    // `k = usize::MAX` made the fused `k * 2` over-fetch wrap (wasm32) or
+    // panic (debug) before #2679; now refused as VELES-023.
+    let mut store = VectorStore::new(4, "cosine").unwrap();
+    store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
+
+    let queries = vec![1.0_f32, 0.0, 0.0, 0.0];
+    let err = store
+        .multi_query_search(&queries, 1, usize::MAX, "rrf", None, None)
+        .unwrap_err();
+    assert_eq!(js_error_code(&err).as_deref(), Some("VELES-023"));
+}
+
+#[wasm_bindgen_test]
+fn execute_query_where_scan_refuses_over_cardinality_limit() {
+    // `SELECT *` materializes every matching row; the 100_001st is refused.
+    // The executor's String channel degrades the structured error to text,
+    // but the `[VELES-027]` tag survives inside the message (#2679).
+    let mut db = velesdb_wasm::WasmDatabase::new();
+    db.create_collection("big", 4, "cosine").expect("create");
+    let handle = db.get_collection("big").expect("collection");
+    let ids: Vec<u64> = (0..100_001).collect();
+    let vectors = vec![0.0_f32; 100_001 * 4];
+    handle.insert_batch_raw(&ids, &vectors, 4).expect("insert");
+
+    let err = db.execute_query("SELECT * FROM big", None).unwrap_err();
+    let msg = err.as_string().unwrap_or_default();
+    assert!(msg.contains("VELES-027"), "missing guardrail tag: {msg}");
+}

@@ -103,7 +103,15 @@ fn execute_plain(
     let filters = WhereFilters::build(db, stmt, params, None)?;
     let store = db.get_shared_store(&stmt.from)?;
     let borrowed = store.borrow();
-    let mut out = Vec::with_capacity(borrowed.ids.len());
+    // Capacity is bounded by the guardrail refusal, never by the raw store
+    // size: `with_capacity(ids.len())` preallocated the whole dataset even
+    // when the WHERE matched a handful of rows (#2679).
+    let mut out = Vec::with_capacity(
+        borrowed
+            .ids
+            .len()
+            .min(crate::guardrails::MAX_INTERMEDIATE_CARDINALITY),
+    );
     for (idx, &id) in borrowed.ids.iter().enumerate() {
         let payload = borrowed.payloads.get(idx).and_then(|p| p.as_ref());
         if !filters.passes(id, payload, idx, &borrowed, params)? {
@@ -111,6 +119,7 @@ fn execute_plain(
         }
         let score = filters.eval.as_ref().map_or(0.0, |e| e.score_at(idx));
         out.push((id, score, payload.cloned()));
+        crate::guardrails::check_cardinality(out.len())?;
     }
     if filters.eval.is_some() {
         rank_by_score(&mut out, borrowed.metric.higher_is_better());

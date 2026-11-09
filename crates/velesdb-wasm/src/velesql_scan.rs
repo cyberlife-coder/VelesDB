@@ -28,7 +28,15 @@ pub(crate) fn scan_all(
 ) -> Result<Vec<OwnedScanRow>, String> {
     let store = db.get_shared_store(from)?;
     let borrowed = store.borrow();
-    let mut out = Vec::with_capacity(borrowed.ids.len());
+    // Capacity is bounded by the guardrail refusal, never by the raw store
+    // size: `with_capacity(ids.len())` preallocated the whole dataset even
+    // when the WHERE matched a handful of rows (#2679).
+    let mut out = Vec::with_capacity(
+        borrowed
+            .ids
+            .len()
+            .min(crate::guardrails::MAX_INTERMEDIATE_CARDINALITY),
+    );
     for (idx, &id) in borrowed.ids.iter().enumerate() {
         let payload = borrowed.payloads.get(idx).and_then(|p| p.as_ref());
         if let Some(cond) = where_clause {
@@ -37,6 +45,7 @@ pub(crate) fn scan_all(
             }
         }
         out.push((id, 0.0, payload.cloned()));
+        crate::guardrails::check_cardinality(out.len())?;
     }
     Ok(out)
 }
