@@ -133,11 +133,13 @@ what it got back and reports the drift as a normal error payload:
 
 Presence is not shape, and `hasattr` only ever proved presence.
 
-`list_working_contexts` (browse saved sessions for a project) is not exposed
-here: it exists on the WASM and MCP surfaces but not yet on the `velesdb`
-Python binding (`MemoryService`), and this package only ever calls the
-binding — no memory logic is reimplemented in this MIT-licensed integration.
-It will be added once the Python binding grows the method.
+`list_working_contexts` (browse saved sessions for a project) is deliberately
+not exposed here, though the `velesdb` Python binding does provide it
+(`MemoryService.list_working_contexts`, since 0.11.x): `load_working_context`'s
+`other_sessions` list already covers the typo-recovery case a listing was
+mainly wanted for, and the toolkit stays deliberately narrow. Like every tool
+above it would still only ever call the binding — no memory logic is
+reimplemented in this MIT-licensed integration.
 
 ## License
 

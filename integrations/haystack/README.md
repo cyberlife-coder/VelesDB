@@ -54,6 +54,9 @@ and semantic search example using `SentenceTransformersDocumentEmbedder`.
 ```python
 from haystack import Pipeline
 from haystack.components.converters import PyPDFToDocument
+# haystack-ai 2.x path; on haystack-ai 3.x the SentenceTransformers embedders
+# moved to the `sentence-transformers-haystack` package:
+#   from haystack_integrations.components.embedders.sentence_transformers import (...)
 from haystack.components.embedders import (
     SentenceTransformersDocumentEmbedder,
     SentenceTransformersTextEmbedder,
@@ -111,7 +114,7 @@ print(result["retriever"]["documents"])
 | `write_documents_streaming(documents, policy, sparse_vectors=None, batch_size=100)` | Same `DuplicatePolicy` semantics as `write_documents`, but sent through the streaming channel in `batch_size`-sized chunks — better throughput for large bulk loads. See "Note on streaming ingestion" below |
 | `flush()` | Flush pending changes to disk. See "Note on streaming ingestion" below |
 | `filter_documents(filters)` | Scroll documents matching a VelesDB filter dict, up to `scroll_limit` |
-| `embedding_retrieval(query_embedding, top_k, filters, scale_score, fusion=None, fusion_params=None)` | Vector similarity search. `fusion` selects a `velesdb.FusionStrategy` (`"average"`, `"maximum"`, `"rrf"`, `"weighted"`, `"relative_score"` / `"rsf"`) applied via `Collection.multi_query_search`, changing the ranking; `fusion_params` configures it (e.g. `{"dense_weight": 0.7, "sparse_weight": 0.3}` for `"rsf"`). `filters` cannot be combined with `fusion` |
+| `embedding_retrieval(query_embedding, top_k, filters, scale_score, fusion=None, fusion_params=None)` | Vector similarity search. `fusion` selects a `velesdb.FusionStrategy` (`"average"`, `"maximum"`, `"rrf"`, `"weighted_rrf"`, `"weighted"`, `"relative_score"` / `"rsf"`) applied via `Collection.multi_query_search`, changing the ranking; `fusion_params` configures it (e.g. `{"dense_weight": 0.7, "sparse_weight": 0.3}` for `"rsf"`, `{"weights": [...]}` for `"weighted_rrf"`). `filters` cannot be combined with `fusion` |
 | `count_documents()` | Total document count |
 | `delete_documents(document_ids)` | Delete by Haystack string IDs |
 | `train_pq(m=8, k=256, opq=False)` | Train Product Quantization on the collection |
@@ -122,9 +125,11 @@ print(result["retriever"]["documents"])
 | `to_dict()` / `from_dict()` | Haystack pipeline serialisation |
 
 **Note on `DuplicatePolicy`:** `NONE` and `OVERWRITE` use VelesDB upsert semantics
-and always overwrite on collision.  `FAIL` is fully enforced: a pre-scan is
-performed before writing and `DuplicateDocumentError` is raised if any document
-already exists (prefer `OVERWRITE` or `NONE` for bulk loads to skip the scan cost).
+and always overwrite on collision. `SKIP` drops incoming documents whose ID
+already exists and writes only the new subset. `FAIL` is fully enforced: a
+pre-scan is performed before writing and `DuplicateDocumentError` is raised if
+any document already exists (prefer `OVERWRITE` or `NONE` for bulk loads to
+skip the scan cost).
 
 **Note on document IDs and SHA-256:** Haystack string IDs are mapped to 63-bit
 integers using the first 8 bytes of SHA-256 (~9.2 × 10¹⁸ slots).  For a
