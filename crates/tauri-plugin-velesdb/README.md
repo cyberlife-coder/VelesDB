@@ -14,9 +14,11 @@ embedded vector store onto the frontend and hand-roll the IPC, the permissions,
 and the persistence path.
 
 This plugin removes that choice. Registering it in your `tauri::Builder` opens a
-VelesDB database inside the app process and exposes 69 typed commands to the
-webview — vector search, BM25, hybrid fusion, VelesQL, knowledge graph, agent
-memory — under Tauri's own capability model. Nothing leaves the device.
+VelesDB database inside the app process and exposes up to 69 typed commands
+to the webview — vector search, BM25, hybrid fusion, VelesQL, knowledge
+graph, agent memory — under Tauri's own capability model. Two of them
+(`stream_insert`, `enable_streaming`) sit behind the `persistence` feature;
+the default surface is 67. Nothing leaves the device.
 
 It is the desktop face of **VelesDB, the explainable, local-first memory engine
 for AI agents**: one engine fusing vector, graph and columnar data under
@@ -39,7 +41,7 @@ behind every recall.
 | Requirement | Minimum version | Note |
 |---|---|---|
 | Rust | 1.90 | `rust-version` of the workspace |
-| Tauri | 2.11 | the plugin builds against `tauri = "2.11"` |
+| Tauri | 2.12 | the plugin builds against `tauri = "2.12"` |
 | Node.js | 18 | only for the frontend toolchain / TypeScript SDK |
 | A Tauri 2 project | — | starting from zero? Follow the [Tauri RAG tutorial](../../docs/tutorials/tauri-rag-app/README.md) |
 | Platform toolchain | — | Xcode CLT on macOS, `libwebkit2gtk-4.1-dev` and friends on Linux, nothing extra on Windows |
@@ -173,8 +175,11 @@ rejected. Field reference: [configuration guide](../../docs/guides/CONFIGURATION
 
 ### Cargo features
 
-`default` pulls in `velesdb-core/default`, which includes `persistence` — mmap
-storage, WAL, and the streaming-insert commands. The other features
+`default` pulls in `velesdb-core/default`, which includes `persistence` —
+mmap storage and WAL. The `stream_insert`/`enable_streaming` commands and the
+`quality` argument on `search`/`search_ids` are gated on the plugin's own
+`persistence` feature — pass `features = ["persistence"]` for the full
+69-command surface (67 under `default`). The other features
 (`gpu`, `openapi`, `update-check`, `loom`, `internal-bench`, `bench-sift1m`,
 `test-fault-injection`) forward to the matching `velesdb-core` feature; the last
 two must never be enabled in a shipping bundle.
@@ -232,7 +237,7 @@ plugin targets.
 | macOS (x86_64, aarch64) | Supported | app data under `~/Library/Application Support/<app>/velesdb/` |
 | Linux (x86_64, aarch64) | Supported | app data under `~/.local/share/<app>/velesdb/`; CI runs the test suite here |
 | Android / iOS | Not supported | no mobile bindings, no mobile target in CI |
-| Tauri | 2.11+ | `tauri = { version = "2.11", default-features = false }` |
+| Tauri | 2.12+ | `tauri = { version = "2.12", default-features = false }` |
 | Rust | 1.90+ | workspace `rust-version` |
 | `@tauri-apps/api` | 2.0+ | peer dependency of the TypeScript SDK |
 | WebAssembly | Not applicable | a Tauri plugin runs in the Rust host process |

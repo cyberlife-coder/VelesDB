@@ -181,15 +181,21 @@ that `reason` was passed as `{ target, relation }`.
 
 ## Configuration
 
-There are no environment variables. Everything is an argument to the factory:
+Everything is an argument to the factory; an explicit argument always wins
+over its environment fallback:
 
 | Argument | Default | Effect |
 |---|---|---|
 | `path` | — | Directory of the on-disk store. Created if missing; reopened on the next run. |
-| `embedder` | `"hash"` | `"hash"` is offline and deterministic; `"ollama"` gives real semantic recall. |
-| `ollamaUrl` | `"http://localhost:11434"` | Only with `embedder: "ollama"`. |
-| `ollamaModel` | `"all-minilm"` | Only with `embedder: "ollama"`. |
+| `embedder` | `"hash"` | `"hash"` is offline and deterministic; `"ollama"` or `"openai"` give real semantic recall. Falls back to `VELESDB_MEMORY_EMBEDDER` when omitted. |
+| `ollamaUrl` | `"http://localhost:11434"` | Only with `embedder: "ollama"`. Falls back to `VELESDB_MEMORY_EMBEDDER_URL` (or the legacy `VELESDB_MEMORY_OLLAMA_*` aliases). |
+| `ollamaModel` | `"all-minilm"` | Only with `embedder: "ollama"`. Falls back to `VELESDB_MEMORY_EMBEDDER_MODEL`. |
 | `searchQuality` | the collection's own | Recall quality: `"fast"`, `"balanced"`, `"accurate"`, `"perfect"`, `"autotune"`, `"custom:<ef>"` or `"adaptive:<min_ef>:<max_ef>"`, each ef in 16–4096. Wins over `VELESDB_MEMORY_SEARCH_QUALITY`; an unknown value rejects the open. |
+
+`embedder: "openai"` takes no URL/model argument — it reads its endpoint,
+model and credential from the environment exclusively, so no token lands in
+source. `VELESDB_MEMORY_QUIET=1` silences the one-time offline-embedder
+notice.
 
 ```js
 const store = MemoryService.open('./agent_mem', 'ollama')
@@ -213,13 +219,14 @@ The same wedge in the other bindings is listed in the
 
 ## API
 
-21 methods on one class, in three families:
+23 methods on one class, in four families:
 
 | Family | Methods |
 |---|---|
 | Durable memory | `remember`, `recall`, `recallWhere`, `recallFused`, `recallFusedDated`, `relate`, `unrelate`, `forget`, `why`, `entity`, `feedback`, `rememberExtracted` |
 | Context compiler | `compileContext`, `compileTranscript`, `explainCompilation`, `contextSavings`, `retrieveContextSource`, `suggestBudget` |
 | Session resumption | `saveWorkingContext`, `loadWorkingContext`, `listWorkingContexts` |
+| Introspection | `memoryStatus`, `listMemories` |
 
 `loadWorkingContext` resolves the `{found, working, other_sessions}` envelope
 the MCP tool serves — **breaking in 0.12.0**, where it used to resolve the bare
@@ -229,7 +236,8 @@ working context or `null`; read `.working` for that value, and
 Three contracts hold across all of them: every method returns a `Promise` and
 runs off the event-loop thread; every id crosses as a **decimal string** (a JS
 `number` loses precision above 2^53); every rejection is an `Error` whose
-message starts with `[INVALID_INPUT]`, `[NOT_FOUND]` or `[INTERNAL]`.
+message starts with `[INVALID_INPUT]`, `[NOT_FOUND]`, `[UNSUPPORTED]` or
+`[INTERNAL]`.
 
 Parameter types are generated into `index.d.ts` and shipped with the package —
 read them from your editor. Everything else (per-method semantics, the

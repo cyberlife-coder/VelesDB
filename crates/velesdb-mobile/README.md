@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-VelesDB%20Core%20License%201.0-blue.svg)](./LICENSE)
 
 > **Maturity — read before shipping.** The Rust binding layer is production-grade:
-> 158 tests pass on the host (`cargo test -p velesdb-mobile`), CI re-runs them on every
+> 176 tests pass on the host (`cargo test -p velesdb-mobile`), CI re-runs them on every
 > pull request via `cargo test --workspace`, a parity test fails the build when
 > `velesdb-core` grows an enum variant the binding has not mirrored, and the crate is
 > published to crates.io by the release workflow.
@@ -127,9 +127,9 @@ Sanity-check the engine itself without any mobile toolchain:
 cargo test -p velesdb-mobile
 ```
 
-Expected on a host with default features: `test result: ok. 123 passed` for the lib
-target, then `8 passed` (`tests/coverage_native.rs`) and `4 passed`
-(`tests/feature_parity.rs`).
+Expected on a host with default features: `test result: ok. 160 passed` for the lib
+target, then `8 passed` (`tests/coverage_native.rs`), `6 passed`
+(`tests/feature_parity.rs`) and `2 passed` (`tests/read_gate_analyze.rs`).
 
 ## Configuration
 
@@ -142,7 +142,7 @@ format. Environment variables (`VELESDB_*`) still layer on top of a loaded file.
 | `VelesDatabase.openWithConfig(path, configPath)` | Loads a TOML file, **engine sections only** (`[search]`, `[hnsw]`, `[storage]`, `[limits]`, `[quantization]`); fails fast, never falls back to defaults |
 | `VelesDatabase.openWithConfigToml(path, configToml)` | Same, from an in-memory string (bundled asset, remote config) |
 | `updateGuardrails(limits)` | Live-updates depth / cardinality / memory / timeout / rate-limit / circuit-breaker caps (`MobileQueryLimits`); throws for a rate limit or failure threshold of `0` |
-| `enableStreaming(config)` | Bounded ingestion channel; defaults `bufferSize=10000`, `batchSize=128`, `flushIntervalMs=50` |
+| `collection.enableStreaming(config)` | Bounded ingestion channel on a `VelesCollection`; defaults `bufferSize=10000`, `batchSize=128`, `flushIntervalMs=50` |
 
 Field-by-field reference: [`velesdb.toml` guide](../../docs/guides/CONFIGURATION.md).
 
