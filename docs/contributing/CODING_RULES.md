@@ -63,7 +63,7 @@ Tests run single-threaded — they share filesystem state:
 
 ```bash
 cargo test --workspace --features persistence,gpu,update-check \
-  --exclude velesdb-python -- --test-threads=1
+  --exclude velesdb-python --exclude velesdb-node -- --test-threads=1
 ```
 
 Anti-patterns: `#[ignore]` without a reason, order-dependent tests,
@@ -100,8 +100,9 @@ flaky/random tests.
     `collection::search::query::match_exec::where_eval::eval_match_condition`.
   - **Cross-crate enums** (the compiler forces a wildcard): the wildcard must be
     `_ => false` / `_ => Err(..)`, **never** `_ => true` / `_ => Ok(true)`, and
-    must carry a regression test. Exemplar: `velesdb-wasm`'s `filter::evaluate_condition`
-    with `filter_tests.rs`'s fail-closed cases.
+    must carry a regression test. Exemplar: `velesdb-core`'s
+    `collection::search::query::match_exec::where_eval::eval_match_condition`,
+    whose unknown-arm wildcard is `_ => Err(..)`.
 
 ---
 

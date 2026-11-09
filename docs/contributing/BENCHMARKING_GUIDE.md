@@ -224,7 +224,8 @@ export CARGO_INCREMENTAL=1
 
 ARM64 benchmarks run automatically via GitHub Actions on:
 - Push to `main` (SIMD/index path changes)
-- Pull requests modifying SIMD code
+- Pull requests carrying the `run-arm64-bench` label (otherwise a skip
+  placeholder satisfies the check)
 
 **Workflow**: `.github/workflows/bench-arm64.yml`
 

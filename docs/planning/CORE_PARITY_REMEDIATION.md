@@ -151,7 +151,7 @@ fan-out found the three perf sub-items each *sound-with-fixes*, never *sound* �
     3d Layer A shipped and 3d Layer B closed as declined.
 
 ## Artifacts produced by the audit
-- `PARITY_MATRIX.md` (81 capabilities × 13 components) — regenerate via `.claude/skills/core-parity-audit/scripts/gen_matrix.py`.
+- `PARITY_MATRIX.md` (81 capabilities × 13 components) — generated on demand via `.claude/skills/core-parity-audit/scripts/gen_matrix.py`, not committed.
 - `/core-parity-audit` skill — re-runs the whole analysis (code + docs), core = source of truth, VelesDB Core License boundary enforced.
 
 ## Resume pointer
