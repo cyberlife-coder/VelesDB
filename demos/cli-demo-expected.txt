@@ -1,0 +1,170 @@
+VelesDB CLI demo — vector + graph + columnstore + hybrid fusion, one binary.
+
+── seed: 6 documents, fixed vectors (no network, no model) (Ns)
+$ <REPO>/target/debug/velesdb collection create <DB> docs -d 4 -m cosine
+✅ Vector collection 'docs' created (4 dims, Cosine, Full)
+6 documents upserted into 'docs' (deterministic vectors — distances below are stable).
+
+── ANN search + metadata filter: near [1,0,0,0] AND category='tech' (Ns)
+$ <REPO>/target/debug/velesdb query execute <DB> SELECT id, title, category FROM docs WHERE vector NEAR [1.0, 0.0, 0.0, 0.0] AND category = 'tech' LIMIT 5
+┌────┬──────────┬────────────────────────────┐
+│ id ┆ category ┆ title                      │
+╞════╪══════════╪════════════════════════════╡
+│ 1  ┆ tech     ┆ LSM-tree internals         │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 4  ┆ tech     ┆ SIMD optimization          │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 2  ┆ tech     ┆ Rust programming guide     │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 5  ┆ tech     ┆ Graph traversal algorithms │
+└────┴──────────┴────────────────────────────┘
+
+── graph: authors -> documents (schemaless collection, node embeddings) (Ns)
+$ <REPO>/target/debug/velesdb collection create-graph <DB> kg -d 4
+✅ Graph collection 'kg' created (schemaless, embeddings 4D)
+$ <REPO>/target/debug/velesdb graph store-payload <DB> kg 100 {"name":"Ada","kind":"author"} --vector [0.9,0.1,0.0,0.0]
+✅ Payload stored on node 100
+$ <REPO>/target/debug/velesdb graph store-payload <DB> kg 200 {"name":"Grace","kind":"author"} --vector [0.0,0.0,0.9,0.1]
+✅ Payload stored on node 200
+$ <REPO>/target/debug/velesdb graph store-payload <DB> kg 1 {"name":"LSM-tree internals","kind":"doc"} --vector [0.90,0.10,0.00,0.00]
+✅ Payload stored on node 1
+$ <REPO>/target/debug/velesdb graph store-payload <DB> kg 3 {"name":"Rust cookbook","kind":"doc"} --vector [0.00,0.00,0.90,0.10]
+✅ Payload stored on node 3
+$ <REPO>/target/debug/velesdb graph store-payload <DB> kg 4 {"name":"SIMD optimization","kind":"doc"} --vector [0.85,0.00,0.00,0.15]
+✅ Payload stored on node 4
+$ <REPO>/target/debug/velesdb graph add-edge <DB> kg 1 100 1 WROTE
+✅ Edge 1 added: 100 --[WROTE]--> 1
+$ <REPO>/target/debug/velesdb graph add-edge <DB> kg 2 100 4 WROTE
+✅ Edge 2 added: 100 --[WROTE]--> 4
+$ <REPO>/target/debug/velesdb graph add-edge <DB> kg 3 200 3 WROTE
+✅ Edge 3 added: 200 --[WROTE]--> 3
+$ <REPO>/target/debug/velesdb graph traverse <DB> kg 100 --algorithm bfs --max-depth 2
+
+Traversal Results (algorithm=BFS, source=100, max_depth=2)
+
+  depth=1 target=1 path=[1]
+  depth=1 target=4 path=[2]
+
+  Total: 2 result(s)
+
+$ <REPO>/target/debug/velesdb graph search <DB> kg [0.9,0.1,0.0,0.0] -k 3
+
+Graph Search Results (3 results)
+
+  id=100 score=1.000000
+  id=1 score=1.000000
+  id=4 score=0.978760
+
+
+── columnstore: GROUP BY aggregation over the same docs (Ns)
+$ <REPO>/target/debug/velesdb query execute <DB> SELECT category, COUNT(*), AVG(price) FROM docs GROUP BY category
+┌───────────┬──────────┬───────┐
+│ avg_price ┆ category ┆ count │
+╞═══════════╪══════════╪═══════╡
+│ 15.0      ┆ food     ┆ 2     │
+├╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌┤
+│ 42.5      ┆ tech     ┆ 4     │
+└───────────┴──────────┴───────┘
+
+── branch 1 alone: vector NEAR (no 'rust' filter) (Ns)
+$ <REPO>/target/debug/velesdb query execute <DB> SELECT id, title FROM docs WHERE vector NEAR [1.0, 0.0, 0.0, 0.0] LIMIT 3
+┌────┬────────────────────────┐
+│ id ┆ title                  │
+╞════╪════════════════════════╡
+│ 1  ┆ LSM-tree internals     │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 4  ┆ SIMD optimization      │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 2  ┆ Rust programming guide │
+└────┴────────────────────────┘
+
+── branch 2 alone: text MATCH 'rust' (Ns)
+$ <REPO>/target/debug/velesdb query execute <DB> SELECT id, title FROM docs WHERE content MATCH 'rust' LIMIT 3
+┌────┬────────────────────────┐
+│ id ┆ title                  │
+╞════╪════════════════════════╡
+│ 3  ┆ Rust cookbook          │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 2  ┆ Rust programming guide │
+└────┴────────────────────────┘
+
+── fused: NEAR + MATCH, USING FUSION rrf (k=60) (Ns)
+$ <REPO>/target/debug/velesdb query execute <DB> SELECT id, title FROM docs WHERE vector NEAR [1.0, 0.0, 0.0, 0.0] AND content MATCH 'rust' LIMIT 3 USING FUSION(strategy='rrf', k=60)
+┌────┬────────────────────────┐
+│ id ┆ title                  │
+╞════╪════════════════════════╡
+│ 2  ┆ Rust programming guide │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 3  ┆ Rust cookbook          │
+├╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ 1  ┆ LSM-tree internals     │
+└────┴────────────────────────┘
+Doc 2 sits mid-rank in each single branch yet tops the fused list — that is what RRF buys you.
+
+── EXPLAIN: the fused query's plan (Ns)
+$ <REPO>/target/debug/velesdb query explain <DB> SELECT id, title FROM docs WHERE vector NEAR [1.0, 0.0, 0.0, 0.0] AND content MATCH 'rust' LIMIT 3 USING FUSION(strategy='rrf', k=60)
+
+Query Execution Plan
+Query Plan:
+├─ VectorSearch
+│  ├─ Collection: docs
+│  ├─ ef_search: 100
+│  └─ Candidates: 3
+├─ Filter
+│  ├─ Conditions: content MATCH ?
+│  └─ Selectivity: 50.0%
+└─ Limit: 3
+
+FUSION:
+  Strategy: RRF
+  k: 60
+
+Estimated cost: N ms
+Index used: HNSW
+Filter strategy: post-filtering (low selectivity)
+Cache hit: false
+Plan reuse count: 0
+
+  Estimated cost: N ms
+  Index used: Hnsw
+  Filter strategy: PostFilter
+  Cache hit: no
+  Plan reuse count: 0
+
+
+── REST live: velesdb-server answers the same query over HTTP (Ns)
+$ curl -s http://127.0.0.1:<PORT>/health
+{"status":"ok","version":"8.1.0"}
+$ curl -s -X POST http://127.0.0.1:<PORT>/query -H Content-Type: application/json -d {"query":"SELECT id, title FROM docs WHERE vector NEAR [1.0,0.0,0.0,0.0] LIMIT 2","collection":"docs"}
+{"results":[{"id":1,"title":"LSM-tree internals"},{"id":4,"title":"SIMD optimization"}],"timing_ms":N,"took_ms":N,"rows_returned":2,"meta":{"velesql_contract_version":"3.0.0","count":2}}
+same data dir the CLI just wrote — one binary, one format, embedded or served.
+
+── export: docs -> JSON (Ns)
+$ <REPO>/target/debug/velesdb data export <DB> docs --output <DB>/export.json
+Exporting 6 records from docs...
+✓ Exported 6 records to <DB>/export.json
+[
+  {
+    "id": 1,
+    "payload": {
+      "category": "tech",
+      "content": "storage engine design",
+      "price": 30,
+      "title": "LSM-tree internals"
+    },
+    "vector": [
+      0.8999999761581421,
+      0.10000000149011612,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "id": 2,
+    "payload": {
+      "category": "tech",
+      "content": "rust borrow checker and ownership",
+      "price": 45,
+ ...
+────────────────────────────────────────────
+done in Ns — install: cargo install velesdb-cli · docs: docs/guides/CLI_COMMAND_REFERENCE.md · star the repo if this was useful.

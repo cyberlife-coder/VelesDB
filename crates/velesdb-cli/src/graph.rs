@@ -125,6 +125,9 @@ pub enum GraphAction {
         node_id: u64,
         /// JSON payload (e.g., '{"name": "Alice"}')
         payload: String,
+        /// Optional node embedding as JSON array (embeddings-enabled graphs only)
+        #[arg(long)]
+        vector: Option<String>,
     },
 
     /// Retrieve the JSON payload of a graph node
@@ -276,7 +279,8 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
             collection,
             node_id,
             payload,
-        } => graph_handlers::handle_store_payload(&path, &collection, node_id, &payload),
+            vector,
+        } => graph_handlers::handle_store_payload(&path, &collection, node_id, &payload, vector),
         GraphAction::GetPayload {
             path,
             collection,

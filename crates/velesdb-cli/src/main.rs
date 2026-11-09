@@ -156,9 +156,12 @@ fn dispatch_collection(action: CollectionCommands) -> anyhow::Result<()> {
             metric,
             storage,
         } => handlers::handle_create_vector_collection(&path, &name, dimension, metric, storage),
-        CollectionCommands::CreateGraph { path, name } => {
-            handlers::handle_create_graph_collection(&path, &name)
-        }
+        CollectionCommands::CreateGraph {
+            path,
+            name,
+            dimension,
+            metric,
+        } => handlers::handle_create_graph_collection(&path, &name, dimension, metric),
         CollectionCommands::CreateMetadata { path, name } => {
             handlers::handle_create_metadata_collection(&path, &name)
         }

@@ -1,0 +1,47 @@
+name: CLI Demo Smoke
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - 'demos/cli-demo.sh'
+      - 'demos/cli-demo-expected.txt'
+      - 'crates/velesdb-cli/**'
+      - 'crates/velesdb-server/**'
+      - '.github/workflows/cli-demo.yml'
+  push:
+    branches: [develop]
+    paths:
+      - 'demos/cli-demo.sh'
+      - 'demos/cli-demo-expected.txt'
+      - 'crates/velesdb-cli/**'
+      - 'crates/velesdb-server/**'
+      - '.github/workflows/cli-demo.yml'
+
+permissions:
+  contents: read
+
+env:
+  # rustup never installs a toolchain on its own: a Rust call reached before the
+  # job's install step fails here instead of installing mid-build.
+  RUSTUP_AUTO_INSTALL: "0"
+
+jobs:
+  cli-demo-smoke:
+    name: demos/cli-demo.sh --check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the toolchain rust-toolchain.toml pins
+        run: rustup toolchain install --no-self-update --profile minimal
+
+      - name: Fast Rust tools (sccache + mold)
+        uses: ./.github/actions/fast-rust-tools
+
+      - name: Build CLI and server
+        run: cargo build -p velesdb-cli -p velesdb-server
+
+      - name: Run demo smoke check
+        run: bash demos/cli-demo.sh --check
