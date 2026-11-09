@@ -61,7 +61,7 @@ jobs:
         if: matrix.language == 'rust'
         run: rustup toolchain install --no-self-update --profile minimal --component rust-src
 
-      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
@@ -69,6 +69,6 @@ jobs:
           # file explains why and what it costs.
           config-file: ./.github/codeql/codeql-config.yml
 
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:${{ matrix.language }}
