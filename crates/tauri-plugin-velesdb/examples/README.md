@@ -15,7 +15,7 @@ not a binary you run from this directory.
 | Requirement | Minimum | Note |
 |---|---|---|
 | Rust | 1.90 | workspace `rust-version` |
-| Tauri | 2.11 | the plugin builds against `tauri = "2.11"` |
+| Tauri | 2.12 | the plugin builds against `tauri = "2.12"` |
 | Node.js | 18 | frontend toolchain only |
 | A Tauri 2 project | — | starting from zero? [Tauri RAG tutorial](../../../docs/tutorials/tauri-rag-app/README.md) |
 | Platform toolchain | — | Xcode CLT on macOS, `libwebkit2gtk-4.1-dev` and friends on Linux, nothing extra on Windows |

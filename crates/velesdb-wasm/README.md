@@ -137,9 +137,11 @@ crate is not on docs.rs, so the narrative documentation lives here:
 | [VelesQL in the browser](../../docs/guides/WASM_VELESQL.md) | Parsing, `executeQuery`, `EXPLAIN`, the full WASM-vs-REST feature matrix, every rejected shape with its exact error message, and how to migrate a query to the REST server. |
 | [Bundle size optimization](../../docs/wasm/bundle-optimization.md) | Keeping the `.wasm` payload small. |
 
-Hybrid (dense + sparse) search runs in the browser too: `hybrid_search()` on
-`VectorStore` combines a dense vector query with a sparse one and fuses the
-two result sets with RRF, and `search_sparse()` runs the sparse side alone.
+Two hybrid paths run in the browser. `hybrid_search(vector, textQuery, k,
+vectorWeight)` on `VectorStore` blends a dense vector query with a payload
+text match in one pass, and `search_sparse()` runs the sparse side alone.
+Dense + sparse RRF fusion is the other path: `SparseIndex` postings plus the
+`hybrid_search_fuse` helper, which delegates to core's `FusionStrategy::RRF`.
 Signatures and the fusion parameters are in
 [JavaScript API](../../docs/guides/WASM_API.md).
 
