@@ -26,6 +26,10 @@ cargo run
 
 ## Expected Output
 
+> Approximate search note: HNSW indexing is unseeded, so on this 8-product
+> catalog the similarity list can occasionally return one item fewer than
+> shown below — a rerun restores the full list.
+
 ```
 🚀 VelesDB Mini Recommender Example
 

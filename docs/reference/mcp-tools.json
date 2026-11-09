@@ -650,7 +650,8 @@
           "sources",
           "retrieval_handles",
           "insights",
-          "risk"
+          "risk",
+          "warnings"
         ],
         "type": "object"
       }
@@ -1261,7 +1262,8 @@
               "sources",
               "retrieval_handles",
               "insights",
-              "risk"
+              "risk",
+              "warnings"
             ],
             "type": "object"
           },
@@ -2035,7 +2037,9 @@
           "request_id",
           "state",
           "ids",
-          "ids_str"
+          "ids_str",
+          "skipped_over_cap",
+          "error"
         ],
         "type": "object"
       }
@@ -2186,7 +2190,8 @@
               "required": [
                 "id",
                 "id_str",
-                "content"
+                "content",
+                "metadata"
               ],
               "type": "object"
             },
@@ -2201,7 +2206,8 @@
           }
         },
         "required": [
-          "memories"
+          "memories",
+          "next_cursor"
         ],
         "type": "object"
       }
@@ -2547,6 +2553,14 @@
                     "type": "array"
                   }
                 },
+                "required": [
+                  "active_constraints",
+                  "verified_facts",
+                  "open_hypotheses",
+                  "decisions",
+                  "exact_evidence",
+                  "pending_actions"
+                ],
                 "type": "object"
               },
               {
@@ -2557,7 +2571,9 @@
           }
         },
         "required": [
-          "found"
+          "found",
+          "working",
+          "other_sessions"
         ],
         "type": "object"
       }
@@ -2598,6 +2614,11 @@
                 ]
               }
             },
+            "required": [
+              "model",
+              "dimension",
+              "semantic"
+            ],
             "type": "object"
           },
           "extraction": {
@@ -2648,7 +2669,8 @@
               }
             },
             "required": [
-              "facts"
+              "facts",
+              "edges"
             ],
             "type": "object"
           },
@@ -2676,7 +2698,9 @@
               }
             },
             "required": [
-              "recorded"
+              "recorded",
+              "model",
+              "dimension"
             ],
             "type": "object"
           }
@@ -2782,7 +2806,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -2815,6 +2841,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -2826,7 +2854,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -2923,7 +2952,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -2956,6 +2987,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -2967,7 +3000,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -3101,7 +3135,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -3134,6 +3170,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -3145,7 +3183,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -3242,7 +3281,9 @@
                       "output_watermark",
                       "distinct_dirty_facts",
                       "distinct_edge_sources",
-                      "pending_journal_bytes"
+                      "pending_journal_bytes",
+                      "estimated_pause_ms",
+                      "measured_cutover_ms"
                     ],
                     "type": "object"
                   },
@@ -3275,6 +3316,8 @@
                   "target_dimension",
                   "destination",
                   "cancellation_requested",
+                  "recovery_action",
+                  "last_error",
                   "progress"
                 ],
                 "type": "object"
@@ -3286,7 +3329,8 @@
           }
         },
         "required": [
-          "configured"
+          "configured",
+          "job"
         ],
         "type": "object"
       }
@@ -3367,8 +3411,7 @@
                         }
                       },
                       "required": [
-                        "state",
-                        "changed"
+                        "state"
                       ],
                       "type": "object"
                     },
@@ -3515,8 +3558,7 @@
                         }
                       },
                       "required": [
-                        "state",
-                        "changed"
+                        "state"
                       ],
                       "type": "object"
                     },
@@ -3678,8 +3720,7 @@
                         }
                       },
                       "required": [
-                        "state",
-                        "changed"
+                        "state"
                       ],
                       "type": "object"
                     },
@@ -4250,6 +4291,8 @@
           }
         },
         "required": [
+          "window",
+          "suggested_budget",
           "source"
         ],
         "type": "object"

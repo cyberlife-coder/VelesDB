@@ -97,16 +97,22 @@ VelesDBVectorStore(
 | **Core Operations** | |
 | `add(nodes)` | Add nodes with embeddings |
 | `add_bulk(nodes)` | Bulk insert (faster for large batches) |
+| `add_streaming(nodes, batch_size=100)` | Stream-insert embedded nodes in batches via the ingestion channel; returns node IDs |
+| `stream_insert(nodes, sparse_vectors=None)` | Send embedded nodes through `Collection.stream_insert` in one call (append-only) |
 | `delete(ref_doc_id)` | Delete by document ID |
 | `get_nodes(node_ids)` | Retrieve nodes by their IDs |
+| `get_nodes_by_int_ids(int_ids)` | Retrieve nodes by VelesDB internal point IDs |
 | `flush()` | Flush pending changes to disk |
 | **Search** | |
 | `query(query)` | Query with vector |
+| `query_with_score_threshold(query, score_threshold=0.0)` | Query keeping only results with similarity ≥ threshold |
 | `batch_query(queries)` | Batch query multiple vectors in parallel |
 | `multi_query_search(query_embeddings, ...)` | **Multi-query fusion search** ⭐ NEW |
 | `hybrid_query(query_str, query_embedding, ...)` | Hybrid vector+BM25 search |
 | `text_query(query_str, ...)` | Full-text BM25 search |
+| `contains_text_search(collection, column, keyword, k=10)` | VelesQL `CONTAINS_TEXT` substring search on a column |
 | `velesql(query_str, params)` | Execute VelesQL query |
+| `match_query(query_str, params)` | Execute a VelesQL `MATCH` query; returns `VectorStoreQueryResult` |
 | **Utilities** | |
 | `get_collection_info()` | Get collection metadata |
 | `is_empty()` | Check if collection is empty |
@@ -409,7 +415,7 @@ Source: `benchmarks/baseline.json` — not committed; the figures carry that run
 
 ## Agent Memory (optional)
 
-`llama-index-vector-stores-velesdb` re-exports three agent-memory wrappers around VelesDB's
+`llama-index-vector-stores-velesdb` re-exports four agent-memory wrappers around VelesDB's
 native memory subsystems. They are imported lazily — if the underlying
 `velesdb` native extension isn't installed, the import becomes a no-op and
 the symbols are exposed as `None`.
@@ -418,6 +424,7 @@ the symbols are exposed as `None`.
 from llamaindex_velesdb import (
     VelesDBSemanticMemory,       # long-term knowledge store
     VelesDBEpisodicMemory,       # time-sequenced event recall
+    VelesDBChatMemory,           # conversational turn buffer (save/load context)
     VelesDBProceduralMemory,     # learned procedures with reinforcement
 )
 ```

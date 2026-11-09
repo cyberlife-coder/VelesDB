@@ -7,7 +7,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    velesdb_url: str = "http://localhost:8080"
+    velesdb_data_path: str = "./rag-data"
     embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     embedding_dimension: int = 384
     chunk_size: int = 512

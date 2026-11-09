@@ -18,7 +18,7 @@ class RAGEngine:
         self.settings = get_settings()
         self.pdf_processor = PDFProcessor()
         self.embedding_service = EmbeddingService()
-        self.velesdb = VelesDBClient()
+        self.velesdb = VelesDBClient(self.settings.velesdb_data_path)
         self._documents: dict[str, dict[str, Any]] = {}
 
     def ensure_collection(self) -> None:

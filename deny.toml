@@ -51,6 +51,7 @@ ignore = [
     { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif transitive in the demo, unmaintained" },
     { id = "RUSTSEC-2026-0105", reason = "core2: demo transitive, unmaintained and all versions yanked" },
     { id = "RUSTSEC-2026-0441", reason = "pin-utils: futures-util/hyper transitive in the demo's Tauri stack, unmaintained, no fix released" },
+    { id = "RUSTSEC-2026-0462", reason = "rmcp 3.8.0 unbounded Streamable HTTP client body buffering: velesdb-memory enables only server-side rmcp features (server, transport-io, transport-streamable-http-server) — the vulnerable client transports (transport-streamable-http-client-reqwest/unix-socket) are not compiled; rmcp 3.9 upgrades the MCP wire schemas (drift-gated), tracked as its own change" },
 
     # ── Tauri non-GTK3 transitives ────────────────────────────────────
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: tauri build-time transitive, unmaintained" },
