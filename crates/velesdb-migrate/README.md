@@ -216,7 +216,7 @@ client to be compatible with. Supported platforms:
 | macOS Intel (`x86_64-apple-darwin`) | Supported | Release binary |
 | Linux ARM64, other targets | Build from source | Not covered by the release matrix |
 | Rust toolchain | 1.90+ | Workspace MSRV |
-| VelesDB destination format | 8.0.0 | Written through `velesdb-core` 8.1.0 |
+| VelesDB destination format | 8.0.0 | Written through `velesdb-core` 8.2.0 |
 
 ## Troubleshooting
 
@@ -245,4 +245,4 @@ Developed by Julien Lange, WiScale France.
 
 ---
 
-`velesdb-migrate v8.1.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 8.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-migrate v8.2.0` · Last updated: 2026-09-02 · Applies to: velesdb-core 8.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

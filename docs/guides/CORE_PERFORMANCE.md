@@ -127,4 +127,4 @@ It also downloads a ~168 MB tarball on first run.
 
 ---
 
-Last updated: 2026-09-10 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-09-10 · Applies to: velesdb-core 8.2.0

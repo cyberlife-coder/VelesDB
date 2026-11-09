@@ -467,4 +467,4 @@ SELECT "select", "from", "order" FROM docs LIMIT 10;
 
 ---
 
-Last updated: 2026-10-30 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.2.0
