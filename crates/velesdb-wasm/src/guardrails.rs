@@ -12,7 +12,8 @@
 //! So this module bounds the caller-amplified sites with explicit caps in
 //! core's own vocabulary: the *numbers* mirror `QueryLimits`' defaults
 //! (`DEFAULT_MAX_CARDINALITY`, `DEFAULT_MEMORY_LIMIT_BYTES`), and the
-//! refusals carry core's [`Error::GuardRail`] taxonomy (`VELES-027`) so a
+//! refusals carry core's [`velesdb_core::Error::GuardRail`] taxonomy
+//! (`VELES-027`) so a
 //! browser refusal reads exactly like a core refusal.
 //!
 //! What is bounded:
