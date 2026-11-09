@@ -29,6 +29,7 @@ fn test_prefetch_vector_neon_empty() {
 }
 
 #[test]
+#[allow(deprecated)] // exercises deprecated helpers while they exist
 fn test_all_prefetch_variants() {
     let data = vec![0u8; 256];
     let ptr = data.as_ptr();
