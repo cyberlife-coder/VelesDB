@@ -2,7 +2,7 @@
 
 use axum::{extract::State, response::IntoResponse, Json};
 use std::sync::Arc;
-use velesdb_core::velesql::{Condition, QueryPlan, SelectColumns};
+use velesdb_core::velesql::QueryPlan;
 
 use crate::types::{
     ActualStatsResponse, ExplainCost, ExplainFeatures, ExplainRequest, ExplainResponse,
@@ -71,19 +71,13 @@ fn explain_parsed(
     explain_plan_only(state, req, parsed)
 }
 
-/// Computes the EXPLAIN preamble shared by the plan-only and ANALYZE paths:
-/// detected query features, estimated cost, and the query-type label.
-fn explain_preamble(
-    parsed: &velesdb_core::velesql::Query,
-) -> (ExplainFeatures, ExplainCost, &'static str) {
-    let features = detect_explain_features(&parsed.select);
-    let estimated_cost = estimate_cost(features.has_vector_search);
-    let query_type = if parsed.is_match_query() {
+/// The query-type label shared by the plan-only and ANALYZE paths.
+fn query_type(parsed: &velesdb_core::velesql::Query) -> &'static str {
+    if parsed.is_match_query() {
         "MATCH"
     } else {
         "SELECT"
-    };
-    (features, estimated_cost, query_type)
+    }
 }
 
 /// Build an EXPLAIN-only response (no execution).
@@ -93,19 +87,27 @@ fn explain_plan_only(
     parsed: &velesdb_core::velesql::Query,
 ) -> axum::response::Response {
     let select = &parsed.select;
-    let (features, estimated_cost, query_type) = explain_preamble(parsed);
+    let query_type = query_type(parsed);
 
     // Single-sourced from core: the plan steps come from the canonical
-    // `QueryPlan`, not a server-side AST reconstruction. `explain_query`
+    // `QueryPlan`, not a server-side AST reconstruction, and the features /
+    // estimated-cost sections derive from that same plan — nothing is
+    // re-derived from the AST server-side (#2678). `explain_query`
     // runs the read gate in-core with the query's own operation kind — a
     // denial or an unnarrowable scope is an error it returns, and it is
     // surfaced as one: a failure folded into a plan payload would answer
     // HTTP 200 for a plan the caller was refused (#2587). The request's
     // params go through so a `MATCH` whose target rides in `_collection` is
     // gated on the collection it actually traverses (#2598).
-    let (plan, cache_hit, plan_reuse_count) =
+    let (plan, cache_hit, plan_reuse_count, features, estimated_cost) =
         match state.db.explain_query_with_params(parsed, &req.params) {
-            Ok(qp) => (core_plan_steps(&qp), qp.cache_hit, qp.plan_reuse_count),
+            Ok(qp) => (
+                core_plan_steps(&qp),
+                qp.cache_hit,
+                qp.plan_reuse_count,
+                ExplainFeatures::from_plan(&qp),
+                ExplainCost::from_plan(&qp),
+            ),
             Err(e) => {
                 return velesql_execution_error(
                     &e,
@@ -139,15 +141,18 @@ fn explain_with_analyze(
     parsed: &velesdb_core::velesql::Query,
 ) -> axum::response::Response {
     let select = &parsed.select;
-    let (features, estimated_cost, query_type) = explain_preamble(parsed);
+    let query_type = query_type(parsed);
 
     let output = match run_analyze_query(state, parsed, &req.params) {
         Ok(o) => o,
         Err(resp) => return *resp,
     };
 
-    // Single-sourced from core: steps derive from the executed plan.
+    // Single-sourced from core: steps, features and cost all derive from
+    // the executed plan (#2678).
     let plan = core_plan_steps(&output.plan);
+    let features = ExplainFeatures::from_plan(&output.plan);
+    let estimated_cost = ExplainCost::from_plan(&output.plan);
 
     let (actual_stats_resp, actual_time, node_stats_resp) = extract_analyze_stats(&output);
 
@@ -214,69 +219,10 @@ fn extract_analyze_stats(
     )
 }
 
-/// Detect query features from a SELECT statement for EXPLAIN output.
-fn detect_explain_features(select: &velesdb_core::velesql::SelectStatement) -> ExplainFeatures {
-    let has_vector_search = select
-        .where_clause
-        .as_ref()
-        .map(condition_has_vector_search)
-        .unwrap_or(false);
-
-    ExplainFeatures {
-        has_vector_search,
-        has_filter: select.where_clause.is_some() && !has_vector_search,
-        has_order_by: select.order_by.is_some(),
-        has_group_by: select.group_by.is_some(),
-        has_aggregation: match &select.columns {
-            SelectColumns::Aggregations(_) => true,
-            SelectColumns::Mixed { aggregations, .. } => !aggregations.is_empty(),
-            _ => false,
-        },
-        has_join: !select.joins.is_empty(),
-        has_fusion: select.fusion_clause.is_some(),
-        limit: select.limit,
-        offset: select.offset,
-    }
-}
-
 /// Maps a core [`QueryPlan`] into the REST [`ExplainStep`] list.
 ///
 /// The plan steps are single-sourced from `velesdb-core` (`to_plan_steps`),
 /// so the server no longer reconstructs them from the parsed AST.
 fn core_plan_steps(plan: &QueryPlan) -> Vec<ExplainStep> {
     plan.to_plan_steps().iter().map(ExplainStep::from).collect()
-}
-
-/// Estimate execution cost based on query features.
-fn estimate_cost(has_vector_search: bool) -> ExplainCost {
-    ExplainCost {
-        uses_index: has_vector_search,
-        index_name: if has_vector_search {
-            Some("HNSW".to_string())
-        } else {
-            None
-        },
-        selectivity: if has_vector_search { 0.01 } else { 1.0 },
-        complexity: if has_vector_search {
-            "O(log n)"
-        } else {
-            "O(n)"
-        }
-        .to_string(),
-    }
-}
-
-/// Check if a condition contains vector search.
-pub(super) fn condition_has_vector_search(cond: &Condition) -> bool {
-    match cond {
-        Condition::VectorSearch(_)
-        | Condition::VectorFusedSearch { .. }
-        | Condition::SparseVectorSearch(_)
-        | Condition::Similarity(_) => true,
-        Condition::And(left, right) | Condition::Or(left, right) => {
-            condition_has_vector_search(left) || condition_has_vector_search(right)
-        }
-        Condition::Group(inner) | Condition::Not(inner) => condition_has_vector_search(inner),
-        _ => false,
-    }
 }
