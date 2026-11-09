@@ -1,19 +1,19 @@
 # VelesDB Release Process
 
-Guide simplifié pour publier une nouvelle version de VelesDB.
+Concise guide for publishing a new VelesDB version.
 
 ## Workflow Architecture
 
-VelesDB utilise **6 workflows GitHub Actions** :
+VelesDB uses **6 GitHub Actions workflows**:
 
-| Workflow | Trigger | Fonction |
+| Workflow | Trigger | Function |
 |----------|---------|----------|
-| `ci.yml` | Push/PR sur main | Tests, lint, security audit |
-| `tag-release.yml` | Déclenchement manuel sur develop/main | Création gardée du tag quand le push Git direct est impossible |
-| `release.yml` | Tag `v*` | Publication complète |
-| `release-memory.yml` | Tag `velesdb-memory-v*` | Publication indépendante de `velesdb-memory` |
-| `release-mcpb.yml` | Tag `velesdb-memory-vX.Y.Z` (version finale) | Bundles MCPB + publication au MCP registry |
-| `bench-regression.yml` | Push sur main | Benchmarks de régression |
+| `ci.yml` | Push/PR to main | Tests, lint, security audit |
+| `tag-release.yml` | Manual dispatch on develop/main | Guarded tag creation when direct git push is impossible |
+| `release.yml` | Tag `v*` | Full publication |
+| `release-memory.yml` | Tag `velesdb-memory-v*` | Independent `velesdb-memory` publication |
+| `release-mcpb.yml` | Tag `velesdb-memory-vX.Y.Z` (final version) | MCPB bundles + publication to the MCP registry |
+| `bench-regression.yml` | Pull request to `main` or `develop` | Regression benchmarks |
 
 ## Publishing a Release
 
@@ -38,11 +38,10 @@ done
 python3 scripts/check-version-sync.py  # must report: All versions match
 ```
 
-Le script `bump_version.py` met à jour automatiquement :
+The `bump_version.py` script automatically updates:
 - `Cargo.toml` (workspace)
 - `sdks/typescript/package.json`
 - `crates/velesdb-python/pyproject.toml`
-- `crates/velesdb-wasm/pkg/package.json`
 - `crates/tauri-plugin-velesdb/guest-js/package.json`
 - `integrations/common/pyproject.toml`
 - `integrations/langchain/pyproject.toml`
@@ -53,7 +52,7 @@ Le script `bump_version.py` met à jour automatiquement :
 
 ### 2. Update CHANGELOG.md
 
-Ajouter une section pour la nouvelle version avec les changements.
+Add a section for the new version with its changes.
 
 ### 3. Commit and push (WITHOUT tag)
 
@@ -65,16 +64,16 @@ git push origin main
 
 ### 4. Wait for CI to pass on main
 
-Le CI (`ci.yml`) valide le commit de release : tests, lint, security, conformance,
-perf smoke. **Ne pas créer le tag tant que le CI n'est pas vert.**
+CI (`ci.yml`) validates the release commit: tests, lint, security, conformance,
+perf smoke. **Do not create the tag until CI is green.**
 
 ```bash
-# Surveiller le CI
+# Watch CI
 gh run watch $(gh run list --branch main --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
-Si le CI échoue, corriger et re-pusher. Aucun tag n'existe donc aucun rollback
-de version n'est nécessaire.
+If CI fails, fix and push again. No tag exists yet, so no version rollback is
+needed.
 
 ### 5. Create and push the tag (after CI is green)
 
@@ -83,42 +82,42 @@ git tag -a vX.Y.Z -m "vX.Y.Z - Description"
 git push origin vX.Y.Z
 ```
 
-Le push Git direct reste le chemin principal : il déclenche automatiquement
-`release.yml` sur le nouveau tag.
+Direct git push remains the primary path: it automatically triggers
+`release.yml` on the new tag.
 
-#### Solution de repli depuis GitHub Actions
+#### Fallback from GitHub Actions
 
-Certaines sessions distantes peuvent pousser une branche mais pas un ref de
-tag. Dans ce cas, utiliser le workflow permanent `tag-release.yml` :
+Some remote sessions can push a branch but not a tag ref. In that case, use
+the permanent `tag-release.yml` workflow:
 
-1. Ouvrir **Actions → Create Release Tag → Run workflow**.
-2. Sélectionner `develop` ou `main` comme branche du workflow.
-3. Saisir le tag `vX.Y.Z`, le SHA complet du commit dont le CI est vert sur
-   `main`, et le message du tag annoté. Pour le train `velesdb-memory`, voir la
-   sous-section suivante : même workflow, tag et branche différents.
+1. Open **Actions → Create Release Tag → Run workflow**.
+2. Select `develop` or `main` as the workflow branch.
+3. Enter the `vX.Y.Z` tag, the full SHA of the CI-green commit on `main`, and
+   the annotated tag message. For the `velesdb-memory` train, see the next
+   subsection: same workflow, different tag and branch.
 
-Le workflow refuse un SHA qui n'est pas dans l'historique de `main` et un tag
-qui existe déjà. Après avoir poussé le tag, il déclenche explicitement
-`release.yml` sur ce tag : un tag créé avec `GITHUB_TOKEN` ne déclenche pas à
-lui seul un workflow écoutant `push.tags`.
+The workflow refuses a SHA that is not in `main`'s history and a tag that
+already exists. After pushing the tag it explicitly triggers `release.yml` on
+it: a tag created with `GITHUB_TOKEN` does not by itself trigger a workflow
+listening on `push.tags`.
 
-Si le tag a été créé mais que ce second déclenchement échoue, relancer
-manuellement **Release** avec le tag comme ref et `X.Y.Z` comme version. Ne pas
-recréer ni déplacer le tag.
+If the tag was created but that second trigger fails, re-run **Release**
+manually with the tag as ref and `X.Y.Z` as the version. Do not recreate or
+move the tag.
 
-#### Le même repli pour le train `velesdb-memory`
+#### The same fallback for the `velesdb-memory` train
 
-`velesdb-memory` suit sa propre cadence 0.x et se tague sur `develop`, pas sur
-`main`. Le même workflow **Create Release Tag** couvre ce train : saisir
-`velesdb-memory-vX.Y.Z` comme tag et le SHA complet du commit dont le CI est
-vert sur `develop`.
+`velesdb-memory` follows its own 0.x cadence and is tagged on `develop`, not
+`main`. The same **Create Release Tag** workflow covers this train: enter
+`velesdb-memory-vX.Y.Z` as the tag and the full SHA of the CI-green commit on
+`develop`.
 
-Le train est déduit du tag, pas d'un champ supplémentaire : un tag `vX.Y.Z` est
-vérifié contre `origin/main`, un tag `velesdb-memory-vX.Y.Z` contre
-`origin/develop`. Une paire tag/branche incohérente est donc impossible à
-saisir. Après le push du tag, le workflow déclenche `release-memory.yml` sur ce
-tag, puis `release-mcpb.yml` sauf si la version est une pre-release — ce
-workflow-là n'écoute que les tags de version finale.
+The train is inferred from the tag, not from an extra field: a `vX.Y.Z` tag is
+checked against `origin/main`, a `velesdb-memory-vX.Y.Z` tag against
+`origin/develop` — an inconsistent tag/branch pair is impossible to enter.
+After the tag push, the workflow triggers `release-memory.yml` on it, then
+`release-mcpb.yml` unless the version is a pre-release — that workflow only
+listens to final-version tags.
 
 ### 6. The `release.yml` workflow publishes automatically
 
@@ -128,15 +127,15 @@ workflow-là n'écoute que les tags de version finale.
 | **crates.io** | velesdb-core, velesdb-cli, velesdb-server, velesdb-migrate, velesdb-mobile, tauri-plugin-velesdb |
 | **crates.io (independent `velesdb-memory-v*` tag)** | velesdb-memory (0.1.0 cadence, via `release-memory.yml`) |
 | **PyPI** | velesdb |
-| **npm** | @wiscale/velesdb-wasm, @wiscale/velesdb-sdk, @wiscale/velesdb-memory-node (napi prebuilds; publish job TBD, see note) |
+| **npm** | @wiscale/velesdb-wasm, @wiscale/velesdb-sdk, @wiscale/velesdb-memory-node (napi prebuilds; `publish-npm` job in `release-memory.yml`) |
 
 ### 7. Verify the deployment
 
-- GitHub Actions : https://github.com/cyberlife-coder/VelesDB/actions
-- GitHub Releases : https://github.com/cyberlife-coder/VelesDB/releases
-- crates.io : https://crates.io/crates/velesdb-core
-- PyPI : https://pypi.org/project/velesdb/
-- npm : https://www.npmjs.com/package/@wiscale/velesdb-wasm
+- GitHub Actions: https://github.com/cyberlife-coder/VelesDB/actions
+- GitHub Releases: https://github.com/cyberlife-coder/VelesDB/releases
+- crates.io: https://crates.io/crates/velesdb-core
+- PyPI: https://pypi.org/project/velesdb/
+- npm: https://www.npmjs.com/package/@wiscale/velesdb-wasm
 
 ### 8. Merge `main` back into `develop`
 
@@ -164,38 +163,39 @@ the conflicts instead: taking `main`'s tree would drop those commits.
 
 ## Pre-releases
 
-Pour une pre-release (beta, rc) :
+For a pre-release (beta, rc):
 
 ```bash
 git tag vX.Y.Z-beta.1
 git push origin vX.Y.Z-beta.1
 ```
 
-Le workflow détecte automatiquement les pre-releases et :
-- Crée une GitHub Release marquée "Pre-release"
-- **Ne publie PAS** sur crates.io/PyPI/npm
+The workflow automatically detects pre-releases and:
+- Creates a GitHub Release marked "Pre-release"
+- Does **NOT** publish to crates.io/PyPI/npm
 
 ## Required Secrets
 
 | Secret | Usage |
 |--------|-------|
-| `CARGO_REGISTRY_TOKEN` | Publication crates.io |
-| `NPM_TOKEN` | Publication npm |
-| `PYPI_API_TOKEN` | Publication PyPI (ou trusted publishing) |
+| `CARGO_REGISTRY_TOKEN` | crates.io publication |
+| `NPM_TOKEN` | npm publication |
+| `PYPI_API_TOKEN` | PyPI publication (or trusted publishing) |
 
 ## Troubleshooting
 
 ### The workflow does not trigger
 
-Vérifier que le tag suit le format `v[0-9]+.[0-9]+.[0-9]+` :
+Check that the tag follows the `v[0-9]+.[0-9]+.[0-9]+` format:
 - ✅ `vX.Y.Z`
 - ✅ `vX.Y.Z-beta.1`
-- ❌ `X.Y.Z` (pas de "v")
-- ❌ `vX.Y` (version incomplète)
+- ❌ `X.Y.Z` (no "v")
+- ❌ `vX.Y` (incomplete version)
 
 ### Version already published
 
-Si une version existe déjà sur crates.io/PyPI/npm, le workflow skip cette étape avec un message `⏭️ already published`.
+If a version already exists on crates.io/PyPI/npm, the workflow skips that step
+with a `⏭️ already published` message.
 
 ### Force-update a tag
 
@@ -207,9 +207,9 @@ git push origin vX.Y.Z --force
 
 ## Manual Workflow
 
-Pour déclencher manuellement une release sans tag :
+To trigger a release manually without a tag:
 
-1. Aller sur GitHub Actions
-2. Sélectionner "Release"
-3. Cliquer "Run workflow"
-4. Entrer la version (ex: `0.8.6`)
+1. Go to GitHub Actions
+2. Select "Release"
+3. Click "Run workflow"
+4. Enter the version (e.g. `0.8.6`)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-VelesDB-Core is a **Cargo workspace** containing ten crates. It is the open-source engine for the VelesDB vector database combining Vector + Graph + ColumnStore in a single engine.
+VelesDB-Core is a **Cargo workspace** containing eleven crates. It is the open-source engine for the VelesDB vector database combining Vector + Graph + ColumnStore in a single engine.
 
 ```
 velesdb-core/
@@ -92,7 +92,7 @@ velesdb-core/
 │   │       ├── collection.rs  # VelesCollection (full search API)
 │   │       └── graph.rs       # MobileGraphStore (core GraphCollection handle)
 │   │
-│   ├── velesdb-migrate/       # Data migration from 12 sources
+│   ├── velesdb-migrate/       # Data migration from 10 sources
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │
@@ -175,7 +175,7 @@ Command-line interface with:
 ### `velesdb-python`
 
 Python bindings via PyO3:
-- `Database`, `VelesDatabase`, `Collection`, `GraphCollection`, `AgentMemory` classes
+- `Database`, `Collection`, `GraphCollection`, `AgentMemory` classes
 - `FusionStrategy` pyclass (extracted to `fusion.rs`)
 - NumPy array support (float32, float64)
 - Parallel BFS with GIL release (`py.allow_threads`)
