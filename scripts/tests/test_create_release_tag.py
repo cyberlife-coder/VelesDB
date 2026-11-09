@@ -233,7 +233,7 @@ class ReleaseTagWorkflowContractTests(unittest.TestCase):
     def test_release_guide_keeps_direct_push_primary_and_documents_fallback(self) -> None:
         self.assertIn("git push origin vX.Y.Z", self.release_doc)
         self.assertIn("tag-release.yml", self.release_doc)
-        self.assertIn("solution de repli", self.release_doc.lower())
+        self.assertIn("fallback", self.release_doc.lower())
         # The regeneration command's load-bearing part: the env var is what
         # makes generate_openapi_spec_files WRITE the snapshots rather than
         # only compare — without it the release leaves the spec at the old
