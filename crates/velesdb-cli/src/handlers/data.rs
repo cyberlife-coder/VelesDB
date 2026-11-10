@@ -9,11 +9,14 @@ use crate::cli_types::MetricArg;
 use crate::cli_types::StorageModeArg;
 use crate::import;
 
-/// Handles the `export` subcommand: exports a vector collection to JSON.
+/// Handles the `export` subcommand: exports a vector collection to
+/// JSON / JSONL / CSV, optionally filtered by a `--where` VelesQL condition.
 pub fn handle_export(
     path: &Path,
     collection: &str,
     output: Option<PathBuf>,
+    format: Option<crate::cli_types::ExportFormatArg>,
+    where_clause: Option<String>,
     include_vectors: bool,
 ) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
@@ -24,56 +27,50 @@ pub fn handle_export(
         )
     })?;
 
-    let cfg = col.config();
-    let output_path = output.unwrap_or_else(|| PathBuf::from(format!("{collection}.json")));
+    let format = format.unwrap_or_else(|| infer_export_format(output.as_deref()));
+    let output_path =
+        output.unwrap_or_else(|| PathBuf::from(format!("{collection}.{}", format.extension())));
+    let filter = where_clause
+        .as_deref()
+        .map(crate::export::parse_where_filter)
+        .transpose()?;
 
-    println!(
-        "Exporting {} records from {}...",
-        cfg.point_count,
-        collection.green()
-    );
+    println!("Exporting records from {}...", collection.green());
 
-    let records = collect_export_records(&col, include_vectors);
-    std::fs::write(&output_path, serde_json::to_string_pretty(&records)?)?;
+    let count = crate::export::export_collection(
+        &col,
+        &output_path,
+        format,
+        include_vectors,
+        filter.as_ref(),
+    )?;
     println!(
         "{} Exported {} records to {}",
         "\u{2713}".green(),
-        records.len(),
+        count,
         output_path.display().to_string().green()
     );
     Ok(())
 }
 
-/// Collects all records from a vector collection for export.
+/// Infers the export format from the `--output` file extension.
 ///
-/// IDs come from the live collection (`all_ids`) rather than an assumed
-/// contiguous `1..=point_count` range: sparse or non-sequential IDs (explicit
-/// ids passed at upsert, or gaps left by deletions) would otherwise be exported
-/// as missing records — silent data loss.
-fn collect_export_records(
-    col: &velesdb_core::VectorCollection,
-    include_vectors: bool,
-) -> Vec<serde_json::Value> {
-    let all_ids = col.all_point_ids();
-    let mut records = Vec::with_capacity(all_ids.len());
-    let batch_size = 1000;
+/// `.jsonl`/`.ndjson` → JSONL, `.csv` → CSV, anything else → JSON
+/// (a missing or exotic extension must not surprise: JSON is the format
+/// exports have always produced).
+fn infer_export_format(output: Option<&Path>) -> crate::cli_types::ExportFormatArg {
+    use crate::cli_types::ExportFormatArg;
 
-    for ids in all_ids.chunks(batch_size) {
-        let points = col.get(ids);
-
-        for point in points.into_iter().flatten() {
-            let mut record = serde_json::Map::new();
-            record.insert("id".to_string(), serde_json::json!(point.id));
-            if include_vectors {
-                record.insert("vector".to_string(), serde_json::json!(point.vector));
-            }
-            if let Some(payload) = &point.payload {
-                record.insert("payload".to_string(), payload.clone());
-            }
-            records.push(serde_json::Value::Object(record));
-        }
+    match output
+        .and_then(|p| p.extension())
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .as_deref()
+    {
+        Some("jsonl" | "ndjson") => ExportFormatArg::Jsonl,
+        Some("csv") => ExportFormatArg::Csv,
+        _ => ExportFormatArg::Json,
     }
-    records
 }
 
 /// Handles the `import` subcommand: imports data from CSV or JSONL.

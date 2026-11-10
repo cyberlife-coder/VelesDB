@@ -7,7 +7,7 @@ use clap::{Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
-use crate::cli_types::{IndexTypeArg, MetricArg, StorageModeArg};
+use crate::cli_types::{ExportFormatArg, IndexTypeArg, MetricArg, StorageModeArg};
 use crate::graph;
 
 /// Top-level CLI commands for VelesDB CLI - High-performance vector database.
@@ -283,7 +283,7 @@ pub enum DataCommands {
         progress: bool,
     },
 
-    /// Export a collection to JSON file
+    /// Export a collection to a JSON, JSONL or CSV file
     Export {
         /// Path to database directory
         path: PathBuf,
@@ -291,9 +291,17 @@ pub enum DataCommands {
         /// Collection name
         collection: String,
 
-        /// Output file path
+        /// Output file path (default: `<collection>.<format-ext>`)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Output file format (default: inferred from `--output` extension, else json)
+        #[arg(long, value_enum)]
+        format: Option<ExportFormatArg>,
+
+        /// VelesQL filter condition applied to exported rows (e.g. "cat = 'tech' AND id < 10")
+        #[arg(long = "where")]
+        where_clause: Option<String>,
 
         /// Include vectors in export (pass `--include-vectors false` to omit them)
         #[arg(
