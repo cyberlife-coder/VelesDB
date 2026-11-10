@@ -32,6 +32,10 @@ pub(crate) fn try_handle(
     let cmd = parts.first()?.to_lowercase();
     Some(match cmd.as_str() {
         "\\history" | ".history" => cmd_history(rl),
+        "\\attach" | ".attach" => cmd_attach(state, &parts),
+        "\\detach" | ".detach" => cmd_detach(state, &parts),
+        "\\databases" | ".databases" => cmd_databases(state),
+        "\\connect" | ".connect" => cmd_connect(state, config, &parts),
         "\\save" | ".save" => cmd_save(state, &parts),
         "\\load" | ".load" => cmd_load(state, rl, &parts, config),
         "\\watch" | ".watch" => cmd_watch(state, rl, &parts, config),
@@ -412,6 +416,120 @@ fn pipe_to(program: &str, args: &[&str], text: &str) -> bool {
         let _ = stdin.write_all(text.as_bytes());
     }
     child.wait().map(|status| status.success()).unwrap_or(false)
+}
+
+// ============================================================================
+// \attach / \detach / \databases / \connect — multi-database sessions
+// ============================================================================
+
+/// `\attach <db_path> [alias]` opens another database in the same session;
+/// the alias defaults to the directory's file stem.
+fn cmd_attach(state: &mut ReplState, parts: &[&str]) -> CommandResult {
+    let Some(path) = parts.get(1) else {
+        println!("Usage: \\attach <db_path> [alias]\n");
+        return CommandResult::Continue;
+    };
+    let alias = parts.get(2).map_or_else(
+        || {
+            Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("db")
+                .to_string()
+        },
+        |s| s.to_string(),
+    );
+    if state.databases.contains_key(&alias) {
+        return CommandResult::Error(format!("Alias '{alias}' is already attached"));
+    }
+    match crate::helpers::open_database(Path::new(path)) {
+        Ok(db) => {
+            state.databases.insert(
+                alias.clone(),
+                crate::repl::AttachedDb {
+                    db,
+                    path: PathBuf::from(path),
+                },
+            );
+            println!(
+                "{} Attached {} as {}\n",
+                "\u{2713}".green(),
+                path.green(),
+                alias.cyan()
+            );
+            CommandResult::Continue
+        }
+        Err(e) => CommandResult::Error(format!("Cannot open {path}: {e}")),
+    }
+}
+
+/// `\detach <alias>` closes an attached database — everything but the
+/// active one and `main` may be detached.
+fn cmd_detach(state: &mut ReplState, parts: &[&str]) -> CommandResult {
+    let Some(alias) = parts.get(1) else {
+        println!("Usage: \\detach <alias>\n");
+        return CommandResult::Continue;
+    };
+    if *alias == state.active {
+        return CommandResult::Error(format!(
+            "Cannot detach the active database '{alias}' — \\connect elsewhere first"
+        ));
+    }
+    match state.databases.remove(*alias) {
+        Some(_) => {
+            println!("Detached {}\n", alias.cyan());
+            CommandResult::Continue
+        }
+        None => CommandResult::Error(format!("No database attached as '{alias}'")),
+    }
+}
+
+/// `\databases` lists every attached alias, its path, and which is active.
+fn cmd_databases(state: &ReplState) -> CommandResult {
+    println!("\n{}", "Attached databases".bold().underline());
+    for (alias, attached) in &state.databases {
+        let marker = if *alias == state.active {
+            " (active)".green().to_string()
+        } else {
+            String::new()
+        };
+        println!(
+            "  {} -> {}{}",
+            alias.cyan(),
+            attached.path.display(),
+            marker
+        );
+    }
+    println!();
+    CommandResult::Continue
+}
+
+/// `\connect <alias>` switches the database every command runs on. The
+/// active collection is cleared — it belonged to the previous database.
+fn cmd_connect(state: &mut ReplState, config: &mut ReplConfig, parts: &[&str]) -> CommandResult {
+    let Some(alias) = parts.get(1) else {
+        println!(
+            "Connected to: {} ({})\n",
+            state.active.cyan(),
+            state.databases[&state.active].path.display()
+        );
+        return CommandResult::Continue;
+    };
+    match state.databases.get(*alias) {
+        Some(attached) => {
+            state.active = (*alias).to_string();
+            config.session.use_collection(None);
+            println!(
+                "Connected to {} ({})\n",
+                alias.cyan(),
+                attached.path.display()
+            );
+            CommandResult::Continue
+        }
+        None => CommandResult::Error(format!(
+            "No database attached as '{alias}' — \\attach <path> {alias} first"
+        )),
+    }
 }
 
 #[cfg(test)]

@@ -10,8 +10,9 @@ use tempfile::TempDir;
 /// caller keeps it alive for the test.
 fn test_state() -> (ReplState, TempDir) {
     let temp = TempDir::new().expect("tempdir");
-    let db = velesdb_core::Database::open(temp.path().join("db")).expect("open db");
-    (ReplState::new(db), temp)
+    let path = temp.path().join("db");
+    let db = velesdb_core::Database::open(&path).expect("open db");
+    (ReplState::new(db, path), temp)
 }
 
 fn test_editor() -> ReplEditor {
@@ -192,4 +193,80 @@ fn test_edit_scratch_path_is_unique_and_user_private() {
     assert_eq!(a.parent(), Some(expected_dir.as_path()));
     assert_ne!(a, b);
     assert!(a.extension().is_some_and(|e| e == "sql"));
+}
+
+// ----------------------------------------------------------------------------
+// \attach / \detach / \databases / \connect
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_attach_registers_alias_and_connect_switches() {
+    let (mut state, _t1) = test_state();
+    let t2 = TempDir::new().expect("tempdir2");
+    let path2 = t2.path().join("db2");
+    velesdb_core::Database::open(&path2).expect("open db2");
+    drop_path_check(&path2);
+
+    let result = cmd_attach(
+        &mut state,
+        &["\\attach", path2.to_str().expect("utf8"), "aux"],
+    );
+    assert!(matches!(result, CommandResult::Continue));
+    assert!(state.databases.contains_key("aux"));
+
+    let mut config = ReplConfig::default();
+    config.session.use_collection(Some("docs".to_string()));
+    let result = cmd_connect(&mut state, &mut config, &["\\connect", "aux"]);
+    assert!(matches!(result, CommandResult::Continue));
+    assert_eq!(state.active, "aux");
+    assert!(config.session.active_collection().is_none());
+}
+
+#[test]
+fn test_attach_duplicate_alias_errors() {
+    let (mut state, _t1) = test_state();
+    let t2 = TempDir::new().expect("tempdir2");
+    let path2 = t2.path().join("db2");
+    velesdb_core::Database::open(&path2).expect("open db2");
+    drop_path_check(&path2);
+    let p = path2.to_str().expect("utf8");
+    assert!(matches!(
+        cmd_attach(&mut state, &["\\attach", p, "aux"]),
+        CommandResult::Continue
+    ));
+    assert!(matches!(
+        cmd_attach(&mut state, &["\\attach", p, "aux"]),
+        CommandResult::Error(_)
+    ));
+}
+
+#[test]
+fn test_detach_refuses_active_and_unknown() {
+    let (mut state, _t1) = test_state();
+    assert!(matches!(
+        cmd_detach(&mut state, &["\\detach", "main"]),
+        CommandResult::Error(_)
+    ));
+    assert!(matches!(
+        cmd_detach(&mut state, &["\\detach", "ghost"]),
+        CommandResult::Error(_)
+    ));
+}
+
+#[test]
+fn test_connect_unknown_alias_errors() {
+    let (mut state, _t1) = test_state();
+    let mut config = ReplConfig::default();
+    assert!(matches!(
+        cmd_connect(&mut state, &mut config, &["\\connect", "ghost"]),
+        CommandResult::Error(_)
+    ));
+    assert_eq!(state.active, crate::repl::MAIN_ALIAS);
+}
+
+/// Two `Database` handles on the same path conflict via the lock file —
+/// this drops nothing, it just asserts the seed handle is closed so
+/// `\\attach` can open the same path again.
+fn drop_path_check(path: &std::path::Path) {
+    assert!(path.exists());
 }

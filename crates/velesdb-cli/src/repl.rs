@@ -76,14 +76,25 @@ pub(crate) struct ReplHelper;
 /// (`\history`, `\load`, `\edit`) can drive the same editor.
 pub(crate) type ReplEditor = Editor<ReplHelper, DefaultHistory>;
 
+/// An attached database handle: the `Database` plus the path it was
+/// opened from (shown by `\databases`).
+pub(crate) struct AttachedDb {
+    pub(crate) db: Database,
+    pub(crate) path: PathBuf,
+}
+
 /// Mutable per-session state the daily-driver meta commands operate on:
-/// the open database handle, the last submitted query (`\edit`, `\watch`,
-/// `\save`) and the last successful result (`\save --result`, `\copy`).
+/// the attached database handles (`\attach`/`\connect`/`\detach`),
+/// the last submitted query (`\edit`, `\watch`, `\save`) and the last
+/// successful result (`\save --result`, `\copy`).
 ///
 /// `last_query` is recorded even when the query fails — fixing a failed
 /// query is exactly what `\edit` is for.
 pub(crate) struct ReplState {
-    db: Database,
+    /// Attached databases by alias; `"main"` is the database the REPL
+    /// was started on. `active` names the alias every command runs on.
+    pub(crate) databases: std::collections::BTreeMap<String, AttachedDb>,
+    pub(crate) active: String,
     pub(crate) last_query: Option<String>,
     pub(crate) last_result: Option<QueryResult>,
     /// Depth of nested `\load` script execution; a script that (transitively)
@@ -91,20 +102,27 @@ pub(crate) struct ReplState {
     pub(crate) load_depth: u8,
 }
 
+/// The alias the database the REPL opened on is registered under.
+pub(crate) const MAIN_ALIAS: &str = "main";
+
 impl ReplState {
-    pub(crate) fn new(db: Database) -> Self {
+    pub(crate) fn new(db: Database, path: PathBuf) -> Self {
+        let mut databases = std::collections::BTreeMap::new();
+        databases.insert(MAIN_ALIAS.to_string(), AttachedDb { db, path });
         Self {
-            db,
+            databases,
+            active: MAIN_ALIAS.to_string(),
             last_query: None,
             last_result: None,
             load_depth: 0,
         }
     }
 
-    /// The database commands run against (the only handle until
-    /// multi-database attach lands).
+    /// The database commands run against — the `\connect`-selected alias.
     pub(crate) fn current(&self) -> &Database {
-        &self.db
+        // `active` is only ever set to a key this map holds (\attach and
+        // \connect are the single writers), so the lookup cannot miss.
+        &self.databases[&self.active].db
     }
 }
 
@@ -123,7 +141,7 @@ pub fn run(path: PathBuf) -> Result<()> {
     );
 
     let db = crate::helpers::open_database(&path).context("Failed to open database")?;
-    let mut state = ReplState::new(db);
+    let mut state = ReplState::new(db, path);
 
     let mut rl: ReplEditor = Editor::new()?;
     rl.set_helper(Some(ReplHelper));

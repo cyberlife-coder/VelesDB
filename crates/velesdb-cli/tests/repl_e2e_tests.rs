@@ -613,3 +613,37 @@ fn test_repl_cli_alias_velesql_unaffected() {
     // when reached through SELECT — only a bare first word aliases.
     repl_run(&db_path, &["SELECT * FROM vecs LIMIT 1"]).stdout(predicate::str::contains("1 rows"));
 }
+
+// ============================================================================
+// Multi-database attach (#2727 PR2): \attach, \databases, \connect, \detach
+// ============================================================================
+
+#[test]
+fn test_repl_attach_connect_switches_database() {
+    let (db_path1, _t1) = setup_vector("main_col", 4);
+    let (db_path2, _t2) = setup_vector("aux_col", 4);
+
+    repl_run(
+        &db_path1,
+        &[
+            &format!("\\attach {} aux", db_path2.display()),
+            "\\databases",
+            "\\connect aux",
+            ".collections",
+            "\\connect main",
+            ".collections",
+        ],
+    )
+    .stdout(predicate::str::contains("Attached"))
+    .stdout(predicate::str::contains("(active)"))
+    .stdout(predicate::str::contains("aux_col"))
+    .stdout(predicate::str::contains("main_col"));
+}
+
+#[test]
+fn test_repl_detach_active_is_refused() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &["\\detach main"]).stdout(predicate::str::contains(
+        "Cannot detach the active database",
+    ));
+}
