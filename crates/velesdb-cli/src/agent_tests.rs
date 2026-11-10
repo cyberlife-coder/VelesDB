@@ -63,3 +63,22 @@ fn report_json_carries_answer_backend_sources_iterations() {
     assert!(v.get("sources").is_some());
     assert!(v.get("iterations").is_some());
 }
+
+#[test]
+fn identifier_arguments_cannot_smuggle_velesql() {
+    let (_dir, db) = demo_db();
+    for args in [
+        "docs;DROP content x",
+        "docs content,secret x",
+        "docs* content x",
+        "docs/**/ content x",
+        "1docs content x",
+    ] {
+        for tool in ["search", "hybrid", "explain"] {
+            let e = tools::call(&db, tool, args).unwrap_err();
+            assert!(e.contains("invalid"), "{tool}({args}) -> {e}");
+        }
+    }
+    let e = tools::call(&db, "aggregate", "docs a,b").unwrap_err();
+    assert!(e.contains("invalid field"), "{e}");
+}
