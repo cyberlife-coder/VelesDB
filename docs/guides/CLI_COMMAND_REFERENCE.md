@@ -541,10 +541,12 @@ velesdb agent ./data --format json "find documents about rust"
 Backend: if an Ollama instance answers `GET $VELESDB_AGENT_URL/api/tags`
 (default `http://127.0.0.1:11434`), reasoning delegates to
 `$VELESDB_AGENT_MODEL` (default `qwen3:4b`) — same extractor-style contract
-`velesdb-memory` uses. When no LLM is reachable the agent runs a documented
-deterministic offline router over the same tools and says so in the transcript.
-No LLM is ever required; `--format json` prints the full transcript for
-scripting.
+`velesdb-memory` uses. When the LLM is unusable — unreachable, timed out, a
+non-2xx answer (404 for an unpulled model, 500…), at the probe or mid-loop — the
+agent runs a documented deterministic offline router over the same tools and
+prints a `notice:` line with the cause (the JSON `fallback` field; `null` when
+the LLM answered). No LLM is ever required; `--format json` prints the full
+transcript for scripting.
 
 ---
 
