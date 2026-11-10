@@ -72,20 +72,42 @@ fn describe(db: &Database, name: &str) -> Result<String, String> {
     }
 }
 
+/// Arguments come from the LLM and are interpolated into a statement —
+/// only plain identifiers are allowed through. `;`, quotes, `*`, `,`,
+/// spaces and comments are refused before they can carry VelesQL syntax.
+fn ident<'a>(what: &str, s: &'a str) -> Result<&'a str, String> {
+    let mut chars = s.chars();
+    let ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if ok {
+        Ok(s)
+    } else {
+        Err(format!(
+            "invalid {what} '{s}': expected [A-Za-z_][A-Za-z0-9_]*"
+        ))
+    }
+}
+
+/// `SELECT * WHERE <field> MATCH '<term>'` shared by search/hybrid/explain —
+/// one builder so the identifier check cannot drift between callers.
+fn select_match(tool: &str, a: &[&str]) -> Result<String, String> {
+    if a.len() < 3 {
+        return Err(format!("{tool} needs <collection> <field> <term>"));
+    }
+    let coll = ident("collection", a[0])?;
+    let field = ident("field", a[1])?;
+    let term = a[2..].join(" ").replace('\'', "''");
+    Ok(format!(
+        "SELECT * FROM {coll} WHERE {field} MATCH '{term}' LIMIT 5"
+    ))
+}
+
 /// Text search. `hybrid` is documented honestly: without an embedder the
 /// agent can only run the MATCH branch, and the observation says so.
 fn query_tool(db: &Database, a: &[&str], hybrid: bool) -> Result<String, String> {
-    if a.len() < 3 {
-        return Err(format!(
-            "{} needs <collection> <field> <term>",
-            if hybrid { "hybrid" } else { "search" }
-        ));
-    }
-    let (coll, field, term) = (a[0], a[1], a[2..].join(" "));
-    let sql = format!(
-        "SELECT * FROM {coll} WHERE {field} MATCH '{}' LIMIT 5",
-        term.replace('\'', "''")
-    );
+    let sql = select_match(if hybrid { "hybrid" } else { "search" }, a)?;
     let note = if hybrid {
         "hybrid requested; no embedder — MATCH branch only. "
     } else {
@@ -95,14 +117,7 @@ fn query_tool(db: &Database, a: &[&str], hybrid: bool) -> Result<String, String>
 }
 
 fn explain(db: &Database, a: &[&str]) -> Result<String, String> {
-    if a.len() < 3 {
-        return Err("explain needs <collection> <field> <term>".to_string());
-    }
-    let (coll, field, term) = (a[0], a[1], a[2..].join(" "));
-    let sql = format!(
-        "SELECT * FROM {coll} WHERE {field} MATCH '{}' LIMIT 5",
-        term.replace('\'', "''")
-    );
+    let sql = select_match("explain", a)?;
     let parsed = velesdb_core::velesql::Parser::parse(&sql).map_err(|e| format!("parse: {e}"))?;
     let plan = db
         .explain_query(&parsed)
@@ -114,7 +129,9 @@ fn aggregate(db: &Database, a: &[&str]) -> Result<String, String> {
     if a.len() < 2 {
         return Err("aggregate needs <collection> <field>".to_string());
     }
-    let sql = format!("SELECT {}, COUNT(*) FROM {} GROUP BY {}", a[1], a[0], a[1]);
+    let coll = ident("collection", a[0])?;
+    let field = ident("field", a[1])?;
+    let sql = format!("SELECT {field}, COUNT(*) FROM {coll} GROUP BY {field}");
     run_sql(db, &sql)
 }
 

@@ -63,3 +63,28 @@ fn report_json_carries_answer_backend_sources_iterations() {
     assert!(v.get("sources").is_some());
     assert!(v.get("iterations").is_some());
 }
+
+#[test]
+fn tool_identifier_arguments_cannot_smuggle_velesql() {
+    let (_dir, db) = demo_db();
+    // Bad input in the collection slot — all four SQL-building tools refuse.
+    for args in [
+        "docs;DROP content x",
+        "docs' content x",
+        "docs/**/ content x",
+        "docs,tmp content x",
+        "1docs content x",
+    ] {
+        for tool in ["search", "hybrid", "explain", "aggregate"] {
+            let e = tools::call(&db, tool, args).unwrap_err();
+            assert!(e.contains("invalid"), "{tool}({args}) -> {e}");
+        }
+    }
+    // Bad input in the field slot refuses too.
+    for args in ["docs content;DROP x", "docs a,b x"] {
+        for tool in ["search", "hybrid", "explain", "aggregate"] {
+            let e = tools::call(&db, tool, args).unwrap_err();
+            assert!(e.contains("invalid"), "{tool}({args}) -> {e}");
+        }
+    }
+}
