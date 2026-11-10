@@ -6944,10 +6944,12 @@ dependencies = [
  "indicatif",
  "instant",
  "predicates",
+ "reqwest",
  "rustyline",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "velesdb-core",
 ]
 

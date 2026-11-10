@@ -70,7 +70,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         // Advanced search commands
         ".sparse-search" => repl_search_cmds::cmd_sparse_search(db, &parts),
         ".hybrid-sparse" => repl_search_cmds::cmd_hybrid_sparse(db, &parts),
-        ".agent" => repl_search_cmds::cmd_agent(&parts),
+        ".agent" | "\\agent" => repl_search_cmds::cmd_agent(db, config, &parts),
         ".guardrails" => repl_search_cmds::cmd_guardrails(),
         // Graph commands
         ".graph" => repl_graph_cmds::cmd_graph(db, &parts),

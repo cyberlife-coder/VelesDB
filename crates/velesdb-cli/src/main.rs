@@ -11,6 +11,8 @@
 //!   `velesdb query ./my_database "SELECT * FROM docs LIMIT 10"`
 //!   `velesdb import ./data.jsonl --collection docs`
 
+#[allow(clippy::pedantic)]
+mod agent;
 mod cli_types; // pedantic-clean ✓
 #[allow(clippy::pedantic)]
 mod collection_helpers;
@@ -143,6 +145,20 @@ fn dispatch(command: Commands) -> anyhow::Result<()> {
         Commands::QueryCmd { action } => dispatch_query_cmd(action),
         Commands::Graph { action } => graph::handle(action),
         Commands::Index { action } => handlers::handle_index(action),
+        Commands::Agent {
+            path,
+            question,
+            format,
+        } => {
+            let db = helpers::open_database(&path)?;
+            let report = agent::run(&db, &question.join(" "));
+            if format == "json" {
+                println!("{}", agent::report_json(&report));
+            } else {
+                agent::print_report(&report);
+            }
+            Ok(())
+        }
     }
 }
 
