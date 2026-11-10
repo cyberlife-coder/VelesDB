@@ -94,9 +94,14 @@ fn handle_index_drop(
         .get_vector_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
 
-    let dropped = col
-        .drop_index(label, property)
-        .map_err(|e| anyhow::anyhow!("Drop index failed: {e}"))?;
+    // `index list` reports btree payload indexes under the `secondary` label;
+    // `drop_index` only covers property and range indexes, so route those here.
+    let dropped = if label == "secondary" {
+        col.drop_secondary_index(property)
+    } else {
+        col.drop_index(label, property)
+            .map_err(|e| anyhow::anyhow!("Drop index failed: {e}"))?
+    };
 
     if dropped {
         println!(

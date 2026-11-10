@@ -47,12 +47,20 @@ pub struct AgentReport {
 }
 
 /// Run the agent over `db`. Prefers the Ollama backend when reachable,
-/// otherwise the deterministic offline router. Never fails because no
-/// LLM is installed.
+/// otherwise the deterministic offline router. A reachable-but-broken
+/// LLM (model not pulled, dropped connection) also falls back to the
+/// router — the run never fails because of the LLM.
 pub fn run(db: &Database, question: &str) -> AgentReport {
-    match llm::backend() {
-        Some(backend) => llm::run_loop(db, question, &backend),
-        None => offline::run(db, question),
+    let Some(backend) = llm::backend() else {
+        return offline::run(db, question);
+    };
+    match llm::run_loop(db, question, &backend) {
+        Ok(report) => report,
+        Err(why) => {
+            let mut report = offline::run(db, question);
+            report.backend = format!("offline (llm failed: {why})");
+            report
+        }
     }
 }
 
