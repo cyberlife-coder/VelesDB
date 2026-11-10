@@ -184,9 +184,12 @@ fn test_edit_requires_last_query() {
 }
 
 #[test]
-fn test_edit_scratch_path_is_unique_and_in_tmp() {
+fn test_edit_scratch_path_is_unique_and_user_private() {
     let a = edit_scratch_path();
     let b = edit_scratch_path();
-    assert!(a.starts_with(std::env::temp_dir()));
+    // Not in the shared temp dir — next to the persisted history file.
+    let expected_dir = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    assert_eq!(a.parent(), Some(expected_dir.as_path()));
     assert_ne!(a, b);
+    assert!(a.extension().is_some_and(|e| e == "sql"));
 }

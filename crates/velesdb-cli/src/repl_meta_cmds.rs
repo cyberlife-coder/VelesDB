@@ -250,13 +250,18 @@ fn cmd_edit(state: &mut ReplState, rl: &mut ReplEditor, config: &mut ReplConfig)
 }
 
 /// Unique scratch file for `\edit` (pid + timestamp — no tempfile dep for
-/// one file).
+/// one file). It lives in the user-private data directory, next to the
+/// persisted history file — not in the shared `env::temp_dir`, where a
+/// predictable path would make the file (which holds a query) an
+/// InsecureStorage finding.
 fn edit_scratch_path() -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("velesdb_edit_{}_{nanos}.sql", std::process::id()))
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(format!("velesdb_edit_{}_{nanos}.sql", std::process::id()))
 }
 
 /// Runs `$VISUAL`/`$EDITOR` on `file` and waits for it to exit. Unix
