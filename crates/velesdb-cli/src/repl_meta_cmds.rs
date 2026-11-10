@@ -234,6 +234,13 @@ fn cmd_edit(state: &mut ReplState, rl: &mut ReplEditor, config: &mut ReplConfig)
         return CommandResult::Error("No editor configured — set $VISUAL or $EDITOR.".to_string());
     };
     let file = edit_scratch_path();
+    // The user-private data dir may not exist yet on a fresh machine —
+    // create it like the history-file write would have had to.
+    if let Some(parent) = file.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return CommandResult::Error(format!("Cannot create scratch dir: {e}"));
+        }
+    }
     if let Err(e) = std::fs::write(&file, format!("{query}\n")) {
         return CommandResult::Error(format!("Cannot write scratch file: {e}"));
     }
