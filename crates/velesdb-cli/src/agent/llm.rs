@@ -20,14 +20,28 @@ pub fn backend() -> Option<Backend> {
     let url =
         std::env::var("VELESDB_AGENT_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
     let model = std::env::var("VELESDB_AGENT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_millis(400))
-        .build();
-    agent
-        .get(&format!("{url}/api/tags"))
-        .call()
-        .ok()
+    let probe = format!("{url}/api/tags");
+    runtime()?
+        .block_on(async move {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(400))
+                .build()
+                .ok()?
+                .get(&probe)
+                .send()
+                .await
+                .ok()
+        })
         .map(|_| Backend { url, model })
+}
+
+/// One-shot current-thread runtime — same pattern as the update check's
+/// detached thread: the CLI is sync, each call owns its runtime.
+fn runtime() -> Option<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()
 }
 
 /// Classic ReAct prompt: tools contract + strict line format.
@@ -101,20 +115,32 @@ fn step(b: &Backend, system: &str, transcript: &str) -> Result<String, String> {
         "stream": false,
         "options": {"temperature": 0.0, "num_predict": 512},
     });
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(60))
-        .build();
-    let resp = agent
-        .post(&format!("{}/api/generate", b.url))
-        .send_json(&body)
-        .map_err(|e| format!("{e}"))?;
-    let v: serde_json::Value = resp
-        .into_json()
-        .map_err(|e| format!("bad ollama response: {e}"))?;
-    v.get("response")
-        .and_then(|r| r.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| "ollama response had no 'response' field".to_string())
+    let url = format!("{}/api/generate", b.url);
+    let rt = runtime().ok_or_else(|| "agent runtime unavailable".to_string())?;
+    rt.block_on(async move {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| format!("{e}"))?;
+        let resp = client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("{url}: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("{url}: status code {status}"));
+        }
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("bad ollama response: {e}"))?;
+        v.get("response")
+            .and_then(|r| r.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "ollama response had no 'response' field".to_string())
+    })
 }
 
 fn parse_final(step: &str) -> Option<String> {
