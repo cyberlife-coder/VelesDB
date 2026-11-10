@@ -26,6 +26,9 @@ fn open_db_and_test_config(db_path: &Path) -> (Database, ImportConfig) {
     let config = ImportConfig {
         collection: "test".to_string(),
         show_progress: false,
+        // The error-tolerance tests below pin the legacy skip-and-count
+        // behaviour, which now lives behind the flag.
+        continue_on_error: true,
         ..Default::default()
     };
     (db, config)
@@ -97,6 +100,7 @@ fn test_import_stats_records_per_sec() {
         imported: 1000,
         errors: 0,
         duration_ms: 500,
+        ..Default::default()
     };
     assert!((stats.records_per_sec() - 2000.0).abs() < 0.001);
 }
@@ -108,6 +112,7 @@ fn test_import_stats_records_per_sec_zero_duration() {
         imported: 1000,
         errors: 0,
         duration_ms: 0,
+        ..Default::default()
     };
     assert_eq!(stats.records_per_sec(), 0.0);
 }
@@ -555,4 +560,184 @@ fn test_scenario_large_dimension_vectors() {
 
     let col = db.get_vector_collection("gpt_embeddings").unwrap();
     assert_eq!(col.config().dimension, 1536);
+}
+
+// =========================================================================
+// --dry-run / --on-conflict / --continue-on-error / --error-report (#2726)
+// =========================================================================
+
+#[test]
+fn test_import_fails_fast_by_default_and_writes_nothing() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let jsonl_path = dir.path().join("data.jsonl");
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            "invalid json line",
+            r#"{"id": 3, "vector": [0.0, 0.0, 1.0]}"#,
+        ],
+    );
+
+    let db = Database::open(&db_path).unwrap();
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        ..Default::default()
+    };
+    let err = import_jsonl(&db, &jsonl_path, &config)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("record 2"), "got: {err}");
+    // Fail-fast runs before the collection is created: nothing was written.
+    assert!(db.get_vector_collection("test").is_none());
+}
+
+#[test]
+fn test_continue_on_error_writes_error_report() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let jsonl_path = dir.path().join("data.jsonl");
+    let report_path = dir.path().join("errors.jsonl");
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            "not json",
+            r#"{"id": 3, "vector": [0.0, 0.0, 1.0]}"#,
+        ],
+    );
+
+    let db = Database::open(&db_path).unwrap();
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        continue_on_error: true,
+        error_report: Some(report_path.clone()),
+        ..Default::default()
+    };
+    let stats = import_jsonl(&db, &jsonl_path, &config).unwrap();
+    assert_eq!((stats.imported, stats.errors), (2, 1));
+    assert_eq!(stats.error_details.len(), 1);
+    assert_eq!(stats.error_details[0].line, 2);
+
+    let report = std::fs::read_to_string(&report_path).unwrap();
+    let line: serde_json::Value = serde_json::from_str(report.trim()).unwrap();
+    assert_eq!(line["line"], 2);
+    assert!(line["reason"].as_str().unwrap().contains("invalid JSON"));
+}
+
+#[test]
+fn test_on_conflict_skip_leaves_existing_points_untouched() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let jsonl_path = dir.path().join("data.jsonl");
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            r#"{"id": 2, "vector": [9.9, 9.9, 9.9]}"#,
+            r#"{"id": 3, "vector": [0.0, 0.0, 1.0]}"#,
+            r#"{"id": 3, "vector": [8.8, 8.8, 8.8]}"#,
+        ],
+    );
+
+    let db = Database::open(&db_path).unwrap();
+    db.create_vector_collection("test", 3, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_vector_collection("test").unwrap();
+    col.upsert(vec![Point::new(2, vec![0.0, 1.0, 0.0], None)])
+        .unwrap();
+
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        on_conflict: OnConflict::Skip,
+        ..Default::default()
+    };
+    let stats = import_jsonl(&db, &jsonl_path, &config).unwrap();
+    // id 2 exists; second id-3 record is an in-file duplicate -> skipped too.
+    assert_eq!((stats.imported, stats.skipped, stats.errors), (2, 2, 0));
+
+    let kept = col.get(&[2]).into_iter().flatten().next().unwrap();
+    assert_eq!(kept.vector, vec![0.0, 1.0, 0.0], "skip must not overwrite");
+}
+
+#[test]
+fn test_on_conflict_fail_refuses_before_any_write() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let jsonl_path = dir.path().join("data.jsonl");
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            r#"{"id": 2, "vector": [0.0, 1.0, 0.0]}"#,
+        ],
+    );
+
+    let db = Database::open(&db_path).unwrap();
+    db.create_vector_collection("test", 3, DistanceMetric::Cosine)
+        .unwrap();
+    let col = db.get_vector_collection("test").unwrap();
+    col.upsert(vec![Point::new(2, vec![0.0, 1.0, 0.0], None)])
+        .unwrap();
+
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        on_conflict: OnConflict::Fail,
+        ..Default::default()
+    };
+    let err = import_jsonl(&db, &jsonl_path, &config)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("already exist"), "got: {err}");
+    // Refusal happened before any insert: id 1 is absent.
+    assert!(col.get(&[1]).into_iter().flatten().next().is_none());
+}
+
+#[test]
+fn test_dry_run_reports_without_writing() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("db");
+    let jsonl_path = dir.path().join("data.jsonl");
+    write_lines(
+        &jsonl_path,
+        &[
+            r#"{"id": 1, "vector": [1.0, 0.0, 0.0]}"#,
+            "bad line",
+            r#"{"id": 2, "vector": [0.0, 1.0, 0.0]}"#,
+        ],
+    );
+
+    let db = Database::open(&db_path).unwrap();
+    db.create_vector_collection("test", 3, DistanceMetric::Cosine)
+        .unwrap();
+    db.get_vector_collection("test")
+        .unwrap()
+        .upsert(vec![Point::new(2, vec![0.0, 1.0, 0.0], None)])
+        .unwrap();
+
+    let config = ImportConfig {
+        collection: "test".to_string(),
+        show_progress: false,
+        dry_run: true,
+        on_conflict: OnConflict::Skip,
+        ..Default::default()
+    };
+    let stats = import_jsonl(&db, &jsonl_path, &config).unwrap();
+    assert_eq!(stats.total, 3);
+    assert_eq!(stats.errors, 1);
+    assert_eq!(stats.conflicts, 1, "id 2 already stored");
+    assert_eq!(stats.imported, 1, "only id 1 would import");
+    // Dry-run writes nothing at all.
+    assert_eq!(
+        db.get_vector_collection("test")
+            .unwrap()
+            .config()
+            .point_count,
+        1
+    );
 }

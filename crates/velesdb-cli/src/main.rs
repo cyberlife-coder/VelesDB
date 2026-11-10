@@ -294,6 +294,10 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             vector_column,
             batch_size,
             progress,
+            dry_run,
+            on_conflict,
+            continue_on_error,
+            error_report,
         } => handlers::handle_import(
             &file,
             &database,
@@ -305,6 +309,10 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             vector_column,
             batch_size,
             progress,
+            dry_run,
+            on_conflict,
+            continue_on_error,
+            error_report,
         ),
         DataCommands::Export {
             path,

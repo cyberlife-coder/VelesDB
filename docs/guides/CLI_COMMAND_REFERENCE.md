@@ -387,6 +387,21 @@ Any other extension is rejected with
 | `--vector-column` | `vector` | Vector column name (CSV only) |
 | `--batch-size` | `1000` | Insertion batch size |
 | `--progress [true\|false]` | `true` | Show progress bar (`--progress false` to disable) |
+| `--dry-run` | `false` | Validate and report without writing |
+| `--on-conflict` | `upsert` | Existing-ID policy: `upsert`, `skip`, `fail` |
+| `--continue-on-error` | `false` | Import valid records, report the invalid ones |
+| `--error-report` | none | Write per-record errors to a JSONL file |
+
+`data import` validates the whole file before writing. With neither flag, the
+first invalid record aborts the command and nothing is written.
+`--continue-on-error` imports the valid records and reports the rejected ones.
+`--on-conflict skip` leaves existing points untouched (counted as skipped);
+`--on-conflict fail` refuses before any write when an input ID already exists;
+`upsert` keeps the historical overwrite behavior. `--dry-run` reports what
+would happen — records, conflicts, errors — without creating or modifying a
+collection. `--error-report <file>` writes every rejected record as
+`{"line": N, "reason": "..."}` JSONL; in-memory error details are bounded
+while the file captures the full stream.
 
 **`data export` flags:**
 

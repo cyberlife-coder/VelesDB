@@ -6,3 +6,5 @@
 crates/velesdb-cli/src/export.rs	user-requested data export to a caller-chosen output path (equivalent to shell redirection): a one-shot stream the caller owns, not acknowledged database state; flush-to-OS is the contract
 crates/velesdb-core/src/database/mod.rs	velesdb.lock advisory lock file: exists only while the process holds it, carries no data and no durability semantics
 crates/velesdb-memory/src/daemon_commands.rs	user-requested JSONL export to a caller-chosen output path (equivalent to shell redirection): a one-shot stream the caller owns, not acknowledged database state; flush-to-OS is the contract
+
+crates/velesdb-cli/src/import_validate.rs	user-requested --error-report JSONL to a caller-chosen path: a diagnostic artifact the caller owns, not acknowledged database state; flush-to-OS is the contract

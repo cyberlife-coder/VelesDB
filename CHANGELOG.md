@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (cli): `velesdb data import` validates before writing**
+  (#2726). The command parses the whole input file first; on the first
+  invalid record it aborts without creating or modifying the collection —
+  previously valid records were written and bad ones silently skipped
+  while the command exited 0. Scripts that depended on partial imports
+  must pass `--continue-on-error` to restore the old shape, now with an
+  explicit error summary instead of silence.
+
 ### Added
 
 - **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
@@ -28,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predicate cannot express (vector search, `similarity()`, `MATCH`,
   `$parameter`, subqueries) — the infallible `From` lowering would have
   silently matched every row.
+- **`data import` reliability flags** (#2726): `--dry-run` (validate and
+  report without writing), `--on-conflict upsert|skip|fail` for existing
+  IDs, `--continue-on-error`, and `--error-report <file>` streaming every
+  rejected record as `{"line", "reason"}` JSONL while in-memory details
+  stay bounded. The summary now reports total, imported, skipped,
+  conflicts and error counts.
 
 - **`velesdb db stats|vacuum|snapshot|restore`** (#2725). Offline database
   maintenance behind the same exclusive lock every command takes: `stats`
