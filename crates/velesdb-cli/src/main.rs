@@ -60,7 +60,7 @@ mod session;
 use clap::Parser;
 use std::path::PathBuf;
 
-use commands::{CollectionCommands, Commands, DataCommands, QueryCommands};
+use commands::{CollectionCommands, Commands, DataCommands, DbAction, QueryCommands};
 
 #[derive(Parser)]
 #[command(name = "velesdb")]
@@ -146,6 +146,7 @@ fn dispatch(command: Commands) -> anyhow::Result<()> {
         Commands::Graph { action } => graph::handle(action),
         Commands::Index { action } => handlers::handle_index(action),
         Commands::Config { action } => handlers::handle_config(action),
+        Commands::Db { action } => dispatch_db(action),
         Commands::Agent {
             path,
             question,
@@ -262,6 +263,20 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             collection,
             batch_size,
         } => handlers::handle_stream_insert(&path, &collection, batch_size),
+    }
+}
+
+/// Dispatches database-maintenance sub-commands.
+fn dispatch_db(action: DbAction) -> anyhow::Result<()> {
+    match action {
+        DbAction::Stats { path, format } => handlers::handle_db_stats(&path, &format),
+        DbAction::Vacuum {
+            path,
+            collection,
+            compact,
+        } => handlers::handle_db_vacuum(&path, collection.as_deref(), compact),
+        DbAction::Snapshot { path, output } => handlers::handle_db_snapshot(&path, &output),
+        DbAction::Restore { path, output } => handlers::handle_db_restore(&path, &output),
     }
 }
 
