@@ -80,8 +80,8 @@ pub enum Commands {
     },
 
     /// Ask the bounded ReAct agent a question about this database
-    /// (max 8 iterations, whitelisted VelesQL tools; Ollama backend if
-    /// VELESDB_AGENT_URL answers, else deterministic offline mode)
+    /// (whitelisted VelesQL tools; Ollama backend if VELESDB_AGENT_URL
+    /// answers, else deterministic offline mode)
     Agent {
         /// Path to database directory
         path: PathBuf,
@@ -93,6 +93,14 @@ pub enum Commands {
         /// Output format (table, json)
         #[arg(short, long, default_value = "table")]
         format: String,
+
+        /// Reason→Act cycle cap (1..=32)
+        #[arg(long, default_value_t = crate::agent::MaxIterations::default())]
+        max_iterations: crate::agent::MaxIterations,
+
+        /// Also write the full transcript as JSON to this file
+        #[arg(long, value_name = "FILE")]
+        save: Option<PathBuf>,
     },
 }
 

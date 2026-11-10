@@ -182,7 +182,9 @@ embed VelesDB in a Rust program, use
   file lock, so the CLI cannot share a directory with a running
   `velesdb-server` — see
   [CONCURRENCY_LOCKING.md](../../docs/guides/CONCURRENCY_LOCKING.md).
-- **`.agent` is a preview** and not yet fully implemented in the CLI.
+- **The `.agent` / `velesdb agent` ReAct loop is bounded and tool-whitelisted**
+  — without a reachable Ollama model it answers through a deterministic
+  offline router, which grounds structural questions only.
 
 ## Compatibility
 

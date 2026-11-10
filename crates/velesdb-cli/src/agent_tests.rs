@@ -16,7 +16,7 @@ fn demo_db() -> (TempDir, Database) {
 fn offline_run_lists_collections_and_composes_a_sourced_answer() {
     std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let (_dir, db) = demo_db();
-    let report = run(&db, "describe docs");
+    let report = run(&db, "describe docs", MaxIterations::default());
     assert_eq!(report.backend, "offline");
     assert!(report.iterations.len() >= 2);
     assert_eq!(report.iterations[0].action, "list()");
@@ -28,8 +28,36 @@ fn offline_run_lists_collections_and_composes_a_sourced_answer() {
 fn iterations_never_exceed_the_bound() {
     std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let (_dir, db) = demo_db();
-    let report = run(&db, "tell me everything");
-    assert!(report.iterations.len() < MAX_ITERATIONS);
+    for cap in ["1", "2", "8"] {
+        let max: MaxIterations = cap.parse().expect("valid cap");
+        let report = run(&db, "describe docs and count by kind", max);
+        assert!(report.iterations.len() <= max.get(), "cap {cap} exceeded");
+    }
+}
+
+#[test]
+fn max_iterations_parses_only_the_documented_range() {
+    assert_eq!(MaxIterations::default().get(), MAX_ITERATIONS);
+    assert_eq!("1".parse::<MaxIterations>().map(MaxIterations::get), Ok(1));
+    assert_eq!(
+        " 32 ".parse::<MaxIterations>().map(MaxIterations::get),
+        Ok(32)
+    );
+    for bad in ["0", "33", "-3", "", "x"] {
+        assert!(bad.parse::<MaxIterations>().is_err(), "{bad:?} accepted");
+    }
+}
+
+#[test]
+fn save_report_round_trips_report_json() {
+    std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
+    let (dir, db) = demo_db();
+    let report = run(&db, "what collections exist", MaxIterations::default());
+    let path = dir.path().join("transcript.json");
+    save_report(&report, &path).expect("save");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");
+    assert_eq!(saved, report_json(&report));
 }
 
 #[test]
@@ -57,7 +85,11 @@ fn every_whitelisted_tool_dispatches() {
 fn report_json_carries_answer_backend_sources_iterations() {
     std::env::set_var("VELESDB_AGENT_URL", "http://127.0.0.1:1");
     let (_dir, db) = demo_db();
-    let v = report_json(&run(&db, "what collections exist"));
+    let v = report_json(&run(
+        &db,
+        "what collections exist",
+        MaxIterations::default(),
+    ));
     assert!(v.get("answer").is_some());
     assert!(v.get("backend").is_some());
     assert!(v.get("sources").is_some());
@@ -184,7 +216,10 @@ fn unreachable_llm_falls_back_with_a_notice() {
     }; // listener dropped: nothing answers on `port`
     agent_env(port, "m:1");
     let (_dir, db) = demo_db();
-    assert_offline_fallback(&run(&db, "what collections exist"), "no LLM reachable");
+    assert_offline_fallback(
+        &run(&db, "what collections exist", MaxIterations::default()),
+        "no LLM reachable",
+    );
     clear_agent_env();
 }
 
@@ -196,7 +231,10 @@ fn hung_llm_times_out_and_falls_back_with_a_notice() {
     agent_env(listener.local_addr().expect("addr").port(), "m:1");
     let (_dir, db) = demo_db();
     let started = std::time::Instant::now();
-    assert_offline_fallback(&run(&db, "what collections exist"), "no LLM reachable");
+    assert_offline_fallback(
+        &run(&db, "what collections exist", MaxIterations::default()),
+        "no LLM reachable",
+    );
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     drop(listener);
     clear_agent_env();
@@ -207,7 +245,10 @@ fn probe_5xx_falls_back_with_a_notice() {
     let port = fake_ollama_with("503 Service Unavailable", "{}", "200 OK");
     agent_env(port, "m:1");
     let (_dir, db) = demo_db();
-    assert_offline_fallback(&run(&db, "what collections exist"), "503");
+    assert_offline_fallback(
+        &run(&db, "what collections exist", MaxIterations::default()),
+        "503",
+    );
     clear_agent_env();
 }
 
@@ -219,7 +260,10 @@ fn generate_500_falls_back_to_the_offline_router() {
     );
     agent_env(port, "m:1");
     let (_dir, db) = demo_db();
-    assert_offline_fallback(&run(&db, "what collections exist"), "500");
+    assert_offline_fallback(
+        &run(&db, "what collections exist", MaxIterations::default()),
+        "500",
+    );
     clear_agent_env();
 }
 
@@ -230,7 +274,7 @@ fn generate_404_falls_back_to_the_offline_router() {
     let port = fake_ollama(r#"{"models":[{"name":"m:1"}]}"#, "404 Not Found");
     agent_env(port, "m:1");
     let (_dir, db) = demo_db();
-    let report = run(&db, "what collections exist");
+    let report = run(&db, "what collections exist", MaxIterations::default());
     assert_offline_fallback(&report, "404");
     assert!(report
         .fallback
