@@ -356,7 +356,7 @@ jobs:
       - name: Run Clippy (strict)
         run: |
           cargo clippy --workspace --all-targets \
-            --features persistence,gpu,update-check,openapi,test-fault-injection \
+            --features persistence,gpu,update-check,openapi,test-fault-injection,serve \
             --exclude velesdb-python --exclude velesdb-node \
             -- -D warnings -D clippy::pedantic \
                -A clippy::missing_errors_doc -A clippy::missing_panics_doc
@@ -702,7 +702,7 @@ jobs:
         include:
           - { leg: core,       pkgs: "-p velesdb-core",   feat: "persistence,gpu,update-check" }
           - { leg: server,     pkgs: "-p velesdb-server", feat: "persistence,gpu,update-check" }
-          - { leg: cli-mobile, pkgs: "-p velesdb-cli -p velesdb-mobile", feat: "gpu,update-check" }
+          - { leg: cli-mobile, pkgs: "-p velesdb-cli -p velesdb-mobile", feat: "gpu,update-check,serve" }
           - { leg: memory,     pkgs: "-p velesdb-memory", feat: "persistence" }
           - { leg: rest,       pkgs: "-p velesdb-migrate -p velesdb-wasm -p tauri-plugin-velesdb -p velesdb-rustdoc-guard", feat: "" }
     steps:

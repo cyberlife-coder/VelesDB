@@ -92,6 +92,36 @@ fn main() -> anyhow::Result<()> {
     cli_main()
 }
 
+/// Builds the server config overrides for `velesdb serve` from its flags.
+///
+/// `--config` is the CLI's global flag (also accepted as `VELESDB_CONFIG`),
+/// forwarded to the server so the unified entrypoint reads the same file it
+/// applies to every other command; API keys, log level and allowed hosts
+/// resolve through the same env-var helpers `velesdb-server` itself uses.
+#[cfg(feature = "serve")]
+fn serve_overrides(
+    data_dir: Option<String>,
+    host: Option<String>,
+    port: Option<u16>,
+    tls_cert: Option<String>,
+    tls_key: Option<String>,
+    rate_limit: Option<u32>,
+    allowed_hosts: Option<Vec<String>>,
+) -> velesdb_server::config::CliOverrides {
+    velesdb_server::config::CliOverrides {
+        config_path: helpers::config_path().map(std::path::Path::to_path_buf),
+        data_dir,
+        host,
+        port,
+        api_keys: velesdb_server::config::parse_api_keys_env(),
+        tls_cert,
+        tls_key,
+        rate_limit,
+        log_level: velesdb_server::logging::level_from_env(),
+        allowed_hosts: velesdb_server::config::normalize_list_arg(allowed_hosts),
+    }
+}
+
 fn cli_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     // Non-blocking update check (background thread, 2s timeout), sent once.
@@ -152,6 +182,28 @@ fn dispatch(command: Commands) -> anyhow::Result<()> {
         Commands::Index { action } => handlers::handle_index(action),
         Commands::Config { action } => handlers::handle_config(action),
         Commands::Db { action } => dispatch_db(action),
+        #[cfg(feature = "serve")]
+        Commands::Serve {
+            data_dir,
+            host,
+            port,
+            tls_cert,
+            tls_key,
+            rate_limit,
+            allowed_hosts,
+        } => velesdb_server::serve::run_with_overrides(serve_overrides(
+            data_dir,
+            host,
+            port,
+            tls_cert,
+            tls_key,
+            rate_limit,
+            allowed_hosts,
+        )),
+        #[cfg(not(feature = "serve"))]
+        Commands::Serve => anyhow::bail!(
+            "`velesdb serve` needs the `serve` cargo feature; rebuild with              `--features serve` or use the standalone `velesdb-server` binary"
+        ),
         Commands::Agent {
             path,
             question,
