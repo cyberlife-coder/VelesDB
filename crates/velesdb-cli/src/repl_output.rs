@@ -245,6 +245,31 @@ pub fn print_help() {
     println!("  {}             Database information", "\\info".yellow());
     println!("  {} Quick benchmark", "\\bench <col> [n] [k]".yellow());
     println!();
+    println!("{}", "History & Results:".bold().underline());
+    println!();
+    println!("  {}           Command history", "\\history".yellow());
+    println!("  {}   Save last query to file", "\\save <file>".yellow());
+    println!(
+        "  {} Save last result as JSON",
+        "\\save --result <file>".yellow()
+    );
+    println!("  {}        Run a script file", "\\load <file>".yellow());
+    println!(
+        "  {} Re-run last query N times",
+        "\\watch [secs] [count]".yellow()
+    );
+    println!("  {} Edit last query in $EDITOR", "\\edit".yellow());
+    println!("  {} Copy result to clipboard", "\\copy [query]".yellow());
+    println!();
+    println!(
+        "  {}",
+        "CLI-style lines work too: `collection list` → `.collections`,".dimmed()
+    );
+    println!(
+        "  {}",
+        "`query execute <sql>` runs the SQL; unmappable ones get a hint.".dimmed()
+    );
+    println!();
     println!("{}", "Session Settings:".bold().underline());
     println!();
     println!(

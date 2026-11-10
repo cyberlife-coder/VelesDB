@@ -69,7 +69,44 @@ pub struct QueryResult {
 }
 
 #[derive(Completer, Helper, Highlighter, Hinter, Validator)]
-struct ReplHelper;
+pub(crate) struct ReplHelper;
+
+/// Line editor type used by the REPL loop (rustyline with the default
+/// file-backed history). Exposed crate-wide so meta commands
+/// (`\history`, `\load`, `\edit`) can drive the same editor.
+pub(crate) type ReplEditor = Editor<ReplHelper, DefaultHistory>;
+
+/// Mutable per-session state the daily-driver meta commands operate on:
+/// the open database handle, the last submitted query (`\edit`, `\watch`,
+/// `\save`) and the last successful result (`\save --result`, `\copy`).
+///
+/// `last_query` is recorded even when the query fails — fixing a failed
+/// query is exactly what `\edit` is for.
+pub(crate) struct ReplState {
+    db: Database,
+    pub(crate) last_query: Option<String>,
+    pub(crate) last_result: Option<QueryResult>,
+    /// Depth of nested `\load` script execution; a script that (transitively)
+    /// loads itself errors instead of overflowing the stack.
+    pub(crate) load_depth: u8,
+}
+
+impl ReplState {
+    pub(crate) fn new(db: Database) -> Self {
+        Self {
+            db,
+            last_query: None,
+            last_result: None,
+            load_depth: 0,
+        }
+    }
+
+    /// The database commands run against (the only handle until
+    /// multi-database attach lands).
+    pub(crate) fn current(&self) -> &Database {
+        &self.db
+    }
+}
 
 /// Run the interactive REPL
 #[allow(clippy::needless_pass_by_value)] // PathBuf ownership required for Database::open
@@ -86,8 +123,9 @@ pub fn run(path: PathBuf) -> Result<()> {
     );
 
     let db = crate::helpers::open_database(&path).context("Failed to open database")?;
+    let mut state = ReplState::new(db);
 
-    let mut rl: Editor<ReplHelper, DefaultHistory> = Editor::new()?;
+    let mut rl: ReplEditor = Editor::new()?;
     rl.set_helper(Some(ReplHelper));
 
     let history_path = dirs::data_local_dir()
@@ -100,7 +138,7 @@ pub fn run(path: PathBuf) -> Result<()> {
     loop {
         match rl.readline(&prompt()) {
             Ok(line) => {
-                if handle_input(&db, &mut rl, &line, &mut config) == LoopAction::Quit {
+                if handle_input(&mut state, &mut rl, &line, &mut config) == LoopAction::Quit {
                     break;
                 }
             }
@@ -124,7 +162,7 @@ pub fn run(path: PathBuf) -> Result<()> {
 
 /// Whether the REPL loop should keep reading input or terminate.
 #[derive(PartialEq)]
-enum LoopAction {
+pub(crate) enum LoopAction {
     Continue,
     Quit,
 }
@@ -146,10 +184,11 @@ fn prompt() -> String {
     }
 }
 
-/// Handle a single line of input: dot-commands vs. `VelesQL` queries.
+/// Handle a single line of input: record it in the line-editor history,
+/// then dispatch it.
 fn handle_input(
-    db: &Database,
-    rl: &mut Editor<ReplHelper, DefaultHistory>,
+    state: &mut ReplState,
+    rl: &mut ReplEditor,
     line: &str,
     config: &mut ReplConfig,
 ) -> LoopAction {
@@ -159,18 +198,68 @@ fn handle_input(
     }
 
     let _ = rl.add_history_entry(line);
+    run_line(state, rl, line, config)
+}
+
+/// Dispatch one input line — the shared path for typed lines, `\load`
+/// script lines and `\edit` output: dot/backslash commands first, then
+/// CLI-style subcommand aliases, then raw `VelesQL`.
+pub(crate) fn run_line(
+    state: &mut ReplState,
+    rl: &mut ReplEditor,
+    line: &str,
+    config: &mut ReplConfig,
+) -> LoopAction {
+    let line = line.trim();
+    if line.is_empty() {
+        return LoopAction::Continue;
+    }
 
     if line.starts_with('.') || line.starts_with('\\') {
-        handle_dot_command(db, line, config)
+        handle_dot_command(state, rl, line, config)
     } else {
-        run_query(db, line, config);
-        LoopAction::Continue
+        match crate::repl_cli_alias::translate_cli_line(line) {
+            crate::repl_cli_alias::CliLine::DotCommand(cmd) => {
+                handle_dot_command(state, rl, &cmd, config)
+            }
+            crate::repl_cli_alias::CliLine::Query(query) => {
+                run_query(state, &query, config);
+                LoopAction::Continue
+            }
+            crate::repl_cli_alias::CliLine::Hint(hint) => {
+                println!("{hint}");
+                LoopAction::Continue
+            }
+            crate::repl_cli_alias::CliLine::NotCli => {
+                run_query(state, line, config);
+                LoopAction::Continue
+            }
+        }
     }
 }
 
 /// Dispatch a dot/backslash command and map its result to a [`LoopAction`].
-fn handle_dot_command(db: &Database, line: &str, config: &mut ReplConfig) -> LoopAction {
-    match crate::repl_commands::handle_command(db, line, config) {
+/// The daily-driver meta commands (`repl_meta_cmds`) get first pick;
+/// anything they do not claim goes to the standard dispatch.
+fn handle_dot_command(
+    state: &mut ReplState,
+    rl: &mut ReplEditor,
+    line: &str,
+    config: &mut ReplConfig,
+) -> LoopAction {
+    if let Some(result) = crate::repl_meta_cmds::try_handle(state, rl, line, config) {
+        return map_result(result);
+    }
+    map_result(crate::repl_commands::handle_command(
+        state.current(),
+        line,
+        config,
+    ))
+}
+
+/// Map a [`CommandResult`] to a [`LoopAction`], printing errors in red.
+fn map_result(result: crate::repl_commands::CommandResult) -> LoopAction {
+    match result {
         crate::repl_commands::CommandResult::Continue => LoopAction::Continue,
         crate::repl_commands::CommandResult::Quit => LoopAction::Quit,
         crate::repl_commands::CommandResult::Error(e) => {
@@ -180,10 +269,13 @@ fn handle_dot_command(db: &Database, line: &str, config: &mut ReplConfig) -> Loo
     }
 }
 
-/// Execute a `VelesQL` query line and print its result or error.
-fn run_query(db: &Database, line: &str, config: &ReplConfig) {
+/// Execute a `VelesQL` query line, print its result or error, and record
+/// the query (and its result, on success) in the session state for
+/// `\edit`, `\watch`, `\save` and `\copy`.
+fn run_query(state: &mut ReplState, line: &str, config: &ReplConfig) {
+    state.last_query = Some(line.to_string());
     match execute_query(
-        db,
+        state.current(),
         line,
         config.session.active_collection(),
         Some(&config.session),
@@ -201,6 +293,7 @@ fn run_query(db: &Database, line: &str, config: &ReplConfig) {
                     result.duration_ms
                 );
             }
+            state.last_result = Some(result);
         }
         Err(e) => {
             println!("{} {}\n", "Error:".red().bold(), e);

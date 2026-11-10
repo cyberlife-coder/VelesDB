@@ -37,6 +37,8 @@ mod license;
 #[allow(clippy::pedantic)]
 mod repl;
 #[allow(clippy::pedantic)]
+mod repl_cli_alias;
+#[allow(clippy::pedantic)]
 mod repl_collection_cmds;
 #[allow(clippy::pedantic)]
 mod repl_commands;
@@ -48,6 +50,8 @@ mod repl_data_cmds;
 mod repl_execute;
 #[allow(clippy::pedantic)]
 mod repl_graph_cmds;
+#[allow(clippy::pedantic)]
+mod repl_meta_cmds;
 #[allow(clippy::pedantic)]
 mod repl_output;
 #[allow(clippy::pedantic)]
