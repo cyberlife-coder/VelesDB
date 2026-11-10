@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
+  config file (`--config`, `VELESDB_CONFIG`, `./velesdb.toml`) but had no way
+  to say which one it read or what it applied. The new commands resolve the
+  file exactly as every database-opening command does: `path` prints it,
+  `show` prints the effective engine tables (defaults, then file, then
+  `VELESDB_*`) as TOML that loads back with `--config`, `validate` exits 1 on
+  an invalid file and lists the tables the CLI engine does not read, and
+  `edit` opens `$VISUAL`/`$EDITOR` then validates what was saved.
+
 ## [8.1.0] - 2026-11-06
 
 ### Added
