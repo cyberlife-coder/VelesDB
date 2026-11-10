@@ -47,11 +47,15 @@ pub fn set_config_path(path: Option<PathBuf>) {
 ///
 /// See [`open_database_with_config`].
 pub fn open_database(path: &Path) -> Result<Database> {
-    let config_path = CONFIG_PATH
+    open_database_with_config(path, config_path())
+}
+
+/// The `--config`/`VELESDB_CONFIG` path recorded by [`set_config_path`].
+pub(crate) fn config_path() -> Option<&'static Path> {
+    CONFIG_PATH
         .get()
         .and_then(Option::as_ref)
-        .map(PathBuf::as_path);
-    open_database_with_config(path, config_path)
+        .map(PathBuf::as_path)
 }
 
 /// Opens a database at `path`, optionally loading the core
@@ -93,11 +97,11 @@ pub fn open_database_with_config(path: &Path, config_path: Option<&Path>) -> Res
 
 /// File read from the working directory when no `--config` is given, the
 /// same fallback `velesdb-server` applies.
-const DEFAULT_CONFIG_FILE: &str = "velesdb.toml";
+pub(crate) const DEFAULT_CONFIG_FILE: &str = "velesdb.toml";
 
 /// Where the engine configuration of a command comes from.
 #[derive(Debug, PartialEq, Eq)]
-enum ConfigSource<'a> {
+pub(crate) enum ConfigSource<'a> {
     /// `--config`/`VELESDB_CONFIG`: named by the caller, so a failure needs
     /// no hint about where the file came from.
     Explicit(&'a Path),
@@ -113,7 +117,7 @@ enum ConfigSource<'a> {
 impl<'a> ConfigSource<'a> {
     /// Decides the source once, so the file system is consulted a single
     /// time per command.
-    fn resolve(config_path: Option<&'a Path>, default_file: &'a Path) -> Result<Self> {
+    pub(crate) fn resolve(config_path: Option<&'a Path>, default_file: &'a Path) -> Result<Self> {
         match config_path {
             Some(cfg) if cfg.exists() => Ok(Self::Explicit(cfg)),
             Some(cfg) => anyhow::bail!("config file not found: {}", cfg.display()),
@@ -125,7 +129,7 @@ impl<'a> ConfigSource<'a> {
     /// Loads the engine sections of the file, or the core defaults when
     /// there is none — in both cases with the `VELESDB_*` engine variables
     /// applied, through the same core loaders `velesdb-server` uses.
-    fn load(&self) -> Result<velesdb_core::config::VelesConfig> {
+    pub(crate) fn load(&self) -> Result<velesdb_core::config::VelesConfig> {
         let (file, origin) = match *self {
             Self::Explicit(file) => (file, String::new()),
             Self::Implicit(file) => (
@@ -145,6 +149,14 @@ impl<'a> ConfigSource<'a> {
                 file.display()
             )
         })
+    }
+
+    /// The file this source reads, `None` for the core defaults.
+    pub(crate) fn file(&self) -> Option<&'a Path> {
+        match *self {
+            Self::Explicit(file) | Self::Implicit(file) => Some(file),
+            Self::CoreDefaults => None,
+        }
     }
 }
 
