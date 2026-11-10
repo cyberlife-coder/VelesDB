@@ -15,24 +15,42 @@ pub struct Backend {
 }
 
 /// `VELESDB_AGENT_URL`/`VELESDB_AGENT_MODEL` → probe `{url}/api/tags`
-/// (400 ms timeout). `None` = offline mode.
+/// (400 ms timeout). `None` = offline mode. A reachable server whose
+/// model list parses but lacks the model returns `None` too — otherwise
+/// `/api/generate` just 404s mid-loop.
 pub fn backend() -> Option<Backend> {
     let url =
         std::env::var("VELESDB_AGENT_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
     let model = std::env::var("VELESDB_AGENT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
     let probe = format!("{url}/api/tags");
-    runtime()?
-        .block_on(async move {
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_millis(400))
-                .build()
-                .ok()?
-                .get(&probe)
-                .send()
-                .await
-                .ok()
-        })
-        .map(|_| Backend { url, model })
+    let tags = runtime()?.block_on(async move {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(400))
+            .build()
+            .ok()?
+            .get(&probe)
+            .send()
+            .await
+            .ok()?
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+    })?;
+    // Unknown response shapes don't block the backend — a mid-loop
+    // transport failure falls back to offline anyway.
+    match tags.get("models").and_then(|m| m.as_array()) {
+        Some(models) if !model_pulled(models, &model) => None,
+        _ => Some(Backend { url, model }),
+    }
+}
+
+/// `/api/tags` entries carry the tag (`"qwen3:14b"`); an untagged model
+/// name means `<model>:latest` to Ollama.
+pub(super) fn model_pulled(models: &[serde_json::Value], model: &str) -> bool {
+    models
+        .iter()
+        .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+        .any(|n| n == model || n == format!("{model}:latest"))
 }
 
 /// One-shot current-thread runtime — same pattern as the update check's
@@ -61,8 +79,10 @@ fn system_prompt(question: &str) -> String {
     )
 }
 
-/// Run the bounded Reason→Act loop against `backend`.
-pub fn run_loop(db: &Database, question: &str, b: &Backend) -> AgentReport {
+/// Run the bounded Reason→Act loop against `backend`. `Err` means the
+/// transport failed mid-loop (404, reset, timeout) — the caller then
+/// falls back to the offline router rather than reporting an error.
+pub fn run_loop(db: &Database, question: &str, b: &Backend) -> Result<AgentReport, String> {
     let mut transcript = String::new();
     let mut iterations = Vec::new();
     let mut sources = Vec::new();
@@ -78,11 +98,11 @@ pub fn run_loop(db: &Database, question: &str, b: &Backend) -> AgentReport {
                 } else {
                     String::new()
                 };
-                return finish(iterations, format!("LLM error: {e}{remedy}"), sources, b);
+                return Err(format!("{e}{remedy}"));
             }
         };
         if let Some(ans) = parse_final(&step) {
-            return finish(iterations, ans, sources, b);
+            return Ok(finish(iterations, ans, sources, b));
         }
         let (thought, action) = parse_action(&step);
         let (name, args) = split_call(&action);
@@ -99,12 +119,12 @@ pub fn run_loop(db: &Database, question: &str, b: &Backend) -> AgentReport {
             observation: obs,
         });
     }
-    finish(
+    Ok(finish(
         iterations,
         format!("no final answer within {MAX_ITERATIONS} iterations"),
         sources,
         b,
-    )
+    ))
 }
 
 /// One LLM round-trip: prompt + transcript → model text (60 s budget).
