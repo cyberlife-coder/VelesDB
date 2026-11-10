@@ -40,6 +40,9 @@ pub struct AgentReport {
     pub answer: String,
     /// `"ollama(<model>@<url>)"` or `"offline"`.
     pub backend: String,
+    /// Why an offline run is offline: the probe or mid-loop LLM failure
+    /// (unreachable, 404, 500, timeout…). `None` when the LLM answered.
+    pub fallback: Option<String>,
     /// Every iteration, in order — the audit trail.
     pub iterations: Vec<Iteration>,
     /// Tool outputs the answer drew on, as `tool(args)` strings.
@@ -51,23 +54,27 @@ pub struct AgentReport {
 /// LLM (model not pulled, dropped connection) also falls back to the
 /// router — the run never fails because of the LLM.
 pub fn run(db: &Database, question: &str) -> AgentReport {
-    let Some(backend) = llm::backend() else {
-        return offline::run(db, question);
-    };
-    match llm::run_loop(db, question, &backend) {
-        Ok(report) => report,
-        Err(why) => {
-            let mut report = offline::run(db, question);
-            report.backend = format!("offline (llm failed: {why})");
-            report
-        }
-    }
+    let outcome = llm::backend()
+        .and_then(|b| llm::run_loop(db, question, &b).map_err(|why| format!("llm failed: {why}")));
+    outcome.unwrap_or_else(|why| {
+        let mut report = offline::run(db, question);
+        report.fallback = Some(why);
+        report
+    })
 }
 
 /// Render a report for the terminal (transcript + sourced answer).
 pub fn print_report(report: &AgentReport) {
     println!("\n{}", "Agent (ReAct)".bold().underline());
-    println!("  {} {}\n", "Backend:".cyan(), report.backend);
+    println!("  {} {}", "Backend:".cyan(), report.backend);
+    if let Some(why) = &report.fallback {
+        println!(
+            "  {} answered by the deterministic offline router — {}",
+            "notice:".yellow(),
+            why
+        );
+    }
+    println!();
     for it in &report.iterations {
         println!("  {}", format!("── iteration {}", it.n).dimmed());
         println!("    {} {}", "thought:".dimmed(), it.thought.dimmed());
@@ -94,6 +101,7 @@ pub fn report_json(report: &AgentReport) -> serde_json::Value {
     serde_json::json!({
         "answer": report.answer,
         "backend": report.backend,
+        "fallback": report.fallback,
         "sources": report.sources,
         "iterations": report.iterations.iter().map(|it| serde_json::json!({
             "n": it.n,

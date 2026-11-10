@@ -40,6 +40,7 @@ pub fn run(db: &Database, question: &str) -> AgentReport {
     AgentReport {
         answer: compose(&iterations, question),
         backend: "offline".to_string(),
+        fallback: None,
         iterations,
         sources,
     }

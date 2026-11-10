@@ -15,33 +15,45 @@ pub struct Backend {
 }
 
 /// `VELESDB_AGENT_URL`/`VELESDB_AGENT_MODEL` → probe `{url}/api/tags`
-/// (400 ms timeout). `None` = offline mode. A reachable server whose
-/// model list parses but lacks the model returns `None` too — otherwise
-/// `/api/generate` just 404s mid-loop.
-pub fn backend() -> Option<Backend> {
+/// (400 ms timeout). `Err(cause)` = offline mode, with the reason the
+/// caller shows as the fallback notice: unreachable, non-2xx, unparsable,
+/// or a model list that lacks the model — otherwise `/api/generate` just
+/// 404s mid-loop.
+pub fn backend() -> Result<Backend, String> {
     let url =
         std::env::var("VELESDB_AGENT_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
     let model = std::env::var("VELESDB_AGENT_MODEL").unwrap_or_else(|_| "qwen3:4b".to_string());
-    let probe = format!("{url}/api/tags");
-    let tags = runtime()?.block_on(async move {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(400))
-            .build()
-            .ok()?
-            .get(&probe)
-            .send()
-            .await
-            .ok()?
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-    })?;
+    let tags = probe_tags(&format!("{url}/api/tags"))?;
     // Unknown response shapes don't block the backend — a mid-loop
     // transport failure falls back to offline anyway.
     match tags.get("models").and_then(|m| m.as_array()) {
-        Some(models) if !model_pulled(models, &model) => None,
-        _ => Some(Backend { url, model }),
+        Some(models) if !model_pulled(models, &model) => Err(format!(
+            "model '{model}' not pulled at {url} — try `ollama pull {model}`"
+        )),
+        _ => Ok(Backend { url, model }),
     }
+}
+
+/// `GET {probe}` with the 400 ms budget; any failure is the cause string.
+fn probe_tags(probe: &str) -> Result<serde_json::Value, String> {
+    let rt = runtime().ok_or_else(|| "agent runtime unavailable".to_string())?;
+    rt.block_on(async move {
+        let resp = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(400))
+            .build()
+            .map_err(|e| format!("{e}"))?
+            .get(probe)
+            .send()
+            .await
+            .map_err(|e| format!("no LLM reachable at {probe}: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("{probe}: status code {status}"));
+        }
+        resp.json::<serde_json::Value>()
+            .await
+            .map_err(|e| format!("bad ollama response from {probe}: {e}"))
+    })
 }
 
 /// `/api/tags` entries carry the tag (`"qwen3:14b"`); an untagged model
@@ -204,6 +216,7 @@ fn finish(
     AgentReport {
         answer,
         backend: format!("ollama({}@{})", b.model, b.url),
+        fallback: None,
         iterations,
         sources,
     }

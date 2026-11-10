@@ -62,6 +62,12 @@ fn report_json_carries_answer_backend_sources_iterations() {
     assert!(v.get("backend").is_some());
     assert!(v.get("sources").is_some());
     assert!(v.get("iterations").is_some());
+    assert!(
+        v["fallback"]
+            .as_str()
+            .is_some_and(|f| f.contains("127.0.0.1:1")),
+        "json must carry the fallback cause, got {v}"
+    );
 }
 
 #[test]
@@ -92,6 +98,15 @@ fn tool_identifier_arguments_cannot_smuggle_velesql() {
 /// Fake Ollama: the first accepted connection gets `tags_body` with 200,
 /// every later connection gets `generate_status` with `{}`. Returns the port.
 fn fake_ollama(tags_body: &'static str, generate_status: &'static str) -> u16 {
+    fake_ollama_with("200 OK", tags_body, generate_status)
+}
+
+/// [`fake_ollama`] with a chosen status for the `/api/tags` probe too.
+fn fake_ollama_with(
+    tags_status: &'static str,
+    tags_body: &'static str,
+    generate_status: &'static str,
+) -> u16 {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
@@ -102,7 +117,7 @@ fn fake_ollama(tags_body: &'static str, generate_status: &'static str) -> u16 {
             let _ = s.read(&mut buf);
             let (status, body) = if first {
                 first = false;
-                ("200 OK", tags_body)
+                (tags_status, tags_body)
             } else {
                 (generate_status, "{}")
             };
@@ -142,13 +157,69 @@ fn model_pulled_matches_tagged_and_latest_names() {
 }
 
 #[test]
-fn backend_returns_none_when_the_model_is_not_pulled() {
+fn backend_refuses_a_model_that_is_not_pulled() {
     let port = fake_ollama(r#"{"models":[{"name":"qwen3:14b"}]}"#, "200 OK");
     agent_env(port, "no-such-model:9b");
-    assert!(
-        llm::backend().is_none(),
-        "absent model must not select ollama"
+    let why = llm::backend()
+        .err()
+        .expect("absent model must not select ollama");
+    assert!(why.contains("not pulled") && why.contains("ollama pull no-such-model:9b"));
+    clear_agent_env();
+}
+
+/// Asserts the run fell back to the offline router, still answered, and
+/// carries a fallback cause containing `cause`.
+fn assert_offline_fallback(report: &AgentReport, cause: &str) {
+    assert_eq!(report.backend, "offline");
+    let why = report.fallback.as_deref().unwrap_or_default();
+    assert!(why.contains(cause), "fallback {why:?} hides {cause:?}");
+    assert!(report.answer.contains("docs"), "offline router answered");
+}
+
+#[test]
+fn unreachable_llm_falls_back_with_a_notice() {
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().expect("addr").port()
+    }; // listener dropped: nothing answers on `port`
+    agent_env(port, "m:1");
+    let (_dir, db) = demo_db();
+    assert_offline_fallback(&run(&db, "what collections exist"), "no LLM reachable");
+    clear_agent_env();
+}
+
+#[test]
+fn hung_llm_times_out_and_falls_back_with_a_notice() {
+    // Bound but never accepted: the handshake completes in the backlog and
+    // the probe hangs until its 400 ms budget expires.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    agent_env(listener.local_addr().expect("addr").port(), "m:1");
+    let (_dir, db) = demo_db();
+    let started = std::time::Instant::now();
+    assert_offline_fallback(&run(&db, "what collections exist"), "no LLM reachable");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    drop(listener);
+    clear_agent_env();
+}
+
+#[test]
+fn probe_5xx_falls_back_with_a_notice() {
+    let port = fake_ollama_with("503 Service Unavailable", "{}", "200 OK");
+    agent_env(port, "m:1");
+    let (_dir, db) = demo_db();
+    assert_offline_fallback(&run(&db, "what collections exist"), "503");
+    clear_agent_env();
+}
+
+#[test]
+fn generate_500_falls_back_to_the_offline_router() {
+    let port = fake_ollama(
+        r#"{"models":[{"name":"m:1"}]}"#,
+        "500 Internal Server Error",
     );
+    agent_env(port, "m:1");
+    let (_dir, db) = demo_db();
+    assert_offline_fallback(&run(&db, "what collections exist"), "500");
     clear_agent_env();
 }
 
@@ -160,15 +231,10 @@ fn generate_404_falls_back_to_the_offline_router() {
     agent_env(port, "m:1");
     let (_dir, db) = demo_db();
     let report = run(&db, "what collections exist");
-    assert!(
-        report.backend.starts_with("offline"),
-        "expected offline fallback, got backend={}",
-        report.backend
-    );
-    assert!(report.backend.contains("404"), "backend hides the cause");
-    assert!(
-        report.answer.contains("docs"),
-        "offline router still answered"
-    );
+    assert_offline_fallback(&report, "404");
+    assert!(report
+        .fallback
+        .unwrap_or_default()
+        .contains("ollama pull m:1"));
     clear_agent_env();
 }
