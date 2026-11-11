@@ -212,7 +212,7 @@ fn test_attach_registers_alias_and_connect_switches() {
         &["\\attach", path2.to_str().expect("utf8"), "aux"],
     );
     assert!(matches!(result, CommandResult::Continue));
-    assert!(state.databases.contains_key("aux"));
+    assert!(state.db_by_alias("aux").is_some());
 
     let mut config = ReplConfig::default();
     config.session.use_collection(Some("docs".to_string()));

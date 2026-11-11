@@ -91,9 +91,12 @@ pub(crate) struct AttachedDb {
 /// `last_query` is recorded even when the query fails — fixing a failed
 /// query is exactly what `\edit` is for.
 pub(crate) struct ReplState {
-    /// Attached databases by alias; `"main"` is the database the REPL
-    /// was started on. `active` names the alias every command runs on.
-    pub(crate) databases: std::collections::BTreeMap<String, AttachedDb>,
+    /// Attached databases as (alias, handle) pairs in attach order;
+    /// `"main"` is the database the REPL was started on. `active` names
+    /// the alias every command runs on. A `Vec`, not a map — a session
+    /// holds a handful of aliases, so a linear scan is exact, preserves
+    /// attach order for `\databases`, and instantiates no map machinery.
+    pub(crate) databases: Vec<(String, AttachedDb)>,
     pub(crate) active: String,
     pub(crate) last_query: Option<String>,
     pub(crate) last_result: Option<QueryResult>,
@@ -107,10 +110,8 @@ pub(crate) const MAIN_ALIAS: &str = "main";
 
 impl ReplState {
     pub(crate) fn new(db: Database, path: PathBuf) -> Self {
-        let mut databases = std::collections::BTreeMap::new();
-        databases.insert(MAIN_ALIAS.to_string(), AttachedDb { db, path });
         Self {
-            databases,
+            databases: vec![(MAIN_ALIAS.to_string(), AttachedDb { db, path })],
             active: MAIN_ALIAS.to_string(),
             last_query: None,
             last_result: None,
@@ -120,9 +121,18 @@ impl ReplState {
 
     /// The database commands run against — the `\connect`-selected alias.
     pub(crate) fn current(&self) -> &Database {
-        // `active` is only ever set to a key this map holds (\attach and
+        // `active` is only ever set to an alias this vec holds (\attach and
         // \connect are the single writers), so the lookup cannot miss.
-        &self.databases[&self.active].db
+        self.db_by_alias(&self.active)
+            .map_or_else(|| unreachable!("active alias always present"), |a| &a.db)
+    }
+
+    /// The attached database registered under `alias`, if any.
+    pub(crate) fn db_by_alias(&self, alias: &str) -> Option<&AttachedDb> {
+        self.databases
+            .iter()
+            .find(|(name, _)| name == alias)
+            .map(|(_, attached)| attached)
     }
 }
 

@@ -439,18 +439,18 @@ fn cmd_attach(state: &mut ReplState, parts: &[&str]) -> CommandResult {
         },
         |s| s.to_string(),
     );
-    if state.databases.contains_key(&alias) {
+    if state.db_by_alias(&alias).is_some() {
         return CommandResult::Error(format!("Alias '{alias}' is already attached"));
     }
     match crate::helpers::open_database(Path::new(path)) {
         Ok(db) => {
-            state.databases.insert(
+            state.databases.push((
                 alias.clone(),
                 crate::repl::AttachedDb {
                     db,
                     path: PathBuf::from(path),
                 },
-            );
+            ));
             println!(
                 "{} Attached {} as {}\n",
                 "\u{2713}".green(),
@@ -475,8 +475,9 @@ fn cmd_detach(state: &mut ReplState, parts: &[&str]) -> CommandResult {
             "Cannot detach the active database '{alias}' — \\connect elsewhere first"
         ));
     }
-    match state.databases.remove(*alias) {
-        Some(_) => {
+    match state.databases.iter().position(|(name, _)| name == alias) {
+        Some(i) => {
+            state.databases.remove(i);
             println!("Detached {}\n", alias.cyan());
             CommandResult::Continue
         }
@@ -511,19 +512,19 @@ fn cmd_connect(state: &mut ReplState, config: &mut ReplConfig, parts: &[&str]) -
         println!(
             "Connected to: {} ({})\n",
             state.active.cyan(),
-            state.databases[&state.active].path.display()
+            state
+                .db_by_alias(&state.active)
+                .map(|a| a.path.display().to_string())
+                .unwrap_or_default()
         );
         return CommandResult::Continue;
     };
-    match state.databases.get(*alias) {
+    match state.db_by_alias(alias) {
         Some(attached) => {
+            let shown_path = attached.path.display().to_string();
             state.active = (*alias).to_string();
             config.session.use_collection(None);
-            println!(
-                "Connected to {} ({})\n",
-                alias.cyan(),
-                attached.path.display()
-            );
+            println!("Connected to {} ({})\n", alias.cyan(), shown_path);
             CommandResult::Continue
         }
         None => CommandResult::Error(format!(
