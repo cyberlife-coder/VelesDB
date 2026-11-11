@@ -120,7 +120,7 @@ jobs:
           SHA="${{ github.sha }}"
           echo "Checking CI status for commit $SHA..."
           RESULT=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" --paginate \
-            --jq '[.check_runs[] | select(.name == "CI Success")] | first')
+            | jq -s '[.[] | .check_runs[] | select(.name == "CI Success")] | first')
           if [ -z "$RESULT" ] || [ "$RESULT" = "null" ]; then
             echo "::error::No CI workflow found for commit $SHA. Push to main/develop first to trigger CI, then tag."
             exit 1
