@@ -295,6 +295,28 @@ velesdb> \copy             -- last result JSON -> clipboard
 
 ---
 
+## Multiple databases
+
+One REPL session can hold several open databases. The database the REPL
+was started on is registered as `main`.
+
+| Command | Description |
+|---------|-------------|
+| `\attach <db_path> [alias]` | Open another database; alias defaults to the directory's file stem |
+| `\databases` | List attached aliases, their paths, and the active one |
+| `\connect <alias>` | Switch the database every command runs on (clears the active collection — it belonged to the previous database) |
+| `\detach <alias>` | Close an attached database (not the active one) |
+
+```
+velesdb> \attach ./other_db aux
+velesdb> \databases
+velesdb> \connect aux
+velesdb> .collections          -- now lists other_db's collections
+velesdb> \connect main        -- back to the starting database
+```
+
+---
+
 ## CLI subcommand syntax in the REPL
 
 Lines that look like CLI subcommands are translated instead of failing
