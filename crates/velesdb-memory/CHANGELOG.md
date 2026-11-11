@@ -41,6 +41,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MemoryService::remember` still returns `Result<u64>` — the id. The 0.x
   minor bump at release covers it.
 
+### Added
+
+- **Opt-in GPU passthrough for binding consumers** (#1965, #2669): the
+  memory and Node surfaces accept an explicit GPU preference and route
+  embedding/index work through it — off by default, no caller change.
+- **Devin CLI agent-hooks harness with cross-registry emit dedupe**
+  (#2668) — the Node binding ships the emit-dedupe half.
+
+### Changed
+
+- **BREAKING (MCP wire only): every memory id is now a decimal string, not a JSON number** (#1468 follow-up).
+  `id`, `edge_id`, `from`, `to`, `target_id`, `ids` in tool *results* (`remember`,
+  `recall`, `recall_where`, `recall_fused`, `list_memories`, `relate`, `forget`,
+  `feedback`, `why`, `entity`, `save_working_context`, `extraction_status`)
+  serialize as strings, and their `outputSchema` advertises `"type": "string"`. A raw JSON number above 2^53 was
+  rounded by float-lossy clients and rejected outright by strict parsers (the
+  result of `recall` failed to parse in Vibe with `exceeds safe integer domain`).
+  The `*_str` twin fields are unchanged and carry the same value. Migration:
+  read `id` (or `id_str`) as a string; inputs still accept number or string.
+  The Rust API (`MemoryService`) is untouched — domain types keep `u64` — and
+  the Node/Python/WASM/TS surfaces already spoke decimal strings, so only raw
+  MCP clients that parsed `id` as a number need to switch to the string form.
+  The context compiler's `decisions[].fragment_id` keeps its recorded numeric
+  default; `policy.ids_as_strings` still stringifies it on demand.
+
+- **Build dep-graph diet** (#2665): default-members scoping and the
+  `native-tls`/`openssl` drop cut the cold-build surface the crate pulls
+  in.
+
+### Fixed
+
+- **Parity single-sourcing residuals closed** (#2095, #2683): the
+  bindings read the shared condition vocabulary instead of their own
+  copies.
+
 ## [0.17.1] - 2026-11-06
 
 ### Added
@@ -1054,7 +1089,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the bare form into the new type, where `found` reads as `undefined`/`None`,
   is falsy, and sends the agent back to a fresh start on top of live work.
 
-
 ### Fixed
 
 - **`explain_compilation` refused the `fragment_id` it had just emitted.**
@@ -1181,7 +1215,6 @@ rather than a refusal.
   Note for anyone reading the registries: **0.11.3 never reached crates.io
   or npm** — its `Validate` job failed and skipped all five downstream
   publish jobs. Only its MCPB bundles exist.
-
 
 ## [0.11.4] — 2026-07-28
 

@@ -166,4 +166,4 @@ memory.procedural.reinforce(procedure_id=1, success=False)
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.2.0

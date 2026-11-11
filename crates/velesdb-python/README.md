@@ -226,4 +226,4 @@ velesdb.VelesQLParameterError)` or plain `except Exception`.
 
 ---
 
-`velesdb-python v8.1.0` · Last updated: 2026-10-29 · Applies to: velesdb-core 8.1.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)
+`velesdb-python v8.2.0` · Last updated: 2026-10-29 · Applies to: velesdb-core 8.2.0 · [Report a docs error](https://github.com/cyberlife-coder/VelesDB/issues)

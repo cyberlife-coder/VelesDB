@@ -321,7 +321,7 @@ curl http://localhost:8080/health
 ```json
 {
   "status": "ok",
-  "version": "8.1.0"
+  "version": "8.2.0"
 }
 ```
 
@@ -340,7 +340,7 @@ curl http://localhost:8080/ready
 ```json
 {
   "status": "ready",
-  "version": "8.1.0"
+  "version": "8.2.0"
 }
 ```
 
@@ -349,7 +349,7 @@ curl http://localhost:8080/ready
 ```json
 {
   "status": "not_ready",
-  "version": "8.1.0"
+  "version": "8.2.0"
 }
 ```
 
@@ -527,4 +527,4 @@ rather than silently ignored.
 
 ---
 
-Last updated: 2026-10-30 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-10-30 · Applies to: velesdb-core 8.2.0

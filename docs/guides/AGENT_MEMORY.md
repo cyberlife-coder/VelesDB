@@ -1276,4 +1276,4 @@ Yes. The SDK is covered end-to-end by Rust and Python test suites, including sna
 
 ---
 
-Last updated: 2026-10-29 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-10-29 · Applies to: velesdb-core 8.2.0

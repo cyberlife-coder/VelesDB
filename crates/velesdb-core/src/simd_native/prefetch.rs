@@ -205,6 +205,7 @@ fn prefetch_multi_x86(vector: &[f32]) {
 /// Apple M1-M4 use 128-byte cache lines. Graviton uses 64B but a 128B stride
 /// still provides useful lookahead. Prefetches 4 lines for vectors > 512B.
 #[cfg(target_arch = "aarch64")]
+#[allow(deprecated)] // calls deprecated helper; module leaves the public API in 9.0.0
 #[inline]
 fn prefetch_multi_arm64(vector: &[f32]) {
     const ARM_CL: usize = 128;

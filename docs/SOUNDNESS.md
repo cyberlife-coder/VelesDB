@@ -1236,7 +1236,7 @@ let data_as_bytes: &mut [u8] = unsafe {
 
 ---
 
-*Last updated: 2026-11-03 · Applies to: velesdb-core 8.1.0 (this stamp tracks
+*Last updated: 2026-11-03 · Applies to: velesdb-core 8.2.0 (this stamp tracks
 the document revision; this revision moves the Hamming/Jaccard/binary-Hamming
 kernels into `x86_avx512/hamming_jaccard.rs`. The underlying unsafe audit was
 last run in full on

@@ -183,7 +183,7 @@ pub mod simd_native;
 #[cfg(test)]
 mod simd_native_tests;
 #[cfg(target_arch = "aarch64")]
-pub(crate) mod simd_neon_prefetch;
+pub mod simd_neon_prefetch;
 // simd_ops removed - direct dispatch via simd_native (EPIC-CLEANUP)
 #[cfg(test)]
 mod simd_prefetch_x86_tests;

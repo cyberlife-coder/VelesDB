@@ -544,4 +544,4 @@ Full reference: [Configuration](CLI_COMMAND_REFERENCE.md#configuration) ·
 
 ---
 
-Last updated: 2026-11-11 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-11-11 · Applies to: velesdb-core 8.2.0
