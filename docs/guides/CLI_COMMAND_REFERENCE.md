@@ -17,6 +17,7 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 - [Command overview](#command-overview)
 - [Global options](#global-options)
 - [Configuration](#configuration)
+- [Database maintenance](#database-maintenance)
 - [Collections](#collections)
 - [Points](#points)
 - [Import / export](#import--export)
@@ -107,6 +108,42 @@ velesdb config edit
 | `show` | the resolved configuration does not load |
 | `validate` | the file does not parse or a value fails validation |
 | `edit` | no file resolves, `$VISUAL`/`$EDITOR` is unset, the editor fails, or the saved file is invalid |
+
+---
+
+## Database maintenance
+
+`velesdb db` operates offline on a database directory; every action opens the
+database, so it takes the same exclusive `velesdb.lock` as any other command —
+a running `velesdb-server` or REPL on the directory makes it fail rather than
+race a live database.
+
+```bash
+# Per-collection stats: kind, point/node count, disk usage, last ANALYZE
+velesdb db stats ./data
+velesdb db stats ./data -f json
+
+# Rebuild the HNSW index of every vector collection (drops tombstoned
+# entries), or one with --collection; --compact also rewrites vector storage.
+# Same core calls as POST /collections/{name}/vacuum and /compact.
+velesdb db vacuum ./data
+velesdb db vacuum ./data --collection docs --compact
+
+# Flush everything and copy the tree into a fresh directory. The manifest is
+# written last — a snapshot without it is an incomplete copy, not a snapshot.
+velesdb db snapshot ./data -o ./backups/data-2026-11-10
+
+# Verify the manifest, copy into a fresh directory, open it to prove it loads.
+# Never overwrites: the destination must not exist or be empty.
+velesdb db restore ./backups/data-2026-11-10 -o ./data
+```
+
+| Action | Exit code 1 when |
+|---|---|
+| `stats` | the database does not open or stats cannot be read |
+| `vacuum` | the named collection is missing or not a vector collection, or a rebuild/flush fails |
+| `snapshot` | a flush fails, the destination is not fresh, or it is inside the source tree |
+| `restore` | the source has no manifest (incomplete copy), the destination is not fresh, or the copy fails to open |
 
 ---
 
