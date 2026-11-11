@@ -7,7 +7,7 @@ use clap::{Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
-use crate::cli_types::{ExportFormatArg, IndexTypeArg, MetricArg, StorageModeArg};
+use crate::cli_types::{ExportFormatArg, IndexTypeArg, MetricArg, OnConflictArg, StorageModeArg};
 use crate::graph;
 
 /// Top-level CLI commands for VelesDB CLI - High-performance vector database.
@@ -320,6 +320,22 @@ pub enum DataCommands {
             action = clap::ArgAction::Set
         )]
         progress: bool,
+
+        /// Validate the file and print what would be imported, writing nothing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Policy for ids already in the collection (fail refuses before any write)
+        #[arg(long, value_enum, default_value = "upsert")]
+        on_conflict: OnConflictArg,
+
+        /// Keep importing after a bad record (default: abort before any write)
+        #[arg(long)]
+        continue_on_error: bool,
+
+        /// Write every rejected record as JSONL to this file
+        #[arg(long)]
+        error_report: Option<PathBuf>,
     },
 
     /// Export a collection to a JSON, JSONL or CSV file

@@ -73,7 +73,7 @@ fn infer_export_format(output: Option<&Path>) -> crate::cli_types::ExportFormatA
     }
 }
 
-/// Handles the `import` subcommand: imports data from CSV or JSONL.
+/// Handles the `import` subcommand: imports data from CSV, JSONL or VRB1.
 #[allow(clippy::too_many_arguments)] // Reason: mirrors clap subcommand field count directly
 pub fn handle_import(
     file: &Path,
@@ -86,7 +86,13 @@ pub fn handle_import(
     vector_column: String,
     batch_size: usize,
     progress: bool,
+    dry_run: bool,
+    on_conflict: crate::cli_types::OnConflictArg,
+    continue_on_error: bool,
+    error_report: Option<PathBuf>,
 ) -> Result<()> {
+    use crate::cli_types::OnConflictArg;
+
     let db = crate::helpers::open_database(database)?;
     let config = import::ImportConfig {
         collection,
@@ -96,7 +102,15 @@ pub fn handle_import(
         batch_size,
         id_column,
         vector_column,
-        show_progress: progress,
+        show_progress: progress && !dry_run,
+        dry_run,
+        on_conflict: match on_conflict {
+            OnConflictArg::Upsert => import::OnConflict::Upsert,
+            OnConflictArg::Skip => import::OnConflict::Skip,
+            OnConflictArg::Fail => import::OnConflict::Fail,
+        },
+        continue_on_error,
+        error_report,
     };
 
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -113,23 +127,62 @@ pub fn handle_import(
         }
     };
 
-    print_import_summary(&stats);
+    print_import_summary(&stats, dry_run, config.error_report.is_some());
     Ok(())
 }
 
-/// Prints a summary after a successful import.
-fn print_import_summary(stats: &import::ImportStats) {
-    println!("\n{}", "Import Summary".green().bold());
+/// Prints the import (or dry-run) summary, including conflict and error
+/// detail introduced by `--on-conflict`, `--dry-run` and `--error-report`.
+fn print_import_summary(stats: &import::ImportStats, dry_run: bool, report_written: bool) {
+    println!(
+        "\n{}",
+        if dry_run {
+            "Import Dry-Run Summary".cyan().bold()
+        } else {
+            "Import Summary".green().bold()
+        }
+    );
     println!("  Total records:    {}", stats.total);
-    println!("  Imported:         {}", stats.imported.to_string().green());
+    println!(
+        "  {}:         {}",
+        if dry_run { "Would import" } else { "Imported" },
+        stats.imported.to_string().green()
+    );
+    if stats.conflicts > 0 {
+        println!(
+            "  Conflicts:        {}",
+            stats.conflicts.to_string().yellow()
+        );
+    }
+    if stats.skipped > 0 {
+        println!("  Skipped:          {}", stats.skipped.to_string().yellow());
+    }
     if stats.errors > 0 {
         println!("  Errors:           {}", stats.errors.to_string().red());
+        print_error_details(stats, report_written);
     }
     println!("  Duration:         {} ms", stats.duration_ms);
     println!(
         "  Throughput:       {:.0} records/sec",
         stats.records_per_sec()
     );
+}
+
+/// Prints the first rejected records and where the full list lives.
+fn print_error_details(stats: &import::ImportStats, report_written: bool) {
+    const SHOWN: usize = 10;
+    for e in stats.error_details.iter().take(SHOWN) {
+        println!("    record {}: {}", e.line, e.reason);
+    }
+    if stats.errors > stats.error_details.len() {
+        println!(
+            "    … and {} more",
+            stats.errors - stats.error_details.len()
+        );
+    }
+    if report_written {
+        println!("  Full list written to --error-report file");
+    }
 }
 
 /// Handles the `get` subcommand: retrieves a single point by ID.

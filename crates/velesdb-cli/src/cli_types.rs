@@ -79,3 +79,15 @@ impl ExportFormatArg {
         }
     }
 }
+
+/// CLI import conflict policy (`data import --on-conflict`).
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum OnConflictArg {
+    /// Update the existing point (default, historical behaviour).
+    #[default]
+    Upsert,
+    /// Skip records whose id already exists.
+    Skip,
+    /// Refuse the import when an id already exists.
+    Fail,
+}
