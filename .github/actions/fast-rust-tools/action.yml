@@ -12,7 +12,22 @@ runs:
       shell: bash
       env:
         RUSTUP_AUTO_INSTALL: "0"
-      run: sudo apt-get install -y mold
+      run: |
+        # Runner DNS/mirror hiccups are transient but killed whole jobs:
+        # on 2026-11-11 runs 43046928074 and 43051918030, a single
+        # "Temporary failure resolving security.ubuntu.com" from a bare
+        # `apt-get install` failed 12+ jobs at once (exit 100). Update the
+        # package lists and retry with backoff instead of dying on one bad
+        # resolution.
+        for attempt in 1 2 3 4 5; do
+          if sudo apt-get update && sudo apt-get install -y mold; then
+            exit 0
+          fi
+          echo "apt attempt $attempt failed — retrying after backoff" >&2
+          sleep $((attempt * 10))
+        done
+        echo "apt install mold failed after 5 attempts" >&2
+        exit 1
 
     - name: Install sccache
       shell: bash

@@ -3,7 +3,7 @@
 use tracing::{debug, info, warn};
 
 use crate::config::{MigrationConfig, RelationConfig};
-use crate::connectors::SourceConnector;
+use crate::connectors::{NextPage, SourceConnector};
 use crate::error::{Error, Result};
 use crate::pipeline_points::stable_point_id;
 
@@ -141,12 +141,9 @@ impl<'a> GraphMigrationPhase<'a> {
                 .extract_batch(offset.clone(), batch_size)
                 .await?;
 
-            // Guard against connectors that return has_more=true with an empty batch
-            // (e.g. cursor-based connectors on transient gaps), which would otherwise
-            // cause an infinite loop restarting from offset=None.
-            if batch.points.is_empty() {
-                break;
-            }
+            // An empty page with more behind it must not end the phase; a
+            // cursor that fails to advance is refused by `next_page` instead.
+            let next_page = batch.next_page(offset.as_ref())?;
 
             let mut edges = Vec::with_capacity(batch.points.len());
             for point in &batch.points {
@@ -191,10 +188,10 @@ impl<'a> GraphMigrationPhase<'a> {
                 }
             }
 
-            if !batch.has_more {
-                break;
+            match next_page {
+                NextPage::Done => break,
+                NextPage::At(cursor) => offset = cursor,
             }
-            offset = batch.next_offset;
         }
 
         Ok((created, failed))

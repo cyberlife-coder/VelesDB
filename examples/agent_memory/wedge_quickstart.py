@@ -27,11 +27,11 @@ def main() -> None:
 
     # A decision trail wired with typed links: the decision was made in a PR,
     # which fixes the original ticket.
-    ticket = mem.remember("EPIC-317: intermittent CI hang under load")
+    ticket = mem.remember("EPIC-317: intermittent CI hang under load")["id"]
     pr = mem.remember(
         "PR #42 swaps the std Mutex for parking_lot",
         links=[(ticket, "fixes")],
-    )
+    )["id"]
     mem.remember(
         "we chose parking_lot to avoid lock poisoning after a panic",
         links=[(pr, "decided_in")],

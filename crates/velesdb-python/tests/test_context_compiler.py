@@ -412,7 +412,7 @@ def test_compile_context_result_shape_matches_the_mcp_wire_contract(mem):
     ],
 )
 def test_metadata_boundary_values_round_trip_exactly(mem, value):
-    fid = mem.remember("numeric boundary probe", metadata={"v": value})
+    fid = mem.remember("numeric boundary probe", metadata={"v": value})["id"]
     hits = mem.recall("numeric boundary probe", k=5)
     hit = next(h for h in hits if h["id"] == fid)
     got = hit["metadata"]["v"]

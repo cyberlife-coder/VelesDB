@@ -1,6 +1,6 @@
-//! REPL commands for advanced search and agent features.
+//! REPL commands for advanced search features.
 //!
-//! Covers: `.sparse-search`, `.hybrid-sparse`, `.agent`, `.guardrails`.
+//! Covers: `.sparse-search`, `.hybrid-sparse`, `.guardrails`.
 
 use colored::Colorize;
 use velesdb_core::Database;
@@ -135,17 +135,6 @@ pub(crate) fn cmd_hybrid_sparse(db: &Database, parts: &[&str]) -> CommandResult 
             return CommandResult::Error(format!("Collection '{name}' not found"));
         }
     }
-    CommandResult::Continue
-}
-
-pub(crate) fn cmd_agent(_parts: &[&str]) -> CommandResult {
-    println!(
-        "\n{}\n\n  Agent memory management is available via the {} or {}.\n  \
-         See docs/guides/ for usage examples.\n",
-        "Agent Memory".bold().underline(),
-        "Python/TypeScript SDK".cyan(),
-        "REST API".cyan(),
-    );
     CommandResult::Continue
 }
 

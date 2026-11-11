@@ -486,3 +486,164 @@ fn test_repl_match_at_collection_enrichment() {
     )
     .stdout(predicate::str::contains("w.price"));
 }
+
+// ============================================================================
+// Daily-driver meta commands (#2727): \history, \save, \load, \watch,
+// \edit, \copy, CLI-subcommand aliases — all proven piped.
+// ============================================================================
+
+#[test]
+fn test_repl_history_lists_typed_lines() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &[".collections", "\\history"])
+        .stdout(predicate::str::contains("history").or(predicate::str::contains(".collections")));
+}
+
+#[test]
+fn test_repl_save_and_load_script_roundtrip() {
+    let (db_path, temp) = setup_vector("vecs", 4);
+    let script = temp.path().join("query.sql");
+    repl_run(
+        &db_path,
+        &[
+            "SELECT * FROM vecs LIMIT 2",
+            &format!("\\save {}", script.display()),
+        ],
+    )
+    .stdout(predicate::str::contains("Saved"));
+    let content = std::fs::read_to_string(&script).unwrap();
+    assert!(content.contains("SELECT * FROM vecs LIMIT 2"));
+
+    // \load runs the saved script — the query's rows come back.
+    repl_run(&db_path, &[&format!("\\load {}", script.display())])
+        .stdout(predicate::str::contains("2 rows"))
+        .stdout(predicate::str::contains("Loaded 1 line(s)"));
+}
+
+#[test]
+fn test_repl_save_result_writes_json() {
+    let (db_path, temp) = setup_vector("vecs", 4);
+    let out = temp.path().join("result.json");
+    repl_run(
+        &db_path,
+        &[
+            "SELECT * FROM vecs LIMIT 3",
+            &format!("\\save --result {}", out.display()),
+        ],
+    )
+    .stdout(predicate::str::contains("Saved"));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(parsed.as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn test_repl_watch_reruns_last_query() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &["SELECT * FROM vecs LIMIT 2", "\\watch 0 2"])
+        .stdout(predicate::str::contains("2 rows").count(3)); // 1 initial + 2 watches
+}
+
+#[test]
+fn test_repl_edit_roundtrip_via_editor_env() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    let mut input = String::from("SELECT * FROM vecs LIMIT 2\n\\edit\n.quit\n");
+    // EDITOR rewrites the scratch file to a different query — proves the
+    // write -> edit -> read -> execute roundtrip without a real editor.
+    velesdb_cmd()
+        .arg("repl")
+        .arg(&db_path)
+        .env("EDITOR", "printf 'SELECT * FROM vecs LIMIT 4' >")
+        .write_stdin(std::mem::take(&mut input))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4 rows"));
+}
+
+#[test]
+fn test_repl_edit_errors_without_editor_or_query() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    velesdb_cmd()
+        .arg("repl")
+        .arg(&db_path)
+        .env_remove("VISUAL")
+        .env_remove("EDITOR")
+        .write_stdin("\\edit\n.quit\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No query to edit"));
+}
+
+#[test]
+fn test_repl_copy_reports_clipboard_or_prints() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &["SELECT * FROM vecs LIMIT 2", "\\copy"])
+        .stdout(predicate::str::contains("Copied").or(predicate::str::contains("vec_1")));
+}
+
+// ============================================================================
+// CLI-subcommand aliases typed inside the REPL
+// ============================================================================
+
+#[test]
+fn test_repl_cli_alias_collection_list() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &["collection list"]).stdout(predicate::str::contains("vecs"));
+}
+
+#[test]
+fn test_repl_cli_alias_query_execute() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &["query execute \"SELECT * FROM vecs LIMIT 2\""])
+        .stdout(predicate::str::contains("2 rows"));
+}
+
+#[test]
+fn test_repl_cli_alias_unmappable_gives_hint() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &["data import ./x.jsonl", "license show"])
+        .stdout(predicate::str::contains("CLI subcommand"))
+        .stdout(predicate::str::contains("shell"));
+}
+
+#[test]
+fn test_repl_cli_alias_velesql_unaffected() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    // A collection literally named like a CLI word still parses as VelesQL
+    // when reached through SELECT — only a bare first word aliases.
+    repl_run(&db_path, &["SELECT * FROM vecs LIMIT 1"]).stdout(predicate::str::contains("1 rows"));
+}
+
+// ============================================================================
+// Multi-database attach (#2727 PR2): \attach, \databases, \connect, \detach
+// ============================================================================
+
+#[test]
+fn test_repl_attach_connect_switches_database() {
+    let (db_path1, _t1) = setup_vector("main_col", 4);
+    let (db_path2, _t2) = setup_vector("aux_col", 4);
+
+    repl_run(
+        &db_path1,
+        &[
+            &format!("\\attach {} aux", db_path2.display()),
+            "\\databases",
+            "\\connect aux",
+            ".collections",
+            "\\connect main",
+            ".collections",
+        ],
+    )
+    .stdout(predicate::str::contains("Attached"))
+    .stdout(predicate::str::contains("(active)"))
+    .stdout(predicate::str::contains("aux_col"))
+    .stdout(predicate::str::contains("main_col"));
+}
+
+#[test]
+fn test_repl_detach_active_is_refused() {
+    let (db_path, _temp) = setup_vector("vecs", 4);
+    repl_run(&db_path, &["\\detach main"]).stdout(predicate::str::contains(
+        "Cannot detach the active database",
+    ));
+}

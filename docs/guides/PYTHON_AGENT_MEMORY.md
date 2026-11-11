@@ -26,7 +26,7 @@ process restarts.
 from velesdb import MemoryService            # offline, deterministic, no API key
 
 mem = MemoryService("./agent_memory")        # a real on-disk store; survives restarts
-reason = mem.remember("Robert is recovering from knee surgery")
+reason = mem.remember("Robert is recovering from knee surgery")["id"]
 mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "because")])
 
 # A new process, weeks later, reopens the same store and asks why:

@@ -3,7 +3,8 @@
 //! Each command is implemented in a domain-specific sub-module:
 //! - [`crate::repl_collection_cmds`] — collection inspection (.describe, .count, etc.)
 //! - [`crate::repl_query_cmds`] — query analysis and index management
-//! - [`crate::repl_search_cmds`] — sparse/hybrid search, agent, guardrails
+//! - [`crate::repl_search_cmds`] — sparse/hybrid search, guardrails
+//! - [`crate::repl_agent_cmds`] — the ReAct agent (.agent ...)
 //! - [`crate::repl_graph_cmds`] — graph operations (.graph ...)
 //! - [`crate::repl_config_cmds`] — session settings (\set, \show, etc.)
 //!
@@ -14,6 +15,7 @@
 use velesdb_core::Database;
 
 use crate::repl::ReplConfig;
+use crate::repl_agent_cmds;
 use crate::repl_collection_cmds;
 use crate::repl_config_cmds;
 use crate::repl_data_cmds;
@@ -70,7 +72,7 @@ pub fn handle_command(db: &Database, line: &str, config: &mut ReplConfig) -> Com
         // Advanced search commands
         ".sparse-search" => repl_search_cmds::cmd_sparse_search(db, &parts),
         ".hybrid-sparse" => repl_search_cmds::cmd_hybrid_sparse(db, &parts),
-        ".agent" => repl_search_cmds::cmd_agent(&parts),
+        ".agent" | "\\agent" => repl_agent_cmds::cmd_agent(db, config, &parts),
         ".guardrails" => repl_search_cmds::cmd_guardrails(),
         // Graph commands
         ".graph" => repl_graph_cmds::cmd_graph(db, &parts),

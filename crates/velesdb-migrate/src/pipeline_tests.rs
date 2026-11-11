@@ -225,3 +225,146 @@ fn test_checkpoint_path_uses_explicit_path_when_present() {
         std::path::PathBuf::from("./custom-checkpoint.json")
     );
 }
+
+/// Serves a fixed script of pages; `extract_batch` ignores the requested
+/// cursor and returns the next scripted page.
+struct ScriptedConnector {
+    pages: tokio::sync::Mutex<std::collections::VecDeque<crate::connectors::ExtractedBatch>>,
+}
+
+impl ScriptedConnector {
+    fn new(pages: Vec<crate::connectors::ExtractedBatch>) -> Self {
+        Self {
+            pages: tokio::sync::Mutex::new(pages.into()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SourceConnector for ScriptedConnector {
+    fn source_type(&self) -> &'static str {
+        "scripted"
+    }
+
+    async fn connect(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn get_schema(&self) -> Result<crate::connectors::SourceSchema> {
+        Ok(crate::connectors::SourceSchema {
+            dimension: 2,
+            ..Default::default()
+        })
+    }
+
+    async fn extract_batch(
+        &self,
+        _offset: Option<serde_json::Value>,
+        _batch_size: usize,
+    ) -> Result<crate::connectors::ExtractedBatch> {
+        self.pages
+            .lock()
+            .await
+            .pop_front()
+            .ok_or_else(|| Error::Extraction("test: script exhausted".to_string()))
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn scripted_page(ids: &[&str], next: Option<u64>) -> crate::connectors::ExtractedBatch {
+    crate::connectors::ExtractedBatch {
+        points: ids
+            .iter()
+            .map(|id| crate::connectors::ExtractedPoint {
+                id: (*id).to_string(),
+                vector: vec![0.1, 0.2],
+                payload: std::collections::HashMap::new(),
+                sparse_vector: None,
+            })
+            .collect(),
+        next_offset: next.map(serde_json::Value::from),
+        has_more: next.is_some(),
+    }
+}
+
+fn scripted_pipeline(
+    dir: &tempfile::TempDir,
+    pages: Vec<crate::connectors::ExtractedBatch>,
+) -> crate::Pipeline {
+    let config = MigrationConfig {
+        source: crate::config::SourceConfig::Qdrant(crate::config::QdrantConfig {
+            url: "http://localhost:6333".to_string(),
+            collection: "docs".to_string(),
+            api_key: None,
+            payload_fields: vec![],
+        }),
+        destination: crate::config::DestinationConfig {
+            path: dir.path().to_path_buf(),
+            collection: "scripted".to_string(),
+            dimension: 2,
+            metric: crate::config::DistanceMetric::Cosine,
+            storage_mode: crate::config::StorageMode::Full,
+            graph_collection: None,
+        },
+        options: crate::config::MigrationOptions {
+            checkpoint_path: Some(dir.path().join("checkpoint.json")),
+            ..crate::config::MigrationOptions::default()
+        },
+        relations: vec![],
+    };
+    let mut pipeline = crate::Pipeline::new(config).expect("test: create pipeline");
+    pipeline.connector = Box::new(ScriptedConnector::new(pages));
+    pipeline
+}
+
+/// An empty page that still has more behind it (e.g. a Qdrant page of only
+/// sparse-only points, all skipped by the connector) used to end the run and
+/// silently drop every later page.
+#[tokio::test]
+async fn test_empty_page_with_more_does_not_truncate_migration() {
+    let dir = tempfile::TempDir::new().expect("test: create tempdir");
+    let mut pipeline = scripted_pipeline(
+        &dir,
+        vec![
+            scripted_page(&["1"], Some(1)),
+            scripted_page(&[], Some(2)),
+            scripted_page(&["2", "3"], None),
+        ],
+    );
+
+    let stats = pipeline.run().await.expect("test: run pipeline");
+
+    assert_eq!(
+        stats.extracted, 3,
+        "points after the empty page must be extracted"
+    );
+    assert_eq!(
+        stats.loaded, 3,
+        "points after the empty page must be loaded"
+    );
+    assert_eq!(stats.batches, 2, "an empty page is not counted as a batch");
+}
+
+/// A source that keeps returning the same cursor with `has_more` must fail
+/// loudly instead of re-requesting the same page forever.
+#[tokio::test]
+async fn test_stalled_cursor_fails_instead_of_looping() {
+    let dir = tempfile::TempDir::new().expect("test: create tempdir");
+    let mut pipeline = scripted_pipeline(
+        &dir,
+        vec![scripted_page(&["1"], Some(7)), scripted_page(&[], Some(7))],
+    );
+
+    let err = pipeline
+        .run()
+        .await
+        .expect_err("test: a stalled cursor must be an error");
+
+    assert!(
+        err.to_string().contains("cursor did not advance"),
+        "unexpected error: {err}"
+    );
+}

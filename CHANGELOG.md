@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (cli): `velesdb data import` validates before writing**
+  (#2726). The command parses the whole input file first; on the first
+  invalid record it aborts without creating or modifying the collection —
+  previously valid records were written and bad ones silently skipped
+  while the command exited 0. Scripts that depended on partial imports
+  must pass `--continue-on-error` to restore the old shape, now with an
+  explicit error summary instead of silence.
+
+### Added
+
+- **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
+  config file (`--config`, `VELESDB_CONFIG`, `./velesdb.toml`) but had no way
+  to say which one it read or what it applied. The new commands resolve the
+  file exactly as every database-opening command does: `path` prints it,
+  `show` prints the effective engine tables (defaults, then file, then
+  `VELESDB_*`) as TOML that loads back with `--config`, `validate` exits 1 on
+  an invalid file and lists the tables the CLI engine does not read, and
+  `edit` opens `$VISUAL`/`$EDITOR` then validates what was saved.
+- **`data export --format json|jsonl|csv` and `--where` (closes #2726, part
+  1).** Export now streams the collection through `scroll_batch` instead of
+  materializing it in memory, writes JSON (byte-identical pretty array),
+  JSONL (one compact record per line) or CSV (`id`, JSON-array `vector`, one
+  column per payload key — re-importable via `data import`). `--format`
+  defaults to the `--output` extension, else JSON. `--where '<cond>'` takes a
+  VelesQL filter condition lowered through the new
+  `Filter::try_from_where`, which fails closed on constructs a row-level
+  predicate cannot express (vector search, `similarity()`, `MATCH`,
+  `$parameter`, subqueries) — the infallible `From` lowering would have
+  silently matched every row.
+- **`data import` reliability flags** (#2726): `--dry-run` (validate and
+  report without writing), `--on-conflict upsert|skip|fail` for existing
+  IDs, `--continue-on-error`, and `--error-report <file>` streaming every
+  rejected record as `{"line", "reason"}` JSONL while in-memory details
+  stay bounded. The summary now reports total, imported, skipped,
+  conflicts and error counts.
+
+- **`velesdb db stats|vacuum|snapshot|restore`** (#2725). Offline database
+  maintenance behind the same exclusive lock every command takes: `stats`
+  reports per-collection kind, point/node count, disk usage and the last
+  persisted `ANALYZE`; `vacuum` rebuilds the HNSW index of each targeted
+  vector collection (the core call behind REST `/vacuum`), with `--compact`
+  rewriting vector storage; `snapshot` flushes the database and copies the
+  tree into a fresh directory, writing `snapshot.manifest.json` last as the
+  completeness marker `restore` checks; `restore` copies a verified snapshot
+  into a fresh directory and opens it to prove it loads. Nothing overwrites
+  in place — destinations must be new or empty.
+
+- **`velesdb serve` — the REST API inside the CLI** (#2725, `serve` cargo
+  feature). The `velesdb-server` bootstrap moved into the library as
+  `velesdb_server::serve::run_with_overrides`, so the standalone binary and
+  the CLI subcommand share one code path — flags, `VELESDB_*` variables and
+  `velesdb.toml` sections behave identically. The feature is optional, so a
+  CLI-only build keeps axum/rustls out and fails `serve` with a pointer to
+  the feature or the standalone binary.
 ## [8.2.0] - 2026-11-09
 
 ### Added
@@ -138,6 +194,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parity tests pin top-k equivalence with brute force either way).
 
 ### Fixed
+
+- **`velesdb-migrate` no longer stops at the first empty page.** Both the
+  point loop and the graph phase broke out on `points.is_empty()`, but a
+  connector can return an empty page with more pages after it: Qdrant drops
+  sparse-only points after the scroll, so a page made only of them arrives as
+  `points: []` with a `next_page_offset`. The run cleared its checkpoint and
+  reported success with every later page unmigrated. Pagination now follows
+  `has_more` only, through one `ExtractedBatch::next_page` shared by both
+  loops, and a source that claims more pages without moving its cursor fails
+  with an extraction error instead of re-reading the same page forever.
 
 - **TypeScript SDK: one error code per bad input, on both backends** (#2307).
   A type-level bad value over REST (a negative or fractional `top_k`, a

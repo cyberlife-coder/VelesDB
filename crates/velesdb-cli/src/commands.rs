@@ -3,11 +3,11 @@
 //! All top-level `Commands` variants and their nested action enums live here.
 //! `main.rs` imports these for dispatch.
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
-use crate::cli_types::{IndexTypeArg, MetricArg, StorageModeArg};
+use crate::cli_types::{ExportFormatArg, IndexTypeArg, MetricArg, OnConflictArg, StorageModeArg};
 use crate::graph;
 
 /// Top-level CLI commands for VelesDB CLI - High-performance vector database.
@@ -78,6 +78,81 @@ pub enum Commands {
         #[command(subcommand)]
         action: IndexAction,
     },
+
+    /// Engine configuration the CLI loads (path, show, validate, edit)
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Database maintenance (stats, vacuum, snapshot, restore)
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
+    },
+
+    /// Start the embedded REST API server in-process (requires the `serve`
+    /// cargo feature; flags and VELESDB_* env vars mirror velesdb-server's)
+    #[cfg(feature = "serve")]
+    Serve {
+        /// Data directory for persistent storage
+        #[arg(short, long, env = "VELESDB_DATA_DIR")]
+        data_dir: Option<String>,
+
+        /// Host address to bind to
+        #[arg(long, env = "VELESDB_HOST")]
+        host: Option<String>,
+
+        /// Port to listen on
+        #[arg(short, long, env = "VELESDB_PORT")]
+        port: Option<u16>,
+
+        /// TLS certificate file (PEM)
+        #[arg(long, env = "VELESDB_TLS_CERT")]
+        tls_cert: Option<String>,
+
+        /// TLS private key file (PEM)
+        #[arg(long, env = "VELESDB_TLS_KEY")]
+        tls_key: Option<String>,
+
+        /// Rate limit: max requests per second per IP (0 = disabled)
+        #[arg(long, env = "VELESDB_RATE_LIMIT")]
+        rate_limit: Option<u32>,
+
+        /// Host names to answer to besides localhost, 127.0.0.0/8, [::1] and the
+        /// bind host (comma-separated; "*" disables the Host check)
+        #[arg(long, env = "VELESDB_ALLOWED_HOSTS", value_delimiter = ',')]
+        allowed_hosts: Option<Vec<String>>,
+    },
+
+    /// `velesdb serve` placeholder so a CLI-only build fails with a clear
+    /// message instead of `unrecognized subcommand`
+    #[cfg(not(feature = "serve"))]
+    Serve,
+
+    /// Ask the bounded ReAct agent a question about this database
+    /// (whitelisted VelesQL tools; Ollama backend if VELESDB_AGENT_URL
+    /// answers, else deterministic offline mode)
+    Agent {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Natural-language question (trailing args, quoting optional)
+        #[arg(trailing_var_arg = true)]
+        question: Vec<String>,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+
+        /// Reason→Act cycle cap (1..=32)
+        #[arg(long, default_value_t = crate::agent::MaxIterations::default())]
+        max_iterations: crate::agent::MaxIterations,
+
+        /// Also write the full transcript as JSON to this file
+        #[arg(long, value_name = "FILE")]
+        save: Option<PathBuf>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +192,14 @@ pub enum CollectionCommands {
 
         /// Collection name
         name: String,
+
+        /// Node-embedding dimension; enables `graph search` on the collection
+        #[arg(short, long)]
+        dimension: Option<usize>,
+
+        /// Distance metric for node embeddings (cosine, euclidean, dot, hamming, jaccard)
+        #[arg(short, long, value_enum, default_value = "cosine")]
+        metric: MetricArg,
     },
 
     /// Create a metadata-only collection (no vectors)
@@ -187,59 +270,80 @@ pub enum CollectionCommands {
 // Data sub-commands
 // ---------------------------------------------------------------------------
 
+/// Arguments of `data import` (kept as a `clap::Args` struct so the
+/// dispatch arm stays one line — the variant has fifteen flags).
+#[derive(clap::Args)]
+pub struct ImportArgs {
+    /// Path to data file (CSV or JSONL)
+    pub file: PathBuf,
+
+    /// Path to database directory
+    #[arg(short, long, default_value = "./data")]
+    pub database: PathBuf,
+
+    /// Collection name
+    #[arg(short, long)]
+    pub collection: String,
+
+    /// Vector dimension (auto-detected if not specified)
+    #[arg(long)]
+    pub dimension: Option<usize>,
+
+    /// Distance metric — only checked when importing into an existing
+    /// collection; a new collection defaults to cosine
+    #[arg(long, value_enum)]
+    pub metric: Option<MetricArg>,
+
+    /// Storage mode (full, sq8, binary)
+    #[arg(long, value_enum, default_value = "full")]
+    pub storage_mode: StorageModeArg,
+
+    /// ID column name (for CSV)
+    #[arg(long, default_value = "id")]
+    pub id_column: String,
+
+    /// Vector column name (for CSV)
+    #[arg(long, default_value = "vector")]
+    pub vector_column: String,
+
+    /// Batch size for insertion
+    #[arg(long, default_value = "1000")]
+    pub batch_size: usize,
+
+    /// Show progress bar (pass `--progress false` to disable)
+    #[arg(
+        long,
+        default_value_t = true,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        action = clap::ArgAction::Set
+    )]
+    pub progress: bool,
+
+    /// Validate the file and print what would be imported, writing nothing
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Policy for ids already in the collection (fail refuses before any write)
+    #[arg(long, value_enum, default_value = "upsert")]
+    pub on_conflict: OnConflictArg,
+
+    /// Keep importing after a bad record (default: abort before any write)
+    #[arg(long)]
+    pub continue_on_error: bool,
+
+    /// Write every rejected record as JSONL to this file
+    #[arg(long)]
+    pub error_report: Option<PathBuf>,
+}
+
 /// Commands for data operations on collections.
 #[derive(Subcommand)]
 pub enum DataCommands {
     /// Import vectors from CSV or JSONL file
-    Import {
-        /// Path to data file (CSV or JSONL)
-        file: PathBuf,
+    Import(ImportArgs),
 
-        /// Path to database directory
-        #[arg(short, long, default_value = "./data")]
-        database: PathBuf,
-
-        /// Collection name
-        #[arg(short, long)]
-        collection: String,
-
-        /// Vector dimension (auto-detected if not specified)
-        #[arg(long)]
-        dimension: Option<usize>,
-
-        /// Distance metric — only checked when importing into an existing
-        /// collection; a new collection defaults to cosine
-        #[arg(long, value_enum)]
-        metric: Option<MetricArg>,
-
-        /// Storage mode (full, sq8, binary)
-        #[arg(long, value_enum, default_value = "full")]
-        storage_mode: StorageModeArg,
-
-        /// ID column name (for CSV)
-        #[arg(long, default_value = "id")]
-        id_column: String,
-
-        /// Vector column name (for CSV)
-        #[arg(long, default_value = "vector")]
-        vector_column: String,
-
-        /// Batch size for insertion
-        #[arg(long, default_value = "1000")]
-        batch_size: usize,
-
-        /// Show progress bar (pass `--progress false` to disable)
-        #[arg(
-            long,
-            default_value_t = true,
-            num_args = 0..=1,
-            default_missing_value = "true",
-            action = clap::ArgAction::Set
-        )]
-        progress: bool,
-    },
-
-    /// Export a collection to JSON file
+    /// Export a collection to a JSON, JSONL or CSV file
     Export {
         /// Path to database directory
         path: PathBuf,
@@ -247,9 +351,18 @@ pub enum DataCommands {
         /// Collection name
         collection: String,
 
-        /// Output file path
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        /// Output file path (`--output-file`; the global `--output` is the
+        /// format, so the file flag moved off that name; default: `<collection>.<format-ext>`)
+        #[arg(short = 'o', long = "output-file")]
+        output_file: Option<PathBuf>,
+
+        /// Output file format (default: inferred from `--output` extension, else json)
+        #[arg(long, value_enum)]
+        format: Option<ExportFormatArg>,
+
+        /// VelesQL filter condition applied to exported rows (e.g. "cat = 'tech' AND id < 10")
+        #[arg(long = "where")]
+        where_clause: Option<String>,
 
         /// Include vectors in export (pass `--include-vectors false` to omit them)
         #[arg(
@@ -530,5 +643,96 @@ pub enum LicenseAction {
         /// Public key for verification (base64 encoded)
         #[arg(short, long)]
         public_key: String,
+    },
+}
+
+/// `velesdb config` actions. All resolve the file the way every
+/// database-opening command does: `--config`/`VELESDB_CONFIG`, else
+/// `./velesdb.toml`, else the core defaults.
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Print the config file the CLI reads (nothing on stdout when only the
+    /// core defaults apply)
+    Path,
+
+    /// Print the effective engine configuration: defaults, then the file,
+    /// then the VELESDB_* engine variables
+    Show {
+        /// Output format (toml, json)
+        #[arg(short, long, value_enum, default_value = "toml")]
+        format: ConfigFormat,
+    },
+
+    /// Validate a config file (default: the one `config path` reports);
+    /// exits 1 when it is invalid
+    Validate {
+        /// File to validate instead of the resolved one
+        file: Option<PathBuf>,
+    },
+
+    /// Open the config file in $VISUAL or $EDITOR, then validate it
+    Edit,
+}
+
+/// Output format of `velesdb config show`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ConfigFormat {
+    /// TOML, loadable back with `--config`
+    Toml,
+    /// JSON
+    Json,
+}
+
+/// `velesdb db` maintenance actions. All operate offline against a database
+/// directory and take its exclusive lock like every other command.
+#[derive(Subcommand)]
+pub enum DbAction {
+    /// Per-collection stats: kind, point/node count, disk usage, last ANALYZE
+    Stats {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
+
+    /// Vacuum: rebuild the HNSW index of each targeted vector collection,
+    /// removing tombstoned entries
+    Vacuum {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Only this collection (must be a vector collection; default: all)
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Also rewrite vector storage, reclaiming disk space
+        #[arg(long)]
+        compact: bool,
+    },
+
+    /// Snapshot: flush the database and copy it into a fresh directory.
+    /// Opens the database, so it takes the same exclusive lock every other
+    /// command does — a running server or REPL on the directory fails it.
+    Snapshot {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Destination directory (must not exist or be empty). Named
+        /// `--output-dir` because the global `--output` is the format.
+        #[arg(short = 'o', long = "output-dir")]
+        output_dir: PathBuf,
+    },
+
+    /// Restore: verify a snapshot's manifest, copy it into a fresh directory
+    /// and open it to prove it loads
+    Restore {
+        /// Path to snapshot directory (made by `db snapshot`)
+        path: PathBuf,
+
+        /// Destination database directory (must not exist or be empty)
+        #[arg(short = 'o', long = "output-dir")]
+        output_dir: PathBuf,
     },
 }

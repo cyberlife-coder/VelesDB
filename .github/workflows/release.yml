@@ -758,6 +758,13 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          # (#2748) Sans tag_name, l'action retombe sur GITHUB_REF : un
+          # dispatch manuel sur une branche (refs/heads/main) fait échouer le
+          # job « GitHub Releases requires a tag » et sauter le back-merge.
+          # Le tag v<version> est posé par tag-release.yml avant ce workflow ;
+          # le cibler explicitement rend la release indépendante du ref du
+          # dispatch (republish d'une release déjà taguée incluse).
+          tag_name: v${{ needs.validate.outputs.version }}
           name: VelesDB v${{ needs.validate.outputs.version }}
           body_path: RELEASE_NOTES.md
           prerelease: ${{ needs.validate.outputs.is_prerelease == 'true' }}

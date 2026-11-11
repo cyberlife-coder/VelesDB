@@ -32,7 +32,7 @@ const PROJECT_FACTS = [
 const store = MemoryService.open(mkdtempSync(join(tmpdir(), 'velesdb-demo-')), 'hash')
 
 // An earlier session recorded the decision, its reason, and routine config.
-const reason = await store.remember(
+const { id: reason } = await store.remember(
   "Our biggest customer's field crews work from remote mining sites over satellite links",
 )
 await store.remember('We set the default HTTP request timeout to 7 seconds', [

@@ -55,7 +55,7 @@ silently loses precision above 2^53, so every id (`remember`'s return,
 `memory_id`) crosses the boundary as a decimal string:
 
 ```js
-const id = await store.remember('a fact')   // '15545792975496669522' — a string
+const { id, similar } = await store.remember('a fact')  // id: '15545792975496669522' — a string
 await store.relate(id, otherId, 'because')  // pass the string back verbatim
 ```
 

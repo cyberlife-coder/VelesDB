@@ -14,13 +14,46 @@
 )]
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use velesdb_core::{Database, DistanceMetric, Point, StorageMode};
 
 use crate::helpers::{self, BatchImporter};
+
+#[path = "import_validate.rs"]
+mod validate;
+use validate::*;
+
+/// How many rejected records [`ImportStats::error_details`] keeps in memory.
+/// Past the cap, records are still counted in `errors` and still land in the
+/// `--error-report` file — only the in-memory list is bounded.
+const MAX_REPORTED_ERRORS: usize = 4096;
+
+/// What `data import` does when an imported id already exists in the
+/// collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnConflict {
+    /// Update the existing point (historical behaviour).
+    #[default]
+    Upsert,
+    /// Leave the existing point untouched; the record is counted as skipped.
+    Skip,
+    /// Refuse the import when an id already exists.
+    Fail,
+}
+
+/// One rejected record: its 1-based ordinal in the file (line for JSONL,
+/// record for CSV) and the reason it was refused.
+#[derive(Debug)]
+pub struct ImportError {
+    /// Line (JSONL) or record ordinal (CSV) of the bad record, 1-based.
+    pub line: usize,
+    /// Why the record was rejected.
+    pub reason: String,
+}
 
 /// Import configuration
 pub struct ImportConfig {
@@ -34,6 +67,15 @@ pub struct ImportConfig {
     pub id_column: String,
     pub vector_column: String,
     pub show_progress: bool,
+    /// Validate and count without writing (`--dry-run`).
+    pub dry_run: bool,
+    /// Policy for ids already present in the collection.
+    pub on_conflict: OnConflict,
+    /// Keep importing after a bad record (`--continue-on-error`); when false,
+    /// the first invalid record aborts before anything is written.
+    pub continue_on_error: bool,
+    /// Optional JSONL file receiving every rejected record.
+    pub error_report: Option<PathBuf>,
 }
 
 impl Default for ImportConfig {
@@ -47,17 +89,12 @@ impl Default for ImportConfig {
             id_column: "id".to_string(),
             vector_column: "vector".to_string(),
             show_progress: true,
+            dry_run: false,
+            on_conflict: OnConflict::Upsert,
+            continue_on_error: false,
+            error_report: None,
         }
     }
-}
-
-/// JSON Lines record structure
-#[derive(Debug, Deserialize)]
-struct JsonRecord {
-    id: u64,
-    vector: Vec<f32>,
-    #[serde(default)]
-    payload: Option<serde_json::Value>,
 }
 
 /// Import from JSON Lines file
@@ -70,28 +107,24 @@ struct JsonRecord {
 /// - **Batch flush**: Single I/O flush per batch
 /// - Target: ~3-5K vectors/sec at 768D with batch_size=1000
 pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
-    let file = File::open(path).context("Failed to open JSONL file")?;
-    let file_size = file.metadata()?.len();
+    let start = std::time::Instant::now();
+    let file_size = File::open(path)
+        .context("Failed to open JSONL file")?
+        .metadata()?
+        .len();
 
-    // Perf: Streaming - count lines without loading all in memory
-    let total = BufReader::with_capacity(64 * 1024, &file).lines().count();
-
-    if total == 0 {
+    let all_errors = config.continue_on_error || config.dry_run;
+    let validation = validate_jsonl(path, config, all_errors)?;
+    if validation.records == 0 {
         anyhow::bail!("Empty file");
     }
+    fail_fast_on_first_error(&validation, config)?;
 
-    // Reopen file for actual processing
-    let file = File::open(path)?;
-    let mut reader = BufReader::with_capacity(128 * 1024, file);
+    if config.dry_run {
+        return dry_run_stats(db, config, validation, start);
+    }
 
-    // Perf: Read first line to detect dimension
-    let mut first_line = String::new();
-    reader.read_line(&mut first_line)?;
-    let first_record: JsonRecord =
-        serde_json::from_str(&first_line).context("Failed to parse first line")?;
-    let dimension = config.dimension.unwrap_or(first_record.vector.len());
-
-    // Create or get collection
+    let dimension = resolve_dimension(&validation, config)?;
     let collection = get_or_create_collection(
         db,
         &config.collection,
@@ -99,45 +132,67 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
         config.metric,
         config.storage_mode,
     )?;
+    let conflicts = resolve_conflicts(&collection, config, &validation.ids)?;
 
+    let total = validation.records;
     let progress = helpers::create_progress_bar(total, config.show_progress);
     helpers::set_import_message(&progress, total, file_size, config.show_progress);
 
-    let start = std::time::Instant::now();
     let mut importer = BatchImporter::new(&collection, config.batch_size);
+    let mut report = open_error_report(config)?;
+    let mut details: Vec<ImportError> = Vec::new();
+    let mut seen = HashSet::with_capacity(validation.ids.len());
+    let mut skipped = 0usize;
 
-    // Process first record (already parsed)
-    if first_record.vector.len() == dimension {
-        importer.push(Point::new(
-            first_record.id,
-            first_record.vector,
-            first_record.payload,
-        ))?;
-    } else {
-        importer.record_error();
-    }
-    progress.inc(1);
-
-    // Perf: Streaming parse - process line by line
-    let mut line = String::with_capacity(dimension * 10); // Pre-allocate line buffer
+    let mut reader = BufReader::with_capacity(128 * 1024, File::open(path)?);
+    let mut line = String::with_capacity(dimension * 10);
+    let mut ordinal = 0usize;
     while reader.read_line(&mut line)? > 0 {
+        ordinal += 1;
         match serde_json::from_str::<JsonRecord>(&line) {
-            Ok(record) => {
-                if record.vector.len() != dimension {
-                    importer.record_error();
-                } else {
-                    importer.push(Point::new(record.id, record.vector, record.payload))?;
+            Ok(rec) if check_dimension(rec.vector.len(), Some(dimension), None).is_none() => {
+                if take_conflict(
+                    rec.id,
+                    config.on_conflict,
+                    &conflicts,
+                    &mut seen,
+                    &mut skipped,
+                ) {
+                    importer.push(Point::new(rec.id, rec.vector, rec.payload))?;
                 }
             }
-            Err(_) => {
-                importer.record_error();
-            }
+            Ok(_) => record_error(
+                &mut details,
+                &mut report,
+                &mut importer,
+                ImportError {
+                    line: ordinal,
+                    reason: format!("dimension does not match {dimension}"),
+                },
+            )?,
+            Err(e) => record_error(
+                &mut details,
+                &mut report,
+                &mut importer,
+                ImportError {
+                    line: ordinal,
+                    reason: format!("invalid JSON: {e}"),
+                },
+            )?,
         }
-        line.clear(); // Reuse buffer
+        line.clear();
         progress.inc(1);
     }
 
-    finalize_import(importer, &progress, total, start)
+    finalize_import(
+        importer,
+        &progress,
+        total,
+        start,
+        skipped,
+        conflicts.len(),
+        details,
+    )
 }
 
 /// Import from CSV file
@@ -149,47 +204,22 @@ pub fn import_jsonl(db: &Database, path: &Path, config: &ImportConfig) -> Result
 /// - **Parallel HNSW insert**: Uses rayon for CPU-bound indexing
 /// - **Batch flush**: Single I/O flush per batch
 /// - Target: ~3-5K vectors/sec at 768D with batch_size=1000
-#[allow(clippy::too_many_lines)]
 pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
-    let file = File::open(path).context("Failed to open CSV file")?;
-    let file_size = file.metadata()?.len();
+    let start = std::time::Instant::now();
+    let file_size = path.metadata()?.len();
 
-    // Perf: Use large buffer for reduced syscalls
-    let buffered = BufReader::with_capacity(128 * 1024, file);
-    let mut reader = csv::Reader::from_reader(buffered);
-
-    // Get headers
-    let headers = reader.headers()?.clone();
-    let id_idx = headers
-        .iter()
-        .position(|h| h == config.id_column)
-        .context(format!("ID column '{}' not found", config.id_column))?;
-    let vector_idx = headers
-        .iter()
-        .position(|h| h == config.vector_column)
-        .context(format!(
-            "Vector column '{}' not found",
-            config.vector_column
-        ))?;
-
-    // Count records for progress bar (streaming count)
-    let total = reader.records().count();
-    if total == 0 {
+    let all_errors = config.continue_on_error || config.dry_run;
+    let validation = validate_csv(path, config, all_errors)?;
+    if validation.records == 0 {
         anyhow::bail!("Empty file");
     }
+    fail_fast_on_first_error(&validation, config)?;
 
-    // Reopen for processing
-    let file = File::open(path)?;
-    let buffered = BufReader::with_capacity(128 * 1024, file);
-    let mut reader = csv::Reader::from_reader(buffered);
+    if config.dry_run {
+        return dry_run_stats(db, config, validation, start);
+    }
 
-    // Detect dimension from first record
-    let first_record = reader.records().next().context("No records in CSV")??;
-    let vector_str = &first_record[vector_idx];
-    let first_vector = parse_vector(vector_str)?;
-    let dimension = config.dimension.unwrap_or(first_vector.len());
-
-    // Create or get collection
+    let dimension = resolve_dimension(&validation, config)?;
     let collection = get_or_create_collection(
         db,
         &config.collection,
@@ -197,39 +227,71 @@ pub fn import_csv(db: &Database, path: &Path, config: &ImportConfig) -> Result<I
         config.metric,
         config.storage_mode,
     )?;
+    let conflicts = resolve_conflicts(&collection, config, &validation.ids)?;
 
-    // Reopen for final processing
-    let file = File::open(path)?;
-    let buffered = BufReader::with_capacity(128 * 1024, file);
-    let mut reader = csv::Reader::from_reader(buffered);
-
+    let (mut reader, id_idx, vector_idx) = open_csv(path, config)?;
+    let headers = reader.headers()?.clone();
+    let total = validation.records;
     let progress = helpers::create_progress_bar(total, config.show_progress);
     helpers::set_import_message(&progress, total, file_size, config.show_progress);
 
-    let start = std::time::Instant::now();
     let mut importer = BatchImporter::new(&collection, config.batch_size);
+    let mut report = open_error_report(config)?;
+    let mut details: Vec<ImportError> = Vec::new();
+    let mut seen = HashSet::with_capacity(validation.ids.len());
+    let mut skipped = 0usize;
 
-    // Perf: Streaming parse - process record by record
-    for result in reader.records() {
+    for (idx, result) in reader.records().enumerate() {
+        let ordinal = idx + 1;
         match result {
             Ok(record) => {
-                process_csv_record(
-                    &record,
-                    &headers,
-                    id_idx,
-                    vector_idx,
-                    dimension,
-                    &mut importer,
-                )?;
+                match csv_record_check(&record, id_idx, vector_idx, Some(dimension), None) {
+                    Ok((id, vector)) => {
+                        if take_conflict(
+                            id,
+                            config.on_conflict,
+                            &conflicts,
+                            &mut seen,
+                            &mut skipped,
+                        ) {
+                            let payload_val =
+                                build_csv_payload(&headers, &record, id_idx, vector_idx);
+                            importer.push(Point::new(id, vector, payload_val))?;
+                        }
+                    }
+                    Err(reason) => record_error(
+                        &mut details,
+                        &mut report,
+                        &mut importer,
+                        ImportError {
+                            line: ordinal,
+                            reason,
+                        },
+                    )?,
+                }
             }
-            Err(_) => {
-                importer.record_error();
-            }
+            Err(e) => record_error(
+                &mut details,
+                &mut report,
+                &mut importer,
+                ImportError {
+                    line: ordinal,
+                    reason: format!("invalid CSV record: {e}"),
+                },
+            )?,
         }
         progress.inc(1);
     }
 
-    finalize_import(importer, &progress, total, start)
+    finalize_import(
+        importer,
+        &progress,
+        total,
+        start,
+        skipped,
+        conflicts.len(),
+        details,
+    )
 }
 
 /// Flush the batch importer, finish the progress bar, and build [`ImportStats`].
@@ -240,6 +302,9 @@ fn finalize_import(
     progress: &indicatif::ProgressBar,
     total: usize,
     start: std::time::Instant,
+    skipped: usize,
+    conflicts: usize,
+    error_details: Vec<ImportError>,
 ) -> Result<ImportStats> {
     let acc = importer.flush()?;
     progress.finish_with_message("Import complete");
@@ -248,6 +313,9 @@ fn finalize_import(
         total,
         imported: acc.imported,
         errors: acc.errors,
+        skipped,
+        conflicts,
+        error_details,
         duration_ms: start.elapsed().as_millis() as u64,
     })
 }
@@ -260,9 +328,35 @@ fn finalize_import(
 /// collection). Payloads are not carried by this format — use `.jsonl` / `.csv`
 /// when payloads are needed.
 pub fn import_raw_bulk(db: &Database, path: &Path, config: &ImportConfig) -> Result<ImportStats> {
+    let start = std::time::Instant::now();
     let bytes = std::fs::read(path).context("Failed to read binary file")?;
     let raw = velesdb_core::wire::vrb1::decode(&bytes)
         .map_err(|e| anyhow::anyhow!("Invalid VRB1 binary file: {e}"))?;
+
+    let total = raw.ids.len();
+    if config.dry_run {
+        let conflicts = match (
+            config.on_conflict,
+            db.get_vector_collection(&config.collection),
+        ) {
+            (OnConflict::Upsert, _) | (_, None) => 0,
+            (_, Some(col)) => existing_ids(&col, &raw.ids)?.len(),
+        };
+        let imported = if config.on_conflict == OnConflict::Fail && conflicts > 0 {
+            0
+        } else {
+            total - conflicts.min(total)
+        };
+        return Ok(ImportStats {
+            total,
+            imported,
+            errors: 0,
+            skipped: 0,
+            conflicts,
+            error_details: Vec::new(),
+            duration_ms: start.elapsed().as_millis() as u64,
+        });
+    }
 
     let collection = get_or_create_collection(
         db,
@@ -271,87 +365,25 @@ pub fn import_raw_bulk(db: &Database, path: &Path, config: &ImportConfig) -> Res
         config.metric,
         config.storage_mode,
     )?;
+    let conflicts = resolve_conflicts(&collection, config, &raw.ids)?;
 
-    let total = raw.ids.len();
-    let start = std::time::Instant::now();
-    let imported = collection.upsert_bulk_from_raw(&raw.vectors, &raw.ids, raw.dimension, None)?;
+    let n_conflicts = conflicts.len();
+    let (vectors, ids, skipped) = if conflicts.is_empty() {
+        (raw.vectors, raw.ids, 0)
+    } else {
+        filter_conflicting(&raw.vectors, &raw.ids, raw.dimension, &conflicts)
+    };
+    let imported = collection.upsert_bulk_from_raw(&vectors, &ids, raw.dimension, None)?;
 
     Ok(ImportStats {
         total,
         imported,
         errors: 0,
+        skipped,
+        conflicts: n_conflicts,
+        error_details: Vec::new(),
         duration_ms: start.elapsed().as_millis() as u64,
     })
-}
-
-/// Process a single CSV record and push it into the batch importer.
-fn process_csv_record(
-    record: &csv::StringRecord,
-    headers: &csv::StringRecord,
-    id_idx: usize,
-    vector_idx: usize,
-    dimension: usize,
-    importer: &mut BatchImporter<'_>,
-) -> Result<()> {
-    let id: u64 = match record[id_idx].parse() {
-        Ok(id) => id,
-        Err(_) => {
-            importer.record_error();
-            return Ok(());
-        }
-    };
-
-    match parse_vector(&record[vector_idx]) {
-        Ok(vector) => {
-            if vector.len() != dimension {
-                importer.record_error();
-                return Ok(());
-            }
-            let payload_val = build_csv_payload(headers, record, id_idx, vector_idx);
-            importer.push(Point::new(id, vector, payload_val))?;
-        }
-        Err(_) => {
-            importer.record_error();
-        }
-    }
-    Ok(())
-}
-
-/// Builds a JSON payload from non-id, non-vector CSV columns.
-fn build_csv_payload(
-    headers: &csv::StringRecord,
-    record: &csv::StringRecord,
-    id_idx: usize,
-    vector_idx: usize,
-) -> Option<serde_json::Value> {
-    let mut payload = serde_json::Map::new();
-    for (i, header) in headers.iter().enumerate() {
-        if i != id_idx && i != vector_idx {
-            payload.insert(
-                header.to_string(),
-                serde_json::Value::String(record[i].to_string()),
-            );
-        }
-    }
-    if payload.is_empty() {
-        None
-    } else {
-        Some(serde_json::Value::Object(payload))
-    }
-}
-
-/// Parse vector from string (comma-separated or JSON array)
-fn parse_vector(s: &str) -> Result<Vec<f32>> {
-    let s = s.trim();
-    if s.starts_with('[') {
-        // JSON array format
-        serde_json::from_str(s).context("Invalid JSON vector")
-    } else {
-        // Comma-separated format
-        s.split(',')
-            .map(|v| v.trim().parse::<f32>().context("Invalid float value"))
-            .collect()
-    }
 }
 
 /// Get or create collection
@@ -400,6 +432,13 @@ pub struct ImportStats {
     pub total: usize,
     pub imported: usize,
     pub errors: usize,
+    /// Records skipped by `--on-conflict skip` (existing or duplicate ids).
+    pub skipped: usize,
+    /// Ids already in the collection, reported by `--dry-run`.
+    pub conflicts: usize,
+    /// First [`MAX_REPORTED_ERRORS`] rejected records (the `--error-report`
+    /// file carries the full list).
+    pub error_details: Vec<ImportError>,
     pub duration_ms: u64,
 }
 

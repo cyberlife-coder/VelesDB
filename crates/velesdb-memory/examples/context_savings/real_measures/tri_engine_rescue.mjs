@@ -92,7 +92,7 @@ const mem = MemoryService.open(dir, 'hash')
 
 // Build the knowledge base.
 const ids = {}
-for (const [key, text] of Object.entries(FACTS)) ids[key] = await mem.remember(text)
+for (const [key, text] of Object.entries(FACTS)) ids[key] = (await mem.remember(text)).id
 for (const [from, to, rel] of LINKS) await mem.relate(ids[from], ids[to], rel)
 
 const K = 5
@@ -185,7 +185,7 @@ console.log(`reproducibility      : ${again.content === once.content ? 'OK (byte
 console.log('')
 console.log('RL x GRAPH SYNERGY (importance blend over the fused pool)')
 const SIMILAR_ONLY = 'Failed checkout attempts during peak periods are tallied in the weekly payments report.'
-const similarId = await mem.remember(SIMILAR_ONLY)
+const similarId = (await mem.remember(SIMILAR_ONLY)).id
 for (let i = 0; i < 20; i++) await mem.feedback(ids.pool_fix, true)
 for (let i = 0; i < 5; i++) await mem.feedback(similarId, false)
 

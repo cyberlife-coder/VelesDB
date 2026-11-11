@@ -27,7 +27,7 @@ pub fn execute_query(
 
     // Parse the query
     let mut parsed = velesdb_core::velesql::Parser::parse(query)
-        .map_err(|e| anyhow::anyhow!("Parse error: {}", e.message))?;
+        .map_err(|e| anyhow::Error::new(velesdb_core::Error::from(e)))?;
 
     // $parameter vectors can't be supplied from the REPL (use the REST API).
     // Returning Err (not Ok-empty) makes the REPL print a red error and scripts

@@ -14,7 +14,12 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 
 ## Table of contents
 
+- [Command overview](#command-overview)
 - [Global options](#global-options)
+- [Exit codes](#exit-codes)
+- [Configuration](#configuration)
+- [Database maintenance](#database-maintenance)
+- [Serve (embedded REST)](#serve-embedded-rest)
 - [Collections](#collections)
 - [Points](#points)
 - [Import / export](#import--export)
@@ -25,8 +30,31 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 - [SIMD diagnostics](#simd-diagnostics)
 - [License management](#license-management)
 - [Shell completions](#shell-completions)
+- [Agent](#agent)
 - [Building the Debian package](#building-the-debian-package)
 - [Error reference](#error-reference)
+
+---
+
+## Command overview
+
+Every command runs offline against a database directory (`./data` unless a path
+argument says otherwise). `velesdb --help` prints this same list.
+
+| Command | Subcommands | Section |
+|---------|-------------|---------|
+| `velesdb repl [path]` | interactive REPL (dot-commands + `\session` commands) | [REPL reference](CLI_REPL_REFERENCE.md) |
+| `velesdb info <path>` | database overview | [Collections](#collections) |
+| `velesdb collection <path> …` | `create`, `create-graph`, `create-metadata`, `delete`, `list`, `show`, `analyze` | [Collections](#collections) · [Analyze](#analyze) |
+| `velesdb data <path> …` | `import`, `export`, `upsert`, `get`, `delete`, `scroll`, `stream-insert` | [Points](#points) · [Import / export](#import--export) |
+| `velesdb query <path> …` | `execute`, `search`, `batch-search`, `explain` | [Query](#query) |
+| `velesdb graph <path> <col> …` | `add-edge`, `get-edges`, `degree`, `traverse`, `neighbors`, `store-payload`, `get-payload`, `remove-edge`, `count`, `search`, `nodes`, `doctor` | [Graph](#graph) |
+| `velesdb index <path> <col> …` | `create`, `drop`, `list` | [Index management](#index-management) |
+| `velesdb config …` | `path`, `show`, `validate`, `edit` — the engine configuration the CLI loads | [Configuration](#configuration) |
+| `velesdb agent <path> <question…>` | bounded ReAct agent over whitelisted VelesQL tools | [Agent](#agent) |
+| `velesdb simd …` | `info`, `benchmark` | [SIMD diagnostics](#simd-diagnostics) |
+| `velesdb license …` | `show`, `activate`, `verify` | [License management](#license-management) |
+| `velesdb completions <shell>` | `bash`, `zsh`, `fish`, `powershell`, `elvish` | [Shell completions](#shell-completions) |
 
 ---
 
@@ -35,10 +63,28 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 | Option | Environment variable | Effect |
 |---|---|---|
 | `--config <FILE>` | `VELESDB_CONFIG` | Path to a VelesDB TOML config file (search/HNSW/storage/limits/WAL batching). Applies to every command that opens a database, including the REPL. An invalid or missing path fails fast — it never silently falls back to defaults. Without it, `./velesdb.toml` is read when it exists (same engine sections and fallback as `velesdb-server`; an invalid one fails every command that opens a database until it is fixed or `--config` points elsewhere), else the core defaults apply. |
+| `--output <FORMAT>` | — | Global output format: `table` (default), `json`, `jsonl` (one compact JSON value per line), `csv`. Honored by every command that prints data; overrides its per-command `--format`. `jsonl`/`csv` are meant for scripting: a SELECT with no rows prints `[]` (json) or nothing after the header (csv), never a prose line. |
+| `--quiet` | — | Suppresses human-readable status messages (creation/import summaries…). Data output (table or machine format) still prints. Intended for scripts and CI together with `--output`. |
+| `--no-color` | `NO_COLOR=1` | Disables colored output. |
 
 ```bash
 velesdb --config ./velesdb.toml collection list ./data
+velesdb --output jsonl --quiet query execute ./data "SELECT * FROM docs LIMIT 100"
+velesdb --no-color collection list ./data
 ```
+
+## Exit codes
+
+Stable for scripting; also pinned by tests in `crates/velesdb-cli`.
+
+| Code | Meaning | Examples |
+|---|---|---|
+| `0` | Success | |
+| `1` | Generic error | invalid config file, validation failure, internal error |
+| `2` | Usage error | unknown flag, invalid `--output` value, missing argument (reported by the argument parser) |
+| `3` | Not found | collection / point / edge / node does not exist (`VELES-002`, `VELES-003`, `VELES-020`, `VELES-022`) |
+| `4` | I/O error | database path unreadable or not a directory (`VELES-011`) |
+| `5` | VelesQL parse error | invalid query syntax (`VELES-010`) |
 
 Two more environment variables affect the binary:
 
@@ -46,6 +92,106 @@ Two more environment variables affect the binary:
 |---|---|
 | `VELESDB_NO_UPDATE_CHECK=1` | Disables the non-blocking background update check (built with the default `update-check` feature); [what it sends](CONFIGURATION.md#update-check-and-telemetry). Can also be disabled with `[update_check] enabled = false` in the config file. |
 | `VELESDB_LICENSE_PUBLIC_KEY` | Base64 Ed25519 public key used by `license show` and `license activate`. Unset means a development fallback key is used, with a warning. |
+
+---
+
+## Configuration
+
+`velesdb config` inspects the engine configuration through the same resolution
+every database-opening command uses: `--config` / `VELESDB_CONFIG`, else
+`./velesdb.toml`, else the core defaults — with the `VELESDB_*` engine
+variables applied on top in every case.
+
+```bash
+# The file the CLI reads (absolute path on stdout; nothing on stdout, a note on
+# stderr, when only the core defaults apply)
+velesdb config path
+
+# The effective engine configuration: defaults, then the file, then VELESDB_*.
+# Only the engine tables ([search] [hnsw] [storage] [limits] [quantization]) are
+# printed — the CLI reads no other table. TOML output loads back with --config.
+velesdb config show
+velesdb config show --format json
+
+# Validate the resolved file, or a named one. Exit code 1 when invalid; tables
+# the CLI engine does not read (e.g. velesdb-server's [server]/[auth]) are listed.
+velesdb config validate
+velesdb config validate ./staging.toml
+
+# Open the resolved file in $VISUAL or $EDITOR, then validate what was saved
+velesdb config edit
+```
+
+| Action | Exit code 1 when |
+|---|---|
+| `path` | an explicit `--config` file does not exist |
+| `show` | the resolved configuration does not load |
+| `validate` | the file does not parse or a value fails validation |
+| `edit` | no file resolves, `$VISUAL`/`$EDITOR` is unset, the editor fails, or the saved file is invalid |
+
+---
+
+## Database maintenance
+
+`velesdb db` operates offline on a database directory; every action opens the
+database, so it takes the same exclusive `velesdb.lock` as any other command —
+a running `velesdb-server` or REPL on the directory makes it fail rather than
+race a live database.
+
+```bash
+# Per-collection stats: kind, point/node count, disk usage, last ANALYZE
+velesdb db stats ./data
+velesdb db stats ./data -f json
+
+# Rebuild the HNSW index of every vector collection (drops tombstoned
+# entries), or one with --collection; --compact also rewrites vector storage.
+# Same core calls as POST /collections/{name}/vacuum and /compact.
+velesdb db vacuum ./data
+velesdb db vacuum ./data --collection docs --compact
+
+# Flush everything and copy the tree into a fresh directory. The manifest is
+# written last — a snapshot without it is an incomplete copy, not a snapshot.
+velesdb db snapshot ./data -o ./backups/data-2026-11-10
+
+# Verify the manifest, copy into a fresh directory, open it to prove it loads.
+# Never overwrites: the destination must not exist or be empty.
+velesdb db restore ./backups/data-2026-11-10 -o ./data
+```
+
+| Action | Exit code 1 when |
+|---|---|
+| `stats` | the database does not open or stats cannot be read |
+| `vacuum` | the named collection is missing or not a vector collection, or a rebuild/flush fails |
+| `snapshot` | a flush fails, the destination is not fresh, or it is inside the source tree |
+| `restore` | the source has no manifest (incomplete copy), the destination is not fresh, or the copy fails to open |
+
+---
+
+## Serve (embedded REST)
+
+`velesdb serve` runs the same REST API `velesdb-server` ships, in-process —
+the two binaries share one bootstrap (`velesdb_server::serve`), so flags,
+`VELESDB_*` env vars and `velesdb.toml` sections mean the same thing. The
+subcommand exists only in builds with the `serve` cargo feature; a
+CLI-only build prints a pointer to the feature or the standalone binary.
+
+```bash
+# Default dev settings: 127.0.0.1:8080, ./data
+velesdb serve
+
+# Same flags as velesdb-server
+velesdb serve -d ./prod --host 127.0.0.1 --port 18080 \
+  --rate-limit 100 --allowed-hosts db.internal
+
+# TLS, identical to velesdb-server
+velesdb serve --tls-cert cert.pem --tls-key key.pem
+```
+
+All endpoints are available under `/v1/…` plus the legacy unversioned set
+(a `deprecation: true` header marks them). See
+[SERVER_SECURITY](SERVER_SECURITY.md) for auth/TLS/CORS/Host-guard guidance —
+it applies unchanged, and so does its warning: binding a public address
+without API keys exposes every endpoint.
 
 ---
 
@@ -60,6 +206,9 @@ velesdb collection create ./data my_vectors \
 
 # Create a graph collection (schemaless)
 velesdb collection create-graph ./data my_graph
+
+# Create a graph collection with node embeddings — enables `graph search`
+velesdb collection create-graph ./data my_embedded_graph --dimension 384
 
 # Create a metadata-only collection (no vectors, no graph — structured payloads only)
 velesdb collection create-metadata ./data my_metadata
@@ -197,10 +346,17 @@ velesdb data import vectors.bin \
   --collection docs
 
 # Export to JSON (vector collections only)
-velesdb data export ./data documents --output documents.json
+velesdb data export ./data documents --output-file documents.json
+
+# Export to JSONL or CSV (format inferred from the extension, or --format)
+velesdb data export ./data documents --output documents.jsonl
+velesdb data export ./data documents --output documents.csv --format csv
+
+# Export only the rows matching a VelesQL filter condition
+velesdb data export ./data documents -o tech.jsonl --where "cat = 'tech' AND id < 100"
 
 # Export payloads only (omit vectors)
-velesdb data export ./data documents --output meta.json --include-vectors false
+velesdb data export ./data documents --output-file meta.json --include-vectors false
 ```
 
 > **Note on `--include-vectors`:** vectors and payloads are included by default.
@@ -250,13 +406,35 @@ Any other extension is rejected with
 | `--vector-column` | `vector` | Vector column name (CSV only) |
 | `--batch-size` | `1000` | Insertion batch size |
 | `--progress [true\|false]` | `true` | Show progress bar (`--progress false` to disable) |
+| `--dry-run` | `false` | Validate and report without writing |
+| `--on-conflict` | `upsert` | Existing-ID policy: `upsert`, `skip`, `fail` |
+| `--continue-on-error` | `false` | Import valid records, report the invalid ones |
+| `--error-report` | none | Write per-record errors to a JSONL file |
+
+`data import` validates the whole file before writing. With neither flag, the
+first invalid record aborts the command and nothing is written.
+`--continue-on-error` imports the valid records and reports the rejected ones.
+`--on-conflict skip` leaves existing points untouched (counted as skipped);
+`--on-conflict fail` refuses before any write when an input ID already exists;
+`upsert` keeps the historical overwrite behavior. `--dry-run` reports what
+would happen — records, conflicts, errors — without creating or modifying a
+collection. `--error-report <file>` writes every rejected record as
+`{"line": N, "reason": "..."}` JSONL; in-memory error details are bounded
+while the file captures the full stream.
 
 **`data export` flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o, --output` | `<collection>.json` | Output file path |
+| `-o, --output-file` | `<collection>.<ext>` | Output file path (`<ext>` follows the format; `--output-file` because the global `--output` is the format) |
+| `--format json\|jsonl\|csv` | inferred from `--output-file` extension, else `json` | Output file format |
+| `--where '<cond>'` | none | VelesQL filter condition on exported rows (metadata predicates only — vector search, `similarity()`, `MATCH`, `$params` and subqueries are refused) |
 | `--include-vectors [true\|false]` | `true` | Include vector data (`--include-vectors false` to omit) |
+
+Formats: `json` is a pretty-printed array of `{id, vector, payload}` records
+(byte-identical to previous releases), `jsonl` is one compact record per line,
+`csv` is `id`, a JSON-array `vector` column, then one column per payload key —
+re-importable via `data import file.csv`.
 
 Export operates on **vector collections only**. Exporting a graph or metadata
 collection fails with
@@ -351,8 +529,12 @@ velesdb collection analyze ./data my_vectors --format json
 
 All graph subcommands take a database path and a graph collection name.
 
+Both endpoints of `add-edge` must already exist — store a payload (or an
+embedding) on each node first, otherwise the command fails with
+`[VELES-022] Node with ID '...' not found`.
+
 ```bash
-# Add an edge
+# Add an edge (nodes 100 and 200 already carry payloads — see store-payload below)
 velesdb graph add-edge ./data my_graph 1 100 200 "AUTHORED_BY"
 
 # List edges
@@ -375,6 +557,10 @@ velesdb graph neighbors ./data my_graph 100 --direction both --format json
 # Store payload on a graph node
 velesdb graph store-payload ./data my_graph 100 '{"name": "Alice", "role": "author"}'
 
+# Store payload + embedding on a node (embeddings-enabled graphs only)
+velesdb graph store-payload ./data my_embedded_graph 100 \
+  '{"name": "Alice"}' --vector '[0.1, 0.2, 0.3, ...]'
+
 # Retrieve node payload
 velesdb graph get-payload ./data my_graph 100
 
@@ -385,9 +571,10 @@ velesdb graph remove-edge ./data my_graph 1
 velesdb graph count ./data my_graph
 velesdb graph count ./data my_graph --format json
 
-# Search graph nodes by embedding similarity (requires a graph with embeddings)
-velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' -k 10
-velesdb graph search ./data my_graph '[0.1, 0.2, 0.3]' --format json
+# Search graph nodes by embedding similarity
+# (requires a graph created with `collection create-graph --dimension N`)
+velesdb graph search ./data my_embedded_graph '[0.1, 0.2, 0.3]' -k 10
+velesdb graph search ./data my_embedded_graph '[0.1, 0.2, 0.3]' --format json
 
 # List all nodes (paginated, 20 per page)
 velesdb graph nodes ./data my_graph
@@ -511,6 +698,74 @@ velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
 
 ---
 
+## Agent
+
+`velesdb agent` asks a natural-language question about a database through a
+bounded Reason→Act loop (8 iterations by default, `--max-iterations N` for
+1..=32) over whitelisted VelesQL tools —
+`list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`, `graph`. Every
+iteration is logged (thought / action / observation) and the answer cites the
+tool outputs it used; `--save <file>` also writes that transcript as JSON. The
+same loop is available in the REPL as `.agent <question>`, with `.agent tools`,
+`.agent max-iterations [N]` and `.agent save <file>`.
+
+```bash
+velesdb agent ./data what collections exist
+velesdb agent ./data --format json "find documents about rust"
+velesdb agent ./data --max-iterations 4 --save transcript.json "count docs by kind"
+```
+
+The agent may only call these whitelisted tools — anything else is refused:
+
+| Tool | Signature | Runs |
+|------|-----------|------|
+| `list` | `list()` | all collection names |
+| `describe` | `describe(<collection>)` | stats + row count |
+| `search` | `search(<collection> <field> <term>)` | `SELECT … WHERE field MATCH 'term'` |
+| `hybrid` | `hybrid(<collection> <field> <term>)` | same query flagged hybrid (offline: runs the MATCH branch and says so) |
+| `explain` | `explain(<collection> <field> <term>)` | `EXPLAIN` of that query |
+| `aggregate` | `aggregate(<collection> <field>)` | `SELECT field, COUNT(*) … GROUP BY` |
+| `graph` | `graph(<graph> <node_id>)` | BFS traversal from the node |
+
+Verified against the binary with no LLM reachable (deterministic offline
+router answers; only the `notice:` cause text varies with the failure):
+
+```
+$ velesdb agent ./data what collections exist
+
+Agent (ReAct)
+  Backend: offline
+  notice: answered by the deterministic offline router — no LLM reachable at http://127.0.0.1:11434/api/tags: …
+
+  ── iteration 1
+    thought: ground the run: enumerate collections
+    action: list()
+    observation: 1 collection(s): docs
+  ── iteration 2
+    thought: default: describe available collections
+    action: describe(docs)
+    observation: docs: kind=vector/metadata (no stats file yet)
+
+Answer: offline mode — what the tools saw:
+• docs: kind=vector/metadata (no stats file yet)
+
+  sources: list() · describe(docs)
+```
+
+Backend: if an Ollama instance answers `GET $VELESDB_AGENT_URL/api/tags`
+(default `http://127.0.0.1:11434`), reasoning delegates to
+`$VELESDB_AGENT_MODEL` (default `qwen3:4b`) — same extractor-style contract
+`velesdb-memory` uses. When the LLM is unusable — unreachable, timed out, a
+non-2xx answer (404 for an unpulled model, 500…), at the probe or mid-loop — the
+agent runs a documented deterministic offline router over the same tools and
+prints a `notice:` line with the cause (the JSON `fallback` field; `null` when
+the LLM answered). No LLM is ever required; `--format json` prints the full
+transcript (`answer`, `backend`, `fallback`, `iterations`, `sources`) for
+scripting. In the REPL the backslash alias `\\agent` works too — see the
+[REPL reference](CLI_REPL_REFERENCE.md#react-agent).
+
+---
+
 ## Building the Debian package
 
 The crate carries a `cargo-deb` configuration
@@ -553,4 +808,4 @@ Numeric `VELES-*` codes are listed in
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 8.2.0
+Last updated: 2026-11-11 · Applies to: velesdb-core 8.2.0

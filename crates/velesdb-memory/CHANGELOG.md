@@ -9,7 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.18.0] - 2026-11-09
+## [0.18.0] - 2026-11-11
+
+### Added
+
+- **`remember` returns the existing similar memories, and `graph.auto_link`
+  wires them (opt-in).** `remember` previously stored without looking: callers
+  who wanted dedup ran `recall` first by convention, and semantic
+  near-duplicates accumulated under content-addressed ids. The tool now answers
+  `{id, id_str, similar}` — `similar` is the at-most-5 pre-existing memories
+  nearest to the stored fact, each `{id, id_str, score}` carrying the raw
+  vector similarity, best first, the fact itself and internal entity hubs
+  excluded. The embedding computed for storage is reused for the lookup — one
+  fact, one embedding. With `[graph] auto_link = true` (env
+  `VELESDB_MEMORY_AUTO_LINK`, off by default), every hit at or above
+  `[graph] auto_link_threshold` (env `VELESDB_MEMORY_AUTO_LINK_THRESHOLD`,
+  default `0.95`, must lie in `[0, 1]` — an invalid value aborts startup) also
+  gets a neutral `related_to` edge through the same derived-id path `relate`
+  uses, so re-remembering never duplicates an auto-edge; labels that imply
+  meaning (`supersedes`, `decided_in`, …) stay caller-chosen.
+- **`MemoryService::remember_detailed` / `remember_anchored_detailed`** — the
+  `RememberOutcome { fact_id, similar }` form of `remember`, for callers that
+  want the page.
+
+### Changed
+
+- **BREAKING (bindings): `remember` resolves to `{id, similar}` on Node, WASM,
+  Python and the TypeScript SDK, not to the bare id.** Read `.id` where the
+  return was used as a string/integer (`const { id } = await
+  store.remember(...)`, `mem.remember(...)["id"]`). Rust
+  `MemoryService::remember` still returns `Result<u64>` — the id. The 0.x
+  minor bump at release covers it.
 
 ### Added
 
@@ -68,6 +98,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open (naming both configurations and the migration path) instead of
   silently serving nonsense recall. No binding API change.
 
+- **BREAKING (MCP wire only): every memory id is now a decimal string, not a JSON number** (#1468 follow-up).
+  `id`, `edge_id`, `from`, `to`, `target_id`, `ids` in tool *results* (`remember`,
+  `recall`, `recall_where`, `recall_fused`, `list_memories`, `relate`, `forget`,
+  `feedback`, `why`, `entity`, `save_working_context`, `extraction_status`)
+  serialize as strings, and their `outputSchema` advertises `"type": "string"`. A raw JSON number above 2^53 was
+  rounded by float-lossy clients and rejected outright by strict parsers (the
+  result of `recall` failed to parse in Vibe with `exceeds safe integer domain`).
+  The `*_str` twin fields are unchanged and carry the same value. Migration:
+  read `id` (or `id_str`) as a string; inputs still accept number or string.
+  The Rust API (`MemoryService`) is untouched — domain types keep `u64` — and
+  the Node/Python/WASM/TS surfaces already spoke decimal strings, so only raw
+  MCP clients that parsed `id` as a number need to switch to the string form.
+  The context compiler's `decisions[].fragment_id` keeps its recorded numeric
+  default; `policy.ids_as_strings` still stringifies it on demand.
 - **The OpenAI-compatible extractor constrains decoding** (#1944).
   `OpenAiExtractor` sends the prompt's reply contract as `response_format` —
   the OpenAI-protocol spelling (`json_schema`, `strict`) of the `format` the

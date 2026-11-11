@@ -78,6 +78,9 @@ mod graph;
 #[path = "service_graph_wiring.rs"]
 mod graph_wiring;
 
+#[path = "service_remember_outcome.rs"]
+mod remember_outcome;
+
 #[cfg(feature = "persistence")]
 #[allow(dead_code)]
 #[path = "online_migration.rs"]
@@ -135,6 +138,20 @@ const MENTIONS_RELATION: &str = "mentions";
 /// direction) — [`MENTIONS_RELATION`]'s bipartite twin, written by
 /// [`MemoryService::remember_extracted`]'s `wire_entity`.
 const ABOUT_RELATION: &str = "about";
+/// How many pre-existing memories [`MemoryService::remember_detailed`]
+/// reports as `similar` — the `k` of the ANN search it runs with the fact's
+/// own embedding. The search fetches one extra so excluding the just-stored
+/// fact still yields a full page.
+pub const SIMILAR_LIMIT: usize = 5;
+/// The only relation [`MemoryService::with_auto_link`] is allowed to write:
+/// a neutral similarity link, never an inferred semantic label — deciding
+/// `supersedes`/`decided`-style structure stays with the caller's `links`
+/// and with autograph's extraction.
+const AUTO_LINK_RELATION: &str = "related_to";
+/// Default similarity floor for [`MemoryService::with_auto_link`] when the
+/// configuration names no threshold — high enough that an automatic edge
+/// means "near-duplicate", not merely "topical neighbour".
+pub const AUTO_LINK_DEFAULT_THRESHOLD: f32 = 0.95;
 
 /// Local-first agent memory backed by a single `VelesDB` instance.
 ///
@@ -161,6 +178,7 @@ pub struct MemoryService<E: Embedder, S: FactStore = NativeStore> {
     store: S,
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
+    auto_link: Option<f32>,
     autograph_queue: AutographQueue,
     generation_gate: GenerationGate,
     fact_locks: FactWriteLocks,
@@ -170,6 +188,7 @@ pub struct MemoryService<E: Embedder, S: FactStore> {
     store: S,
     embedder: E,
     autograph: Option<crate::extract::DynExtractor>,
+    auto_link: Option<f32>,
     autograph_queue: AutographQueue,
     generation_gate: GenerationGate,
     fact_locks: FactWriteLocks,
@@ -265,6 +284,7 @@ impl<E: Embedder> MemoryService<E, NativeStore> {
             store,
             embedder,
             autograph: None,
+            auto_link: None,
             autograph_queue: AutographQueue::default(),
             generation_gate: GenerationGate::new(),
             fact_locks: FactWriteLocks::default(),
@@ -333,6 +353,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
             store,
             embedder,
             autograph: None,
+            auto_link: None,
             autograph_queue: AutographQueue::default(),
             generation_gate: GenerationGate::new(),
             fact_locks: FactWriteLocks::default(),
@@ -370,6 +391,33 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         self
     }
 
+    /// Enable similarity auto-linking on [`Self::remember_detailed`]: each
+    /// `similar` hit scoring at least `threshold` additionally gains a
+    /// `related_to` edge from the new fact. Edges go through the same
+    /// `relate` path a caller `links` entry would, so a re-remembered fact
+    /// re-derives the same edge ids instead of duplicating them. The other
+    /// `remember*` entry points are untouched: they never run the candidate
+    /// search, so they cannot rank a threshold anyway.
+    ///
+    /// `threshold` must be finite and inside `[0, 1]`; out-of-range values
+    /// are rejected at configuration time by `daemon_startup` before this
+    /// builder ever sees them — a `NaN` threshold would silently never link
+    /// (`score >= NaN` is always false), so this asserts rather than storing
+    /// it. [`AUTO_LINK_DEFAULT_THRESHOLD`] is what the daemon applies when
+    /// the flag is set without a value.
+    ///
+    /// # Panics
+    /// When `threshold` is not finite or lies outside `[0, 1]`.
+    #[must_use]
+    pub fn with_auto_link(mut self, threshold: f32) -> Self {
+        assert!(
+            threshold.is_finite() && (0.0..=1.0).contains(&threshold),
+            "auto_link threshold must be in [0, 1], got {threshold}"
+        );
+        self.auto_link = Some(threshold);
+        self
+    }
+
     /// Every deterministic rejection, before anything is written: a blank or
     /// over-long fact, an explicit zero TTL, reserved or oversized metadata,
     /// and each link's label and target. Run as one pass so a bad input never
@@ -388,18 +436,20 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         self.validate_links(links)
     }
 
-    /// Embed the fact and persist it with its date-stamped metadata and TTL.
-    /// `system` holds reserved entries the service itself writes (file
-    /// anchors), merged after caller metadata has been validated.
+    /// Persist the fact under `embedding` — already computed by the caller,
+    /// which may reuse it for the similar-candidate search — with its
+    /// date-stamped metadata and TTL. `system` holds reserved entries the
+    /// service itself writes (file anchors), merged after caller metadata
+    /// has been validated.
     fn write_fact(
         &self,
         fact_id: u64,
         fact: &str,
+        embedding: &[f32],
         metadata: Option<&Metadata>,
         ttl_seconds: Option<u64>,
         system: Option<&Metadata>,
     ) -> Result<(), MemoryError> {
-        let embedding = self.embedder.embed(fact)?;
         let stamped = with_system_entries(stamp_with_today(metadata), system);
         // Serialized per fact with `feedback`: a re-store carries the fact's
         // learned `_veles_*` state forward, and must not interleave with a
@@ -407,7 +457,7 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         let _fact = self.fact_locks.for_fact(fact_id);
         // `ttl_seconds` is already known positive-or-absent: `validate_write`
         // refuses an explicit `Some(0)` before any of this runs.
-        self.store_fact(fact_id, fact, &embedding, stamped.as_ref(), ttl_seconds)
+        self.store_fact(fact_id, fact, embedding, stamped.as_ref(), ttl_seconds)
     }
 
     /// Validate EVERY link property — relation label and target existence —

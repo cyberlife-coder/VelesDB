@@ -2461,8 +2461,13 @@ class MemoryService:
         links: Optional[List[Tuple[int, str]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         ttl_seconds: Optional[int] = None,
-    ) -> int:
-        """Store a fact and return its stable id (content-addressed / idempotent).
+    ) -> Dict[str, Any]:
+        """Store a fact and return ``{"id": ..., "similar": [...]}``.
+
+        ``similar`` lists the at-most-5 pre-existing memories nearest to the
+        stored fact (each ``{"id", "score"}``, raw similarity, the fact
+        itself and internal hubs excluded); check it before deciding which
+        candidates deserve an explicit ``links`` edge.
 
         Args:
             fact: The text to remember.
@@ -2478,7 +2483,7 @@ class MemoryService:
                 ``0`` means "expire now", not "never".
 
         Returns:
-            Stable integer id for the stored fact.
+            ``{"id": <int>, "similar": [{"id": <int>, "score": <float>}]}``.
 
         Raises:
             ValueError: If ``fact`` is empty or ``metadata`` contains a

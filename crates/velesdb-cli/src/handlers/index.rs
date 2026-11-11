@@ -39,15 +39,17 @@ fn handle_index_create(
     label: Option<&str>,
 ) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
     match index_type {
         IndexTypeArg::Secondary => {
             col.create_index(field)
                 .map_err(|e| anyhow::anyhow!("Create index failed: {e}"))?;
-            println!(
+            crate::info!(
                 "{} Secondary index created on field '{}' in '{}'",
                 "\u{2705}".green(),
                 field.cyan(),
@@ -58,7 +60,7 @@ fn handle_index_create(
             let lbl = label.unwrap_or("default");
             col.create_property_index(lbl, field)
                 .map_err(|e| anyhow::anyhow!("Create index failed: {e}"))?;
-            println!(
+            crate::info!(
                 "{} Property index created on '{}:{}' in '{}'",
                 "\u{2705}".green(),
                 lbl.cyan(),
@@ -70,7 +72,7 @@ fn handle_index_create(
             let lbl = label.unwrap_or("default");
             col.create_range_index(lbl, field)
                 .map_err(|e| anyhow::anyhow!("Create index failed: {e}"))?;
-            println!(
+            crate::info!(
                 "{} Range index created on '{}:{}' in '{}'",
                 "\u{2705}".green(),
                 lbl.cyan(),
@@ -90,16 +92,23 @@ fn handle_index_drop(
     property: &str,
 ) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
-    let dropped = col
-        .drop_index(label, property)
-        .map_err(|e| anyhow::anyhow!("Drop index failed: {e}"))?;
+    // `index list` reports btree payload indexes under the `secondary` label;
+    // `drop_index` only covers property and range indexes, so route those here.
+    let dropped = if label == "secondary" {
+        col.drop_secondary_index(property)
+    } else {
+        col.drop_index(label, property)
+            .map_err(|e| anyhow::anyhow!("Drop index failed: {e}"))?
+    };
 
     if dropped {
-        println!(
+        crate::info!(
             "{} Index '{}:{}' dropped from '{}'",
             "\u{2705}".green(),
             label.cyan(),
@@ -107,7 +116,7 @@ fn handle_index_drop(
             collection.cyan()
         );
     } else {
-        println!(
+        crate::info!(
             "{} No index '{}:{}' found in '{}'",
             "\u{26a0}\u{fe0f}".yellow(),
             label,
@@ -121,22 +130,24 @@ fn handle_index_drop(
 /// Lists all indexes on a collection.
 fn handle_index_list(path: &std::path::Path, collection: &str, format: &str) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
     let indexes = col.list_indexes();
 
-    if format == "json" {
-        print_indexes_json(&indexes)?;
+    if crate::output::is_machine(format) {
+        print_indexes_json(&indexes, format)?;
     } else {
         print_indexes_table(&indexes);
     }
     Ok(())
 }
 
-/// Prints indexes as JSON.
-fn print_indexes_json(indexes: &[velesdb_core::IndexInfo]) -> Result<()> {
+/// Prints indexes as a machine format (json, jsonl, csv).
+fn print_indexes_json(indexes: &[velesdb_core::IndexInfo], format: &str) -> Result<()> {
     let data: Vec<_> = indexes
         .iter()
         .map(|idx| {
@@ -149,8 +160,7 @@ fn print_indexes_json(indexes: &[velesdb_core::IndexInfo]) -> Result<()> {
             })
         })
         .collect();
-    println!("{}", serde_json::to_string_pretty(&data)?);
-    Ok(())
+    crate::output::print_machine(&data, format)
 }
 
 /// Prints indexes as a colored table.

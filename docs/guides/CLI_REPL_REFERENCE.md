@@ -130,7 +130,10 @@ Per-Node Statistics:
 | `.sparse-search <col> <index> <json> [k]` | Sparse vector search. JSON format: `[[idx, weight], ...]`. Default k=10. |
 | `.hybrid-sparse <col> <dense> <sparse> [k] [--strategy rrf\|average\|max\|weighted\|relative_score] [--index <name>]` | Dense+sparse hybrid search with fusion. Default k=10, strategy=rrf. Strategy names follow core's grammar (`avg`, `max`, `rsf` aliases, any case); `weighted` uses core's 0.6 / 0.3 / 0.1. |
 | `.guardrails` | Display current query guard-rails (timeout, memory limit, rate limit, circuit breaker) |
-| `.agent [cmd]` | Agent memory commands (preview — not yet fully implemented in the CLI) |
+| `.agent <question>` | Bounded ReAct agent — see [ReAct agent](#react-agent) below. Alias: `\agent` |
+| `.agent tools` | List the whitelisted tools and their argument contracts |
+| `.agent max-iterations [N]` | Show, or set for this session, the Reason→Act cap (1..=32, default 8) |
+| `.agent save <file>` | Write the last `.agent` run's full transcript (answer, backend, `fallback` cause, sources, every iteration) as pretty JSON. Errors if no question was asked yet |
 
 ```
 velesdb> .sparse-search my_col sparse_idx [[42,0.8],[137,0.6],[891,0.3]] 10
@@ -140,6 +143,77 @@ velesdb> .hybrid-sparse docs [0.1,0.2,0.3,0.4] [[0,1.5],[3,0.8]] 10 --strategy r
 Dense vector is a JSON array `[0.1, 0.2, ...]`; sparse vector is
 `[[index, weight], ...]`. Valid strategies: `rrf`, `average`, `max` (also
 accepts `maximum`).
+
+## ReAct agent
+
+`.agent <question>` (alias `\agent`) asks a natural-language question about
+the open database through a bounded Reason→Act loop: **8 iterations by
+default** (the cap is 32), over a whitelist of VelesQL tools —
+`list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`, `graph`.
+Anything outside the whitelist is refused. Every iteration is logged (thought /
+action / observation) and the final answer cites the tool outputs it used
+(`sources:`).
+
+```bash
+velesdb> .agent what collections exist
+velesdb> \agent find documents about rust      # same thing, backslash alias
+velesdb> .agent tools                          # list the whitelisted tools + contracts
+velesdb> .agent max-iterations                 # show the session cap (default 8)
+velesdb> .agent max-iterations 16              # raise it for this session (1..=32)
+velesdb> .agent save run.json                  # dump the last run's transcript as JSON
+velesdb> .agent                                # prints the agent sub-commands
+```
+
+Bare `.agent` prints those sub-commands (and notes that agent *memory*
+management lives in the Python/TypeScript SDKs or the REST API, not in the
+REPL).
+
+Verified output with no LLM reachable (deterministic offline router; only the
+`notice:` cause text varies with the failure):
+
+```
+velesdb> .agent what collections exist
+
+Agent (ReAct)
+  Backend: offline
+  notice: answered by the deterministic offline router — no LLM reachable at http://127.0.0.1:11434/api/tags: …
+
+  ── iteration 1
+    thought: ground the run: enumerate collections
+    action: list()
+    observation: 1 collection(s): docs
+  ── iteration 2
+    thought: default: describe available collections
+    action: describe(docs)
+    observation: docs: kind=vector/metadata (no stats file yet)
+
+Answer: offline mode — what the tools saw:
+• docs: kind=vector/metadata (no stats file yet)
+
+  sources: list() · describe(docs)
+```
+
+Backends:
+
+- **Ollama** — when `GET $VELESDB_AGENT_URL/api/tags` answers (default
+  `http://127.0.0.1:11434`), reasoning delegates to `$VELESDB_AGENT_MODEL`
+  (default `qwen3:4b`).
+- **Offline router** — when the LLM is unusable (unreachable, timeout, 404 for
+  an unpulled model, 500…, at the probe or mid-loop), a deterministic
+  keyword-intent router runs the same tools and prints the `notice:` line with
+  the cause. No LLM is ever required.
+
+With `.format json` active, `.agent` prints the machine-readable transcript
+instead (`answer`, `backend`, `fallback`, `iterations`, `sources`):
+
+```
+velesdb> .format json
+velesdb> .agent find documents about rust
+{"answer":"offline mode — what the tools saw:\n• SELECT * FROM docs WHERE content MATCH 'rust' LIMIT 5 -> 1 row(s): …","backend":"offline","fallback":"no LLM reachable at …","iterations":[…],"sources":["list()","search(docs content rust)"]}
+```
+
+The same loop is available outside the REPL as
+[`velesdb agent <path> <question…>`](CLI_COMMAND_REFERENCE.md#agent).
 
 ## Graph commands
 
@@ -184,6 +258,96 @@ displays its type. `\use` records the active collection in the session state
 (visible via `\show`), but VelesQL queries still require an explicit
 `FROM <collection>` clause. The active collection does not automatically apply
 to dot-commands or queries.
+
+---
+
+## History, scripts and results
+
+The daily-driver commands track the last submitted query and the last
+result so they can be edited, re-run, saved and copied. The last query is
+recorded even when it fails — editing a failed query is the point of
+`\edit`.
+
+| Command | Description |
+|---------|-------------|
+| `\history` | Print the session command history, numbered, oldest first |
+| `\save <file>` | Write the last submitted query to a script file |
+| `\save --result <file>` | Write the last result rows as pretty JSON |
+| `\load <file>` | Run each non-empty, non-`--`-comment line of a script file (dot-commands and VelesQL alike). Nested `\load` is bounded (depth 8) so a self-including script errors instead of recursing forever. |
+| `\watch [seconds] [count]` | Re-run the last query `count` times (default 3, max 1000) every `seconds` (default 2, fractions allowed) |
+| `\edit` | Write the last query to a scratch file, open it in `$VISUAL`/`$EDITOR`, then run the edited lines. Errors when no editor is configured or no query was run. |
+| `\copy` | Copy the last result rows as JSON to the system clipboard |
+| `\copy query` | Copy the last query text instead |
+
+`\copy` uses the platform clipboard tool (`pbcopy` on macOS, `clip` on
+Windows, `wl-copy`/`xclip`/`xsel` on Linux). When none is available — a
+headless or piped session — the payload is printed instead of being lost.
+
+```
+velesdb> SELECT * FROM docs LIMIT 3;
+velesdb> \save find_docs.sql
+velesdb> \load find_docs.sql
+velesdb> \watch 5 12        -- re-runs the query every 5 s, 12 times
+velesdb> \edit             -- fix the query in $EDITOR, then it runs
+velesdb> \save --result rows.json
+velesdb> \copy             -- last result JSON -> clipboard
+```
+
+---
+
+## Multiple databases
+
+One REPL session can hold several open databases. The database the REPL
+was started on is registered as `main`.
+
+| Command | Description |
+|---------|-------------|
+| `\attach <db_path> [alias]` | Open another database; alias defaults to the directory's file stem |
+| `\databases` | List attached aliases, their paths, and the active one |
+| `\connect <alias>` | Switch the database every command runs on (clears the active collection — it belonged to the previous database) |
+| `\detach <alias>` | Close an attached database (not the active one) |
+
+```
+velesdb> \attach ./other_db aux
+velesdb> \databases
+velesdb> \connect aux
+velesdb> .collections          -- now lists other_db's collections
+velesdb> \connect main        -- back to the starting database
+```
+
+---
+
+## CLI subcommand syntax in the REPL
+
+Lines that look like CLI subcommands are translated instead of failing
+with a bare `VelesQL` parse error. The match is on the exact first word —
+`VelesQL` statements never start with `collection`, `data`, `query`,
+`graph`, `index`, `info`, `agent`, `license`, `simd`, `repl`,
+`completions` or `help`, so a real query can never be captured.
+
+The database-path positional the CLI form carries is dropped when it
+looks like a path (`collection show ./db docs` → `.describe docs`).
+
+| Typed in the REPL | Runs |
+|-------------------|------|
+| `collection list` | `.collections` |
+| `collection show <name>` | `.describe <name>` |
+| `collection analyze <name>` | `.analyze <name>` |
+| `data export <col>` | `.export <col>` |
+| `data scroll <col>` | `.scroll <col>` |
+| `data delete <col> <ids>` | `.delete <col> <ids>` |
+| `query execute "<sql>"` | the SQL itself |
+| `query explain "<sql>"` | `.explain <sql>` |
+| `graph <sub> ...` | `.graph <sub> ...` (`get-edges` → `edges`) |
+| `index list <col>` | `.indexes <col>` |
+| `info` | `\info` |
+| `agent <question>` | `.agent <question>` |
+| `help` | `.help` |
+
+Subcommands with no REPL equivalent (`data import`, `collection create`,
+`license`, `simd`, `completions`, `repl`, `index create|drop`, `graph
+doctor`, `query search|batch-search`) print a hint naming the shell form
+(`velesdb <subcommand> ...`) and the closest REPL command.
 
 ---
 
@@ -287,4 +451,4 @@ executed successfully.`, `Admin statement executed successfully.`, or
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 8.2.0
+Last updated: 2026-11-11 · Applies to: velesdb-core 8.2.0

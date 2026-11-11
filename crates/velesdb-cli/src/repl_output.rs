@@ -14,7 +14,8 @@ use crate::repl::{QueryKind, QueryResult};
 /// In `json` format a SELECT always prints a JSON array — `[]` when nothing
 /// matched — so a script parsing the output never meets a prose line.
 pub fn print_result(result: &QueryResult, format: &str) {
-    let json_select = result.kind == QueryKind::Select && format.eq_ignore_ascii_case("json");
+    let machine = crate::output::is_machine(format);
+    let json_select = result.kind == QueryKind::Select && machine;
     if result.rows.is_empty() && !json_select {
         let msg = match result.kind {
             QueryKind::Ddl => "DDL statement executed successfully.",
@@ -28,15 +29,17 @@ pub fn print_result(result: &QueryResult, format: &str) {
         return;
     }
 
-    match format.to_lowercase().as_str() {
-        "json" => match serde_json::to_string_pretty(&result.rows) {
-            Ok(json) => println!("{json}"),
-            Err(e) => eprintln!("{}", format!("Failed to serialize to JSON: {e}").red()),
-        },
-        _ => {
-            print_table(&result.rows);
+    if machine {
+        // Machine formats (json, jsonl, csv) always print the rows as a JSON
+        // array — `[]` when nothing matched — so scripts never meet prose.
+        match crate::output::print_machine(&result.rows, format) {
+            Ok(()) => {}
+            Err(e) => eprintln!("{}", format!("Failed to serialize output: {e}").red()),
         }
+        return;
     }
+
+    print_table(&result.rows);
 }
 
 /// Print results as a formatted table
@@ -180,7 +183,14 @@ pub fn print_help() {
             .yellow()
     );
     println!("  {}        Show query guard-rails", ".guardrails".yellow());
-    println!("  {}   Agent memory (preview)", ".agent [cmd]".yellow());
+    println!(
+        "  {}   ReAct agent (bounded, whitelisted tools)",
+        ".agent <q>".yellow()
+    );
+    println!(
+        "  {} Agent tools / cap / transcript export",
+        ".agent tools|max-iterations [N]|save <file>".yellow()
+    );
     println!();
     println!("{}", "Graph Commands:".bold().underline());
     println!();
@@ -241,6 +251,44 @@ pub fn print_help() {
     );
     println!("  {}             Database information", "\\info".yellow());
     println!("  {} Quick benchmark", "\\bench <col> [n] [k]".yellow());
+    println!();
+    println!("{}", "History & Results:".bold().underline());
+    println!();
+    println!("  {}           Command history", "\\history".yellow());
+    println!("  {}   Save last query to file", "\\save <file>".yellow());
+    println!(
+        "  {} Save last result as JSON",
+        "\\save --result <file>".yellow()
+    );
+    println!("  {}        Run a script file", "\\load <file>".yellow());
+    println!(
+        "  {} Re-run last query N times",
+        "\\watch [secs] [count]".yellow()
+    );
+    println!("  {} Edit last query in $EDITOR", "\\edit".yellow());
+    println!("  {} Copy result to clipboard", "\\copy [query]".yellow());
+    println!();
+    println!("{}", "Multiple databases:".bold().underline());
+    println!();
+    println!(
+        "  {} Attach a second database",
+        "\\attach <db_path> [alias]".yellow()
+    );
+    println!("  {}  List attached databases", "\\databases".yellow());
+    println!(
+        "  {}   Switch active database",
+        "\\connect <alias>".yellow()
+    );
+    println!("  {}   Detach a database", "\\detach <alias>".yellow());
+    println!();
+    println!(
+        "  {}",
+        "CLI-style lines work too: `collection list` → `.collections`,".dimmed()
+    );
+    println!(
+        "  {}",
+        "`query execute <sql>` runs the SQL; unmappable ones get a hint.".dimmed()
+    );
     println!();
     println!("{}", "Session Settings:".bold().underline());
     println!();

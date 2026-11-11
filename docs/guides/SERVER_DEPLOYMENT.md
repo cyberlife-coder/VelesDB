@@ -3,6 +3,9 @@
 How to run `velesdb-server` outside a developer laptop: containers,
 orchestrators, probes, rate limiting, CORS, and runtime sizing.
 
+The same server also runs inside the CLI as `velesdb serve` (built with the
+`serve` cargo feature) — identical flags and `velesdb.toml` sections.
+
 > **See also:** [SERVER_SECURITY.md](SERVER_SECURITY.md) for API keys, TLS and
 > graceful shutdown; [CONFIGURATION.md](CONFIGURATION.md) for the exhaustive
 > option reference; [INSTALLATION.md](INSTALLATION.md) for every install path.

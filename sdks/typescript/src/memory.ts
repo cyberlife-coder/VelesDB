@@ -69,6 +69,30 @@ export interface MemoryRecollection {
 }
 
 /**
+ * One `similar` entry of {@link RememberOutcome}: a pre-existing memory the
+ * fact is closest to, ranked by raw similarity — the fact itself and
+ * internal scaffolding are never in the page.
+ */
+export interface SimilarHit {
+  /** Decimal-string id of the similar memory. */
+  id: string;
+  /** Raw vector similarity score (higher is closer). */
+  score: number;
+}
+
+/**
+ * Result of {@link MemoryService.remember}: the stored id plus the
+ * `similar` page — check it before deciding which candidates deserve an
+ * explicit `links` edge.
+ */
+export interface RememberOutcome {
+  /** Decimal-string stable id of the stored fact. */
+  id: string;
+  /** Pre-existing memories nearest to the fact (at most 5, best first). */
+  similar: SimilarHit[];
+}
+
+/**
  * An inline media payload on a {@link CompileContextFragment} (US-009).
  * `content` on the fragment stays the caption — often empty for a bare
  * screenshot — while the pixels live here, base64-encoded. The fragment
@@ -543,7 +567,7 @@ type ServiceParams<M extends keyof BindingMemoryService> = AllParams<BindingMemo
 // an argument left out, `null` for "none" included, fails the typecheck; only
 // the result shapes, which the binding types as `any`, are stated here.
 interface WasmMemoryServiceInstance {
-  remember(...args: ServiceParams<'remember'>): string;
+  remember(...args: ServiceParams<'remember'>): RememberOutcome;
   recall(...args: ServiceParams<'recall'>): unknown;
   recallWhere(...args: ServiceParams<'recallWhere'>): unknown;
   recallFused(...args: ServiceParams<'recallFused'>): unknown;
@@ -609,7 +633,7 @@ interface WasmErrorLike {
  * ```typescript
  * const memory = new MemoryService({ dimension: 384 });
  * await memory.init();
- * const id = await memory.remember('we chose parking_lot to avoid lock poisoning');
+ * const { id, similar } = await memory.remember('we chose parking_lot to avoid lock poisoning');
  * const hits = await memory.recall('lock poisoning');
  * ```
  */
@@ -749,13 +773,16 @@ export class MemoryService {
   }
 
   /**
-   * Store a fact; resolves to its decimal-string id (idempotent on
-   * identical content). `links` are edges to existing memories; `metadata`
-   * is optional structured data for later filtering; `ttlSeconds` makes the
-   * fact expire after that many seconds. Omit it for a permanent memory,
-   * including when re-storing a fact that already had an expiry — only what
-   * this call supplies is applied. An explicit `0` is REFUSED, because a
-   * caller writing `0` means "expire now", not "never".
+   * Store a fact; resolves to `{id, similar}` — the decimal-string id plus
+   * the at-most-5 pre-existing memories nearest to it (`{id, score}`, the
+   * fact itself and internal scaffolding excluded). Check `similar` before
+   * deciding which candidates deserve an explicit `links` edge. `links` are
+   * edges to existing memories; `metadata` is optional structured data for
+   * later filtering; `ttlSeconds` makes the fact expire after that many
+   * seconds. Omit it for a permanent memory, including when re-storing a
+   * fact that already had an expiry — only what this call supplies is
+   * applied. An explicit `0` is REFUSED, because a caller writing `0` means
+   * "expire now", not "never".
    */
   remember(
     fact: string,
@@ -764,7 +791,7 @@ export class MemoryService {
       metadata?: MemoryMetadata;
       ttlSeconds?: number;
     } = {}
-  ): Promise<string> {
+  ): Promise<RememberOutcome> {
     return wrapWasmCall(() => {
       const svc = this.ensureInitialized();
       const ttl = options.ttlSeconds;

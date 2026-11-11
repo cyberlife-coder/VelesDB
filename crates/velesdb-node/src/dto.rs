@@ -8,7 +8,7 @@ use napi_derive::napi;
 use serde_json::Value;
 use velesdb_memory::{
     EntityProfile, EntityRelation, Explanation, MemoryEdge, MemoryNode, Recollection,
-    RememberedExtraction, UnrelateOutcome,
+    RememberOutcome, RememberedExtraction, SimilarMemory, UnrelateOutcome,
 };
 
 use crate::convert::id_to_string;
@@ -70,6 +70,49 @@ impl From<Recollection> for RecollectionJs {
             score: f64::from(r.score),
             content: r.content,
             metadata: r.metadata.map(Value::Object),
+        }
+    }
+}
+
+/// One `similar` entry of `remember`'s outcome: a pre-existing memory the
+/// fact is closest to, ranked by raw similarity — the fact itself and
+/// internal scaffolding are never in the page.
+#[napi(object)]
+pub struct SimilarHitJs {
+    /// Decimal-string id of the similar memory.
+    pub id: String,
+    /// Raw vector similarity score (higher is closer).
+    pub score: f64,
+}
+
+impl From<SimilarMemory> for SimilarHitJs {
+    fn from(hit: SimilarMemory) -> Self {
+        Self {
+            id: id_to_string(hit.id),
+            score: f64::from(hit.score),
+        }
+    }
+}
+
+/// Result of `remember`: the stored id plus the `similar` page — check it
+/// before deciding which candidates deserve an explicit `links` edge.
+#[napi(object)]
+pub struct RememberOutcomeJs {
+    /// Decimal-string stable id of the stored fact.
+    pub id: String,
+    /// Pre-existing memories nearest to the fact (at most 5, best first).
+    pub similar: Vec<SimilarHitJs>,
+}
+
+impl From<RememberOutcome> for RememberOutcomeJs {
+    fn from(outcome: RememberOutcome) -> Self {
+        Self {
+            id: id_to_string(outcome.fact_id),
+            similar: outcome
+                .similar
+                .into_iter()
+                .map(SimilarHitJs::from)
+                .collect(),
         }
     }
 }

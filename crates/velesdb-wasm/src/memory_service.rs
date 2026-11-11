@@ -68,7 +68,7 @@ use velesdb_memory::context::build_transcript_compile_request;
 
 use dto::{
     to_js, CompileTranscriptOut, DatedRecallOut, EntityProfileOut, ExplanationOut, RecollectionOut,
-    RememberedExtractionOut, UnrelateOut,
+    RememberOutcomeOut, RememberedExtractionOut, UnrelateOut,
 };
 use errors::{invalid_input, to_js_err, CODE_INTERNAL};
 use marshal::{
@@ -114,9 +114,12 @@ impl WasmMemoryService {
         }
     }
 
-    /// Store a fact; resolves to its decimal-string id. `links` is an array
-    /// of `{target, relation}` edges to existing memories; `metadata` is an
-    /// optional plain object; `ttlSeconds` makes the fact expire after that
+    /// Store a fact; resolves to `{id, similar}` — the decimal-string id plus
+    /// the at-most-5 pre-existing memories nearest to it (`{id, score}`, the
+    /// fact itself and internal scaffolding excluded). Check `similar` before
+    /// deciding which candidates deserve an explicit `links` edge. `links` is
+    /// an array of `{target, relation}` edges to existing memories; `metadata`
+    /// is an optional plain object; `ttlSeconds` makes the fact expire after that
     /// many seconds. Omit it for a permanent memory, including when re-storing
     /// a fact that already had an expiry — only what this call supplies is
     /// applied. An explicit `0` is REFUSED, because a caller writing `0` means
@@ -128,7 +131,7 @@ impl WasmMemoryService {
         links: JsValue,
         metadata: JsValue,
         ttl_seconds: Option<u64>,
-    ) -> Result<String, JsValue> {
+    ) -> Result<JsValue, JsValue> {
         if fact.len() > velesdb_memory::limits::MAX_FACT_BYTES {
             return Err(invalid_input(format!(
                 "fact exceeds {} bytes ({} given)",
@@ -138,10 +141,11 @@ impl WasmMemoryService {
         }
         let links = to_links(links)?;
         let metadata = to_metadata(metadata)?;
-        self.inner
-            .remember_with_ttl(fact, &links, metadata.as_ref(), ttl_seconds)
-            .map(id_to_string)
-            .map_err(to_js_err)
+        let outcome = self
+            .inner
+            .remember_detailed(fact, &links, metadata.as_ref(), ttl_seconds)
+            .map_err(to_js_err)?;
+        to_js(&RememberOutcomeOut::from(outcome))
     }
 
     /// Recall up to `k` (default 10, capped) memories similar to `query`,

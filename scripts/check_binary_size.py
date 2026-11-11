@@ -66,8 +66,16 @@ BINARIES = [
     ("velesdb-server", 14.75 * MIB),
     # Measured 11.51 MiB on the 8.0.0 release cut — the major's accumulated
     # feature surface added ~0.47 MiB over 6.0.0's 11.04 across the dev
-    # cycle. Ceiling = measured + ~2.5 %.
-    ("velesdb", 11.8 * MIB),  # was 11.04 MiB at 6.0.0, 10.99 at 5.2.0
+    # cycle. 11.68 once the REPL daily-driver meta commands landed
+    # (\history/\save/\load/\watch/\edit/\copy, #2727 PR1); 11.85 MiB
+    # once the `config` and `db` command groups landed (#2725), plus the
+    # data export surface (format writers, VelesQL --where lowering;
+    # #2726) and the multi-database attach commands (#2727 PR2) — clap
+    # tables, handlers and REPL state, no dependency changed in any;
+    # #2729 (global --output/--quiet/--no-color + exit codes) measured
+    # 11.81 MiB on the ubuntu x86_64 runner, under this ceiling.
+    # Ceiling = measured + ~2.5 %.
+    ("velesdb", 12.15 * MIB),  # was 11.51 MiB at 8.0.0, 11.04 at 6.0.0
     # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
     # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.
     # The +1.0 MiB is the parser itself, not the integration: stripped build of

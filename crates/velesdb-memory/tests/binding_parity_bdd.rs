@@ -603,6 +603,12 @@ const SHAPE_DIVERGENCES: &[ShapeDivergence] = &[
     },
     ShapeDivergence {
         binding: TYPESCRIPT_SDK,
+        tool: "remember",
+        field: "id_str",
+        reason: ID_TWIN,
+    },
+    ShapeDivergence {
+        binding: TYPESCRIPT_SDK,
         tool: "remember_extracted",
         field: "request_id",
         reason: MCP_ASYNC_SPLIT,
@@ -888,11 +894,6 @@ const SDK_SHAPE_SKIPS: &[SdkShapeSkip] = &[
     },
     SdkShapeSkip {
         tool: "relate",
-        return_type: "string",
-        reason: ID_TWIN,
-    },
-    SdkShapeSkip {
-        tool: "remember",
         return_type: "string",
         reason: ID_TWIN,
     },
@@ -2188,7 +2189,10 @@ fn the_sdk_shape_parser_reads_real_returns_and_interfaces() {
         returns.get("why").map(String::as_str),
         Some("MemoryExplanation")
     );
-    assert_eq!(returns.get("remember").map(String::as_str), Some("string"));
+    assert_eq!(
+        returns.get("remember").map(String::as_str),
+        Some("RememberOutcome")
+    );
     let interfaces = sdk_interfaces();
     let explanation = interfaces
         .get("MemoryExplanation")

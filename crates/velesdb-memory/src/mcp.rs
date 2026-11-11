@@ -50,7 +50,7 @@ mod wire;
 use dto::{
     EntityParams, EntityProfileDto, FeedbackParams, FeedbackResult, ForgetParams, ForgetResult,
     RecallParams, RecallResult, RecallWhereParams, RelateParams, RelateResult, RememberParams,
-    RememberResult, UnrelateParams, UnrelateResult,
+    RememberResult, SimilarHit, UnrelateParams, UnrelateResult,
 };
 use extraction_jobs::ExtractionJobs;
 use extractor_resolver::ExtractorResolver;
@@ -307,7 +307,7 @@ impl McpServer {
         // conserve des $ref qu'un client aveugle aux $defs ne resout pas —
         // or les SDK MCP valident structuredContent contre ce schema.
         output_schema = crate::schema::wire_safe_output_schema::<RememberResult>(),
-        description = "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots) tie the fact to those files: the server records each file's SHA-256 so a later `recall` can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
+        description = "Store a fact in durable local memory; optional `links` (graph edges) and `metadata` tags (ColumnStore, ≤64 KiB serialized) for later filtering. Facts are capped at 2048 bytes — a longer one is REFUSED with its size; split it into atomic facts, or `compile_context` it and remember a summary. `ttl_seconds` sets a durable expiry (omit = permanent; 0 is refused). Optional `anchors` (repo-relative paths, ≤8) with `anchor_root` (an absolute checkout inside the server's ingest roots) tie the fact to those files: the server records each file's SHA-256 so a later `recall` can flag the fact stale when one changes; re-remember with `anchors` to re-anchor. Returns the fact's stable id — relay it as a string (`id_str`): ids exceed 2^53 — plus `similar`: up to 5 pre-existing memories nearest to the new fact, each `{id, id_str, score}` with the raw similarity score, the fact itself and internal scaffolding excluded; check them before deciding which deserve an explicit `links` edge. With `[graph] auto_link` enabled server-side, hits at or above `auto_link_threshold` also carry a `related_to` edge. With the async autograph worker, derived edges land asynchronously; the fact itself is immediately readable.",
         input_schema = id_wire_input_schema::<RememberParams>(&["target"])
     )]
     async fn remember(
@@ -329,20 +329,35 @@ impl McpServer {
         } = params;
         let ttl = ttl_seconds.or(self.default_ttl);
         let allowlist = self.anchor_allowlist();
-        let id = tokio::task::spawn_blocking(move || {
+        let outcome = tokio::task::spawn_blocking(move || {
             // Read before the fact is stored: a refused anchor stores nothing.
             let anchors =
                 AnchorRoot::resolve_request(anchor_root.as_deref(), &anchors, &allowlist)?;
             service.run(|current| {
-                current.remember_anchored(&fact, &links, metadata.as_ref(), ttl, anchors.as_ref())
+                current.remember_anchored_detailed(
+                    &fact,
+                    &links,
+                    metadata.as_ref(),
+                    ttl,
+                    anchors.as_ref(),
+                )
             })
         })
         .await
         .map_err(join_error)?
         .map_err(to_error)?;
         Ok(Json(RememberResult {
-            id: id.to_string(),
-            id_str: id.to_string(),
+            id: outcome.fact_id.to_string(),
+            id_str: outcome.fact_id.to_string(),
+            similar: outcome
+                .similar
+                .into_iter()
+                .map(|hit| SimilarHit {
+                    id: hit.id.to_string(),
+                    id_str: hit.id.to_string(),
+                    score: hit.score,
+                })
+                .collect(),
         }))
     }
 
