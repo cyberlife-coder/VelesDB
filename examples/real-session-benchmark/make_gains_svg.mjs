@@ -53,7 +53,7 @@ const memoryEnabled = await measureSession({
       { title: 'pricing-api README (discounts module)', content: README_EXCERPT.content },
     ]) {
       const ids = []
-      for (const s of splitSections(doc.title, doc.content)) ids.push(await mem.remember(s))
+      for (const s of splitSections(doc.title, doc.content)) ids.push((await mem.remember(s)).id)
       for (let i = 1; i < ids.length; i++) await mem.relate(ids[i - 1], ids[i], 'followed_by')
     }
   },

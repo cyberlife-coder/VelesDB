@@ -241,7 +241,7 @@ pub use mcp::McpServer;
 pub use model::{
     column_value_matches, BoundedMemoryEdges, ColumnFilter, ColumnOp, EntityProfile,
     EntityRelation, Explanation, FusionOptions, Link, MemoryEdge, MemoryNode, Recollection,
-    RememberedExtraction, UnrelateOutcome,
+    RememberOutcome, RememberedExtraction, SimilarMemory, UnrelateOutcome,
 };
 #[cfg(feature = "embedder-http")]
 pub use remote_endpoint::embedder_env_endpoint;

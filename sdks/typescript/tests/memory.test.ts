@@ -26,7 +26,7 @@ import { ConnectionError, NotFoundError, ValidationError, VelesDBError } from '.
 let lastMockInstance: MockWasmMemoryService | null = null;
 
 class MockWasmMemoryService {
-  remember = vi.fn(() => '1');
+  remember = vi.fn(() => ({ id: '1', similar: [] }));
   recall = vi.fn(() => [{ id: '1', score: 0.9, content: 'we chose parking_lot' }]);
   recallWhere = vi.fn(() => [{ id: '1', score: 0.9, content: 'we chose parking_lot' }]);
   recallFused = vi.fn(() => [{ id: '2', score: 0.0, content: 'EPIC-317' }]);
@@ -249,13 +249,13 @@ describe('MemoryService', () => {
       await memory.init();
     });
 
-    it('remember() passes fact/links/metadata/ttl through and returns the id', async () => {
-      const id = await memory.remember('we chose parking_lot', {
+    it('remember() passes fact/links/metadata/ttl through and returns the outcome', async () => {
+      const outcome = await memory.remember('we chose parking_lot', {
         links: [{ target: '1', relation: 'decided_in' }],
         metadata: { project: 'veles' },
         ttlSeconds: 60,
       });
-      expect(id).toBe('1');
+      expect(outcome).toEqual({ id: '1', similar: [] });
       expect(lastMockInstance!.remember).toHaveBeenCalledWith(
         'we chose parking_lot',
         [{ target: '1', relation: 'decided_in' }],

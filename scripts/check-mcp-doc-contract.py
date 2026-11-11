@@ -417,7 +417,14 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
         (
             "crates/velesdb-memory/skill/velesdb-memory/SKILL.md",
             "crates/velesdb-node/skills/velesdb-memory/SKILL.md",
+            "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/NODE_ADDON.md",
+            "docs/guides/WASM_API.md",
             "docs/reference/MCP_TOOLS.md",
+            "sdks/typescript/src/memory.ts",
         ),
     ),
     PolicedTool(
@@ -470,6 +477,10 @@ ENTITY_ID_TWIN = (
 SYNC_EXTRACTION = (
     "in-process bindings finish extraction inline and return committed ids; "
     "the MCP transport returns a durable background-job receipt (#1839)"
+)
+REMEMBER_ID_TWIN = (
+    "typed bindings expose the stored id once; MCP additionally publishes "
+    "id_str for float-lossy JSON clients"
 )
 
 # Exact alternate root shapes, never a field-subtraction heuristic. Most
@@ -529,6 +540,18 @@ SHAPE_DIVERGENCES: "tuple[ShapeDivergence, ...]" = (
             "crates/velesdb-python/python/velesdb/__init__.pyi",
             "crates/velesdb-python/src/agent_memory_service.rs",
             "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/WASM_API.md",
+            "sdks/typescript/src/memory.ts",
+        )
+    ),
+    *(
+        ShapeDivergence(surface, "remember", ("id", "similar"), REMEMBER_ID_TWIN)
+        for surface in (
+            "crates/velesdb-node/src/lib.rs",
+            "crates/velesdb-python/python/velesdb/__init__.pyi",
+            "crates/velesdb-python/src/agent_memory_service.rs",
+            "crates/velesdb-wasm/src/memory_service.rs",
+            "docs/guides/NODE_ADDON.md",
             "docs/guides/WASM_API.md",
             "sdks/typescript/src/memory.ts",
         )

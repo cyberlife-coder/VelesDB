@@ -64,7 +64,7 @@ use velesdb_memory::{
 
 use crate::dto::{
     ColumnFilterJs, CompiledContextJs, DatedRecallJs, EntityProfileJs, ExplanationJs,
-    FusionOptionsJs, LinkJs, RecollectionJs, RememberedExtractionJs, UnrelateJs,
+    FusionOptionsJs, LinkJs, RecollectionJs, RememberOutcomeJs, RememberedExtractionJs, UnrelateJs,
 };
 use crate::error::{invalid_input, setting_error, to_napi_err, CODE_INTERNAL};
 use crate::tasks::{Job, JsonOut};
@@ -231,28 +231,31 @@ impl NodeMemoryService {
     // still run as the closure's first lines, before any embedding or search, so
     // an oversized input never triggers real work.
 
-    /// Store a fact; resolves to its decimal-string id. `links` are
+    /// Store a fact; resolves to `{id, similar}` — the decimal-string id plus
+    /// the at-most-5 pre-existing memories nearest to it (`{id, score}`, the
+    /// fact itself and internal scaffolding excluded). Check `similar` before
+    /// deciding which candidates deserve an explicit `links` edge. `links` are
     /// `{target, relation}` edges to existing memories; `metadata` is an optional
     /// object for later filtering. `ttlSeconds` makes the fact expire after that
     /// many seconds (a durable TTL that survives restarts); omit it for a
     /// permanent memory, including when re-storing a fact that already had an
     /// expiry — only what this call supplies is applied. An explicit `0` is
     /// REFUSED, because a caller writing `0` means "expire now", not "never".
-    #[napi(ts_return_type = "Promise<string>")]
+    #[napi(ts_return_type = "Promise<RememberOutcomeJs>")]
     pub fn remember(
         &self,
         fact: String,
         links: Option<Vec<LinkJs>>,
         metadata: Option<Value>,
         ttl_seconds: Option<u32>,
-    ) -> AsyncTask<Job<String>> {
+    ) -> AsyncTask<Job<RememberOutcomeJs>> {
         let svc = Arc::clone(&self.inner);
         AsyncTask::new(Job::new(move || {
             guards::check_fact(&fact)?;
             let links = convert::to_links(links)?;
             let metadata = convert::to_metadata(metadata)?;
-            svc.remember_with_ttl(&fact, &links, metadata.as_ref(), ttl_seconds.map(u64::from))
-                .map(convert::id_to_string)
+            svc.remember_detailed(&fact, &links, metadata.as_ref(), ttl_seconds.map(u64::from))
+                .map(RememberOutcomeJs::from)
                 .map_err(to_napi_err)
         }))
     }

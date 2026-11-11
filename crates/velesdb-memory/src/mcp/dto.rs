@@ -63,6 +63,22 @@ pub(super) struct RememberParams {
     pub(super) anchor_root: Option<String>,
 }
 
+/// One `similar` entry of [`RememberResult`]: a pre-existing memory the
+/// remembered fact is closest to, ranked by raw similarity — the fact itself
+/// and internal scaffolding are never in the page.
+#[derive(Serialize, JsonSchema)]
+#[schemars(transform = crate::schema::strip_int_formats)]
+pub(super) struct SimilarHit {
+    /// Stable id of the similar memory — a decimal string on the wire
+    /// (#1468).
+    pub(super) id: String,
+    /// Decimal-string twin of `id` — same value, the documented relay field
+    /// for `relate`/`forget`/`feedback` (#1468).
+    pub(super) id_str: String,
+    /// Raw vector similarity score, higher means closer.
+    pub(super) score: f32,
+}
+
 /// Result of the `remember` tool.
 #[derive(Serialize, JsonSchema)]
 #[schemars(transform = crate::schema::strip_int_formats)]
@@ -74,6 +90,11 @@ pub(super) struct RememberResult {
     /// Decimal-string twin of `id` — same value, kept as the documented
     /// relay field for `relate`/`forget`/`feedback` (#1468).
     pub(super) id_str: String,
+    /// At most 5 pre-existing memories nearest to the fact, best first. The
+    /// caller checks them before deciding which deserve an explicit `links`
+    /// edge; with `[graph] auto_link` enabled, those at or above
+    /// `auto_link_threshold` already carry a `related_to` edge.
+    pub(super) similar: Vec<SimilarHit>,
 }
 
 /// Parameters for the `recall` tool.

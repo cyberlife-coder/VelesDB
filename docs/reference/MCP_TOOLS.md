@@ -106,8 +106,14 @@ Store a fact in durable local memory.
 | `anchors` | array of strings | no | Repository-relative paths of the files the fact is about, at most 8. The server reads each one under `anchor_root` and records its SHA-256 (reserved, never in `metadata`), so `recall` can later flag the fact stale. Requires `anchor_root`. Remembering the fact again with `anchors` re-anchors it; without them it keeps its anchors. |
 | `anchor_root` | string | no | Absolute path of the checkout `anchors` are relative to. Must lie inside `VELESDB_MEMORY_INGEST_ROOTS`; without ingest roots, anchoring is refused. A path with a root, `.` or `..`, a symlink leaving the checkout, a missing or non-regular file, or a file over 1 MiB is refused with `invalid_params`, and nothing is stored. |
 
-Returns `{ id, id_str }`. The id is derived from the fact's content, so
-re-remembering identical text is idempotent — same id, updated in place.
+Returns `{ id, id_str, similar }`. The id is derived from the fact's content,
+so re-remembering identical text is idempotent — same id, updated in place.
+`similar` is the at-most-5 pre-existing memories nearest to the stored fact,
+each `{ id, id_str, score }` carrying the raw vector similarity, best first —
+the fact itself and internal entity hubs never appear. Check them before
+deciding which deserve an explicit `links` edge. With `[graph] auto_link`
+enabled server-side, hits at or above `auto_link_threshold` already carry a
+`related_to` edge.
 
 When the server runs autograph through its async worker, edges derived from a
 `remember` land asynchronously: an `entity` or `why` read immediately after
@@ -118,7 +124,8 @@ remember { "fact": "we chose parking_lot to avoid lock poisoning",
            "metadata": { "project": "checkout" },
            "links":   [ { "target": "1234", "relation": "decided_in" } ],
            "ttl_seconds": 604800 }
-→ { "id": "9876543210", "id_str": "9876543210" }
+→ { "id": "9876543210", "id_str": "9876543210",
+    "similar": [ { "id": "1234", "id_str": "1234", "score": 0.83 } ] }
 ```
 
 ### Automatic dating (`_veles_date`)

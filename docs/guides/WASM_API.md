@@ -263,12 +263,14 @@ import init, { MemoryService } from '@wiscale/velesdb-wasm';
 await init();
 const memory = new MemoryService(384);   // embedding dimension
 
-const pr = memory.remember('PR #42 swaps the mutex for parking_lot', [], null);
-const decision = memory.remember(
+const { id: pr, similar } = memory.remember('PR #42 swaps the mutex for parking_lot', [], null);
+const { id: decision, similar: near } = memory.remember(
   'we chose parking_lot to avoid lock poisoning',
   [{ target: pr, relation: 'decided_in' }],
   null,
 );
+// remember resolves {id, similar} — similar lists the at-most-5 nearest
+// pre-existing memories ({id, score} each); check it before wiring links.
 
 memory.recall('lock poisoning', 5, null);
 // => [ { id: "7771…", score: 0.5345…, content: "we chose parking_lot to avoid lock poisoning" },

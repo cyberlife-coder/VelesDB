@@ -44,6 +44,48 @@ impl From<Recollection> for RecollectionOut {
     }
 }
 
+/// One `similar` entry of [`RememberOutcomeOut`]: a pre-existing memory the
+/// fact is closest to, ranked by raw similarity — the fact itself and
+/// internal scaffolding are never in the page.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SimilarHitOut {
+    pub(super) id: String,
+    pub(super) score: f32,
+}
+
+impl From<velesdb_memory::SimilarMemory> for SimilarHitOut {
+    fn from(hit: velesdb_memory::SimilarMemory) -> Self {
+        Self {
+            id: id_to_string(hit.id),
+            score: hit.score,
+        }
+    }
+}
+
+/// Result of [`WasmMemoryService::remember`](super::WasmMemoryService::remember):
+/// the stored id plus the `similar` page — check it before deciding which
+/// candidates deserve an explicit `links` edge.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RememberOutcomeOut {
+    pub(super) id: String,
+    pub(super) similar: Vec<SimilarHitOut>,
+}
+
+impl From<velesdb_memory::RememberOutcome> for RememberOutcomeOut {
+    fn from(outcome: velesdb_memory::RememberOutcome) -> Self {
+        Self {
+            id: id_to_string(outcome.fact_id),
+            similar: outcome
+                .similar
+                .into_iter()
+                .map(SimilarHitOut::from)
+                .collect(),
+        }
+    }
+}
+
 /// Result of [`WasmMemoryService::recall_fused_dated`](super::WasmMemoryService::recall_fused_dated): the recalled memories
 /// plus a chronological, date-prefixed timeline and a "now" anchor.
 #[derive(Serialize)]

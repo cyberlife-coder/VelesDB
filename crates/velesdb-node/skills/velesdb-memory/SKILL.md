@@ -50,7 +50,10 @@ for these roots.
 
 `recall` returns `{memories}`.
 
-`remember` returns `{id, id_str}`.
+`remember` returns `{id, id_str, similar}` — `similar` lists the at-most-5
+pre-existing memories nearest to the stored fact (`{id, id_str, score}` each,
+raw similarity, the fact itself and internal hubs excluded); check it before
+deciding which candidates deserve an explicit `links` edge.
 
 `why` returns `{nodes, edges, truncated}`.
 
@@ -434,6 +437,8 @@ model = "qwen3.6:35b-mlx"      # required by "ollama" and "openai"; "outline" ne
 
 [graph]
 autograph = false              # true = every `remember` also wires entities
+auto_link = false              # true = `remember` wires `related_to` to similar
+auto_link_threshold = 0.95     # minimum similarity for an auto-linked edge
 ```
 
 With `autograph = true` you stop having to choose the right tool: a plain

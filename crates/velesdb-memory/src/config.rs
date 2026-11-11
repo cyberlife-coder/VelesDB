@@ -138,6 +138,17 @@ pub struct GraphConfig {
     /// deliberate choice, not something to inherit silently — and it needs an
     /// `[extractor]` backend to have anything to do.
     pub autograph: Option<bool>,
+    /// Let `remember` wire a `related_to` edge to each `similar` hit scoring
+    /// at least `auto_link_threshold` (`VELESDB_MEMORY_AUTO_LINK`).
+    ///
+    /// Off by default. It only ever writes the neutral similarity label —
+    /// never an inferred semantic edge — and the edges are idempotent, so a
+    /// re-remembered fact re-derives the same ones instead of duplicating.
+    pub auto_link: Option<bool>,
+    /// Similarity floor an automatic `related_to` edge requires
+    /// (`VELESDB_MEMORY_AUTO_LINK_THRESHOLD`); defaults to `0.95` when
+    /// `auto_link` is set without it. In `[0, 1]` — higher means stricter.
+    pub auto_link_threshold: Option<f64>,
 }
 
 /// `[http]` — the streamable-HTTP transport (multi-client daemon mode).
@@ -419,6 +430,11 @@ impl ConfigFile {
         set("VELESDB_MEMORY_EXTRACTOR_URL", self.extractor.url);
 
         set("VELESDB_MEMORY_AUTOGRAPH", self.graph.autograph.map(flag));
+        set("VELESDB_MEMORY_AUTO_LINK", self.graph.auto_link.map(flag));
+        set(
+            "VELESDB_MEMORY_AUTO_LINK_THRESHOLD",
+            self.graph.auto_link_threshold.map(|t| t.to_string()),
+        );
         set("VELESDB_MEMORY_SEARCH_QUALITY", self.search.quality);
 
         if let Some(roots) = self.context.ingest_roots {
