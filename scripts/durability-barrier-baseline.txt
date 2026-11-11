@@ -3,5 +3,6 @@
 # design. Format: <repo-relative path><TAB><reason>. This baseline only
 # shrinks: when a file gains a barrier or stops creating files, the guard
 # fails until its line here is deleted.
+crates/velesdb-cli/src/export.rs	user-requested data export to a caller-chosen output path (equivalent to shell redirection): a one-shot stream the caller owns, not acknowledged database state; flush-to-OS is the contract
 crates/velesdb-core/src/database/mod.rs	velesdb.lock advisory lock file: exists only while the process holds it, carries no data and no durability semantics
 crates/velesdb-memory/src/daemon_commands.rs	user-requested JSONL export to a caller-chosen output path (equivalent to shell redirection): a one-shot stream the caller owns, not acknowledged database state; flush-to-OS is the contract

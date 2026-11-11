@@ -68,10 +68,8 @@ fn engine_handled_identity() -> Condition {
 /// `CONTAINS_TEXT` is deliberately absent: it already *is* a strict substring
 /// metadata predicate ([`crate::velesql::ContainsTextCondition`]), so its
 /// `Contains` lowering is faithful, not a degradation.
-// Only `database::query_engine` consults this helper, and the whole `database`
-// module is `#[cfg(feature = "persistence")]` — gate it the same way or the
-// no-persistence (wasm) build warns dead code.
-#[cfg(feature = "persistence")]
+// Ungated: `Filter::try_from_where` below consults it in every build; the
+// gated re-export in `mod` is what `database::query_engine` sees.
 pub(crate) fn inexpressible_scope_construct(
     condition: &crate::velesql::Condition,
 ) -> Option<&'static str> {
@@ -95,6 +93,34 @@ pub(crate) fn inexpressible_scope_construct(
         }
         C::Not(inner) | C::Group(inner) => inexpressible_scope_construct(inner),
         C::IsNull(_) | C::Like(_) | C::ContainsText(_) | C::GeoDistance(_) | C::GeoBbox(_) => None,
+    }
+}
+
+impl super::Filter {
+    /// Lowers a `VelesQL` `WHERE` condition into a row-level filter for a
+    /// caller that evaluates it with
+    /// [`matches_point`](super::Filter::matches_point) alone — a scroll or an
+    /// export, with no query engine in front to pre-extract vector, graph or
+    /// full-text conditions.
+    ///
+    /// The infallible [`From`] lowering is unfit for that: it maps those
+    /// conditions to an always-true sentinel, so a clause like
+    /// `WHERE similarity(v) > 0.8` would silently match every row. This
+    /// refuses exactly what an observer scope refuses, through the same check.
+    ///
+    /// # Errors
+    ///
+    /// Names the first construct (depth-first) that a row-level predicate
+    /// cannot express: a vector-similarity or graph-match directive, a
+    /// full-text `MATCH`, or a `$parameter` / subquery value.
+    pub fn try_from_where(condition: crate::velesql::Condition) -> Result<Self, String> {
+        match inexpressible_scope_construct(&condition) {
+            Some(construct) => Err(format!(
+                "WHERE clause contains {construct}, which cannot be evaluated \
+                 as a row-level filter"
+            )),
+            None => Ok(Self::new(condition.into())),
+        }
     }
 }
 

@@ -18,6 +18,7 @@ mod cli_types; // pedantic-clean ✓
 mod collection_helpers;
 #[allow(clippy::pedantic)]
 mod commands;
+mod export;
 #[allow(clippy::pedantic)]
 mod graph;
 #[allow(clippy::pedantic)]
@@ -309,8 +310,17 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             path,
             collection,
             output,
+            format,
+            where_clause,
             include_vectors,
-        } => handlers::handle_export(&path, &collection, output, include_vectors),
+        } => handlers::handle_export(
+            &path,
+            &collection,
+            output,
+            format,
+            where_clause,
+            include_vectors,
+        ),
         DataCommands::Upsert {
             path,
             collection,

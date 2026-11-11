@@ -329,6 +329,13 @@ velesdb data import vectors.bin \
 # Export to JSON (vector collections only)
 velesdb data export ./data documents --output documents.json
 
+# Export to JSONL or CSV (format inferred from the extension, or --format)
+velesdb data export ./data documents --output documents.jsonl
+velesdb data export ./data documents --output documents.csv --format csv
+
+# Export only the rows matching a VelesQL filter condition
+velesdb data export ./data documents -o tech.jsonl --where "cat = 'tech' AND id < 100"
+
 # Export payloads only (omit vectors)
 velesdb data export ./data documents --output meta.json --include-vectors false
 ```
@@ -385,8 +392,15 @@ Any other extension is rejected with
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o, --output` | `<collection>.json` | Output file path |
+| `-o, --output` | `<collection>.<ext>` | Output file path (`<ext>` follows the format) |
+| `--format json\|jsonl\|csv` | inferred from `--output` extension, else `json` | Output file format |
+| `--where '<cond>'` | none | VelesQL filter condition on exported rows (metadata predicates only — vector search, `similarity()`, `MATCH`, `$params` and subqueries are refused) |
 | `--include-vectors [true\|false]` | `true` | Include vector data (`--include-vectors false` to omit) |
+
+Formats: `json` is a pretty-printed array of `{id, vector, payload}` records
+(byte-identical to previous releases), `jsonl` is one compact record per line,
+`csv` is `id`, a JSON-array `vector` column, then one column per payload key —
+re-importable via `data import file.csv`.
 
 Export operates on **vector collections only**. Exporting a graph or metadata
 collection fails with

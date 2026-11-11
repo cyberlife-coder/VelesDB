@@ -59,3 +59,23 @@ pub enum IndexTypeArg {
     Property,
     Range,
 }
+
+/// CLI export file format option (`data export --format`).
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ExportFormatArg {
+    Json,
+    Jsonl,
+    Csv,
+}
+
+impl ExportFormatArg {
+    /// File extension used when `--output` is not given.
+    #[must_use]
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Jsonl => "jsonl",
+            Self::Csv => "csv",
+        }
+    }
+}
