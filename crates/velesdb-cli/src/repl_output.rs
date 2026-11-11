@@ -265,6 +265,19 @@ pub fn print_help() {
     println!("  {} Edit last query in $EDITOR", "\\edit".yellow());
     println!("  {} Copy result to clipboard", "\\copy [query]".yellow());
     println!();
+    println!("{}", "Multiple databases:".bold().underline());
+    println!();
+    println!(
+        "  {} Attach a second database",
+        "\\attach <db_path> [alias]".yellow()
+    );
+    println!("  {}  List attached databases", "\\databases".yellow());
+    println!(
+        "  {}   Switch active database",
+        "\\connect <alias>".yellow()
+    );
+    println!("  {}   Detach a database", "\\detach <alias>".yellow());
+    println!();
     println!(
         "  {}",
         "CLI-style lines work too: `collection list` → `.collections`,".dimmed()
