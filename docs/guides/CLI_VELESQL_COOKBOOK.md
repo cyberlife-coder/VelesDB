@@ -38,6 +38,8 @@ summary lives in
 - [TRAIN QUANTIZER](#train-quantizer)
 - [WITH clause (per-query options)](#with-clause-per-query-options)
 - [Escaped identifiers](#escaped-identifiers)
+- [Ask the ReAct agent (natural language)](#ask-the-react-agent-natural-language)
+- [Engine configuration from the CLI](#engine-configuration-from-the-cli)
 
 ---
 
@@ -465,6 +467,77 @@ SELECT `select`, `from`, `order` FROM docs LIMIT 10;
 SELECT "select", "from", "order" FROM docs LIMIT 10;
 ```
 
+## Ask the ReAct agent (natural language)
+
+When the question is easier to ask than to write as SQL, let the bounded ReAct
+agent query the database for you — max 8 iterations over whitelisted VelesQL
+tools (`list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`,
+`graph`), every step logged, answer sourced from the tool outputs:
+
+```bash
+# Top-level command (works in scripts; --format json prints the full transcript)
+velesdb agent ./data what collections exist
+velesdb agent ./data --format json "find documents about rust"
+
+# In the REPL (alias \agent also works)
+velesdb> .agent how many documents per category
+```
+
+No LLM is required: when no Ollama answers `GET $VELESDB_AGENT_URL/api/tags`
+(default `http://127.0.0.1:11434`, model `$VELESDB_AGENT_MODEL`, default
+`qwen3:4b`), a deterministic offline router answers instead and says so.
+Verified against the binary (only the `notice:` cause text varies with the
+failure):
+
+```
+$ velesdb agent ./data what collections exist
+
+Agent (ReAct)
+  Backend: offline
+  notice: answered by the deterministic offline router — no LLM reachable at http://127.0.0.1:11434/api/tags: …
+
+  ── iteration 1
+    thought: ground the run: enumerate collections
+    action: list()
+    observation: 1 collection(s): docs
+  ── iteration 2
+    thought: default: describe available collections
+    action: describe(docs)
+    observation: docs: kind=vector/metadata (no stats file yet)
+
+Answer: offline mode — what the tools saw:
+• docs: kind=vector/metadata (no stats file yet)
+
+  sources: list() · describe(docs)
+```
+
+Details and the tool contracts: [Agent](CLI_COMMAND_REFERENCE.md#agent) ·
+[REPL reference](CLI_REPL_REFERENCE.md#react-agent).
+
+## Engine configuration from the CLI
+
+The same engine configuration every database-opening command loads can be
+inspected without opening a database — resolved as `--config` /
+`VELESDB_CONFIG`, else `./velesdb.toml` when it exists, else the core defaults,
+with the `VELESDB_*` engine variables applied on top:
+
+```bash
+velesdb config path                  # file the CLI reads (stdout; stderr note when only defaults apply)
+velesdb config show                  # effective engine config as TOML (loadable back with --config)
+velesdb config show --format json    # same, as JSON
+velesdb config validate              # exit 1 when the file is invalid
+velesdb config validate ./ci.toml    # validate a named file instead
+velesdb config edit                  # open it in $VISUAL/$EDITOR, then validate
+```
+
+```
+$ velesdb config validate
+OK: no config file; core defaults + VELESDB_* engine variables are valid
+```
+
+Full reference: [Configuration](CLI_COMMAND_REFERENCE.md#configuration) ·
+[Configuration guide](CONFIGURATION.md).
+
 ---
 
-Last updated: 2026-10-30 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-11-11 · Applies to: velesdb-core 8.1.0
