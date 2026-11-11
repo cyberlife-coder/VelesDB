@@ -127,7 +127,7 @@ Type `.collections`, then `.quit` to leave.
 | `VELESDB_LICENSE_PUBLIC_KEY` | (dev fallback key) | Base64 Ed25519 public key used by `license show` and `license activate`. When unset, a development fallback key is used and a warning is printed. |
 
 Cargo features: `default = ["velesdb-core/default", "update-check"]`, plus
-`gpu` and `loom`, all forwarded to `velesdb-core`.
+`gpu` and `loom` forwarded to `velesdb-core`, and `serve`, which links `velesdb-server` to provide the embedded `velesdb serve` REST API.
 
 ## Examples
 
@@ -152,6 +152,7 @@ below are the map.
 | `velesdb data …` | `upsert`, `get`, `delete`, `scroll`, `stream-insert`, `import`, `export` | [CLI reference](../../docs/guides/CLI_COMMAND_REFERENCE.md#points) |
 | `velesdb query …` | `execute`, `search`, `batch-search`, `explain` | [CLI reference](../../docs/guides/CLI_COMMAND_REFERENCE.md#query) |
 | `velesdb graph …` | `add-edge`, `get-edges`, `degree`, `traverse`, `neighbors`, `store-payload`, `get-payload`, `remove-edge`, `count`, `search`, `nodes`, `doctor` | [CLI reference](../../docs/guides/CLI_COMMAND_REFERENCE.md#graph) |
+| `velesdb serve` | Embedded REST API (`serve` cargo feature; mirrors `velesdb-server` flags) | [CLI reference](../../docs/guides/CLI_COMMAND_REFERENCE.md#serve-embedded-rest) |
 | `velesdb db …` | `stats`, `vacuum`, `snapshot`, `restore` — offline maintenance | [CLI reference](../../docs/guides/CLI_COMMAND_REFERENCE.md#database-maintenance) |
 | `velesdb config …` | `path`, `show`, `validate`, `edit` — the engine configuration the CLI loads | [CLI reference](../../docs/guides/CLI_COMMAND_REFERENCE.md#configuration) |
 | `velesdb index …` | `create`, `list`, `drop` | [CLI reference](../../docs/guides/CLI_COMMAND_REFERENCE.md#index-management) |

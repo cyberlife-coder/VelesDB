@@ -68,10 +68,10 @@ BINARIES = [
     # feature surface added ~0.47 MiB over 6.0.0's 11.04 across the dev
     # cycle. 11.68 once the REPL daily-driver meta commands landed
     # (\history/\save/\load/\watch/\edit/\copy, #2727 PR1); 11.85 MiB
-    # once the `config` and `db` command groups landed (#2725), ~11.97
-    # measured with the multi-database attach commands on top (#2727 PR2)
-    # — clap parse tables, handlers and REPL state, no dependency changed.
-    # Ceiling = measured + ~1.5 %.
+    # once the `config` and `db` command groups landed (#2725), plus the
+    # data export surface (format writers, VelesQL --where lowering;
+    # #2726) and the multi-database attach commands (#2727 PR2) — clap
+    # tables, handlers and REPL state, no dependency changed in any.
     ("velesdb", 12.15 * MIB),  # was 11.51 MiB at 8.0.0, 11.04 at 6.0.0
     # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
     # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.

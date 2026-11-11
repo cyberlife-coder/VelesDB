@@ -7,7 +7,7 @@ use clap::{Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
-use crate::cli_types::{IndexTypeArg, MetricArg, StorageModeArg};
+use crate::cli_types::{ExportFormatArg, IndexTypeArg, MetricArg, StorageModeArg};
 use crate::graph;
 
 /// Top-level CLI commands for VelesDB CLI - High-performance vector database.
@@ -90,6 +90,45 @@ pub enum Commands {
         #[command(subcommand)]
         action: DbAction,
     },
+
+    /// Start the embedded REST API server in-process (requires the `serve`
+    /// cargo feature; flags and VELESDB_* env vars mirror velesdb-server's)
+    #[cfg(feature = "serve")]
+    Serve {
+        /// Data directory for persistent storage
+        #[arg(short, long, env = "VELESDB_DATA_DIR")]
+        data_dir: Option<String>,
+
+        /// Host address to bind to
+        #[arg(long, env = "VELESDB_HOST")]
+        host: Option<String>,
+
+        /// Port to listen on
+        #[arg(short, long, env = "VELESDB_PORT")]
+        port: Option<u16>,
+
+        /// TLS certificate file (PEM)
+        #[arg(long, env = "VELESDB_TLS_CERT")]
+        tls_cert: Option<String>,
+
+        /// TLS private key file (PEM)
+        #[arg(long, env = "VELESDB_TLS_KEY")]
+        tls_key: Option<String>,
+
+        /// Rate limit: max requests per second per IP (0 = disabled)
+        #[arg(long, env = "VELESDB_RATE_LIMIT")]
+        rate_limit: Option<u32>,
+
+        /// Host names to answer to besides localhost, 127.0.0.0/8, [::1] and the
+        /// bind host (comma-separated; "*" disables the Host check)
+        #[arg(long, env = "VELESDB_ALLOWED_HOSTS", value_delimiter = ',')]
+        allowed_hosts: Option<Vec<String>>,
+    },
+
+    /// `velesdb serve` placeholder so a CLI-only build fails with a clear
+    /// message instead of `unrecognized subcommand`
+    #[cfg(not(feature = "serve"))]
+    Serve,
 
     /// Ask the bounded ReAct agent a question about this database
     /// (whitelisted VelesQL tools; Ollama backend if VELESDB_AGENT_URL
@@ -283,7 +322,7 @@ pub enum DataCommands {
         progress: bool,
     },
 
-    /// Export a collection to JSON file
+    /// Export a collection to a JSON, JSONL or CSV file
     Export {
         /// Path to database directory
         path: PathBuf,
@@ -291,9 +330,17 @@ pub enum DataCommands {
         /// Collection name
         collection: String,
 
-        /// Output file path
+        /// Output file path (default: `<collection>.<format-ext>`)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Output file format (default: inferred from `--output` extension, else json)
+        #[arg(long, value_enum)]
+        format: Option<ExportFormatArg>,
+
+        /// VelesQL filter condition applied to exported rows (e.g. "cat = 'tech' AND id < 10")
+        #[arg(long = "where")]
+        where_clause: Option<String>,
 
         /// Include vectors in export (pass `--include-vectors false` to omit them)
         #[arg(

@@ -18,6 +18,7 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 - [Global options](#global-options)
 - [Configuration](#configuration)
 - [Database maintenance](#database-maintenance)
+- [Serve (embedded REST)](#serve-embedded-rest)
 - [Collections](#collections)
 - [Points](#points)
 - [Import / export](#import--export)
@@ -144,6 +145,34 @@ velesdb db restore ./backups/data-2026-11-10 -o ./data
 | `vacuum` | the named collection is missing or not a vector collection, or a rebuild/flush fails |
 | `snapshot` | a flush fails, the destination is not fresh, or it is inside the source tree |
 | `restore` | the source has no manifest (incomplete copy), the destination is not fresh, or the copy fails to open |
+
+---
+
+## Serve (embedded REST)
+
+`velesdb serve` runs the same REST API `velesdb-server` ships, in-process —
+the two binaries share one bootstrap (`velesdb_server::serve`), so flags,
+`VELESDB_*` env vars and `velesdb.toml` sections mean the same thing. The
+subcommand exists only in builds with the `serve` cargo feature; a
+CLI-only build prints a pointer to the feature or the standalone binary.
+
+```bash
+# Default dev settings: 127.0.0.1:8080, ./data
+velesdb serve
+
+# Same flags as velesdb-server
+velesdb serve -d ./prod --host 127.0.0.1 --port 18080 \
+  --rate-limit 100 --allowed-hosts db.internal
+
+# TLS, identical to velesdb-server
+velesdb serve --tls-cert cert.pem --tls-key key.pem
+```
+
+All endpoints are available under `/v1/…` plus the legacy unversioned set
+(a `deprecation: true` header marks them). See
+[SERVER_SECURITY](SERVER_SECURITY.md) for auth/TLS/CORS/Host-guard guidance —
+it applies unchanged, and so does its warning: binding a public address
+without API keys exposes every endpoint.
 
 ---
 
@@ -300,6 +329,13 @@ velesdb data import vectors.bin \
 # Export to JSON (vector collections only)
 velesdb data export ./data documents --output documents.json
 
+# Export to JSONL or CSV (format inferred from the extension, or --format)
+velesdb data export ./data documents --output documents.jsonl
+velesdb data export ./data documents --output documents.csv --format csv
+
+# Export only the rows matching a VelesQL filter condition
+velesdb data export ./data documents -o tech.jsonl --where "cat = 'tech' AND id < 100"
+
 # Export payloads only (omit vectors)
 velesdb data export ./data documents --output meta.json --include-vectors false
 ```
@@ -356,8 +392,15 @@ Any other extension is rejected with
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o, --output` | `<collection>.json` | Output file path |
+| `-o, --output` | `<collection>.<ext>` | Output file path (`<ext>` follows the format) |
+| `--format json\|jsonl\|csv` | inferred from `--output` extension, else `json` | Output file format |
+| `--where '<cond>'` | none | VelesQL filter condition on exported rows (metadata predicates only — vector search, `similarity()`, `MATCH`, `$params` and subqueries are refused) |
 | `--include-vectors [true\|false]` | `true` | Include vector data (`--include-vectors false` to omit) |
+
+Formats: `json` is a pretty-printed array of `{id, vector, payload}` records
+(byte-identical to previous releases), `jsonl` is one compact record per line,
+`csv` is `id`, a JSON-array `vector` column, then one column per payload key —
+re-importable via `data import file.csv`.
 
 Export operates on **vector collections only**. Exporting a graph or metadata
 collection fails with

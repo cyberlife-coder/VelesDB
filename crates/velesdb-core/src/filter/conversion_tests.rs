@@ -586,3 +586,50 @@ fn test_a_velesql_id_column_reads_the_point_id_and_a_json_filter_id_the_payload(
         "a JSON filter reads the payload"
     );
 }
+
+#[test]
+fn test_try_from_where_lowers_a_metadata_predicate() {
+    let cond = crate::velesql::Condition::Comparison(crate::velesql::Comparison {
+        column: "cat".to_string(),
+        operator: crate::velesql::CompareOp::Eq,
+        value: VelesValue::String("tech".to_string()),
+    });
+    let filter = super::Filter::try_from_where(cond).expect("test: lowering");
+    let payload = serde_json::json!({"cat": "tech"});
+    assert!(filter.matches_point(1, Some(&payload)));
+    assert!(!filter.matches_point(1, Some(&serde_json::json!({"cat": "news"}))));
+}
+
+#[test]
+fn test_try_from_where_refuses_constructs_rows_cannot_express() {
+    let refusal = |cond: crate::velesql::Condition| {
+        super::Filter::try_from_where(cond).expect_err("test: must refuse")
+    };
+    // `similarity` lowers to an always-true sentinel in `From` — exporting it
+    // would match every row instead of refusing.
+    let err = refusal(crate::velesql::Condition::Similarity(
+        crate::velesql::SimilarityCondition {
+            field: "title".to_string(),
+            vector: crate::velesql::VectorExpr::Literal(vec![0.1]),
+            operator: crate::velesql::CompareOp::Gte,
+            threshold: 0.8,
+        },
+    ));
+    assert!(err.contains("vector-similarity"), "got: {err}");
+
+    let err = refusal(crate::velesql::Condition::Match(MatchCondition {
+        column: "title".to_string(),
+        query: "q".to_string(),
+    }));
+    assert!(err.contains("MATCH"), "got: {err}");
+
+    // A $parameter binds to caller params a row filter never sees.
+    let err = refusal(crate::velesql::Condition::Comparison(
+        crate::velesql::Comparison {
+            column: "v".to_string(),
+            operator: crate::velesql::CompareOp::Eq,
+            value: VelesValue::Parameter("x".to_string()),
+        },
+    ));
+    assert!(err.contains("parameter"), "got: {err}");
+}

@@ -60,6 +60,7 @@ pub mod rate_limit;
 pub mod routes;
 pub mod runtime;
 mod security_addon;
+pub mod serve;
 pub mod tls;
 mod types;
 
