@@ -218,12 +218,25 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
         self.validate_write(fact, links, metadata, ttl_seconds)?;
         let fact_id = id::stable_id(fact);
         reject_self_links(fact_id, links)?;
-        let existed_before = !links.is_empty() && self.store.get(fact_id)?.is_some();
+        let existed_before = self.existed_with_links(fact_id, links)?;
         let embedding = self.embedder.embed(fact)?;
         self.write_fact(fact_id, fact, &embedding, metadata, ttl_seconds, system)?;
         self.link_or_rollback(fact_id, links, existed_before)?;
         self.autograph_if(run_autograph, fact_id, fact);
         Ok((fact_id, embedding))
+    }
+
+    /// Whether `fact_id` already lives in the store — probed only when the
+    /// caller brought edges, the one case `link_or_rollback` must tell a
+    /// pre-existing fact (kept on edge failure) from a fresh one (deleted).
+    fn existed_with_links(&self, fact_id: u64, links: &[Link]) -> Result<bool, MemoryError>
+    where
+        S: GraphStore,
+    {
+        if links.is_empty() {
+            return Ok(false);
+        }
+        Ok(self.store.get(fact_id)?.is_some())
     }
 
     /// [`Self::remember`], additionally returning the `similar` page — the
