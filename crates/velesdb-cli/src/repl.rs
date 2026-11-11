@@ -24,6 +24,7 @@ pub struct ReplConfig {
     pub timing: bool,
     pub format: OutputFormat,
     pub session: SessionSettings,
+    pub agent: crate::agent::AgentSession,
 }
 
 impl Default for ReplConfig {
@@ -32,6 +33,7 @@ impl Default for ReplConfig {
             timing: true,
             format: OutputFormat::Table,
             session: SessionSettings::new(),
+            agent: crate::agent::AgentSession::default(),
         }
     }
 }

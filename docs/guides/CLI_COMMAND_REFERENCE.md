@@ -564,15 +564,18 @@ velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
 ## Agent
 
 `velesdb agent` asks a natural-language question about a database through a
-bounded Reason→Act loop (max 8 iterations) over whitelisted VelesQL tools —
+bounded Reason→Act loop (8 iterations by default, `--max-iterations N` for
+1..=32) over whitelisted VelesQL tools —
 `list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`, `graph`. Every
 iteration is logged (thought / action / observation) and the answer cites the
-tool outputs it used. The same loop is available in the REPL as
-`.agent <question>`.
+tool outputs it used; `--save <file>` also writes that transcript as JSON. The
+same loop is available in the REPL as `.agent <question>`, with `.agent tools`,
+`.agent max-iterations [N]` and `.agent save <file>`.
 
 ```bash
 velesdb agent ./data what collections exist
 velesdb agent ./data --format json "find documents about rust"
+velesdb agent ./data --max-iterations 4 --save transcript.json "count docs by kind"
 ```
 
 Backend: if an Ollama instance answers `GET $VELESDB_AGENT_URL/api/tags`

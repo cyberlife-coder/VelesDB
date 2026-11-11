@@ -184,6 +184,10 @@ pub fn print_help() {
         "  {}   ReAct agent (bounded, whitelisted tools)",
         ".agent <q>".yellow()
     );
+    println!(
+        "  {} Agent tools / cap / transcript export",
+        ".agent tools|max-iterations [N]|save <file>".yellow()
+    );
     println!();
     println!("{}", "Graph Commands:".bold().underline());
     println!();

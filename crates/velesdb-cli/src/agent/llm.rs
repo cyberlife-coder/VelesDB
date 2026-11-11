@@ -3,7 +3,7 @@
 //! Absent or unreachable means the caller falls back to the offline router;
 //! the agent never *requires* an LLM.
 
-use super::{tools, AgentReport, Iteration, MAX_ITERATIONS};
+use super::{tools, AgentReport, Iteration, MaxIterations};
 use velesdb_core::Database;
 
 /// Resolved backend endpoint.
@@ -75,7 +75,7 @@ fn runtime() -> Option<tokio::runtime::Runtime> {
 }
 
 /// Classic ReAct prompt: tools contract + strict line format.
-fn system_prompt(question: &str) -> String {
+fn system_prompt(question: &str, max: MaxIterations) -> String {
     format!(
         "You are a VelesDB agent. Answer the question using ONLY these tools.\n\
          Tools:\n{}\n\n\
@@ -86,7 +86,7 @@ fn system_prompt(question: &str) -> String {
          Rules: max {} rounds; never invent data; cite the observations.\n\n\
          Question: {}",
         tools::TOOL_DOCS,
-        MAX_ITERATIONS,
+        max,
         question
     )
 }
@@ -94,12 +94,17 @@ fn system_prompt(question: &str) -> String {
 /// Run the bounded Reason→Act loop against `backend`. `Err` means the
 /// transport failed mid-loop (404, reset, timeout) — the caller then
 /// falls back to the offline router rather than reporting an error.
-pub fn run_loop(db: &Database, question: &str, b: &Backend) -> Result<AgentReport, String> {
+pub fn run_loop(
+    db: &Database,
+    question: &str,
+    b: &Backend,
+    max: MaxIterations,
+) -> Result<AgentReport, String> {
     let mut transcript = String::new();
     let mut iterations = Vec::new();
     let mut sources = Vec::new();
-    for n in 1..=MAX_ITERATIONS {
-        let step = match step(b, &system_prompt(question), &transcript) {
+    for n in 1..=max.get() {
+        let step = match step(b, &system_prompt(question, max), &transcript) {
             Ok(s) => s,
             Err(e) => {
                 let remedy = if e.contains("404") {
@@ -133,7 +138,7 @@ pub fn run_loop(db: &Database, question: &str, b: &Backend) -> Result<AgentRepor
     }
     Ok(finish(
         iterations,
-        format!("no final answer within {MAX_ITERATIONS} iterations"),
+        format!("no final answer within {max} iterations"),
         sources,
         b,
     ))
