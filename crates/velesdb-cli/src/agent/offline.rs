@@ -4,7 +4,7 @@
 //! data honestly, and says when the question is outside what its router can
 //! ground.
 
-use super::{tools, AgentReport, Iteration};
+use super::{tools, AgentReport, Iteration, MaxIterations};
 use velesdb_core::Database;
 
 struct Step {
@@ -14,8 +14,9 @@ struct Step {
 }
 
 /// Run the deterministic plan: `list` grounds the run, then at most two
-/// intent-driven tool calls, then a composed answer. Well under the cap.
-pub fn run(db: &Database, question: &str) -> AgentReport {
+/// intent-driven tool calls, then a composed answer. A cap below three
+/// truncates the plan; `list` always runs (the cap is at least 1).
+pub fn run(db: &Database, question: &str, max: MaxIterations) -> AgentReport {
     let mut iterations = Vec::new();
     let mut sources = Vec::new();
 
@@ -32,10 +33,10 @@ pub fn run(db: &Database, question: &str) -> AgentReport {
     );
 
     for step in plan(&names, question) {
-        act(db, &mut iterations, &mut sources, step);
-        if iterations.len() >= super::MAX_ITERATIONS - 1 {
+        if iterations.len() >= max.get() {
             break;
         }
+        act(db, &mut iterations, &mut sources, step);
     }
     AgentReport {
         answer: compose(&iterations, question),

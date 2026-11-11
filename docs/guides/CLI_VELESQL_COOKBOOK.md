@@ -470,17 +470,21 @@ SELECT "select", "from", "order" FROM docs LIMIT 10;
 ## Ask the ReAct agent (natural language)
 
 When the question is easier to ask than to write as SQL, let the bounded ReAct
-agent query the database for you — max 8 iterations over whitelisted VelesQL
-tools (`list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`,
-`graph`), every step logged, answer sourced from the tool outputs:
+agent query the database for you — 8 iterations by default
+(`--max-iterations N`, 1..=32) over whitelisted VelesQL tools (`list`,
+`describe`, `search`, `hybrid`, `explain`, `aggregate`, `graph`), every step
+logged, answer sourced from the tool outputs:
 
 ```bash
 # Top-level command (works in scripts; --format json prints the full transcript)
 velesdb agent ./data what collections exist
 velesdb agent ./data --format json "find documents about rust"
 
-# In the REPL (alias \agent also works)
+# In the REPL (alias \\agent also works; .agent tools / max-iterations / save too)
 velesdb> .agent how many documents per category
+
+# Keep the transcript for later: --save writes it as JSON, --format json prints it
+velesdb agent ./data --save transcript.json "count docs by category"
 ```
 
 No LLM is required: when no Ollama answers `GET $VELESDB_AGENT_URL/api/tags`

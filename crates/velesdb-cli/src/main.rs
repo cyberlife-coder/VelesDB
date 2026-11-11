@@ -36,6 +36,9 @@ mod import;
 mod license;
 #[allow(clippy::pedantic)]
 mod repl;
+mod repl_agent_cmds;
+#[allow(clippy::pedantic)]
+mod repl_cli_alias;
 #[allow(clippy::pedantic)]
 mod repl_collection_cmds;
 #[allow(clippy::pedantic)]
@@ -48,6 +51,8 @@ mod repl_data_cmds;
 mod repl_execute;
 #[allow(clippy::pedantic)]
 mod repl_graph_cmds;
+#[allow(clippy::pedantic)]
+mod repl_meta_cmds;
 #[allow(clippy::pedantic)]
 mod repl_output;
 #[allow(clippy::pedantic)]
@@ -150,17 +155,38 @@ fn dispatch(command: Commands) -> anyhow::Result<()> {
             path,
             question,
             format,
-        } => {
-            let db = helpers::open_database(&path)?;
-            let report = agent::run(&db, &question.join(" "));
-            if format == "json" {
-                println!("{}", agent::report_json(&report));
-            } else {
-                agent::print_report(&report);
-            }
-            Ok(())
-        }
+            max_iterations,
+            save,
+        } => run_agent(
+            &path,
+            &question.join(" "),
+            &format,
+            max_iterations,
+            save.as_deref(),
+        ),
     }
+}
+
+/// `velesdb agent`: run, print in `format`, optionally save the transcript.
+fn run_agent(
+    path: &std::path::Path,
+    question: &str,
+    format: &str,
+    max: agent::MaxIterations,
+    save: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    let db = helpers::open_database(path)?;
+    let report = agent::run(&db, question, max);
+    if format == "json" {
+        println!("{}", agent::report_json(&report));
+    } else {
+        agent::print_report(&report);
+    }
+    if let Some(file) = save {
+        agent::save_report(&report, file)
+            .map_err(|e| anyhow::anyhow!("cannot write {}: {e}", file.display()))?;
+    }
+    Ok(())
 }
 
 /// Dispatches collection sub-commands.

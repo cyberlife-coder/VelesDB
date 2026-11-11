@@ -242,3 +242,63 @@ fn test_update_check_plan_reads_the_config_file_and_names_the_cli() {
         "no data directory is known at start-up"
     );
 }
+
+// =========================================================================
+// `velesdb agent --max-iterations / --save`
+// =========================================================================
+
+fn parse_agent(args: &[&str]) -> Result<(agent::MaxIterations, Option<PathBuf>), clap::Error> {
+    match Cli::try_parse_from(args)?.command {
+        Commands::Agent {
+            max_iterations,
+            save,
+            ..
+        } => Ok((max_iterations, save)),
+        _ => panic!("expected `agent`"),
+    }
+}
+
+#[test]
+fn test_agent_max_iterations_defaults_and_parses_within_range() {
+    let (max, save) = parse_agent(&["velesdb", "agent", "./db", "hi"]).expect("parse");
+    assert_eq!(max, agent::MaxIterations::default());
+    assert!(save.is_none());
+    let (max, save) = parse_agent(&[
+        "velesdb",
+        "agent",
+        "./db",
+        "--max-iterations",
+        "3",
+        "--save",
+        "t.json",
+        "hi",
+    ])
+    .expect("parse");
+    assert_eq!(max.get(), 3);
+    assert_eq!(save, Some(PathBuf::from("t.json")));
+}
+
+#[test]
+fn test_agent_max_iterations_out_of_range_is_a_usage_error() {
+    for bad in ["0", "33", "x"] {
+        let err = parse_agent(&["velesdb", "agent", "./db", "--max-iterations", bad, "hi"])
+            .expect_err("out-of-range cap accepted");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation, "{bad}");
+    }
+}
+
+#[test]
+fn test_agent_max_iterations_help_names_the_real_limit() {
+    use clap::CommandFactory;
+    let cmd = Cli::command();
+    let help = cmd
+        .find_subcommand("agent")
+        .and_then(|a| a.get_arguments().find(|x| x.get_id() == "max_iterations"))
+        .and_then(|x| x.get_help())
+        .map(ToString::to_string)
+        .expect("--max-iterations help");
+    assert!(
+        help.contains(&format!("1..={}", agent::MaxIterations::LIMIT)),
+        "help {help:?} drifted from MaxIterations::LIMIT"
+    );
+}

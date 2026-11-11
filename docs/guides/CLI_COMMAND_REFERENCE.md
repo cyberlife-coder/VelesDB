@@ -587,15 +587,18 @@ velesdb completions elvish > ~/.config/elvish/lib/velesdb.elv
 ## Agent
 
 `velesdb agent` asks a natural-language question about a database through a
-bounded Reason→Act loop (max 8 iterations) over whitelisted VelesQL tools —
+bounded Reason→Act loop (8 iterations by default, `--max-iterations N` for
+1..=32) over whitelisted VelesQL tools —
 `list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`, `graph`. Every
 iteration is logged (thought / action / observation) and the answer cites the
-tool outputs it used. The same loop is available in the REPL as
-`.agent <question>`.
+tool outputs it used; `--save <file>` also writes that transcript as JSON. The
+same loop is available in the REPL as `.agent <question>`, with `.agent tools`,
+`.agent max-iterations [N]` and `.agent save <file>`.
 
 ```bash
 velesdb agent ./data what collections exist
 velesdb agent ./data --format json "find documents about rust"
+velesdb agent ./data --max-iterations 4 --save transcript.json "count docs by kind"
 ```
 
 The agent may only call these whitelisted tools — anything else is refused:
@@ -644,8 +647,8 @@ agent runs a documented deterministic offline router over the same tools and
 prints a `notice:` line with the cause (the JSON `fallback` field; `null` when
 the LLM answered). No LLM is ever required; `--format json` prints the full
 transcript (`answer`, `backend`, `fallback`, `iterations`, `sources`) for
-scripting. In the REPL the same loop is `.agent <question>` (alias `\agent`);
-see the [REPL reference](CLI_REPL_REFERENCE.md#react-agent).
+scripting. In the REPL the backslash alias `\\agent` works too — see the
+[REPL reference](CLI_REPL_REFERENCE.md#react-agent).
 
 ---
 
