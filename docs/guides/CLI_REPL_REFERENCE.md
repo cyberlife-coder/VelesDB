@@ -130,10 +130,10 @@ Per-Node Statistics:
 | `.sparse-search <col> <index> <json> [k]` | Sparse vector search. JSON format: `[[idx, weight], ...]`. Default k=10. |
 | `.hybrid-sparse <col> <dense> <sparse> [k] [--strategy rrf\|average\|max\|weighted\|relative_score] [--index <name>]` | Dense+sparse hybrid search with fusion. Default k=10, strategy=rrf. Strategy names follow core's grammar (`avg`, `max`, `rsf` aliases, any case); `weighted` uses core's 0.6 / 0.3 / 0.1. |
 | `.guardrails` | Display current query guard-rails (timeout, memory limit, rate limit, circuit breaker) |
-| `.agent <question>` | Bounded ReAct agent over whitelisted VelesQL tools (list / describe / search / hybrid / explain / aggregate / graph). Max 8 iterations by default (see `.agent max-iterations`), every step logged, answer cites the tool outputs used. Uses the Ollama backend when `VELESDB_AGENT_URL` (default `http://127.0.0.1:11434`) answers — model via `VELESDB_AGENT_MODEL` (default `qwen3:4b`); otherwise a documented deterministic offline router. No LLM is ever required. Bare `.agent` prints the agent sub-commands. |
-| `.agent tools` | List the whitelisted tools and their argument contracts. |
-| `.agent max-iterations [N]` | Show, or set for this session, the Reason→Act cap (1..=32, default 8). |
-| `.agent save <file>` | Write the last `.agent` run's full transcript (answer, backend, `fallback` cause, sources, every iteration) as pretty JSON. Errors if no question was asked yet. |
+| `.agent <question>` | Bounded ReAct agent — see [ReAct agent](#react-agent) below. Alias: `\agent` |
+| `.agent tools` | List the whitelisted tools and their argument contracts |
+| `.agent max-iterations [N]` | Show, or set for this session, the Reason→Act cap (1..=32, default 8) |
+| `.agent save <file>` | Write the last `.agent` run's full transcript (answer, backend, `fallback` cause, sources, every iteration) as pretty JSON. Errors if no question was asked yet |
 
 ```
 velesdb> .sparse-search my_col sparse_idx [[42,0.8],[137,0.6],[891,0.3]] 10
@@ -143,6 +143,77 @@ velesdb> .hybrid-sparse docs [0.1,0.2,0.3,0.4] [[0,1.5],[3,0.8]] 10 --strategy r
 Dense vector is a JSON array `[0.1, 0.2, ...]`; sparse vector is
 `[[index, weight], ...]`. Valid strategies: `rrf`, `average`, `max` (also
 accepts `maximum`).
+
+## ReAct agent
+
+`.agent <question>` (alias `\agent`) asks a natural-language question about
+the open database through a bounded Reason→Act loop: **8 iterations by
+default** (the cap is 32), over a whitelist of VelesQL tools —
+`list`, `describe`, `search`, `hybrid`, `explain`, `aggregate`, `graph`.
+Anything outside the whitelist is refused. Every iteration is logged (thought /
+action / observation) and the final answer cites the tool outputs it used
+(`sources:`).
+
+```bash
+velesdb> .agent what collections exist
+velesdb> \agent find documents about rust      # same thing, backslash alias
+velesdb> .agent tools                          # list the whitelisted tools + contracts
+velesdb> .agent max-iterations                 # show the session cap (default 8)
+velesdb> .agent max-iterations 16              # raise it for this session (1..=32)
+velesdb> .agent save run.json                  # dump the last run's transcript as JSON
+velesdb> .agent                                # prints the agent sub-commands
+```
+
+Bare `.agent` prints those sub-commands (and notes that agent *memory*
+management lives in the Python/TypeScript SDKs or the REST API, not in the
+REPL).
+
+Verified output with no LLM reachable (deterministic offline router; only the
+`notice:` cause text varies with the failure):
+
+```
+velesdb> .agent what collections exist
+
+Agent (ReAct)
+  Backend: offline
+  notice: answered by the deterministic offline router — no LLM reachable at http://127.0.0.1:11434/api/tags: …
+
+  ── iteration 1
+    thought: ground the run: enumerate collections
+    action: list()
+    observation: 1 collection(s): docs
+  ── iteration 2
+    thought: default: describe available collections
+    action: describe(docs)
+    observation: docs: kind=vector/metadata (no stats file yet)
+
+Answer: offline mode — what the tools saw:
+• docs: kind=vector/metadata (no stats file yet)
+
+  sources: list() · describe(docs)
+```
+
+Backends:
+
+- **Ollama** — when `GET $VELESDB_AGENT_URL/api/tags` answers (default
+  `http://127.0.0.1:11434`), reasoning delegates to `$VELESDB_AGENT_MODEL`
+  (default `qwen3:4b`).
+- **Offline router** — when the LLM is unusable (unreachable, timeout, 404 for
+  an unpulled model, 500…, at the probe or mid-loop), a deterministic
+  keyword-intent router runs the same tools and prints the `notice:` line with
+  the cause. No LLM is ever required.
+
+With `.format json` active, `.agent` prints the machine-readable transcript
+instead (`answer`, `backend`, `fallback`, `iterations`, `sources`):
+
+```
+velesdb> .format json
+velesdb> .agent find documents about rust
+{"answer":"offline mode — what the tools saw:\n• SELECT * FROM docs WHERE content MATCH 'rust' LIMIT 5 -> 1 row(s): …","backend":"offline","fallback":"no LLM reachable at …","iterations":[…],"sources":["list()","search(docs content rust)"]}
+```
+
+The same loop is available outside the REPL as
+[`velesdb agent <path> <question…>`](CLI_COMMAND_REFERENCE.md#agent).
 
 ## Graph commands
 
@@ -380,4 +451,4 @@ executed successfully.`, `Admin statement executed successfully.`, or
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-11-11 · Applies to: velesdb-core 8.1.0

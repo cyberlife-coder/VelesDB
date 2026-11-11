@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an invalid file and lists the tables the CLI engine does not read, and
   `edit` opens `$VISUAL`/`$EDITOR` then validates what was saved.
 
+- **`velesdb db stats|vacuum|snapshot|restore`** (#2725). Offline database
+  maintenance behind the same exclusive lock every command takes: `stats`
+  reports per-collection kind, point/node count, disk usage and the last
+  persisted `ANALYZE`; `vacuum` rebuilds the HNSW index of each targeted
+  vector collection (the core call behind REST `/vacuum`), with `--compact`
+  rewriting vector storage; `snapshot` flushes the database and copies the
+  tree into a fresh directory, writing `snapshot.manifest.json` last as the
+  completeness marker `restore` checks; `restore` copies a verified snapshot
+  into a fresh directory and opens it to prove it loads. Nothing overwrites
+  in place — destinations must be new or empty.
+
 ## [8.1.0] - 2026-11-06
 
 ### Added

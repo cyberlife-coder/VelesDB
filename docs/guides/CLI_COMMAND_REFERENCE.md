@@ -14,8 +14,10 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 
 ## Table of contents
 
+- [Command overview](#command-overview)
 - [Global options](#global-options)
 - [Configuration](#configuration)
+- [Database maintenance](#database-maintenance)
 - [Collections](#collections)
 - [Points](#points)
 - [Import / export](#import--export)
@@ -29,6 +31,28 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 - [Agent](#agent)
 - [Building the Debian package](#building-the-debian-package)
 - [Error reference](#error-reference)
+
+---
+
+## Command overview
+
+Every command runs offline against a database directory (`./data` unless a path
+argument says otherwise). `velesdb --help` prints this same list.
+
+| Command | Subcommands | Section |
+|---------|-------------|---------|
+| `velesdb repl [path]` | interactive REPL (dot-commands + `\session` commands) | [REPL reference](CLI_REPL_REFERENCE.md) |
+| `velesdb info <path>` | database overview | [Collections](#collections) |
+| `velesdb collection <path> …` | `create`, `create-graph`, `create-metadata`, `delete`, `list`, `show`, `analyze` | [Collections](#collections) · [Analyze](#analyze) |
+| `velesdb data <path> …` | `import`, `export`, `upsert`, `get`, `delete`, `scroll`, `stream-insert` | [Points](#points) · [Import / export](#import--export) |
+| `velesdb query <path> …` | `execute`, `search`, `batch-search`, `explain` | [Query](#query) |
+| `velesdb graph <path> <col> …` | `add-edge`, `get-edges`, `degree`, `traverse`, `neighbors`, `store-payload`, `get-payload`, `remove-edge`, `count`, `search`, `nodes`, `doctor` | [Graph](#graph) |
+| `velesdb index <path> <col> …` | `create`, `drop`, `list` | [Index management](#index-management) |
+| `velesdb config …` | `path`, `show`, `validate`, `edit` — the engine configuration the CLI loads | [Configuration](#configuration) |
+| `velesdb agent <path> <question…>` | bounded ReAct agent over whitelisted VelesQL tools | [Agent](#agent) |
+| `velesdb simd …` | `info`, `benchmark` | [SIMD diagnostics](#simd-diagnostics) |
+| `velesdb license …` | `show`, `activate`, `verify` | [License management](#license-management) |
+| `velesdb completions <shell>` | `bash`, `zsh`, `fish`, `powershell`, `elvish` | [Shell completions](#shell-completions) |
 
 ---
 
@@ -84,6 +108,42 @@ velesdb config edit
 | `show` | the resolved configuration does not load |
 | `validate` | the file does not parse or a value fails validation |
 | `edit` | no file resolves, `$VISUAL`/`$EDITOR` is unset, the editor fails, or the saved file is invalid |
+
+---
+
+## Database maintenance
+
+`velesdb db` operates offline on a database directory; every action opens the
+database, so it takes the same exclusive `velesdb.lock` as any other command —
+a running `velesdb-server` or REPL on the directory makes it fail rather than
+race a live database.
+
+```bash
+# Per-collection stats: kind, point/node count, disk usage, last ANALYZE
+velesdb db stats ./data
+velesdb db stats ./data -f json
+
+# Rebuild the HNSW index of every vector collection (drops tombstoned
+# entries), or one with --collection; --compact also rewrites vector storage.
+# Same core calls as POST /collections/{name}/vacuum and /compact.
+velesdb db vacuum ./data
+velesdb db vacuum ./data --collection docs --compact
+
+# Flush everything and copy the tree into a fresh directory. The manifest is
+# written last — a snapshot without it is an incomplete copy, not a snapshot.
+velesdb db snapshot ./data -o ./backups/data-2026-11-10
+
+# Verify the manifest, copy into a fresh directory, open it to prove it loads.
+# Never overwrites: the destination must not exist or be empty.
+velesdb db restore ./backups/data-2026-11-10 -o ./data
+```
+
+| Action | Exit code 1 when |
+|---|---|
+| `stats` | the database does not open or stats cannot be read |
+| `vacuum` | the named collection is missing or not a vector collection, or a rebuild/flush fails |
+| `snapshot` | a flush fails, the destination is not fresh, or it is inside the source tree |
+| `restore` | the source has no manifest (incomplete copy), the destination is not fresh, or the copy fails to open |
 
 ---
 
@@ -578,6 +638,43 @@ velesdb agent ./data --format json "find documents about rust"
 velesdb agent ./data --max-iterations 4 --save transcript.json "count docs by kind"
 ```
 
+The agent may only call these whitelisted tools — anything else is refused:
+
+| Tool | Signature | Runs |
+|------|-----------|------|
+| `list` | `list()` | all collection names |
+| `describe` | `describe(<collection>)` | stats + row count |
+| `search` | `search(<collection> <field> <term>)` | `SELECT … WHERE field MATCH 'term'` |
+| `hybrid` | `hybrid(<collection> <field> <term>)` | same query flagged hybrid (offline: runs the MATCH branch and says so) |
+| `explain` | `explain(<collection> <field> <term>)` | `EXPLAIN` of that query |
+| `aggregate` | `aggregate(<collection> <field>)` | `SELECT field, COUNT(*) … GROUP BY` |
+| `graph` | `graph(<graph> <node_id>)` | BFS traversal from the node |
+
+Verified against the binary with no LLM reachable (deterministic offline
+router answers; only the `notice:` cause text varies with the failure):
+
+```
+$ velesdb agent ./data what collections exist
+
+Agent (ReAct)
+  Backend: offline
+  notice: answered by the deterministic offline router — no LLM reachable at http://127.0.0.1:11434/api/tags: …
+
+  ── iteration 1
+    thought: ground the run: enumerate collections
+    action: list()
+    observation: 1 collection(s): docs
+  ── iteration 2
+    thought: default: describe available collections
+    action: describe(docs)
+    observation: docs: kind=vector/metadata (no stats file yet)
+
+Answer: offline mode — what the tools saw:
+• docs: kind=vector/metadata (no stats file yet)
+
+  sources: list() · describe(docs)
+```
+
 Backend: if an Ollama instance answers `GET $VELESDB_AGENT_URL/api/tags`
 (default `http://127.0.0.1:11434`), reasoning delegates to
 `$VELESDB_AGENT_MODEL` (default `qwen3:4b`) — same extractor-style contract
@@ -586,7 +683,9 @@ non-2xx answer (404 for an unpulled model, 500…), at the probe or mid-loop —
 agent runs a documented deterministic offline router over the same tools and
 prints a `notice:` line with the cause (the JSON `fallback` field; `null` when
 the LLM answered). No LLM is ever required; `--format json` prints the full
-transcript for scripting.
+transcript (`answer`, `backend`, `fallback`, `iterations`, `sources`) for
+scripting. In the REPL the backslash alias `\\agent` works too — see the
+[REPL reference](CLI_REPL_REFERENCE.md#react-agent).
 
 ---
 
@@ -632,4 +731,4 @@ Numeric `VELES-*` codes are listed in
 
 ---
 
-Last updated: 2026-08-13 · Applies to: velesdb-core 8.1.0
+Last updated: 2026-11-11 · Applies to: velesdb-core 8.1.0

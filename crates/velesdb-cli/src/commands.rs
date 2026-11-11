@@ -85,6 +85,12 @@ pub enum Commands {
         action: ConfigAction,
     },
 
+    /// Database maintenance (stats, vacuum, snapshot, restore)
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
+    },
+
     /// Ask the bounded ReAct agent a question about this database
     /// (whitelisted VelesQL tools; Ollama backend if VELESDB_AGENT_URL
     /// answers, else deterministic offline mode)
@@ -606,4 +612,57 @@ pub enum ConfigFormat {
     Toml,
     /// JSON
     Json,
+}
+
+/// `velesdb db` maintenance actions. All operate offline against a database
+/// directory and take its exclusive lock like every other command.
+#[derive(Subcommand)]
+pub enum DbAction {
+    /// Per-collection stats: kind, point/node count, disk usage, last ANALYZE
+    Stats {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Output format (table, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+    },
+
+    /// Vacuum: rebuild the HNSW index of each targeted vector collection,
+    /// removing tombstoned entries
+    Vacuum {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Only this collection (must be a vector collection; default: all)
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Also rewrite vector storage, reclaiming disk space
+        #[arg(long)]
+        compact: bool,
+    },
+
+    /// Snapshot: flush the database and copy it into a fresh directory.
+    /// Opens the database, so it takes the same exclusive lock every other
+    /// command does — a running server or REPL on the directory fails it.
+    Snapshot {
+        /// Path to database directory
+        path: PathBuf,
+
+        /// Destination directory (must not exist or be empty)
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    /// Restore: verify a snapshot's manifest, copy it into a fresh directory
+    /// and open it to prove it loads
+    Restore {
+        /// Path to snapshot directory (made by `db snapshot`)
+        path: PathBuf,
+
+        /// Destination database directory (must not exist or be empty)
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
