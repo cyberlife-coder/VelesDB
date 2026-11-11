@@ -86,7 +86,7 @@ fn serve_answers_rest_and_stops_on_sigterm() {
     assert!(up, "embedded server did not start on port {port}");
 
     assert!(get(port, "/v1/collections").is_some_and(|b| b.contains("docs")));
-    assert!(get(port, "/v1/health").is_some_and(|b| b.contains("8.1.0")));
+    assert!(get(port, "/v1/health").is_some_and(|b| b.contains(env!("CARGO_PKG_VERSION"))));
 
     libc_kill(child.id());
     let status = child.wait().unwrap();
