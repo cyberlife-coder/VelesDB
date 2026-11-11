@@ -187,6 +187,74 @@ to dot-commands or queries.
 
 ---
 
+## History, scripts and results
+
+The daily-driver commands track the last submitted query and the last
+result so they can be edited, re-run, saved and copied. The last query is
+recorded even when it fails — editing a failed query is the point of
+`\edit`.
+
+| Command | Description |
+|---------|-------------|
+| `\history` | Print the session command history, numbered, oldest first |
+| `\save <file>` | Write the last submitted query to a script file |
+| `\save --result <file>` | Write the last result rows as pretty JSON |
+| `\load <file>` | Run each non-empty, non-`--`-comment line of a script file (dot-commands and VelesQL alike). Nested `\load` is bounded (depth 8) so a self-including script errors instead of recursing forever. |
+| `\watch [seconds] [count]` | Re-run the last query `count` times (default 3, max 1000) every `seconds` (default 2, fractions allowed) |
+| `\edit` | Write the last query to a scratch file, open it in `$VISUAL`/`$EDITOR`, then run the edited lines. Errors when no editor is configured or no query was run. |
+| `\copy` | Copy the last result rows as JSON to the system clipboard |
+| `\copy query` | Copy the last query text instead |
+
+`\copy` uses the platform clipboard tool (`pbcopy` on macOS, `clip` on
+Windows, `wl-copy`/`xclip`/`xsel` on Linux). When none is available — a
+headless or piped session — the payload is printed instead of being lost.
+
+```
+velesdb> SELECT * FROM docs LIMIT 3;
+velesdb> \save find_docs.sql
+velesdb> \load find_docs.sql
+velesdb> \watch 5 12        -- re-runs the query every 5 s, 12 times
+velesdb> \edit             -- fix the query in $EDITOR, then it runs
+velesdb> \save --result rows.json
+velesdb> \copy             -- last result JSON -> clipboard
+```
+
+---
+
+## CLI subcommand syntax in the REPL
+
+Lines that look like CLI subcommands are translated instead of failing
+with a bare `VelesQL` parse error. The match is on the exact first word —
+`VelesQL` statements never start with `collection`, `data`, `query`,
+`graph`, `index`, `info`, `agent`, `license`, `simd`, `repl`,
+`completions` or `help`, so a real query can never be captured.
+
+The database-path positional the CLI form carries is dropped when it
+looks like a path (`collection show ./db docs` → `.describe docs`).
+
+| Typed in the REPL | Runs |
+|-------------------|------|
+| `collection list` | `.collections` |
+| `collection show <name>` | `.describe <name>` |
+| `collection analyze <name>` | `.analyze <name>` |
+| `data export <col>` | `.export <col>` |
+| `data scroll <col>` | `.scroll <col>` |
+| `data delete <col> <ids>` | `.delete <col> <ids>` |
+| `query execute "<sql>"` | the SQL itself |
+| `query explain "<sql>"` | `.explain <sql>` |
+| `graph <sub> ...` | `.graph <sub> ...` (`get-edges` → `edges`) |
+| `index list <col>` | `.indexes <col>` |
+| `info` | `\info` |
+| `agent <question>` | `.agent <question>` |
+| `help` | `.help` |
+
+Subcommands with no REPL equivalent (`data import`, `collection create`,
+`license`, `simd`, `completions`, `repl`, `index create|drop`, `graph
+doctor`, `query search|batch-search`) print a hint naming the shell form
+(`velesdb <subcommand> ...`) and the closest REPL command.
+
+---
+
 ## Session settings
 
 Session settings control REPL search behaviour. Set with `\set`, view with
