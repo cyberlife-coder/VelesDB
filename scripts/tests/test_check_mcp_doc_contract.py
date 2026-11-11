@@ -1067,6 +1067,7 @@ class RealRepositoryTests(unittest.TestCase):
                 "docs/guides/NODE_ADDON.md",
                 "docs/guides/WASM_API.md",
                 "docs/reference/MCP_TOOLS.md",
+                "integrations/langgraph/src/langgraph_velesdb/tools.py",
                 "sdks/typescript/src/memory.ts",
             },
             "remember_extracted": {

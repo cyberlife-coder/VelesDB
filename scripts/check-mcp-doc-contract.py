@@ -424,6 +424,7 @@ POLICED_TOOLS: "tuple[PolicedTool, ...]" = (
             "docs/guides/NODE_ADDON.md",
             "docs/guides/WASM_API.md",
             "docs/reference/MCP_TOOLS.md",
+            "integrations/langgraph/src/langgraph_velesdb/tools.py",
             "sdks/typescript/src/memory.ts",
         ),
     ),
@@ -553,6 +554,7 @@ SHAPE_DIVERGENCES: "tuple[ShapeDivergence, ...]" = (
             "crates/velesdb-wasm/src/memory_service.rs",
             "docs/guides/NODE_ADDON.md",
             "docs/guides/WASM_API.md",
+            "integrations/langgraph/src/langgraph_velesdb/tools.py",
             "sdks/typescript/src/memory.ts",
         )
     ),
