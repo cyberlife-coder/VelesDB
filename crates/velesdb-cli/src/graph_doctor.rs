@@ -17,8 +17,6 @@ use std::collections::{BTreeSet, HashMap};
 use colored::Colorize;
 use velesdb_core::GraphCollection;
 
-use crate::helpers;
-
 /// Number of phantom edges shown in the printed sample (table and JSON).
 const SAMPLE_SIZE: usize = 10;
 
@@ -161,19 +159,22 @@ pub(crate) fn print_report(
     fixed: usize,
     format: &str,
 ) -> anyhow::Result<()> {
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let sample: Vec<_> = phantoms
             .iter()
             .take(SAMPLE_SIZE)
             .map(phantom_to_json)
             .collect();
-        helpers::print_json(&serde_json::json!({
-            "collection": collection,
-            "phantom_edge_count": phantoms.len(),
-            "mode": mode.label(),
-            "fixed": fixed,
-            "sample": sample,
-        }))?;
+        crate::output::print_machine(
+            &serde_json::json!({
+                "collection": collection,
+                "phantom_edge_count": phantoms.len(),
+                "mode": mode.label(),
+                "fixed": fixed,
+                "sample": sample,
+            }),
+            format,
+        )?;
     } else {
         print_report_table(collection, phantoms, mode, fixed);
     }

@@ -23,7 +23,7 @@ bash demos/cli-demo.sh --db /tmp/x --keep     # custom data dir, kept after the 
 | fusion | `NEAR + MATCH … USING FUSION(strategy='rrf', k=60)` | each branch alone vs the fused list, side by side — doc 2 is mid-rank in both and tops the fused list |
 | EXPLAIN | `query explain` | the real plan: VectorSearch → Filter → Limit, FUSION RRF k=60 |
 | REST live | `velesdb-server` + `curl /health` + `POST /query` | same data dir, same engine, over HTTP |
-| export | `data export --output` | the whole collection back out as JSON |
+| export | `data export --output-file` | the whole collection back out as JSON |
 
 `cli-demo-expected.txt` is a normalized transcript of a full run (`<DB>`, `<REPO>`,
 `<PORT>` and timings scrubbed). `cli-demo.cast` is the asciinema source of the

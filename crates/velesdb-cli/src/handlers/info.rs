@@ -47,22 +47,25 @@ pub fn handle_list(path: &Path, format: &str) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
     let collections = db.list_collections();
 
-    if format == "json" {
-        print_list_json(&db, &collections)?;
+    if crate::output::is_machine(format) {
+        print_list_json(&db, &collections, format)?;
     } else {
         print_list_table(&db, &collections);
     }
     Ok(())
 }
 
-/// Prints collection list as JSON.
-fn print_list_json(db: &velesdb_core::Database, collections: &[String]) -> Result<()> {
+/// Prints collection list as a machine format (json, jsonl, csv).
+fn print_list_json(
+    db: &velesdb_core::Database,
+    collections: &[String],
+    format: &str,
+) -> Result<()> {
     let data: Vec<_> = collections
         .iter()
         .map(|name| collection_to_json(db, name))
         .collect();
-    println!("{}", serde_json::to_string_pretty(&data)?);
-    Ok(())
+    crate::output::print_machine(&data, format)
 }
 
 /// Converts a single collection to a JSON value for listing.
@@ -165,8 +168,11 @@ fn print_collection_row(db: &velesdb_core::Database, name: &str) {
 /// Handles the `show` subcommand: shows detailed info about one collection.
 pub fn handle_show(path: &Path, collection: &str, samples: usize, format: &str) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let typed = collection_helpers::resolve_collection(&db, collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+    let typed = collection_helpers::resolve_collection(&db, collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
     let type_label = collection_helpers::collection_type_label(&db, collection);
 
     match typed {
@@ -191,7 +197,7 @@ fn show_vector(
     format: &str,
 ) -> Result<()> {
     let cfg = col.config();
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let data = serde_json::json!({
             "name": cfg.name,
             "type": type_label,
@@ -201,7 +207,7 @@ fn show_vector(
             "storage_mode": format!("{:?}", cfg.storage_mode),
             "estimated_memory_mb": (cfg.point_count * cfg.dimension * 4) as f64 / 1_000_000.0
         });
-        println!("{}", serde_json::to_string_pretty(&data)?);
+        crate::output::print_machine(&data, format)?;
     } else {
         print_vector_table(&cfg, type_label);
         if samples > 0 {
@@ -245,7 +251,7 @@ fn print_vector_samples(col: &velesdb_core::VectorCollection, samples: usize) {
 /// Displays graph collection details.
 fn show_graph(col: &velesdb_core::GraphCollection, type_label: &str, format: &str) -> Result<()> {
     let edge_count = col.get_edges(None).len();
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let data = serde_json::json!({
             "name": col.name(),
             "type": type_label,
@@ -253,7 +259,7 @@ fn show_graph(col: &velesdb_core::GraphCollection, type_label: &str, format: &st
             "has_embeddings": col.has_embeddings(),
             "schema": format!("{:?}", col.schema())
         });
-        println!("{}", serde_json::to_string_pretty(&data)?);
+        crate::output::print_machine(&data, format)?;
     } else {
         println!("\n{}", "Collection Details".bold().underline());
         println!("  {} {}", "Name:".cyan(), col.name().green());
@@ -272,13 +278,13 @@ fn show_metadata(
     type_label: &str,
     format: &str,
 ) -> Result<()> {
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let data = serde_json::json!({
             "name": col.name(),
             "type": type_label,
             "item_count": col.len()
         });
-        println!("{}", serde_json::to_string_pretty(&data)?);
+        crate::output::print_machine(&data, format)?;
     } else {
         println!("\n{}", "Collection Details".bold().underline());
         println!("  {} {}", "Name:".cyan(), col.name().green());
@@ -296,8 +302,8 @@ pub fn handle_analyze(path: &Path, collection: &str, format: &str) -> Result<()>
         .analyze_collection(collection)
         .map_err(|e| anyhow::anyhow!("Analyze error: {}", e))?;
 
-    if format == "json" {
-        println!("{}", serde_json::to_string_pretty(&stats)?);
+    if crate::output::is_machine(format) {
+        crate::output::print_machine(&stats, format)?;
     } else {
         print_analyze_table(collection, &stats);
     }

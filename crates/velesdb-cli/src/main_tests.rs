@@ -120,8 +120,8 @@ fn parse_import_progress(args: &[&str]) -> bool {
         .command
     {
         Commands::Data {
-            action: DataCommands::Import { progress, .. },
-        } => progress,
+            action: DataCommands::Import(args),
+        } => args.progress,
         _ => panic!("expected `data import`"),
     }
 }

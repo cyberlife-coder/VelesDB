@@ -319,16 +319,6 @@ fn truncate_display_value(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// Serializes a value as pretty JSON and prints it to stdout.
-///
-/// # Errors
-///
-/// Returns an error if JSON serialization fails.
-pub fn print_json(data: &serde_json::Value) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(data)?);
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Export helpers (REPL commands)
 // ---------------------------------------------------------------------------

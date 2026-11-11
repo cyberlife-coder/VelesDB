@@ -36,6 +36,8 @@ mod import;
 #[allow(clippy::pedantic)]
 mod license;
 #[allow(clippy::pedantic)]
+mod output;
+#[allow(clippy::pedantic)]
 mod repl;
 mod repl_agent_cmds;
 #[allow(clippy::pedantic)]
@@ -85,12 +87,29 @@ struct Cli {
     #[arg(long = "config", global = true, env = "VELESDB_CONFIG")]
     config: Option<PathBuf>,
 
+    /// Global output format (table, json, jsonl, csv); overrides the
+    /// per-command `--format` of every command that prints data.
+    #[arg(long = "output", global = true, value_name = "FORMAT")]
+    output: Option<output::GlobalFormat>,
+
+    /// Suppress human-readable status output; data still prints. For
+    /// scripting/CI use together with `--output`.
+    #[arg(long = "quiet", global = true)]
+    quiet: bool,
+
+    /// Disable colored output (same as setting NO_COLOR=1).
+    #[arg(long = "no-color", global = true)]
+    no_color: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
 
-fn main() -> anyhow::Result<()> {
-    cli_main()
+fn main() {
+    if let Err(err) = cli_main() {
+        eprintln!("Error: {err:#}");
+        std::process::exit(output::exit_code(&err));
+    }
 }
 
 /// Builds the server config overrides for `velesdb serve` from its flags.
@@ -125,6 +144,11 @@ fn serve_overrides(
 
 fn cli_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    output::init(output::OutputOptions {
+        format: cli.output,
+        quiet: cli.quiet,
+        no_color: cli.no_color,
+    });
     // Non-blocking update check (background thread, 2s timeout), sent once.
     // No data directory is known this early, so the install id lives in the
     // per-user config directory or, failing that, for this process only.
@@ -231,8 +255,9 @@ fn run_agent(
 ) -> anyhow::Result<()> {
     let db = helpers::open_database(path)?;
     let report = agent::run(&db, question, max);
-    if format == "json" {
-        println!("{}", agent::report_json(&report));
+    let format = output::effective_format(format);
+    if output::is_machine(&format) {
+        output::print_machine(&agent::report_json(&report), &format)?;
     } else {
         agent::print_report(&report);
     }
@@ -265,66 +290,65 @@ fn dispatch_collection(action: CollectionCommands) -> anyhow::Result<()> {
         CollectionCommands::Delete { path, name, force } => {
             handlers::handle_delete_collection(&path, &name, force)
         }
-        CollectionCommands::List { path, format } => handlers::handle_list(&path, &format),
+        CollectionCommands::List { path, format } => {
+            let format = output::effective_format(&format);
+            handlers::handle_list(&path, &format)
+        }
         CollectionCommands::Show {
             path,
             collection,
             samples,
             format,
-        } => handlers::handle_show(&path, &collection, samples, &format),
+        } => {
+            let format = output::effective_format(&format);
+            handlers::handle_show(&path, &collection, samples, &format)
+        }
         CollectionCommands::Analyze {
             path,
             collection,
             format,
-        } => handlers::handle_analyze(&path, &collection, &format),
+        } => {
+            let format = output::effective_format(&format);
+            handlers::handle_analyze(&path, &collection, &format)
+        }
     }
+}
+
+/// Dispatches `data import`.
+fn dispatch_data_import(args: commands::ImportArgs) -> anyhow::Result<()> {
+    handlers::handle_import(
+        &args.file,
+        &args.database,
+        args.collection,
+        args.dimension,
+        args.metric,
+        args.storage_mode,
+        args.id_column,
+        args.vector_column,
+        args.batch_size,
+        args.progress,
+        args.dry_run,
+        args.on_conflict,
+        args.continue_on_error,
+        args.error_report,
+    )
 }
 
 /// Dispatches data sub-commands.
 fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
     match action {
-        DataCommands::Import {
-            file,
-            database,
-            collection,
-            dimension,
-            metric,
-            storage_mode,
-            id_column,
-            vector_column,
-            batch_size,
-            progress,
-            dry_run,
-            on_conflict,
-            continue_on_error,
-            error_report,
-        } => handlers::handle_import(
-            &file,
-            &database,
-            collection,
-            dimension,
-            metric,
-            storage_mode,
-            id_column,
-            vector_column,
-            batch_size,
-            progress,
-            dry_run,
-            on_conflict,
-            continue_on_error,
-            error_report,
-        ),
+        DataCommands::Import(args) => dispatch_data_import(args),
         DataCommands::Export {
             path,
             collection,
-            output,
+            output_file,
             format,
             where_clause,
             include_vectors,
         } => handlers::handle_export(
             &path,
             &collection,
-            output,
+            output_file,
             format,
             where_clause,
             include_vectors,
@@ -341,7 +365,10 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             collection,
             id,
             format,
-        } => handlers::handle_get(&path, &collection, id, &format),
+        } => {
+            let format = output::effective_format(&format);
+            handlers::handle_get(&path, &collection, id, &format)
+        }
         DataCommands::DeletePoints {
             path,
             collection,
@@ -353,7 +380,10 @@ fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
             batch_size,
             cursor,
             format,
-        } => handlers::handle_scroll(&path, &collection, batch_size, cursor, &format),
+        } => {
+            let format = output::effective_format(&format);
+            handlers::handle_scroll(&path, &collection, batch_size, cursor, &format)
+        }
         DataCommands::StreamInsert {
             path,
             collection,
@@ -371,8 +401,8 @@ fn dispatch_db(action: DbAction) -> anyhow::Result<()> {
             collection,
             compact,
         } => handlers::handle_db_vacuum(&path, collection.as_deref(), compact),
-        DbAction::Snapshot { path, output } => handlers::handle_db_snapshot(&path, &output),
-        DbAction::Restore { path, output } => handlers::handle_db_restore(&path, &output),
+        DbAction::Snapshot { path, output_dir } => handlers::handle_db_snapshot(&path, &output_dir),
+        DbAction::Restore { path, output_dir } => handlers::handle_db_restore(&path, &output_dir),
     }
 }
 
@@ -384,7 +414,10 @@ fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
             query,
             collection,
             format,
-        } => dispatch_query(&path, &query, collection.as_deref(), &format),
+        } => {
+            let format = output::effective_format(&format);
+            dispatch_query(&path, &query, collection.as_deref(), &format)
+        }
         QueryCommands::Search {
             path,
             collection,
@@ -394,28 +427,37 @@ fn dispatch_query_cmd(action: QueryCommands) -> anyhow::Result<()> {
             rrf_k,
             branch_weights,
             format,
-        } => handlers::handle_multi_search(
-            &path,
-            &collection,
-            &vectors,
-            top_k,
-            &strategy,
-            rrf_k,
-            branch_weights.as_deref(),
-            &format,
-        ),
+        } => {
+            let format = output::effective_format(&format);
+            handlers::handle_multi_search(
+                &path,
+                &collection,
+                &vectors,
+                top_k,
+                &strategy,
+                rrf_k,
+                branch_weights.as_deref(),
+                &format,
+            )
+        }
         QueryCommands::BatchSearch {
             path,
             collection,
             vectors,
             top_k,
             format,
-        } => handlers::handle_batch_search(&path, &collection, &vectors, top_k, &format),
+        } => {
+            let format = output::effective_format(&format);
+            handlers::handle_batch_search(&path, &collection, &vectors, top_k, &format)
+        }
         QueryCommands::Explain {
             path,
             query,
             format,
-        } => handlers::handle_explain(&path, &query, &format),
+        } => {
+            let format = output::effective_format(&format);
+            handlers::handle_explain(&path, &query, &format)
+        }
     }
 }
 
@@ -435,6 +477,10 @@ fn dispatch_query(
     repl::print_result(&result, format);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "output_parse_tests.rs"]
+mod output_parse_tests;
 
 #[cfg(test)]
 #[path = "main_tests.rs"]

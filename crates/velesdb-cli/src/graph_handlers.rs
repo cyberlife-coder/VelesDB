@@ -11,7 +11,6 @@ use velesdb_core::GraphEdge;
 use crate::graph::{Direction, TraverseAlgo};
 use crate::graph_display;
 use crate::graph_doctor::{self, DoctorMode};
-use crate::helpers;
 
 /// Open a graph collection from a database path.
 pub(crate) fn open_graph(
@@ -19,8 +18,11 @@ pub(crate) fn open_graph(
     collection: &str,
 ) -> anyhow::Result<velesdb_core::GraphCollection> {
     let db = crate::helpers::open_database(path)?;
-    db.get_graph_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Graph collection '{}' not found", collection))
+    db.get_graph_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })
 }
 
 /// Converts a slice of edges to a JSON array value.
@@ -42,7 +44,7 @@ pub(crate) fn handle_add_edge(
     col.add_edge(edge).map_err(|e| anyhow::anyhow!("{e}"))?;
     col.flush()
         .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
-    println!(
+    crate::info!(
         "{} Edge {} added: {} --[{}]--> {}",
         "✅".green(),
         id.to_string().green(),
@@ -61,8 +63,8 @@ pub(crate) fn handle_get_edges(
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
     let edges = col.get_edges(label);
-    if format == "json" {
-        helpers::print_json(&edges_to_json_value(&edges))?;
+    if crate::output::is_machine(format) {
+        crate::output::print_machine(&edges_to_json_value(&edges), format)?;
     } else {
         let filter_msg = label.map_or_else(String::new, |l| format!(" (label={})", l.cyan()));
         println!("\n{}{}\n", "Edges".bold().underline(), filter_msg);
@@ -79,11 +81,14 @@ pub(crate) fn handle_degree(
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
     let (in_deg, out_deg) = col.node_degree(node_id);
-    if format == "json" {
-        helpers::print_json(&serde_json::json!({
-            "node_id": node_id, "in_degree": in_deg,
-            "out_degree": out_deg, "total_degree": in_deg + out_deg
-        }))?;
+    if crate::output::is_machine(format) {
+        crate::output::print_machine(
+            &serde_json::json!({
+                "node_id": node_id, "in_degree": in_deg,
+                "out_degree": out_deg, "total_degree": in_deg + out_deg
+            }),
+            format,
+        )?;
     } else {
         graph_display::print_degree(node_id, in_deg, out_deg);
     }
@@ -120,14 +125,14 @@ pub(crate) fn handle_traverse(
         TraverseAlgo::Bfs => col.traverse_bfs(source, &config),
         TraverseAlgo::Dfs => col.traverse_dfs(source, &config),
     };
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let data: Vec<_> = results
             .iter()
             .map(
                 |r| serde_json::json!({"target_id": r.target_id, "depth": r.depth, "path": r.path}),
             )
             .collect();
-        helpers::print_json(&serde_json::Value::Array(data))?;
+        crate::output::print_machine(&serde_json::Value::Array(data), format)?;
     } else {
         graph_display::print_traversal(&results, algo_label, source, max_depth);
     }
@@ -156,8 +161,8 @@ pub(crate) fn handle_neighbors(
         Direction::In => "incoming",
         Direction::Both => "all",
     };
-    if format == "json" {
-        helpers::print_json(&edges_to_json_value(&edges))?;
+    if crate::output::is_machine(format) {
+        crate::output::print_machine(&edges_to_json_value(&edges), format)?;
     } else {
         println!(
             "\n{} (node={}, direction={})\n",
@@ -188,7 +193,7 @@ pub(crate) fn handle_store_payload(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     col.flush()
         .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
-    println!(
+    crate::info!(
         "{} Payload stored on node {}",
         "✅".green(),
         node_id.to_string().green()
@@ -221,13 +226,13 @@ pub(crate) fn handle_remove_edge(
     if col.remove_edge(edge_id) {
         col.flush()
             .map_err(|e| anyhow::anyhow!("Flush failed: {e}"))?;
-        println!(
+        crate::info!(
             "{} Edge {} removed",
             "✅".green(),
             edge_id.to_string().green()
         );
     } else {
-        println!(
+        crate::info!(
             "{} Edge {} not found",
             "⚠️".yellow(),
             edge_id.to_string().yellow()
@@ -240,8 +245,11 @@ pub(crate) fn handle_count(path: &Path, collection: &str, format: &str) -> anyho
     let col = open_graph(path, collection)?;
     let count = col.edge_count();
     let node_count = col.all_node_ids().len();
-    if format == "json" {
-        helpers::print_json(&serde_json::json!({"edge_count": count, "node_count": node_count}))?;
+    if crate::output::is_machine(format) {
+        crate::output::print_machine(
+            &serde_json::json!({"edge_count": count, "node_count": node_count}),
+            format,
+        )?;
     } else {
         println!(
             "\n{} '{}'\n",
@@ -274,11 +282,11 @@ pub(crate) fn handle_graph_search(
     let results = col
         .search_by_embedding(&query, top_k)
         .map_err(|e| anyhow::anyhow!("Search failed: {e}"))?;
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let data: Vec<_> = results.iter()
             .map(|r| serde_json::json!({"id": r.point.id, "score": r.score, "payload": r.point.payload}))
             .collect();
-        helpers::print_json(&serde_json::Value::Array(data))?;
+        crate::output::print_machine(&serde_json::Value::Array(data), format)?;
     } else if results.is_empty() {
         println!("No results found.\n");
     } else {
@@ -307,13 +315,13 @@ pub(crate) fn handle_graph_nodes(
 ) -> anyhow::Result<()> {
     let col = open_graph(path, collection)?;
     let node_page = graph_display::paginate_graph_nodes(&col, page, 20)?;
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let data: Vec<serde_json::Value> = node_page
             .entries
             .iter()
             .map(|(id, payload)| serde_json::json!({"id": id, "payload": payload}))
             .collect();
-        helpers::print_json(&serde_json::Value::Array(data))?;
+        crate::output::print_machine(&serde_json::Value::Array(data), format)?;
     } else {
         println!(
             "\n{} in '{}' -- Page {}/{} ({} unique nodes from {} edges)\n",

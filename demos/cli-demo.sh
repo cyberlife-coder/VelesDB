@@ -193,7 +193,7 @@ fi
 # 7. Export — the whole collection back out as JSON
 # ---------------------------------------------------------------------------
 step "export: docs -> JSON"
-run "$VELESDB" data export "$DB" docs --output "$DB/export.json"
+run "$VELESDB" data export "$DB" docs --output-file "$DB/export.json"
 head -c 400 "$DB/export.json"; echo " ..."
 
 hr

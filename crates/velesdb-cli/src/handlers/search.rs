@@ -29,8 +29,11 @@ pub fn handle_multi_search(
 /// Opens a database and returns the named vector collection.
 fn open_vector_collection(path: &Path, collection: &str) -> Result<velesdb_core::VectorCollection> {
     let db = crate::helpers::open_database(path)?;
-    db.get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))
+    db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })
 }
 
 /// Parses and validates the query vectors JSON.
@@ -81,16 +84,16 @@ fn print_results(
     vector_count: usize,
     format: &str,
 ) -> Result<()> {
-    if format == "json" {
-        print_search_json(results)
+    if crate::output::is_machine(format) {
+        print_search_json(results, format)
     } else {
         print_search_table(results, strategy, vector_count);
         Ok(())
     }
 }
 
-/// Prints multi-search results as JSON.
-fn print_search_json(results: &[velesdb_core::SearchResult]) -> Result<()> {
+/// Prints multi-search results as a machine format.
+fn print_search_json(results: &[velesdb_core::SearchResult], format: &str) -> Result<()> {
     let output: Vec<_> = results
         .iter()
         .map(|r| {
@@ -101,8 +104,7 @@ fn print_search_json(results: &[velesdb_core::SearchResult]) -> Result<()> {
             })
         })
         .collect();
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    crate::output::print_machine(&output, format)
 }
 
 /// Prints multi-search results as a colored table.
@@ -149,16 +151,16 @@ pub fn handle_batch_search(
         .search_batch_with_filters(&query_refs, top_k, &no_filters)
         .map_err(|e| anyhow::anyhow!("Batch search failed: {e}"))?;
 
-    if format == "json" {
-        print_batch_json(&batch_results)
+    if crate::output::is_machine(format) {
+        print_batch_json(&batch_results, format)
     } else {
         print_batch_table(&batch_results);
         Ok(())
     }
 }
 
-/// Prints batch search results as JSON.
-fn print_batch_json(batch: &[Vec<velesdb_core::SearchResult>]) -> Result<()> {
+/// Prints batch search results as a machine format.
+fn print_batch_json(batch: &[Vec<velesdb_core::SearchResult>], format: &str) -> Result<()> {
     let output: Vec<_> = batch
         .iter()
         .enumerate()
@@ -175,8 +177,7 @@ fn print_batch_json(batch: &[Vec<velesdb_core::SearchResult>]) -> Result<()> {
             })
         })
         .collect();
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    crate::output::print_machine(&output, format)
 }
 
 /// Prints batch search results as a colored table.

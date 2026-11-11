@@ -35,7 +35,7 @@ pub fn handle_export(
         .map(crate::export::parse_where_filter)
         .transpose()?;
 
-    println!("Exporting records from {}...", collection.green());
+    crate::info!("Exporting records from {}...", collection.green());
 
     let count = crate::export::export_collection(
         &col,
@@ -44,7 +44,7 @@ pub fn handle_export(
         include_vectors,
         filter.as_ref(),
     )?;
-    println!(
+    crate::info!(
         "{} Exported {} records to {}",
         "\u{2713}".green(),
         count,
@@ -134,7 +134,7 @@ pub fn handle_import(
 /// Prints the import (or dry-run) summary, including conflict and error
 /// detail introduced by `--on-conflict`, `--dry-run` and `--error-report`.
 fn print_import_summary(stats: &import::ImportStats, dry_run: bool, report_written: bool) {
-    println!(
+    crate::info!(
         "\n{}",
         if dry_run {
             "Import Dry-Run Summary".cyan().bold()
@@ -142,27 +142,27 @@ fn print_import_summary(stats: &import::ImportStats, dry_run: bool, report_writt
             "Import Summary".green().bold()
         }
     );
-    println!("  Total records:    {}", stats.total);
-    println!(
+    crate::info!("  Total records:    {}", stats.total);
+    crate::info!(
         "  {}:         {}",
         if dry_run { "Would import" } else { "Imported" },
         stats.imported.to_string().green()
     );
     if stats.conflicts > 0 {
-        println!(
+        crate::info!(
             "  Conflicts:        {}",
             stats.conflicts.to_string().yellow()
         );
     }
     if stats.skipped > 0 {
-        println!("  Skipped:          {}", stats.skipped.to_string().yellow());
+        crate::info!("  Skipped:          {}", stats.skipped.to_string().yellow());
     }
     if stats.errors > 0 {
-        println!("  Errors:           {}", stats.errors.to_string().red());
+        crate::info!("  Errors:           {}", stats.errors.to_string().red());
         print_error_details(stats, report_written);
     }
-    println!("  Duration:         {} ms", stats.duration_ms);
-    println!(
+    crate::info!("  Duration:         {} ms", stats.duration_ms);
+    crate::info!(
         "  Throughput:       {:.0} records/sec",
         stats.records_per_sec()
     );
@@ -172,51 +172,52 @@ fn print_import_summary(stats: &import::ImportStats, dry_run: bool, report_writt
 fn print_error_details(stats: &import::ImportStats, report_written: bool) {
     const SHOWN: usize = 10;
     for e in stats.error_details.iter().take(SHOWN) {
-        println!("    record {}: {}", e.line, e.reason);
+        crate::info!("    record {}: {}", e.line, e.reason);
     }
     if stats.errors > stats.error_details.len() {
-        println!(
+        crate::info!(
             "    … and {} more",
             stats.errors - stats.error_details.len()
         );
     }
     if report_written {
-        println!("  Full list written to --error-report file");
+        crate::info!("  Full list written to --error-report file");
     }
 }
 
 /// Handles the `get` subcommand: retrieves a single point by ID.
 pub fn handle_get(path: &Path, collection: &str, id: u64, format: &str) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
     let points = col.get(&[id]);
 
-    if format == "json" {
-        print_point_json(points);
+    if crate::output::is_machine(format) {
+        print_point_json(points, format)?;
     } else {
         print_point_table(points, id);
     }
     Ok(())
 }
 
-/// Prints a point as JSON.
-fn print_point_json(points: Vec<Option<velesdb_core::Point>>) {
-    if let Some(point) = points.into_iter().flatten().next() {
-        let output = serde_json::json!({
-            "id": point.id,
-            "vector": point.vector,
-            "payload": point.payload
+/// Prints a point as a machine format (json, jsonl, csv).
+fn print_point_json(points: Vec<Option<velesdb_core::Point>>, format: &str) -> Result<()> {
+    let output = points
+        .into_iter()
+        .flatten()
+        .next()
+        .map_or(serde_json::Value::Null, |point| {
+            serde_json::json!({
+                "id": point.id,
+                "vector": point.vector,
+                "payload": point.payload
+            })
         });
-        // Reason: doc output to stdout; formatting failure is not recoverable
-        if let Ok(json) = serde_json::to_string_pretty(&output) {
-            println!("{json}");
-        }
-    } else {
-        println!("null");
-    }
+    crate::output::print_machine(&output, format)
 }
 
 /// Prints a point as a colored table.
@@ -242,9 +243,11 @@ pub fn handle_upsert(
     payload: Option<String>,
 ) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
     let vec_data = parse_vector_json(vector)?;
     let payload_data = parse_payload_json(payload)?;
@@ -253,7 +256,7 @@ pub fn handle_upsert(
     col.upsert(vec![point])
         .map_err(|e| anyhow::anyhow!("Upsert failed: {e}"))?;
 
-    println!(
+    crate::info!(
         "{} Upserted point {} into '{}'",
         "\u{2705}".green(),
         id.to_string().green(),
@@ -287,14 +290,16 @@ fn parse_payload_json(raw: Option<String>) -> Result<Option<serde_json::Value>> 
 /// Handles the `delete-points` subcommand: removes points by ID.
 pub fn handle_delete_points(path: &Path, collection: &str, ids: &[u64]) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
     col.delete(ids)
         .map_err(|e| anyhow::anyhow!("Delete failed: {e}"))?;
 
-    println!(
+    crate::info!(
         "{} Deleted {} point(s) from '{}'",
         "\u{2705}".green(),
         ids.len(),
@@ -312,24 +317,26 @@ pub fn handle_scroll(
     format: &str,
 ) -> Result<()> {
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
     let batch = col
         .scroll_batch(cursor, batch_size, None)
         .map_err(|e| anyhow::anyhow!("Scroll failed: {e}"))?;
 
-    if format == "json" {
-        print_scroll_json(&batch)
+    if crate::output::is_machine(format) {
+        print_scroll_json(&batch, format)
     } else {
         print_scroll_table(&batch, collection);
         Ok(())
     }
 }
 
-/// Prints scroll results as JSON (suitable for piping).
-fn print_scroll_json(batch: &velesdb_core::ScrollBatch) -> Result<()> {
+/// Prints scroll results as a machine format (suitable for piping).
+fn print_scroll_json(batch: &velesdb_core::ScrollBatch, format: &str) -> Result<()> {
     let output = serde_json::json!({
         "points": batch.points.iter().map(|p| {
             serde_json::json!({
@@ -340,8 +347,7 @@ fn print_scroll_json(batch: &velesdb_core::ScrollBatch) -> Result<()> {
         }).collect::<Vec<_>>(),
         "nextCursor": batch.next_cursor
     });
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    crate::output::print_machine(&output, format)
 }
 
 /// Prints scroll results as a colored table.
@@ -383,9 +389,11 @@ pub fn handle_stream_insert(path: &Path, collection: &str, batch_size: usize) ->
     use std::io::BufRead;
 
     let db = crate::helpers::open_database(path)?;
-    let col = db
-        .get_vector_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Vector collection '{}' not found", collection))?;
+    let col = db.get_vector_collection(collection).ok_or_else(|| {
+        anyhow::Error::new(velesdb_core::Error::CollectionNotFound(
+            collection.to_string(),
+        ))
+    })?;
 
     let stdin = std::io::stdin();
     let reader = stdin.lock();

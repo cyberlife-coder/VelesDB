@@ -16,6 +16,7 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 
 - [Command overview](#command-overview)
 - [Global options](#global-options)
+- [Exit codes](#exit-codes)
 - [Configuration](#configuration)
 - [Database maintenance](#database-maintenance)
 - [Serve (embedded REST)](#serve-embedded-rest)
@@ -62,10 +63,28 @@ argument says otherwise). `velesdb --help` prints this same list.
 | Option | Environment variable | Effect |
 |---|---|---|
 | `--config <FILE>` | `VELESDB_CONFIG` | Path to a VelesDB TOML config file (search/HNSW/storage/limits/WAL batching). Applies to every command that opens a database, including the REPL. An invalid or missing path fails fast — it never silently falls back to defaults. Without it, `./velesdb.toml` is read when it exists (same engine sections and fallback as `velesdb-server`; an invalid one fails every command that opens a database until it is fixed or `--config` points elsewhere), else the core defaults apply. |
+| `--output <FORMAT>` | — | Global output format: `table` (default), `json`, `jsonl` (one compact JSON value per line), `csv`. Honored by every command that prints data; overrides its per-command `--format`. `jsonl`/`csv` are meant for scripting: a SELECT with no rows prints `[]` (json) or nothing after the header (csv), never a prose line. |
+| `--quiet` | — | Suppresses human-readable status messages (creation/import summaries…). Data output (table or machine format) still prints. Intended for scripts and CI together with `--output`. |
+| `--no-color` | `NO_COLOR=1` | Disables colored output. |
 
 ```bash
 velesdb --config ./velesdb.toml collection list ./data
+velesdb --output jsonl --quiet query execute ./data "SELECT * FROM docs LIMIT 100"
+velesdb --no-color collection list ./data
 ```
+
+## Exit codes
+
+Stable for scripting; also pinned by tests in `crates/velesdb-cli`.
+
+| Code | Meaning | Examples |
+|---|---|---|
+| `0` | Success | |
+| `1` | Generic error | invalid config file, validation failure, internal error |
+| `2` | Usage error | unknown flag, invalid `--output` value, missing argument (reported by the argument parser) |
+| `3` | Not found | collection / point / edge / node does not exist (`VELES-002`, `VELES-003`, `VELES-020`, `VELES-022`) |
+| `4` | I/O error | database path unreadable or not a directory (`VELES-011`) |
+| `5` | VelesQL parse error | invalid query syntax (`VELES-010`) |
 
 Two more environment variables affect the binary:
 
@@ -327,7 +346,7 @@ velesdb data import vectors.bin \
   --collection docs
 
 # Export to JSON (vector collections only)
-velesdb data export ./data documents --output documents.json
+velesdb data export ./data documents --output-file documents.json
 
 # Export to JSONL or CSV (format inferred from the extension, or --format)
 velesdb data export ./data documents --output documents.jsonl
@@ -337,7 +356,7 @@ velesdb data export ./data documents --output documents.csv --format csv
 velesdb data export ./data documents -o tech.jsonl --where "cat = 'tech' AND id < 100"
 
 # Export payloads only (omit vectors)
-velesdb data export ./data documents --output meta.json --include-vectors false
+velesdb data export ./data documents --output-file meta.json --include-vectors false
 ```
 
 > **Note on `--include-vectors`:** vectors and payloads are included by default.
@@ -407,8 +426,8 @@ while the file captures the full stream.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o, --output` | `<collection>.<ext>` | Output file path (`<ext>` follows the format) |
-| `--format json\|jsonl\|csv` | inferred from `--output` extension, else `json` | Output file format |
+| `-o, --output-file` | `<collection>.<ext>` | Output file path (`<ext>` follows the format; `--output-file` because the global `--output` is the format) |
+| `--format json\|jsonl\|csv` | inferred from `--output-file` extension, else `json` | Output file format |
 | `--where '<cond>'` | none | VelesQL filter condition on exported rows (metadata predicates only — vector search, `similarity()`, `MATCH`, `$params` and subqueries are refused) |
 | `--include-vectors [true\|false]` | `true` | Include vector data (`--include-vectors false` to omit) |
 
