@@ -15,6 +15,7 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 ## Table of contents
 
 - [Global options](#global-options)
+- [Configuration](#configuration)
 - [Collections](#collections)
 - [Points](#points)
 - [Import / export](#import--export)
@@ -47,6 +48,42 @@ Two more environment variables affect the binary:
 |---|---|
 | `VELESDB_NO_UPDATE_CHECK=1` | Disables the non-blocking background update check (built with the default `update-check` feature); [what it sends](CONFIGURATION.md#update-check-and-telemetry). Can also be disabled with `[update_check] enabled = false` in the config file. |
 | `VELESDB_LICENSE_PUBLIC_KEY` | Base64 Ed25519 public key used by `license show` and `license activate`. Unset means a development fallback key is used, with a warning. |
+
+---
+
+## Configuration
+
+`velesdb config` inspects the engine configuration through the same resolution
+every database-opening command uses: `--config` / `VELESDB_CONFIG`, else
+`./velesdb.toml`, else the core defaults — with the `VELESDB_*` engine
+variables applied on top in every case.
+
+```bash
+# The file the CLI reads (absolute path on stdout; nothing on stdout, a note on
+# stderr, when only the core defaults apply)
+velesdb config path
+
+# The effective engine configuration: defaults, then the file, then VELESDB_*.
+# Only the engine tables ([search] [hnsw] [storage] [limits] [quantization]) are
+# printed — the CLI reads no other table. TOML output loads back with --config.
+velesdb config show
+velesdb config show --format json
+
+# Validate the resolved file, or a named one. Exit code 1 when invalid; tables
+# the CLI engine does not read (e.g. velesdb-server's [server]/[auth]) are listed.
+velesdb config validate
+velesdb config validate ./staging.toml
+
+# Open the resolved file in $VISUAL or $EDITOR, then validate what was saved
+velesdb config edit
+```
+
+| Action | Exit code 1 when |
+|---|---|
+| `path` | an explicit `--config` file does not exist |
+| `show` | the resolved configuration does not load |
+| `validate` | the file does not parse or a value fails validation |
+| `edit` | no file resolves, `$VISUAL`/`$EDITOR` is unset, the editor fails, or the saved file is invalid |
 
 ---
 

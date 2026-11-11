@@ -4,6 +4,7 @@
 //! a `Commands` variant. The `main()` dispatcher delegates to these.
 
 mod collections;
+mod config;
 mod data;
 mod index;
 mod info;
@@ -14,6 +15,7 @@ pub use collections::{
     handle_create_graph_collection, handle_create_metadata_collection,
     handle_create_vector_collection, handle_delete_collection,
 };
+pub use config::handle_config;
 pub use data::{
     handle_delete_points, handle_export, handle_get, handle_import, handle_scroll,
     handle_stream_insert, handle_upsert,

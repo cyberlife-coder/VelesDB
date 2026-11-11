@@ -146,6 +146,7 @@ fn dispatch(command: Commands) -> anyhow::Result<()> {
         Commands::QueryCmd { action } => dispatch_query_cmd(action),
         Commands::Graph { action } => graph::handle(action),
         Commands::Index { action } => handlers::handle_index(action),
+        Commands::Config { action } => handlers::handle_config(action),
         Commands::Agent {
             path,
             question,

@@ -3,7 +3,7 @@
 //! All top-level `Commands` variants and their nested action enums live here.
 //! `main.rs` imports these for dispatch.
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use clap_complete::Shell;
 use std::path::PathBuf;
 
@@ -77,6 +77,12 @@ pub enum Commands {
     Index {
         #[command(subcommand)]
         action: IndexAction,
+    },
+
+    /// Engine configuration the CLI loads (path, show, validate, edit)
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
     },
 
     /// Ask the bounded ReAct agent a question about this database
@@ -563,4 +569,41 @@ pub enum LicenseAction {
         #[arg(short, long)]
         public_key: String,
     },
+}
+
+/// `velesdb config` actions. All resolve the file the way every
+/// database-opening command does: `--config`/`VELESDB_CONFIG`, else
+/// `./velesdb.toml`, else the core defaults.
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Print the config file the CLI reads (nothing on stdout when only the
+    /// core defaults apply)
+    Path,
+
+    /// Print the effective engine configuration: defaults, then the file,
+    /// then the VELESDB_* engine variables
+    Show {
+        /// Output format (toml, json)
+        #[arg(short, long, value_enum, default_value = "toml")]
+        format: ConfigFormat,
+    },
+
+    /// Validate a config file (default: the one `config path` reports);
+    /// exits 1 when it is invalid
+    Validate {
+        /// File to validate instead of the resolved one
+        file: Option<PathBuf>,
+    },
+
+    /// Open the config file in $VISUAL or $EDITOR, then validate it
+    Edit,
+}
+
+/// Output format of `velesdb config show`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ConfigFormat {
+    /// TOML, loadable back with `--config`
+    Toml,
+    /// JSON
+    Json,
 }
