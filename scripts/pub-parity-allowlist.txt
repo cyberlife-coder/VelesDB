@@ -1,0 +1,2 @@
+# Deliberate public-API removals, one `path kind name` per line.
+# Regenerate the snapshot with: python3 scripts/check-pub-parity.py --write-snapshot

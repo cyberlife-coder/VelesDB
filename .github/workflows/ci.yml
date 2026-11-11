@@ -601,6 +601,33 @@ jobs:
       - name: Verify version sync across policed manifests (REL-07, PR-time)
         run: python3 scripts/check-version-sync.py
 
+      # #2751: release-only zones stay single-sourced so the next
+      # back-merge main->develop stops conflicting on them. CHANGELOG
+      # versioned sections and doc version stamps are written only by the
+      # release script on main; a PR may not create or edit them. The pub
+      # parity guard compares against origin/main (fetch-depth: 0), so a
+      # semver hotfix merged on main but not forward-ported fails here.
+      - name: Back-merge conflict guards (#2751)
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "::error::base commit $BASE_SHA is not in this checkout — a diff against it reads zero files instead of failing."
+            exit 1
+          fi
+          python3 scripts/check-changelog-zones.py --root . --base "$BASE_SHA"
+          python3 scripts/check-version-stamps.py --root . --base "$BASE_SHA"
+          python3 scripts/check-pub-parity.py --root . --base origin/main
+
+      - name: Test the back-merge conflict guards
+        run: python3 -m unittest scripts.tests.test_check_changelog_zones scripts.tests.test_check_version_stamps scripts.tests.test_check_pub_parity
+
       # `WalBatchConfig` was promised "at the next major"; v6.0.0 shipped two
       # days later without it, because the constraint lived in a doc comment and
       # nothing reads a doc comment when a version is bumped. This runs beside

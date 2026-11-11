@@ -790,8 +790,13 @@ jobs:
   back-merge:
     name: Back-merge main into develop
     runs-on: ubuntu-latest
-    needs: [validate, github-release]
-    if: needs.github-release.result == 'success'
+    # (#2748, #2749) Ce job ne depend PAS de github-release : quand le job
+    # Release echouait sur un dispatch branche, `if: needs.github-release...`
+    # sautait le back-merge silencieusement et develop divergeait pendant des
+    # jours — c'est ce qui a force le back-merge manuel de la 8.2.0 avec ses
+    # 19 conflits. Le report main->develop ne depend que de validate.
+    needs: [validate]
+    if: needs.validate.result == 'success'
     permissions:
       contents: write
       pull-requests: write
@@ -842,7 +847,7 @@ jobs:
   summary:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [validate, build, publish-crates, publish-pypi-wheels, publish-pypi-common, publish-pypi-pure, publish-npm, github-release]
+    needs: [validate, build, publish-crates, publish-pypi-wheels, publish-pypi-common, publish-pypi-pure, publish-npm, github-release, back-merge]
     if: always()
     steps:
       - name: Summary
