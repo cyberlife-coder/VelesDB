@@ -88,17 +88,17 @@ fn render(config: &VelesConfig, format: ConfigFormat) -> Result<String> {
 fn validate(source: &ConfigSource<'_>) -> Result<()> {
     source.load()?;
     let Some(file) = source.file() else {
-        println!("OK: no config file; core defaults + VELESDB_* engine variables are valid");
+        crate::info!("OK: no config file; core defaults + VELESDB_* engine variables are valid");
         return Ok(());
     };
     let (engine, other) = split_tables(file)?;
-    println!(
+    crate::info!(
         "OK: {} (engine tables read: {}; VELESDB_* engine variables applied)",
         display_path(file),
         bracketed(&engine, "none")
     );
     if !other.is_empty() {
-        println!(
+        crate::info!(
             "not read by the CLI engine: {} (velesdb-server reads its own tables itself)",
             bracketed(&other, "")
         );

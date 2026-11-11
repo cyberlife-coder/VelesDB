@@ -15,21 +15,21 @@ pub fn handle_simd(action: SimdAction) {
             // What the dispatcher detected on this machine, read from core:
             // a fixed summary here described the design, not the machine, and
             // drifted from the thresholds the code applies (#1965).
-            println!("\n{}", "SIMD".bold().underline());
-            println!(
+            crate::info!("\n{}", "SIMD".bold().underline());
+            crate::info!(
                 "  Detected level: {}",
                 velesdb_core::simd_native::simd_level()
             );
-            println!(
+            crate::info!(
                 "  Distance kernels (dot product, cosine, Euclidean, Hamming, Jaccard,\n  \
                  and their batch forms) dispatch to this level at runtime."
             );
-            println!();
+            crate::info!();
         }
         SimdAction::Benchmark => {
-            println!("{}", "The CLI does not benchmark SIMD.".yellow());
-            println!("Run: cargo bench -p velesdb-core --bench simd_benchmark");
-            println!();
+            crate::info!("{}", "The CLI does not benchmark SIMD.".yellow());
+            crate::info!("Run: cargo bench -p velesdb-core --bench simd_benchmark");
+            crate::info!();
         }
     }
 }
@@ -44,11 +44,13 @@ pub fn handle_explain(path: &Path, query: &str, format: &str) -> Result<()> {
         .explain_query(&parsed)
         .map_err(|e| anyhow::anyhow!("Explain error: {e}"))?;
 
-    if format == "json" {
+    if crate::output::is_machine(format) {
         let json = plan
             .to_json()
             .map_err(|e| anyhow::anyhow!("JSON serialization error: {e}"))?;
-        println!("{json}");
+        let value: serde_json::Value =
+            serde_json::from_str(&json).map_err(|e| anyhow::anyhow!("JSON parse error: {e}"))?;
+        crate::output::print_machine(&value, format)?;
     } else {
         print_explain_tree(&plan);
     }
@@ -105,7 +107,7 @@ fn handle_license_show() -> Result<()> {
                 license::display_license_info(&info);
             }
             Err(e) => {
-                println!(
+                crate::info!(
                     "{} {}",
                     "\u{274c} License validation failed:".red().bold(),
                     e
@@ -122,12 +124,12 @@ fn handle_license_show() -> Result<()> {
 
 /// Prints the "no license found" message with activation instructions.
 fn print_no_license_found() {
-    println!("{}", "\u{274c} No license found".red().bold());
-    println!("\n{}", "To activate a license:".cyan());
-    println!("  velesdb license activate <license_key>");
-    println!("\n{}", "License keys are stored in:".cyan());
+    crate::info!("{}", "\u{274c} No license found".red().bold());
+    crate::info!("\n{}", "To activate a license:".cyan());
+    crate::info!("  velesdb license activate <license_key>");
+    crate::info!("\n{}", "License keys are stored in:".cyan());
     if let Ok(path) = license::get_license_config_path() {
-        println!("  {}", path.display());
+        crate::info!("  {}", path.display());
     }
 }
 
@@ -137,19 +139,19 @@ fn handle_license_activate(key: &str) -> Result<()> {
     match license::validate_license(key, &public_key) {
         Ok(info) => {
             license::save_license_key(key)?;
-            println!(
+            crate::info!(
                 "{}",
                 "\u{2705} License activated successfully!".green().bold()
             );
-            println!();
+            crate::info!();
             license::display_license_info(&info);
             if let Ok(path) = license::get_license_config_path() {
-                println!("{}", "License saved to:".cyan());
-                println!("  {}", path.display());
+                crate::info!("{}", "License saved to:".cyan());
+                crate::info!("  {}", path.display());
             }
         }
         Err(e) => {
-            println!(
+            crate::info!(
                 "{} {}",
                 "\u{274c} License activation failed:".red().bold(),
                 e
@@ -163,31 +165,31 @@ fn handle_license_activate(key: &str) -> Result<()> {
 
 /// Prints troubleshooting tips for license activation failure.
 fn print_license_troubleshooting() {
-    println!("\n{}", "Please check:".yellow());
-    println!("  \u{2022} License key format is correct (base64_payload.base64_signature)");
-    println!("  \u{2022} License has not expired");
-    println!("  \u{2022} Public key is correctly set in VELESDB_LICENSE_PUBLIC_KEY");
+    crate::info!("\n{}", "Please check:".yellow());
+    crate::info!("  \u{2022} License key format is correct (base64_payload.base64_signature)");
+    crate::info!("  \u{2022} License has not expired");
+    crate::info!("  \u{2022} Public key is correctly set in VELESDB_LICENSE_PUBLIC_KEY");
 }
 
 /// Verifies a license key against a provided public key.
 fn handle_license_verify(key: &str, public_key: &str) -> Result<()> {
     match license::validate_license(key, public_key) {
         Ok(info) => {
-            println!("{}", "\u{2705} License is VALID".green().bold());
-            println!();
+            crate::info!("{}", "\u{2705} License is VALID".green().bold());
+            crate::info!();
             license::display_license_info(&info);
         }
         Err(e) => {
-            println!(
+            crate::info!(
                 "{} {}",
                 "\u{274c} License verification failed:".red().bold(),
                 e
             );
-            println!("\n{}", "Possible reasons:".yellow());
-            println!("  \u{2022} Invalid signature (license may have been tampered with)");
-            println!("  \u{2022} Wrong public key");
-            println!("  \u{2022} License has expired");
-            println!("  \u{2022} Malformed license format");
+            crate::info!("\n{}", "Possible reasons:".yellow());
+            crate::info!("  \u{2022} Invalid signature (license may have been tampered with)");
+            crate::info!("  \u{2022} Wrong public key");
+            crate::info!("  \u{2022} License has expired");
+            crate::info!("  \u{2022} Malformed license format");
             std::process::exit(1);
         }
     }
@@ -197,12 +199,12 @@ fn handle_license_verify(key: &str, public_key: &str) -> Result<()> {
 /// Reads the public key from environment, falling back to a dev key with a warning.
 fn get_public_key_or_fallback() -> String {
     std::env::var("VELESDB_LICENSE_PUBLIC_KEY").unwrap_or_else(|_| {
-        println!(
+        crate::info!(
             "{}",
             "\u{26a0}\u{fe0f}  Warning: VELESDB_LICENSE_PUBLIC_KEY not set in environment".yellow()
         );
-        println!("   Set it with: export VELESDB_LICENSE_PUBLIC_KEY=<base64_key>");
-        println!("   Using embedded development key for validation...\n");
+        crate::info!("   Set it with: export VELESDB_LICENSE_PUBLIC_KEY=<base64_key>");
+        crate::info!("   Using embedded development key for validation...\n");
         "MCowBQYDK2VwAyEADevelopmentKeyReplaceMeInProd==".to_string()
     })
 }

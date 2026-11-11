@@ -19,7 +19,7 @@ pub fn handle_create_vector_collection(
     let db = crate::helpers::open_database(path)?;
     db.create_vector_collection_with_options(name, dimension, metric.into(), storage.into())?;
 
-    println!(
+    crate::info!(
         "{} Vector collection '{}' created ({} dims, {:?}, {:?})",
         "\u{2705}".green(),
         name.cyan(),
@@ -42,7 +42,7 @@ pub fn handle_create_graph_collection(
     match dimension {
         Some(d) => {
             db.create_graph_collection_with_embeddings(name, schema, d, metric.into())?;
-            println!(
+            crate::info!(
                 "{} Graph collection '{}' created (schemaless, embeddings {d}D)",
                 "\u{2705}".green(),
                 name.cyan(),
@@ -50,7 +50,7 @@ pub fn handle_create_graph_collection(
         }
         None => {
             db.create_graph_collection(name, schema)?;
-            println!(
+            crate::info!(
                 "{} Graph collection '{}' created (schemaless)",
                 "\u{2705}".green(),
                 name.cyan(),
@@ -65,7 +65,7 @@ pub fn handle_create_metadata_collection(path: &Path, name: &str) -> Result<()> 
     let db = crate::helpers::open_database(path)?;
     db.create_metadata_collection(name)?;
 
-    println!(
+    crate::info!(
         "{} Collection '{}' created (metadata-only)",
         "\u{2705}".green(),
         name.cyan()
@@ -79,13 +79,13 @@ pub fn handle_delete_collection(path: &Path, name: &str, force: bool) -> Result<
 
     if !force {
         if !confirm_deletion(name)? {
-            println!("{} Deletion cancelled.", "\u{2139}\u{fe0f}".cyan());
+            crate::info!("{} Deletion cancelled.", "\u{2139}\u{fe0f}".cyan());
             return Ok(());
         }
     }
 
     db.delete_collection(name)?;
-    println!(
+    crate::info!(
         "{} Collection '{}' deleted.",
         "\u{2705}".green(),
         name.cyan()

@@ -241,13 +241,19 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
             collection,
             label,
             format,
-        } => graph_handlers::handle_get_edges(&path, &collection, label.as_deref(), &format),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_get_edges(&path, &collection, label.as_deref(), &format)
+        }
         GraphAction::Degree {
             path,
             collection,
             node_id,
             format,
-        } => graph_handlers::handle_degree(&path, &collection, node_id, &format),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_degree(&path, &collection, node_id, &format)
+        }
         GraphAction::Traverse {
             path,
             collection,
@@ -257,23 +263,29 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
             limit,
             rel_types,
             format,
-        } => graph_handlers::handle_traverse(
-            &path,
-            &collection,
-            source,
-            algorithm,
-            max_depth,
-            limit,
-            rel_types.as_deref(),
-            &format,
-        ),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_traverse(
+                &path,
+                &collection,
+                source,
+                algorithm,
+                max_depth,
+                limit,
+                rel_types.as_deref(),
+                &format,
+            )
+        }
         GraphAction::Neighbors {
             path,
             collection,
             node_id,
             direction,
             format,
-        } => graph_handlers::handle_neighbors(&path, &collection, node_id, direction, &format),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_neighbors(&path, &collection, node_id, direction, &format)
+        }
         GraphAction::StorePayload {
             path,
             collection,
@@ -295,27 +307,39 @@ pub fn handle(action: GraphAction) -> anyhow::Result<()> {
             path,
             collection,
             format,
-        } => graph_handlers::handle_count(&path, &collection, &format),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_count(&path, &collection, &format)
+        }
         GraphAction::Search {
             path,
             collection,
             vector,
             top_k,
             format,
-        } => graph_handlers::handle_graph_search(&path, &collection, &vector, top_k, &format),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_graph_search(&path, &collection, &vector, top_k, &format)
+        }
         GraphAction::Nodes {
             path,
             collection,
             page,
             format,
-        } => graph_handlers::handle_graph_nodes(&path, &collection, page, &format),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_graph_nodes(&path, &collection, page, &format)
+        }
         GraphAction::Doctor {
             path,
             collection,
             purge,
             stub,
             format,
-        } => graph_handlers::handle_graph_doctor(&path, &collection, purge, stub, &format),
+        } => {
+            let format = crate::output::effective_format(&format);
+            graph_handlers::handle_graph_doctor(&path, &collection, purge, stub, &format)
+        }
     }
 }
 

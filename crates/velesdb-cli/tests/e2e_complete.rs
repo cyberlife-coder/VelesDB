@@ -358,7 +358,7 @@ mod import_export_commands {
             .args(["data", "export"])
             .arg(temp.path())
             .arg("test_collection")
-            .arg("--output")
+            .arg("--output-file")
             .arg(&output_file)
             .assert()
             .failure();

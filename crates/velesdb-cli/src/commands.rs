@@ -346,9 +346,10 @@ pub enum DataCommands {
         /// Collection name
         collection: String,
 
-        /// Output file path (default: `<collection>.<format-ext>`)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        /// Output file path (`--output-file`; the global `--output` is the
+        /// format, so the file flag moved off that name; default: `<collection>.<format-ext>`)
+        #[arg(short = 'o', long = "output-file")]
+        output_file: Option<PathBuf>,
 
         /// Output file format (default: inferred from `--output` extension, else json)
         #[arg(long, value_enum)]
@@ -713,9 +714,10 @@ pub enum DbAction {
         /// Path to database directory
         path: PathBuf,
 
-        /// Destination directory (must not exist or be empty)
-        #[arg(short, long)]
-        output: PathBuf,
+        /// Destination directory (must not exist or be empty). Named
+        /// `--output-dir` because the global `--output` is the format.
+        #[arg(short = 'o', long = "output-dir")]
+        output_dir: PathBuf,
     },
 
     /// Restore: verify a snapshot's manifest, copy it into a fresh directory
@@ -725,7 +727,7 @@ pub enum DbAction {
         path: PathBuf,
 
         /// Destination database directory (must not exist or be empty)
-        #[arg(short, long)]
-        output: PathBuf,
+        #[arg(short = 'o', long = "output-dir")]
+        output_dir: PathBuf,
     },
 }

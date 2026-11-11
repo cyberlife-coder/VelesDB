@@ -14,7 +14,8 @@ use crate::repl::{QueryKind, QueryResult};
 /// In `json` format a SELECT always prints a JSON array — `[]` when nothing
 /// matched — so a script parsing the output never meets a prose line.
 pub fn print_result(result: &QueryResult, format: &str) {
-    let json_select = result.kind == QueryKind::Select && format.eq_ignore_ascii_case("json");
+    let machine = crate::output::is_machine(format);
+    let json_select = result.kind == QueryKind::Select && machine;
     if result.rows.is_empty() && !json_select {
         let msg = match result.kind {
             QueryKind::Ddl => "DDL statement executed successfully.",
@@ -28,15 +29,17 @@ pub fn print_result(result: &QueryResult, format: &str) {
         return;
     }
 
-    match format.to_lowercase().as_str() {
-        "json" => match serde_json::to_string_pretty(&result.rows) {
-            Ok(json) => println!("{json}"),
-            Err(e) => eprintln!("{}", format!("Failed to serialize to JSON: {e}").red()),
-        },
-        _ => {
-            print_table(&result.rows);
+    if machine {
+        // Machine formats (json, jsonl, csv) always print the rows as a JSON
+        // array — `[]` when nothing matched — so scripts never meet prose.
+        match crate::output::print_machine(&result.rows, format) {
+            Ok(()) => {}
+            Err(e) => eprintln!("{}", format!("Failed to serialize output: {e}").red()),
         }
+        return;
     }
+
+    print_table(&result.rows);
 }
 
 /// Print results as a formatted table

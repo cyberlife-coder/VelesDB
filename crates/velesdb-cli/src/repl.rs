@@ -287,7 +287,9 @@ fn run_query(state: &mut ReplState, line: &str, config: &ReplConfig) {
                 OutputFormat::Table => "table",
                 OutputFormat::Json => "json",
             };
-            print_result(&result, fmt);
+            // A global `--output` on the command line wins over `.format`.
+            let fmt = crate::output::effective_format(fmt);
+            print_result(&result, &fmt);
             if config.timing {
                 println!(
                     "\n{} rows ({:.2}ms)\n",
