@@ -47,6 +47,43 @@ pub struct ExtractedBatch {
     pub has_more: bool,
 }
 
+/// Where an extract loop goes after consuming one [`ExtractedBatch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NextPage {
+    /// The source is exhausted.
+    Done,
+    /// Fetch the page at this cursor next.
+    At(Option<serde_json::Value>),
+}
+
+impl ExtractedBatch {
+    /// Decides the next page from `has_more` alone — never from `points`
+    /// being empty.
+    ///
+    /// A page may legitimately be empty while more follow: connectors drop
+    /// points they cannot migrate after fetching a page (Qdrant skips
+    /// sparse-only points), so an all-skipped page arrives as `points: []`
+    /// with `has_more: true`. Stopping there would silently truncate the
+    /// migration.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Extraction`](crate::error::Error::Extraction) when the source
+    /// claims more pages but its cursor did not move: re-requesting the same
+    /// cursor would loop forever.
+    pub(crate) fn next_page(&self, current: Option<&serde_json::Value>) -> Result<NextPage> {
+        if !self.has_more {
+            return Ok(NextPage::Done);
+        }
+        if self.next_offset.as_ref() == current {
+            return Err(crate::error::Error::Extraction(format!(
+                "source reported more pages but its cursor did not advance (stuck at {current:?})"
+            )));
+        }
+        Ok(NextPage::At(self.next_offset.clone()))
+    }
+}
+
 /// Schema information from the source.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SourceSchema {
