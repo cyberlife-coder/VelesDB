@@ -66,8 +66,10 @@ BINARIES = [
     ("velesdb-server", 14.75 * MIB),
     # Measured 11.51 MiB on the 8.0.0 release cut — the major's accumulated
     # feature surface added ~0.47 MiB over 6.0.0's 11.04 across the dev
-    # cycle. Ceiling = measured + ~2.5 %.
-    ("velesdb", 11.8 * MIB),  # was 11.04 MiB at 6.0.0, 10.99 at 5.2.0
+    # cycle. 11.85 MiB once the `config` and `db` command groups landed
+    # (#2725) — clap parse tables and handlers, no dependency changed.
+    # Ceiling = measured + ~2.5 %.
+    ("velesdb", 12.15 * MIB),  # was 11.51 MiB at 8.0.0, 11.04 at 6.0.0
     # Measured 8.62 MiB at 6.0.0; 9.63 MiB once serde_yaml (RUSTSEC-2024-0449,
     # unmaintained, unsafe-libyaml) gave way to serde-saphyr, a safe-Rust parser.
     # The +1.0 MiB is the parser itself, not the integration: stripped build of
