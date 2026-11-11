@@ -314,40 +314,30 @@ fn dispatch_collection(action: CollectionCommands) -> anyhow::Result<()> {
     }
 }
 
+/// Dispatches `data import`.
+fn dispatch_data_import(args: commands::ImportArgs) -> anyhow::Result<()> {
+    handlers::handle_import(
+        &args.file,
+        &args.database,
+        args.collection,
+        args.dimension,
+        args.metric,
+        args.storage_mode,
+        args.id_column,
+        args.vector_column,
+        args.batch_size,
+        args.progress,
+        args.dry_run,
+        args.on_conflict,
+        args.continue_on_error,
+        args.error_report,
+    )
+}
+
 /// Dispatches data sub-commands.
 fn dispatch_data(action: DataCommands) -> anyhow::Result<()> {
     match action {
-        DataCommands::Import {
-            file,
-            database,
-            collection,
-            dimension,
-            metric,
-            storage_mode,
-            id_column,
-            vector_column,
-            batch_size,
-            progress,
-            dry_run,
-            on_conflict,
-            continue_on_error,
-            error_report,
-        } => handlers::handle_import(
-            &file,
-            &database,
-            collection,
-            dimension,
-            metric,
-            storage_mode,
-            id_column,
-            vector_column,
-            batch_size,
-            progress,
-            dry_run,
-            on_conflict,
-            continue_on_error,
-            error_report,
-        ),
+        DataCommands::Import(args) => dispatch_data_import(args),
         DataCommands::Export {
             path,
             collection,

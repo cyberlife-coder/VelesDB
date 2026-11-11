@@ -270,73 +270,78 @@ pub enum CollectionCommands {
 // Data sub-commands
 // ---------------------------------------------------------------------------
 
+/// Arguments of `data import` (kept as a `clap::Args` struct so the
+/// dispatch arm stays one line — the variant has fifteen flags).
+#[derive(clap::Args)]
+pub struct ImportArgs {
+    /// Path to data file (CSV or JSONL)
+    pub file: PathBuf,
+
+    /// Path to database directory
+    #[arg(short, long, default_value = "./data")]
+    pub database: PathBuf,
+
+    /// Collection name
+    #[arg(short, long)]
+    pub collection: String,
+
+    /// Vector dimension (auto-detected if not specified)
+    #[arg(long)]
+    pub dimension: Option<usize>,
+
+    /// Distance metric — only checked when importing into an existing
+    /// collection; a new collection defaults to cosine
+    #[arg(long, value_enum)]
+    pub metric: Option<MetricArg>,
+
+    /// Storage mode (full, sq8, binary)
+    #[arg(long, value_enum, default_value = "full")]
+    pub storage_mode: StorageModeArg,
+
+    /// ID column name (for CSV)
+    #[arg(long, default_value = "id")]
+    pub id_column: String,
+
+    /// Vector column name (for CSV)
+    #[arg(long, default_value = "vector")]
+    pub vector_column: String,
+
+    /// Batch size for insertion
+    #[arg(long, default_value = "1000")]
+    pub batch_size: usize,
+
+    /// Show progress bar (pass `--progress false` to disable)
+    #[arg(
+        long,
+        default_value_t = true,
+        num_args = 0..=1,
+        default_missing_value = "true",
+        action = clap::ArgAction::Set
+    )]
+    pub progress: bool,
+
+    /// Validate the file and print what would be imported, writing nothing
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Policy for ids already in the collection (fail refuses before any write)
+    #[arg(long, value_enum, default_value = "upsert")]
+    pub on_conflict: OnConflictArg,
+
+    /// Keep importing after a bad record (default: abort before any write)
+    #[arg(long)]
+    pub continue_on_error: bool,
+
+    /// Write every rejected record as JSONL to this file
+    #[arg(long)]
+    pub error_report: Option<PathBuf>,
+}
+
 /// Commands for data operations on collections.
 #[derive(Subcommand)]
 pub enum DataCommands {
     /// Import vectors from CSV or JSONL file
-    Import {
-        /// Path to data file (CSV or JSONL)
-        file: PathBuf,
-
-        /// Path to database directory
-        #[arg(short, long, default_value = "./data")]
-        database: PathBuf,
-
-        /// Collection name
-        #[arg(short, long)]
-        collection: String,
-
-        /// Vector dimension (auto-detected if not specified)
-        #[arg(long)]
-        dimension: Option<usize>,
-
-        /// Distance metric — only checked when importing into an existing
-        /// collection; a new collection defaults to cosine
-        #[arg(long, value_enum)]
-        metric: Option<MetricArg>,
-
-        /// Storage mode (full, sq8, binary)
-        #[arg(long, value_enum, default_value = "full")]
-        storage_mode: StorageModeArg,
-
-        /// ID column name (for CSV)
-        #[arg(long, default_value = "id")]
-        id_column: String,
-
-        /// Vector column name (for CSV)
-        #[arg(long, default_value = "vector")]
-        vector_column: String,
-
-        /// Batch size for insertion
-        #[arg(long, default_value = "1000")]
-        batch_size: usize,
-
-        /// Show progress bar (pass `--progress false` to disable)
-        #[arg(
-            long,
-            default_value_t = true,
-            num_args = 0..=1,
-            default_missing_value = "true",
-            action = clap::ArgAction::Set
-        )]
-        progress: bool,
-
-        /// Validate the file and print what would be imported, writing nothing
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Policy for ids already in the collection (fail refuses before any write)
-        #[arg(long, value_enum, default_value = "upsert")]
-        on_conflict: OnConflictArg,
-
-        /// Keep importing after a bad record (default: abort before any write)
-        #[arg(long)]
-        continue_on_error: bool,
-
-        /// Write every rejected record as JSONL to this file
-        #[arg(long)]
-        error_report: Option<PathBuf>,
-    },
+    Import(ImportArgs),
 
     /// Export a collection to a JSON, JSONL or CSV file
     Export {
