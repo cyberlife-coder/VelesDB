@@ -40,16 +40,50 @@ impl<E: Embedder, S: FactStore> MemoryService<E, S> {
     where
         S: GraphStore,
     {
+        let system = Self::anchor_system(anchors)?;
+        let _generation = self.enter_generation();
+        self.remember_inner(fact, links, metadata, ttl_seconds, true, system.as_ref())
+    }
+
+    /// [`Self::remember_anchored`], additionally returning the `similar`
+    /// page — the at-most [`SIMILAR_LIMIT`](super::SIMILAR_LIMIT)
+    /// pre-existing memories nearest to the fact, scored by raw similarity,
+    /// the fact itself and internal hubs excluded — and, when the service
+    /// was built with [`Self::with_auto_link`], a `related_to` edge to each
+    /// hit at or above that threshold. [`Self::remember_detailed`] is the
+    /// anchor-free twin; both reuse the embedding the store pass already
+    /// computed, so one remember costs one embed, never two.
+    ///
+    /// # Errors
+    /// The errors of [`Self::remember_anchored`].
+    pub fn remember_anchored_detailed(
+        &self,
+        fact: &str,
+        links: &[Link],
+        metadata: Option<&Metadata>,
+        ttl_seconds: Option<u64>,
+        anchors: Option<&AnchorSet>,
+    ) -> Result<crate::model::RememberOutcome, MemoryError>
+    where
+        S: GraphStore + RecallStore,
+    {
+        let system = Self::anchor_system(anchors)?;
+        let _generation = self.enter_generation();
+        self.remember_outcome(fact, links, metadata, ttl_seconds, system.as_ref())
+    }
+
+    /// Validate the requested `anchors` and build the reserved system
+    /// entries they contribute — `None` when the set is empty, so storing
+    /// stays byte-identical to an unanchored remember.
+    fn anchor_system(anchors: Option<&AnchorSet>) -> Result<Option<Metadata>, MemoryError> {
         let files = anchors.map_or(&[][..], |set| set.files.as_slice());
         check_anchor_count(files.len())?;
         if !files.is_empty() && anchors.is_some_and(|set| set.root.is_empty()) {
             return Err(MemoryError::Anchor(AnchorError::MissingRoot));
         }
-        let system = anchors
+        Ok(anchors
             .filter(|set| !set.files.is_empty())
-            .map(anchors_entry);
-        let _generation = self.enter_generation();
-        self.remember_inner(fact, links, metadata, ttl_seconds, true, system.as_ref())
+            .map(anchors_entry))
     }
 
     /// [`Self::recall`], with each lesson's [`Freshness`] judged through

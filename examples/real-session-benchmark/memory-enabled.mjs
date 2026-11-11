@@ -51,10 +51,10 @@ async function rememberDocs(mem) {
       while (rest.length > 1800) {
         let cut = rest.lastIndexOf('\n\n', 1800)
         if (cut < 900) cut = 1800
-        ids.push(await mem.remember(rest.slice(0, cut)))
+        ids.push((await mem.remember(rest.slice(0, cut))).id)
         rest = rest.slice(cut).trimStart()
       }
-      ids.push(await mem.remember(rest))
+      ids.push((await mem.remember(rest)).id)
     }
     for (let i = 1; i < ids.length; i++) {
       await mem.relate(ids[i - 1], ids[i], 'followed_by')

@@ -81,12 +81,15 @@ class _MemoryToolkit:
         seconds. All three are optional; a bare ``remember(fact)`` behaves
         exactly as before.
         """
-        return self._mem.remember(
+        outcome = self._mem.remember(
             fact,
             links=_as_tuples(links),
             metadata=metadata,
             ttl_seconds=ttl_seconds,
         )
+        # velesdb ≥ 0.18.0 returns ``{"id": ..., "similar": [...]}``; older
+        # wheels return the bare id. The tool contract stays the id alone.
+        return outcome["id"] if isinstance(outcome, dict) else outcome
 
     def recall(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         """Recall memories semantically similar to the query (vector search).

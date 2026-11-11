@@ -198,10 +198,10 @@ pub(crate) fn build_configured_service(
     // resolved identity still exists.
     let embedder_model = configured.model.clone();
     let embedder_dimension = configured.embedder.dimension();
-    let service = apply_autograph(open_store_with_actionable_lock_error(
+    let service = apply_autograph(apply_auto_link(open_store_with_actionable_lock_error(
         &store_path,
         configured,
-    )?)?;
+    )?)?)?;
     let service = match search_quality {
         Some(quality) => service.with_search_quality(quality),
         None => service,
@@ -301,6 +301,45 @@ pub(crate) fn apply_autograph(
             Ok(service.with_autograph(extractor))
         }
     }
+}
+
+/// Apply `[graph] auto_link`: `VELESDB_MEMORY_AUTO_LINK=1` turns on
+/// similarity auto-linking, `VELESDB_MEMORY_AUTO_LINK_THRESHOLD` overrides
+/// its `[0, 1]` floor. Unlike autograph no backend is needed — the edges
+/// reuse the embedding `remember` already computes — but a malformed or
+/// out-of-range threshold aborts startup rather than silently clamping a
+/// value the operator typed.
+pub(crate) fn apply_auto_link(
+    service: MemoryService<DynEmbedder>,
+) -> Result<MemoryService<DynEmbedder>, Box<dyn std::error::Error>> {
+    if std::env::var("VELESDB_MEMORY_AUTO_LINK").as_deref() != Ok("1") {
+        return Ok(service);
+    }
+    let threshold = auto_link_threshold(
+        std::env::var("VELESDB_MEMORY_AUTO_LINK_THRESHOLD")
+            .ok()
+            .as_deref(),
+    )?;
+    Ok(service.with_auto_link(threshold))
+}
+
+/// The `[0, 1]` floor `auto_link_threshold` must hold: [`AUTO_LINK_DEFAULT_THRESHOLD`]
+/// when unset, a parse error carrying the offending text otherwise — an
+/// out-of-range number is a typo the operator sees at boot, not a clamp they
+/// never notice.
+///
+/// [`AUTO_LINK_DEFAULT_THRESHOLD`]: velesdb_memory::service::AUTO_LINK_DEFAULT_THRESHOLD
+fn auto_link_threshold(raw: Option<&str>) -> Result<f32, Box<dyn std::error::Error>> {
+    let Some(text) = raw else {
+        return Ok(velesdb_memory::service::AUTO_LINK_DEFAULT_THRESHOLD);
+    };
+    text.parse::<f32>()
+        .ok()
+        .filter(|value| (0.0..=1.0).contains(value))
+        .ok_or_else(|| {
+            format!("VELESDB_MEMORY_AUTO_LINK_THRESHOLD must be a number in [0, 1], got {text:?}")
+                .into()
+        })
 }
 
 /// Locate and apply the optional `velesdb-memory.toml`.
@@ -455,3 +494,7 @@ pub(crate) fn attach_extractor(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "daemon_startup_tests.rs"]
+mod tests;

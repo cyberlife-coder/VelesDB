@@ -44,7 +44,7 @@ def build_project_memory() -> None:
     # The reason is a real-world fact; the decision links OUT to it.
     reason = mem.remember(
         "Our biggest customer's field crews work from remote mining sites over satellite links"
-    )
+    )["id"]
     mem.remember(
         "We set the default HTTP request timeout to 7 seconds",
         links=[(reason, "because")],

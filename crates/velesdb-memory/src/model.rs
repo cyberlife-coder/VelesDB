@@ -464,6 +464,30 @@ pub struct Explanation {
 #[path = "model_tests.rs"]
 mod tests;
 
+/// One existing memory close to a fact about to be remembered: the raw
+/// similarity hit [`MemoryService::remember_detailed`](crate::service::MemoryService::remember_detailed)
+/// surfaces so a caller can verify — before picking explicit `links` — that a
+/// near-duplicate already exists.
+#[derive(Debug, Clone, Serialize)]
+pub struct SimilarMemory {
+    /// Stable id of the similar memory.
+    pub id: u64,
+    /// Raw vector similarity score, higher means closer.
+    pub score: f32,
+}
+
+/// Outcome of [`MemoryService::remember_detailed`](crate::service::MemoryService::remember_detailed):
+/// the stored id plus the pre-existing memories the same embedding matched.
+/// `similar` excludes the fact itself and internal scaffolding (hubs) and is
+/// capped at [`crate::service::SIMILAR_LIMIT`] entries, best first.
+#[derive(Debug)]
+pub struct RememberOutcome {
+    /// Stable id of the fact that was stored.
+    pub fact_id: u64,
+    /// At most `SIMILAR_LIMIT` existing memories nearest to the new fact.
+    pub similar: Vec<SimilarMemory>,
+}
+
 /// One audited fact, as `list_memories` returns it: the caller-facing shape
 /// of a [`crate::storage::RawListedFact`] after the service applied its
 /// visibility policy (hub filtering, reserved-key stripping).

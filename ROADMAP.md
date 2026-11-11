@@ -78,7 +78,7 @@ No dates. These graduate to **Next** only through a milestone.
 
 ## velesdb-memory line (independent 0.x cadence)
 
-`velesdb-memory` (0.17.1) versions and releases on its own 0.x cadence, decoupled from the workspace majors.
+`velesdb-memory` (0.18.0) versions and releases on its own 0.x cadence, decoupled from the workspace majors.
 
 - **LoCoMo temporal-decomposition follow-up** — [`docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md`](docs/planning/LOCOMO_TEMPORAL_DECOMP_RESEARCH.md) concluded: dated recall's +33.6pp temporal lift is real and ironclad; the scaffold's marginal gain is unproven at n=321 and its feared single-hop cost is not real. The honest follow-up it scopes is a *cost*-framed routing chapter (skip the scaffold's CoT tokens where they don't move accuracy) — and it needs its own justification before it runs.
 - **Context-compiler evolution** — the deterministic compiler (`compile_context` and friends) evolves per `crates/velesdb-memory/CHANGELOG.md`.

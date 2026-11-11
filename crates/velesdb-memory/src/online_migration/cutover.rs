@@ -30,6 +30,7 @@ struct RetiredGeneration<E: Embedder> {
 
 struct RuntimeState {
     autograph: Option<crate::extract::DynExtractor>,
+    auto_link: Option<f32>,
     autograph_queue: crate::service::AutographQueue,
 }
 
@@ -194,6 +195,7 @@ fn retire<E: Embedder>(generation: ActiveGeneration<E>) -> RetiredGeneration<E> 
         store,
         embedder,
         autograph,
+        auto_link,
         autograph_queue,
         generation_gate: _,
         fact_locks: _,
@@ -204,6 +206,7 @@ fn retire<E: Embedder>(generation: ActiveGeneration<E>) -> RetiredGeneration<E> 
         model: generation.model,
         runtime: RuntimeState {
             autograph,
+            auto_link,
             autograph_queue,
         },
     }
@@ -250,6 +253,7 @@ fn assemble<E: Embedder>(
             store,
             embedder,
             autograph: runtime.autograph,
+            auto_link: runtime.auto_link,
             autograph_queue: runtime.autograph_queue,
             generation_gate: crate::service::GenerationGate::new(),
             // A new store, so a new table: the swap holds the generation gate

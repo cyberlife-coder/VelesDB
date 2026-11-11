@@ -39,20 +39,20 @@ def mem(tmp_path):
 
 
 def test_remember_returns_stable_id(mem):
-    a = mem.remember("Paris is the capital of France")
-    b = mem.remember("Paris is the capital of France")
+    a = mem.remember("Paris is the capital of France")["id"]
+    b = mem.remember("Paris is the capital of France")["id"]
     assert a == b  # content-addressed → idempotent
 
 
 def test_recall_finds_a_stored_fact(mem):
-    fid = mem.remember("we chose parking_lot to avoid lock poisoning")
+    fid = mem.remember("we chose parking_lot to avoid lock poisoning")["id"]
     hits = mem.recall("parking_lot poisoning", k=5)
     assert any(h["id"] == fid for h in hits)
     assert all({"id", "score", "content"} <= set(h) for h in hits)
 
 
 def test_recall_filter_narrows_to_metadata(mem):
-    keep = mem.remember("auth bug in login", metadata={"project": "veles"})
+    keep = mem.remember("auth bug in login", metadata={"project": "veles"})["id"]
     mem.remember("auth bug in login too", metadata={"project": "acme"})
     hits = mem.recall("auth bug", k=5, filter={"project": "veles"})
     ids = {h["id"] for h in hits}
@@ -61,11 +61,11 @@ def test_recall_filter_narrows_to_metadata(mem):
 
 
 def test_why_returns_the_connected_subgraph(mem):
-    pr = mem.remember("PR #42 swaps the std Mutex for parking_lot")
+    pr = mem.remember("PR #42 swaps the std Mutex for parking_lot")["id"]
     dec = mem.remember(
         "we chose parking_lot to avoid lock poisoning",
         links=[(pr, "decided_in")],
-    )
+    )["id"]
     why = mem.why("why did we choose parking_lot", max_hops=2)
     node_ids = [n["id"] for n in why["nodes"]]
     assert dec in node_ids and pr in node_ids
@@ -104,7 +104,7 @@ def test_entity_does_not_surface_a_mentioning_sentence(mem):
 
 
 def test_forget_removes_a_memory(mem):
-    fid = mem.remember("ephemeral note about France")
+    fid = mem.remember("ephemeral note about France")["id"]
     assert mem.forget(fid) is True
     hits = mem.recall("France", k=5)
     assert all(h["id"] != fid for h in hits)
@@ -123,7 +123,7 @@ def test_unknown_search_quality_raises_value_error_naming_the_forms(tmp_path):
 
 def test_search_quality_open_still_recalls(tmp_path):
     mem = MemoryService(str(tmp_path / "store"), search_quality="perfect")
-    fact_id = mem.remember("we chose parking_lot to avoid lock poisoning")
+    fact_id = mem.remember("we chose parking_lot to avoid lock poisoning")["id"]
 
     hits = mem.recall("lock poisoning", 5)
 
@@ -213,7 +213,7 @@ raise SystemExit(0 if memory.memory_status()["embedder"]["semantic"] else 1)
 def test_why_huge_max_hops_is_silently_capped(mem):
     # The binding caps max_hops at 10 (same as the MCP server) to prevent
     # unbounded graph traversal; passing usize::MAX must not hang or error.
-    fid = mem.remember("rust is a systems language")
+    fid = mem.remember("rust is a systems language")["id"]
     why = mem.why("rust", max_hops=10_000)
     node_ids = [n["id"] for n in why["nodes"]]
     assert fid in node_ids
@@ -221,7 +221,7 @@ def test_why_huge_max_hops_is_silently_capped(mem):
 
 def test_recall_where_eq_matches_metadata_filter(mem):
     # An `eq` column filter equals the exact-match recall filter (same engine).
-    keep = mem.remember("auth bug in login", metadata={"project": "veles"})
+    keep = mem.remember("auth bug in login", metadata={"project": "veles"})["id"]
     mem.remember("auth bug elsewhere", metadata={"project": "acme"})
     hits = mem.recall_where("auth bug", [("project", "eq", "veles")], k=5)
     ids = {h["id"] for h in hits}
@@ -231,7 +231,7 @@ def test_recall_where_eq_matches_metadata_filter(mem):
 
 def test_recall_where_numeric_range_filters(mem):
     # A year range a vector store cannot express; the ColumnStore predicate can.
-    inrange = mem.remember("alice was CEO in 2003", metadata={"year": 2003})
+    inrange = mem.remember("alice was CEO in 2003", metadata={"year": 2003})["id"]
     mem.remember("bob was CEO in 2010", metadata={"year": 2010})
     hits = mem.recall_where(
         "who was CEO", [("year", "ge", 2000), ("year", "le", 2005)], k=5
@@ -252,7 +252,7 @@ def test_recall_where_returns_stored_metadata(mem):
     # every fact unless the caller already set it, so the metadata dict is
     # no longer exactly `{"ts": ...}` — check the caller-supplied key plus
     # the presence of the auto date, not exact dict equality.
-    fid = mem.remember("we shipped the release", metadata={"ts": 20260701})
+    fid = mem.remember("we shipped the release", metadata={"ts": 20260701})["id"]
     hits = mem.recall_where("release", [("ts", "eq", 20260701)], k=5)
     hit = next(h for h in hits if h["id"] == fid)
     assert hit["metadata"]["ts"] == 20260701
@@ -263,7 +263,7 @@ def test_recall_also_returns_stored_metadata(mem):
     # `recall` round-trips caller metadata too (one extra by-id lookup per
     # hit), not just `recall_where` — enables dated/sorted context from any
     # recall path. See the `_veles_date` note above.
-    fid = mem.remember("paris is lovely in spring", metadata={"ts": 1})
+    fid = mem.remember("paris is lovely in spring", metadata={"ts": 1})["id"]
     hits = mem.recall("paris", k=5)
     hit = next(h for h in hits if h["id"] == fid)
     assert hit["metadata"]["ts"] == 1
@@ -288,11 +288,11 @@ def test_recall_fused_folds_in_a_graph_reached_fact(mem):
     # Fused recall walks the graph from the top vector hit and folds in a fact
     # the query never mentions but a stored link connects — the shipped
     # tri-engine ranking, not a harness-only prompt trick.
-    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")
+    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")["id"]
     linked = mem.remember(
         "the on-call rotation moved to Tuesdays",
         links=[(anchor, "context")],
-    )
+    )["id"]
     # Plain top-1 vector recall finds the anchor, not the unrelated linked fact.
     plain = mem.recall("parking_lot poisoning", k=1)
     assert all(h["id"] != linked for h in plain)
@@ -303,7 +303,7 @@ def test_recall_fused_folds_in_a_graph_reached_fact(mem):
 
 
 def test_recall_fused_respects_exact_match_filter(mem):
-    keep = mem.remember("auth bug in login", metadata={"project": "veles"})
+    keep = mem.remember("auth bug in login", metadata={"project": "veles"})["id"]
     mem.remember("auth bug in login too", metadata={"project": "acme"})
     hits = mem.recall_fused("auth bug", k=5, filter={"project": "veles"})
     assert all(h["id"] == keep for h in hits)
@@ -321,11 +321,11 @@ def test_recall_fused_survives_non_finite_graph_boost(mem):
     # A native Python float bypasses JSON's NaN rejection, so the binding must
     # not let a NaN graph_boost poison fusion (it would collapse the ranking and
     # silently drop exactly the graph-reached facts recall_fused exists to find).
-    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")
+    anchor = mem.remember("we chose parking_lot to avoid lock poisoning")["id"]
     linked = mem.remember(
         "the on-call rotation moved to Tuesdays",
         links=[(anchor, "context")],
-    )
+    )["id"]
     hits = mem.recall_fused(
         "parking_lot poisoning", k=10, options={"graph_boost": float("nan")}
     )
@@ -375,7 +375,7 @@ def test_oversized_fact_raises_value_error(mem):
 def test_feedback_success_increases_confidence_and_roundtrips(mem):
     # remember -> feedback(id, True) returns a float, and repeated positive
     # feedback moves confidence monotonically upward (the RL loop learning).
-    fid = mem.remember("we chose parking_lot to avoid lock poisoning")
+    fid = mem.remember("we chose parking_lot to avoid lock poisoning")["id"]
     first = mem.feedback(fid, True)
     assert isinstance(first, float)
     second = mem.feedback(fid, True)
@@ -391,8 +391,8 @@ def test_feedback_unknown_id_raises_key_error(mem):
 
 def test_unrelate_removes_the_edge_and_keeps_both_facts(mem):
     # relate's exact undo: the edge stops being traversable, the two facts stay.
-    decision = mem.remember("we chose parking_lot to avoid lock poisoning")
-    ticket = mem.remember("EPIC-317 xyzzy quux frobnicate")
+    decision = mem.remember("we chose parking_lot to avoid lock poisoning")["id"]
+    ticket = mem.remember("EPIC-317 xyzzy quux frobnicate")["id"]
     mem.relate(decision, ticket, "decided_in")
 
     def reached():
@@ -411,8 +411,8 @@ def test_unrelate_removes_the_edge_and_keeps_both_facts(mem):
 
 def test_unrelate_is_idempotent_on_an_absent_edge(mem):
     # An absent edge is an answer, never an exception — a cleanup must replay.
-    a = mem.remember("fact a for the unrelate guard")
-    b = mem.remember("fact b for the unrelate guard")
+    a = mem.remember("fact a for the unrelate guard")["id"]
+    b = mem.remember("fact b for the unrelate guard")["id"]
     assert mem.unrelate(a, b, "decided_in") == {"found": False, "removed": 0}
 
     mem.relate(a, b, "decided_in")
@@ -422,8 +422,8 @@ def test_unrelate_is_idempotent_on_an_absent_edge(mem):
 
 def test_unrelate_refuses_exactly_what_relate_refuses(mem):
     # Same taxonomy as relate: invalid input surfaces as ValueError.
-    a = mem.remember("fact a for the unrelate refusals")
-    b = mem.remember("fact b for the unrelate refusals")
+    a = mem.remember("fact a for the unrelate refusals")["id"]
+    b = mem.remember("fact b for the unrelate refusals")["id"]
     with pytest.raises(ValueError):
         mem.unrelate(a, b, "")
     with pytest.raises(ValueError):
@@ -511,8 +511,8 @@ def test_memory_status_reports_the_hash_default_as_not_semantic(mem):
     assert before["memory"]["facts"] == 0
     assert before["memory"]["edges"] == 0
 
-    a = mem.remember("le port est 6333")
-    b = mem.remember("l'incident est INC-42")
+    a = mem.remember("le port est 6333")["id"]
+    b = mem.remember("l'incident est INC-42")["id"]
     mem.relate(a, b, "explique")
 
     after = mem.memory_status()

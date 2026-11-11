@@ -38,6 +38,10 @@ backend = "ollama"
 model = "qwen3.6:35b-mlx"
 url = "http://localhost:11434"
 
+[graph]
+auto_link = true
+auto_link_threshold = 0.8
+
 [search]
 quality = "accurate"
 "#,
@@ -69,10 +73,12 @@ quality = "accurate"
     assert_eq!(v["VELESDB_MEMORY_EXTRACTOR"], "ollama");
     assert_eq!(v["VELESDB_MEMORY_EXTRACTOR_MODEL"], "qwen3.6:35b-mlx");
     assert_eq!(v["VELESDB_MEMORY_EXTRACTOR_URL"], "http://localhost:11434");
+    assert_eq!(v["VELESDB_MEMORY_AUTO_LINK"], "1");
+    assert_eq!(v["VELESDB_MEMORY_AUTO_LINK_THRESHOLD"], "0.8");
     assert_eq!(v["VELESDB_MEMORY_SEARCH_QUALITY"], "accurate");
 }
 
-/// The eighteen variables the binary reads, minus the two that are not file
+/// The twenty variables the binary reads, minus the two that are not file
 /// settings (`VELESDB_MEMORY_CONFIG` selects the file itself; the store path
 /// is covered above). Guards against a knob being added to the binary and
 /// forgotten here — the whole promise is that the file covers everything.
@@ -104,6 +110,8 @@ url = "u"
 ingest_roots = ["/tmp"]
 [graph]
 autograph = true
+auto_link = true
+auto_link_threshold = 0.8
 [search]
 quality = "fast"
 "#,
@@ -129,6 +137,8 @@ quality = "fast"
         "VELESDB_MEMORY_EXTRACTOR_URL",
         "VELESDB_MEMORY_INGEST_ROOTS",
         "VELESDB_MEMORY_AUTOGRAPH",
+        "VELESDB_MEMORY_AUTO_LINK",
+        "VELESDB_MEMORY_AUTO_LINK_THRESHOLD",
         "VELESDB_MEMORY_SEARCH_QUALITY",
     ];
     for key in expected {

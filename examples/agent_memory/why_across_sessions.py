@@ -44,11 +44,11 @@ def monday_session() -> None:
     mem = MemoryService(STORE)
     # Build the trail so the fact that answers the question (the booking) links
     # *out* to its reason, which links on to who it's about: booking -> reason -> who.
-    who = mem.remember("Robert is my father")
+    who = mem.remember("Robert is my father")["id"]
     reason = mem.remember(
         "He is recovering from knee surgery and needs to stretch his leg",
         links=[(who, "about")],
-    )
+    )["id"]
     mem.remember("Booked the aisle seat on Robert's flight", links=[(reason, "because")])
     for fact in EVERYDAY:
         mem.remember(fact)

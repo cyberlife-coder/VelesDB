@@ -19,27 +19,28 @@ async function main() {
   // `links` is an array of {target, relation} edges to memories that already
   // exist; pass `null` for none. `metadata` is a plain object or `null`.
   // `ttlSeconds` makes the fact expire; omit it (or pass 0) for a permanent
-  // memory. The call resolves to the new memory's id, as a decimal string.
+  // memory. The call resolves to `{id, similar}` — `id` is the new memory's
+  // id as a decimal string, `similar` the pre-existing memories nearest to it.
   const pgId = memory.remember(
     'The team chose PostgreSQL for the billing service.',
     null,
     { project: 'billing', kind: 'decision' },
-  );
+  ).id;
   const whyId = memory.remember(
     'PostgreSQL was chosen because billing needs multi-row transactions.',
     null,
     { project: 'billing', kind: 'rationale' },
-  );
+  ).id;
   const opsId = memory.remember(
     'The ops team already runs a managed PostgreSQL cluster.',
     null,
     { project: 'billing', kind: 'constraint' },
-  );
+  ).id;
   const noiseId = memory.remember(
     'The marketing site is a static bundle on a CDN.',
     null,
     { project: 'marketing', kind: 'note' },
-  );
+  ).id;
 
   log(out, `remembered 4 facts: ${[pgId, whyId, opsId, noiseId].join(', ')}`);
   log(out, '(ids are decimal STRINGS, not numbers — that is the id contract)');

@@ -7007,7 +7007,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-memory"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "atomicwrites",
@@ -7089,7 +7089,7 @@ dependencies = [
 
 [[package]]
 name = "velesdb-node"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "napi",
  "napi-build",

@@ -767,7 +767,13 @@ fn unrelate_outcome(result: &JsValue) -> (bool, f64) {
 fn unrelate_marshals_a_plain_object_with_a_boolean_found_and_a_numeric_removed() {
     let svc = WasmMemoryService::new(16);
     let remember = |fact: &str| {
-        svc.remember(fact, JsValue::UNDEFINED, JsValue::UNDEFINED, None)
+        // `remember` resolves to `{id, similar}` — `relate` wants the id.
+        let outcome = svc
+            .remember(fact, JsValue::UNDEFINED, JsValue::UNDEFINED, None)
+            .unwrap();
+        js_sys::Reflect::get(&outcome, &"id".into())
+            .unwrap()
+            .as_string()
             .unwrap()
     };
     let cause = remember("the canary deploy shipped an unbounded query");

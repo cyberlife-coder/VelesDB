@@ -145,6 +145,12 @@ impl PyMemoryService {
     /// re-storing a fact that already had an expiry — only what this call
     /// supplies is applied. An explicit `0` is REFUSED, because a caller
     /// writing `0` means "expire now", not "never".
+    ///
+    /// Returns `{"id": <int>, "similar": [{"id": <int>, "score": <float>}]}` —
+    /// the stored id plus the at-most-5 pre-existing memories nearest to the
+    /// fact (the fact itself and internal scaffolding excluded). Check
+    /// `similar` before deciding which candidates deserve an explicit
+    /// `links` edge.
     #[pyo3(signature = (fact, links = None, metadata = None, ttl_seconds = None))]
     fn remember(
         &self,
@@ -153,7 +159,7 @@ impl PyMemoryService {
         links: Option<Vec<(u64, String)>>,
         metadata: Option<HashMap<String, Py<PyAny>>>,
         ttl_seconds: Option<u64>,
-    ) -> PyResult<u64> {
+    ) -> PyResult<Py<PyAny>> {
         if fact.len() > limits::MAX_FACT_BYTES {
             return Err(PyValueError::new_err(format!(
                 "fact exceeds {} bytes ({} given)",
@@ -167,11 +173,21 @@ impl PyMemoryService {
             .map(|(target, relation)| Link { target, relation })
             .collect();
         let metadata = to_metadata(py, metadata)?;
-        py.detach(|| {
+        let outcome = py.detach(|| {
             self.svc
-                .remember_with_ttl(fact, &links, metadata.as_ref(), ttl_seconds)
+                .remember_detailed(fact, &links, metadata.as_ref(), ttl_seconds)
                 .map_err(to_py_err)
-        })
+        })?;
+        Ok(json_to_python(
+            py,
+            &serde_json::json!({
+                "id": outcome.fact_id,
+                "similar": outcome.similar.iter().map(|hit| serde_json::json!({
+                    "id": hit.id,
+                    "score": hit.score,
+                })).collect::<Vec<_>>(),
+            }),
+        ))
     }
 
     /// Recall up to `k` memories similar to `query`, optionally narrowed by an

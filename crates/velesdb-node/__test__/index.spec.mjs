@@ -241,7 +241,7 @@ test('open defaults to the offline hash embedder when none is named', async () =
     // No embedder argument at all: the store must still be fully usable with
     // no Ollama running (this is what makes the default offline-safe).
     const store = MemoryService.open(dir)
-    const id = await store.remember('the default embedder needs no network')
+    const { id } = await store.remember('the default embedder needs no network')
     const hits = await store.recall('default embedder network', 5)
     assert.ok(
       hits.some((h) => h.id === id),
@@ -345,7 +345,7 @@ test('open on an existing directory reopens the store — it never starts empty'
   try {
     const writtenId = inChildProcess(
       dir,
-      `store.remember('the first process wrote this before exiting').then((id) => process.stdout.write(id))`,
+      `store.remember('the first process wrote this before exiting').then((outcome) => process.stdout.write(outcome.id))`,
     )
     assert.match(writtenId, /^\d+$/)
 
@@ -373,11 +373,8 @@ test('open on a path that is a regular file fails cleanly and leaves the addon u
     // A failed open must not poison the process: a nested path that does not
     // exist yet is still created and opened normally afterwards.
     const store = MemoryService.open(join(dir, 'nested', 'store'), 'hash')
-    assert.match(
-      await store.remember('the addon survived a bad open'),
-      /^\d+$/,
-      'the addon still works after a rejected open',
-    )
+    const { id } = await store.remember('the addon survived a bad open')
+    assert.match(id, /^\d+$/, 'the addon still works after a rejected open')
   } finally {
     rmStoreDir(dir)
   }
@@ -386,9 +383,15 @@ test('open on a path that is a regular file fails cleanly and leaves the addon u
 test('remember → recall round-trips, ids are decimal strings', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const id = await store.remember('parking_lot avoids lock poisoning')
+    const { id, similar } = await store.remember('parking_lot avoids lock poisoning')
     assert.equal(typeof id, 'string', 'id crosses as a string (JS 2^53 safety)')
     assert.match(id, /^\d+$/, 'id is a decimal string')
+    assert.ok(Array.isArray(similar), 'similar is an array of {id, score} hits')
+    for (const hit of similar) {
+      assert.equal(typeof hit.id, 'string')
+      assert.equal(typeof hit.score, 'number')
+      assert.notEqual(hit.id, id, 'a fact is never its own similar')
+    }
 
     const hits = await store.recall('lock poisoning', 5)
     assert.ok(Array.isArray(hits) && hits.length >= 1)
@@ -404,8 +407,8 @@ test('remember → recall round-trips, ids are decimal strings', async () => {
 test('relate + why returns a connected subgraph with string ids', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const pr = await store.remember('PR #42 swaps the mutex for parking_lot')
-    const decision = await store.remember('we chose parking_lot to avoid lock poisoning', [
+    const { id: pr } = await store.remember('PR #42 swaps the mutex for parking_lot')
+    const { id: decision } = await store.remember('we chose parking_lot to avoid lock poisoning', [
       { target: pr, relation: 'decided_in' },
     ])
     assert.equal(typeof decision, 'string')
@@ -433,8 +436,8 @@ test('relate + why returns a connected subgraph with string ids', async () => {
 test('unrelate removes the edge, keeps both facts, and replays without throwing', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const decision = await store.remember('we chose parking_lot to avoid lock poisoning')
-    const ticket = await store.remember('EPIC-317 xyzzy quux frobnicate')
+    const { id: decision } = await store.remember('we chose parking_lot to avoid lock poisoning')
+    const { id: ticket } = await store.remember('EPIC-317 xyzzy quux frobnicate')
     await store.relate(decision, ticket, 'decided_in')
 
     const reached = (explanation) => explanation.nodes.some((n) => n.id === ticket)
@@ -466,8 +469,8 @@ test('unrelate removes the edge, keeps both facts, and replays without throwing'
 test('unrelate refuses exactly what relate refuses (empty label, self-loop)', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const a = await store.remember('fact a for the unrelate guard')
-    const b = await store.remember('fact b for the unrelate guard')
+    const { id: a } = await store.remember('fact a for the unrelate guard')
+    const { id: b } = await store.remember('fact b for the unrelate guard')
     await assert.rejects(
       () => store.unrelate(a, b, ''),
       (err) => err.message.includes('INVALID_INPUT'),
@@ -535,9 +538,9 @@ test('entity does not surface ordinary facts — it answers about entities, not 
 test('recallFused surfaces a graph-connected fact plain recall ranks low', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const decision = await store.remember('we chose parking_lot to avoid lock poisoning')
-    const ticket = await store.remember('EPIC-317 xyzzy quux frobnicate')
-    const distractor = await store.remember('the quarterly report is due next Friday')
+    const { id: decision } = await store.remember('we chose parking_lot to avoid lock poisoning')
+    const { id: ticket } = await store.remember('EPIC-317 xyzzy quux frobnicate')
+    const { id: distractor } = await store.remember('the quarterly report is due next Friday')
     await store.relate(decision, ticket, 'decided_in')
 
     const fused = await store.recallFused('we chose parking_lot to avoid lock poisoning', 3)
@@ -565,7 +568,7 @@ test('recallFused surfaces a graph-connected fact plain recall ranks low', async
 test('recallWhere equals recall with the same exact-match filter', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const a = await store.remember('auth bug in login', [], { project: 'veles', score: 3 })
+    const { id: a } = await store.remember('auth bug in login', [], { project: 'veles', score: 3 })
     await store.remember('auth bug elsewhere', [], { project: 'acme', score: 9 })
 
     const filtered = await store.recallWhere('auth bug', [
@@ -681,7 +684,7 @@ test('recallFusedDated dates a plain remember through the auto-stamped _veles_da
 test('feedback reinforces a fact, weakens on failure, NOT_FOUND on unknown id', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const id = await store.remember('the deploy pipeline runs clippy before tests')
+    const { id } = await store.remember('the deploy pipeline runs clippy before tests')
     const up = await store.feedback(id, true)
     assert.equal(typeof up, 'number', 'feedback resolves to the learned confidence')
     assert.ok(up > 0.5 && up <= 1, `success must raise confidence above neutral, got ${up}`)
@@ -700,7 +703,7 @@ test('feedback reinforces a fact, weakens on failure, NOT_FOUND on unknown id', 
 test('forget reports found=true on a real deletion, found=false on a typo id', async () => {
   const { store, cleanup } = freshStore()
   try {
-    const id = await store.remember('ephemeral note to forget')
+    const { id } = await store.remember('ephemeral note to forget')
     assert.equal(await store.forget(id), true, 'deleting an existing fact resolves true')
     assert.equal(
       await store.forget(id),
@@ -1612,8 +1615,8 @@ test('memoryStatus reports the hash default as NOT semantic, with counts', async
   assert.equal(before.memory.facts, 0)
   assert.equal(before.memory.edges, 0)
 
-  const a = await svc.remember('le port est 6333', [], null)
-  const b = await svc.remember("l'incident est INC-42", [], null)
+  const { id: a } = await svc.remember('le port est 6333', [], null)
+  const { id: b } = await svc.remember("l'incident est INC-42", [], null)
   await svc.relate(a, b, 'explique')
 
   const after = await svc.memoryStatus()
