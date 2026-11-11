@@ -18,6 +18,7 @@ Related: [REPL reference](CLI_REPL_REFERENCE.md) ·
 - [Global options](#global-options)
 - [Configuration](#configuration)
 - [Database maintenance](#database-maintenance)
+- [Serve (embedded REST)](#serve-embedded-rest)
 - [Collections](#collections)
 - [Points](#points)
 - [Import / export](#import--export)
@@ -144,6 +145,34 @@ velesdb db restore ./backups/data-2026-11-10 -o ./data
 | `vacuum` | the named collection is missing or not a vector collection, or a rebuild/flush fails |
 | `snapshot` | a flush fails, the destination is not fresh, or it is inside the source tree |
 | `restore` | the source has no manifest (incomplete copy), the destination is not fresh, or the copy fails to open |
+
+---
+
+## Serve (embedded REST)
+
+`velesdb serve` runs the same REST API `velesdb-server` ships, in-process —
+the two binaries share one bootstrap (`velesdb_server::serve`), so flags,
+`VELESDB_*` env vars and `velesdb.toml` sections mean the same thing. The
+subcommand exists only in builds with the `serve` cargo feature; a
+CLI-only build prints a pointer to the feature or the standalone binary.
+
+```bash
+# Default dev settings: 127.0.0.1:8080, ./data
+velesdb serve
+
+# Same flags as velesdb-server
+velesdb serve -d ./prod --host 127.0.0.1 --port 18080 \
+  --rate-limit 100 --allowed-hosts db.internal
+
+# TLS, identical to velesdb-server
+velesdb serve --tls-cert cert.pem --tls-key key.pem
+```
+
+All endpoints are available under `/v1/…` plus the legacy unversioned set
+(a `deprecation: true` header marks them). See
+[SERVER_SECURITY](SERVER_SECURITY.md) for auth/TLS/CORS/Host-guard guidance —
+it applies unchanged, and so does its warning: binding a public address
+without API keys exposes every endpoint.
 
 ---
 

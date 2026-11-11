@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a fresh directory and opens it to prove it loads. Nothing overwrites
   in place — destinations must be new or empty.
 
+- **`velesdb serve` — the REST API inside the CLI** (#2725, `serve` cargo
+  feature). The `velesdb-server` bootstrap moved into the library as
+  `velesdb_server::serve::run_with_overrides`, so the standalone binary and
+  the CLI subcommand share one code path — flags, `VELESDB_*` variables and
+  `velesdb.toml` sections behave identically. The feature is optional, so a
+  CLI-only build keeps axum/rustls out and fails `serve` with a pointer to
+  the feature or the standalone binary.
+
 ## [8.1.0] - 2026-11-06
 
 ### Added

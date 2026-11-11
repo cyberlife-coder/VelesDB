@@ -91,6 +91,45 @@ pub enum Commands {
         action: DbAction,
     },
 
+    /// Start the embedded REST API server in-process (requires the `serve`
+    /// cargo feature; flags and VELESDB_* env vars mirror velesdb-server's)
+    #[cfg(feature = "serve")]
+    Serve {
+        /// Data directory for persistent storage
+        #[arg(short, long, env = "VELESDB_DATA_DIR")]
+        data_dir: Option<String>,
+
+        /// Host address to bind to
+        #[arg(long, env = "VELESDB_HOST")]
+        host: Option<String>,
+
+        /// Port to listen on
+        #[arg(short, long, env = "VELESDB_PORT")]
+        port: Option<u16>,
+
+        /// TLS certificate file (PEM)
+        #[arg(long, env = "VELESDB_TLS_CERT")]
+        tls_cert: Option<String>,
+
+        /// TLS private key file (PEM)
+        #[arg(long, env = "VELESDB_TLS_KEY")]
+        tls_key: Option<String>,
+
+        /// Rate limit: max requests per second per IP (0 = disabled)
+        #[arg(long, env = "VELESDB_RATE_LIMIT")]
+        rate_limit: Option<u32>,
+
+        /// Host names to answer to besides localhost, 127.0.0.0/8, [::1] and the
+        /// bind host (comma-separated; "*" disables the Host check)
+        #[arg(long, env = "VELESDB_ALLOWED_HOSTS", value_delimiter = ',')]
+        allowed_hosts: Option<Vec<String>>,
+    },
+
+    /// `velesdb serve` placeholder so a CLI-only build fails with a clear
+    /// message instead of `unrecognized subcommand`
+    #[cfg(not(feature = "serve"))]
+    Serve,
+
     /// Ask the bounded ReAct agent a question about this database
     /// (whitelisted VelesQL tools; Ollama backend if VELESDB_AGENT_URL
     /// answers, else deterministic offline mode)
