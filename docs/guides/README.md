@@ -55,7 +55,7 @@ each guide links back.
 |-------|-------------|
 | [CLI command reference](./CLI_COMMAND_REFERENCE.md) | `velesdb`: every subcommand and flag, import/export formats, packaging, error reference |
 | [REPL reference](./CLI_REPL_REFERENCE.md) | `velesdb repl`: dot-commands, session commands and settings, output formats |
-| [VelesQL cookbook (CLI & REPL)](./CLI_VELESQL_COOKBOOK.md) | Runnable VelesQL snippets: vector, hybrid, sparse, temporal, graph, aggregation, JOIN |
+| [VelesQL cookbook (CLI & REPL)](./CLI_VELESQL_COOKBOOK.md) | Runnable VelesQL snippets: vector, hybrid, sparse, temporal, graph, aggregation, JOIN — plus the ReAct agent and `velesdb config` |
 
 ## Server
 
