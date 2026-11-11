@@ -78,6 +78,9 @@ mod graph;
 #[path = "service_graph_wiring.rs"]
 mod graph_wiring;
 
+#[path = "service_remember_outcome.rs"]
+mod remember_outcome;
+
 #[cfg(feature = "persistence")]
 #[allow(dead_code)]
 #[path = "online_migration.rs"]
