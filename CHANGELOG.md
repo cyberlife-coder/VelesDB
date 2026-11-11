@@ -95,6 +95,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`velesdb-migrate` no longer stops at the first empty page.** Both the
+  point loop and the graph phase broke out on `points.is_empty()`, but a
+  connector can return an empty page with more pages after it: Qdrant drops
+  sparse-only points after the scroll, so a page made only of them arrives as
+  `points: []` with a `next_page_offset`. The run cleared its checkpoint and
+  reported success with every later page unmigrated. Pagination now follows
+  `has_more` only, through one `ExtractedBatch::next_page` shared by both
+  loops, and a source that claims more pages without moving its cursor fails
+  with an extraction error instead of re-reading the same page forever.
+
 - **TypeScript SDK: one error code per bad input, on both backends** (#2307).
   A type-level bad value over REST (a negative or fractional `top_k`, a
   string `rrf_k`, a `null` fusion weight, a non-string `fusion` strategy)

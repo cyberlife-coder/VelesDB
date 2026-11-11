@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::MigrationConfig;
-use crate::connectors::{create_connector, SourceConnector};
+use crate::connectors::{create_connector, ExtractedBatch, NextPage, SourceConnector};
 use crate::error::{Error, Result};
 use crate::transform::Transformer;
 
@@ -297,48 +297,61 @@ impl Pipeline {
             })
             .await?;
 
-            if batch.points.is_empty() {
-                break;
-            }
+            // Decided before the points are consumed, and from `has_more`
+            // only: an empty page with more behind it (all points skipped by
+            // the connector) must not end the run.
+            let next_page = batch.next_page(offset.as_ref())?;
 
-            stats.extracted += batch.points.len() as u64;
-            stats.batches += 1;
-
-            let transformed = self.transformer.transform_batch(batch.points);
-
-            if let Some(db) = db {
-                let loaded = crate::pipeline_points::load_prepared_batch(
-                    db,
-                    &self.config.destination.collection,
-                    transformed,
-                    self.config.options.workers,
-                    self.config.options.continue_on_error,
-                    stats,
-                )?;
-
-                // Save checkpoint immediately after a successful flush, BEFORE
-                // the next iteration's offset update.  This ensures that if
-                // batch N succeeds but batch N+1 fails, the checkpoint
-                // reflects batch N's completion.
-                if let Some(ctx) = checkpoint_ctx.filter(|_| loaded) {
-                    ctx.save(
-                        batch.next_offset.clone(),
-                        stats,
-                        resumed_duration_secs + start.elapsed().as_secs_f64(),
-                    )
+            if !batch.points.is_empty() {
+                let elapsed_secs = resumed_duration_secs + start.elapsed().as_secs_f64();
+                self.ingest_batch(db, checkpoint_ctx, batch, stats, elapsed_secs)
                     .await?;
-                }
             }
 
             progress.set_position(stats.loaded.min(total));
 
-            if !batch.has_more {
-                break;
+            match next_page {
+                NextPage::Done => break,
+                NextPage::At(cursor) => *offset = cursor,
             }
-
-            *offset = batch.next_offset.clone();
         }
 
+        Ok(())
+    }
+
+    /// Transforms and loads one non-empty batch, then checkpoints it.
+    async fn ingest_batch(
+        &self,
+        db: Option<&velesdb_core::Database>,
+        checkpoint_ctx: Option<&CheckpointContext>,
+        batch: ExtractedBatch,
+        stats: &mut MigrationStats,
+        elapsed_secs: f64,
+    ) -> Result<()> {
+        stats.extracted += batch.points.len() as u64;
+        stats.batches += 1;
+
+        let transformed = self.transformer.transform_batch(batch.points);
+
+        let Some(db) = db else {
+            return Ok(());
+        };
+        let loaded = crate::pipeline_points::load_prepared_batch(
+            db,
+            &self.config.destination.collection,
+            transformed,
+            self.config.options.workers,
+            self.config.options.continue_on_error,
+            stats,
+        )?;
+
+        // Save checkpoint immediately after a successful flush, BEFORE
+        // the next iteration's offset update.  This ensures that if
+        // batch N succeeds but batch N+1 fails, the checkpoint
+        // reflects batch N's completion.
+        if let Some(ctx) = checkpoint_ctx.filter(|_| loaded) {
+            ctx.save(batch.next_offset, stats, elapsed_secs).await?;
+        }
         Ok(())
     }
 
