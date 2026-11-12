@@ -1736,6 +1736,140 @@
           ]
         }
       ]
+    },
+    {
+      "script": "scripts/check-changelog-zones.py",
+      "purpose": "CHANGELOG versioned sections are written only by the release script on main; PRs may edit Unreleased only (#2751 family A). Structural rules: Unreleased first, versioned sections dated, no duplicate version.",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_changelog_zones",
+      "self_test_required": true,
+      "must_refuse": [
+        {
+          "vector": "a CHANGELOG with two sections for the same version — the 0.18.0 double of #2749",
+          "files": {
+            "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n\n## [0.18.0] - 2026-11-11\n\n## [0.18.0] - 2026-11-09\n"
+          },
+          "accepts": {
+            "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n\n## [0.18.0] - 2026-11-11\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a versioned section without a date — hand-written, not produced by the release script",
+          "files": {
+            "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n\n## [8.3.0]\n"
+          },
+          "accepts": {
+            "CHANGELOG.md": "# Changelog\n\n## [Unreleased]\n\n## [8.3.0] - 2026-11-12\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": 2751,
+        "summary": "The --base diff mode (PR must not create or edit a versioned section) is covered by the unit tests with a real temp git repo, not by a registry vector: the vector harness cannot materialise two commits with different content. A hand edit that keeps the date format and lands under Unreleased still merges cleanly — the guard kills the structural anomalies, not the 3-way merge overlap itself."
+      }
+    },
+    {
+      "script": "scripts/check-version-stamps.py",
+      "purpose": "Version stamps in docs footers change only via the release script on main, and tests assert env!(CARGO_PKG_VERSION), never a literal (#2751 family B; the serve_tests.rs 8.1.0 of #2749).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_version_stamps",
+      "self_test_required": true,
+      "must_refuse": [
+        {
+          "vector": "a doc footer naming a stale velesdb-core version while the workspace Cargo.toml is bumped",
+          "files": {
+            "Cargo.toml": "version = \"8.2.0\"\n",
+            "docs/GUIDE.md": "Last updated: 2026-11-11 - Applies to: velesdb-core 8.1.0\n"
+          },
+          "accepts": {
+            "Cargo.toml": "version = \"8.2.0\"\n",
+            "docs/GUIDE.md": "Last updated: 2026-11-11 - Applies to: velesdb-core 8.2.0\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a test asserting a hardcoded version literal — the serve_tests.rs \"8.1.0\" that failed the #2749 back-merge CI",
+          "files": {
+            "Cargo.toml": "version = \"8.2.0\"\n",
+            "crates/velesdb-cli/tests/serve_tests.rs": "assert!(get(port, \"/v1/health\").is_some_and(|b| b.contains(\"8.1.0\")));\n"
+          },
+          "accepts": {
+            "Cargo.toml": "version = \"8.2.0\"\n",
+            "crates/velesdb-cli/tests/serve_tests.rs": "assert!(get(port, \"/v1/health\").is_some_and(|b| b.contains(env!(\"CARGO_PKG_VERSION\"))));\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": 2751,
+        "summary": "The --base diff mode (a PR must not edit a stamp line) is exercised in CI with the PR base sha; registry vectors cover the structural footer-vs-Cargo.toml coherence and the hardcoded test literal. Stamps inside CHANGELOGs are deliberately out of scope — check-changelog-zones owns those files."
+      }
+    },
+    {
+      "script": "scripts/check-pub-parity.py",
+      "purpose": "A `pub` item of the last release must stay `pub` on the working branch — a semver hotfix merged on main only (the pub->pub(crate) of lib.rs in #2749, which merged silently with no conflict marker) is refused (#2751 family C).",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "lint",
+      "required": true,
+      "mode": "strict",
+      "self_test": "scripts.tests.test_check_pub_parity",
+      "self_test_required": true,
+      "must_refuse": [
+        {
+          "vector": "a pub fn of the release snapshot narrowed to pub(crate) in the tree — the silent lib.rs case of #2749",
+          "files": {
+            "crates/velesdb-core/src/simd_neon_prefetch.rs": "pub(crate) fn prefetch_write_l1(ptr: *const u8) {}\n",
+            "scripts/public-api-snapshot.txt": "crates/velesdb-core/src/simd_neon_prefetch.rs fn prefetch_write_l1\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/simd_neon_prefetch.rs": "pub fn prefetch_write_l1(ptr: *const u8) {}\n",
+            "scripts/public-api-snapshot.txt": "crates/velesdb-core/src/simd_neon_prefetch.rs fn prefetch_write_l1\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        },
+        {
+          "vector": "a pub fn of the release snapshot deleted outright",
+          "files": {
+            "crates/velesdb-core/src/simd_neon_prefetch.rs": "fn gone() {}\n",
+            "scripts/public-api-snapshot.txt": "crates/velesdb-core/src/simd_neon_prefetch.rs fn prefetch_write_l1\n"
+          },
+          "accepts": {
+            "crates/velesdb-core/src/simd_neon_prefetch.rs": "pub fn prefetch_write_l1(ptr: *const u8) {}\n",
+            "scripts/public-api-snapshot.txt": "crates/velesdb-core/src/simd_neon_prefetch.rs fn prefetch_write_l1\n"
+          },
+          "argv": [
+            "--root",
+            "{root}"
+          ]
+        }
+      ],
+      "blind_spot": {
+        "issue": 2751,
+        "summary": "Line-based extraction sees `pub` items declared at line start; a `pub` item behind a macro invocation or a re-export (`pub use`) at a non-standard position is not tracked. Deliberate removals go in scripts/pub-parity-allowlist.txt. The --base git mode is unit-tested with a temp repo; CI uses origin/main (fetch-depth: 0)."
+      }
     }
   ],
   "unwired": [
@@ -1784,5 +1918,5 @@
       "reason": "A measurement harness, not a gate: manual-dispatch probe for #1944 whose exit 1 means 'a case scored fatal' - a result to record, which is why the workflow runs it with `|| true` and fails only on a missing result file. It refuses nothing on any merge path and sits outside CI Success by design."
     }
   ],
-  "last_updated": "2026-11-07"
+  "last_updated": "2026-11-11"
 }

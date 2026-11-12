@@ -1,0 +1,2 @@
+# Historical version fixtures in test assertions, one `path literal` per line.
+crates/velesdb-core/src/config_tests.rs 7.0.0
