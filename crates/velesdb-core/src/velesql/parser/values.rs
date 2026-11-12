@@ -82,6 +82,13 @@ impl Parser {
         let interval_str =
             crate::velesql::parser::helpers::unescape_string_literal(string_pair.as_str());
         let interval_value = Self::parse_interval_string(&interval_str)?;
+        if interval_value.checked_seconds().is_none() {
+            return Err(ParseError::syntax(
+                0,
+                &interval_str,
+                "INTERVAL length overflows the supported range",
+            ));
+        }
         Ok(TemporalExpr::Interval(interval_value))
     }
 

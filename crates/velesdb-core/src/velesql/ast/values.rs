@@ -146,8 +146,14 @@ impl TemporalExpr {
         match self {
             Self::Now => now,
             Self::Interval(iv) => iv.to_seconds(),
-            Self::Subtract(left, right) => left.to_epoch_seconds() - right.to_epoch_seconds(),
-            Self::Add(left, right) => left.to_epoch_seconds() + right.to_epoch_seconds(),
+            // Saturating: an extreme operand clamps to the i64 range instead
+            // of panicking (debug) or wrapping to a meaningless instant (release).
+            Self::Subtract(left, right) => left
+                .to_epoch_seconds()
+                .saturating_sub(right.to_epoch_seconds()),
+            Self::Add(left, right) => left
+                .to_epoch_seconds()
+                .saturating_add(right.to_epoch_seconds()),
         }
     }
 }
@@ -162,17 +168,19 @@ pub struct IntervalValue {
 }
 
 impl IntervalValue {
-    /// Converts the interval to seconds.
+    /// Converts the interval to seconds, saturating at the `i64` bounds.
+    ///
+    /// The parser rejects an interval whose length overflows, so saturation
+    /// only applies to values built directly through the public fields.
     #[must_use]
     pub fn to_seconds(&self) -> i64 {
-        match self.unit {
-            IntervalUnit::Seconds => self.magnitude,
-            IntervalUnit::Minutes => self.magnitude * 60,
-            IntervalUnit::Hours => self.magnitude * 3600,
-            IntervalUnit::Days => self.magnitude * 86400,
-            IntervalUnit::Weeks => self.magnitude * 604_800,
-            IntervalUnit::Months => self.magnitude * 2_592_000,
-        }
+        self.magnitude.saturating_mul(self.unit.seconds())
+    }
+
+    /// Converts the interval to seconds, or `None` if the result overflows `i64`.
+    #[must_use]
+    pub(crate) fn checked_seconds(&self) -> Option<i64> {
+        self.magnitude.checked_mul(self.unit.seconds())
     }
 }
 
@@ -243,4 +251,19 @@ pub enum IntervalUnit {
     Weeks,
     /// Months.
     Months,
+}
+
+impl IntervalUnit {
+    /// Length of one unit in seconds (a month counts as 30 days).
+    #[must_use]
+    pub(crate) const fn seconds(self) -> i64 {
+        match self {
+            Self::Seconds => 1,
+            Self::Minutes => 60,
+            Self::Hours => 3600,
+            Self::Days => 86_400,
+            Self::Weeks => 604_800,
+            Self::Months => 2_592_000,
+        }
+    }
 }

@@ -67,6 +67,23 @@ fn test_interval_to_seconds() {
 }
 
 #[test]
+fn test_interval_to_seconds_saturates() {
+    let huge = IntervalValue {
+        magnitude: i64::MAX,
+        unit: IntervalUnit::Days,
+    };
+    assert_eq!(huge.to_seconds(), i64::MAX);
+    assert_eq!(huge.checked_seconds(), None);
+
+    let months = IntervalValue {
+        magnitude: -2,
+        unit: IntervalUnit::Months,
+    };
+    assert_eq!(months.to_seconds(), -5_184_000);
+    assert_eq!(months.checked_seconds(), Some(-5_184_000));
+}
+
+#[test]
 fn test_temporal_now() {
     let expr = TemporalExpr::Now;
     let epoch = expr.to_epoch_seconds();

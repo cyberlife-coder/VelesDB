@@ -100,6 +100,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **VelesQL: two integer overflows reachable from query text** (2026-11-12).
+  A MATCH with a start-node `similarity()` and `LIMIT` above `usize::MAX / 100`
+  overflowed the planner's over-fetch bound — a debug panic, and in release a
+  failed `clamp` assertion that aborts the process under `panic = "abort"`;
+  the bound now saturates. An `INTERVAL` whose length overflows `i64` seconds
+  (e.g. `'9223372036854775807 days'`) is now a parse error instead of a panic
+  (debug) or a silently wrapped timestamp (release), and `NOW() ± INTERVAL`
+  arithmetic saturates.
 - **CLI accepts premium-issued license shapes** (#2686): `max_instances`
   accepts the u32::MAX unlimited sentinel (i64 widening) and perpetual
   `expires_at` renders as `Never` instead of wrapping to 1969 — pinned by
