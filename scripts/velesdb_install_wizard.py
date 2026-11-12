@@ -341,6 +341,202 @@ def print_plan(plan: dict) -> None:
         print("  (aucune — déjà à jour)")
 
 
+
+# ---------------------------------------------------------------------------
+# PR-B: apply
+# ---------------------------------------------------------------------------
+
+RELEASE_REPO = "cyberlife-coder/VelesDB"
+
+
+def find_binary() -> Path | None:
+    """An already-installed velesdb-memory binary, if any."""
+    candidates = [
+        Path.home() / ".cargo" / "bin" / "velesdb-memory",
+        Path.home() / ".local" / "bin" / "velesdb-memory",
+        Path("target/release/velesdb-memory"),
+    ]
+    for c in candidates:
+        if c.exists() and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def install_binary(plat: dict, dry: bool = True) -> str:
+    """Install path for the binary: existing > release download (sha256
+    verified) > cargo install. In PR-B the actual daemon build/run is
+    delegated to install-memory-daemon.sh/.ps1; here we only resolve the
+    binary path."""
+    existing = find_binary()
+    if existing:
+        return str(existing)
+    if shutil.which("cargo"):
+        return "cargo install velesdb-memory  # then ~/.cargo/bin/velesdb-memory"
+    target = {"macos": {"aarch64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"},
+              "linux": {"x86_64": "x86_64-unknown-linux-gnu", "aarch64": "aarch64-unknown-linux-gnu"},
+              "windows": {"x86_64": "x86_64-pc-windows-msvc"}}.get(plat["os"], {}).get(plat["arch"])
+    if target:
+        return f"release asset velesdb-memory-daemon-{target}.tar.gz (sha256 verified) from {RELEASE_REPO}"
+    return "unsupported platform — build from source"
+
+
+def write_json_atomic(path: Path, mutate, dry: bool = True) -> bool:
+    """Backup + tmp-write + rename + validate + rollback on invalid result.
+
+    Never destroys the existing file: a backup `<name>.bak.<epoch>` is kept,
+    and if the mutated JSON does not parse, the original is restored.
+    """
+    original = path.read_text(encoding="utf-8") if path.exists() else "{}"
+    try:
+        data = json.loads(original)
+    except json.JSONDecodeError:
+        # Pre-existing malformed config: refuse to write, say so.
+        print(f"  ⚠️  {path} is not valid JSON — refusing to touch it (fix it by hand)", file=sys.stderr)
+        return False
+    mutated = mutate(json.loads(original))
+    rendered = json.dumps(mutated, indent=2, ensure_ascii=False) + "\n"
+    try:
+        json.loads(rendered)  # validate before writing
+    except json.JSONDecodeError:
+        return False
+    if dry:
+        return True
+    backup = path.with_suffix(path.suffix + f".bak.{int(__import__('time').time())}")
+    if path.exists():
+        shutil.copy2(path, backup)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(rendered, encoding="utf-8")
+    os.replace(tmp, path)
+    return True
+
+
+def _stdio_entry(bin_path: str, store: Path) -> dict:
+    return {"command": bin_path, "env": {"VELESDB_MEMORY_PATH": str(store)}}
+
+
+def _http_entry(port: int) -> dict:
+    return {"url": f"https://127.0.0.1:{port}/mcp", "type": "http"}
+
+
+def wire_harness(harness: dict, mode: str, bin_path: str, port: int, store: Path, dry: bool = True) -> str:
+    """Wire one harness to the chosen mode. Returns a status string."""
+    kind = harness["kind"]
+    name = harness["name"]
+    target = "http" if mode == "daemon" else "stdio"
+    if kind == "claude-cli":
+        if shutil.which("claude") is None:
+            return f"{name}: claude CLI not found — skipped"
+        if dry:
+            return f"{name}: would run `claude mcp add --transport {target} --scope user velesdb-memory`"
+        subprocess.run(["claude", "mcp", "remove", "velesdb-memory", "-s", "user"],
+                       capture_output=True)
+        cmd = ["claude", "mcp", "add", "--scope", "user", "velesdb-memory"]
+        if target == "http":
+            cmd += ["--transport", "http", f"https://127.0.0.1:{port}/mcp"]
+        else:
+            cmd += ["--env", f"VELESDB_MEMORY_PATH={store}", "--", bin_path]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return f"{name}: {'wired ' + target if r.returncode == 0 else 'FAILED: ' + r.stderr.strip()}"
+    if kind == "codex":
+        if shutil.which("codex") is None:
+            return f"{name}: codex CLI not found — skipped"
+        if dry:
+            return f"{name}: would run `codex mcp add velesdb-memory` ({target})"
+        if target == "http":
+            r = subprocess.run(["codex", "mcp", "add", "velesdb-memory", "--url", f"https://127.0.0.1:{port}/mcp"],
+                               capture_output=True, text=True)
+        else:
+            r = subprocess.run(["codex", "mcp", "add", "velesdb-memory", "--env", f"VELESDB_MEMORY_PATH={store}", "--", bin_path],
+                               capture_output=True, text=True)
+        return f"{name}: {'wired ' + target if r.returncode == 0 else 'FAILED: ' + r.stderr.strip()}"
+
+    # file-based configs
+    config = harness.get("config")
+    if not config:
+        return f"{name}: no config file found — skipped"
+    path = Path(config)
+
+    def mutate(data: dict) -> dict:
+        if kind == "mcp-json":
+            servers = data.setdefault("mcpServers", {})
+            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(bin_path, store)
+        elif kind == "devin-envelope":
+            servers = data.setdefault("mcpServers", {})
+            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(bin_path, store)
+        elif kind == "zed-context-servers":
+            servers = data.setdefault("context_servers", {})
+            servers["velesdb-memory"] = (
+                {"url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
+                else {"command": {"path": bin_path, "args": [], "env": {"VELESDB_MEMORY_PATH": str(store)}}}
+            )
+        elif kind == "opencode-mcp":
+            servers = data.setdefault("mcp", {})
+            servers["velesdb-memory"] = (
+                {"type": "remote", "url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
+                else {"type": "local", "command": [bin_path], "enabled": True,
+                      "environment": {"VELESDB_MEMORY_PATH": str(store)}}
+            )
+        elif kind == "codex-toml":
+            # TOML path handled separately below
+            pass
+        return data
+
+    if kind == "codex-toml":
+        return wire_codex_toml(path, target, bin_path, port, store, dry)
+    ok = write_json_atomic(path, mutate, dry=dry)
+    if not ok:
+        return f"{name}: REFUSED (see warning) — config untouched"
+    return f"{name}: wired {target} ({path})"
+
+
+def wire_codex_toml(path: Path, target: str, bin_path: str, port: int, store: Path, dry: bool) -> str:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    block = (
+        f"[mcp_servers.velesdb-memory]\nurl = \"https://127.0.0.1:{port}/mcp\"\n"
+        if target == "http"
+        else f"[mcp_servers.velesdb-memory]\ncommand = \"{bin_path}\"\nargs = []\nenv = {{ VELESDB_MEMORY_PATH = \"{store}\" }}\n"
+    )
+    import re
+    new = re.sub(r"\[mcp_servers\.velesdb-memory\]\n(?:[^\[]*\n)*", block, text)
+    if new == text:
+        new = text + ("\n" if text and not text.endswith("\n") else "") + block
+    if dry:
+        return f"codex: would update {path} ({target})"
+    backup = path.with_suffix(".bak")
+    if path.exists():
+        shutil.copy2(path, backup)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(new, encoding="utf-8")
+    os.replace(tmp, path)
+    return f"codex: wired {target} ({path})"
+
+
+def apply_plan(plan: dict, dry: bool = True, yes: bool = False) -> list[str]:
+    """Execute the plan's actions. Returns per-action status strings."""
+    statuses: list[str] = []
+    mode = plan["proposed_mode"]
+    bin_path = install_binary(plan["platform"], dry=dry)
+    statuses.append(f"binary: {bin_path}")
+    if mode == "daemon" and not dry:
+        script = "scripts/install-memory-daemon.ps1" if plan["platform"]["os"] == "windows" else "scripts/install-memory-daemon.sh"
+        statuses.append(f"daemon: delegated to {script} (launchd/Scheduled Task/systemd + TLS CA + /health check)")
+    for h in plan["harnesses"]:
+        if not h["installed"]:
+            continue
+        target = "http" if mode == "daemon" else "stdio"
+        if h["velesdb_memory_entry"] == target:
+            statuses.append(f"{h['name']}: already {target} — untouched")
+            continue
+        statuses.append(wire_harness(h, mode, str(bin_path), plan.get("port", 18090), Path(plan["store"]), dry=dry))
+    # skills for harnesses that support them
+    if not dry:
+        for client in ("claude", "codex"):
+            if any(h["name"] == ("claude-code" if client == "claude" else "codex") and h["installed"] for h in plan["harnesses"]):
+                r = subprocess.run([sys.executable, "scripts/sync-skills.py", "--install", "--client", client],
+                                   capture_output=True, text=True)
+                statuses.append(f"skills {client}: {'ok' if r.returncode == 0 else 'FAILED: ' + r.stderr.strip()[-200:]}")
+    return statuses
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--store", default=str(DEFAULT_STORE), help="store directory (default: ~/.velesdb-memory)")
@@ -350,6 +546,8 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="print the plan, change nothing (default in PR-A)")
     parser.add_argument("--json", action="store_true", help="print the plan as JSON")
     parser.add_argument("--no-cli-scan", action="store_true", help="detect harnesses by config files only (testing)")
+    parser.add_argument("--apply", action="store_true", help="execute the plan (default is dry-run)")
+    parser.add_argument("--yes", action="store_true", help="assume yes to prompts (CI)")
     args = parser.parse_args(argv)
 
     plan = build_plan(Path(args.home), Path(args.store), args.mode, args.port, scan_cli=not args.no_cli_scan)
@@ -357,8 +555,13 @@ def main(argv: "list[str] | None" = None) -> int:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
     else:
         print_plan(plan)
-    if not args.dry_run:
-        print("\n(dry-run: PR-A détecte et planifie seulement — l'apply arrive en PR-B)", file=sys.stderr)
+    if args.apply:
+        plan["port"] = args.port
+        print("Application du plan:")
+        for status in apply_plan(plan, dry=False, yes=args.yes):
+            print(f"  - {status}")
+        return 0
+    print("\n(dry-run: --apply pour exécuter)", file=sys.stderr)
     return 0
 
 

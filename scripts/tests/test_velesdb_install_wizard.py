@@ -171,3 +171,72 @@ class PlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyTests(unittest.TestCase):
+    def _home(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name)
+
+    def test_write_json_atomic_writes_and_backs_up(self):
+        home = self._home()
+        cfg = home / "mcp.json"
+        cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "/x"}}}), encoding="utf-8")
+        ok = mod.write_json_atomic(cfg, lambda d: {**d, "mcpServers": {**d["mcpServers"], "velesdb-memory": {"url": "https://127.0.0.1:18090/mcp"}}}, dry=False)
+        self.assertTrue(ok)
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        self.assertEqual(data["mcpServers"]["velesdb-memory"]["url"], "https://127.0.0.1:18090/mcp")
+        self.assertIn("other", data["mcpServers"])  # foreign entries preserved
+        self.assertTrue(list(home.glob("mcp.json.bak.*")))  # backup kept
+
+    def test_write_json_atomic_refuses_malformed(self):
+        home = self._home()
+        cfg = home / "mcp.json"
+        cfg.write_text("{broken", encoding="utf-8")
+        ok = mod.write_json_atomic(cfg, lambda d: d, dry=False)
+        self.assertFalse(ok)
+        self.assertEqual(cfg.read_text(encoding="utf-8"), "{broken")  # untouched
+
+    def test_write_json_atomic_dry_run_changes_nothing(self):
+        home = self._home()
+        cfg = home / "mcp.json"
+        cfg.write_text("{}", encoding="utf-8")
+        ok = mod.write_json_atomic(cfg, lambda d: {"x": 1}, dry=True)
+        self.assertTrue(ok)
+        self.assertEqual(cfg.read_text(encoding="utf-8"), "{}")
+
+    def test_wire_mcp_json_stdio_to_http(self):
+        home = self._home()
+        cfg = home / ".cursor" / "mcp.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {"command": "/old/bin"}}}), encoding="utf-8")
+        harness = {"name": "cursor", "kind": "mcp-json", "config": str(cfg), "velesdb_memory_entry": "stdio", "installed": True}
+        status = mod.wire_harness(harness, "daemon", "/bin/velesdb-memory", 18090, home / "store", dry=False)
+        self.assertIn("wired http", status)
+        entry = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
+        self.assertEqual(entry["url"], "https://127.0.0.1:18090/mcp")
+
+    def test_wire_codex_toml_http(self):
+        home = self._home()
+        cfg = home / ".codex" / "config.toml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text('[mcp_servers.other]\ncommand = "/x"\n', encoding="utf-8")
+        status = mod.wire_codex_toml(cfg, "http", "/bin/velesdb-memory", 18090, home / "store", dry=False)
+        self.assertIn("wired http", status)
+        text = cfg.read_text(encoding="utf-8")
+        self.assertIn('[mcp_servers.velesdb-memory]', text)
+        self.assertIn('url = "https://127.0.0.1:18090/mcp"', text)
+        self.assertIn("[mcp_servers.other]", text)  # foreign table preserved
+
+    def test_apply_plan_dry_run_touches_nothing(self):
+        home = self._home()
+        (home / ".cursor").mkdir()
+        cfg = home / ".cursor" / "mcp.json"
+        cfg.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+        plan = mod.build_plan(home, home / "store", "daemon", 18090, scan_cli=False)
+        plan["port"] = 18090
+        before = cfg.read_text(encoding="utf-8")
+        statuses = mod.apply_plan(plan, dry=True)
+        self.assertEqual(cfg.read_text(encoding="utf-8"), before)
+        self.assertTrue(any("cursor" in s for s in statuses))
