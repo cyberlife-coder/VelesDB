@@ -286,7 +286,9 @@ impl MatchQueryPlanner {
         // Reason: limit, graph_factor and selectivity are all positive, so ceil() >= 0.
         #[allow(clippy::cast_sign_loss)]
         let estimated = (limit as f64 * graph_factor / selectivity).ceil() as usize;
-        estimated.clamp(limit, limit * 100)
+        // Saturating: LIMIT is user-supplied and uncapped here, so `limit * 100`
+        // could overflow (a panic in debug, a failed `clamp` assert in release).
+        estimated.clamp(limit, limit.saturating_mul(100))
     }
 
     /// Estimate selectivity based on similarity threshold.

@@ -348,3 +348,16 @@ fn test_planner_never_runs_vector_first_beside_graph_first() {
         "got {strategy:?}"
     );
 }
+
+#[test]
+fn test_planner_saturates_top_k_for_huge_limit() {
+    // A user-supplied LIMIT near `u64::MAX` used to overflow `limit * 100`
+    // (debug panic, failed `clamp` assert in release).
+    let match_clause = make_match_clause(true, Some(u64::MAX));
+    let strategy = MatchQueryPlanner::plan(&match_clause, &default_stats());
+
+    let MatchExecutionStrategy::VectorFirst { top_k, .. } = strategy else {
+        panic!("expected VectorFirst, got {strategy:?}");
+    };
+    assert_eq!(top_k, usize::MAX);
+}

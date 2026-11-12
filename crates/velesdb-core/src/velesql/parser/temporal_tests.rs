@@ -205,3 +205,36 @@ fn test_interval_shorthand_units() {
         }
     }
 }
+
+#[test]
+fn test_parse_interval_rejects_overflowing_length() {
+    // i64::MAX days does not fit in i64 seconds: a parse error, not a panic
+    // (debug) or a silently wrapped timestamp (release).
+    let query = "SELECT * FROM events WHERE ts > NOW() - INTERVAL '9223372036854775807 days'";
+    let err = Parser::parse(query).expect_err("overflowing INTERVAL must be rejected");
+    assert!(
+        err.to_string().contains("overflows"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_parse_interval_accepts_largest_representable_length() {
+    let query = "SELECT * FROM events WHERE ts > INTERVAL '9223372036854775807 seconds'";
+    assert!(Parser::parse(query).is_ok());
+}
+
+#[test]
+fn test_temporal_arithmetic_saturates_instead_of_overflowing() {
+    // `-i64::MIN` seconds parses (it fits), but `NOW() - i64::MIN` overflows.
+    let query = "SELECT * FROM events WHERE ts > NOW() - INTERVAL '-9223372036854775808 seconds'";
+    let parsed = Parser::parse(query).expect("representable INTERVAL should parse");
+    let Some(crate::velesql::Condition::Comparison(cmp)) = parsed.select.where_clause.as_ref()
+    else {
+        panic!("expected Comparison, got {:?}", parsed.select.where_clause);
+    };
+    let Value::Temporal(expr) = &cmp.value else {
+        panic!("expected Temporal, got {:?}", cmp.value);
+    };
+    assert_eq!(expr.to_epoch_seconds(), i64::MAX);
+}
