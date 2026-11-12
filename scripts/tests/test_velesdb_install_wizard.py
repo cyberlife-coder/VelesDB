@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "velesdb_install_wizard.py"
@@ -287,3 +288,100 @@ class LockSwitchTests(unittest.TestCase):
         servers = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
         self.assertEqual(list(servers).count("velesdb-memory"), 1)
         self.assertNotIn("command", servers["velesdb-memory"])
+
+
+class CrossPlatformDetectionTests(unittest.TestCase):
+    """The HARNESSES table is OS-agnostic: the same detection must find a
+    harness whether its config lives under ~ (mac/linux) or under %APPDATA%
+    / %USERPROFILE% (Windows). #2759 follow-up: detection on every platform."""
+
+    def _home(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name)
+
+    def test_expand_tilde_and_env_vars(self):
+        home = self._home()
+        with unittest.mock.patch.dict(os.environ, {"APPDATA": str(home / "AppData" / "Roaming")}):
+            p = mod._expand("%APPDATA%/Zed/settings.json", home)
+            self.assertEqual(p, home / "AppData" / "Roaming" / "Zed" / "settings.json")
+        self.assertEqual(mod._expand("~/.cursor/mcp.json", home), home / ".cursor" / "mcp.json")
+
+    def test_expand_unresolved_windows_var_never_exists(self):
+        home = self._home()
+        env = {k: v for k, v in os.environ.items() if k not in ("APPDATA", "USERPROFILE", "LOCALAPPDATA")}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            p = mod._expand("%APPDATA%/Claude/claude_desktop_config.json", home)
+            self.assertFalse(p.exists())
+            self.assertNotIn("%", str(p))
+
+    def test_linux_home_layout(self):
+        home = self._home()
+        for rel in (
+            ".config/zed/settings.json",
+            ".config/opencode/opencode.json",
+            ".config/devin/config.json",
+            ".cursor/mcp.json",
+            ".codex/config.toml",
+            ".codeium/windsurf/mcp_config.json",
+            ".vibe/mcp.json",
+        ):
+            path = home / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+        found = {h["name"]: h for h in mod.detect_harnesses(home, "linux", scan_cli=False)}
+        for name in ("zed", "opencode", "devin", "cursor", "codex", "windsurf", "vibe"):
+            self.assertTrue(found[name]["installed"], name)
+            self.assertIsNotNone(found[name]["config"], name)
+
+    def test_macos_home_layout(self):
+        home = self._home()
+        mac = [
+            "Library/Application Support/Claude/claude_desktop_config.json",
+            "Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        ]
+        for rel in mac:
+            path = home / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+        found = {h["name"]: h for h in mod.detect_harnesses(home, "macos", scan_cli=False)}
+        self.assertTrue(found["claude-desktop"]["installed"])
+        self.assertTrue(found["cline"]["installed"])
+        self.assertIn("Library/Application Support", found["claude-desktop"]["config"])
+
+    def test_windows_home_layout(self):
+        home = self._home()
+        appdata = home / "AppData" / "Roaming"
+        userprofile = home  # on Windows %USERPROFILE% is the home itself
+        win = [
+            appdata / "Claude" / "claude_desktop_config.json",
+            appdata / "Zed" / "settings.json",
+            appdata / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",
+            appdata / "devin" / "config.json",
+            userprofile / ".cursor" / "mcp.json",
+            userprofile / ".codex" / "config.toml",
+        ]
+        for path in win:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}", encoding="utf-8")
+        env = {"APPDATA": str(appdata), "USERPROFILE": str(userprofile)}
+        with unittest.mock.patch.dict(os.environ, env):
+            found = {h["name"]: h for h in mod.detect_harnesses(home, "windows", scan_cli=False)}
+        for name in ("claude-desktop", "zed", "cline", "devin", "cursor", "codex"):
+            self.assertTrue(found[name]["installed"], name)
+            self.assertIsNotNone(found[name]["config"], name)
+            self.assertNotIn("%", found[name]["config"], name)
+
+    def test_windows_vars_do_not_leak_into_linux_scan(self):
+        # APPDATA set in the environment must not make a linux scan match a
+        # Windows-style relative candidate by accident.
+        home = self._home()
+        (home / ".config" / "zed").mkdir(parents=True)
+        (home / ".config" / "zed" / "settings.json").write_text("{}", encoding="utf-8")
+        with unittest.mock.patch.dict(os.environ, {"APPDATA": str(home / "AppData" / "Roaming")}):
+            found = {h["name"]: h for h in mod.detect_harnesses(home, "linux", scan_cli=False)}
+        self.assertEqual(found["zed"]["config"], str(home / ".config" / "zed" / "settings.json"))
+
+    def test_every_harness_has_at_least_one_candidate_or_cli(self):
+        for h in mod.HARNESSES:
+            self.assertTrue(h["configs"] or h["cli"], h["name"])
