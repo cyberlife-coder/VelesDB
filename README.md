@@ -46,7 +46,13 @@ Query: "tech + music"
 
 An embedding model determines the vector dimension, while your similarity semantics determine the metric. Both are fixed when a collection is created; to change either, create a new collection and re-index your documents.
 
-**Give your agent a persistent memory — three more commands:**
+**Give your agent a persistent memory — the guided installer:**
+
+```bash
+python3 scripts/velesdb_install_wizard.py --apply    # detects your agent harnesses, wires velesdb-memory, installs the skills
+```
+
+The wizard checks which harnesses are installed (Claude Code, Codex, Cursor, …), detects whether the memory store is already locked by a running process (`VELES-031`), and picks single-client stdio or one shared local daemon accordingly. Prefer the manual commands? `cargo install velesdb-memory`, then `claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory`, and the skills tarball as before:
 
 ```bash
 cargo install velesdb-memory                                    # the local MCP memory server

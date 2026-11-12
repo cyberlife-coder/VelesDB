@@ -85,6 +85,15 @@ Each subsystem uses a dedicated VelesDB VectorCollection. Data is automatically 
 
 ### Install
 
+For the **MCP server** (`velesdb-memory`, used by agent harnesses), the guided
+installer detects your harnesses and the store lock and wires everything:
+
+```bash
+python3 scripts/velesdb_install_wizard.py --apply    # see docs/guides/MCP_SERVER_SETUP.md
+```
+
+For the **Python SDK** (embedded, same process):
+
 ```bash
 pip install velesdb
 ```
