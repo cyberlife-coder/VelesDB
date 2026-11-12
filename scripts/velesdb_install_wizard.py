@@ -273,6 +273,13 @@ def _lock_holder(lock_path: Path) -> tuple[int | None, str | None]:
     return None, None
 
 
+def lock_holder_is_memory(lock: dict) -> bool:
+    """True when the process holding the store lock is a direct velesdb-memory
+    (stdio spawned by a harness), not the shared daemon or velesdb-server."""
+    cmd = (lock.get("holder_cmd") or "").lower()
+    return "velesdb-memory" in cmd and "daemon" not in cmd
+
+
 def propose_mode(harnesses: list[dict], lock: dict) -> str:
     """daemon when several harnesses are installed or the store is already
     locked by a live direct process; stdio for the single-harness case."""
@@ -293,6 +300,12 @@ def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: b
     lock = detect_lock(store)
     proposed = mode or propose_mode(harnesses, lock)
     actions = []
+    if lock["locked"] and lock_holder_is_memory(lock):
+        actions.append(
+            {"step": "lock-switch",
+             "detail": f"store lock held by direct velesdb-memory pid {lock['holder_pid']} "
+                       f"({lock['holder_cmd']}) — switch that harness from stdio to the shared daemon"}
+        )
     if proposed == "daemon":
         actions.append(
             {"step": "daemon", "detail": f"one shared HTTPS daemon on 127.0.0.1:{port} holds the lock once (install-memory-daemon)"}
@@ -336,7 +349,10 @@ def print_plan(plan: dict) -> None:
         print("  (aucun)")
     print("Actions prévues:")
     for a in plan["actions"]:
-        print(f"  - {a['step']}: {a.get('harness', a.get('detail', ''))} {a.get('from', '')}→{a.get('to', '')}".strip())
+        line = f"  - {a['step']}: {a.get('harness', a.get('detail', ''))}"
+        if a.get("from"):
+            line += f" {a['from']}→{a['to']}"
+        print(line.strip())
     if not plan["actions"]:
         print("  (aucune — déjà à jour)")
 
@@ -459,6 +475,7 @@ def wire_harness(harness: dict, mode: str, bin_path: str, port: int, store: Path
     def mutate(data: dict) -> dict:
         if kind == "mcp-json":
             servers = data.setdefault("mcpServers", {})
+            # replace in place: the stdio entry is overwritten, never duplicated
             servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(bin_path, store)
         elif kind == "devin-envelope":
             servers = data.setdefault("mcpServers", {})

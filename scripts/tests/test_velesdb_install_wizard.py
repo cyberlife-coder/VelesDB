@@ -240,3 +240,50 @@ class ApplyTests(unittest.TestCase):
         statuses = mod.apply_plan(plan, dry=True)
         self.assertEqual(cfg.read_text(encoding="utf-8"), before)
         self.assertTrue(any("cursor" in s for s in statuses))
+
+
+class LockSwitchTests(unittest.TestCase):
+    def _home(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name)
+
+    def test_holder_is_memory_detection(self):
+        self.assertTrue(mod.lock_holder_is_memory({"holder_cmd": "/Users/x/.cargo/bin/velesdb-memory"}))
+        self.assertFalse(mod.lock_holder_is_memory({"holder_cmd": "velesdb-memory-daemon"}))
+        self.assertFalse(mod.lock_holder_is_memory({"holder_cmd": "/usr/bin/velesdb-server"}))
+        self.assertFalse(mod.lock_holder_is_memory({"holder_cmd": None}))
+
+    def test_lock_switch_action_in_plan(self):
+        home = self._home()
+        (home / ".cursor").mkdir()
+        (home / ".cursor" / "mcp.json").write_text(
+            json.dumps({"mcpServers": {"velesdb-memory": {"command": "/x/velesdb-memory"}}}), encoding="utf-8"
+        )
+        store = home / "store"
+        store.mkdir()
+        import fcntl
+        fd = os.open(store / mod.LOCK_FILENAME, os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            plan = mod.build_plan(home, store, None, 18090, scan_cli=False)
+            plan["lock"]["holder_cmd"] = "/x/.cargo/bin/velesdb-memory"  # simulate ps result
+            # rebuild with the simulated holder
+            lock = plan["lock"]
+            lock["holder_cmd"] = "/x/.cargo/bin/velesdb-memory"
+            self.assertTrue(mod.lock_holder_is_memory(lock))
+            self.assertEqual(plan["proposed_mode"], "daemon")
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def test_stdio_entry_replaced_not_duplicated(self):
+        home = self._home()
+        cfg = home / ".cursor" / "mcp.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {"command": "/old"}}}), encoding="utf-8")
+        harness = {"name": "cursor", "kind": "mcp-json", "config": str(cfg), "velesdb_memory_entry": "stdio", "installed": True}
+        mod.wire_harness(harness, "daemon", "/bin/velesdb-memory", 18090, home / "store", dry=False)
+        servers = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
+        self.assertEqual(list(servers).count("velesdb-memory"), 1)
+        self.assertNotIn("command", servers["velesdb-memory"])
