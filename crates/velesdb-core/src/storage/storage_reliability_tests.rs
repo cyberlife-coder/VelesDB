@@ -320,6 +320,84 @@ fn test_legacy_compaction_marker_leading_byte_detected() {
     );
 }
 
+#[test]
+fn test_torn_only_wal_tail_truncated_so_later_write_recovers() {
+    // #2754: a WAL holding only a torn record was classified legacy and never
+    // truncated, so the next append landed behind the garbage and was lost on
+    // the following open.
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+
+    // Torn store record: op=1, id=7, len=12 (one dim-3 vector), 3 data bytes.
+    let mut wal = vec![1u8];
+    wal.extend_from_slice(&7u64.to_le_bytes());
+    wal.extend_from_slice(&12u32.to_le_bytes());
+    wal.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+    std::fs::write(path.join("vectors.wal"), &wal).unwrap();
+
+    // Reopen: nothing in the file is recoverable, so the torn tail must be
+    // truncated and the next append must start at a frame boundary.
+    {
+        let storage = MmapStorage::new(&path, dim).unwrap();
+        assert_eq!(
+            std::fs::metadata(path.join("vectors.wal")).unwrap().len(),
+            0,
+            "a torn-only WAL must be truncated at open (#2754)"
+        );
+        drop(storage);
+    }
+
+    // Acknowledged write, then a crash before the index is persisted.
+    {
+        let mut storage = MmapStorage::new(&path, dim).unwrap();
+        storage.store(5, &[1.0, 2.0, 3.0]).unwrap();
+        storage.wal().write().flush().unwrap();
+        storage.wal().write().get_ref().sync_all().unwrap();
+    }
+
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    assert_eq!(
+        storage.retrieve(5).unwrap(),
+        Some(vec![1.0, 2.0, 3.0]),
+        "a write appended after the truncated tail must be recovered (#2754)"
+    );
+}
+
+#[test]
+fn test_genuine_legacy_wal_not_truncated_on_open() {
+    // A fully legacy-framed WAL is skipped by replay by design; it must NOT be
+    // truncated at open (#2754 only truncates unframed tails).
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let dim = 3;
+
+    {
+        let storage = MmapStorage::new(&path, dim).unwrap();
+        drop(storage);
+    }
+
+    // Legacy store frame (no CRC): op=1, id=2, len, payload.
+    let mut wal = vec![1u8];
+    wal.extend_from_slice(&2u64.to_le_bytes());
+    let data = vec3_bytes([7.0, 8.0, 9.0]);
+    wal.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wal.extend_from_slice(&data);
+    let wal_len = wal.len() as u64;
+    std::fs::write(path.join("vectors.wal"), &wal).unwrap();
+
+    let storage = MmapStorage::new(&path, dim).unwrap();
+    assert!(
+        storage.retrieve(2).unwrap().is_none(),
+        "legacy WAL entries are not replayed"
+    );
+    assert_eq!(
+        std::fs::metadata(path.join("vectors.wal")).unwrap().len(),
+        wal_len,
+        "an intact legacy WAL must be preserved, not truncated (#2754)"
+    );
+}
+
 // ===========================================================================
 // Issue #318: Windows atomic_replace crash-safety (.bak recovery)
 // ===========================================================================

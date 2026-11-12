@@ -1091,3 +1091,90 @@ fn test_concurrent_retrieve_reads_correct_payloads() {
         h.join().expect("retrieve thread panicked");
     }
 }
+
+// -------------------------------------------------------------------------
+// #2754: a torn tail is truncated at open, so writes acknowledged after
+// recovery survive the next restart (previously they were appended behind the
+// garbage and the next replay never reached them).
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_torn_tail_truncated_at_open_and_later_write_survives_restart() {
+    let temp = storage_with_three_entries();
+    let wal_path = temp.path().join("payloads.log");
+    let good_len = std::fs::metadata(&wal_path).expect("metadata").len();
+    append_raw_to_wal(&wal_path, &[CRC_STORE_MARKER, 0xAA, 0xBB]);
+
+    // Reopen: recovery keeps 1..=3 and truncates the torn tail before any new
+    // append can land behind it.
+    let mut storage = LogPayloadStorage::new(temp.path()).expect("open with torn tail");
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "prior entries must survive the torn tail"
+    );
+    assert_eq!(
+        std::fs::metadata(&wal_path).expect("metadata").len(),
+        good_len,
+        "the torn tail must be truncated at open, not left for later appends"
+    );
+
+    // A write acknowledged after recovery must survive a clean restart.
+    storage
+        .store(99, &json!({ "id": 99 }))
+        .expect("store after recovery");
+    drop(storage);
+
+    let storage = LogPayloadStorage::new(temp.path()).expect("reopen");
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3, 99],
+        "a post-recovery write must survive the next restart (#2754)"
+    );
+    assert_eq!(
+        storage.retrieve(99).expect("retrieve"),
+        Some(json!({ "id": 99 }))
+    );
+}
+
+#[test]
+fn test_torn_tail_after_snapshot_truncated_and_delta_survives_restart() {
+    // Same guarantee on the snapshot path: replay starts at the snapshot's WAL
+    // position, and the torn tail past it must be truncated too.
+    let temp = TempDir::new().expect("temp dir");
+    {
+        let mut storage =
+            LogPayloadStorage::new_with_durability(temp.path(), DurabilityMode::Fsync)
+                .expect("create storage");
+        storage.store(1, &json!({ "id": 1 })).expect("store");
+        storage.store(2, &json!({ "id": 2 })).expect("store");
+        storage.create_snapshot().expect("snapshot");
+    }
+    let wal_path = temp.path().join("payloads.log");
+    let good_len = std::fs::metadata(&wal_path).expect("metadata").len();
+    append_raw_to_wal(&wal_path, &[CRC_STORE_MARKER, 0x01, 0x02]);
+
+    let mut storage = LogPayloadStorage::new(temp.path()).expect("open with torn tail");
+    assert_eq!(
+        std::fs::metadata(&wal_path).expect("metadata").len(),
+        good_len,
+        "torn tail past the snapshot position must be truncated at open"
+    );
+    storage
+        .store(99, &json!({ "id": 99 }))
+        .expect("store after recovery");
+    drop(storage);
+
+    let storage = LogPayloadStorage::new(temp.path()).expect("reopen");
+    let mut ids = storage.ids();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        vec![1, 2, 99],
+        "snapshot + delta replay must see id 99"
+    );
+}

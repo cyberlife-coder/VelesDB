@@ -107,7 +107,13 @@ impl LogPayloadStorage {
 
         let wal = Self::open_wal_writer(&log_path)?;
         let (reader, wal_len) = Self::open_wal_reader(&log_path)?;
-        let (index, last_snapshot_wal_pos) = Self::load_or_replay_index(&path, &log_path, wal_len)?;
+        let (index, last_snapshot_wal_pos, good_len) =
+            Self::load_or_replay_index(&path, &log_path, wal_len)?;
+        // A crash mid-append can leave a torn tail that replay never reaches.
+        // Truncate to the last good record boundary (and fsync) before any new
+        // append, so later writes cannot land behind the garbage and be lost
+        // on the next open (#2754).
+        let write_offset = Self::truncate_torn_tail(&wal, good_len, wal_len)?;
 
         Ok(Self {
             path,
@@ -116,7 +122,7 @@ impl LogPayloadStorage {
             reader: RwLock::new(reader),
             last_snapshot_wal_pos: RwLock::new(last_snapshot_wal_pos),
             durability,
-            write_offset: RwLock::new(wal_len),
+            write_offset: RwLock::new(write_offset),
         })
     }
 
@@ -141,20 +147,49 @@ impl LogPayloadStorage {
         Ok((reader, wal_len))
     }
 
+    /// Truncates a torn/corrupt WAL tail left by a crash mid-append.
+    ///
+    /// Replay stops at the first unreadable record, so every byte beyond
+    /// `good_len` is unreachable by replay; leaving it in place would make
+    /// later appends land behind the garbage, and the next open would stop at
+    /// the garbage again and never reach them (#2754). The prefix below
+    /// `good_len` was already fsynced when written, so truncating to `good_len`
+    /// and fsyncing makes the truncation itself durable before any new write.
+    /// Returns the offset new writes must start from.
+    fn truncate_torn_tail(
+        wal: &io::BufWriter<File>,
+        good_len: u64,
+        wal_len: u64,
+    ) -> io::Result<u64> {
+        if good_len >= wal_len {
+            return Ok(wal_len);
+        }
+        wal.get_ref().set_len(good_len)?;
+        wal.get_ref().sync_all()?;
+        tracing::warn!(
+            kept_bytes = good_len,
+            discarded_bytes = wal_len - good_len,
+            "payload WAL torn tail truncated at open"
+        );
+        Ok(good_len)
+    }
+
     /// Loads the payload index, trying a snapshot first, falling back to full WAL replay.
     ///
-    /// Returns `(index, last_snapshot_wal_position)`.
+    /// Returns `(index, last_snapshot_wal_position, good_wal_len)` where
+    /// `good_wal_len` is where replay stopped: `wal_len` when every record was
+    /// replayed, or the last good record boundary when a torn tail is present.
     fn load_or_replay_index(
         dir: &Path,
         log_path: &Path,
         wal_len: u64,
-    ) -> io::Result<(FxHashMap<u64, u64>, u64)> {
+    ) -> io::Result<(FxHashMap<u64, u64>, u64, u64)> {
         let snapshot_path = dir.join("payloads.snapshot");
         match snapshot::load_snapshot(&snapshot_path) {
             Ok((snapshot_index, snapshot_wal_pos)) => {
-                let index =
+                let (index, good_len) =
                     Self::replay_wal_from(log_path, snapshot_index, snapshot_wal_pos, wal_len)?;
-                Ok((index, snapshot_wal_pos))
+                Ok((index, snapshot_wal_pos, good_len))
             }
             Err(e) => {
                 // `NotFound` is the expected cold-start case (no snapshot yet).
@@ -170,8 +205,9 @@ impl LogPayloadStorage {
                         "payload snapshot failed to load, falling back to full WAL replay"
                     );
                 }
-                let index = Self::replay_wal_from(log_path, FxHashMap::default(), 0, wal_len)?;
-                Ok((index, 0))
+                let (index, good_len) =
+                    Self::replay_wal_from(log_path, FxHashMap::default(), 0, wal_len)?;
+                Ok((index, 0, good_len))
             }
         }
     }
@@ -212,14 +248,18 @@ impl LogPayloadStorage {
     }
 
     /// Replays WAL entries from `start_pos` to `end_pos`, updating the index.
+    ///
+    /// Returns the index and the offset at which replay stopped: `end_pos` when
+    /// every record was replayed, or the start of the first torn/corrupt record
+    /// (the last good record boundary) when replay stopped early.
     fn replay_wal_from(
         log_path: &Path,
         mut index: FxHashMap<u64, u64>,
         start_pos: u64,
         end_pos: u64,
-    ) -> io::Result<FxHashMap<u64, u64>> {
+    ) -> io::Result<(FxHashMap<u64, u64>, u64)> {
         if start_pos >= end_pos {
-            return Ok(index);
+            return Ok((index, end_pos));
         }
 
         let file = File::open(log_path)?;
@@ -242,7 +282,7 @@ impl LogPayloadStorage {
             pos = next_pos;
         }
 
-        Ok(index)
+        Ok((index, pos))
     }
 
     /// Creates a snapshot of the current index state.

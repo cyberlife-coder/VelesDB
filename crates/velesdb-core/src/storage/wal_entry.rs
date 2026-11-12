@@ -19,6 +19,10 @@
 //! last record. [`WalEntry::read`] signals such a tail by returning `None`, and
 //! [`WalEntry::apply`] by returning `Ok(None)`, so the caller stops replay
 //! cleanly and keeps every prior entry rather than failing the collection open.
+//! The "last record" invariant is enforced, not assumed:
+//! [`super::log_payload::LogPayloadStorage`] truncates the WAL to the last good
+//! record boundary at open before appending (`new_with_durability`, #2754), so a
+//! torn tail can never sit mid-file behind later writes.
 //!
 //! The CRC only ever covers the id + payload bytes; it never protects the
 //! framing fields (marker and length) that are read *before* any CRC check. A

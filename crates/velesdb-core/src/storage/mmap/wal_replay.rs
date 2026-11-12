@@ -47,7 +47,7 @@ use crate::storage::sharded_index::ShardedIndex;
 
 use memmap2::MmapMut;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, Read, Seek};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Minimum store entry size: op(1) + id(8) + len(4) + crc(4) = 17.
@@ -126,6 +126,12 @@ pub(crate) fn replay_wal_to_index(
     touched_ids: &mut Vec<u64>,
 ) -> io::Result<usize> {
     let Some((mut reader, file_len)) = open_crc_wal(wal_path)? else {
+        // Not CRC-framed. A genuine legacy WAL is left untouched (replay skips
+        // it by design), but a file with no CRC-valid record and a torn/corrupt
+        // tail holds nothing replay can reach — truncate the tail so later
+        // appends stay frame-aligned instead of landing behind the garbage and
+        // being lost on the next open (#2754).
+        truncate_unframed_tail(wal_path)?;
         return Ok(0);
     };
 
@@ -150,6 +156,84 @@ pub(crate) fn truncate_wal(wal_path: &Path) -> io::Result<()> {
     let file = OpenOptions::new().write(true).open(wal_path)?;
     file.set_len(0)?;
     file.sync_all()
+}
+
+/// Truncates a non-CRC-framed WAL whose tail is not a complete legacy frame.
+///
+/// A genuine legacy WAL (every byte parses as a complete legacy frame) is
+/// preserved: replay skips it by design and the persisted index is
+/// authoritative. Anything else — e.g. a lone torn record left by a crash
+/// during the first append after an empty WAL — contains no CRC-valid record,
+/// so no replay path can recover bytes past the last complete legacy frame.
+/// Truncating there keeps future appends frame-aligned. The recovered state
+/// (the persisted index) is already durable when this runs, so the truncation
+/// is safe to apply immediately.
+fn truncate_unframed_tail(wal_path: &Path) -> io::Result<()> {
+    if !wal_path.exists() {
+        return Ok(());
+    }
+    let file_len = File::open(wal_path)?.metadata()?.len();
+    if file_len == 0 {
+        return Ok(());
+    }
+    let mut reader = BufReader::new(File::open(wal_path)?);
+    let good_len = legacy_frame_boundary(&mut reader, file_len)?;
+    if good_len >= file_len {
+        return Ok(());
+    }
+    let file = OpenOptions::new().write(true).open(wal_path)?;
+    file.set_len(good_len)?;
+    file.sync_all()?;
+    tracing::warn!(
+        kept_bytes = good_len,
+        discarded_bytes = file_len - good_len,
+        "vector WAL unframed tail truncated at open"
+    );
+    Ok(())
+}
+
+/// Scans a WAL as legacy frames (`[1][id:8][len:4][payload]`, `[2][id:8]`, bare
+/// `0x04` marker) and returns the offset just past the last complete frame:
+/// `file_len` when the whole file parses, or the offset of the first
+/// torn/unknown record otherwise.
+fn legacy_frame_boundary(reader: &mut BufReader<File>, file_len: u64) -> io::Result<u64> {
+    let mut good = 0u64;
+    loop {
+        let pos = reader.stream_position()?;
+        if pos >= file_len {
+            return Ok(file_len);
+        }
+        let mut op = [0u8; 1];
+        if reader.read_exact(&mut op).is_err() {
+            return Ok(good);
+        }
+        let frame_len = match op[0] {
+            // Legacy store: op(1) + id(8) + len(4) + payload(len).
+            1 => {
+                let mut header = [0u8; 12];
+                if reader.read_exact(&mut header).is_err() {
+                    return Ok(good);
+                }
+                let len = u64::from(u32::from_le_bytes([
+                    header[8], header[9], header[10], header[11],
+                ]));
+                13u64.saturating_add(len)
+            }
+            // Legacy delete: op(1) + id(8).
+            2 => 9,
+            // Bare legacy compaction marker.
+            4 => 1,
+            _ => return Ok(good),
+        };
+        if pos.saturating_add(frame_len) > file_len {
+            return Ok(good);
+        }
+        let skip = i64::try_from(frame_len).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "legacy WAL frame too large")
+        })?;
+        reader.seek(SeekFrom::Current(skip))?;
+        good = pos + frame_len;
+    }
 }
 
 /// Opens the WAL file and validates it uses CRC32-framed format.

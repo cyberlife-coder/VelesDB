@@ -100,6 +100,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Storage: torn WAL tails are truncated at open** (#2754, 2026-11-12).
+  A crash mid-append left a torn tail in the file; writes appended after
+  recovery landed behind it and were lost on the next restart. The payload
+  WAL (`payloads.log`) is now truncated to the last good record boundary
+  (replay returns its stop position; the file is `set_len` + fsynced before
+  any new append), and the vector WAL (`vectors.wal`) truncates an unframed
+  tail when no CRC-valid record exists, while intact legacy WALs are
+  preserved. Pinned by crash/restart tests for both stores.
 - **VelesQL: two integer overflows reachable from query text** (2026-11-12).
   A MATCH with a start-node `similarity()` and `LIMIT` above `usize::MAX / 100`
   overflowed the planner's over-fetch bound — a debug panic, and in release a
