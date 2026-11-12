@@ -100,6 +100,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Server (graph): `has_more` off-by-one, self-loop duplication, and silently
+  accepted enum values** (#2755, 2026-11-12). `/graph/traverse` and
+  `/graph/traverse/parallel` now over-fetch `limit + 1` from core so
+  `has_more` is false when exactly `limit` nodes are reachable (and `limit: 0`
+  on an isolated node no longer reports `has_more: true`);
+  `GET /graph/nodes/{id}/edges?direction=both` no longer returns a self-loop
+  twice; unknown `direction` values get a 400 (previously treated as `out`),
+  and the streaming endpoint rejects an unknown `algorithm` with the same 400
+  the non-streaming endpoint uses (previously streamed as BFS). Pinned by HTTP
+  integration tests.
 - **Storage: torn WAL tails are truncated at open** (#2754, 2026-11-12).
   A crash mid-append left a torn tail in the file; writes appended after
   recovery landed behind it and were lost on the next restart. The payload

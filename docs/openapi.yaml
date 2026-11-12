@@ -963,6 +963,12 @@ paths:
       responses:
         "200":
           description: SSE stream of traversal events (node, stats, done, error)
+        "400":
+          description: Invalid algorithm (use 'bfs' or 'dfs')
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   "/collections/{name}/index/rebuild":
     post:
       tags:

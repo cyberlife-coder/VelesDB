@@ -139,13 +139,34 @@ pub async fn get_node_edges(
 ) -> Result<Json<EdgesResponse>, (StatusCode, Json<ErrorResponse>)> {
     let coll = graph_read_preamble(&state, &name, QueryOperationKind::GraphTraversal)?;
 
-    // Edge listing takes edge-store shard locks — run it on the blocking pool.
+    // An unknown direction must be rejected, not silently treated as "out"
+    // (#2755) — same 400 shape the traverse endpoint uses for its strategy.
     let direction = params.direction.to_lowercase();
+    if !matches!(direction.as_str(), "in" | "out" | "both") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "Invalid direction '{}'. Use 'in', 'out', or 'both'.",
+                    params.direction
+                ),
+                code: None,
+            }),
+        ));
+    }
+
+    // Edge listing takes edge-store shard locks — run it on the blocking pool.
     let raw_edges = run_blocking_typed(move || match direction.as_str() {
         "in" => coll.get_incoming(node_id),
         "both" => {
+            // A self-loop (source == target == node_id) is both outgoing and
+            // incoming; keep it once (#2755).
             let mut all = coll.get_outgoing(node_id);
-            all.extend(coll.get_incoming(node_id));
+            all.extend(
+                coll.get_incoming(node_id)
+                    .into_iter()
+                    .filter(|e| e.source() != node_id),
+            );
             all
         }
         _ => coll.get_outgoing(node_id),
@@ -264,8 +285,10 @@ pub async fn traverse_parallel(
     state.operational_metrics.record_graph_query();
 
     let limit = request.limit;
+    // Over-fetch by one so `has_more` can tell "exactly `limit` reachable"
+    // apart from "truncated at `limit`" (#2755).
     let config = TraversalConfig::with_range(1, request.max_depth)
-        .with_limit(limit)
+        .with_limit(limit.saturating_add(1))
         .with_rel_types(request.rel_types);
 
     // Parallel traversal is synchronous, rayon-dispatching core code — run
@@ -274,7 +297,7 @@ pub async fn traverse_parallel(
     let raw_results =
         run_blocking_typed(move || coll.traverse_bfs_parallel(&sources, &config)).await?;
 
-    let results: Vec<super::types::TraversalResultItem> = raw_results
+    let mut results: Vec<super::types::TraversalResultItem> = raw_results
         .into_iter()
         .map(|r| super::types::TraversalResultItem {
             target_id: r.target_id,
@@ -283,9 +306,10 @@ pub async fn traverse_parallel(
         })
         .collect();
 
+    let has_more = results.len() > limit;
+    results.truncate(limit);
     let depth_reached = results.iter().map(|r| r.depth).max().unwrap_or(0);
     let visited = results.len();
-    let has_more = visited >= limit;
 
     Ok(Json(TraverseResponse {
         results,

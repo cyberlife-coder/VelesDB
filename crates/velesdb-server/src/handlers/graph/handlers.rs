@@ -333,8 +333,11 @@ pub async fn traverse_graph(
 
     let limit = request.limit;
     let source = request.source;
+    // Over-fetch by one: core truncates to `limit`, so a reachable set of
+    // exactly `limit` nodes is indistinguishable from a truncated one unless
+    // one extra result is requested (#2755).
     let config = TraversalConfig::with_range(1, request.max_depth)
-        .with_limit(limit)
+        .with_limit(limit.saturating_add(1))
         .with_rel_types(request.rel_types);
 
     // Traversal is synchronous, lock-taking core code — run it on the
@@ -348,7 +351,7 @@ pub async fn traverse_graph(
     })
     .await?;
 
-    let results: Vec<super::types::TraversalResultItem> = raw_results
+    let mut results: Vec<super::types::TraversalResultItem> = raw_results
         .into_iter()
         .map(|r| super::types::TraversalResultItem {
             target_id: r.target_id,
@@ -357,9 +360,10 @@ pub async fn traverse_graph(
         })
         .collect();
 
+    let has_more = results.len() > limit;
+    results.truncate(limit);
     let depth_reached = results.iter().map(|r| r.depth).max().unwrap_or(0);
     let visited = results.len();
-    let has_more = visited >= limit;
 
     Ok(Json(TraverseResponse {
         results,

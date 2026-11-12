@@ -26,7 +26,9 @@
 use axum::response::IntoResponse;
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
+    Json,
 };
 use futures::stream;
 use std::convert::Infallible;
@@ -35,6 +37,7 @@ use tracing::warn;
 
 use std::sync::Arc;
 
+use crate::types::ErrorResponse;
 use crate::AppState;
 
 use super::types::{
@@ -61,7 +64,8 @@ const STATS_INTERVAL: usize = 100;
         StreamTraverseParams
     ),
     responses(
-        (status = 200, description = "SSE stream of traversal events (node, stats, done, error)")
+        (status = 200, description = "SSE stream of traversal events (node, stats, done, error)"),
+        (status = 400, description = "Invalid algorithm (use 'bfs' or 'dfs')", body = ErrorResponse)
     )
 )]
 pub async fn stream_traverse(
@@ -82,6 +86,24 @@ pub async fn stream_traverse(
         "graph traversal streaming",
     ) {
         return crate::handlers::helpers::auto_core_error_response(&refusal);
+    }
+
+    // An unknown algorithm must be rejected with the same 400 the
+    // non-streaming traverse endpoint returns for its strategy, not silently
+    // streamed as BFS (#2755).
+    let algorithm = params.algorithm.to_lowercase();
+    if !matches!(algorithm.as_str(), "bfs" | "dfs") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "Invalid algorithm '{}'. Use 'bfs' or 'dfs'.",
+                    params.algorithm
+                ),
+                code: None,
+            }),
+        )
+            .into_response();
     }
 
     // Snapshot the parameters and state needed by the blocking worker.
@@ -145,8 +167,14 @@ fn run_traversal_blocking(
         .with_rel_types(rel_types);
 
     let raw = match params.algorithm.to_lowercase().as_str() {
+        "bfs" => coll.traverse_bfs(params.start_node, &config),
         "dfs" => coll.traverse_dfs(params.start_node, &config),
-        _ => coll.traverse_bfs(params.start_node, &config),
+        // The handler rejects unknown algorithms with a 400 before this
+        // runs; keep an explicit error arm so a future caller cannot
+        // silently stream BFS for a typo'd algorithm (#2755).
+        other => {
+            return Err(format!("Invalid algorithm '{other}'. Use 'bfs' or 'dfs'."));
+        }
     };
 
     Ok(raw

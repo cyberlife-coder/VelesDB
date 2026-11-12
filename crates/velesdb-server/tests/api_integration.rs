@@ -8,8 +8,8 @@ use axum::{
     http::{Request, StatusCode},
 };
 use common::{
-    create_graph_collection, create_graph_node, create_test_app, create_test_app_with_core_config,
-    create_test_app_with_state,
+    create_full_app, create_graph_collection, create_graph_node, create_test_app,
+    create_test_app_with_core_config, create_test_app_with_state,
 };
 use futures::stream;
 use serde_json::{json, Value};
@@ -2413,6 +2413,251 @@ async fn test_graph_traverse_invalid_strategy() {
         .expect("Request failed");
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// #2755 helpers: small wrappers so the pagination tests stay readable.
+async fn add_edge(app: &axum::Router, coll: &str, id: u64, src: u64, tgt: u64) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{coll}/graph/edges"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    json!({ "id": id, "source": src, "target": tgt, "label": "KNOWS" }).to_string(),
+                ))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+async fn post_traverse(app: &axum::Router, coll: &str, body: Value) -> Value {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/collections/{coll}/graph/traverse"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    serde_json::from_slice(&bytes).expect("Invalid JSON")
+}
+
+#[tokio::test]
+async fn test_graph_traverse_has_more_exact_limit_is_false() {
+    // #2755: core truncates to `limit`, so a reachable set of exactly `limit`
+    // nodes used to report `has_more: true`.
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "hm").await;
+    for id in [1, 2, 3] {
+        create_graph_node(&app, "hm", id).await;
+    }
+    // 1 -> 2 and 1 -> 3: exactly 2 nodes reachable at depth 1.
+    add_edge(&app, "hm", 1, 1, 2).await;
+    add_edge(&app, "hm", 2, 1, 3).await;
+
+    let json = post_traverse(&app, "hm", json!({"source": 1, "limit": 2, "max_depth": 1})).await;
+    assert_eq!(json["results"].as_array().expect("array").len(), 2);
+    assert_eq!(
+        json["has_more"], false,
+        "exactly `limit` reachable => has_more false"
+    );
+
+    let json = post_traverse(&app, "hm", json!({"source": 1, "limit": 3, "max_depth": 1})).await;
+    assert_eq!(json["results"].as_array().expect("array").len(), 2);
+    assert_eq!(json["has_more"], false);
+
+    let json = post_traverse(&app, "hm", json!({"source": 1, "limit": 1, "max_depth": 1})).await;
+    assert_eq!(json["results"].as_array().expect("array").len(), 1);
+    assert_eq!(
+        json["has_more"], true,
+        "truncated at `limit` => has_more true"
+    );
+    assert_eq!(json["stats"]["visited"], 1);
+}
+
+#[tokio::test]
+async fn test_graph_traverse_has_more_limit_zero_on_isolated_node() {
+    // #2755: `limit: 0` on a node with no edges used to report `has_more: true`.
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let app = create_test_app(&temp_dir);
+    create_graph_collection(&app, "hm0").await;
+    create_graph_node(&app, "hm0", 1).await;
+
+    let json = post_traverse(
+        &app,
+        "hm0",
+        json!({"source": 1, "limit": 0, "max_depth": 3}),
+    )
+    .await;
+    assert_eq!(json["results"].as_array().expect("array").len(), 0);
+    assert_eq!(json["has_more"], false);
+}
+
+#[tokio::test]
+async fn test_graph_traverse_parallel_has_more_exact_limit_is_false() {
+    // #2755, same off-by-one on the parallel endpoint.
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    // The parallel endpoint is only registered on the full API router.
+    let db = velesdb_core::Database::open(temp_dir.path()).expect("Failed to open db");
+    let (app, _state) = create_full_app(db);
+    create_graph_collection(&app, "hp").await;
+    for id in [1, 2, 3] {
+        create_graph_node(&app, "hp", id).await;
+    }
+    add_edge(&app, "hp", 1, 1, 2).await;
+    add_edge(&app, "hp", 2, 1, 3).await;
+
+    let post = |app: axum::Router, limit: usize| {
+        let body = json!({"sources": [1], "max_depth": 1, "limit": limit}).to_string();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/collections/hp/graph/traverse/parallel")
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body))
+                        .expect("Failed to build request"),
+                )
+                .await
+                .expect("Request failed");
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("Failed to read body");
+            serde_json::from_slice::<Value>(&bytes).expect("Invalid JSON")
+        }
+    };
+
+    let json = post(app.clone(), 2).await;
+    assert_eq!(json["results"].as_array().expect("array").len(), 2);
+    assert_eq!(
+        json["has_more"], false,
+        "exactly `limit` reachable => has_more false"
+    );
+
+    let json = post(app, 1).await;
+    assert_eq!(json["results"].as_array().expect("array").len(), 1);
+    assert_eq!(json["has_more"], true);
+}
+
+#[tokio::test]
+async fn test_graph_node_edges_direction_both_dedups_self_loop() {
+    // #2755: `direction=both` returned a self-loop twice (once per direction).
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    // The node-edges endpoint is only registered on the full API router.
+    let db = velesdb_core::Database::open(temp_dir.path()).expect("Failed to open db");
+    let (app, _state) = create_full_app(db);
+    create_graph_collection(&app, "sl").await;
+    for id in [2, 3, 4] {
+        create_graph_node(&app, "sl", id).await;
+    }
+    add_edge(&app, "sl", 11, 2, 3).await; // incoming to 3
+    add_edge(&app, "sl", 12, 3, 3).await; // self-loop on 3
+    add_edge(&app, "sl", 13, 3, 4).await; // outgoing from 3
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections/sl/graph/nodes/3/edges?direction=both")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("Failed to read body");
+    let json: Value = serde_json::from_slice(&bytes).expect("Invalid JSON");
+
+    let ids: Vec<&str> = json["edges"]
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|e| e["id"].as_str().expect("id string"))
+        .collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        sorted,
+        vec!["11", "12", "13"],
+        "self-loop must appear exactly once"
+    );
+    assert_eq!(json["count"], 3);
+}
+
+#[tokio::test]
+async fn test_graph_node_edges_rejects_unknown_direction() {
+    // #2755: an unknown `direction` used to be silently treated as "out".
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let db = velesdb_core::Database::open(temp_dir.path()).expect("Failed to open db");
+    let (app, _state) = create_full_app(db);
+    create_graph_collection(&app, "dir").await;
+    create_graph_node(&app, "dir", 3).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections/dir/graph/nodes/3/edges?direction=inn")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_graph_traverse_stream_rejects_unknown_algorithm() {
+    // #2755: the streaming endpoint treated any non-"dfs" algorithm as BFS.
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let db = velesdb_core::Database::open(temp_dir.path()).expect("Failed to open db");
+    let (app, _state) = create_full_app(db);
+    create_graph_collection(&app, "st").await;
+    create_graph_node(&app, "st", 1).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections/st/graph/traverse/stream?start_node=1&algorithm=dfz")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // A valid algorithm still streams.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/collections/st/graph/traverse/stream?start_node=1&algorithm=bfs")
+                .body(Body::empty())
+                .expect("Failed to build request"),
+        )
+        .await
+        .expect("Request failed");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
