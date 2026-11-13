@@ -31,17 +31,30 @@ guide is everything else.
 **The guided way (recommended, macOS / Linux / Windows):**
 
 ```bash
-python3 scripts/velesdb_install_wizard.py            # shows the plan, changes nothing
-python3 scripts/velesdb_install_wizard.py --apply    # executes it
+python3 scripts/velesdb_install_wizard.py            # interactive on a TTY: boxed plan + menu [1] apply [2] JSON [3] quit
+python3 scripts/velesdb_install_wizard.py --dry-run  # print the plan, change nothing (piped/CI default)
+python3 scripts/velesdb_install_wizard.py --apply    # non-interactive apply (exit 1 if any step fails)
+python3 scripts/velesdb_install_wizard.py --json     # machine-readable plan
 ```
 
-The wizard detects which agent harnesses are installed on the machine (Claude
-Code, Codex, Cursor, Cline, Zed, opencode, Claude Desktop, Windsurf, Devin,
-Vibe), checks whether the memory store is currently **locked** by a live
-process (see below), and proposes the right mode: single-harness `stdio`, or
-one shared HTTPS `daemon` when several harnesses — or an already-running
-direct `velesdb-memory` — would otherwise fight over the lock. Every config
-write is backed up and atomic; `--dry-run` is the default. See #2759.
+The wizard detects the platform (macOS / Linux / Windows) and which agent
+harnesses are installed on the machine (Claude Code, Codex, Cursor, Cline,
+Zed, opencode, Claude Desktop, Windsurf, Devin, Vibe — config paths resolved
+per OS, `~` / `%APPDATA%` / `%USERPROFILE%`), checks whether the memory store
+is currently **locked** by a live process (see below), and proposes the right
+mode: single-harness `stdio`, or one shared HTTPS `daemon` when several
+harnesses — or an already-running direct `velesdb-memory` — would otherwise
+fight over the lock. In daemon mode `--apply` really starts the daemon via
+`scripts/install-memory-daemon.sh|.ps1` and only rewires the harnesses once
+`https://127.0.0.1:18090/health` answers. Every config write is backed up and
+atomic (unique tmp + rename + post-write validation, original file mode kept,
+symlinks refused). See #2759.
+
+**Packaged installers (no Python needed):** Releases carry
+`velesdb-install-wizard.exe` (Windows), `VelesDB Install Wizard.app` / `.dmg`
+(macOS) and a Linux binary / `.tar.gz`, each embedding a discreet **WiScale**
+publisher signature plus a sha256 manifest — verify before running:
+`python3 scripts/validate_package.py <artifact>`.
 
 **One command, with a Rust toolchain present:**
 
@@ -167,6 +180,8 @@ env = { VELESDB_MEMORY_PATH = "/home/you/.velesdb-memory" }
 } } }
 ```
 
+**Vibe** — `~/.vibe/config.toml` (`mcp_servers = [ { name = "velesdb-memory", url|command, … } ]`, Windows: `%USERPROFILE%\.vibe\config.toml`)
+
 **Devin CLI** — `~/.config/devin/config.json`. Its `mcpServers` block sits
 inside a top-level `{"version": 1, …}` envelope, unlike every client above:
 
@@ -229,14 +244,24 @@ cp -r skills/velesdb-extract-outline ~/.claude/skills/
 
 → [`skills/velesdb-extract-outline/SKILL.md`](../../skills/velesdb-extract-outline/SKILL.md)
 
-**No repo clone needed.** Every
-[GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
-attaches `velesdb-skills.tar.gz` — every skill, one folder per skill at the
-archive root — so a one-liner installs them straight from the release:
+**No repo clone needed.** Prefer the repo script, which installs from a
+pinned checkout with symlink guards and an atomic swap:
 
 ```bash
-curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz \
-  | tar -xz -C ~/.claude/skills/
+python3 scripts/sync-skills.py --install --client all     # from a repo clone
+```
+
+Every [GitHub Release](https://github.com/cyberlife-coder/VelesDB/releases/latest)
+also attaches `velesdb-skills.tar.gz` (one folder per skill at the archive
+root). When using the tarball, pin a release tag and verify the published
+`.sha256` sidecar before extracting — `releases/latest` is a moving ref and
+the tarball ships no checksum of its own:
+
+```bash
+TAG=velesdb-memory-vX.Y.Z
+curl -fsSL "https://github.com/cyberlife-coder/VelesDB/releases/download/$TAG/velesdb-skills.tar.gz" -o /tmp/skills.tar.gz
+curl -fsSL "https://github.com/cyberlife-coder/VelesDB/releases/download/$TAG/velesdb-skills.tar.gz.sha256" -o /tmp/skills.tar.gz.sha256
+(cd /tmp && sha256sum -c skills.tar.gz.sha256) && tar -xzf /tmp/skills.tar.gz -C ~/.claude/skills/
 ```
 
 **Keep skills fresh.** The `cp` / `curl` above is a snapshot, not a live link:

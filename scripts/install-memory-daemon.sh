@@ -453,6 +453,14 @@ install_from_release() {
   local tag target asset base_url tmp_dir archive_path checksum_path expected actual
 
   if [ -n "$FROM_RELEASE_TAG" ]; then
+    # HARDENING: an explicit tag goes straight into the download URL — only
+    # accept the strict release-tag charset (no ../, no slashes) so a forged
+    # tag cannot redirect the download outside this repo's releases.
+    case "$FROM_RELEASE_TAG" in
+      *[!A-Za-z0-9._-]*|*..*|"")
+        echo -e "${RED}❌ invalid --from-release tag '$FROM_RELEASE_TAG' (allowed: A-Za-z0-9._-, no '..')${NC}" >&2
+        exit 1 ;;
+    esac
     tag="$FROM_RELEASE_TAG"
   else
     tag="$(resolve_latest_release_tag)"

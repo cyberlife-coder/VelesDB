@@ -347,7 +347,15 @@ function Resolve-LatestReleaseTag {
 }
 
 function Install-FromRelease {
-    $tag = if ($FromReleaseTag -ne '') { $FromReleaseTag } else { Resolve-LatestReleaseTag }
+    $tag = if ($FromReleaseTag -ne '') {
+        # HARDENING: the explicit tag goes straight into the download URL —
+        # strict charset only (no path separators, no '..').
+        if ($FromReleaseTag -notmatch '^[A-Za-z0-9._-]+$' -or $FromReleaseTag.Contains('..')) {
+            Write-Error "invalid -FromReleaseTag '$FromReleaseTag' (allowed: A-Za-z0-9._-, no '..')"
+            exit 1
+        }
+        $FromReleaseTag
+    } else { Resolve-LatestReleaseTag }
     $target = 'x86_64-pc-windows-msvc'
     $asset = "velesdb-memory-daemon-$target.zip"
     $baseUrl = "https://github.com/$RepoSlug/releases/download/$tag"

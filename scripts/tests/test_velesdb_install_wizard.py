@@ -324,7 +324,7 @@ class CrossPlatformDetectionTests(unittest.TestCase):
             ".cursor/mcp.json",
             ".codex/config.toml",
             ".codeium/windsurf/mcp_config.json",
-            ".vibe/mcp.json",
+            ".vibe/config.toml",
         ):
             path = home / rel
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -457,4 +457,186 @@ class InteractiveUiTests(unittest.TestCase):
         self.assertIn("assistant d'installation", out)
         self.assertIn("linux/x86_64", out)
         self.assertIn("cursor", out)
-        self.assertIn("stdio→http", out)
+        self.assertIn("stdio->http", out)
+
+
+class AuditFixRegressionTests(unittest.TestCase):
+    """Regression tests for the 5 adversarial audits (2026-11-13):
+    locked=>daemon, vibe config.toml, BOM, url-vs-command, TOML block safety,
+    atomic write hardening, real-binary requirement, daemon health gate,
+    exit codes, cp1252/cp65001."""
+
+    def _home(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name)
+
+    # -- propose_mode: any held lock forces daemon (xplat S1 / uxdocs S5)
+    def test_locked_lock_forces_daemon_even_single_http_harness(self):
+        h = [{"name": "cursor", "installed": True, "velesdb_memory_entry": "http"}]
+        lock = {"locked": True}
+        self.assertEqual(mod.propose_mode(h, lock), "daemon")
+        self.assertEqual(mod.propose_mode(h, {"locked": False}), "stdio")
+        self.assertEqual(mod.propose_mode(h + h, {"locked": False}), "daemon")
+
+    # -- plan exposes port (uxdocs S6)
+    def test_build_plan_includes_port(self):
+        home = self._home()
+        plan = mod.build_plan(home, home / "s", None, 19099, scan_cli=False)
+        self.assertEqual(plan["port"], 19099)
+
+    # -- BOM-safe reads (xplat S6)
+    def test_bom_json_is_read(self):
+        home = self._home()
+        cfg = home / ".cursor" / "mcp.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_bytes(b'\xef\xbb\xbf{"mcpServers": {"velesdb-memory": {"url": "https://x/mcp"}}}')
+        self.assertEqual(mod.read_mcp_entry("mcp-json", cfg), "http")
+
+    # -- url vs command for toml/json kinds (xplat S7 / apply S8 / uxdocs S4)
+    def test_codex_toml_url_detected_as_http(self):
+        home = self._home()
+        cfg = home / ".codex" / "config.toml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text('[mcp_servers.velesdb-memory]\nurl = "https://127.0.0.1:18090/mcp"\n', encoding="utf-8")
+        self.assertEqual(mod.read_mcp_entry("codex-toml", cfg), "http")
+        cfg.write_text('[mcp_servers.velesdb-memory]\ncommand = "/x/velesdb-memory"\n', encoding="utf-8")
+        self.assertEqual(mod.read_mcp_entry("codex-toml", cfg), "stdio")
+
+    def test_zed_opencode_url_detected_as_http(self):
+        home = self._home()
+        zed = home / ".config" / "zed" / "settings.json"
+        zed.parent.mkdir(parents=True)
+        zed.write_text(json.dumps({"context_servers": {"velesdb-memory": {"url": "https://x/mcp"}}}), encoding="utf-8")
+        self.assertEqual(mod.read_mcp_entry("zed-context-servers", zed), "http")
+        oc = home / ".config" / "opencode" / "opencode.json"
+        oc.parent.mkdir(parents=True)
+        oc.write_text(json.dumps({"mcp": {"velesdb-memory": {"type": "remote", "url": "https://x/mcp"}}}), encoding="utf-8")
+        self.assertEqual(mod.read_mcp_entry("opencode-mcp", oc), "http")
+
+    # -- non-dict JSON root never crashes (sec S10 / xplat S16)
+    def test_non_dict_json_root_returns_none(self):
+        home = self._home()
+        cfg = home / ".cursor" / "mcp.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text("[1,2]", encoding="utf-8")
+        self.assertIsNone(mod.read_mcp_entry("mcp-json", cfg))
+
+    # -- vibe config.toml detection + wiring (xplat S4)
+    def test_vibe_toml_detection_and_wiring(self):
+        home = self._home()
+        cfg = home / ".vibe" / "config.toml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text('mcp_servers = [ { url = "https://127.0.0.1:18090/mcp", name = "velesdb-memory", transport = "streamable-http" } ]\n', encoding="utf-8")
+        self.assertEqual(mod.read_mcp_entry("vibe-toml", cfg), "http")
+        fake_bin = home / "bin" / "velesdb-memory"
+        fake_bin.parent.mkdir(parents=True)
+        fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+        harness = {"name": "vibe", "kind": "vibe-toml", "config": str(cfg), "velesdb_memory_entry": "http", "installed": True}
+        mod.wire_harness(harness, "daemon", str(fake_bin), 18090, home / "store", dry=False)
+        import tomllib
+        data = tomllib.loads(cfg.read_text(encoding="utf-8"))
+        entries = [e for e in data["mcp_servers"] if e.get("name") == "velesdb-memory"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["url"], "https://127.0.0.1:18090/mcp")
+        # stdio switch replaces the same object, no duplicate
+        mod.wire_harness(harness, "stdio", str(fake_bin), 18090, home / "store", dry=False)
+        data = tomllib.loads(cfg.read_text(encoding="utf-8"))
+        entries = [e for e in data["mcp_servers"] if e.get("name") == "velesdb-memory"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["command"], str(fake_bin))
+
+    # -- codex TOML rewrite safe when old block contains '[' (xplat S8 / sec S9)
+    def test_codex_toml_block_with_brackets_replaced_cleanly(self):
+        home = self._home()
+        cfg = home / ".codex" / "config.toml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text('[mcp_servers.velesdb-memory]\ncommand = "/old"\nargs = ["--http"]\n\n[other]\nk = 1\n', encoding="utf-8")
+        out = mod.wire_codex_toml(cfg, "http", "/bin/velesdb-memory", 18090, home / "s", dry=False)
+        self.assertIn("wired", out)
+        import tomllib
+        data = tomllib.loads(cfg.read_text(encoding="utf-8"))
+        self.assertEqual(data["mcp_servers"]["velesdb-memory"]["url"], "https://127.0.0.1:18090/mcp")
+        self.assertEqual(data["other"]["k"], 1)
+
+    # -- atomic write hardening (apply S5 / supply S5 / sec S4)
+    def test_write_json_atomic_preserves_mode_and_backups(self):
+        home = self._home()
+        cfg = home / "mcp.json"
+        cfg.write_text('{"mcpServers": {}}', encoding="utf-8")
+        os.chmod(cfg, 0o600)
+        self.assertTrue(mod.write_json_atomic(cfg, lambda d: {**d, "mcpServers": {**d.get("mcpServers", {}), "x": 1}}, dry=False))
+        self.assertEqual(os.stat(cfg).st_mode & 0o777, 0o600)
+        self.assertTrue(list(home.glob("mcp.json.bak.*")))
+
+    def test_write_json_atomic_refuses_symlink_and_non_dict(self):
+        home = self._home()
+        target = home / "real.json"
+        target.write_text("{}", encoding="utf-8")
+        link = home / "link.json"
+        link.symlink_to(target)
+        self.assertFalse(mod.write_json_atomic(link, lambda d: d, dry=False))
+        self.assertEqual(target.read_text(encoding="utf-8"), "{}")
+        bad = home / "bad.json"
+        bad.write_text("[1]", encoding="utf-8")
+        self.assertFalse(mod.write_json_atomic(bad, lambda d: d, dry=False))
+        self.assertEqual(bad.read_text(encoding="utf-8"), "[1]")
+
+    # -- stdio wiring refused without a real binary (sec S1 / apply S3 / xplat S11)
+    def test_stdio_wiring_refused_without_real_binary(self):
+        home = self._home()
+        cfg = home / ".cursor" / "mcp.json"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text('{"mcpServers": {}}', encoding="utf-8")
+        h = {"name": "cursor", "kind": "mcp-json", "config": str(cfg), "velesdb_memory_entry": None, "installed": True}
+        out = mod.wire_harness(h, "stdio", None, 18090, home / "s", dry=False)
+        self.assertIn("REFUSED", out)
+        self.assertEqual(json.loads(cfg.read_text(encoding="utf-8")), {"mcpServers": {}})
+
+    def test_install_binary_returns_none_not_sentence(self):
+        with unittest.mock.patch.object(mod, "find_binary", return_value=None):
+            self.assertIsNone(mod.install_binary({"os": "linux", "arch": "x86_64"}, dry=False))
+
+    # -- daemon health gate: no rewiring when the daemon is not up (apply S1 / xplat S2)
+    def test_apply_plan_daemon_failure_skips_rewiring(self):
+        plan = {
+            "platform": {"os": "linux", "arch": "x86_64"}, "store": "/tmp/s", "port": 18090,
+            "proposed_mode": "daemon",
+            "harnesses": [{"name": "cursor", "kind": "mcp-json", "config": "/tmp/c.json", "velesdb_memory_entry": None, "installed": True}],
+            "actions": [],
+        }
+        with unittest.mock.patch.object(mod, "install_binary", return_value="/bin/x"), \
+             unittest.mock.patch.object(mod, "run_daemon_installer", return_value=(False, "boom")), \
+             unittest.mock.patch.object(mod, "wire_harness") as wh:
+            statuses = mod.apply_plan(plan, dry=False, yes=True)
+            wh.assert_not_called()
+            self.assertTrue(any("FAILED" in s for s in statuses))
+
+    # -- main: flags, exit codes, version (uxdocs S14, apply S2, packaging)
+    def test_main_json_and_apply_conflict(self):
+        with self.assertRaises(SystemExit) as cm:
+            mod.main(["--json", "--apply", "--home", str(self._home()), "--store", str(self._home() / "s"), "--no-cli-scan"])
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_main_port_range_validated(self):
+        with self.assertRaises(SystemExit):
+            mod.main(["--port", "0", "--dry-run", "--home", str(self._home()), "--store", str(self._home() / "s"), "--no-cli-scan"])
+
+    def test_main_version_prints_publisher(self):
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = mod.main(["--version"])
+        self.assertEqual(rc, 0)
+        self.assertIn("WiScale", buf.getvalue())
+
+    def test_main_apply_exit_code_nonzero_on_failure(self):
+        home = self._home()
+        with unittest.mock.patch.object(mod, "apply_plan", return_value=["x: FAILED: boom"]):
+            rc = mod.main(["--apply", "--home", str(home), "--store", str(home / "s"), "--no-cli-scan"])
+        self.assertEqual(rc, 1)
+
+    # -- charset: cp65001 counts as UTF-8 (xplat S17)
+    def test_charset_cp65001_is_utf8(self):
+        self.assertEqual(mod._ui_charset("cp65001")[0], "┌")
+        self.assertEqual(mod._ui_charset("cp1252")[0], "+")

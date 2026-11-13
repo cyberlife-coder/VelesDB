@@ -49,15 +49,25 @@ An embedding model determines the vector dimension, while your similarity semant
 **Give your agent a persistent memory — the guided installer:**
 
 ```bash
-python3 scripts/velesdb_install_wizard.py --apply    # detects your agent harnesses, wires velesdb-memory, installs the skills
+python3 scripts/velesdb_install_wizard.py            # interactive: boxed plan + menu [1] apply [2] JSON [3] quit
+python3 scripts/velesdb_install_wizard.py --apply    # non-interactive apply (CI)
+python3 scripts/velesdb_install_wizard.py --json     # machine-readable plan
 ```
 
-The wizard checks which harnesses are installed (Claude Code, Codex, Cursor, …), detects whether the memory store is already locked by a running process (`VELES-031`), and picks single-client stdio or one shared local daemon accordingly. Prefer the manual commands? `cargo install velesdb-memory`, then `claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory`, and the skills tarball as before:
+The wizard detects your platform (macOS / Linux / Windows) and which harnesses are installed (Claude Code, Codex, Cursor, Cline, Zed, OpenCode, Claude Desktop, Windsurf, Devin, Vibe), checks whether the memory store is already locked by a running process (`VELES-031`), and picks single-client stdio or one shared local daemon accordingly — in daemon mode it really starts the daemon (`scripts/install-memory-daemon.sh|.ps1`) and only rewires your harnesses once `https://127.0.0.1:18090/health` answers. Every config write is backed up and atomic; `--apply` exits non-zero if any step fails.
+
+**No Python?** Download the packaged installer from Releases — `velesdb-install-wizard.exe` (Windows), `VelesDB Install Wizard.app` / `.dmg` (macOS), `velesdb-install-wizard` binary or `.tar.gz` (Linux), all signed by **WiScale** — and verify it before running:
+
+```bash
+python3 scripts/validate_package.py dist/velesdb-install-wizard.exe   # sha256 manifest + embedded WiScale signature
+```
+
+Prefer the manual commands? `cargo install velesdb-memory`, then `claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory`, and install the skills from a verified release with the repo script:
 
 ```bash
 cargo install velesdb-memory                                    # the local MCP memory server
 claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory    # any MCP client works
-curl -L https://github.com/cyberlife-coder/VelesDB/releases/latest/download/velesdb-skills.tar.gz | tar -xz -C ~/.claude/skills/
+python3 scripts/sync-skills.py --install --client all          # skills from this checkout
 ```
 
 No Rust toolchain? `npm i @wiscale/velesdb-memory-node`, or grab a prebuilt `.mcpb` bundle from the [official MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) (`io.github.cyberlife-coder/velesdb-memory`).
