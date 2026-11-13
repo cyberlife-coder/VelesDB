@@ -181,15 +181,11 @@ impl Collection {
                     MAX_LIMIT,
                 );
             }
-            // SQL-standard: OFFSET then LIMIT on the combined result.
-            if let Some(offset) = query.select.offset {
-                let skip = usize::try_from(offset).unwrap_or(usize::MAX);
-                accumulated = accumulated.into_iter().skip(skip).collect();
-            }
-            if let Some(limit) = query.select.limit {
-                accumulated.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
-            }
-            return Ok(accumulated);
+            return Ok(set_operations::apply_offset_limit(
+                accumulated,
+                query.select.offset,
+                query.select.limit,
+            ));
         }
 
         Ok(left_results)
