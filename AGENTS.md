@@ -3,7 +3,12 @@
 Local-first unified database (Vector + Graph + ColumnStore) under VelesQL. Rust workspace, single ~14 MB binary.
 Authoritative docs (don't duplicate them here — read them): [QUALITY_BAR.md](QUALITY_BAR.md), [CONTRIBUTING.md](CONTRIBUTING.md), [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md), [CONCURRENCY_MODEL.md](docs/CONCURRENCY_MODEL.md).
 
-Directory-scoped rules live in `AGENTS.md` files beside the code — read the one covering what you touch: `crates/velesdb-core`, `crates/velesdb-memory`, `crates/velesdb-python`, `crates/velesdb-node`, `crates/velesdb-server`, `crates/velesdb-wasm`, `sdks/typescript`, `integrations`, `scripts`.
+Directory-scoped rules live in an `AGENTS.md` beside every component — read the root one (this file) first, then the one covering what you touch; on conflict, the file closest to the task wins:
+
+- crates: `crates/velesdb-core`, `crates/velesdb-memory`, `crates/velesdb-server`, `crates/velesdb-cli`, `crates/velesdb-python`, `crates/velesdb-node`, `crates/velesdb-wasm`, `crates/velesdb-mobile`, `crates/velesdb-migrate`, `crates/tauri-plugin-velesdb`, `crates/velesdb-rustdoc-guard`
+- `sdks/typescript`, `scripts`, `integrations` (and each package under it: `agent-hooks`, `common`, `haystack`, `langchain`, `langgraph`, `llamaindex`)
+
+**How agents consume nested AGENTS.md (2026 harness reality):** support is real but uneven — Codex walks up from the working directory and loads each level, recent Claude Code attaches a nested `AGENTS.md` when you @-mention a file under it, and several harnesses still read only the root file. So: this root file stays the contract, component files stay small and link outward instead of duplicating (some harnesses cap an AGENTS.md at 32 KiB — bloat is not free), and no rule lives in two places. If your harness loads only the root file, the component list above is the map: open the component's `AGENTS.md` yourself before editing under it.
 
 ---
 
@@ -68,83 +73,7 @@ of the `lint` and `hygiene` jobs as written, reporting each one, and telling a
 missing tool (exit 127) apart from a refusal. 44 of the 48 declared gates run
 on a developer machine; the rest need the runner.
 
-The listing that follows is a reading aid — what the replay covers, and what to
-run in isolation while iterating on one thing. **It is a copy, and a copy
-drifts**: it had, measurably, until #2350 — its single clippy line was missing
-a whole second pass and four features CI lints, so a contributor following it
-ran a *weaker* check than CI and shipped red pipelines. Where the two disagree,
-`ci.yml` wins and this listing is the defect.
-
-```bash
-cargo fmt --all
-# Two workspace passes, and the pair is the point: between them they lint both
-# states of every feature that gates code. `scripts/check_feature_lint_coverage.py`
-# fails the build if a feature gating code is named by neither (#2348).
-# The -A pair reinstates the [workspace.lints] allow of the two doc-coverage
-# lints after the pedantic group deny: .clippy.toml's check-private-items
-# (which is what makes missing_safety_doc cover non-public unsafe fns, #2396)
-# would otherwise demand # Panics/# Errors on every documented private fn.
-cargo clippy --workspace --all-targets \
-  --features persistence,gpu,update-check,openapi,test-fault-injection \
-  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic \
-     -A clippy::missing_errors_doc -A clippy::missing_panics_doc
-cargo clippy --workspace --all-targets \
-  --features persistence,update-check,internal-bench \
-  --exclude velesdb-python --exclude velesdb-node -- -D warnings -D clippy::pedantic \
-     -A clippy::missing_errors_doc -A clippy::missing_panics_doc
-cargo clippy -p velesdb-node --lib -- -D warnings   # node is excluded above (N-API link), linted separately
-PYO3_PYTHON=python3 cargo clippy -p velesdb-python --lib -- -D warnings   # excluded above too (PyO3 link)
-cargo clippy -p velesdb-core --lib --bins --features persistence,gpu,update-check \
-  -- -A warnings -D clippy::undocumented_unsafe_blocks
-cargo test -p velesdb-core --features persistence -- --test-threads=1
-# A single test by name:
-cargo test -p velesdb-core --features persistence <test_name> -- --test-threads=1
-# If search path modified:
-cargo test -p velesdb-core --features persistence test_recall -- --test-threads=1
-# Doctests are a separate CI step from the test suite above:
-cargo test --doc --package velesdb-core
-cargo test --doc --package velesdb-server
-# Feature-gate sanity:
-cargo check --no-default-features
-cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
-# Memory feature matrix — CI's blocking `memory-feature-matrix` job (#2019),
-# the four shapes downstream consumers actually build, plus each feature in
-# isolation with --all-targets (mirrors the Lint job's loop, #1765; it
-# compiles integration tests and examples the four shapes never do, #2202).
-# Command list lives beside the crate: crates/velesdb-memory/AGENTS.md.
-# The published crates' rustdoc is what docs.rs serves, so a broken intra-doc
-# link is a dead link on a public page. Both crates now `#![deny]` the two link
-# lints at their crate root, so a plain `cargo doc` already fails on one; the
-# RUSTDOCFLAGS here and the matching Lint steps are what guarantee the docs are
-# BUILT — an attribute cannot fire if nobody builds them.
-RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-memory --no-deps --all-features --document-private-items
-RUSTDOCFLAGS="-D warnings" cargo doc -p velesdb-core --no-deps --all-features --document-private-items
-# Functional wasm gate — catches std APIs that abort on wasm32 (e.g. SystemTime::now):
-wasm-pack test --node crates/velesdb-wasm
-# Guards and contracts. Every one of these blocks a PR through `CI Success`, and
-# every one runs here. `unittest discover` prints "Performance claims audit
-# FAILED" on stdout while passing — that is a test exercising a guard's refusal
-# path, so read `Ran N tests` + `OK`, never grep for FAILED.
-python3 -m unittest discover -s scripts/tests -p "test_*.py" -t .
-python3 scripts/check-version-sync.py
-# ^ checks stamps against each other, not against crates.io/npm. Manifest↔registry
-#   coherence is proved at release time (release-memory.yml `verify-registries`)
-#   and daily by registry-drift.yml — never at PR time, where "manifest > registry"
-#   is the normal transient state of every release-prep PR (#2030).
-python3 scripts/check-feature-claims.py
-python3 scripts/check-perf-claims.py --no-criterion
-python3 scripts/check-promise-contract.py
-python3 scripts/check-mcp-doc-contract.py --verbose
-python3 scripts/check-skill-private-references.py
-python3 scripts/check-ai-attribution.py "origin/develop..HEAD"
-bash scripts/check-doc-contract.sh
-for g in stamp index tracked versions decisions; do
-  python3 scripts/check-doc-freshness.py --guard "$g" --mode strict
-done
-bash integrations/agent-hooks/test/hooks.test.sh
-cargo deny check advisories licenses bans sources
-# Shipping a new surface? grep the READMEs/CHANGELOG for now-stale availability caveats.
-```
+The authoritative command list lives in [CONTRIBUTING.md](CONTRIBUTING.md) and, for replay, in `bash scripts/local-ci.sh` — which *reads* `.github/workflows/ci.yml` instead of reproducing it, so it cannot drift. Run it before every push; while iterating on one gate, run that gate alone (commands in CONTRIBUTING.md). The listing that used to sit here was a copy, and a copy drifts — measurably, until #2350, when it was missing a whole clippy pass and four features and contributors following it shipped red pipelines. Where any copy and `ci.yml` disagree, `ci.yml` wins and the copy is the defect.
 
 Shortcut: `bash scripts/local-ci.sh` (derived from `ci.yml`, preferred) or `.\scripts\local-ci.ps1` on Windows. Git hooks: `git config core.hooksPath .githooks`.
 Benchmarks: `cargo bench -p velesdb-core --bench hnsw_benchmark` (also `simd_benchmark`, `sparse_benchmark`); end-to-end perf/recall via `python benchmarks/velesdb_benchmark.py --recall`.

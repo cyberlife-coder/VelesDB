@@ -262,6 +262,29 @@ Tool parity per surface is published honestly — including where a surface is s
 
 </details>
 
+## Repository map — every component has its own AGENTS.md
+
+AI agents (and humans) working in this repo should read the root [`AGENTS.md`](AGENTS.md) first, then the `AGENTS.md` of the component they touch — on conflict, the file closest to the code wins. Harnesses differ in nested-file support (Codex loads each level from the working directory; recent Claude Code attaches a nested `AGENTS.md` on @-mention; others read the root only), so the component list is the map:
+
+| Component | Path | Component AGENTS.md |
+|---|---|---|
+| Engine (VelesQL, HNSW/BM25/ColumnStore, SIMD, storage) | `crates/velesdb-core` | [`AGENTS.md`](crates/velesdb-core/AGENTS.md) |
+| Agent memory MCP server + context compiler | `crates/velesdb-memory` | [`AGENTS.md`](crates/velesdb-memory/AGENTS.md) |
+| REST server (Axum) | `crates/velesdb-server` | [`AGENTS.md`](crates/velesdb-server/AGENTS.md) |
+| CLI / interactive VelesQL REPL | `crates/velesdb-cli` | [`AGENTS.md`](crates/velesdb-cli/AGENTS.md) |
+| Python SDK (PyO3 + NumPy) | `crates/velesdb-python` | [`AGENTS.md`](crates/velesdb-python/AGENTS.md) |
+| Node binding (napi) | `crates/velesdb-node` | [`AGENTS.md`](crates/velesdb-node/AGENTS.md) |
+| Browser / edge (WASM) | `crates/velesdb-wasm` + `sdks/typescript` | [`AGENTS.md`](crates/velesdb-wasm/AGENTS.md) · [`AGENTS.md`](sdks/typescript/AGENTS.md) |
+| Mobile (UniFFI: iOS/Android) | `crates/velesdb-mobile` | [`AGENTS.md`](crates/velesdb-mobile/AGENTS.md) |
+| Desktop app embedding (Tauri) | `crates/tauri-plugin-velesdb` | [`AGENTS.md`](crates/tauri-plugin-velesdb/AGENTS.md) |
+| Bulk migration loaders | `crates/velesdb-migrate` | [`AGENTS.md`](crates/velesdb-migrate/AGENTS.md) |
+| rustdoc link guard | `crates/velesdb-rustdoc-guard` | [`AGENTS.md`](crates/velesdb-rustdoc-guard/AGENTS.md) |
+| Python integrations (Haystack, LangChain, LangGraph, LlamaIndex, shared utils) | `integrations/` | [`AGENTS.md`](integrations/AGENTS.md) + one per package (`agent-hooks`, `common`, `haystack`, `langchain`, `langgraph`, `llamaindex`) |
+| Agent session hooks | `integrations/agent-hooks` | [`AGENTS.md`](integrations/agent-hooks/AGENTS.md) |
+| CI guards, checks, release + install scripts | `scripts/` | [`AGENTS.md`](scripts/AGENTS.md) |
+
+Architecture in one paragraph: [ARCHITECTURE.md](docs/reference/ARCHITECTURE.md) · storage layout: [STORAGE_FORMAT.md](docs/STORAGE_FORMAT.md) · contributing & CI: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## How it compares
 
 | | **VelesDB** | Chroma | Qdrant | pgvector |
