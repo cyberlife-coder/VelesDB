@@ -100,6 +100,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **VelesQL: compound-query `OFFSET` windows the combined result on the
+  `Database` path** (2026-11-13). `Database::execute_query` — behind the
+  server's `/query` and the CLI REPL — applied a compound query's `OFFSET` to
+  the left operand only and never to the merged rows, so `SELECT * FROM alpha LIMIT 10 OFFSET 3 UNION SELECT *
+  FROM beta LIMIT 10` returned 3 rows instead of 2. `Collection::execute_query`
+  was already correct; both paths now share one `apply_offset_limit` helper.
+  Pinned by a BDD test through the full parse → execute pipeline.
 - **Server (graph): `has_more` off-by-one, self-loop duplication, and silently
   accepted enum values** (#2755, 2026-11-12). `/graph/traverse` and
   `/graph/traverse/parallel` now over-fetch `limit + 1` from core so

@@ -201,6 +201,27 @@ fn test_union_combines_results_from_two_queries() {
     assert!(ids.contains(&5), "should contain id 5 from beta");
 }
 
+/// GIVEN two collections `alpha` (ids 1,2,3) and `beta` (ids 3,4,5)
+/// WHEN `SELECT * FROM alpha LIMIT 10 OFFSET 3 UNION SELECT * FROM beta LIMIT 10`
+/// THEN OFFSET skips 3 rows of the 5-row combined result, leaving 2. Applied
+/// to `alpha` alone it would empty that operand and leave beta's 3 rows.
+/// Count only — all scores tie at 0.0, so which rows are skipped is
+/// unspecified (fixture divergence D003).
+#[test]
+fn test_union_offset_applies_to_combined_result() {
+    let (_dir, db) = create_test_db();
+    setup_two_collections(&db);
+
+    let results = execute_sql(
+        &db,
+        "SELECT * FROM alpha LIMIT 10 OFFSET 3 UNION SELECT * FROM beta LIMIT 10",
+    )
+    .expect("UNION with OFFSET should succeed");
+
+    let ids = result_ids(&results);
+    assert_eq!(ids.len(), 2, "OFFSET must skip merged rows: got {ids:?}");
+}
+
 // =========================================================================
 // UNION ALL: keeps duplicates
 // =========================================================================
