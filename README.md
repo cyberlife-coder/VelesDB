@@ -54,12 +54,12 @@ python3 scripts/velesdb_install_wizard.py --apply    # non-interactive apply (CI
 python3 scripts/velesdb_install_wizard.py --json     # machine-readable plan
 ```
 
-The wizard detects your platform (macOS / Linux / Windows) and which harnesses are installed (Claude Code, Codex, Cursor, Cline, Zed, OpenCode, Claude Desktop, Windsurf, Devin, Vibe), checks whether the memory store is already locked by a running process (`VELES-031`), and picks single-client stdio or one shared local daemon accordingly — in daemon mode it really starts the daemon (`scripts/install-memory-daemon.sh|.ps1`) and only rewires your harnesses once `https://127.0.0.1:18090/health` answers. Every config write is backed up and atomic; `--apply` exits non-zero if any step fails.
+The wizard detects your platform (macOS / Linux / Windows) and which harnesses are installed (Claude Code, Codex, Cursor, Cline, Zed, OpenCode, Claude Desktop, Windsurf, Devin, Vibe), checks whether the memory store is already locked by a running process (`VELES-031`), and picks single-client stdio or one shared local daemon accordingly. A missing `velesdb-memory` is installed from the latest `velesdb-memory-v*` release archive (sha256-verified; `cargo install` as fallback). In daemon mode it runs `scripts/install-memory-daemon.sh|.ps1` (launchd on macOS, a Scheduled Task on Windows — on Linux no service is installed yet, so the health gate below refuses daemon mode) and only rewires your harnesses once `https://127.0.0.1:18090/health` answers. Every config write is backed up and atomic; `--apply` exits non-zero if any step fails.
 
-**No Python?** Download the packaged installer from Releases — `velesdb-install-wizard.exe` (Windows), `VelesDB Install Wizard.app` / `.dmg` (macOS), `velesdb-install-wizard` binary or `.tar.gz` (Linux), all signed by **WiScale** — and verify it before running:
+**No Python on the target machine?** `python3 scripts/package_wizard.py --apply` builds a self-contained installer for the machine it runs on (PyInstaller does not cross-compile) — `velesdb-install-wizard-<target>.exe` (Windows), `.tar.gz` + `.dmg` with a double-click Terminal launcher (macOS), `.tar.gz` (Linux) — each with a `.sha256` sidecar and an embedded **WiScale** publisher signature. Verify one before running it:
 
 ```bash
-python3 scripts/validate_package.py dist/velesdb-install-wizard.exe   # sha256 manifest + embedded WiScale signature
+python3 scripts/validate_package.py velesdb-install-wizard-x86_64-unknown-linux-gnu.tar.gz   # sha256 sidecar + embedded WiScale signature
 ```
 
 Prefer the manual commands? `cargo install velesdb-memory`, then `claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory`, and install the skills from a verified release with the repo script:

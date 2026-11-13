@@ -633,3 +633,32 @@ class DesktopBridgeContractTests(InstallerHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FromReleaseOutsideCheckoutTests(unittest.TestCase):
+    """`--from-release` is how the packaged install wizard runs the shell
+    installer: from a directory that is no git checkout, with no cargo. The
+    preflight must let it reach the release download instead of demanding a
+    checkout only a source build needs."""
+
+    def test_shell_from_release_needs_no_checkout(self) -> None:
+        if shutil.which("bash") is None or shutil.which("jq") is None:
+            self.skipTest("bash or jq is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir, cwd, home = root / "bin", root / "not-a-checkout", root / "home"
+            for d in (bin_dir, cwd, home):
+                d.mkdir()
+            write_warm_executable(bin_dir / "curl", "#!/bin/sh\nexit 22\n")  # offline
+            result = subprocess.run(
+                ["bash", str(SHELL_INSTALLER), "--from-release", "--yes", "--embedder=hash"],
+                cwd=cwd,
+                env={**os.environ, "HOME": str(home), "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin"},
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        output = result.stdout + result.stderr
+        self.assertNotIn("not inside a git checkout", output)
+        self.assertIn("could not list releases", output)  # it got as far as the download

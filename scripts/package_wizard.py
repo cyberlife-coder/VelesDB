@@ -1,52 +1,121 @@
 #!/usr/bin/env python3
-"""Package the velesdb-memory install wizard as a native, per-OS artifact.
+"""Package the velesdb-memory install wizard as a native, per-target artifact.
 
-Outputs (under --out, default dist/):
-  windows  velesdb-install-wizard.exe        (onefile, VERSIONINFO resource w/ WiScale)
-  macos    VelesDB Install Wizard.app + .dmg  (Info.plist fr.wiscale.*, signature WSCL)
-  linux    velesdb-install-wizard             (onefile) + .tar.gz + .desktop
+One PyInstaller onefile binary per target, carrying every resource the
+wizard reads at runtime (the daemon installers, sync-skills.py and the skill
+sources) at its repo-relative path. Release assets, named per target triple
+like release-memory.yml's daemon archives, each with a `<asset>.sha256`
+sidecar in the same `<hex>  <name>` format:
 
-Every artifact embeds a discreet publisher signature — the string
-"WISCALE-PKG-SIG v1" plus a build meta module compiled into the binary — and
-is listed with its sha256 in <out>/manifest.sha256. Verify any download with:
+  windows  velesdb-install-wizard-<target>.exe     (VERSIONINFO: WiScale)
+  macos    velesdb-install-wizard-<target>.tar.gz  (binary, for curl | sh)
+           velesdb-install-wizard-<target>.dmg     (binary + double-click
+                                                    .command launcher)
+  linux    velesdb-install-wizard-<target>.tar.gz  (binary + .desktop)
 
-    python3 scripts/validate_package.py dist/velesdb-install-wizard.exe
+The wizard is a terminal program, hence no .app bundle: Finder opens a
+`.command` file in Terminal.app, a double-clicked .app has no terminal.
 
-Real code signing (Authenticode signtool on Windows, Developer ID codesign on
-macOS) happens in the RELEASE PIPELINE with CI secrets — never in this repo.
-Here we only embed the publisher identity so the artifact is attributable and
-tamper-evident via the sha256 manifest.
+Every binary embeds a discreet publisher signature — a build meta module
+whose BUILD_SIGNATURE starts with "WISCALE-PKG-SIG v1". Verify a download:
 
-Default is --dry-run (prints the plan, builds nothing); --apply runs
-PyInstaller (pip install pyinstaller) and hdiutil on macOS.
+    python3 scripts/validate_package.py velesdb-install-wizard-<target>.tar.gz
+
+Real code signing (Authenticode, Developer ID) is a release-pipeline
+concern with CI secrets — never this repo.
+
+Default is a dry run (prints the plan); --apply runs PyInstaller
+(pip install pyinstaller) and, on macOS, hdiutil.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
-import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 WIZARD = SCRIPT_DIR / "velesdb_install_wizard.py"
+BINARY = "velesdb-install-wizard"
+META_MODULE = "_wizard_build_meta"
 PUBLISHER = "WiScale"
 SIGNATURE_PREFIX = "WISCALE-PKG-SIG v1"
-BUNDLE_ID = "fr.wiscale.velesdb.install-wizard"
-CF_SIGNATURE = "WSCL"  # 4-char CFBundleSignature
+COMMAND_LAUNCHER = "VelesDB Install Wizard.command"
+
+#: (os, arch) -> target triple of the binary a native build produces.
+_TARGETS: dict[tuple[str, str], str] = {
+    ("macos", "aarch64"): "aarch64-apple-darwin",
+    ("macos", "x86_64"): "x86_64-apple-darwin",
+    ("linux", "x86_64"): "x86_64-unknown-linux-gnu",
+    ("linux", "aarch64"): "aarch64-unknown-linux-gnu",
+    ("windows", "x86_64"): "x86_64-pc-windows-msvc",
+}
 
 
-def detect_os() -> str:
-    return {"darwin": "macos", "linux": "linux", "windows": "windows"}.get(
-        platform.system().lower(), platform.system().lower()
-    )
+def _load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def detect_target() -> str:
+    os_name = {"darwin": "macos", "linux": "linux", "windows": "windows"}.get(platform.system().lower(), "")
+    machine = platform.machine().lower()
+    arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(machine, machine)
+    target = _TARGETS.get((os_name, arch))
+    if target is None:
+        raise SystemExit(f"no wizard build target for {platform.system()}/{platform.machine()}")
+    return target
+
+
+def target_os(target: str) -> str:
+    if target.endswith("windows-msvc"):
+        return "windows"
+    return "macos" if target.endswith("apple-darwin") else "linux"
+
+
+def memory_version() -> str:
+    """The wizard ships with velesdb-memory, so it carries that crate's version."""
+    text = (REPO_ROOT / "crates" / "velesdb-memory" / "Cargo.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if match is None:
+        raise SystemExit("no version in crates/velesdb-memory/Cargo.toml")
+    return match.group(1)
+
+
+def asset_names(target: str) -> list[str]:
+    stem = f"{BINARY}-{target}"
+    return {
+        "windows": [f"{stem}.exe"],
+        "macos": [f"{stem}.tar.gz", f"{stem}.dmg"],
+        "linux": [f"{stem}.tar.gz"],
+    }[target_os(target)]
+
+
+def bundled_data() -> list[tuple[Path, str]]:
+    """(source, destination dir) for --add-data: the wizard's runtime
+    resources and the skills sync-skills.py installs, at repo-relative paths
+    so RESOURCE_ROOT resolves them in the build exactly as in a checkout."""
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))  # the wizard imports wizard_release
+    wizard = _load("velesdb_install_wizard_for_packaging", WIZARD)
+    sync = _load("sync_skills_for_packaging", SCRIPT_DIR / "sync-skills.py")
+    data = [(REPO_ROOT / rel, Path(rel).parent.as_posix()) for rel in wizard.BUNDLED_RESOURCES]
+    data += [(REPO_ROOT / source_rel, source_rel) for source_rel, _ in sync.SKILLS]
+    return data
 
 
 def build_meta_source(version: str) -> str:
@@ -54,17 +123,15 @@ def build_meta_source(version: str) -> str:
     return (
         f'PUBLISHER = "{PUBLISHER}"\n'
         f'BUILD_VERSION = "{version}"\n'
-        f'BUILD_SIGNATURE = "{SIGNATURE_PREFIX} publisher={PUBLISHER} product=velesdb-install-wizard version={version}"\n'
+        f'BUILD_SIGNATURE = "{SIGNATURE_PREFIX} publisher={PUBLISHER} product={BINARY} version={version}"\n'
     )
 
 
 def windows_version_resource(version: str) -> str:
     """RC file compiled into the .exe — the visible 'signature' in Explorer
     properties (CompanyName / LegalCopyright), discreet but attributable."""
-    parts = version.split(".")
-    while len(parts) < 4:
-        parts.append("0")
-    filever = ",".join(parts[:4])
+    parts = re.findall(r"\d+", version)[:4]
+    filever = ",".join(parts + ["0"] * (4 - len(parts)))
     return f"""VSVersionInfo(
   VERSIONINFO,
   FILEVERSION {filever},
@@ -80,8 +147,8 @@ def windows_version_resource(version: str) -> str:
         VALUE "ProductName", "VelesDB Install Wizard"
         VALUE "FileDescription", "velesdb-memory installer wizard"
         VALUE "LegalCopyright", "(c) {PUBLISHER}"
-        VALUE "InternalName", "velesdb-install-wizard"
-        VALUE "OriginalFilename", "velesdb-install-wizard.exe"
+        VALUE "InternalName", "{BINARY}"
+        VALUE "OriginalFilename", "{BINARY}.exe"
       END
     END
     BLOCK "VarFileInfo"
@@ -93,66 +160,43 @@ def windows_version_resource(version: str) -> str:
 """
 
 
-def macos_info_plist(version: str) -> str:
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>VelesDB Install Wizard</string>
-  <key>CFBundleDisplayName</key><string>VelesDB Install Wizard</string>
-  <key>CFBundleIdentifier</key><string>{BUNDLE_ID}</string>
-  <key>CFBundleVersion</key><string>{version}</string>
-  <key>CFBundleShortVersionString</key><string>{version}</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleSignature</key><string>{CF_SIGNATURE}</string>
-  <key>CFBundleExecutable</key><string>velesdb-install-wizard</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
+def macos_command_launcher() -> str:
+    """Double-click launcher shipped in the .dmg: Finder runs it in Terminal."""
+    return f"""#!/bin/bash
+# VelesDB Install Wizard — double-click to run it in Terminal.
+cd "$(dirname "$0")" || exit 1
+./{BINARY}
+status=$?
+echo
+read -r -n 1 -s -p "Press any key to close this window."
+exit $status
 """
 
 
 def linux_desktop_entry() -> str:
-    return """[Desktop Entry]
+    return f"""[Desktop Entry]
 Type=Application
 Name=VelesDB Install Wizard
 Comment=Install velesdb-memory into your agent harnesses
-Exec=velesdb-install-wizard
+Exec={BINARY}
 Terminal=true
 Categories=Utility;
 """
 
 
-def pyinstaller_cmd(os_name: str, version: str, out: Path, work: Path, meta: Path) -> list[str]:
-    exe = ".exe" if os_name == "windows" else ""
+def pyinstaller_cmd(target: str, version: str, out: Path, work: Path, meta: Path) -> list[str]:
     cmd = [
-        sys.executable, "-m", "PyInstaller", "--onefile", "--name", f"velesdb-install-wizard{exe}",
+        sys.executable, "-m", "PyInstaller", "--onefile", "--name", BINARY,
         "--distpath", str(out), "--workpath", str(work), "--specpath", str(work),
-        "--add-data", f"{meta}:.", "--clean", "--noconfirm",
-        str(WIZARD),
+        "--paths", str(SCRIPT_DIR), "--add-data", f"{meta}:.", "--clean", "--noconfirm",
     ]
-    if os_name == "windows":
+    for source, dest in bundled_data():
+        cmd += ["--add-data", f"{source}:{dest}"]
+    if target_os(target) == "windows":
         rc = work / "version.rc"
         rc.write_text(windows_version_resource(version), encoding="utf-8")
         cmd += ["--version-file", str(rc)]
-    if os_name == "macos":
-        plist = work / "Info.plist"
-        plist.write_text(macos_info_plist(version), encoding="utf-8")
-        cmd += ["--osx-bundle-identifier", BUNDLE_ID]
-        # our Info.plist is copied over the generated one post-build (finalize_macos)
-    return cmd
-
-
-def finalize_macos(out: Path, work: Path, version: str) -> list[str]:
-    """Post-build steps on macOS: overwrite the app Info.plist with ours, then
-    create the .dmg with hdiutil. Returns the commands (run only with --apply)."""
-    app = out / "VelesDB Install Wizard.app"
-    plist_dst = app / "Contents" / "Info.plist"
-    dmg = out / f"velesdb-install-wizard-{version}-macos.dmg"
-    return [
-        f'cp "{work / "Info.plist"}" "{plist_dst}"',
-        f'hdiutil create -volname "VelesDB Install Wizard" -srcfolder "{app}" -ov "{dmg}"',
-    ]
+    return cmd + [str(WIZARD)]
 
 
 def sha256_file(path: Path) -> str:
@@ -163,90 +207,95 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def write_manifest(out: Path, artifacts: list[Path]) -> Path:
-    manifest = out / "manifest.sha256"
-    lines = [f"{sha256_file(a)}  {a.name}" for a in sorted(artifacts) if a.exists()]
-    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return manifest
+def write_sidecar(asset: Path) -> Path:
+    sidecar = asset.with_name(asset.name + ".sha256")
+    sidecar.write_text(f"{sha256_file(asset)}  {asset.name}\n", encoding="utf-8")
+    return sidecar
 
 
-def plan(os_name: str, version: str, out: Path) -> dict:
-    """Pure planning: what would be built for this OS (used by --dry-run and tests)."""
-    exe = ".exe" if os_name == "windows" else ""
-    artifact = {
-        "windows": f"velesdb-install-wizard{exe}",
-        "macos": f"VelesDB Install Wizard.app + velesdb-install-wizard-{version}-macos.dmg",
-        "linux": f"velesdb-install-wizard + velesdb-install-wizard-{version}-linux.tar.gz",
-    }[os_name]
+def _tar_gz(archive: Path, members: list[Path]) -> None:
+    with tarfile.open(archive, "w:gz") as tar:
+        for member in members:
+            tar.add(member, arcname=member.name)
+
+
+def finalize(target: str, out: Path, work: Path) -> list[Path]:
+    """Turn PyInstaller's binary into the target's release assets."""
+    os_name = target_os(target)
+    names = asset_names(target)
+    if os_name == "windows":
+        asset = out / names[0]
+        (out / f"{BINARY}.exe").replace(asset)
+        return [asset]
+    binary = out / BINARY
+    extra = work / f"{BINARY}.desktop"
+    if os_name == "linux":
+        extra.write_text(linux_desktop_entry(), encoding="utf-8")
+        _tar_gz(out / names[0], [binary, extra])
+        return [out / names[0]]
+    _tar_gz(out / names[0], [binary])
+    stage = work / "dmg"
+    stage.mkdir()
+    shutil.copy2(binary, stage / BINARY)
+    launcher = stage / COMMAND_LAUNCHER
+    launcher.write_text(macos_command_launcher(), encoding="utf-8")
+    launcher.chmod(0o755)
+    subprocess.run(["hdiutil", "create", "-volname", "VelesDB Install Wizard", "-srcfolder", str(stage),
+                    "-format", "UDZO", "-ov", str(out / names[1])], check=True)
+    return [out / names[0], out / names[1]]
+
+
+def plan(target: str, version: str, out: Path) -> dict:
+    """Pure planning: what would be built (used by the dry run and tests)."""
     return {
-        "os": os_name,
+        "target": target,
         "version": version,
         "out": str(out),
-        "artifact": artifact,
+        "assets": asset_names(target),
+        "bundled": sorted(dest + "/" + src.name for src, dest in bundled_data()),
         "publisher": PUBLISHER,
-        "signature": f"{SIGNATURE_PREFIX} publisher={PUBLISHER} version={version}",
-        "bundle_id": BUNDLE_ID if os_name == "macos" else None,
-        "steps": [
-            "write build meta module (_wizard_build_meta.py with BUILD_SIGNATURE)",
-            f"pyinstaller --onefile --name velesdb-install-wizard{exe} --add-data meta:. --version-file version.rc" if os_name == "windows" else f"pyinstaller --onefile --name velesdb-install-wizard{exe} --add-data meta:.",
-        ] + (["cp Info.plist into .app", "hdiutil create .dmg"] if os_name == "macos" else [])
-          + (["tar czf linux tarball (binary + .desktop)"] if os_name == "linux" else [])
-          + ["write manifest.sha256", "REAL code signing happens in the release pipeline (signtool/codesign + CI secrets), not here"],
+        "signature": f"{SIGNATURE_PREFIX} publisher={PUBLISHER} product={BINARY} version={version}",
     }
 
 
-def main(argv: "list[str] | None" = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--os", choices=["windows", "macos", "linux"], default=detect_os())
-    parser.add_argument("--version", default="1.0.0")
-    parser.add_argument("--out", default=str(REPO_ROOT / "dist"))
-    parser.add_argument("--dry-run", action="store_true", help="print the plan, build nothing (default)")
-    parser.add_argument("--apply", action="store_true", help="really run PyInstaller (+hdiutil on macOS)")
-    args = parser.parse_args(argv)
-
-    out = Path(args.out)
-    p = plan(args.os, args.version, out)
-    print(json.dumps(p, indent=2, ensure_ascii=False))
-    if not args.apply and not args.dry_run:
-        print("\n(dry-run by default — --apply to build)", file=sys.stderr)
-        return 0
-    if not args.apply:
-        return 0
-
-    if shutil.which("pyinstaller") is None and subprocess.run(
-        [sys.executable, "-c", "import PyInstaller"], capture_output=True
-    ).returncode != 0:
+def build(target: str, version: str, out: Path) -> int:
+    if subprocess.run([sys.executable, "-c", "import PyInstaller"], capture_output=True).returncode != 0:
         print("PyInstaller not installed: pip install pyinstaller", file=sys.stderr)
         return 2
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="wizard-pkg-") as work_s:
         work = Path(work_s)
-        meta = work / "_wizard_build_meta.py"
-        meta.write_text(build_meta_source(args.version), encoding="utf-8")
-        cmd = pyinstaller_cmd(args.os, args.version, out, work, meta)
+        meta = work / f"{META_MODULE}.py"
+        meta.write_text(build_meta_source(version), encoding="utf-8")
+        cmd = pyinstaller_cmd(target, version, out, work, meta)
         print("+", " ".join(cmd))
-        r = subprocess.run(cmd, cwd=REPO_ROOT)
-        if r.returncode != 0:
-            return r.returncode
-        artifacts: list[Path] = []
-        if args.os == "macos":
-            for c in finalize_macos(out, work, args.version):
-                print("+", c)
-                if subprocess.run(c, shell=True).returncode != 0:
-                    return 1
-            artifacts += [out / "VelesDB Install Wizard.app", out / f"velesdb-install-wizard-{args.version}-macos.dmg"]
-        elif args.os == "linux":
-            bin_path = out / "velesdb-install-wizard"
-            desktop = out / "velesdb-install-wizard.desktop"
-            desktop.write_text(linux_desktop_entry(), encoding="utf-8")
-            tarball = out / f"velesdb-install-wizard-{args.version}-linux.tar.gz"
-            subprocess.run(["tar", "-czf", str(tarball), "-C", str(out), bin_path.name, desktop.name], check=True)
-            artifacts += [bin_path, tarball]
-        else:
-            artifacts.append(out / "velesdb-install-wizard.exe")
-        manifest = write_manifest(out, artifacts)
-        print(f"manifest: {manifest}")
+        if subprocess.run(cmd, cwd=REPO_ROOT).returncode != 0:
+            return 1
+        for asset in finalize(target, out, work):
+            print(f"asset: {asset} ({write_sidecar(asset).name})")
     return 0
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--target", choices=sorted(set(_TARGETS.values())), default=None,
+                        help="build target (default: this machine; PyInstaller cannot cross-compile)")
+    parser.add_argument("--version", default=None, help="default: crates/velesdb-memory version")
+    parser.add_argument("--out", default=str(REPO_ROOT / "dist"))
+    parser.add_argument("--apply", action="store_true", help="really run PyInstaller (+hdiutil on macOS)")
+    args = parser.parse_args(argv)
+
+    target = args.target or detect_target()
+    version = args.version or memory_version()
+    out = Path(args.out)
+    print(json.dumps(plan(target, version, out), indent=2, ensure_ascii=False))
+    if not args.apply:
+        print("\n(dry run — --apply to build)", file=sys.stderr)
+        return 0
+    if args.target and args.target != detect_target():
+        print(f"cannot build {args.target} on this machine: PyInstaller does not cross-compile", file=sys.stderr)
+        return 2
+    return build(target, version, out)
 
 
 if __name__ == "__main__":
