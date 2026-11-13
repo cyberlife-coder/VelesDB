@@ -385,3 +385,76 @@ class CrossPlatformDetectionTests(unittest.TestCase):
     def test_every_harness_has_at_least_one_candidate_or_cli(self):
         for h in mod.HARNESSES:
             self.assertTrue(h["configs"] or h["cli"], h["name"])
+
+
+class InteractiveUiTests(unittest.TestCase):
+    """Stdlib-only interactive menu: same behavior on Windows/macOS/Linux,
+    ASCII fallback on legacy consoles, EOF/Ctrl-C = safe dry-run exit."""
+
+    def _plan(self) -> dict:
+        return {
+            "platform": {"os": "linux", "arch": "x86_64", "system": "linux"},
+            "store": "/tmp/store",
+            "port": 18090,
+            "proposed_mode": "daemon",
+            "lock": {"lock_path": "/tmp/store/velesdb.lock", "locked": False, "holder_pid": None, "holder_cmd": None},
+            "harnesses": [{"name": "cursor", "kind": "mcp-json", "skills": None, "installed": True, "config": "/tmp/c/mcp.json", "velesdb_memory_entry": "stdio"}],
+            "actions": [{"step": "wire", "harness": "cursor", "from": "stdio", "to": "http"}],
+        }
+
+    def _menu(self, answers):
+        it = iter(answers)
+        with unittest.mock.patch("builtins.input", side_effect=lambda *a: next(it)):
+            return mod.interactive_menu(self._plan(), types.SimpleNamespace(port=18090, yes=True))
+
+    def test_quit_on_choice_3_and_empty(self):
+        self.assertEqual(self._menu(["3"]), 0)
+        self.assertEqual(self._menu([""]), 0)
+
+    def test_eof_and_ctrl_c_quit_safely(self):
+        with unittest.mock.patch("builtins.input", side_effect=EOFError):
+            self.assertEqual(mod.interactive_menu(self._plan(), types.SimpleNamespace(port=18090, yes=True)), 0)
+        with unittest.mock.patch("builtins.input", side_effect=KeyboardInterrupt):
+            self.assertEqual(mod.interactive_menu(self._plan(), types.SimpleNamespace(port=18090, yes=True)), 0)
+
+    def test_apply_choice_calls_apply_plan(self):
+        with unittest.mock.patch.object(mod, "apply_plan", return_value=["ok"]) as ap:
+            self.assertEqual(self._menu(["1"]), 0)
+            ap.assert_called_once()
+            self.assertFalse(ap.call_args.kwargs.get("dry", True))
+
+    def test_json_choice_then_quit(self):
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = self._menu(["2", "q"])
+        self.assertEqual(rc, 0)
+        self.assertIn('"proposed_mode": "daemon"', buf.getvalue())
+
+    def test_invalid_choice_reprompts(self):
+        self.assertEqual(self._menu(["x", "9", "3"]), 0)
+
+    def test_box_utf8_vs_ascii(self):
+        utf = mod._box("Titre", ["ligne un", "deux"], color=False, enc="utf-8")
+        asc = mod._box("Titre", ["ligne un", "deux"], color=False, enc="cp1252")
+        self.assertIn("┌", utf)
+        self.assertIn("└", utf)
+        self.assertNotIn("┌", asc)
+        self.assertIn("+", asc)
+        # same geometry in both charsets
+        self.assertEqual(len(utf.splitlines()), len(asc.splitlines()))
+
+    def test_charset_detection(self):
+        self.assertEqual(mod._ui_charset("UTF-8")[0], "┌")
+        self.assertEqual(mod._ui_charset("cp850")[0], "+")
+
+    def test_pretty_plan_renders_all_sections(self):
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            mod.print_plan_pretty(self._plan())
+        out = buf.getvalue()
+        self.assertIn("assistant d'installation", out)
+        self.assertIn("linux/x86_64", out)
+        self.assertIn("cursor", out)
+        self.assertIn("stdio→http", out)
