@@ -34,6 +34,7 @@ import os
 import re
 import platform
 import shutil
+import tempfile
 import subprocess
 import sys
 import textwrap
@@ -46,6 +47,19 @@ else:
 
 DEFAULT_STORE = Path.home() / ".velesdb-memory"
 LOCK_FILENAME = "velesdb.lock"
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+#: Discreet publisher marker, embedded in packaged builds (exe/dmg/app) and
+#: printed by --version. Real code signing happens in the release pipeline
+#: (signtool / codesign with CI secrets) — never in this repo.
+PUBLISHER = "WiScale"
+__version__ = "1.0.0"
+try:
+    # injected at packaging time by scripts/package_wizard.py (compiled into
+    # the exe/app/dmg binary) — proves the artifact is an official build
+    from _wizard_build_meta import BUILD_SIGNATURE  # type: ignore
+except ImportError:
+    BUILD_SIGNATURE = None
 
 #: One entry per supported harness. `configs` is a flat, OS-agnostic candidate
 #: list (first existing wins). `kind` says how the MCP entry is read/written.
@@ -99,7 +113,7 @@ HARNESSES: list[dict] = [
     {
         "name": "opencode",
         "cli": "opencode",
-        "configs": ["~/.config/opencode/opencode.json", "%APPDATA%/opencode/opencode.json", "opencode.json"],
+        "configs": ["~/.config/opencode/opencode.json", "%APPDATA%/opencode/opencode.json"],
         "kind": "opencode-mcp",
         "skills": None,
     },
@@ -131,8 +145,8 @@ HARNESSES: list[dict] = [
     {
         "name": "vibe",
         "cli": "vibe",
-        "configs": ["~/.vibe/mcp.json", "%USERPROFILE%/.vibe/mcp.json"],
-        "kind": "mcp-json",
+        "configs": ["~/.vibe/config.toml", "%USERPROFILE%/.vibe/config.toml"],
+        "kind": "vibe-toml",
         "skills": "~/.vibe/skills",
     },
 ]
@@ -182,8 +196,7 @@ def detect_harnesses(home: Path, os_name: str, scan_cli: bool = True) -> list[di
                 installed = True
                 break
         if not installed and h["cli"] is None:
-            # no cli, no config: only the config dir heuristic (e.g. ~/.codex)
-            continue
+            continue  # no cli and no config file: nothing to wire
         entry = {
             "name": h["name"],
             "kind": h["kind"],
@@ -196,18 +209,69 @@ def detect_harnesses(home: Path, os_name: str, scan_cli: bool = True) -> list[di
     return found
 
 
+def _read_text(path: Path) -> str:
+    """Read a config file tolerating a UTF-8 BOM (Windows editors add one)."""
+    return path.read_text(encoding="utf-8-sig")
+
+
+def _toml_section(text: str, header: str) -> "list[str] | None":
+    """Return the body lines of a TOML table section (until the next line
+    starting with '['), or None if absent. Line-scan: no tomllib dependency."""
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == header:
+            start = i
+            break
+    if start is None:
+        return None
+    body = []
+    for ln in lines[start + 1:]:
+        if ln.startswith("["):
+            break
+        body.append(ln)
+    return body
+
+
+def _toml_entry_mode(body: "list[str]") -> "str | None":
+    """'http' if the section sets url=, 'stdio' if command=, else None."""
+    has_url = has_cmd = False
+    for ln in body:
+        stripped = ln.strip()
+        if stripped.startswith("url"):
+            has_url = True
+        elif stripped.startswith("command"):
+            has_cmd = True
+    if has_url:
+        return "http"
+    if has_cmd:
+        return "stdio"
+    return None
+
+
 def read_mcp_entry(kind: str, config_path: Path | None) -> str | None:
     """Return 'stdio' | 'http' | None for an existing velesdb-memory entry."""
-    if config_path is None or not config_path.exists():
-        return None
     try:
+        if kind == "claude-cli":
+            if shutil.which("claude") is None:
+                return None
+            out = subprocess.run(
+                ["claude", "mcp", "list", "--scope", "user"],
+                capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL,
+            )
+            if out.returncode == 0 and "velesdb-memory" in out.stdout:
+                return "http" if "https://" in out.stdout or "http://" in out.stdout else "stdio"
+            return None
+        if config_path is None or not config_path.exists():
+            return None
         if kind in ("mcp-json", "devin-envelope"):
-            data = json.loads(config_path.read_text(encoding="utf-8"))
-            if kind == "devin-envelope":
-                data = data.get("mcpServers", {})
-            else:
-                data = data.get("mcpServers", {})
-            entry = data.get("velesdb-memory")
+            data = json.loads(_read_text(config_path))
+            if not isinstance(data, dict):
+                return None
+            servers = data.get("mcpServers", {})
+            if not isinstance(servers, dict):
+                return None
+            entry = servers.get("velesdb-memory")
             if not isinstance(entry, dict):
                 return None
             if "url" in entry:
@@ -215,24 +279,43 @@ def read_mcp_entry(kind: str, config_path: Path | None) -> str | None:
             if "command" in entry:
                 return "stdio"
         elif kind == "codex-toml":
-            text = config_path.read_text(encoding="utf-8")
-            if "[mcp_servers.velesdb-memory]" in text:
-                return "stdio"  # toml entry spawns the binary
+            body = _toml_section(_read_text(config_path), "[mcp_servers.velesdb-memory]")
+            return _toml_entry_mode(body) if body is not None else None
+        elif kind == "vibe-toml":
+            text = _read_text(config_path)
+            marker = text.find('name = "velesdb-memory"')
+            if marker == -1:
+                return None
+            start = text.rfind("{", 0, marker)
+            end = text.find("}", marker)
+            if start == -1 or end == -1:
+                return None
+            obj = text[start:end]
+            if "url" in obj:
+                return "http"
+            if "command" in obj:
+                return "stdio"
+            return None
         elif kind == "zed-context-servers":
-            data = json.loads(config_path.read_text(encoding="utf-8"))
+            data = json.loads(_read_text(config_path))
+            if not isinstance(data, dict):
+                return None
             entry = (data.get("context_servers") or {}).get("velesdb-memory")
-            return "stdio" if isinstance(entry, dict) else None
+            if not isinstance(entry, dict):
+                return None
+            if "url" in entry:
+                return "http"
+            return "stdio" if "command" in entry or "path" in entry else None
         elif kind == "opencode-mcp":
-            data = json.loads(config_path.read_text(encoding="utf-8"))
+            data = json.loads(_read_text(config_path))
+            if not isinstance(data, dict):
+                return None
             entry = (data.get("mcp") or {}).get("velesdb-memory")
-            return "stdio" if isinstance(entry, dict) else None
-        elif kind == "claude-cli":
-            out = subprocess.run(
-                ["claude", "mcp", "list", "--scope", "user"],
-                capture_output=True, text=True,
-            )
-            if out.returncode == 0 and "velesdb-memory" in out.stdout:
-                return "http" if "https://" in out.stdout or "http://" in out.stdout else "stdio"
+            if not isinstance(entry, dict):
+                return None
+            if entry.get("type") == "remote" or "url" in entry:
+                return "http"
+            return "stdio" if entry.get("type") == "local" or "command" in entry else None
     except (OSError, json.JSONDecodeError, subprocess.SubprocessError):
         return None
     return None
@@ -292,7 +375,7 @@ def _lock_holder(lock_path: Path) -> tuple[int | None, str | None]:
                 if pids:
                     pid = pids[0]
                     cmd = subprocess.run(
-                        ["ps", "-o", "comm=", "-p", str(pid)],
+                        ["ps", "-o", "args=", "-p", str(pid)],
                         capture_output=True, text=True, timeout=5,
                     ).stdout.strip()
                     return pid, cmd or None
@@ -314,6 +397,22 @@ def _lock_holder(lock_path: Path) -> tuple[int | None, str | None]:
 
 
 def _lock_holder_windows() -> tuple[int | None, str | None]:
+    if shutil.which("powershell") or shutil.which("pwsh"):
+        ps = shutil.which("pwsh") or shutil.which("powershell")
+        try:
+            out = subprocess.run(
+                [ps, "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process -Filter \"Name like 'velesdb-memory%.exe'\" "
+                 "| Select-Object -First 1 ProcessId,CommandLine | ConvertTo-Json -Compress"],
+                capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                info = json.loads(out.stdout)
+                pid, cmd = info.get("ProcessId"), info.get("CommandLine")
+                if pid and cmd:
+                    return int(pid), str(cmd)
+        except (subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+            pass
     if shutil.which("tasklist"):
         try:
             out = subprocess.run(
@@ -342,17 +441,13 @@ def lock_holder_is_memory(lock: dict) -> bool:
 
 
 def propose_mode(harnesses: list[dict], lock: dict) -> str:
-    """daemon when several harnesses are installed or the store is already
-    locked by a live direct process; stdio for the single-harness case."""
+    """daemon when the store lock is held by ANY live process (a second direct
+    writer would fail with VELES-031) or several harnesses are installed;
+    stdio for the single-harness, lock-free case."""
+    if lock["locked"]:
+        return "daemon"
     installed = [h for h in harnesses if h["installed"]]
-    direct = [h for h in installed if h["velesdb_memory_entry"] == "stdio"]
-    if lock["locked"] and any(h["velesdb_memory_entry"] == "stdio" for h in installed):
-        return "daemon"
-    if len(installed) > 1:
-        return "daemon"
-    if direct:
-        return "stdio"
-    return "stdio" if len(installed) <= 1 else "daemon"
+    return "daemon" if len(installed) > 1 else "stdio"
 
 
 def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: bool = True) -> dict:
@@ -383,6 +478,7 @@ def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: b
     return {
         "platform": plat,
         "store": str(store),
+        "port": port,
         "lock": lock,
         "harnesses": harnesses,
         "proposed_mode": proposed,
@@ -412,7 +508,7 @@ def print_plan(plan: dict) -> None:
     for a in plan["actions"]:
         line = f"  - {a['step']}: {a.get('harness', a.get('detail', ''))}"
         if a.get("from"):
-            line += f" {a['from']}→{a['to']}"
+            line += f" {a['from']}->{a['to']}"
         print(line.strip())
     if not plan["actions"]:
         print("  (aucune — déjà à jour)")
@@ -430,10 +526,13 @@ def find_binary() -> Path | None:
     """An already-installed velesdb-memory binary, if any (velesdb-memory.exe
     on Windows)."""
     exe = ".exe" if sys.platform == "win32" else ""
+    on_path = shutil.which(f"velesdb-memory{exe}")
+    if on_path:
+        return Path(on_path)
     candidates = [
         Path.home() / ".cargo" / "bin" / f"velesdb-memory{exe}",
         Path.home() / ".local" / "bin" / f"velesdb-memory{exe}",
-        Path("target/release") / f"velesdb-memory{exe}",
+        REPO_ROOT / "target" / "release" / f"velesdb-memory{exe}",
     ]
     for c in candidates:
         if c.exists():
@@ -441,51 +540,149 @@ def find_binary() -> Path | None:
     return None
 
 
-def install_binary(plat: dict, dry: bool = True) -> str:
-    """Install path for the binary: existing > release download (sha256
-    verified) > cargo install. In PR-B the actual daemon build/run is
-    delegated to install-memory-daemon.sh/.ps1; here we only resolve the
-    binary path."""
+def install_binary(plat: dict, dry: bool = True) -> "str | None":
+    """Resolve an existing velesdb-memory binary to a REAL path, or None.
+    The wizard never writes a descriptive sentence into a `command` field:
+    installation itself (release asset with sha256 sidecar, or cargo) is done
+    by scripts/install-memory-daemon.sh|.ps1, which apply_plan runs in daemon
+    mode — see run_daemon_installer()."""
     existing = find_binary()
-    if existing:
-        return str(existing)
-    if shutil.which("cargo"):
-        return "cargo install velesdb-memory  # then ~/.cargo/bin/velesdb-memory"
-    target = {"macos": {"aarch64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"},
-              "linux": {"x86_64": "x86_64-unknown-linux-gnu", "aarch64": "aarch64-unknown-linux-gnu"},
-              "windows": {"x86_64": "x86_64-pc-windows-msvc"}}.get(plat["os"], {}).get(plat["arch"])
-    if target:
-        return f"release asset velesdb-memory-daemon-{target}.tar.gz (sha256 verified) from {RELEASE_REPO}"
-    return "unsupported platform — build from source"
+    return str(existing) if existing else None
+
+
+def daemon_installer_script(os_name: str) -> Path:
+    name = "install-memory-daemon.ps1" if os_name == "windows" else "install-memory-daemon.sh"
+    return SCRIPT_DIR / name
+
+
+def run_daemon_installer(plat: dict, port: int, store: Path, yes: bool) -> "tuple[bool, str]":
+    """Really run install-memory-daemon (absolute path, anchored to this repo),
+    then probe /health. Returns (ok, detail). The daemon installer does the
+    sha256-verified release download / build and the OS wiring (launchd /
+    Scheduled Task); the wizard refuses to wire harnesses to an http endpoint
+    that does not answer."""
+    script = daemon_installer_script(plat["os"])
+    if not script.exists():
+        return False, f"daemon installer not found: {script}"
+    if plat["os"] == "windows":
+        ps = shutil.which("pwsh") or shutil.which("powershell")
+        if ps is None:
+            return False, "powershell/pwsh not found for install-memory-daemon.ps1"
+        cmd = [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+               "-Port", str(port), "-Store", str(store)]
+        if yes:
+            cmd.append("-Yes")
+    else:
+        cmd = ["bash", str(script), f"--port={port}", f"--store={store}"] + (["--yes"] if yes else [])
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"daemon installer failed to start: {e}"
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout or "").strip()[-300:]
+        return False, f"daemon installer exited {r.returncode}: {tail}"
+    ok, detail = probe_health(port)
+    return ok, f"/health: {detail}"
+
+
+def probe_health(port: int, attempts: int = 10) -> "tuple[bool, str]":
+    """Poll https://127.0.0.1:<port>/health (self-signed local CA, so the
+    default context is disabled on purpose — loopback only, cert is pinned by
+    the daemon installer's own ground-truth check)."""
+    import ssl, time, urllib.request
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    last = "no attempt"
+    for _ in range(attempts):
+        try:
+            with urllib.request.urlopen(f"https://127.0.0.1:{port}/health", timeout=3, context=ctx) as resp:
+                return resp.status == 200, f"HTTP {resp.status}"
+        except Exception as e:  # noqa: BLE001 — probe must never crash the wizard
+            last = f"{type(e).__name__}: {e}"
+            time.sleep(1)
+    return False, last
+
+
+def _atomic_write_text(path: Path, rendered: str, dry: bool, kind: str = "json") -> "str | None":
+    """Backup + unique tmp (mkstemp, O_EXCL, same dir) + fsync + os.replace +
+    post-write re-read validation. Preserves the original file mode; refuses
+    symlink targets. Returns an error string, or None on success."""
+    if path.is_symlink():
+        return f"{path} is a symlink — refusing to touch it"
+    if dry:
+        return None
+    import stat as _stat
+    backup = path.with_suffix(path.suffix + f".bak.{__import__('time').time_ns()}")
+    mode = None
+    if path.exists():
+        shutil.copy2(path, backup)
+        mode = _stat.S_IMODE(path.stat().st_mode)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(rendered)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp_name, mode)
+        os.replace(tmp_name, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        return f"write failed: {e}"
+    # post-write validation: what landed on disk is what we validated
+    err = _validate_written(path, kind)
+    if err:
+        if backup.exists():
+            shutil.copy2(backup, path)
+            return f"{err} — restored from backup"
+        return err + " — original was empty"
+    return None
+
+
+def _validate_written(path: Path, kind: str) -> "str | None":
+    try:
+        text = _read_text(path)
+        if kind == "json":
+            json.loads(text)
+        elif kind == "toml":
+            import tomllib
+            tomllib.loads(text)
+    except ImportError:
+        return None  # no stdlib parser available: pre-write validation already ran
+    except Exception as e:  # noqa: BLE001
+        return f"post-write validation failed ({e})"
+    return None
 
 
 def write_json_atomic(path: Path, mutate, dry: bool = True) -> bool:
-    """Backup + tmp-write + rename + validate + rollback on invalid result.
-
-    Never destroys the existing file: a backup `<name>.bak.<epoch>` is kept,
-    and if the mutated JSON does not parse, the original is restored.
-    """
-    original = path.read_text(encoding="utf-8") if path.exists() else "{}"
+    """Backup + tmp-write + rename + validate. Never destroys the existing
+    file: a backup `<name>.bak.<ns>` is kept; malformed pre-existing JSON is
+    refused untouched; the JSON root must be an object."""
+    original = _read_text(path) if path.exists() else "{}"
     try:
         data = json.loads(original)
     except json.JSONDecodeError:
-        # Pre-existing malformed config: refuse to write, say so.
-        print(f"  ⚠️  {path} is not valid JSON — refusing to touch it (fix it by hand)", file=sys.stderr)
+        print(f"  [!] {path} is not valid JSON — refusing to touch it (fix it by hand)", file=sys.stderr)
+        return False
+    if not isinstance(data, dict):
+        print(f"  [!] {path} is valid JSON but not an object — refusing to touch it", file=sys.stderr)
         return False
     mutated = mutate(json.loads(original))
+    if not isinstance(mutated, dict):
+        return False
     rendered = json.dumps(mutated, indent=2, ensure_ascii=False) + "\n"
     try:
         json.loads(rendered)  # validate before writing
     except json.JSONDecodeError:
         return False
-    if dry:
-        return True
-    backup = path.with_suffix(path.suffix + f".bak.{int(__import__('time').time())}")
-    if path.exists():
-        shutil.copy2(path, backup)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(rendered, encoding="utf-8")
-    os.replace(tmp, path)
+    err = _atomic_write_text(path, rendered, dry)
+    if err:
+        print(f"  [!] {err}", file=sys.stderr)
+        return False
     return True
 
 
@@ -497,37 +694,31 @@ def _http_entry(port: int) -> dict:
     return {"url": f"https://127.0.0.1:{port}/mcp", "type": "http"}
 
 
-def wire_harness(harness: dict, mode: str, bin_path: str, port: int, store: Path, dry: bool = True) -> str:
+def _run_cli(cmd: "list[str]") -> "subprocess.CompletedProcess":
+    """Run a harness CLI without ever hanging on an interactive prompt."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+
+
+def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, store: Path, dry: bool = True) -> str:
     """Wire one harness to the chosen mode. Returns a status string."""
     kind = harness["kind"]
     name = harness["name"]
     target = "http" if mode == "daemon" else "stdio"
+    if target == "stdio" and (bin_path is None or not Path(bin_path).exists()):
+        return f"{name}: REFUSED — no velesdb-memory binary on disk; run scripts/install-memory-daemon first"
     if kind == "claude-cli":
         if shutil.which("claude") is None:
             return f"{name}: claude CLI not found — skipped"
         if dry:
             return f"{name}: would run `claude mcp add --transport {target} --scope user velesdb-memory`"
-        subprocess.run(["claude", "mcp", "remove", "velesdb-memory", "-s", "user"],
-                       capture_output=True)
+        _run_cli(["claude", "mcp", "remove", "velesdb-memory", "-s", "user"])
         cmd = ["claude", "mcp", "add", "--scope", "user", "velesdb-memory"]
         if target == "http":
             cmd += ["--transport", "http", f"https://127.0.0.1:{port}/mcp"]
         else:
-            cmd += ["--env", f"VELESDB_MEMORY_PATH={store}", "--", bin_path]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        return f"{name}: {'wired ' + target if r.returncode == 0 else 'FAILED: ' + r.stderr.strip()}"
-    if kind == "codex":
-        if shutil.which("codex") is None:
-            return f"{name}: codex CLI not found — skipped"
-        if dry:
-            return f"{name}: would run `codex mcp add velesdb-memory` ({target})"
-        if target == "http":
-            r = subprocess.run(["codex", "mcp", "add", "velesdb-memory", "--url", f"https://127.0.0.1:{port}/mcp"],
-                               capture_output=True, text=True)
-        else:
-            r = subprocess.run(["codex", "mcp", "add", "velesdb-memory", "--env", f"VELESDB_MEMORY_PATH={store}", "--", bin_path],
-                               capture_output=True, text=True)
-        return f"{name}: {'wired ' + target if r.returncode == 0 else 'FAILED: ' + r.stderr.strip()}"
+            cmd += ["--env", f"VELESDB_MEMORY_PATH={store}", "--", str(bin_path)]
+        r = _run_cli(cmd)
+        return f"{name}: {'wired ' + target if r.returncode == 0 else 'FAILED: ' + (r.stderr or '').strip()}"
 
     # file-based configs
     config = harness.get("config")
@@ -535,71 +726,176 @@ def wire_harness(harness: dict, mode: str, bin_path: str, port: int, store: Path
         return f"{name}: no config file found — skipped"
     path = Path(config)
 
+    if kind == "codex-toml":
+        return wire_codex_toml(path, target, str(bin_path), port, store, dry)
+    if kind == "vibe-toml":
+        return wire_vibe_toml(path, target, str(bin_path), port, store, dry)
+
     def mutate(data: dict) -> dict:
-        if kind == "mcp-json":
+        if kind in ("mcp-json", "devin-envelope"):
             servers = data.setdefault("mcpServers", {})
             # replace in place: the stdio entry is overwritten, never duplicated
-            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(bin_path, store)
-        elif kind == "devin-envelope":
-            servers = data.setdefault("mcpServers", {})
-            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(bin_path, store)
+            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(str(bin_path), store)
         elif kind == "zed-context-servers":
             servers = data.setdefault("context_servers", {})
             servers["velesdb-memory"] = (
                 {"url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
-                else {"command": {"path": bin_path, "args": [], "env": {"VELESDB_MEMORY_PATH": str(store)}}}
+                else {"command": {"path": str(bin_path), "args": [], "env": {"VELESDB_MEMORY_PATH": str(store)}}}
             )
         elif kind == "opencode-mcp":
             servers = data.setdefault("mcp", {})
             servers["velesdb-memory"] = (
                 {"type": "remote", "url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
-                else {"type": "local", "command": [bin_path], "enabled": True,
+                else {"type": "local", "command": [str(bin_path)], "enabled": True,
                       "environment": {"VELESDB_MEMORY_PATH": str(store)}}
             )
-        elif kind == "codex-toml":
-            # TOML path handled separately below
-            pass
         return data
 
-    if kind == "codex-toml":
-        return wire_codex_toml(path, target, bin_path, port, store, dry)
     ok = write_json_atomic(path, mutate, dry=dry)
     if not ok:
         return f"{name}: REFUSED (see warning) — config untouched"
     return f"{name}: wired {target} ({path})"
 
 
+def _toml_escape(value: str) -> str:
+    return value.replace(chr(92), chr(92)*2).replace(chr(34), chr(92)+chr(34))
+
+
+def _replace_toml_section(text: str, header: str, new_body_lines: "list[str]") -> str:
+    """Replace the body of a TOML table section with new lines, anchored on
+    lines starting with '[' — safe even if the old body contains '[' in a
+    value (e.g. args = ["--http"])."""
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    replaced = False
+    while i < len(lines):
+        if lines[i].strip() == header:
+            out.append(header)
+            out.extend(new_body_lines)
+            i += 1
+            while i < len(lines) and not lines[i].startswith("["):
+                i += 1  # skip old body
+            replaced = True
+            continue
+        out.append(lines[i])
+        i += 1
+    if not replaced:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(header)
+        out.extend(new_body_lines)
+    return "\n".join(out) + "\n"
+
+
 def wire_codex_toml(path: Path, target: str, bin_path: str, port: int, store: Path, dry: bool) -> str:
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    block = (
-        f"[mcp_servers.velesdb-memory]\nurl = \"https://127.0.0.1:{port}/mcp\"\n"
-        if target == "http"
-        else f"[mcp_servers.velesdb-memory]\ncommand = \"{bin_path}\"\nargs = []\nenv = {{ VELESDB_MEMORY_PATH = \"{store}\" }}\n"
-    )
-    import re
-    new = re.sub(r"\[mcp_servers\.velesdb-memory\]\n(?:[^\[]*\n)*", block, text)
-    if new == text:
-        new = text + ("\n" if text and not text.endswith("\n") else "") + block
+    text = _read_text(path) if path.exists() else ""
+    if target == "http":
+        body = [f'url = "https://127.0.0.1:{port}/mcp"']
+    else:
+        body = [f'command = "{_toml_escape(bin_path)}"', "args = []",
+                f'env = {{ VELESDB_MEMORY_PATH = "{_toml_escape(str(store))}" }}']
+    new = _replace_toml_section(text, "[mcp_servers.velesdb-memory]", body)
+    try:
+        import tomllib
+        tomllib.loads(new)  # validate before writing when the stdlib parser exists
+    except ImportError:
+        pass
+    except Exception as e:  # noqa: BLE001 — refuse invalid TOML, never write it
+        return f"codex: REFUSED — resulting TOML invalid ({e})"
     if dry:
         return f"codex: would update {path} ({target})"
-    backup = path.with_suffix(".bak")
-    if path.exists():
-        shutil.copy2(path, backup)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(new, encoding="utf-8")
-    os.replace(tmp, path)
+    err = _atomic_write_text(path, new, dry=False, kind="toml")
+    if err:
+        return f"codex: REFUSED — {err}"
     return f"codex: wired {target} ({path})"
 
 
+def wire_vibe_toml(path: Path, target: str, bin_path: str, port: int, store: Path, dry: bool) -> str:
+    """Vibe reads ~/.vibe/config.toml: mcp_servers is an inline array of objects
+    { name = "velesdb-memory", url|command, transport? }. We replace the object
+    whose name matches by brace-matching, or append one before the closing ']'."""
+    text = _read_text(path) if path.exists() else "mcp_servers = []\n"
+    if target == "http":
+        obj = (f'{{ name = "velesdb-memory", url = "https://127.0.0.1:{port}/mcp", '
+               f'transport = "streamable-http" }}')
+    else:
+        obj = (f'{{ name = "velesdb-memory", command = "{_toml_escape(bin_path)}", '
+               f'args = [], env = {{ VELESDB_MEMORY_PATH = "{_toml_escape(str(store))}" }} }}')
+    new = _replace_vibe_mcp_entry(text, obj)
+    if dry:
+        return f"vibe: would update {path} ({target})"
+    err = _atomic_write_text(path, new, dry=False, kind="toml")
+    if err:
+        return f"vibe: REFUSED — {err}"
+    return f"vibe: wired {target} ({path})"
+
+
+def _match_brace(text: str, open_idx: int) -> int:
+    """Index of the '}' matching the '{' at open_idx, or -1."""
+    depth = 0
+    for j in range(open_idx, len(text)):
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+    return -1
+
+
+def _replace_vibe_mcp_entry(text: str, new_obj: str) -> str:
+    """Replace the { ... name = "velesdb-memory" ... } object inside the
+    mcp_servers = [ ... ] array (brace-matched), or insert before the ']'."""
+    marker = "mcp_servers"
+    idx = text.find(marker)
+    if idx == -1:
+        return text.rstrip("\n") + f"\n{marker} = [ {new_obj} ]\n"
+    arr_start = text.find("[", idx)
+    if arr_start == -1:
+        return text
+    depth = 0
+    i = arr_start
+    while i < len(text):
+        ch = text[i]
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                break
+        elif ch == "{" and depth == 1:
+            close = _match_brace(text, i)
+            if close != -1 and 'name = "velesdb-memory"' in text[i:close]:
+                return text[:i] + new_obj + text[close + 1:]
+            i = close if close != -1 else i
+        i += 1
+    if depth == 0 and i < len(text):  # closing ']' found: insert before it
+        inner = text[arr_start + 1:i].strip()
+        sep = ", " if inner else ""
+        return text[:i] + sep + new_obj + text[i:]
+    return text
+
+
 def apply_plan(plan: dict, dry: bool = True, yes: bool = False) -> list[str]:
-    """Execute the plan's actions. Returns per-action status strings."""
+    """Execute the plan's actions. Returns per-action status strings; any
+    status containing FAILED or REFUSED means the apply did not fully succeed
+    (main() turns that into a non-zero exit code)."""
     statuses: list[str] = []
     mode = plan["proposed_mode"]
+    port = plan.get("port", 18090)
+    store = Path(plan["store"])
     bin_path = install_binary(plan["platform"], dry=dry)
-    statuses.append(f"binary: {bin_path}")
+    if bin_path is None:
+        statuses.append("binary: NOT FOUND on disk (PATH, ~/.cargo/bin, ~/.local/bin, repo target/release)")
+    else:
+        statuses.append(f"binary: {bin_path}")
     if mode == "daemon" and not dry:
-        script = "scripts/install-memory-daemon.ps1" if plan["platform"]["os"] == "windows" else "scripts/install-memory-daemon.sh"
-        statuses.append(f"daemon: delegated to {script} (launchd/Scheduled Task/systemd + TLS CA + /health check)")
+        ok, detail = run_daemon_installer(plan["platform"], port, store, yes)
+        statuses.append(f"daemon: {'up — ' + detail if ok else 'FAILED — ' + detail}")
+        if not ok:
+            statuses.append("harnesses: NOT rewired — the daemon endpoint is not answering; configs untouched")
+            return statuses
     for h in plan["harnesses"]:
         if not h["installed"]:
             continue
@@ -607,15 +903,20 @@ def apply_plan(plan: dict, dry: bool = True, yes: bool = False) -> list[str]:
         if h["velesdb_memory_entry"] == target:
             statuses.append(f"{h['name']}: already {target} — untouched")
             continue
-        statuses.append(wire_harness(h, mode, str(bin_path), plan.get("port", 18090), Path(plan["store"]), dry=dry))
-    # skills for harnesses that support them
+        statuses.append(wire_harness(h, mode, bin_path, port, store, dry=dry))
+    # skills for harnesses that support them (path anchored to this repo, not the CWD)
     if not dry:
+        sync = SCRIPT_DIR / "sync-skills.py"
         for client in ("claude", "codex"):
             if any(h["name"] == ("claude-code" if client == "claude" else "codex") and h["installed"] for h in plan["harnesses"]):
-                r = subprocess.run([sys.executable, "scripts/sync-skills.py", "--install", "--client", client],
-                                   capture_output=True, text=True)
-                statuses.append(f"skills {client}: {'ok' if r.returncode == 0 else 'FAILED: ' + r.stderr.strip()[-200:]}")
+                try:
+                    r = subprocess.run([sys.executable, str(sync), "--install", "--client", client],
+                                       capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+                    statuses.append(f"skills {client}: {'ok' if r.returncode == 0 else 'FAILED: ' + (r.stderr or '').strip()[-200:]}")
+                except (OSError, subprocess.SubprocessError) as e:
+                    statuses.append(f"skills {client}: FAILED: {e}")
     return statuses
+
 
 # ---------------------------------------------------------------------------
 # Interactive UI (stdlib only, identical on Windows/macOS/Linux). Unicode box
@@ -628,7 +929,7 @@ def _ui_charset(enc: "str | None" = None) -> tuple[str, str, str, str, str, str]
     consoles (cp1252/cp850). Returns (top-left, horiz, vert, top-right,
     bottom-left, bottom-right)."""
     enc = (enc if enc is not None else (sys.stdout.encoding or "")).lower()
-    if "utf" in enc:
+    if "utf" in enc or enc == "cp65001":
         return "┌", "─", "│", "┐", "└", "┘"
     return "+", "-", "|", "+", "+", "+"
 
@@ -696,7 +997,7 @@ def print_plan_pretty(plan: dict) -> None:
     for a in plan["actions"]:
         line = f"  • {a['step']}: {a.get('harness', a.get('detail', ''))}"
         if a.get("from"):
-            line += f" {a['from']}→{a['to']}"
+            line += f" {a['from']}->{a['to']}"
         lines.append(line.strip())
     if not plan["actions"]:
         lines.append("  (aucune — déjà à jour)")
@@ -727,44 +1028,66 @@ def interactive_menu(plan: dict, args) -> int:
         if ans in ("3", "q", "n", ""):
             return 0
         if ans in ("1", "y", "apply"):
-            plan["port"] = args.port
             print("Application du plan :")
-            for status in apply_plan(plan, dry=False, yes=args.yes):
+            statuses = apply_plan(plan, dry=False, yes=args.yes)
+            for status in statuses:
                 print(f"  - {status}")
-            return 0
+            return 1 if _statuses_failed(statuses) else 0
         print("Choix invalide.")
 
 
 def main(argv: "list[str] | None" = None) -> int:
+    # Legacy Windows consoles (cp1252/cp850) must never crash on a glyph:
+    # replace unencodable chars instead of raising UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--store", default=str(DEFAULT_STORE), help="store directory (default: ~/.velesdb-memory)")
     parser.add_argument("--mode", choices=["stdio", "daemon"], default=None, help="force install mode (default: proposed)")
     parser.add_argument("--port", type=int, default=18090, help="daemon port (daemon mode)")
     parser.add_argument("--home", default=str(Path.home()), help="home directory to scan (testing)")
-    parser.add_argument("--dry-run", action="store_true", help="print the plan, change nothing (default in PR-A)")
-    parser.add_argument("--json", action="store_true", help="print the plan as JSON")
+    parser.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
+    parser.add_argument("--json", action="store_true", help="print the plan as JSON (machine-readable)")
     parser.add_argument("--no-cli-scan", action="store_true", help="detect harnesses by config files only (testing)")
-    parser.add_argument("--apply", action="store_true", help="execute the plan (default is dry-run)")
-    parser.add_argument("--yes", action="store_true", help="assume yes to prompts (CI)")
+    parser.add_argument("--apply", action="store_true", help="execute the plan (non-interactive)")
+    parser.add_argument("--yes", action="store_true", help="forwarded to the daemon installer (assume yes to its prompts)")
+    parser.add_argument("--version", action="store_true", help="print version and publisher, then exit")
     args = parser.parse_args(argv)
+    if args.version:
+        print(f"velesdb-install-wizard {__version__} — {PUBLISHER}")
+        if BUILD_SIGNATURE:
+            print(f"signature: {BUILD_SIGNATURE}")
+        return 0
+    if args.json and args.apply:
+        parser.error("--json and --apply are mutually exclusive")
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be in 1..65535")
 
     plan = build_plan(Path(args.home), Path(args.store), args.mode, args.port, scan_cli=not args.no_cli_scan)
     if args.json:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
         return 0
     if args.apply:
-        plan["port"] = args.port
         print_plan(plan)
         print("Application du plan:")
-        for status in apply_plan(plan, dry=False, yes=args.yes):
+        statuses = apply_plan(plan, dry=False, yes=args.yes)
+        for status in statuses:
             print(f"  - {status}")
-        return 0
+        return 1 if any(("FAILED" in st or "REFUSED" in st or "NOT FOUND" in st) for st in statuses) else 0
     if args.dry_run or not (sys.stdin.isatty() and sys.stdout.isatty()):
         print_plan(plan)
         print("\n(dry-run: --apply pour exécuter, ou lancez sans flag en interactif)", file=sys.stderr)
         return 0
     print_plan_pretty(plan)
     return interactive_menu(plan, args)
+
+
+def _statuses_failed(statuses: "list[str]") -> bool:
+    return any(("FAILED" in st or "REFUSED" in st or "NOT FOUND" in st) for st in statuses)
 
 
 if __name__ == "__main__":
