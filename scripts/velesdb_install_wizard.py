@@ -36,6 +36,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -616,6 +617,124 @@ def apply_plan(plan: dict, dry: bool = True, yes: bool = False) -> list[str]:
                 statuses.append(f"skills {client}: {'ok' if r.returncode == 0 else 'FAILED: ' + r.stderr.strip()[-200:]}")
     return statuses
 
+# ---------------------------------------------------------------------------
+# Interactive UI (stdlib only, identical on Windows/macOS/Linux). Unicode box
+# when the console is UTF-8, ASCII fallback on legacy Windows consoles
+# (cp1252/cp850), ANSI colors only when the terminal advertises support.
+
+
+def _ui_charset(enc: "str | None" = None) -> tuple[str, str, str, str, str, str]:
+    """Box-drawing charset: Unicode on UTF-8 consoles, ASCII on legacy Windows
+    consoles (cp1252/cp850). Returns (top-left, horiz, vert, top-right,
+    bottom-left, bottom-right)."""
+    enc = (enc if enc is not None else (sys.stdout.encoding or "")).lower()
+    if "utf" in enc:
+        return "┌", "─", "│", "┐", "└", "┘"
+    return "+", "-", "|", "+", "+", "+"
+
+
+def _ui_color() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    enc = (sys.stdout.encoding or "").lower()
+    if "utf" not in enc or not sys.stdout.isatty():
+        return False
+    return os.name != "nt" or bool(os.environ.get("WT_SESSION") or os.environ.get("ANSICON"))
+
+
+def _paint(text: str, code: str, color: bool) -> str:
+    return f"\033[{code}m{text}\033[0m" if color else text
+
+
+def _box(title: str, lines: list[str], color: bool, enc: "str | None" = None, max_width: int = 100) -> str:
+    """Draw a box, wrapping content to the terminal width (capped) so long
+    action lines never blow up the layout."""
+    tl, hz, vr, tr, bl, br = _ui_charset(enc)
+    term = shutil.get_terminal_size(fallback=(80, 24)).columns
+    width = min(max([len(title) + 4] + [len(x) for x in lines] + [40]), max_width, max(term, 40))
+    wrapped: list[str] = []
+    for x in lines:
+        if not x:
+            wrapped.append("")
+            continue
+        indent = "  " if x.startswith("  ") else ""
+        wrapped.extend(textwrap.wrap(x, width=width - 4, subsequent_indent=indent) or [""])
+    width = max([len(title) + 4] + [len(x) for x in wrapped] + [40])
+    out = [_paint(f"{tl}{hz} {title} {hz * max(width - len(title) - 3, 0)}{tr}".rstrip(), "1", color)]
+    for x in wrapped:
+        pad = width - len(x) - 1
+        out.append(f"{vr} {x}{' ' * max(pad, 0)}{vr}")
+    out.append(f"{bl}{hz * (width - 2)}{br}")
+    return "\n".join(out)
+
+
+def print_plan_pretty(plan: dict) -> None:
+    """Boxed rendering of the plan for interactive terminals."""
+    color = _ui_color()
+    p = plan["platform"]
+    lock = plan["lock"]
+    if lock["locked"]:
+        holder = f"pid {lock['holder_pid']} ({lock['holder_cmd']})" if lock["holder_pid"] else "pid inconnu"
+        lock_line = _paint(f"VERROUILLÉ par {holder} (VELES-031)", "31", color)
+    else:
+        lock_line = _paint("libre", "32", color)
+    lines = [
+        f"Plateforme : {p['os']}/{p['arch']}",
+        f"Store      : {plan['store']}",
+        f"Lock       : {lock_line}",
+        f"Mode proposé : {_paint(plan['proposed_mode'], '36', color)}",
+        "",
+        "Harnais détectés :",
+    ]
+    installed = [h for h in plan["harnesses"] if h["installed"]]
+    for h in installed:
+        entry = h["velesdb_memory_entry"] or "absent"
+        lines.append(f"  • {h['name']} — velesdb-memory = {entry}")
+    if not installed:
+        lines.append("  (aucun)")
+    lines += ["", "Actions prévues :"]
+    for a in plan["actions"]:
+        line = f"  • {a['step']}: {a.get('harness', a.get('detail', ''))}"
+        if a.get("from"):
+            line += f" {a['from']}→{a['to']}"
+        lines.append(line.strip())
+    if not plan["actions"]:
+        lines.append("  (aucune — déjà à jour)")
+    print(_box("velesdb-memory — assistant d'installation", lines, color))
+
+
+def interactive_menu(plan: dict, args) -> int:
+    """Numbered menu on a TTY: apply / json / quit. EOF or Ctrl-C -> quit
+    (dry-run), so piping the wizard never blocks."""
+    choices = {
+        "1": "Appliquer ce plan maintenant",
+        "2": "Voir le plan en JSON",
+        "3": "Quitter sans rien changer (dry-run)",
+    }
+    color = _ui_color()
+    while True:
+        print()
+        for k, label in choices.items():
+            print(_paint(f"  [{k}] {label}", "36" if k == "1" else "0", color))
+        try:
+            ans = input("Choix [1/2/3] : ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if ans in ("2", "json"):
+            print(json.dumps(plan, indent=2, ensure_ascii=False))
+            continue
+        if ans in ("3", "q", "n", ""):
+            return 0
+        if ans in ("1", "y", "apply"):
+            plan["port"] = args.port
+            print("Application du plan :")
+            for status in apply_plan(plan, dry=False, yes=args.yes):
+                print(f"  - {status}")
+            return 0
+        print("Choix invalide.")
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--store", default=str(DEFAULT_STORE), help="store directory (default: ~/.velesdb-memory)")
@@ -632,16 +751,20 @@ def main(argv: "list[str] | None" = None) -> int:
     plan = build_plan(Path(args.home), Path(args.store), args.mode, args.port, scan_cli=not args.no_cli_scan)
     if args.json:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
-    else:
-        print_plan(plan)
+        return 0
     if args.apply:
         plan["port"] = args.port
+        print_plan(plan)
         print("Application du plan:")
         for status in apply_plan(plan, dry=False, yes=args.yes):
             print(f"  - {status}")
         return 0
-    print("\n(dry-run: --apply pour exécuter)", file=sys.stderr)
-    return 0
+    if args.dry_run or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print_plan(plan)
+        print("\n(dry-run: --apply pour exécuter, ou lancez sans flag en interactif)", file=sys.stderr)
+        return 0
+    print_plan_pretty(plan)
+    return interactive_menu(plan, args)
 
 
 if __name__ == "__main__":
