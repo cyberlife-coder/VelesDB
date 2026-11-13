@@ -145,3 +145,31 @@ fn test_limit_larger_than_results_is_noop() {
     let results = apply_set_operation(left, right, SetOperator::Union, 100);
     assert_eq!(results.len(), 3);
 }
+
+fn ids(results: &[SearchResult]) -> Vec<u64> {
+    results.iter().map(|r| r.point.id).collect()
+}
+
+#[test]
+fn test_offset_limit_windows_in_order() {
+    let rows: Vec<_> = (1..=5).map(|id| make_result(id, 0.0)).collect();
+
+    let windowed = apply_offset_limit(rows, Some(1), Some(2));
+
+    assert_eq!(ids(&windowed), vec![2, 3]);
+}
+
+#[test]
+fn test_offset_past_end_is_empty_not_panic() {
+    let rows = vec![make_result(1, 0.0), make_result(2, 0.0)];
+
+    assert!(apply_offset_limit(rows.clone(), Some(3), None).is_empty());
+    assert!(apply_offset_limit(rows, Some(u64::MAX), Some(u64::MAX)).is_empty());
+}
+
+#[test]
+fn test_no_offset_no_limit_is_identity() {
+    let rows = vec![make_result(1, 0.0), make_result(2, 0.0)];
+
+    assert_eq!(ids(&apply_offset_limit(rows, None, None)), vec![1, 2]);
+}

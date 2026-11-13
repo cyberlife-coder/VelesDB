@@ -44,6 +44,29 @@ pub(crate) fn apply_set_operation(
     results
 }
 
+/// Applies a compound query's `OFFSET` then `LIMIT` to the merged result.
+///
+/// SQL semantics: both clauses window the combined rows, never one operand.
+/// Callers must strip `OFFSET` from the operands they execute; this is the
+/// single place both compound executors (`Collection::execute_query` and the
+/// `Database` path) apply it, so the two cannot diverge again.
+pub(crate) fn apply_offset_limit(
+    mut results: Vec<SearchResult>,
+    offset: Option<u64>,
+    limit: Option<u64>,
+) -> Vec<SearchResult> {
+    if let Some(offset) = offset {
+        let skip = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(results.len());
+        results.drain(..skip);
+    }
+    if let Some(limit) = limit {
+        results.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    results
+}
+
 /// UNION: merge both sides, deduplicate by point ID (keep highest score).
 fn union_dedup(left: Vec<SearchResult>, right: Vec<SearchResult>) -> Vec<SearchResult> {
     let mut map: HashMap<u64, SearchResult> = HashMap::with_capacity(left.len() + right.len());

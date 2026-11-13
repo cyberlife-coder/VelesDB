@@ -735,6 +735,7 @@ impl Database {
             // strategy would be ambiguous, so the probe stays untouched.
             let mut left_query = query.clone();
             left_query.select.limit = compound_limit;
+            left_query.select.offset = None; // OFFSET applies to the combined result.
             self.execute_single_select(&left_query, params, None)?
         } else {
             return self.execute_single_select(query, params, probe);
@@ -756,11 +757,14 @@ impl Database {
                     COMPOUND_LIMIT,
                 );
             }
-            // SQL-standard: LIMIT from the left (outer) SELECT applies to the final result.
-            if let Some(limit) = query.select.limit {
-                accumulated.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
-            }
-            return Ok(accumulated);
+            // SQL-standard: the outer SELECT's OFFSET then LIMIT window the final result.
+            return Ok(
+                crate::collection::search::query::set_operations::apply_offset_limit(
+                    accumulated,
+                    query.select.offset,
+                    query.select.limit,
+                ),
+            );
         }
 
         Ok(left_results)
