@@ -130,14 +130,20 @@ def resource_imports() -> list[str]:
     wizard = _load("velesdb_install_wizard_for_packaging", WIZARD)
     modules: set[str] = set()
     for rel in wizard.BUNDLED_RESOURCES:
-        if not rel.endswith(".py"):
-            continue
-        for node in ast.walk(ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Import):
-                modules.update(alias.name.split(".")[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                modules.add(node.module.split(".")[0])
+        if rel.endswith(".py"):
+            modules |= _top_level_imports(REPO_ROOT / rel)
     return sorted(modules - {"__future__"})
+
+
+def _top_level_imports(script: Path) -> set[str]:
+    """Top-level package of every absolute import in `script`."""
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(script.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names.add(node.module.split(".")[0])
+    return names
 
 
 def build_meta_source(version: str) -> str:

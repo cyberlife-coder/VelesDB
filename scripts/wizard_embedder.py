@@ -89,17 +89,25 @@ def _read_json(path: Path) -> "dict | None":
     return data if isinstance(data, dict) else None
 
 
+def _collection_dimension(configs: list[dict]) -> "int | None":
+    dims = [c["dimension"] for c in configs if isinstance(c.get("dimension"), int)]
+    return dims[0] if dims else None
+
+
+def _holds_facts(configs: list[dict]) -> bool:
+    return any(int(c.get("point_count") or 0) > 0 for c in configs)
+
+
 def read_store(store: Path) -> StoreProfile:
     configs = [c for c in (_read_json(store / name / "config.json") for name in COLLECTIONS) if c]
     if not configs:
         return StoreProfile(exists=False)
     provenance = _read_json(store / PROVENANCE_FILE) or {}
-    dims = [c.get("dimension") for c in configs if isinstance(c.get("dimension"), int)]
     return StoreProfile(
         exists=True,
-        dimension=dims[0] if dims else provenance.get("dimension"),
+        dimension=_collection_dimension(configs) or provenance.get("dimension"),
         model=provenance.get("model"),
-        has_facts=any(int(c.get("point_count") or 0) > 0 for c in configs),
+        has_facts=_holds_facts(configs),
     )
 
 

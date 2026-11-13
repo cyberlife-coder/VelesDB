@@ -961,6 +961,16 @@ def _load_resource_script(filename: str) -> types.ModuleType:
     return module
 
 
+def _installed_clients(plan: dict, mapping: "tuple[tuple[str, str], ...]") -> list[str]:
+    """The clients of `mapping` whose harness the plan found installed."""
+    installed = {h["name"] for h in plan["harnesses"] if h["installed"]}
+    return [client for client, harness in mapping if harness in installed]
+
+
+def _missing_tools(tools: "tuple[str, ...]") -> list[str]:
+    return [tool for tool in tools if shutil.which(tool) is None]
+
+
 #: sync-skills client -> the harness that loads its skills.
 SKILL_CLIENTS: tuple[tuple[str, str], ...] = (("claude", "claude-code"), ("codex", "codex"))
 
@@ -976,8 +986,7 @@ def _deploy_skills(sync: types.ModuleType, client: str) -> str:
 
 def install_skills(plan: dict) -> list[str]:
     """Skills for the installed harnesses that load them (Claude Code, Codex)."""
-    installed = {h["name"] for h in plan["harnesses"] if h["installed"]}
-    clients = [client for client, harness in SKILL_CLIENTS if harness in installed]
+    clients = _installed_clients(plan, SKILL_CLIENTS)
     if not clients:
         return []
     try:
@@ -1011,11 +1020,10 @@ def install_hooks(plan: dict) -> list[str]:
     context compiler (oversized tool results, pre-compaction) — for every
     installed harness that has them. Without bash and jq the hooks cannot
     run, so nothing is installed and the status says what to add."""
-    installed = {h["name"] for h in plan["harnesses"] if h["installed"]}
-    clients = [client for client, harness in HOOK_CLIENTS if harness in installed]
+    clients = _installed_clients(plan, HOOK_CLIENTS)
     if not clients:
         return []
-    missing = [tool for tool in HOOK_PREREQUISITES if shutil.which(tool) is None]
+    missing = _missing_tools(HOOK_PREREQUISITES)
     if missing:
         hint = _JQ_INSTALL_HINT.get(plan["platform"]["os"], "install them")
         return [f"hooks: SKIPPED — {' and '.join(missing)} not found ({hint}); re-run the wizard once installed"]
