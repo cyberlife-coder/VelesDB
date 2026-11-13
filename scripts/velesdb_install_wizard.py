@@ -29,104 +29,108 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
+import re
 import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+if sys.platform == "win32":
+    import msvcrt  # noqa: F401  (Windows byte-range locking)
+else:
+    import fcntl
+
 DEFAULT_STORE = Path.home() / ".velesdb-memory"
 LOCK_FILENAME = "velesdb.lock"
 
-#: One entry per supported harness. `configs` maps os -> candidate config
-#: paths (first existing wins). `kind` says how the MCP entry is read/written
-#: (PR-B). `skills` is the harness skills root (sync-skills.py compatible
-#: for claude/codex; others are informational).
+#: One entry per supported harness. `configs` is a flat, OS-agnostic candidate
+#: list (first existing wins). `kind` says how the MCP entry is read/written.
+#: `skills` is the harness skills root (sync-skills.py compatible for
+#: claude/codex; others are informational).
 HARNESSES: list[dict] = [
+    # `configs` is a flat candidate list, OS-agnostic: `~` and env vars
+    # (%APPDATA%, $HOME, ...) that do not exist on the current platform simply
+    # resolve to non-existent paths and are skipped — one table works on
+    # macOS, Linux and Windows alike.
     {
         "name": "claude-code",
         "cli": "claude",
-        "configs": {"*": []},  # managed via `claude mcp add/list`, no file
+        "configs": [],  # managed via `claude mcp add/list`, no file
         "kind": "claude-cli",
         "skills": "~/.claude/skills",
     },
     {
         "name": "codex",
         "cli": "codex",
-        "configs": {"*": ["~/.codex/config.toml"]},
+        "configs": ["~/.codex/config.toml", "%USERPROFILE%/.codex/config.toml"],
         "kind": "codex-toml",
         "skills": "~/.codex/skills",
     },
     {
         "name": "cursor",
         "cli": "cursor",
-        "configs": {"*": ["~/.cursor/mcp.json"]},
+        "configs": ["~/.cursor/mcp.json", "%USERPROFILE%/.cursor/mcp.json"],
         "kind": "mcp-json",
         "skills": None,
     },
     {
         "name": "cline",
         "cli": None,
-        "configs": {
-            "darwin": [
-                "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
-            ],
-            "linux": [
-                "~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
-            ],
-            "windows": [
-                "~/AppData/Roaming/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
-            ],
-        },
+        "configs": [
+            "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+            "~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+            "%APPDATA%/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+            "%APPDATA%/Cursor/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        ],
         "kind": "mcp-json",
         "skills": None,
     },
     {
         "name": "zed",
         "cli": "zed",
-        "configs": {"*": ["~/.config/zed/settings.json"]},
+        "configs": ["~/.config/zed/settings.json", "%APPDATA%/Zed/settings.json"],
         "kind": "zed-context-servers",
         "skills": None,
     },
     {
         "name": "opencode",
         "cli": "opencode",
-        "configs": {"*": ["~/.config/opencode/opencode.json", "opencode.json"]},
+        "configs": ["~/.config/opencode/opencode.json", "%APPDATA%/opencode/opencode.json", "opencode.json"],
         "kind": "opencode-mcp",
         "skills": None,
     },
     {
         "name": "claude-desktop",
         "cli": None,
-        "configs": {
-            "darwin": ["~/Library/Application Support/Claude/claude_desktop_config.json"],
-            "windows": ["~/AppData/Roaming/Claude/claude_desktop_config.json"],
-            "linux": ["~/.config/Claude/claude_desktop_config.json"],
-        },
+        "configs": [
+            "~/Library/Application Support/Claude/claude_desktop_config.json",
+            "%APPDATA%/Claude/claude_desktop_config.json",
+            "~/.config/Claude/claude_desktop_config.json",
+        ],
         "kind": "mcp-json",
         "skills": None,
     },
     {
         "name": "windsurf",
         "cli": None,
-        "configs": {"*": ["~/.codeium/windsurf/mcp_config.json"]},
+        "configs": ["~/.codeium/windsurf/mcp_config.json", "%USERPROFILE%/.codeium/windsurf/mcp_config.json"],
         "kind": "mcp-json",
         "skills": None,
     },
     {
         "name": "devin",
         "cli": "devin",
-        "configs": {"*": ["~/.config/devin/config.json"]},
+        "configs": ["~/.config/devin/config.json", "%APPDATA%/devin/config.json"],
         "kind": "devin-envelope",
         "skills": None,
     },
     {
         "name": "vibe",
         "cli": "vibe",
-        "configs": {"*": ["~/.vibe/mcp.json"]},
+        "configs": ["~/.vibe/mcp.json", "%USERPROFILE%/.vibe/mcp.json"],
         "kind": "mcp-json",
         "skills": "~/.vibe/skills",
     },
@@ -143,20 +147,34 @@ def detect_platform() -> dict:
     return {"os": os_name, "arch": arch, "system": system}
 
 
+_WIN_VAR_RE = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
+
+
 def _expand(path: str, home: Path) -> Path:
-    return Path(os.path.expandvars(path.replace("~", str(home), 1)))
+    """Resolve `~`, %VAR% (Windows style) and $VAR/${VAR} on EVERY platform —
+    os.path.expandvars only understands %VAR% on Windows, so expand manually.
+    Candidates whose variable is unset resolve to a non-existent path and are
+    skipped by the caller — that is what makes one table serve every OS."""
+    expanded = path.replace("~", str(home), 1)
+    expanded = _WIN_VAR_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), expanded)
+    expanded = os.path.expandvars(expanded)
+    if "%" in expanded:
+        return home / ".nonexistent-candidate"  # unresolved %VAR% -> never exists
+    return Path(expanded)
 
 
 def detect_harnesses(home: Path, os_name: str, scan_cli: bool = True) -> list[dict]:
     """One entry per harness: installed (cli or config dir), config path if
-    any, and whether velesdb-memory is already present in its MCP config."""
+    any, and whether velesdb-memory is already present in its MCP config.
+    `os_name` is advisory only: candidate paths are OS-agnostic, so detection
+    works identically on macOS, Linux and Windows."""
     found: list[dict] = []
     for h in HARNESSES:
         installed = False
         if scan_cli and h["cli"] and shutil.which(h["cli"]):
             installed = True
         config_path = None
-        for candidate in h["configs"].get(os_name, h["configs"].get("*", [])):
+        for candidate in h["configs"]:
             p = _expand(candidate, home)
             if p.exists():
                 config_path = p
@@ -241,18 +259,27 @@ def detect_lock(store: Path) -> dict:
         return result
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+            if sys.platform == "win32":
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)  # byte 0, non-blocking
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            # BlockingIOError on POSIX, PermissionError/OSError on Windows:
+            # the single-writer lock is held by a live process.
             result["locked"] = True
             result["holder_pid"], result["holder_cmd"] = _lock_holder(lock_path)
-            return result
-        fcntl.flock(fd, fcntl.LOCK_UN)
         return result
     finally:
         os.close(fd)
 
 
 def _lock_holder(lock_path: Path) -> tuple[int | None, str | None]:
+    """Best-effort identification of the lock holder, per platform:
+    lsof/fuser + ps on POSIX, tasklist on Windows (no admin needed)."""
+    if sys.platform == "win32":
+        return _lock_holder_windows()
     for tool, args in (
         ("lsof", ["lsof", "-t", str(lock_path)]),
         ("fuser", ["fuser", str(lock_path)]),
@@ -270,7 +297,47 @@ def _lock_holder(lock_path: Path) -> tuple[int | None, str | None]:
                     return pid, cmd or None
             except (subprocess.SubprocessError, ValueError):
                 continue
+    # fallback: any live velesdb-memory process
+    if shutil.which("pgrep"):
+        try:
+            out = subprocess.run(
+                ["pgrep", "-af", "velesdb-memory"], capture_output=True, text=True, timeout=5
+            )
+            line = out.stdout.strip().splitlines()[0] if out.stdout.strip() else ""
+            if line:
+                pid = int(line.split()[0])
+                return pid, line
+        except (subprocess.SubprocessError, ValueError, IndexError):
+            pass
     return None, None
+
+
+def _lock_holder_windows() -> tuple[int | None, str | None]:
+    if shutil.which("tasklist"):
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq velesdb-memory*.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in out.stdout.splitlines():
+                if "velesdb-memory" in line.lower():
+                    parts = [c.strip('"') for c in line.split('","')]
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        return int(parts[1]), parts[0]
+        except (subprocess.SubprocessError, ValueError, IndexError):
+            pass
+    return None, None
+
+
+def lock_holder_is_memory(lock: dict) -> bool:
+    """True when the process holding the store lock is a direct velesdb-memory
+    (stdio spawned by a harness), not the shared daemon or velesdb-server."""
+    cmd = (lock.get("holder_cmd") or "").lower()
+    if "velesdb-memory" not in cmd:
+        return False
+    # the shared daemon / velesdb-server hold the lock too — only a DIRECT
+    # stdio spawn (no http/serve/daemon flag) triggers the lock-switch.
+    return not any(flag in cmd for flag in ("daemon", "serve", "http", "--port"))
 
 
 def propose_mode(harnesses: list[dict], lock: dict) -> str:
@@ -293,6 +360,12 @@ def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: b
     lock = detect_lock(store)
     proposed = mode or propose_mode(harnesses, lock)
     actions = []
+    if lock["locked"] and lock_holder_is_memory(lock):
+        actions.append(
+            {"step": "lock-switch",
+             "detail": f"store lock held by direct velesdb-memory pid {lock['holder_pid']} "
+                       f"({lock['holder_cmd']}) — switch that harness from stdio to the shared daemon"}
+        )
     if proposed == "daemon":
         actions.append(
             {"step": "daemon", "detail": f"one shared HTTPS daemon on 127.0.0.1:{port} holds the lock once (install-memory-daemon)"}
@@ -336,7 +409,10 @@ def print_plan(plan: dict) -> None:
         print("  (aucun)")
     print("Actions prévues:")
     for a in plan["actions"]:
-        print(f"  - {a['step']}: {a.get('harness', a.get('detail', ''))} {a.get('from', '')}→{a.get('to', '')}".strip())
+        line = f"  - {a['step']}: {a.get('harness', a.get('detail', ''))}"
+        if a.get("from"):
+            line += f" {a['from']}→{a['to']}"
+        print(line.strip())
     if not plan["actions"]:
         print("  (aucune — déjà à jour)")
 
@@ -350,14 +426,16 @@ RELEASE_REPO = "cyberlife-coder/VelesDB"
 
 
 def find_binary() -> Path | None:
-    """An already-installed velesdb-memory binary, if any."""
+    """An already-installed velesdb-memory binary, if any (velesdb-memory.exe
+    on Windows)."""
+    exe = ".exe" if sys.platform == "win32" else ""
     candidates = [
-        Path.home() / ".cargo" / "bin" / "velesdb-memory",
-        Path.home() / ".local" / "bin" / "velesdb-memory",
-        Path("target/release/velesdb-memory"),
+        Path.home() / ".cargo" / "bin" / f"velesdb-memory{exe}",
+        Path.home() / ".local" / "bin" / f"velesdb-memory{exe}",
+        Path("target/release") / f"velesdb-memory{exe}",
     ]
     for c in candidates:
-        if c.exists() and os.access(c, os.X_OK):
+        if c.exists():
             return c
     return None
 
@@ -459,6 +537,7 @@ def wire_harness(harness: dict, mode: str, bin_path: str, port: int, store: Path
     def mutate(data: dict) -> dict:
         if kind == "mcp-json":
             servers = data.setdefault("mcpServers", {})
+            # replace in place: the stdio entry is overwritten, never duplicated
             servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(bin_path, store)
         elif kind == "devin-envelope":
             servers = data.setdefault("mcpServers", {})
