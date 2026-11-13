@@ -28,6 +28,21 @@ guide is everything else.
 
 ## Install
 
+**The guided way (recommended, macOS / Linux / Windows):**
+
+```bash
+python3 scripts/velesdb_install_wizard.py            # shows the plan, changes nothing
+python3 scripts/velesdb_install_wizard.py --apply    # executes it
+```
+
+The wizard detects which agent harnesses are installed on the machine (Claude
+Code, Codex, Cursor, Cline, Zed, opencode, Claude Desktop, Windsurf, Devin,
+Vibe), checks whether the memory store is currently **locked** by a live
+process (see below), and proposes the right mode: single-harness `stdio`, or
+one shared HTTPS `daemon` when several harnesses — or an already-running
+direct `velesdb-memory` — would otherwise fight over the lock. Every config
+write is backed up and atomic; `--dry-run` is the default. See #2759.
+
 **One command, with a Rust toolchain present:**
 
 ```bash
@@ -75,6 +90,14 @@ claude mcp add velesdb-memory \
   --env VELESDB_MEMORY_PATH="$HOME/.velesdb-memory" \
   -- ~/.cargo/bin/velesdb-memory
 ```
+
+> **One client at a time in stdio.** The store is guarded by a single-writer
+> `flock` (`velesdb.lock` in the store directory): the first process to open
+> it holds it, and any second one fails with `VELES-031 DatabaseLocked`. So
+> with stdio wiring, only one harness can use the memory at a time. When you
+> need several — or a harness is already running `velesdb-memory` directly —
+> use the shared daemon below (or let the wizard propose it): the daemon
+> holds the lock once and every client connects over HTTPS.
 
 **Cursor** — `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project)
 
