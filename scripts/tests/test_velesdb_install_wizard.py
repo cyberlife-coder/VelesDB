@@ -281,6 +281,35 @@ class PackagedBuildTests(unittest.TestCase):
             self.assertEqual(statuses, ["skills claude: ok"])
             self.assertTrue((Path(d) / "velesdb-memory" / "SKILL.md").is_file())
 
+    def test_bundled_trees_exist_in_the_checkout(self):
+        for rel in mod.BUNDLED_TREES:
+            self.assertTrue((mod.REPO_ROOT / rel).is_dir(), rel)
+
+    def test_hooks_are_skipped_with_a_hint_when_jq_is_missing(self):
+        plan = {"platform": {"os": "macos"}, "harnesses": [{"name": "claude-code", "installed": True}]}
+        real_which = mod.shutil.which
+        with unittest.mock.patch.object(mod.shutil, "which", side_effect=lambda t: None if t == "jq" else real_which(t)):
+            statuses = mod.install_hooks(plan)
+        self.assertEqual(len(statuses), 1)
+        self.assertIn("SKIPPED", statuses[0])
+        self.assertIn("brew install jq", statuses[0])
+
+    def test_hooks_install_in_process_with_their_settings_entries(self):
+        if mod.shutil.which("bash") is None or mod.shutil.which("jq") is None:
+            self.skipTest("bash or jq is not installed")
+        with tempfile.TemporaryDirectory() as home:
+            plan = {"platform": {"os": "linux"}, "harnesses": [{"name": "claude-code", "installed": True}]}
+            with unittest.mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}), \
+                 unittest.mock.patch.object(mod.subprocess, "run") as run:
+                statuses = mod.install_hooks(plan)
+            run.assert_not_called()
+            self.assertEqual(statuses, ["hooks claude: ok"])
+            hooks = Path(home) / ".claude" / "hooks" / "velesdb-memory"
+            self.assertTrue((hooks / "post-tool-use.sh").is_file())
+            settings = json.loads((Path(home) / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            self.assertIn("PostToolUse", settings["hooks"])
+            self.assertIn("PreCompact", settings["hooks"])
+
     def test_version_comes_from_the_build_not_a_constant(self):
         self.assertEqual(mod.__version__, mod.BUILD_VERSION or "source")
 
