@@ -82,6 +82,7 @@ mod store_search;
 mod text_search;
 mod vector_ops;
 mod vector_store;
+mod vector_store_handle;
 mod vector_store_persistence;
 mod velesql;
 mod velesql_admin;
@@ -120,7 +121,8 @@ pub use memory_service::WasmMemoryService;
 pub use observer::{
     WasmAccessDecision, WasmObserver, WasmQueryAccessContext, WasmQueryOperationKind,
 };
-pub use vector_store::VectorStore;
+pub(crate) use vector_store::StoreState;
+pub use vector_store_handle::VectorStore;
 pub use velesdb_core::DistanceMetric;
 
 /// Query result for multi-model queries (EPIC-031 US-009).

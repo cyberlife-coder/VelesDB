@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use velesdb_core::velesql::Condition;
 
-use crate::vector_store::VectorStore;
+use crate::vector_store::StoreState;
 use crate::velesql_value::Params;
 use crate::velesql_where;
 
@@ -29,7 +29,7 @@ pub(crate) fn condition_has_vector_search(cond: &velesdb_core::velesql::Conditio
 /// every row is considered a match (caller must decide whether that is
 /// valid — DELETE requires WHERE, UPDATE allows omission).
 pub(crate) fn collect_matching_indices(
-    store: &Rc<RefCell<VectorStore>>,
+    store: &Rc<RefCell<StoreState>>,
     where_clause: Option<&Condition>,
     params: &Params,
 ) -> Result<Vec<usize>, String> {

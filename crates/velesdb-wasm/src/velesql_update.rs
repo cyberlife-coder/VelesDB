@@ -46,7 +46,7 @@ fn validate_assignments(assignments: &[UpdateAssignment]) -> Result<(), String> 
 
 /// Applies the `SET` assignments to the rows at the given indices.
 fn apply_updates(
-    store: &std::rc::Rc<std::cell::RefCell<crate::vector_store::VectorStore>>,
+    store: &std::rc::Rc<std::cell::RefCell<crate::vector_store::StoreState>>,
     indices: &[usize],
     assignments: &[UpdateAssignment],
     params: &Params,

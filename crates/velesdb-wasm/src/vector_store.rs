@@ -11,21 +11,9 @@ use crate::store_new;
 use crate::store_search;
 use crate::{DistanceMetric, QueryResult, StorageMode};
 
-/// A vector store for in-memory vector search.
-///
-/// # Performance
-///
-/// Uses contiguous memory layout for optimal cache locality and fast
-/// serialization. Vector data is stored in a single buffer rather than
-/// individual Vec allocations.
-///
-/// # Storage Modes
-///
-/// Every mode keeps the f32 vectors and scores them exactly, returning the
-/// same results as a `velesdb-core` collection with that mode; the mode saves
-/// no memory in the browser (see [`StorageMode`]).
-#[wasm_bindgen]
-pub struct VectorStore {
+/// The data behind a JS [`crate::VectorStore`] handle, shared with any
+/// [`crate::WasmDatabase`] it is attached to (`Rc<RefCell<StoreState>>`).
+pub struct StoreState {
     /// Vector IDs in insertion order
     pub(crate) ids: Vec<u64>,
     /// Contiguous f32 vectors, `dimension` floats per id, in every storage mode
@@ -42,7 +30,7 @@ pub struct VectorStore {
     pub(crate) sparse_index: Option<sparse::SparseIndex>,
 }
 
-impl VectorStore {
+impl StoreState {
     /// Returns the JSON payload stored for `id`, if the id exists and carries one.
     ///
     /// Used by cross-collection MATCH enrichment to merge a referenced
@@ -53,11 +41,9 @@ impl VectorStore {
     }
 }
 
-#[wasm_bindgen]
-impl VectorStore {
+impl StoreState {
     /// Creates a new vector store. Metrics: cosine, euclidean, dot, hamming, jaccard.
-    #[wasm_bindgen(constructor)]
-    pub fn new(dimension: usize, metric: &str) -> Result<VectorStore, JsValue> {
+    pub fn new(dimension: usize, metric: &str) -> Result<StoreState, JsValue> {
         let metric = parsing::parse_metric(metric)?;
         Ok(store_new::create_store(
             dimension,
@@ -67,13 +53,11 @@ impl VectorStore {
     }
 
     /// Creates a metadata-only store (no vectors, only payloads).
-    #[wasm_bindgen]
-    pub fn new_metadata_only() -> VectorStore {
+    pub fn new_metadata_only() -> StoreState {
         store_new::create_metadata_only()
     }
 
     /// Returns true if this is a metadata-only store.
-    #[wasm_bindgen(getter)]
     #[must_use]
     pub fn is_metadata_only(&self) -> bool {
         self.dimension == 0
@@ -83,19 +67,17 @@ impl VectorStore {
     ///
     /// Every mode keeps f32 vectors (4 bytes per dimension) and returns the
     /// same results as `velesdb-core` with that mode.
-    #[wasm_bindgen]
     pub fn new_with_mode(
         dimension: usize,
         metric: &str,
         mode: &str,
-    ) -> Result<VectorStore, JsValue> {
+    ) -> Result<StoreState, JsValue> {
         let metric = parsing::parse_metric(metric)?;
         let storage_mode = parsing::parse_storage_mode(mode)?;
         Ok(store_new::create_store(dimension, metric, storage_mode))
     }
 
     /// Returns the storage mode.
-    #[wasm_bindgen(getter)]
     #[must_use]
     pub fn storage_mode(&self) -> String {
         match self.storage_mode {
@@ -108,28 +90,24 @@ impl VectorStore {
     }
 
     /// Returns the number of vectors in the store.
-    #[wasm_bindgen(getter)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.ids.len()
     }
 
     /// Returns true if the store is empty.
-    #[wasm_bindgen(getter)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }
 
     /// Returns the vector dimension.
-    #[wasm_bindgen(getter)]
     #[must_use]
     pub fn dimension(&self) -> usize {
         self.dimension
     }
 
     /// Inserts a vector with the given ID.
-    #[wasm_bindgen]
     pub fn insert(&mut self, id: u64, vector: &[f32]) -> Result<(), JsValue> {
         store_search::validate_dimension(vector.len(), self.dimension)?;
         store_insert::insert_vector(self, id, vector);
@@ -137,7 +115,6 @@ impl VectorStore {
     }
 
     /// Inserts a vector with ID and optional JSON payload.
-    #[wasm_bindgen]
     pub fn insert_with_payload(
         &mut self,
         id: u64,
@@ -159,13 +136,11 @@ impl VectorStore {
     }
 
     /// Gets a vector by ID. Returns {id, vector, payload} or null.
-    #[wasm_bindgen]
     pub fn get(&self, id: u64) -> Result<JsValue, JsValue> {
         store_get::get_by_id(self, id)
     }
 
     /// Searches with metadata filtering. Returns [{id, score, payload}].
-    #[wasm_bindgen]
     pub fn search_with_filter(
         &self,
         query: &[f32],
@@ -194,7 +169,6 @@ impl VectorStore {
     }
 
     /// k-NN search. Returns [[id, score], ...].
-    #[wasm_bindgen]
     pub fn search(&self, query: &[f32], k: usize) -> Result<JsValue, JsValue> {
         store_search::validate_dimension(query.len(), self.dimension)?;
         store_search::search(query, &self.ids, &self.data, self.dimension, self.metric, k)
@@ -212,7 +186,6 @@ impl VectorStore {
     /// forward-compatibility with future HNSW-backed WASM stores.
     ///
     /// Returns `[[id, score], ...]` sorted by relevance.
-    #[wasm_bindgen]
     pub fn search_with_quality(
         &self,
         query: &[f32],
@@ -227,7 +200,6 @@ impl VectorStore {
     }
 
     /// Similarity search with threshold. Operators: >, >=, <, <=, =, !=.
-    #[wasm_bindgen]
     pub fn similarity_search(
         &self,
         query: &[f32],
@@ -252,7 +224,6 @@ impl VectorStore {
     ///
     /// Returns `[{id, score, payload}, ...]` in insertion order, truncated to
     /// `k`, with `score: null`: a substring match selects, it does not rank.
-    #[wasm_bindgen]
     pub fn text_search(
         &self,
         query: &str,
@@ -269,7 +240,6 @@ impl VectorStore {
     ///
     /// Returns `[{id, score, payload}, ...]` sorted by combined score
     /// descending, truncated to `k` results.
-    #[wasm_bindgen]
     pub fn hybrid_search(
         &self,
         query_vector: &[f32],
@@ -302,7 +272,6 @@ impl VectorStore {
     ///
     /// Returns a JSON array of `{doc_id, score}` objects sorted by score
     /// descending, truncated to `k`.
-    #[wasm_bindgen]
     pub fn search_sparse(
         &self,
         query_indices: &[u32],
@@ -327,7 +296,6 @@ impl VectorStore {
     ///
     /// # Returns
     /// Array of `{nodeId, vectorScore, graphScore, fusedScore, bindings, columnData}`
-    #[wasm_bindgen]
     pub fn query(&self, query_vector: &[f32], k: usize) -> Result<JsValue, JsValue> {
         store_search::validate_dimension(query_vector.len(), self.dimension)?;
 
@@ -369,7 +337,6 @@ impl VectorStore {
     /// used only by the `"weighted"` strategy. When omitted, core's canonical
     /// default weights are used (`avg=0.6, max=0.3, hit=0.1`) — see issue
     /// #1545. Passing a slice of any length other than 3 is an error.
-    #[wasm_bindgen]
     #[allow(clippy::too_many_arguments)]
     pub fn multi_query_search(
         &mut self,
@@ -400,7 +367,6 @@ impl VectorStore {
     }
 
     /// Batch search for multiple vectors. Returns [[[id, score], ...], ...].
-    #[wasm_bindgen]
     pub fn batch_search(
         &self,
         vectors: &[f32],
@@ -425,7 +391,6 @@ impl VectorStore {
     }
 
     /// Removes a vector by ID.
-    #[wasm_bindgen]
     pub fn remove(&mut self, id: u64) -> bool {
         if let Some(idx) = self.ids.iter().position(|&x| x == id) {
             self.remove_at_index(idx);
@@ -445,7 +410,6 @@ impl VectorStore {
     /// Used by `TRUNCATE` (Devin Review Finding F12) so that outstanding
     /// `WasmCollectionHandle`s holding an `Rc` to this store observe the
     /// wipe atomically instead of pointing to a stale clone.
-    #[wasm_bindgen]
     pub fn clear(&mut self) {
         self.ids.clear();
         self.data.clear();
@@ -455,19 +419,17 @@ impl VectorStore {
 
     /// Returns memory usage estimate in bytes: ids plus the f32 vectors,
     /// which every storage mode keeps (see [`StorageMode`]).
-    #[wasm_bindgen]
     #[must_use]
     pub fn memory_usage(&self) -> usize {
         self.ids.len() * std::mem::size_of::<u64>() + std::mem::size_of_val(self.data.as_slice())
     }
 
     /// Creates store with pre-allocated capacity.
-    #[wasm_bindgen]
     pub fn with_capacity(
         dimension: usize,
         metric: &str,
         capacity: usize,
-    ) -> Result<VectorStore, JsValue> {
+    ) -> Result<StoreState, JsValue> {
         let metric = parsing::parse_metric(metric)?;
         Ok(store_new::create_with_capacity(
             dimension,
@@ -478,7 +440,6 @@ impl VectorStore {
     }
 
     /// Pre-allocates memory for additional vectors.
-    #[wasm_bindgen]
     pub fn reserve(&mut self, additional: usize) {
         self.ids.reserve(additional);
         // `reserve` is a capacity hint, so a `saturating_mul` (rather than a
@@ -489,7 +450,6 @@ impl VectorStore {
     }
 
     /// Batch insert. Input: `[[id, Float32Array], ...]`.
-    #[wasm_bindgen]
     pub fn insert_batch(&mut self, batch: JsValue) -> Result<(), JsValue> {
         let batch: Vec<(u64, Vec<f32>)> = serde_wasm_bindgen::from_value(batch)
             .map_err(|e| JsValue::from_str(&format!("Invalid batch format: {e}")))?;
@@ -519,7 +479,6 @@ impl VectorStore {
     /// Bulk insert from a flat contiguous `Float32Array` (zero-copy layout),
     /// mirroring the VRB1 raw-bulk contract: `ids` + flat row-major `vectors`
     /// + `dimension`. No payloads (use `insert_batch` for those).
-    #[wasm_bindgen(js_name = insertBatchRaw)]
     pub fn insert_batch_raw(
         &mut self,
         ids: &[u64],
@@ -532,7 +491,7 @@ impl VectorStore {
 }
 
 // Native-testable internals (not part of the wasm-bindgen surface).
-impl VectorStore {
+impl StoreState {
     /// Top-`k` `(id, score)` pairs for `query`, best first — the exact f32
     /// scores behind [`search`](Self::search) in every storage mode.
     pub(crate) fn search_scored(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {

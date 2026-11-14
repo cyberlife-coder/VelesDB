@@ -1,6 +1,6 @@
 //! Insert operations for `VectorStore`.
 
-use crate::{store_search, VectorStore};
+use crate::{store_search, StoreState};
 
 #[cfg(test)]
 #[path = "store_insert_tests.rs"]
@@ -10,7 +10,7 @@ mod tests;
 ///
 /// The f32 vector is stored as-is whatever the storage mode, as in
 /// `velesdb-core`: the mode never makes search lossy (see `vector_ops`).
-pub fn insert_vector(store: &mut VectorStore, id: u64, vector: &[f32]) {
+pub fn insert_vector(store: &mut StoreState, id: u64, vector: &[f32]) {
     insert_with_payload(store, id, vector, None);
 }
 
@@ -20,7 +20,7 @@ pub fn insert_vector(store: &mut VectorStore, id: u64, vector: &[f32]) {
 /// `checked_mul` overflow guard and `ids.len() * dimension` length check to
 /// [`store_search::validate_multi_vector_len`].
 fn validate_raw_batch(
-    store: &VectorStore,
+    store: &StoreState,
     ids: &[u64],
     vectors: &[f32],
     dimension: usize,
@@ -42,7 +42,7 @@ fn validate_raw_batch(
 /// upsert-dedup behaves identically to single insert. No payloads — use
 /// `insert_batch` for those.
 pub fn insert_batch_raw(
-    store: &mut VectorStore,
+    store: &mut StoreState,
     ids: &[u64],
     vectors: &[f32],
     dimension: usize,
@@ -59,7 +59,7 @@ pub fn insert_batch_raw(
 
 /// Inserts a vector with payload, replacing any existing vector with the same ID.
 pub fn insert_with_payload(
-    store: &mut VectorStore,
+    store: &mut StoreState,
     id: u64,
     vector: &[f32],
     payload: Option<serde_json::Value>,
@@ -80,7 +80,7 @@ pub fn insert_with_payload(
 /// mixing `swap_remove` on one and `drain` on the other desynchronises ids
 /// from the vector at `idx`. Order is not preserved by removal anyway, so
 /// swap-remove is both cheaper and correct.
-pub fn remove_at_index(store: &mut VectorStore, idx: usize) {
+pub fn remove_at_index(store: &mut StoreState, idx: usize) {
     store.ids.swap_remove(idx);
     store.payloads.swap_remove(idx);
     swap_remove_chunk(&mut store.data, idx, store.dimension);

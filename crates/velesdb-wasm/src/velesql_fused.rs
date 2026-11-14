@@ -74,7 +74,7 @@ pub(crate) fn execute_fused_search(
 /// fused list (mirrors core's `multi_query_search` "at least one vector").
 fn resolve_fused_vectors(
     fused: &VectorFusedSearch,
-    store: &crate::vector_store::VectorStore,
+    store: &crate::vector_store::StoreState,
     params: &Params,
 ) -> Result<Vec<Vec<f32>>, String> {
     if fused.vectors.is_empty() {
@@ -100,7 +100,7 @@ fn resolve_fused_vectors(
 /// `apply_pre_fusion_filter`).
 fn score_branches(
     vectors: &[Vec<f32>],
-    store: &crate::vector_store::VectorStore,
+    store: &crate::vector_store::StoreState,
     residual: Option<&Condition>,
     params: &Params,
 ) -> Result<Vec<Vec<(u64, f32)>>, String> {
@@ -119,7 +119,7 @@ fn score_branches(
 /// Returns the set of ids passing the residual metadata predicate, or `None`
 /// when there is no residual (no filtering required).
 fn passing_ids(
-    store: &crate::vector_store::VectorStore,
+    store: &crate::vector_store::StoreState,
     residual: Option<&Condition>,
     params: &Params,
 ) -> Result<Option<std::collections::HashSet<u64>>, String> {

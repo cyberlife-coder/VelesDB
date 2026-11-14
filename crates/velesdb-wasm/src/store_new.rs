@@ -1,14 +1,14 @@
 //! Constructor helpers for `VectorStore`.
 
-use crate::{DistanceMetric, StorageMode, VectorStore};
+use crate::{DistanceMetric, StorageMode, StoreState};
 
 /// Creates a new empty `VectorStore`.
 pub fn create_store(
     dimension: usize,
     metric: DistanceMetric,
     storage_mode: StorageMode,
-) -> VectorStore {
-    VectorStore {
+) -> StoreState {
+    StoreState {
         ids: Vec::new(),
         data: Vec::new(),
         payloads: Vec::new(),
@@ -20,7 +20,7 @@ pub fn create_store(
 }
 
 /// Creates a metadata-only store (dimension=0).
-pub fn create_metadata_only() -> VectorStore {
+pub fn create_metadata_only() -> StoreState {
     create_store(0, DistanceMetric::Cosine, StorageMode::Full)
 }
 
@@ -30,7 +30,7 @@ pub fn create_with_capacity(
     metric: DistanceMetric,
     storage_mode: StorageMode,
     capacity: usize,
-) -> VectorStore {
+) -> StoreState {
     let mut store = create_store(dimension, metric, storage_mode);
     store.ids.reserve(capacity);
     // A capacity hint; `saturating_mul` keeps a 32-bit-usize wasm32 build from

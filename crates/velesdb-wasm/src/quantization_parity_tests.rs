@@ -37,7 +37,7 @@ use velesdb_core::{
 use crate::store_get::get_vector_at_index;
 use crate::store_insert::insert_vector;
 use crate::store_new::create_store;
-use crate::{DistanceMetric, StorageMode, VectorStore};
+use crate::{DistanceMetric, StorageMode, StoreState};
 
 const DIMENSION: usize = 16;
 const TOP_K: usize = 10;
@@ -78,7 +78,7 @@ fn dataset(count: usize, seed: u64) -> Vec<Vec<f32>> {
         .collect()
 }
 
-fn wasm_store(vectors: &[Vec<f32>], metric: DistanceMetric, mode: StorageMode) -> VectorStore {
+fn wasm_store(vectors: &[Vec<f32>], metric: DistanceMetric, mode: StorageMode) -> StoreState {
     let mut store = create_store(DIMENSION, metric, mode);
     for (id, vector) in (0u64..).zip(vectors) {
         insert_vector(&mut store, id, vector);

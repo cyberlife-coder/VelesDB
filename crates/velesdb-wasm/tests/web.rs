@@ -561,3 +561,32 @@ fn execute_query_where_scan_refuses_over_cardinality_limit() {
     let msg = err.as_string().unwrap_or_default();
     assert!(msg.contains("VELES-027"), "missing guardrail tag: {msg}");
 }
+
+#[wasm_bindgen_test]
+fn attached_store_payloads_written_from_js_are_filtered_by_velesql() {
+    // The browser path end to end: a store and its payloads built from JS,
+    // attached to a database, then queried with a VelesQL WHERE — the
+    // TypeScript SDK's route to the executor once its collections are
+    // attached (before, a JS-created store was invisible to `executeQuery`).
+    let mut store = VectorStore::new(2, "cosine").expect("store");
+    let payload = |category: &str| {
+        let value = serde_json::json!({ "category": category });
+        serde_wasm_bindgen::to_value(&value).expect("payload")
+    };
+    store
+        .insert_with_payload(1, &[1.0, 0.0], payload("tech"))
+        .expect("insert 1");
+    store
+        .insert_with_payload(2, &[0.0, 1.0], payload("food"))
+        .expect("insert 2");
+    let mut db = velesdb_wasm::WasmDatabase::new();
+    db.attach_store("docs", &store).expect("attach");
+
+    let result = db
+        .execute_query("SELECT * FROM docs WHERE category = 'tech' LIMIT 10", None)
+        .expect("query");
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&result.rows_json()).expect("rows");
+    let ids: Vec<u64> = rows.iter().filter_map(|r| r["id"].as_u64()).collect();
+    assert_eq!(ids, vec![1]);
+}
