@@ -190,8 +190,7 @@ positive_decimal_at_most "$min_bytes" 1000000000 || passthrough
 original_bytes="$(printf '%s' "$text" | wc -c | tr -d ' ')"  # exact-read-ok: a decimal byte count
 [ "$original_bytes" -ge "$min_bytes" ] || passthrough
 
-bin="${VELESDB_MEMORY_BIN:-velesdb-memory}"
-command -v "$bin" >/dev/null 2>&1 || passthrough
+resolve_memory_bin bin || passthrough
 
 # Capability probe, cached once per session per binary: a velesdb-memory
 # released before `compile-stdin` ignores the subcommand and starts the MCP

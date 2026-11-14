@@ -281,6 +281,66 @@ class PackagedBuildTests(unittest.TestCase):
             self.assertEqual(statuses, ["skills claude: ok"])
             self.assertTrue((Path(d) / "velesdb-memory" / "SKILL.md").is_file())
 
+    def test_bundled_trees_exist_in_the_checkout(self):
+        for rel in mod.BUNDLED_TREES:
+            self.assertTrue((mod.REPO_ROOT / rel).is_dir(), rel)
+
+    def test_hooks_are_skipped_with_a_hint_when_jq_is_missing(self):
+        plan = {"platform": {"os": "macos"}, "harnesses": [{"name": "claude-code", "installed": True}]}
+        real_which = mod.shutil.which
+        with unittest.mock.patch.object(mod.shutil, "which", side_effect=lambda t: None if t == "jq" else real_which(t)):
+            statuses = mod.install_hooks(plan)
+        self.assertEqual(len(statuses), 1)
+        self.assertIn("SKIPPED", statuses[0])
+        self.assertIn("brew install jq", statuses[0])
+
+    def test_hooks_install_in_process_with_their_settings_entries(self):
+        if mod.shutil.which("bash") is None or mod.shutil.which("jq") is None:
+            self.skipTest("bash or jq is not installed")
+        with tempfile.TemporaryDirectory() as home:
+            plan = {"platform": {"os": "linux"}, "harnesses": [{"name": "claude-code", "installed": True}]}
+            with unittest.mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}), \
+                 unittest.mock.patch.object(mod.subprocess, "run") as run:
+                statuses = mod.install_hooks(plan)
+            run.assert_not_called()
+            self.assertEqual(statuses, ["hooks claude: ok"])
+            hooks = Path(home) / ".claude" / "hooks" / "velesdb-memory"
+            self.assertTrue((hooks / "post-tool-use.sh").is_file())
+            settings = json.loads((Path(home) / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            self.assertIn("PostToolUse", settings["hooks"])
+            self.assertIn("PreCompact", settings["hooks"])
+
+    def test_a_malformed_hook_registry_is_a_status_not_a_crash(self):
+        if mod.shutil.which("bash") is None or mod.shutil.which("jq") is None:
+            self.skipTest("bash or jq is not installed")
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / ".claude").mkdir()
+            (Path(home) / ".claude" / "settings.json").write_text("{not json", encoding="utf-8")
+            plan = {"platform": {"os": "linux"}, "harnesses": [{"name": "claude-code", "installed": True}]}
+            with unittest.mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
+                statuses = mod.install_hooks(plan)
+        self.assertEqual(len(statuses), 1)
+        self.assertTrue(statuses[0].startswith("hooks claude: FAILED"), statuses)
+
+    def test_devin_hooks_go_to_the_registry_the_plan_wired(self):
+        if mod.shutil.which("bash") is None or mod.shutil.which("jq") is None:
+            self.skipTest("bash or jq is not installed")
+        with tempfile.TemporaryDirectory() as home:
+            appdata_devin = Path(home) / "AppData" / "Roaming" / "devin"
+            appdata_devin.mkdir(parents=True)
+            config = appdata_devin / "config.json"
+            config.write_text("{}", encoding="utf-8")
+            plan = {"platform": {"os": "windows"},
+                    "harnesses": [{"name": "devin", "installed": True, "config": str(config)}]}
+            env = {"HOME": home, "USERPROFILE": home}
+            with unittest.mock.patch.dict(os.environ, env):
+                os.environ.pop("DEVIN_CONFIG_HOME", None)
+                statuses = mod.install_hooks(plan)
+                self.assertNotIn("DEVIN_CONFIG_HOME", os.environ)
+            self.assertEqual(statuses, ["hooks devin: ok"])
+            self.assertIn("hooks", json.loads(config.read_text(encoding="utf-8")))
+            self.assertFalse((Path(home) / ".config" / "devin").exists())
+
     def test_version_comes_from_the_build_not_a_constant(self):
         self.assertEqual(mod.__version__, mod.BUILD_VERSION or "source")
 

@@ -1016,6 +1016,27 @@ else
   fail "PostToolUse: a risk=low compilation IS shipped (second positive control)"
 fi
 
+# The install wizard puts velesdb-memory in ~/.local/bin, which a harness's
+# hook PATH rarely holds; resolving by PATH alone made the compiler a silent
+# no-op there. With VELESDB_MEMORY_BIN unset and no velesdb-memory on PATH, the
+# per-user install location must still be found and the output compiled.
+offpath_home="$TMP_TEST_DIR/offpath-home"
+mkdir -p "$offpath_home/.local/bin"
+cp "$FAKE_BIN_DIR/fake-low" "$offpath_home/.local/bin/velesdb-memory"
+offpath_path=""
+IFS=':' read -r -a path_dirs <<<"$PATH"
+for path_dir in "${path_dirs[@]}"; do
+  [ -x "$path_dir/velesdb-memory" ] || offpath_path="${offpath_path:+$offpath_path:}$path_dir"
+done
+offpath_out="$(env -u VELESDB_MEMORY_BIN "${COMPILE_TIMEOUTS[@]}" HOME="$offpath_home" PATH="$offpath_path" \
+  bash "$HOOKS_DIR/post-tool-use.sh" 2>/dev/null \
+  <<<"$(post_tool_payload "Bash" "offpath" "$big_output")")" || hook_exited "$LINENO" "$?"
+if printf '%s' "$offpath_out" | jq -e '.hookSpecificOutput.updatedToolOutput.stdout | contains("LOSSLESS SUMMARY")' >/dev/null; then
+  pass "PostToolUse: a velesdb-memory installed off PATH (~/.local/bin) is found and compiles"
+else
+  fail "PostToolUse: a velesdb-memory installed off PATH (~/.local/bin) is found and compiles"
+fi
+
 # The line pruner (`compile-stdin --tool-output`) is asked for only
 # when the binary accepts it, and the Bash command is the query either way.
 # fake-args answers both probes, records the real compilation's argv;
