@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`compile-stdin --tool-output`: line-level pruning of one command's
+  output** (`context::prune_tool_output`). The fragment compiler's critical
+  rules are existence tests, so on tool output — digits on nearly every line
+  of an `ls -l`, a `git log --stat` or a changelog — every fragment was
+  critical and any cut reported `risk: high`, which the `PostToolUse` hook
+  refuses: it shipped nothing on those outputs. The pruner keeps diagnostic
+  lines (`error:`, `error[E…]`, `FAILED`, `panicked at`, `Traceback`, …)
+  first, then negative constraints, the tail, the head, lines naming a query
+  argument, context around each diagnostic, and the nearest rest; identical
+  runs collapse to `[×N]` and every elided run is marked in place. An output
+  that already fits is returned whole. `risk` is `high` only when a diagnostic
+  line was dropped. Measured at a 4 000-token budget:
+  `git log --stat -40 cd69dd9f` 18 813 → 3 792 tokens, a 400-test run with one
+  failure 8 487 → 3 892 tokens with the failure kept verbatim — both `medium`
+  where the fragment path was `high`. The default `compile-stdin` path is
+  unchanged.
+
 ## [0.18.0] - 2026-11-11
 
 ### Added
