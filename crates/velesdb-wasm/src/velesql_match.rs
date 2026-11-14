@@ -1,8 +1,11 @@
 //! MATCH (graph pattern matching) execution for the WASM executor (S4-13).
 //!
 //! Split out of `velesql_graph.rs` to keep each module under the 500 NLOC
-//! cap. Handles 1- to 2-hop patterns; longer patterns are rejected with a
-//! clear message.
+//! cap. A single pattern of any fixed length is expanded depth-first, one
+//! relationship per step, with core's relationship-isomorphism rule: an edge
+//! is traversed at most once per matched path. Multi-pattern MATCH and
+//! variable-length relationships (`[*1..3]`) are rejected with a clear
+//! message.
 
 use velesdb_core::velesql::{
     Condition, Direction, GraphPattern, MatchClause, NodePattern, Query, RelationshipPattern,
@@ -104,41 +107,157 @@ pub(crate) fn execute_match(
         ));
     }
     let pattern = &clause.patterns[0];
-    match pattern.nodes.len() {
-        1 => execute_single_node(db, clause, pattern, params),
-        2 => execute_1_hop(db, clause, pattern, params),
-        3 => execute_2_hop(db, clause, pattern, params),
-        _ => Err(format!(
-            "MATCH patterns with more than 2 hops are not yet supported in WASM ({} nodes)",
-            pattern.nodes.len()
-        )),
-    }
-}
-
-fn execute_single_node(
-    db: &mut DatabaseInner,
-    clause: &MatchClause,
-    pattern: &GraphPattern,
-    params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
-    let node = &pattern.nodes[0];
-    let label = first_label(node);
+    validate_pattern(pattern)?;
     let cross = resolve_cross_refs(db, clause);
     let store = inferred_graph_store(db, pattern)?;
     let borrowed = store.borrow();
-    let candidates = borrowed.candidate_nodes(label.as_deref());
+    let walk = PathWalk {
+        pattern,
+        labels: pattern.nodes.iter().map(first_label).collect(),
+        where_clause: clause.where_clause.as_ref(),
+        params,
+        cross,
+    };
     let mut out = Vec::new();
-    for nid in candidates {
-        let Some(node_data) = borrowed.get_node(nid) else {
-            continue;
-        };
-        let bindings = [make_binding(node, nid, node_data, "a")];
-        if !matches_where_in_match_scope(clause.where_clause.as_ref(), &bindings, params)? {
-            continue;
-        }
-        out.push(build_match_row_single(node, nid, node_data, &cross)?);
+    let mut path = PathState::default();
+    for start in borrowed.candidate_nodes(walk.labels[0].as_deref()) {
+        walk.start_from(&borrowed, start, &mut path, &mut out)?;
     }
     finalize_candidates(out, clause)
+}
+
+/// Rejects pattern shapes this executor would otherwise misread.
+fn validate_pattern(pattern: &GraphPattern) -> Result<(), String> {
+    if pattern.nodes.is_empty() {
+        return Err("MATCH pattern has no node".to_string());
+    }
+    if pattern.relationships.len() + 1 != pattern.nodes.len() {
+        return Err(format!(
+            "MATCH pattern with {} nodes must have {} relationships, got {}",
+            pattern.nodes.len(),
+            pattern.nodes.len() - 1,
+            pattern.relationships.len()
+        ));
+    }
+    if pattern.relationships.iter().any(|rel| rel.range.is_some()) {
+        return Err(
+            "Variable-length relationships (e.g. [*1..3]) are not yet supported in WASM. \
+             Spell the hops out, or use core (persistence-enabled)."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// The immutable inputs of one MATCH pattern walk.
+struct PathWalk<'p> {
+    pattern: &'p GraphPattern,
+    /// First label of each pattern node, by position (`None` = any).
+    labels: Vec<Option<String>>,
+    where_clause: Option<&'p Condition>,
+    params: &'p Params,
+    cross: Vec<CrossRef>,
+}
+
+/// The path being built: bound node ids and the edges walked to reach them.
+#[derive(Default)]
+struct PathState {
+    nodes: Vec<u64>,
+    edges: Vec<u64>,
+}
+
+impl PathWalk<'_> {
+    fn start_from(
+        &self,
+        store: &WasmGraphStore,
+        start: u64,
+        path: &mut PathState,
+        out: &mut Vec<MatchCandidate>,
+    ) -> Result<(), String> {
+        // A lone node must exist to be returned; as a path anchor an id known
+        // only through its edges still starts a walk, as it always has.
+        if self.pattern.nodes.len() == 1 && store.get_node(start).is_none() {
+            return Ok(());
+        }
+        path.nodes.push(start);
+        let result = self.extend(store, path, out);
+        path.nodes.pop();
+        result
+    }
+
+    /// Depth-first: binds the next pattern node through every compatible
+    /// edge of the current one, or emits the row once all nodes are bound.
+    fn extend(
+        &self,
+        store: &WasmGraphStore,
+        path: &mut PathState,
+        out: &mut Vec<MatchCandidate>,
+    ) -> Result<(), String> {
+        let depth = path.nodes.len();
+        if depth == self.pattern.nodes.len() {
+            return self.emit(store, path, out);
+        }
+        let anchor = path.nodes[depth - 1];
+        let rel = &self.pattern.relationships[depth - 1];
+        for edge in directed_filter_edges(store, anchor, rel) {
+            // Relationship isomorphism (Cypher, and core's `follow_edge`).
+            if path.edges.contains(&edge.id) {
+                continue;
+            }
+            let next = other_endpoint(&edge, anchor);
+            let Some(next_node) = store.get_node(next) else {
+                continue;
+            };
+            if !matches_label(next_node, self.labels[depth].as_deref()) {
+                continue;
+            }
+            path.nodes.push(next);
+            path.edges.push(edge.id);
+            let result = self.extend(store, path, out);
+            path.edges.pop();
+            path.nodes.pop();
+            result?;
+        }
+        Ok(())
+    }
+
+    /// Evaluates WHERE with every alias bound, then builds the row.
+    fn emit(
+        &self,
+        store: &WasmGraphStore,
+        path: &PathState,
+        out: &mut Vec<MatchCandidate>,
+    ) -> Result<(), String> {
+        let default_node = WasmGraphNode::default();
+        let bound: Vec<(&NodePattern, u64, &WasmGraphNode)> = self
+            .pattern
+            .nodes
+            .iter()
+            .zip(&path.nodes)
+            .map(|(pattern, &id)| (pattern, id, store.get_node(id).unwrap_or(&default_node)))
+            .collect();
+        let bindings: Vec<AliasBinding> = bound
+            .iter()
+            .enumerate()
+            .map(|(position, (pattern, id, data))| {
+                make_binding(pattern, *id, data, &positional_alias(position))
+            })
+            .collect();
+        if !matches_where_in_match_scope(self.where_clause, &bindings, self.params)? {
+            return Ok(());
+        }
+        out.push(build_match_row(&bound, &self.cross)?);
+        Ok(())
+    }
+}
+
+/// The alias an unnamed pattern node gets: `a`, `b`, `c`… by position, then
+/// `n26`, `n27`… past `z`.
+fn positional_alias(position: usize) -> String {
+    match u8::try_from(position) {
+        Ok(offset) if offset < 26 => char::from(b'a' + offset).to_string(),
+        _ => format!("n{position}"),
+    }
 }
 
 /// Sorts the collected candidates per the RETURN `ORDER BY` (Finding 8: sort
@@ -153,84 +272,6 @@ fn finalize_candidates(
         clause.return_clause.limit,
     )?;
     Ok(candidates.into_iter().map(|c| c.row).collect())
-}
-
-fn execute_1_hop(
-    db: &mut DatabaseInner,
-    clause: &MatchClause,
-    pattern: &GraphPattern,
-    params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
-    if pattern.relationships.len() != 1 {
-        return Err(format!(
-            "Expected 1 relationship for 1-hop pattern, got {}",
-            pattern.relationships.len()
-        ));
-    }
-    let cross = resolve_cross_refs(db, clause);
-    let store = inferred_graph_store(db, pattern)?;
-    let borrowed = store.borrow();
-    let ctx = OneHopContext {
-        na: &pattern.nodes[0],
-        nb: &pattern.nodes[1],
-        rel: &pattern.relationships[0],
-        la: first_label(&pattern.nodes[0]),
-        lb: first_label(&pattern.nodes[1]),
-        cross,
-    };
-    let mut out = Vec::new();
-    for sid in borrowed.candidate_nodes(ctx.la.as_deref()) {
-        expand_one_hop(
-            &borrowed,
-            sid,
-            &ctx,
-            clause.where_clause.as_ref(),
-            params,
-            &mut out,
-        )?;
-    }
-    finalize_candidates(out, clause)
-}
-
-struct OneHopContext<'p> {
-    na: &'p NodePattern,
-    nb: &'p NodePattern,
-    rel: &'p RelationshipPattern,
-    la: Option<String>,
-    lb: Option<String>,
-    cross: Vec<CrossRef>,
-}
-
-fn expand_one_hop(
-    store: &WasmGraphStore,
-    sid: u64,
-    ctx: &OneHopContext<'_>,
-    where_clause: Option<&Condition>,
-    params: &Params,
-    out: &mut Vec<MatchCandidate>,
-) -> Result<(), String> {
-    let default_node = WasmGraphNode::default();
-    let a_node = store.get_node(sid).unwrap_or(&default_node);
-    for edge in directed_filter_edges(store, sid, ctx.rel) {
-        let other = other_endpoint(&edge, sid);
-        let Some(b_node) = store.get_node(other) else {
-            continue;
-        };
-        if !matches_label(b_node, ctx.lb.as_deref()) {
-            continue;
-        }
-        // WHERE is evaluated with both aliases bound so predicates on `b`
-        // (e.g. `WHERE b.name = 'Bob'`) work the same as on `a`.
-        let bindings = [
-            make_binding(ctx.na, sid, a_node, "a"),
-            make_binding(ctx.nb, other, b_node, "b"),
-        ];
-        if !matches_where_in_match_scope(where_clause, &bindings, params)? {
-            continue;
-        }
-        out.push(build_match_row_pair(ctx, sid, a_node, other, b_node)?);
-    }
-    Ok(())
 }
 
 /// Returns edges incident to `anchor` that are compatible with the
@@ -279,118 +320,6 @@ fn directed_filter_edges(
     }
 }
 
-fn execute_2_hop(
-    db: &mut DatabaseInner,
-    clause: &MatchClause,
-    pattern: &GraphPattern,
-    params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
-    if pattern.relationships.len() != 2 {
-        return Err(format!(
-            "Expected 2 relationships for 2-hop pattern, got {}",
-            pattern.relationships.len()
-        ));
-    }
-    let cross = resolve_cross_refs(db, clause);
-    let store = inferred_graph_store(db, pattern)?;
-    let borrowed = store.borrow();
-    let ctx = TwoHopContext::new(pattern, cross);
-    let where_clause = clause.where_clause.as_ref();
-    let mut out = Vec::new();
-    for a_id in borrowed.candidate_nodes(ctx.la.as_deref()) {
-        expand_from_a(&borrowed, a_id, &ctx, where_clause, params, &mut out)?;
-    }
-    finalize_candidates(out, clause)
-}
-
-struct TwoHopContext<'p> {
-    na: &'p NodePattern,
-    nb: &'p NodePattern,
-    nc: &'p NodePattern,
-    la: Option<String>,
-    lb: Option<String>,
-    lc: Option<String>,
-    r1: &'p RelationshipPattern,
-    r2: &'p RelationshipPattern,
-    cross: Vec<CrossRef>,
-}
-
-impl<'p> TwoHopContext<'p> {
-    fn new(pattern: &'p GraphPattern, cross: Vec<CrossRef>) -> Self {
-        Self {
-            na: &pattern.nodes[0],
-            nb: &pattern.nodes[1],
-            nc: &pattern.nodes[2],
-            la: first_label(&pattern.nodes[0]),
-            lb: first_label(&pattern.nodes[1]),
-            lc: first_label(&pattern.nodes[2]),
-            r1: &pattern.relationships[0],
-            r2: &pattern.relationships[1],
-            cross,
-        }
-    }
-}
-
-fn expand_from_a(
-    store: &WasmGraphStore,
-    a_id: u64,
-    ctx: &TwoHopContext<'_>,
-    where_clause: Option<&Condition>,
-    params: &Params,
-    out: &mut Vec<MatchCandidate>,
-) -> Result<(), String> {
-    for edge_ab in directed_filter_edges(store, a_id, ctx.r1) {
-        let b_id = other_endpoint(&edge_ab, a_id);
-        let Some(b_node) = store.get_node(b_id) else {
-            continue;
-        };
-        if !matches_label(b_node, ctx.lb.as_deref()) {
-            continue;
-        }
-        expand_from_b(store, a_id, b_id, b_node, ctx, where_clause, params, out)?;
-    }
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn expand_from_b(
-    store: &WasmGraphStore,
-    a_id: u64,
-    b_id: u64,
-    b_node: &WasmGraphNode,
-    ctx: &TwoHopContext<'_>,
-    where_clause: Option<&Condition>,
-    params: &Params,
-    out: &mut Vec<MatchCandidate>,
-) -> Result<(), String> {
-    let default_node = WasmGraphNode::default();
-    let a_node = store.get_node(a_id).unwrap_or(&default_node);
-    for edge_bc in directed_filter_edges(store, b_id, ctx.r2) {
-        let c_id = other_endpoint(&edge_bc, b_id);
-        let Some(c_node) = store.get_node(c_id) else {
-            continue;
-        };
-        if !matches_label(c_node, ctx.lc.as_deref()) {
-            continue;
-        }
-        // WHERE evaluates with all three aliases bound; mid-/end-node
-        // predicates (e.g. `WHERE b.age > 30`, `WHERE c.name = 'X'`)
-        // resolve against the correct node.
-        let bindings = [
-            make_binding(ctx.na, a_id, a_node, "a"),
-            make_binding(ctx.nb, b_id, b_node, "b"),
-            make_binding(ctx.nc, c_id, c_node, "c"),
-        ];
-        if !matches_where_in_match_scope(where_clause, &bindings, params)? {
-            continue;
-        }
-        out.push(build_match_row_triple(
-            ctx, a_id, a_node, b_id, b_node, c_id, c_node,
-        )?);
-    }
-    Ok(())
-}
-
 fn other_endpoint(edge: &WasmEdge, anchor: u64) -> u64 {
     if edge.source == anchor {
         edge.target
@@ -429,7 +358,7 @@ fn first_type(r: &RelationshipPattern) -> Option<String> {
 
 /// One alias → (id, payload) binding used during WHERE evaluation.
 ///
-/// At most 3 bindings exist (1-, 2-, or 3-node MATCH pattern). Owned
+/// One binding exists per pattern node. Owned
 /// `String` alias avoids lifetime plumbing in the bindings slice; payload
 /// is a cloned `serde_json::Value` since the matcher consumes references.
 struct AliasBinding {
@@ -530,9 +459,8 @@ fn payload_with_id(payload: &serde_json::Value, id: u64) -> serde_json::Value {
 
 /// Builds a single binding from a `(NodePattern, id, data)` triple.
 ///
-/// Falls back to alias `a`/`b`/`c` by position when the pattern omits an
-/// explicit alias — matches the convention already used by the row
-/// builders.
+/// Falls back to the [`positional_alias`] when the pattern omits an explicit
+/// alias — the same convention [`build_match_row`] uses.
 fn make_binding(node: &NodePattern, id: u64, data: &WasmGraphNode, fallback: &str) -> AliasBinding {
     let alias = node.alias.clone().unwrap_or_else(|| fallback.to_string());
     let payload = data.payload.clone().unwrap_or(serde_json::Value::Null);
@@ -558,53 +486,20 @@ fn candidate_from_map(
     })
 }
 
-fn build_match_row_single(
-    node: &NodePattern,
-    id: u64,
-    data: &WasmGraphNode,
+fn build_match_row(
+    bound: &[(&NodePattern, u64, &WasmGraphNode)],
     cross: &[CrossRef],
 ) -> Result<MatchCandidate, String> {
-    let alias = node.alias.clone().unwrap_or_else(|| "a".to_string());
     let mut map = serde_json::Map::new();
-    map.insert(alias, node_json(id, data));
+    for (position, (pattern, id, data)) in bound.iter().enumerate() {
+        let alias = pattern
+            .alias
+            .clone()
+            .unwrap_or_else(|| positional_alias(position));
+        map.insert(alias, node_json(*id, data));
+    }
     enrich_row(&mut map, cross);
-    candidate_from_map(vec![id], map)
-}
-
-fn build_match_row_pair(
-    ctx: &OneHopContext<'_>,
-    a_id: u64,
-    a_data: &WasmGraphNode,
-    b_id: u64,
-    b_data: &WasmGraphNode,
-) -> Result<MatchCandidate, String> {
-    let alias_a = ctx.na.alias.clone().unwrap_or_else(|| "a".to_string());
-    let alias_b = ctx.nb.alias.clone().unwrap_or_else(|| "b".to_string());
-    let mut map = serde_json::Map::new();
-    map.insert(alias_a, node_json(a_id, a_data));
-    map.insert(alias_b, node_json(b_id, b_data));
-    enrich_row(&mut map, &ctx.cross);
-    candidate_from_map(vec![a_id, b_id], map)
-}
-
-fn build_match_row_triple(
-    ctx: &TwoHopContext<'_>,
-    a_id: u64,
-    a_data: &WasmGraphNode,
-    b_id: u64,
-    b_data: &WasmGraphNode,
-    c_id: u64,
-    c_data: &WasmGraphNode,
-) -> Result<MatchCandidate, String> {
-    let alias_a = ctx.na.alias.clone().unwrap_or_else(|| "a".to_string());
-    let alias_b = ctx.nb.alias.clone().unwrap_or_else(|| "b".to_string());
-    let alias_c = ctx.nc.alias.clone().unwrap_or_else(|| "c".to_string());
-    let mut map = serde_json::Map::new();
-    map.insert(alias_a, node_json(a_id, a_data));
-    map.insert(alias_b, node_json(b_id, b_data));
-    map.insert(alias_c, node_json(c_id, c_data));
-    enrich_row(&mut map, &ctx.cross);
-    candidate_from_map(vec![a_id, b_id, c_id], map)
+    candidate_from_map(bound.iter().map(|(_, id, _)| *id).collect(), map)
 }
 
 /// Builds the JSON shape returned for a single MATCH-bound node.
@@ -636,3 +531,7 @@ fn node_json(id: u64, data: &WasmGraphNode) -> serde_json::Value {
     map.insert("labels".to_string(), serde_json::json!(data.labels.clone()));
     serde_json::Value::Object(map)
 }
+
+#[cfg(test)]
+#[path = "velesql_match_path_tests.rs"]
+mod path_tests;
