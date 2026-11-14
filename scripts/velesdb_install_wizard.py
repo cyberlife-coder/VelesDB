@@ -1006,11 +1006,38 @@ _HOOK_PREREQUISITES_HINT = {"macos": "brew install jq", "windows": "winget insta
                     "linux": "your package manager, e.g. sudo apt install jq"}
 
 
-def _deploy_hooks(sync: types.ModuleType, client: str) -> str:
+#: Hook clients whose registry root sync-agent-hooks.py takes from the
+#: environment: the wizard hands it the root of the config it detected and
+#: wired, so the MCP entry and the hooks land in the same registry.
+_HOOK_ROOT_ENV: dict[str, str] = {"devin": "DEVIN_CONFIG_HOME"}
+
+
+@contextlib.contextmanager
+def _hook_root_env(client: str, plan: dict):
+    """Point sync-agent-hooks.py at the registry this plan wired, then
+    restore the environment exactly as it was."""
+    variable = _HOOK_ROOT_ENV.get(client)
+    config = next((h.get("config") for h in plan["harnesses"] if h["name"] == client and h.get("config")), None)
+    if variable is None or config is None:
+        yield
+        return
+    previous = os.environ.get(variable)
+    os.environ[variable] = str(Path(config).parent)
     try:
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(variable, None)
+        else:
+            os.environ[variable] = previous
+
+
+def _deploy_hooks(sync: types.ModuleType, client: str, plan: dict) -> str:
+    try:
+        with _hook_root_env(client, plan), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
             rc = sync.main(["--install", "--client", client])
-    except (OSError, SystemExit) as e:
+    except (OSError, SystemExit, ValueError) as e:  # ValueError: a malformed registry (JSONDecodeError)
         return f"hooks {client}: FAILED: {e}"
     return f"hooks {client}: {'ok' if rc == 0 else f'FAILED (exit {rc})'}"
 
@@ -1031,7 +1058,7 @@ def install_hooks(plan: dict) -> list[str]:
         sync = _load_resource_script("sync-agent-hooks.py")
     except (ImportError, OSError, SyntaxError) as e:
         return [f"hooks: FAILED: {e}"]
-    return [_deploy_hooks(sync, client) for client in clients]
+    return [_deploy_hooks(sync, client, plan) for client in clients]
 
 
 def _prepare_server(plan: dict, dry: bool, yes: bool) -> "tuple[str | None, list[str], bool]":

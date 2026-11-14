@@ -310,6 +310,37 @@ class PackagedBuildTests(unittest.TestCase):
             self.assertIn("PostToolUse", settings["hooks"])
             self.assertIn("PreCompact", settings["hooks"])
 
+    def test_a_malformed_hook_registry_is_a_status_not_a_crash(self):
+        if mod.shutil.which("bash") is None or mod.shutil.which("jq") is None:
+            self.skipTest("bash or jq is not installed")
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / ".claude").mkdir()
+            (Path(home) / ".claude" / "settings.json").write_text("{not json", encoding="utf-8")
+            plan = {"platform": {"os": "linux"}, "harnesses": [{"name": "claude-code", "installed": True}]}
+            with unittest.mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
+                statuses = mod.install_hooks(plan)
+        self.assertEqual(len(statuses), 1)
+        self.assertTrue(statuses[0].startswith("hooks claude: FAILED"), statuses)
+
+    def test_devin_hooks_go_to_the_registry_the_plan_wired(self):
+        if mod.shutil.which("bash") is None or mod.shutil.which("jq") is None:
+            self.skipTest("bash or jq is not installed")
+        with tempfile.TemporaryDirectory() as home:
+            appdata_devin = Path(home) / "AppData" / "Roaming" / "devin"
+            appdata_devin.mkdir(parents=True)
+            config = appdata_devin / "config.json"
+            config.write_text("{}", encoding="utf-8")
+            plan = {"platform": {"os": "windows"},
+                    "harnesses": [{"name": "devin", "installed": True, "config": str(config)}]}
+            env = {"HOME": home, "USERPROFILE": home}
+            with unittest.mock.patch.dict(os.environ, env):
+                os.environ.pop("DEVIN_CONFIG_HOME", None)
+                statuses = mod.install_hooks(plan)
+                self.assertNotIn("DEVIN_CONFIG_HOME", os.environ)
+            self.assertEqual(statuses, ["hooks devin: ok"])
+            self.assertIn("hooks", json.loads(config.read_text(encoding="utf-8")))
+            self.assertFalse((Path(home) / ".config" / "devin").exists())
+
     def test_version_comes_from_the_build_not_a_constant(self):
         self.assertEqual(mod.__version__, mod.BUILD_VERSION or "source")
 

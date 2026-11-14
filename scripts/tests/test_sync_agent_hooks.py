@@ -1593,3 +1593,39 @@ class WindsurfIsInstalled(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortableInstall(unittest.TestCase):
+    """What a native Windows Python (the packaged install wizard) meets."""
+
+    def test_the_composed_library_is_written_with_lf_whatever_the_platform(self) -> None:
+        # Windows text mode turns "\n" into "\r\n", and bash cannot parse a
+        # CRLF library. Emulate it: the composed lib must not go through it.
+        original = Path.write_text
+
+        def windows_write_text(self, data, encoding=None, errors=None, newline=None):
+            return original(self, data, encoding=encoding, errors=errors,
+                            newline="\r\n" if newline is None else newline)
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(Path, "write_text", windows_write_text):
+            staged = staged_host("claude", Path(tmp))
+            library = (staged / "lib" / "common.sh").read_bytes()
+        self.assertNotIn(b"\r", library)
+
+    def test_devin_root_is_appdata_on_windows(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"APPDATA": tmp}, clear=False), \
+                mock.patch.object(installer.sys, "platform", "win32"):
+            os.environ.pop("DEVIN_CONFIG_HOME", None)
+            self.assertEqual(installer.devin_root(), Path(tmp) / "devin")
+
+    def test_a_bom_prefixed_registry_is_read(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / ".claude" / "settings.json"
+            settings.parent.mkdir()
+            settings.write_bytes(b"\xef\xbb\xbf" + b'{"theme": "dark"}')
+            with mock.patch.object(installer.Path, "home", return_value=Path(tmp)):
+                self.assertEqual(installer.read_settings("claude"), {"theme": "dark"})

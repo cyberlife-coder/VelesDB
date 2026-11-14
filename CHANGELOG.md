@@ -85,7 +85,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PATH rarely holds the per-user directories the installers write to
   (`~/.local/bin`, `%LOCALAPPDATA%\Programs\velesdb-memory`, `~/.cargo/bin`),
   so on those installs the compiler silently never ran. The shared
-  `resolve_memory_bin` probes them after PATH.
+  `resolve_memory_bin` probes them after PATH. For a native Windows Python —
+  the packaged wizard — `sync-agent-hooks.py` now writes the composed
+  `lib/common.sh` as bytes (text mode made it CRLF, which bash cannot parse),
+  puts Devin's hooks under `%APPDATA%\devin` as its own docstring said (the
+  wizard also hands it the Devin registry it wired), and reads a BOM-prefixed
+  registry; a malformed one is reported per client instead of aborting.
 
 - **Install wizard works on a machine with no checkout and no Rust**
   (#2759). In stdio mode — the default for one harness — `--apply` never
