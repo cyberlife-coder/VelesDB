@@ -687,6 +687,23 @@ class InteractiveUiTests(unittest.TestCase):
             ap.assert_called_once()
             self.assertFalse(ap.call_args.kwargs.get("dry", True))
 
+    def test_embeddings_choice_rebuilds_the_plan_then_applies_it_with_consent_prompts(self):
+        args = types.SimpleNamespace(port=18090, yes=False, home="/tmp/h", mode=None, no_cli_scan=True)
+        rebuilt = {**self._plan(), "embedder": {"backend": "ollama", "model": "bge-m3", "dimension": 1024,
+                                                "verdict": "fresh", "store_model": None, "store_dimension": None,
+                                                "store_has_facts": False}}
+        answers = iter(["4", "4", "1"])  # menu [4], catalog entry 4, then apply
+        with unittest.mock.patch("builtins.input", side_effect=lambda *a: next(answers)), \
+             unittest.mock.patch.object(mod.wizard_embedder.Ops, "tags", return_value=[]), \
+             unittest.mock.patch.object(mod, "build_plan", return_value=rebuilt) as bp, \
+             unittest.mock.patch.object(mod, "print_plan_pretty"), \
+             unittest.mock.patch.object(mod, "apply_plan", return_value=["ok"]) as ap:
+            self.assertEqual(mod.interactive_menu(self._plan(), args), 0)
+        picked = mod.wizard_embedder.rank_models(mod.wizard_embedder.StoreProfile(False), [])[3].name
+        self.assertEqual(bp.call_args.kwargs["embedder"], ("ollama", picked))
+        self.assertIs(ap.call_args.args[0], rebuilt)
+        self.assertIs(ap.call_args.kwargs["confirm"], mod._ask_yes_no)
+
     def test_json_choice_then_quit(self):
         import io, contextlib
         buf = io.StringIO()
