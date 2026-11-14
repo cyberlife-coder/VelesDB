@@ -17,7 +17,7 @@ use crate::graph_store::WasmGraphStore;
 use crate::observer::{gate, WasmObserver, WasmQueryOperationKind};
 use crate::parsing;
 use crate::store_new;
-use crate::vector_store::StoreState;
+use crate::store_state::StoreState;
 use crate::wasm_error::WasmError;
 use crate::VectorStore;
 

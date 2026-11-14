@@ -204,7 +204,7 @@ impl WhereFilters {
         id: u64,
         payload: Option<&serde_json::Value>,
         idx: usize,
-        _store: &crate::vector_store::StoreState,
+        _store: &crate::store_state::StoreState,
         params: &Params,
     ) -> Result<bool, String> {
         let Some(cond) = self.normalized.as_ref() else {
@@ -286,7 +286,7 @@ fn reject_single_branch_weighted_fusion(
 }
 
 fn validate_vector_collection(
-    store: &crate::vector_store::StoreState,
+    store: &crate::store_state::StoreState,
     name: &str,
 ) -> Result<(), String> {
     if store.dimension == 0 {
@@ -299,7 +299,7 @@ fn validate_vector_collection(
 
 fn resolve_query_vector(
     vs: &VectorSearch,
-    store: &crate::vector_store::StoreState,
+    store: &crate::store_state::StoreState,
     params: &Params,
 ) -> Result<Vec<f32>, String> {
     let q = resolve_vector(&vs.vector, params)?;
@@ -316,7 +316,7 @@ fn resolve_query_vector(
 /// Brute-force scores every stored vector against `query` and sorts by the
 /// metric's natural direction. Shared with the `NEAR_FUSED` path
 /// (`velesql_fused`) so the single-vector and per-branch scans stay identical.
-pub(crate) fn score_all(query: &[f32], store: &crate::vector_store::StoreState) -> Vec<(u64, f32)> {
+pub(crate) fn score_all(query: &[f32], store: &crate::store_state::StoreState) -> Vec<(u64, f32)> {
     let mut scored = vector_ops::compute_scores(
         query,
         &store.ids,
@@ -331,7 +331,7 @@ pub(crate) fn score_all(query: &[f32], store: &crate::vector_store::StoreState) 
 fn apply_fusion(
     scored: &[(u64, f32)],
     clause: &velesdb_core::velesql::FusionClause,
-    store: &crate::vector_store::StoreState,
+    store: &crate::store_state::StoreState,
     residual: Option<&Condition>,
     params: &Params,
 ) -> Result<Vec<(u64, f32)>, String> {
@@ -348,7 +348,7 @@ fn apply_fusion(
 ///
 /// The non-fusion path walks every scored row, calls this once per query,
 /// and then hits the map N times; overall work goes from O(n^2) to O(n).
-fn build_id_to_idx(store: &crate::vector_store::StoreState) -> HashMap<u64, usize> {
+fn build_id_to_idx(store: &crate::store_state::StoreState) -> HashMap<u64, usize> {
     store
         .ids
         .iter()
@@ -364,7 +364,7 @@ fn build_id_to_idx(store: &crate::vector_store::StoreState) -> HashMap<u64, usiz
 /// `NEAR_FUSED` path (`velesql_fused`) so both hydrate rows identically.
 pub(crate) fn collect_vector_rows_unfiltered(
     scored: &[(u64, f32)],
-    store: &crate::vector_store::StoreState,
+    store: &crate::store_state::StoreState,
 ) -> Result<Vec<OwnedScanRow>, String> {
     // Finding F10: hash-map lookup, O(1) per row, O(n) build cost paid
     // once. Previous `store.ids.iter().position(...)` was O(n) per row,
@@ -388,7 +388,7 @@ pub(crate) fn collect_vector_rows_unfiltered(
 
 fn collect_vector_rows(
     scored: &[(u64, f32)],
-    store: &crate::vector_store::StoreState,
+    store: &crate::store_state::StoreState,
     filters: &WhereFilters,
     params: &Params,
 ) -> Result<Vec<OwnedScanRow>, String> {
@@ -418,7 +418,7 @@ fn collect_vector_rows(
 }
 
 fn fusion_branch_from_residual(
-    store: &crate::vector_store::StoreState,
+    store: &crate::store_state::StoreState,
     cond: Option<&Condition>,
     params: &Params,
 ) -> Result<Vec<(u64, f32)>, String> {

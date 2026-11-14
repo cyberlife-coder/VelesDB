@@ -77,7 +77,7 @@ fn find_required_column(columns: &[String], name: &str) -> Result<usize, String>
 
 /// Inserts a single row into the store.
 fn insert_row(
-    store: &std::rc::Rc<std::cell::RefCell<crate::vector_store::StoreState>>,
+    store: &std::rc::Rc<std::cell::RefCell<crate::store_state::StoreState>>,
     stmt: &InsertStatement,
     row: &[Value],
     params: &Params,
@@ -173,7 +173,7 @@ fn build_payload(
 
 /// Inserts a row into a metadata-only collection (no vector data).
 fn insert_metadata_row(
-    store: &std::rc::Rc<std::cell::RefCell<crate::vector_store::StoreState>>,
+    store: &std::rc::Rc<std::cell::RefCell<crate::store_state::StoreState>>,
     id: u64,
     payload: Option<serde_json::Value>,
 ) {

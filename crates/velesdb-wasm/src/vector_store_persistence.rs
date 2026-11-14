@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{persistence, serialization};
 
-use super::vector_store::StoreState;
+use crate::store_state::StoreState;
 
 impl StoreState {
     /// Exports to binary format for IndexedDB/localStorage.

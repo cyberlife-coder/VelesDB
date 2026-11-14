@@ -25,7 +25,7 @@ pub(crate) fn execute(
 
 /// Removes rows from the store in descending order to keep indices stable.
 fn remove_indices_desc(
-    store: &std::rc::Rc<std::cell::RefCell<crate::vector_store::StoreState>>,
+    store: &std::rc::Rc<std::cell::RefCell<crate::store_state::StoreState>>,
     indices: &[usize],
 ) {
     let mut sorted = indices.to_vec();

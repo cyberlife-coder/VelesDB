@@ -1417,7 +1417,7 @@ fn test_bdd_truncate_preserves_storage_mode_sq8() {
     // must re-provision it in SQ8, not silently drop back to Full. Uses
     // the `install_store` test seam because the public WASM DDL surface
     // currently only creates Full-mode collections.
-    use crate::vector_store::StoreState;
+    use crate::store_state::StoreState;
     let mut db = DatabaseInner::new();
     let sq8_store = StoreState::new_with_mode(4, "cosine", "sq8")
         .map_err(|e| format!("{e:?}"))

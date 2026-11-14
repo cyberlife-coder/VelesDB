@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use velesdb_core::velesql::Condition;
 
-use crate::vector_store::StoreState;
+use crate::store_state::StoreState;
 use crate::velesql_value::Params;
 use crate::velesql_where;
 
