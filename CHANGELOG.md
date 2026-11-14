@@ -108,6 +108,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MATCH rows carry the score of a WHERE `similarity()` on any alias.** When
+  the similarity targeted a node other than the pattern's start, e.g.
+  `MATCH (a)-[:WROTE]->(d) WHERE similarity(d.embedding, $v) > 0.8`, the
+  GraphFirst plan used it as a filter and dropped the score. Every row came
+  back with the depth fallback (`0.5` at one hop), `RETURN similarity()`
+  projected nothing, and `ORDER BY similarity()` kept traversal order, so ASC
+  and DESC returned the same rows. Rows now carry the similarity of the node
+  that leaf targets, the score VectorFirst already reported for a
+  similarity on the start node.
+
 - **The install wizard installs the agent hooks, and the hooks find the
   binary it installed** (#2759). The wizard wired the harnesses and copied the
   skills but never the hooks, so the context compiler, working-context
