@@ -74,6 +74,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The install wizard installs the agent hooks, and the hooks find the
+  binary it installed** (#2759). The wizard wired the harnesses and copied the
+  skills but never the hooks, so the context compiler, working-context
+  load/save and recall-before-edit only ran for whoever found
+  `sync-agent-hooks.py` on their own; it now installs them in-process for
+  every installed harness that has them, after checking `bash` and `jq`, and
+  the packaged build bundles them. And `post-tool-use.sh` looked for
+  `velesdb-memory` on `$VELESDB_MEMORY_BIN` or PATH only: a harness's hook
+  PATH rarely holds the per-user directories the installers write to
+  (`~/.local/bin`, `%LOCALAPPDATA%\Programs\velesdb-memory`, `~/.cargo/bin`),
+  so on those installs the compiler silently never ran. The shared
+  `resolve_memory_bin` probes them after PATH.
+
 - **Install wizard works on a machine with no checkout and no Rust**
   (#2759). In stdio mode — the default for one harness — `--apply` never
   installed `velesdb-memory`: on a fresh machine it refused every harness
