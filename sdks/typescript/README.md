@@ -642,7 +642,7 @@ Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, 
 > On the WASM backend, `query()` executes:
 > - pure top-k vector queries, `SELECT * FROM <collection> WHERE vector NEAR $param [LIMIT n]`
 >   (`vector` is the grammar keyword, not a column name), on every binding;
-> - with a velesdb-wasm binding newer than 8.0.0 (one that has `WasmDatabase.attachStore`),
+> - with a velesdb-wasm binding that has `WasmDatabase.attachStore`,
 >   any other read-only `SELECT` — `WHERE` predicates, `ORDER BY`, and the rest of what
 >   velesdb-wasm's executor evaluates — over the points the SDK wrote, in REST's `/query` shape.
 >
