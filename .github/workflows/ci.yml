@@ -6,6 +6,8 @@
 # - Cache unifié et partagé entre jobs
 # - Outils pré-compilés via taiki-e/install-action
 # - Path filtering agressif
+# - PR docs-only: les jobs lourds no-op en success via le filtre `code-changed`
+#   (jamais un `if:` de job — un `skipped` casserait la chaîne ci-success, #2232)
 # - PR: validation minimale | main: coverage + benchmarks complets
 # =============================================================================
 
@@ -134,14 +136,102 @@ env:
 
 jobs:
   # ===========================================================================
+  # Code-changed filter — the docs-only fast path.
+  #
+  # `pull_request:` above deliberately has NO `paths:` filter (#1465, #2118:
+  # an absent required check blocks the merge with no remedy), so every PR
+  # schedules the whole workflow. This job is where a docs-only PR pays ~1
+  # minute instead of a full build: it diffs base..head and reports
+  # `relevant=false` when every changed file is docs-only (a root-level
+  # *.md/*.txt, any AGENTS.md, or anything under docs/ except docs/reference/,
+  # which the push trigger treats as CI-relevant). Heavy jobs `needs:` it and AND its
+  # output into every step-level `if:`, then no-op in success — never via a
+  # job-level `if:`, which would report `skipped` and break the ci-success
+  # chain that demands `success` (#2232). Fail-safe direction: any diff
+  # error, or any file outside the docs-only set (code, scripts/, workflows,
+  # manifests), means relevant=true and the full CI runs.
+  # ===========================================================================
+  code-changed:
+    name: Code Changed — path filter
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: a shallow (depth-1) PR checkout only fetches the
+          # merge commit itself, not the base commit `git diff` needs below.
+          fetch-depth: 0
+
+      - name: Determine if anything outside docs changed
+        id: filter
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          # An unreachable base is the failure a diff-scoped step cannot
+          # survive quietly: `git diff` errors, the surrounding mapfile/if
+          # swallows the status, and the step concludes "nothing changed"
+          # having looked at nothing. Prove the object is here before trusting
+          # an empty result.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              echo "::error::base commit $BASE_SHA is not in this checkout — a" \
+                   "diff against it reads zero files instead of failing." \
+                   "Give this job actions/checkout with fetch-depth: 0."
+              exit 1
+            fi
+            echo "::warning::push base $BASE_SHA is unreachable (force-push?) —" \
+                 "validating full history instead of the pushed range."
+            BASE_SHA="$(git rev-list --max-parents=0 HEAD)"
+          fi
+          if ! git diff --name-only "$BASE_SHA" "${{ github.sha }}" > /tmp/velesdb-changed-files.txt; then
+            echo "::warning::git diff failed — assuming code changed (fail toward running CI)."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          relevant=false
+          while IFS= read -r f; do
+            case "$f" in
+              docs/reference/*) relevant=true ;;   # push paths treat these as CI-relevant
+              docs/*) ;;                            # other docs are docs-only
+              AGENTS.md|*/AGENTS.md) ;;             # agent instructions are never compiled — docs-only anywhere
+              *.md|*.txt)
+                # Only ROOT-level md/txt are docs-only; a README inside
+                # crates/, scripts/, sdks/... is package content — relevant.
+                if [[ "$f" == */* ]]; then relevant=true; fi
+                ;;
+              *) relevant=true ;;                   # code, scripts, workflows, manifests
+            esac
+          done < /tmp/velesdb-changed-files.txt
+          if [[ "$relevant" == "true" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "code or CI-relevant files changed — heavy jobs will run."
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "docs-only diff — heavy jobs will no-op (cost guard)."
+          fi
+
+  # ===========================================================================
   # Lint & Format (parallèle avec test et security)
   # ===========================================================================
   lint:
     name: Lint & Format
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           # Full history: a shallow (depth-1) PR checkout only fetches the
           # merge commit itself, not the base commit `git diff` needs. Two
@@ -154,15 +244,18 @@ jobs:
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - name: Cache apt packages
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -176,6 +269,7 @@ jobs:
       # crates ONLY forces a full re-lint of first-party code on every run
       # while keeping all third-party deps cached (moderate cost, ~1-3 min).
       - name: Drop cached workspace fingerprints (force full re-lint)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           # -r: never run a bare `cargo clean` (full wipe) on empty input.
@@ -184,6 +278,7 @@ jobs:
             | xargs -r cargo clean
 
       - name: Check formatting
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo fmt --all -- --check
 
       # Closes the --no-default-features matrix gap from #1472: nothing in CI
@@ -199,6 +294,7 @@ jobs:
       # contain lib_name`. Le crate a ses propres etapes dediees (clippy
       # --lib, tests Rust) qui, elles, posent l'environnement qu'il lui faut.
       - name: Check --no-default-features (workspace matrix gap, #1472)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check --workspace --no-default-features --exclude velesdb-python
 
       # The workspace check above unifies features across crates, so a feature
@@ -213,6 +309,7 @@ jobs:
       # this step green (#1765) — a target that cannot fail the build is not
       # guarded by it.
       - name: Check each velesdb-memory feature in isolation
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           set -eu
           for feat in mcp http context persistence embedder-http extractor-http ollama extract gpu; do
@@ -230,6 +327,7 @@ jobs:
       # fixed. `--document-private-items` makes it resolve the links private
       # items carry too: without it nothing did, and 15 more had broken.
       - name: Rustdoc intra-doc links (velesdb-memory)
+        if: needs.code-changed.outputs.relevant == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p velesdb-memory --no-deps --all-features --document-private-items
@@ -248,6 +346,7 @@ jobs:
       # weaken the public-docs check: `private_intra_doc_links` still fires
       # when a public doc links a private item; only its note changes.
       - name: Rustdoc intra-doc links (velesdb-core)
+        if: needs.code-changed.outputs.relevant == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p velesdb-core --no-deps --all-features --document-private-items
@@ -258,6 +357,7 @@ jobs:
       # items that only exist under `persistence`, which the wasm build never
       # enables, so they can only ever be code spans, never links.
       - name: Rustdoc intra-doc links (velesdb-wasm)
+        if: needs.code-changed.outputs.relevant == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p velesdb-wasm --no-deps --document-private-items
@@ -267,6 +367,7 @@ jobs:
       # and its compatibility alias so neither path can silently stop enabling
       # the implementation it promises.
       - name: Test the velesdb-memory extraction features
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo test -p velesdb-memory --lib --no-default-features --features extractor-http,persistence
           cargo test -p velesdb-memory --lib --no-default-features --features extract,persistence
@@ -288,6 +389,7 @@ jobs:
       # gated target is reachable by no command here, so this cannot silently
       # reopen — for `http` or for the next feature.
       - name: Test the velesdb-memory http transport
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-memory --features http
 
       # velesdb-memory publishes independently, and `cargo publish` verifies
@@ -321,6 +423,7 @@ jobs:
       # tard, le fait disparaitre. Bloquer dessus rendrait tout bump de
       # workspace impossible.
       - name: Validate velesdb-memory packaging (dry-run, publishability gate)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           set +e
           out=$(cargo publish -p velesdb-memory --dry-run --locked 2>&1)
@@ -354,6 +457,7 @@ jobs:
       # both are `allow` there, and the `-A` pair reinstates that after the
       # `-D clippy::pedantic` group deny.
       - name: Run Clippy (strict)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo clippy --workspace --all-targets \
             --features persistence,gpu,update-check,openapi,test-fault-injection,serve \
@@ -386,6 +490,7 @@ jobs:
       # feature adds 19 s of recompilation on a warm tree and no new job, since
       # this step runs either way.
       - name: Run Clippy (strict, no gpu)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo clippy --workspace --all-targets \
             --features persistence,update-check,internal-bench \
@@ -398,6 +503,7 @@ jobs:
       # above). Lint just its library target, which links cleanly. The crate's
       # [lints] table already enables clippy::pedantic with the workspace allows.
       - name: Run Clippy (velesdb-node cdylib)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo clippy -p velesdb-node --lib -- -D warnings
 
       # velesdb-python was excluded from the workspace clippy for the same
@@ -411,11 +517,13 @@ jobs:
       # `--lib` links cleanly (0 findings when introduced) and the crate's
       # [lints] table already carries the workspace pedantic set.
       - name: Run Clippy (velesdb-python cdylib)
+        if: needs.code-changed.outputs.relevant == 'true'
         env:
           PYO3_PYTHON: python3
         run: cargo clippy -p velesdb-python --lib -- -D warnings
 
       - name: Run Clippy undocumented unsafe blocks (core)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo clippy -p velesdb-core --lib --bins \
             --features persistence,gpu,update-check \
@@ -426,9 +534,11 @@ jobs:
       # `CI Success`'s needs, so a suite reached only from there is a suite
       # whose red does not block a merge.
       - name: SAFETY-template verifier self-test
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_verify_unsafe_safety_template
 
       - name: Verify SAFETY template (production code)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
@@ -486,6 +596,7 @@ jobs:
           python3 scripts/verify_unsafe_safety_template.py --files "${PROD_RS_FILES[@]}" --strict
 
       - name: Check TODO/FIXME/HACK governance (production code)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
@@ -542,6 +653,7 @@ jobs:
       # bigger block is allowed in. Whole-tree, not diff-scoped, since the
       # baseline itself is the frozen state to compare against.
       - name: Check inline test-module debt against the frozen baseline
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-inline-tests.py
 
       # Same freeze, other axis: no production file newly crosses the
@@ -549,6 +661,7 @@ jobs:
       # lives in the failure message; test volume is #1918's program and is
       # excluded here.
       - name: Check production file budgets against the frozen baseline
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-file-budgets.py
 
       # Durability-barrier class-closer (#1981 item 2): a production file
@@ -556,6 +669,7 @@ jobs:
       # exemption in the shrink-only baseline. The helper to use lives in
       # the failure message (storage::atomic_write / wal_framing::flush_wal).
       - name: Check durability barriers on file-creating write paths
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-durability-barrier.py
 
       # velesdb-memory's doctrine (crates/velesdb-memory/src/lib.rs) requires a
@@ -564,9 +678,11 @@ jobs:
       # a default body — it compiles, and the wrapper silently runs the default
       # instead of the concrete override. That is the #1690-#1692 gap family.
       - name: Check wrapper adapters forward their trait whole
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-trait-forwarding.py
 
       - name: Check for .unwrap() in production code
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check_prod_unwraps.py
 
       # #2343 was a closed deadlock cycle: an HNSW operation holding
@@ -576,6 +692,7 @@ jobs:
       # such submission now runs on the dedicated `graph_pool`; this refuses a
       # new one that neither does nor says why it is safe.
       - name: Check HNSW rayon submissions stay off the global pool
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check_hnsw_rayon_pool.py
 
       # The guards' Python pins were written inline in three `pip install`
@@ -583,6 +700,7 @@ jobs:
       # them; both workflows said so in a comment and neither could enforce
       # it. scripts/requirements-guards.txt is now the only place they live.
       - name: Check the guards' Python pins have one source
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check_guard_python_pins.py
 
       # `cargo clippy --features a,b` lints what those features switch on and
@@ -592,6 +710,7 @@ jobs:
       # were compiled by no pedantic pass at all. Three violations reached
       # #2347's review that way. This keeps the two lists in step.
       - name: Check every feature that gates code is linted
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check_feature_lint_coverage.py
 
       # REL-07 ran only at release time (release.yml), so a version drift in a
@@ -599,6 +718,7 @@ jobs:
       # at PR time surfaces the drift in the PR that introduces it (<5s, pure
       # python, no build needed).
       - name: Verify version sync across policed manifests (REL-07, PR-time)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-version-sync.py
 
       # #2751: release-only zones stay single-sourced so the next
@@ -608,6 +728,7 @@ jobs:
       # parity guard compares against origin/main (fetch-depth: 0), so a
       # semver hotfix merged on main but not forward-ported fails here.
       - name: Back-merge conflict guards (#2751)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             BASE_SHA="${{ github.event.pull_request.base.sha }}"
@@ -626,6 +747,7 @@ jobs:
           python3 scripts/check-pub-parity.py --root . --base origin/main
 
       - name: Test the back-merge conflict guards
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_changelog_zones scripts.tests.test_check_version_stamps scripts.tests.test_check_pub_parity
 
       # `WalBatchConfig` was promised "at the next major"; v6.0.0 shipped two
@@ -634,18 +756,22 @@ jobs:
       # the version guard on purpose: the release commit that raises the major
       # is the one that must go red.
       - name: Deferred removals are not overdue
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-deferred-removals.py
 
       - name: Test the deferred-removal guard
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_deferred_removals
 
       # ERROR_CODES.md is a second source of truth for the VELES-XXX and
       # E0XX codes error.rs declares — two sources, nothing comparing them
       # (parity audit 2026-08-21, section D). This is the comparison.
       - name: Error codes documented match the declared set
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-error-codes.py
 
       - name: Test the error-codes guard
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_error_codes
 
       # `local-ci.sh` n'est pas lance ici — il REJOUE ce job, l'executer dedans
@@ -653,36 +779,47 @@ jobs:
       # defauts qu'il a deja eus, dont un faux vert (zero etape traitee
       # rapportee comme un succes).
       - name: Test the local gate replayer
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_local_ci
 
       - name: Test feature-claims audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_feature_claims
 
       - name: Test prod-unwraps audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_prod_unwraps
 
       - name: Test HNSW rayon-pool audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_hnsw_rayon_pool
 
       - name: Test guard-python-pins audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_guard_python_pins
 
       - name: Test feature-lint-coverage audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_feature_lint_coverage
 
       - name: Test inline-tests audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_inline_tests
 
       - name: Test file-budgets audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_file_budgets
 
       - name: Test trait-forwarding audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 -m unittest scripts.tests.test_check_trait_forwarding
 
       - name: Audit feature claims vs exports
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-feature-claims.py
 
       - name: Audit performance claims consistency
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-perf-claims.py --no-criterion
       # The figure guard reads Markdown with a real parser. Its pins live in
       # scripts/requirements-guards.txt, which is the only place they are
@@ -691,12 +828,15 @@ jobs:
       # runner's system Python refuses a pip install into itself (PEP 668).
       # Without these exact versions the guard exits 2, never 0.
       - name: Install the figure guard's Markdown parser
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           python3 -m venv /tmp/figure-guard
           /tmp/figure-guard/bin/pip install --quiet --disable-pip-version-check -r scripts/requirements-guards.txt
       - name: Every performance figure names its measurement
+        if: needs.code-changed.outputs.relevant == 'true'
         run: /tmp/figure-guard/bin/python scripts/check-figure-sources.py
       - name: Test figure-sources audit script
+        if: needs.code-changed.outputs.relevant == 'true'
         run: /tmp/figure-guard/bin/python -m unittest scripts.tests.test_check_figure_sources
 
       # Both crates pull their own README into the crate docs with
@@ -705,6 +845,7 @@ jobs:
       # crates/velesdb-server/README.md. A README snippet that stops matching
       # the API fails here instead of rotting unnoticed.
       - name: Check doctests compile
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo test --doc --package velesdb-core
           cargo test --doc --package velesdb-server
@@ -714,6 +855,12 @@ jobs:
   # Tests unitaires (parallèle avec lint et security)
   # TODO(S1-05): Add Windows and macOS test matrix for cross-platform coverage
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   test:
     name: Tests
     if: github.event.action != 'edited' || github.event.changes.base != null
@@ -732,8 +879,11 @@ jobs:
           - { leg: cli-mobile, pkgs: "-p velesdb-cli -p velesdb-mobile", feat: "gpu,update-check,serve" }
           - { leg: memory,     pkgs: "-p velesdb-memory", feat: "persistence" }
           - { leg: rest,       pkgs: "-p velesdb-migrate -p velesdb-wasm -p tauri-plugin-velesdb -p velesdb-rustdoc-guard", feat: "" }
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       # Free ~35 GB of disk space by dropping pre-installed tooling we do
       # not use (Android SDK, .NET, Haskell/GHC, cached Docker images).
@@ -752,6 +902,7 @@ jobs:
       #   `awalsh128/cache-apt-pkgs-action` below is unreliable once
       #   autoremove has touched them, so we simply keep them installed.
       - name: Free disk space on runner
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
         with:
           preinstalled-runtimes: false
@@ -766,20 +917,24 @@ jobs:
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - name: Cache apt packages
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Run tests
+        if: needs.code-changed.outputs.relevant == 'true'
         # matrix.feat resolves to the crate's own feature set; `rest` legs
         # carry none (migrate/wasm/rustdoc-guard/tauri-plugin define none of
         # persistence,gpu,update-check — tauri-plugin has its own features
@@ -807,7 +962,7 @@ jobs:
       # which here is the test binary), so pointing PYO3_PYTHON at the venv is
       # not enough — PYTHONPATH is what makes its site-packages visible.
       - name: Test velesdb-python (Rust unit tests)
-        if: matrix.leg == 'core'
+        if: needs.code-changed.outputs.relevant == 'true' && (matrix.leg == 'core')
         run: |
           python3 -m venv /tmp/velesdb-python-tests
           /tmp/velesdb-python-tests/bin/pip install --quiet --upgrade pip numpy
@@ -829,7 +984,7 @@ jobs:
       # The debug binary is already built by the workspace test compile above;
       # cargo build is a cache no-op that guarantees it exists.
       - name: MCP server e2e (stdio)
-        if: matrix.leg == 'core'
+        if: needs.code-changed.outputs.relevant == 'true' && (matrix.leg == 'core')
         run: |
           cargo build -p velesdb-memory
           python3 crates/velesdb-memory/examples/context_savings/real_measures/mcp_e2e.py
@@ -840,7 +995,7 @@ jobs:
       # arbitrary installation on PATH. Missing or renamed `risk` is a hard
       # failure inside the harness, not a skip that reads like a pass.
       - name: Agent hook contract against current checkout binary
-        if: matrix.leg == 'core'
+        if: needs.code-changed.outputs.relevant == 'true' && (matrix.leg == 'core')
         run: bash integrations/agent-hooks/test/hooks.test.sh
         env:
           VELESDB_MEMORY_BIN_REAL: ${{ github.workspace }}/target/debug/velesdb-memory
@@ -848,26 +1003,38 @@ jobs:
   # ===========================================================================
   # Security Audit (parallèle - outils pré-compilés)
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   security:
     name: Security Audit
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - name: Install cargo-deny
+        if: needs.code-changed.outputs.relevant == 'true'
         # Pinned, not floating: 0.19 and 0.20 disagree on where `--config`
         # goes, each rejecting the other's spelling, so an unpinned install
         # moves the argument grammar under a gate nobody touched (#2322).
         run: cargo install cargo-deny@0.20.2 --locked
 
       - name: Run security audit (advisories, licenses, bans, sources)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo deny check advisories licenses bans sources
 
       # The step above reads the ROOT lockfile and nothing else, so the six
@@ -890,6 +1057,7 @@ jobs:
       # not hide the next, and an empty list fails: a loop over nothing exits 0
       # and would read exactly like a clean audit.
       - name: Audit every other tracked lockfile (advisories)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           set -uo pipefail
           locks=$(git ls-files '*Cargo.lock' | grep -v '^Cargo.lock$')
@@ -950,25 +1118,37 @@ jobs:
   # See the inline comments below for why the tool version and `--release-type`
   # are what they are.
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   semver-checks:
     name: Semver Checks (velesdb-core, velesdb-memory)
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-semver-checks"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Install cargo-semver-checks (prebuilt)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           # 0.46.0 is the last release whose own `rust_version` is 1.90, this
@@ -1004,6 +1184,7 @@ jobs:
       # the flag is dropped and cargo-semver-checks reads the two versions as
       # they are; when the index cannot be read it stays, the safe default.
       - name: Check public API against the last published release
+        if: needs.code-changed.outputs.relevant == 'true'
         env:
           # cargo-semver-checks builds each crate's rustdoc in a temporary
           # project that resolves dependencies fresh — the workspace
@@ -1041,6 +1222,12 @@ jobs:
   # - cargo-machete fails on any dependency declared but never used, and on
   #   stale `ignored` entries.
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   hygiene:
     name: Hygiene (typos, taplo, machete)
     if: github.event.action != 'edited' || github.event.changes.base != null
@@ -1094,30 +1281,39 @@ jobs:
     name: Memory Feature Matrix
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci-memory-feature-matrix"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: No default features (API floor)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-memory --no-default-features
 
       - name: context alone (wasm consumer)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-memory --no-default-features --features context
 
       - name: Default features (persistence + context)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-memory
 
       - name: mcp + persistence (daemon)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-memory --no-default-features --features mcp,persistence
 
   # ===========================================================================
@@ -1139,25 +1335,37 @@ jobs:
   # `--benches` is load-bearing — the feature's `required-features` targets
   # (Cargo.toml:440, :445) are bench targets, so a lib-only check would miss
   # exactly the code the feature exists for.
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   internal-bench-check:
     name: Internal Bench Compiles
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci-internal-bench"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Library and benches under internal-bench
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-core --benches --features persistence,internal-bench
 
       # velesdb-memory's four criterion benches were built by nothing in CI,
@@ -1168,26 +1376,38 @@ jobs:
       # decision (cost per PR vs a weekly sweep, the feature-powerset
       # trade-off) and is deliberately not taken in this job.
       - name: velesdb-memory benches type-check
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-memory --benches --features persistence,context
 
       - name: Tests under internal-bench
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-core --tests --features persistence,internal-bench
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
 
   drop-tightening-check:
     name: Drop-Tightening Backlog Frozen
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           python-version: "3.11"
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci-drop-tightening"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1199,16 +1419,26 @@ jobs:
       # failing silently is worse than a second job. This one cannot weaken the
       # primary lint gate because it does not touch it.
       - name: Backlog frozen at the baseline
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-drop-tightening.py --verbose
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
 
   wasm-check:
     name: WASM Build Check
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           python-version: '3.12'
 
@@ -1218,11 +1448,13 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci-wasm"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Check WASM build (no default features)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo check -p velesdb-wasm --no-default-features --target wasm32-unknown-unknown
 
       # Host-run (native target, no wasm32/Node involved) cross-implementation
@@ -1235,6 +1467,7 @@ jobs:
       # job; named explicitly here for a dedicated, visible signal on the
       # WASM-specific job.
       - name: Run WASM↔core quantization parity tests (host)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-wasm --lib quantization_parity_tests
 
       # The wasm-bindgen suites (tests/*.rs gated on target_arch = "wasm32",
@@ -1242,11 +1475,13 @@ jobs:
       # to empty binaries under the native test job and are invisible to the
       # cargo check above — without this step they never run in CI at all.
       - name: Install wasm-pack
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: wasm-pack
 
       - name: Run wasm-bindgen tests (Node)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/run-wasm-bindgen-tests.py --root .
 
       # The TypeScript SDK's WASM backend over the binding THIS tree builds,
@@ -1257,12 +1492,14 @@ jobs:
       # why it runs here, where wasm-pack can build the package, and why it
       # is named explicitly: vitest fails on a file that no longer exists.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: sdks/typescript/package-lock.json
 
       - name: TypeScript SDK over the real velesdb-wasm build
+        if: needs.code-changed.outputs.relevant == 'true'
         env:
           VELESDB_WASM_PKG: ${{ runner.temp }}/velesdb-wasm-pkg
         run: |
@@ -1284,25 +1521,37 @@ jobs:
   # asserts on the run summary: a renamed or re-gated test must fail the
   # job, not green it on zero tests run (#2592).
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   openapi-drift:
     name: OpenAPI Drift Check
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci-openapi"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Regenerate OpenAPI snapshots
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           set -o pipefail
           cargo test -p velesdb-server --features openapi \
@@ -1315,6 +1564,7 @@ jobs:
           UPDATE_OPENAPI_SNAPSHOT: "1"
 
       - name: Check OpenAPI snapshots are up to date
+        if: needs.code-changed.outputs.relevant == 'true'
         run: git diff --exit-code docs/openapi.json docs/openapi.yaml
 
   # ===========================================================================
@@ -1350,6 +1600,12 @@ jobs:
   # them. It therefore runs on title-only edits too, which costs one cheap
   # Python job. `test_the_gate_job_cannot_opt_out_of_blocking` pins the
   # absence; `RETARGET_GUARD_EXEMPT` records the exemption.
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   mcp-doc-contract:
     name: MCP Doc Contract
     runs-on: ubuntu-latest
@@ -1471,23 +1727,29 @@ jobs:
     name: Public Trait Surface
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       # Installed on a step of its own, so the stable toolchain
       # rust-toolchain.toml pins stays the default for everything else here.
       # nightly: cargo-public-api reads rustdoc JSON, which is nightly-only.
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # nightly
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           toolchain: nightly
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-public-trait-api"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1497,25 +1759,37 @@ jobs:
       # newer rustc and failed three scheduled runs before a single target
       # ran. A tool whose version floats moves the gate under the repository.
       - name: Install cargo-public-api
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo install cargo-public-api@0.52.0 --locked
 
       - name: The public trait surface matches what is recorded
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/check-public-trait-api.py
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
 
   fuzz-compile:
     name: Fuzz Targets Compile Check
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           workspaces: fuzz
           shared-key: "velesdb-fuzz-compile"
@@ -1539,32 +1813,44 @@ jobs:
       # pedantic on here would apply a DIFFERENT policy from the rest of the
       # repository rather than a stricter one.
       - name: cargo clippy (all fuzz targets, under --cfg fuzzing)
+        if: needs.code-changed.outputs.relevant == 'true'
         env:
           RUSTFLAGS: "--cfg fuzzing"
         run: |
           cargo clippy --locked --manifest-path fuzz/Cargo.toml --bins \
             -- -D warnings
 
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   bench-sift1m-compile:
     name: Bench SIFT1M Compile Check
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - name: Cache apt packages
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1576,12 +1862,14 @@ jobs:
       # out of the workspace clippy passes; linting it here costs nothing
       # extra, since this job already builds them (#2348).
       - name: cargo clippy (bench + feature)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo clippy -p velesdb-core --benches --features bench-sift1m \
             -- -D warnings -D clippy::pedantic \
                -A clippy::missing_errors_doc -A clippy::missing_panics_doc
 
       - name: cargo clippy (sift1m loader unit tests)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo clippy --tests -p velesdb-core --features bench-sift1m \
             --test sift1m_loader_unit_tests -- -D warnings -D clippy::pedantic \
@@ -1590,10 +1878,16 @@ jobs:
   # ===========================================================================
   # Python Integration Tests (uniquement si integrations/ modifié)
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   python-integrations:
     name: Python Integrations
     runs-on: ubuntu-latest
-    needs: test
+    needs: [code-changed, test]
     # Runs on PRs too (and gates CI Success) so connector regressions are
     # caught before merge — the LangChain suite once rotted to 21 failures
     # while this job was push-only and advisory.
@@ -1616,8 +1910,10 @@ jobs:
     if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))) && (github.event.action != 'edited' || github.event.changes.base != null)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -1634,6 +1930,7 @@ jobs:
       # were causing pyo3-build-config to misdetect the interpreter even when
       # PYO3_PYTHON was set correctly).
       - name: Cache Cargo registry
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -1649,6 +1946,7 @@ jobs:
       # with "abi3-py3* feature must be specified", even with PYO3_PYTHON
       # set explicitly — see hotfix log #649-#655).
       - name: Build & install velesdb-python from source
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           # PEP 517 default build (debug profile). MATURIN_PEP517_ARGS=--release
           # was rejected because the flag was forwarded to ALL maturin
@@ -1660,12 +1958,14 @@ jobs:
           pip install ./crates/velesdb-python --force-reinstall
 
       - name: Install velesdb-common (local shared package)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: pip install -e integrations/common
 
       # All RAG/agent framework connectors are installed and tested from
       # source. Until 2026-06 only LlamaIndex ran here — the LangChain
       # suite was never executed in CI and rotted to 21 failures.
       - name: Install & Test LangChain integration
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           pip install -e "integrations/langchain[dev]"
           python -m pytest integrations/langchain/tests/ -v --tb=short
@@ -1682,11 +1982,13 @@ jobs:
       # downloaded into it here -- the remedy NLTK's own message gives --
       # so a failure names NLTK instead of a test.
       - name: Provision NLTK data in a private directory
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           install -d -m 0700 "$RUNNER_TEMP/nltk_data"
           echo "NLTK_DATA=$RUNNER_TEMP/nltk_data" >> "$GITHUB_ENV"
 
       - name: Install & Test LlamaIndex integration
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           pip install -e "integrations/llamaindex[dev]"
           python - <<'PY'
@@ -1704,11 +2006,13 @@ jobs:
           python -m pytest integrations/llamaindex/tests/ -v --tb=short
 
       - name: Install & Test Haystack integration
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           pip install -e "integrations/haystack[dev]"
           python -m pytest integrations/haystack/tests/ -v --tb=short
 
       - name: Install & Test LangGraph integration
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           pip install -e "integrations/langgraph[dev]"
           python -m pytest integrations/langgraph/tests/ -v --tb=short
@@ -1716,6 +2020,7 @@ jobs:
       # velesdb-common's own suite. No job ran it before #2275, so its
       # mirror of core's ef_search bounds could drift with CI green.
       - name: Test velesdb-common (shared package)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python -m pytest integrations/common/tests/ -v --tb=short
 
   # ===========================================================================
@@ -1728,16 +2033,24 @@ jobs:
   # excluded here — recall@10 >= 0.95 is enforced on a release wheel by
   # perf-gate-e2e.yml; a debug build is sufficient for the functional suite.
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   python-sdk-tests:
     name: Python SDK Tests
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
-    needs: test
+    needs: [code-changed, test]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -1746,9 +2059,11 @@ jobs:
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - name: Cache Cargo registry
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -1759,36 +2074,48 @@ jobs:
       # PEP 517 source build (debug profile), identical to python-integrations.
       # numpy is a hard runtime dependency of the binding's NumPy fast paths.
       - name: Build & install velesdb-python from source
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           pip install --upgrade pip maturin numpy pytest
           pip install ./crates/velesdb-python --force-reinstall
 
       - name: Run velesdb-python functional tests
+        if: needs.code-changed.outputs.relevant == 'true'
         working-directory: crates/velesdb-python
         run: python -m pytest tests/ -m "not slow" -p no:cacheprovider -q -W ignore::DeprecationWarning
 
       # The examples were only compiled, so the root README's quickstart shipped
       # calling an argument the wheel had removed. Run them against this wheel.
       - name: Run the Python examples against the built wheel
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python scripts/run-python-examples.py
 
   # Builds the napi addon and runs its Node test suite on PRs (gates CI Success)
   # so binding regressions are caught before merge. velesdb-node is a cdylib
   # excluded from `cargo test --workspace`, so this is its ONLY functional gate.
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   node-binding-tests:
     name: Node Binding Tests
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
-    needs: test
+    needs: [code-changed, test]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           node-version: '20'
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           python-version: '3.12'
 
@@ -1796,6 +2123,7 @@ jobs:
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache Cargo registry
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -1804,6 +2132,7 @@ jobs:
           key: ${{ runner.os }}-node-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: License/dependency boundary gate
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           # The addon must bind velesdb-memory ONLY (memory semantics), never the
           # raw engine, and must not pull the MCP server stack into the prebuild.
@@ -1823,12 +2152,14 @@ jobs:
       # including new ones like skills-sync.spec.mjs — is picked up automatically;
       # see package.json's "test" script for the single source of truth on the glob.
       - name: Build napi addon + run Node tests
+        if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/run-node-binding-tests.py --root .
 
       # Mirror the release assembly before any tag exists: test the root
       # tarball plus its native package from a clean npm install, never the
       # build directory where generated entrypoints happen to be present.
       - name: Smoke-test the packed Node package from a clean install
+        if: needs.code-changed.outputs.relevant == 'true'
         working-directory: crates/velesdb-node
         run: |
           mkdir -p artifacts
@@ -1846,6 +2177,7 @@ jobs:
       # gpt-tokenizer is installed here (not committed) per
       # examples/real-session-benchmark/README.md's prereqs.
       - name: Real-session benchmark — facts-survive gate (offline, no network)
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           npm install --no-save --no-audit --no-fund --prefix crates/velesdb-node gpt-tokenizer
           node --test examples/real-session-benchmark/test/facts-survive.test.mjs
@@ -1863,6 +2195,12 @@ jobs:
   # exposes an output that gates the actual work inside the Windows job's
   # steps, so that job always reports success/failure, never skipped.
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   node-windows-changed:
     name: Node Binding (Windows) — path filter
     if: github.event.action != 'edited' || github.event.changes.base != null
@@ -1951,28 +2289,28 @@ jobs:
     name: Node Binding Tests (Windows)
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: windows-latest
-    needs: [test, node-windows-changed]
+    needs: [test, node-windows-changed, code-changed]
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.node-windows-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.node-windows-changed.outputs.relevant == 'true')
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: needs.node-windows-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.node-windows-changed.outputs.relevant == 'true')
         with:
           node-version: '20'
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: needs.node-windows-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.node-windows-changed.outputs.relevant == 'true')
         with:
           python-version: '3.12'
 
       - name: Install the toolchain rust-toolchain.toml pins
-        if: needs.node-windows-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.node-windows-changed.outputs.relevant == 'true')
         run: rustup toolchain install --no-self-update --profile minimal
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: needs.node-windows-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.node-windows-changed.outputs.relevant == 'true')
         with:
           shared-key: "velesdb-ci-node-windows"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -1980,17 +2318,23 @@ jobs:
       # Debug profile, same rationale as the Linux job above. Explicit spec
       # file (not `npm test`) — see the job-level comment for why (#1509).
       - name: Build napi addon + run Node tests (Windows)
-        if: needs.node-windows-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.node-windows-changed.outputs.relevant == 'true')
         run: python scripts/run-node-binding-tests-windows.py --root .
 
       - name: Skipped — crates/velesdb-node/** unchanged
-        if: needs.node-windows-changed.outputs.relevant != 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.node-windows-changed.outputs.relevant != 'true')
         shell: bash
         run: echo "No changes under crates/velesdb-node/ on this PR — Windows build skipped to save CI minutes."
 
   # ===========================================================================
   # Coverage (main seulement)
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
@@ -2074,47 +2418,61 @@ jobs:
     name: VelesQL Conformance
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
+    needs: [code-changed]
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Fast Rust tools (sccache + mold)
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: ./.github/actions/fast-rust-tools
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: sdks/typescript/package-lock.json
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci"
 
       - name: Core parser conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-core --test velesql_parser_conformance
 
       - name: CLI parser conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-cli --test velesql_parser_conformance
 
       - name: WASM parser conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-wasm --test velesql_parser_conformance
 
       - name: Core executor conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-core --features persistence --test velesql_executor_conformance
 
       - name: CLI executor conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-cli --test velesql_executor_conformance
 
       - name: WASM executor conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-wasm velesql_executor_conformance
 
       - name: Server REST conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         run: cargo test -p velesdb-server --test velesql_conformance_tests
 
       - name: TypeScript SDK conformance
+        if: needs.code-changed.outputs.relevant == 'true'
         working-directory: sdks/typescript
         run: |
           npm ci
@@ -2124,36 +2482,48 @@ jobs:
   # Performance Smoke Test (EPIC-026/US-002)
   # Blocking regression detection against baseline
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   perf-smoke:
     name: Perf Smoke Test
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
-    needs: test
+    needs: [code-changed, test]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
 
       - name: Install the toolchain rust-toolchain.toml pins
         run: rustup toolchain install --no-self-update --profile minimal
 
       - name: Cache apt packages
+        if: needs.code-changed.outputs.relevant == 'true'
         uses: awalsh128/cache-apt-pkgs-action@681749ae568c81c2037cb9185e38b709b261bd2f # v1.6.1
         with:
           packages: libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
           version: 1.0
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           shared-key: "velesdb-ci"
 
       - name: Run smoke benchmark
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           cargo bench -p velesdb-core --bench smoke_test -- --noplot
 
       - name: Export smoke benchmark results
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           python3 scripts/export_smoke_criterion.py
 
       - name: Compare with baseline
+        if: needs.code-changed.outputs.relevant == 'true'
         run: |
           python3 scripts/compare_perf.py \
             --current benchmarks/results/latest.json \
@@ -2161,6 +2531,7 @@ jobs:
             --threshold 15
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: needs.code-changed.outputs.relevant == 'true'
         with:
           name: perf-smoke-results
           path: target/criterion/
@@ -2169,6 +2540,12 @@ jobs:
   # ===========================================================================
   # Benchmarks (main seulement - rapides uniquement)
   # ===========================================================================
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   benchmark:
     name: Benchmarks
     runs-on: ubuntu-latest
@@ -2353,7 +2730,7 @@ jobs:
     name: Perf Gate (E2E) — recall ≥ 0.95 + p50 sanity floor (10K/384D)
     if: github.event.action != 'edited' || github.event.changes.base != null
     runs-on: ubuntu-latest
-    needs: [test, perf-path-changed]
+    needs: [test, perf-path-changed, code-changed]
     timeout-minutes: 30
     env:
       # Loose order-of-magnitude floor: GitHub-hosted runners are ~3-4×
@@ -2365,21 +2742,21 @@ jobs:
       RECALL_MIN: 0.95
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.perf-path-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true')
       - name: Install the toolchain rust-toolchain.toml pins
-        if: needs.perf-path-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true')
         run: rustup toolchain install --no-self-update --profile minimal
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: needs.perf-path-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true')
         with:
           python-version: "3.11"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: needs.perf-path-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true')
         with:
           shared-key: "velesdb-perf-gate"
 
       - name: Build velesdb-python (release wheel)
-        if: needs.perf-path-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true')
         run: |
           python -m pip install --upgrade pip "maturin>=1.7,<2" numpy
           # Release build is mandatory for a perf gate — debug builds are
@@ -2393,7 +2770,7 @@ jobs:
           pip install --force-reinstall ../../target/wheels/velesdb-*.whl
 
       - name: Run benchmark (10K vectors, 384D, --recall, --json)
-        if: needs.perf-path-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true')
         run: |
           python benchmarks/velesdb_benchmark.py \
             --datasets 10000 \
@@ -2403,7 +2780,7 @@ jobs:
             --output perf-report.json
 
       - name: Gate report on recall and p50 floor
-        if: needs.perf-path-changed.outputs.relevant == 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true')
         id: gate
         run: |
           python - <<'PY'
@@ -2455,7 +2832,7 @@ jobs:
           PY
 
       - name: Upload perf report
-        if: needs.perf-path-changed.outputs.relevant == 'true' && always()
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant == 'true' && always())
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: perf-report-${{ github.sha }}
@@ -2463,7 +2840,7 @@ jobs:
           retention-days: 30
 
       - name: Skipped — search hot path unchanged
-        if: needs.perf-path-changed.outputs.relevant != 'true'
+        if: needs.code-changed.outputs.relevant == 'true' && (needs.perf-path-changed.outputs.relevant != 'true')
         shell: bash
         # Block scalar, not a plain one: on a plain `run:` line a bare `#`
         # starts a YAML comment, which truncated this echo before its closing
@@ -2510,6 +2887,12 @@ jobs:
   # Freshness may also now report a stale branch on an edit that did not cause
   # it — true information, arriving earlier than it used to, not a false
   # positive. `RETARGET_GUARD_EXEMPT` records this exemption.
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   pr-governance:
     name: PR Governance
     permissions:
