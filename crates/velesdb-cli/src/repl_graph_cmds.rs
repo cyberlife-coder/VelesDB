@@ -344,19 +344,25 @@ fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
         db,
         parts,
         5,
-        "Usage: .graph store-payload <collection> <node_id> <json_payload>",
+        "Usage: .graph store-payload <collection> <node_id> <json_payload> [--vector <json_array>]",
     ) {
         Ok(v) => v,
         Err(r) => return r,
     };
 
-    let payload_str = parts[4..].join(" ");
-    let payload: serde_json::Value = match serde_json::from_str(&payload_str) {
+    let (payload_parts, vector_parts) = split_vector_flag(&parts[4..]);
+    let payload: serde_json::Value = match serde_json::from_str(&payload_parts.join(" ")) {
         Ok(v) => v,
         Err(e) => return CommandResult::Error(format!("Invalid JSON: {e}")),
     };
+    let embedding = match vector_parts.map(parse_vector) {
+        None => None,
+        Some(Ok(vector)) => Some(vector),
+        Some(Err(message)) => return CommandResult::Error(message),
+    };
 
-    if let Err(e) = col.upsert_node_payload(node_id, &payload) {
+    // Same core call as `velesdb graph store-payload [--vector]`.
+    if let Err(e) = col.upsert_node(node_id, &payload, embedding) {
         return CommandResult::Error(format!("{e}"));
     }
     if let Err(e) = col.flush() {
@@ -369,6 +375,23 @@ fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
         node_id.to_string().green(),
     );
     CommandResult::Continue
+}
+
+/// Splits `<json…> [--vector <json…>]`: the REPL tokenizes on whitespace, so
+/// both the payload and the vector may arrive in several pieces.
+fn split_vector_flag<'a>(args: &'a [&'a str]) -> (&'a [&'a str], Option<&'a [&'a str]>) {
+    match args.iter().position(|arg| *arg == "--vector") {
+        Some(flag) => (&args[..flag], Some(&args[flag + 1..])),
+        None => (args, None),
+    }
+}
+
+/// Parses the `--vector` value, a JSON array of numbers.
+fn parse_vector(parts: &[&str]) -> Result<Vec<f32>, String> {
+    if parts.is_empty() {
+        return Err("--vector needs a JSON array, e.g. --vector [0.1,0.2,0.3]".to_string());
+    }
+    serde_json::from_str(&parts.join(" ")).map_err(|e| format!("Invalid vector JSON: {e}"))
 }
 
 fn cmd_graph_get_payload(db: &Database, parts: &[&str]) -> CommandResult {
@@ -479,7 +502,7 @@ fn print_graph_help() {
     );
     println!(
         "  {} Store payload",
-        ".graph store-payload <col> <node> <json>".yellow()
+        ".graph store-payload <col> <node> <json> [--vector <json>]".yellow()
     );
     println!(
         "  {}  Get payload",

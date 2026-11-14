@@ -227,7 +227,7 @@ The same loop is available outside the REPL as
 | `.graph remove-edge <col> <edge_id>` | Remove an edge by ID |
 | `.graph count <col>` | Show edge and node count |
 | `.graph search <col> <vector_json> [k]` | Search by embedding similarity (requires embeddings) |
-| `.graph store-payload <col> <node_id> <json>` | Store JSON payload on a node |
+| `.graph store-payload <col> <node_id> <json> [--vector <json_array>]` | Store JSON payload on a node; `--vector` also stores its embedding (graph collections created with a dimension), so the node answers `similarity()` in MATCH |
 | `.graph get-payload <col> <node_id>` | Retrieve node payload |
 | `.graph nodes <col> [--page N]` | Paginated node browsing (20 per page) |
 | `.graph help` | Full graph help |

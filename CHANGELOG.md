@@ -108,6 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **REPL `.graph store-payload` takes `--vector`** like the one-shot
+  `velesdb graph store-payload`. The REPL command stored the payload only, so a
+  graph created with a dimension could not get node embeddings from the REPL,
+  and `MATCH … WHERE similarity(d.embedding, …)` found nothing there. Both
+  commands now call the same `upsert_node`.
+
 - **The install wizard installs the agent hooks, and the hooks find the
   binary it installed** (#2759). The wizard wired the harnesses and copied the
   skills but never the hooks, so the context compiler, working-context
