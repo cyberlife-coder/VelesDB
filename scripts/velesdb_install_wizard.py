@@ -535,12 +535,22 @@ def print_plan(plan: dict) -> None:
 # ---------------------------------------------------------------------------
 
 #: Resources the wizard reads at runtime, repo-relative. package_wizard.py
-#: bundles exactly these (plus the skill sources sync-skills.py declares), so a
-#: packaged build finds them under RESOURCE_ROOT as a checkout does.
+#: bundles exactly these files and trees (plus the skill sources
+#: sync-skills.py declares), so a packaged build finds them under
+#: RESOURCE_ROOT as a checkout does.
 BUNDLED_RESOURCES: tuple[str, ...] = (
     "scripts/install-memory-daemon.sh",
     "scripts/install-memory-daemon.ps1",
     "scripts/sync-skills.py",
+    "scripts/sync-agent-hooks.py",
+)
+#: The hook sources sync-agent-hooks.py installs from (its test suite stays out).
+BUNDLED_TREES: tuple[str, ...] = (
+    "integrations/agent-hooks/claude-code",
+    "integrations/agent-hooks/codex",
+    "integrations/agent-hooks/windsurf",
+    "integrations/agent-hooks/devin",
+    "integrations/agent-hooks/shared",
 )
 
 
@@ -939,16 +949,26 @@ def _replace_vibe_mcp_entry(text: str, new_obj: str) -> str:
     return text
 
 
-def _load_sync_skills() -> types.ModuleType:
-    """sync-skills.py, imported (its name has a dash) rather than run: in a
+def _load_resource_script(filename: str) -> types.ModuleType:
+    """A bundled script, imported (its name has a dash) rather than run: in a
     packaged build `sys.executable` is the wizard itself, not a Python."""
-    path = RESOURCE_ROOT / "scripts" / "sync-skills.py"
-    spec = importlib.util.spec_from_file_location("velesdb_sync_skills", path)
+    path = RESOURCE_ROOT / "scripts" / filename
+    spec = importlib.util.spec_from_file_location("velesdb_" + path.stem.replace("-", "_"), path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _installed_clients(plan: dict, mapping: "tuple[tuple[str, str], ...]") -> list[str]:
+    """The clients of `mapping` whose harness the plan found installed."""
+    installed = {h["name"] for h in plan["harnesses"] if h["installed"]}
+    return [client for client, harness in mapping if harness in installed]
+
+
+def _missing_tools(tools: "tuple[str, ...]") -> list[str]:
+    return [tool for tool in tools if shutil.which(tool) is None]
 
 
 #: sync-skills client -> the harness that loads its skills.
@@ -966,15 +986,79 @@ def _deploy_skills(sync: types.ModuleType, client: str) -> str:
 
 def install_skills(plan: dict) -> list[str]:
     """Skills for the installed harnesses that load them (Claude Code, Codex)."""
-    installed = {h["name"] for h in plan["harnesses"] if h["installed"]}
-    clients = [client for client, harness in SKILL_CLIENTS if harness in installed]
+    clients = _installed_clients(plan, SKILL_CLIENTS)
     if not clients:
         return []
     try:
-        sync = _load_sync_skills()
+        sync = _load_resource_script("sync-skills.py")
     except (ImportError, OSError, SyntaxError) as e:
         return [f"skills: FAILED: {e}"]
     return [_deploy_skills(sync, client) for client in clients]
+
+
+#: sync-agent-hooks client -> the harness that runs its hooks.
+HOOK_CLIENTS: tuple[tuple[str, str], ...] = (
+    ("claude", "claude-code"), ("codex", "codex"), ("windsurf", "windsurf"), ("devin", "devin"),
+)
+#: The hooks are bash scripts that parse every payload with jq.
+HOOK_PREREQUISITES: tuple[str, ...] = ("bash", "jq")
+_HOOK_PREREQUISITES_HINT = {"macos": "brew install jq", "windows": "winget install jqlang.jq (bash: Git for Windows)",
+                    "linux": "your package manager, e.g. sudo apt install jq"}
+
+
+#: Hook clients whose registry root sync-agent-hooks.py takes from the
+#: environment: the wizard hands it the root of the config it detected and
+#: wired, so the MCP entry and the hooks land in the same registry.
+_HOOK_ROOT_ENV: dict[str, str] = {"devin": "DEVIN_CONFIG_HOME"}
+
+
+@contextlib.contextmanager
+def _hook_root_env(client: str, plan: dict):
+    """Point sync-agent-hooks.py at the registry this plan wired, then
+    restore the environment exactly as it was."""
+    variable = _HOOK_ROOT_ENV.get(client)
+    config = next((h.get("config") for h in plan["harnesses"] if h["name"] == client and h.get("config")), None)
+    if variable is None or config is None:
+        yield
+        return
+    previous = os.environ.get(variable)
+    os.environ[variable] = str(Path(config).parent)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(variable, None)
+        else:
+            os.environ[variable] = previous
+
+
+def _deploy_hooks(sync: types.ModuleType, client: str, plan: dict) -> str:
+    try:
+        with _hook_root_env(client, plan), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            rc = sync.main(["--install", "--client", client])
+    except (OSError, SystemExit, ValueError) as e:  # ValueError: a malformed registry (JSONDecodeError)
+        return f"hooks {client}: FAILED: {e}"
+    return f"hooks {client}: {'ok' if rc == 0 else f'FAILED (exit {rc})'}"
+
+
+def install_hooks(plan: dict) -> list[str]:
+    """The agent hooks — working-context load/save, recall-before-edit and the
+    context compiler (oversized tool results, pre-compaction) — for every
+    installed harness that has them. Without bash and jq the hooks cannot
+    run, so nothing is installed and the status says what to add."""
+    clients = _installed_clients(plan, HOOK_CLIENTS)
+    if not clients:
+        return []
+    missing = _missing_tools(HOOK_PREREQUISITES)
+    if missing:
+        hint = _HOOK_PREREQUISITES_HINT.get(plan["platform"]["os"], "install them")
+        return [f"hooks: SKIPPED — {' and '.join(missing)} not found ({hint}); re-run the wizard once installed"]
+    try:
+        sync = _load_resource_script("sync-agent-hooks.py")
+    except (ImportError, OSError, SyntaxError) as e:
+        return [f"hooks: FAILED: {e}"]
+    return [_deploy_hooks(sync, client, plan) for client in clients]
 
 
 def _prepare_server(plan: dict, dry: bool, yes: bool) -> "tuple[str | None, list[str], bool]":
@@ -1010,7 +1094,7 @@ def apply_plan(plan: dict, dry: bool = True, yes: bool = False) -> list[str]:
             continue
         statuses.append(wire_harness(h, mode, bin_path, plan.get("port", 18090), Path(plan["store"]), dry=dry))
     if not dry:
-        statuses += install_skills(plan)
+        statuses += install_skills(plan) + install_hooks(plan)
     return statuses
 
 

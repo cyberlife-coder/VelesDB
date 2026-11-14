@@ -168,6 +168,13 @@ fn is_code(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
 /// line by line so a megabyte fragment never allocates a second megabyte
 /// (markers contain no newline, so no match can span two lines).
 fn has_negative_constraint(fragment: &ContextFragment, _policy: &CompilePolicy) -> bool {
+    fragment.content.lines().any(line_has_negative_constraint)
+}
+
+/// One line carries a negative-constraint marker — the line-level test behind
+/// `preserve.negative_constraint`, shared with the tool-output pruner so both
+/// read "a constraint" the same way.
+pub(crate) fn line_has_negative_constraint(line: &str) -> bool {
     const MARKERS: &[&str] = &[
         "never ",
         "must not",
@@ -177,10 +184,8 @@ fn has_negative_constraint(fragment: &ContextFragment, _policy: &CompilePolicy) 
         "ne jamais",
         "jamais ",
     ];
-    fragment.content.lines().any(|line| {
-        let lowered = word_bounded(&line.to_lowercase());
-        MARKERS.iter().any(|marker| lowered.contains(marker))
-    })
+    let lowered = word_bounded(&line.to_lowercase());
+    MARKERS.iter().any(|marker| lowered.contains(marker))
 }
 
 /// Normalize a lowercased line so a trailing-space marker (`"never "`,

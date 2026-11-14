@@ -64,6 +64,10 @@ class PackagePlanTests(unittest.TestCase):
         self.assertIn(("scripts/install-memory-daemon.sh", "scripts"), bundled)
         self.assertIn(("scripts/install-memory-daemon.ps1", "scripts"), bundled)
         self.assertIn(("scripts/sync-skills.py", "scripts"), bundled)
+        self.assertIn(("scripts/sync-agent-hooks.py", "scripts"), bundled)
+        self.assertIn(("integrations/agent-hooks/claude-code", "integrations/agent-hooks/claude-code"), bundled)
+        self.assertIn(("integrations/agent-hooks/shared", "integrations/agent-hooks/shared"), bundled)
+        self.assertNotIn(("integrations/agent-hooks/test", "integrations/agent-hooks/test"), bundled)
         self.assertIn(("crates/velesdb-memory/skill/velesdb-memory", "crates/velesdb-memory/skill/velesdb-memory"), bundled)
         for src, _ in pkg.bundled_data():
             self.assertTrue(src.exists(), src)
@@ -80,6 +84,17 @@ class PackagePlanTests(unittest.TestCase):
             self.assertTrue(any(c.endswith("install-memory-daemon.ps1:scripts") for c in cmd))
             linux = pkg.pyinstaller_cmd("x86_64-unknown-linux-gnu", "0.18.0", work / "out", work, meta)
             self.assertNotIn("--version-file", linux)
+
+    def test_imports_of_dynamically_loaded_scripts_are_hidden_imports(self):
+        # sync-agent-hooks.py imports shlex, which the wizard itself never does
+        self.assertIn("shlex", pkg.resource_imports())
+        self.assertNotIn("__future__", pkg.resource_imports())
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            meta = work / "_wizard_build_meta.py"
+            meta.write_text(pkg.build_meta_source("0.18.0"))
+            cmd = pkg.pyinstaller_cmd("x86_64-unknown-linux-gnu", "0.18.0", work / "out", work, meta)
+        self.assertIn("shlex", [cmd[i + 1] for i, c in enumerate(cmd) if c == "--hidden-import"])
 
     def test_windows_version_resource_has_wiscale(self):
         rc = pkg.windows_version_resource("0.18.0")

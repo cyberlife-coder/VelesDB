@@ -31,6 +31,7 @@ Default is a dry run (prints the plan); --apply runs PyInstaller
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import json
@@ -114,8 +115,35 @@ def bundled_data() -> list[tuple[Path, str]]:
     wizard = _load("velesdb_install_wizard_for_packaging", WIZARD)
     sync = _load("sync_skills_for_packaging", SCRIPT_DIR / "sync-skills.py")
     data = [(REPO_ROOT / rel, Path(rel).parent.as_posix()) for rel in wizard.BUNDLED_RESOURCES]
+    data += [(REPO_ROOT / rel, rel) for rel in wizard.BUNDLED_TREES]
     data += [(REPO_ROOT / source_rel, source_rel) for source_rel, _ in sync.SKILLS]
     return data
+
+
+def resource_imports() -> list[str]:
+    """Modules the bundled scripts import. The wizard loads them with
+    importlib at run time, so PyInstaller's analysis never sees their imports
+    and a packaged build failed with `No module named 'shlex'` on the first
+    one only a resource used: each is declared as a hidden import instead."""
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))
+    wizard = _load("velesdb_install_wizard_for_packaging", WIZARD)
+    modules: set[str] = set()
+    for rel in wizard.BUNDLED_RESOURCES:
+        if rel.endswith(".py"):
+            modules |= _top_level_imports(REPO_ROOT / rel)
+    return sorted(modules - {"__future__"})
+
+
+def _top_level_imports(script: Path) -> set[str]:
+    """Top-level package of every absolute import in `script`."""
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(script.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names.add(node.module.split(".")[0])
+    return names
 
 
 def build_meta_source(version: str) -> str:
@@ -192,6 +220,8 @@ def pyinstaller_cmd(target: str, version: str, out: Path, work: Path, meta: Path
     ]
     for source, dest in bundled_data():
         cmd += ["--add-data", f"{source}:{dest}"]
+    for module in resource_imports():
+        cmd += ["--hidden-import", module]
     if target_os(target) == "windows":
         rc = work / "version.rc"
         rc.write_text(windows_version_resource(version), encoding="utf-8")

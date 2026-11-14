@@ -50,7 +50,12 @@ sidecar, `cargo install velesdb-memory` as fallback) before any harness is
 wired. In daemon mode `--apply` runs `scripts/install-memory-daemon.sh|.ps1`
 (launchd on macOS, a Scheduled Task on Windows; on Linux it installs no
 service yet, so the health gate refuses daemon mode) and only rewires the
-harnesses once `https://127.0.0.1:18090/health` answers. Every config write is backed up and
+harnesses once `https://127.0.0.1:18090/health` answers. It then installs the
+skills and the [agent hooks](../../integrations/agent-hooks/README.md) —
+working-context load/save, recall-before-edit and the context compiler — for
+every installed harness that has them (Claude Code, Codex, Windsurf, Devin),
+after checking `bash` and `jq`: without them it installs no hook and says
+what to add. Every config write is backed up and
 atomic (unique tmp + rename + post-write validation, original file mode kept,
 symlinks refused). See #2759.
 

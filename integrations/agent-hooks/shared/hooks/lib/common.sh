@@ -556,6 +556,37 @@ read_exact_line() {
   printf -v "$1" '%s' "${read_exact_line_out%$'\n'}"
 }
 
+# resolve_memory_bin VAR: the velesdb-memory binary a hook runs, into VAR.
+# $VELESDB_MEMORY_BIN wins, then PATH, then the per-user locations the
+# installers write to — the install wizard (~/.local/bin, or
+# %LOCALAPPDATA%\Programs\velesdb-memory on Windows) and cargo /
+# install-memory-daemon (~/.cargo/bin). A harness launches hooks with its own,
+# often minimal, PATH: with PATH alone the compiler was a silent no-op on every
+# install that never touched it. Returns 1 when none exists.
+resolve_memory_bin() {
+  local candidate local_app_data="${LOCALAPPDATA:-}"
+  if [ -n "${VELESDB_MEMORY_BIN:-}" ]; then
+    printf -v "$1" '%s' "$VELESDB_MEMORY_BIN"
+    return 0
+  fi
+  if command -v velesdb-memory >/dev/null 2>&1; then
+    printf -v "$1" '%s' velesdb-memory
+    return 0
+  fi
+  if [ -n "$local_app_data" ] && command -v cygpath >/dev/null 2>&1; then
+    read_exact_line local_app_data cygpath -u "$local_app_data" || local_app_data=""
+  fi
+  for candidate in "$HOME/.local/bin/velesdb-memory" "$HOME/.cargo/bin/velesdb-memory" \
+      "$HOME/.cargo/bin/velesdb-memory.exe" \
+      "${local_app_data:-$HOME/AppData/Local}/Programs/velesdb-memory/velesdb-memory.exe"; do
+    if [ -x "$candidate" ]; then
+      printf -v "$1" '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # physical_dir DIR: DIR's physical path, as `pwd -P` prints it.
 physical_dir() {
   (cd "$1" 2>/dev/null && pwd -P)

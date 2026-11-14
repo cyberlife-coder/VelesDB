@@ -64,6 +64,11 @@ mod relevance;
 /// so the same transcript + policy always segments byte-identically. See
 /// [`segment::segment_transcript`].
 pub mod segment;
+/// Line-level pruning of one tool result under a token budget — the
+/// `compile-stdin --tool-output` path: failure lines, negative constraints
+/// and query terms survive verbatim, elided runs are marked in place. See
+/// [`tool_output::prune_tool_output`].
+pub mod tool_output;
 /// The binding-side glue over [`segment`]: one implementation of
 /// "transcript in, `CompileRequest` + audit trail out", relayed by the
 /// Node, Python and WASM bindings instead of copied into each.
@@ -91,6 +96,7 @@ pub use segment::{
     segment_transcript, SegmentFormat, SegmentKind, SegmentationOutcome, SegmentationPolicy,
     TranscriptSegment,
 };
+pub use tool_output::{prune_tool_output, PrunedToolOutput, ToolOutputPolicy};
 pub use transcript_bridge::{
     build_transcript_compile_request, SegmentInfo, SegmentationReport, TranscriptCompileInput,
 };

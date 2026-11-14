@@ -192,6 +192,9 @@ def devin_root() -> Path:
         if not root.is_absolute():
             raise SystemExit("DEVIN_CONFIG_HOME must be an absolute path")
         return root
+    appdata = os.environ.get("APPDATA")
+    if sys.platform == "win32" and appdata:
+        return Path(appdata) / "devin"
     return Path.home() / ".config" / "devin"
 
 
@@ -417,16 +420,17 @@ def stage_source(client: str, staging: Path) -> None:
         )
     shutil.copytree(source, staging)
     (staging / "lib").mkdir(parents=True, exist_ok=True)
-    (staging / COMPOSED_LIB).write_text(
-        compose_library(HOST_DIRS[client]), encoding="utf-8"
-    )
+    # Bytes, not text: a native Windows Python (the packaged install wizard)
+    # would translate "\n" to "\r\n", and bash cannot parse a CRLF library.
+    (staging / COMPOSED_LIB).write_bytes(compose_library(HOST_DIRS[client]).encode("utf-8"))
 
 
 def read_settings(client: str = "claude") -> dict:
     path = settings_path(client)
     if not path.is_file():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    # utf-8-sig: an editor-written registry may start with a BOM.
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def is_ours(hook: dict, client: str = "claude") -> bool:
