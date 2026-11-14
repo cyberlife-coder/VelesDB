@@ -130,6 +130,16 @@ class SourceBundleTests(unittest.TestCase):
     """The asset for a platform with no native build (Intel Macs): the wizard
     and every resource it reads, runnable with any python3 >= 3.9."""
 
+    def test_the_wizard_modules_are_found_through_its_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "entry.py").write_text("import json\nimport helper_a\n", encoding="utf-8")
+            (root / "helper_a.py").write_text("from helper_b import x\n", encoding="utf-8")
+            (root / "helper_b.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "unused.py").write_text("", encoding="utf-8")
+            names = [p.name for p in pkg.wizard_modules(root / "entry.py")]
+        self.assertEqual(names, ["entry.py", "helper_a.py", "helper_b.py"])
+
     def test_bundle_carries_the_wizard_and_everything_it_reads(self):
         names = {arc for _, arc in pkg.source_members()}
         self.assertIn("scripts/velesdb_install_wizard.py", names)

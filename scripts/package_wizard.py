@@ -57,8 +57,6 @@ COMMAND_LAUNCHER = "VelesDB Install Wizard.command"
 #: native build covers (PyInstaller cannot cross-compile, and the release
 #: matrix has no Intel macOS runner). Runs with any python3 >= 3.9.
 SOURCE_ASSET = f"{BINARY}-src.tar.gz"
-#: The wizard's own modules, beside the resources bundled_data() lists.
-WIZARD_MODULES: tuple[str, ...] = ("scripts/velesdb_install_wizard.py", "scripts/wizard_release.py")
 
 #: (os, arch) -> target triple of the binary a native build produces.
 _TARGETS: dict[tuple[str, str], str] = {
@@ -153,10 +151,23 @@ def _top_level_imports(script: Path) -> set[str]:
     return names
 
 
+def wizard_modules(entry: Path = WIZARD) -> list[Path]:
+    """The wizard and every sibling module it imports, transitively — derived
+    from the imports, so a new module cannot be left out of the bundle."""
+    found, pending = [entry], [entry]
+    while pending:
+        for name in sorted(_top_level_imports(pending.pop())):
+            module = entry.parent / f"{name}.py"
+            if module.is_file() and module not in found:
+                found.append(module)
+                pending.append(module)
+    return found
+
+
 def source_members() -> list[tuple[Path, str]]:
     """(file, repo-relative name) for the source bundle: the wizard modules
     and every bundled resource, directories expanded (bytecode caches out)."""
-    members = [(REPO_ROOT / rel, rel) for rel in WIZARD_MODULES]
+    members = [(path, path.relative_to(REPO_ROOT).as_posix()) for path in wizard_modules()]
     for source, dest in bundled_data():
         if source.is_file():
             members.append((source, f"{dest}/{source.name}"))
