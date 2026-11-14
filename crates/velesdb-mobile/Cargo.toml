@@ -41,6 +41,11 @@ serde_json = "1.0.145"
 # - x86_64-linux-android (x86_64 emulator)
 # - i686-linux-android (x86 emulator)
 
+# CI (`mobile-cross-build` in .github/workflows/ci.yml) builds and links
+# aarch64/x86_64 Android, type-checks aarch64-apple-ios and
+# aarch64-apple-ios-sim, and generates the Kotlin and Swift bindings. The
+# other targets above are untested.
+
 [features]
 default = ["velesdb-core/default"]
 gpu = ["velesdb-core/gpu"]

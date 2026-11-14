@@ -92,7 +92,7 @@ VelesQL without declaring a `vector` column.
 | Aggregate `ORDER BY` over a `GROUP BY` | yes | yes |
 | `UNION` / `INTERSECT` / `EXCEPT` | yes | yes |
 | `JOIN` | `INNER`, `LEFT` only | all |
-| `MATCH` graph traversal | 1–2 hops | any depth |
+| `MATCH` graph traversal | one fixed-length pattern, any number of hops | any depth, multi-pattern, variable-length |
 | Cross-collection `MATCH` (`@collection`) | no | yes |
 | `EXPLAIN` (core plan vocabulary) | yes | yes |
 | Persistence | IndexedDB | Disk (mmap) |
@@ -129,7 +129,8 @@ reference from `@wiscale/velesdb-wasm@4.0.0`.
 | Scalar subqueries | `Subqueries are not supported in WASM` |
 | `RIGHT JOIN` | `RIGHT JOIN is not supported in WASM (use LEFT JOIN)` |
 | `FULL JOIN` | `FULL JOIN is not supported in WASM` |
-| `MATCH` beyond 2 hops | `MATCH patterns with more than 2 hops are not yet supported in WASM (N nodes)` |
+| Multi-pattern `MATCH` | `Multi-pattern MATCH is not yet supported in WASM (N patterns in this query)` |
+| Variable-length relationship (`[*1..3]`) | `Variable-length relationships (e.g. [*1..3]) are not yet supported in WASM` |
 | `ALTER COLLECTION` | `ALTER COLLECTION is not supported in WASM yet` |
 | Graph collections in DDL | `Graph collections are not supported in WASM (use GraphStore directly)` |
 | `similarity()` threshold in `WHERE` | `similarity() threshold filters are not supported in WASM` |
@@ -207,7 +208,7 @@ Reach for the [REST server](https://github.com/cyberlife-coder/VelesDB) when you
 need:
 
 - **Cross-collection `MATCH`** — `@collection` routing lives on the server.
-- **Multi-hop `MATCH`** — traversals beyond 2 hops.
+- **Multi-pattern or variable-length `MATCH`** — `(a), (b)` patterns and `[*1..3]` ranges.
 - **More than ~100 K vectors** — browser RAM is the ceiling.
 - **`RIGHT`/`FULL JOIN`, quantizer training, geospatial or BM25 predicates.**
 - **Centralized, shared state** — WASM is per-tab and per-user by definition.

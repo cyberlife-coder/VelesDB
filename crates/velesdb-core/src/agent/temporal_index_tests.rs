@@ -117,6 +117,21 @@ mod tests {
         );
     }
 
+    /// A count whose low 32 bits match the payload (`(1 << 32) + 1` with one
+    /// 16-byte entry) must be rejected on every target: on wasm32 an `as usize`
+    /// cast truncated it to `1` and the lying header was accepted.
+    #[test]
+    fn test_deserialize_rejects_count_truncating_to_payload() {
+        let count: u64 = (1u64 << 32) + 1;
+        let mut data = count.to_le_bytes().to_vec();
+        data.extend_from_slice(&[0u8; 16]);
+
+        assert!(
+            TemporalIndex::deserialize(&data).is_none(),
+            "a count that only matches the payload after truncation must be rejected"
+        );
+    }
+
     /// #897: a huge caller-supplied `limit` must not pre-allocate beyond the number
     /// of indexed entries.
     #[test]

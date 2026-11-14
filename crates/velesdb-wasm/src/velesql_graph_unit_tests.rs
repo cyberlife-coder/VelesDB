@@ -189,16 +189,6 @@ fn test_match_at_collection_missing_collection_is_skipped() {
 }
 
 #[test]
-fn test_match_rejects_beyond_2_hop() {
-    let mut db = DatabaseInner::new();
-    let q =
-        parse_match("MATCH (a:P)-[:R]->(b:P)-[:R]->(c:P)-[:R]->(d:P) RETURN a, b, c, d LIMIT 10");
-    let err = execute_match(&mut db, &q, &Params::new());
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("more than 2 hops"));
-}
-
-#[test]
 fn test_select_edges_on_missing_graph_errors() {
     let db = DatabaseInner::new();
     let stmt = SelectEdgesStatement {

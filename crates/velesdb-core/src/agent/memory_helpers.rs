@@ -337,12 +337,14 @@ pub(super) fn search_live(
 ///
 /// Used by `TemporalIndex::deserialize` (16-byte entries) and
 /// `MemoryTtl::deserialize` (25-byte entries).
-#[allow(clippy::cast_possible_truncation)] // count validated against buffer length
 pub(super) fn validate_binary_header(data: &[u8], entry_size: usize) -> Option<usize> {
     if data.len() < 8 {
         return None;
     }
-    let count = u64::from_le_bytes(data[0..8].try_into().ok()?) as usize;
+    // Checked, not `as`: on a 32-bit target (wasm32) a forged count such as
+    // `(1 << 32) + 1` would truncate to `1` before any bound below ran, and a
+    // one-entry payload would then be accepted under a header that lies.
+    let count = usize::try_from(u64::from_le_bytes(data[0..8].try_into().ok()?)).ok()?;
     let payload = data.len() - 8;
     // Untrusted `count`: bound it against the actual payload first so the
     // `count * entry_size` below cannot wrap on a 32-bit target and produce a

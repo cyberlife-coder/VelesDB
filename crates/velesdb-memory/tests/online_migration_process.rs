@@ -1,9 +1,11 @@
 #![cfg(all(feature = "mcp", feature = "persistence"))]
 
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+mod common;
+
+use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
+use common::mcp_stdio::McpStdioProcess;
 use serde_json::{json, Value};
 use velesdb_memory::{HashEmbedder, MemoryService, Metadata, DEFAULT_DIMENSION};
 
@@ -211,47 +213,31 @@ fn memory_by_id(memories: &[Value], expected: u64) -> &Value {
         .expect("memory id")
 }
 
-struct ProcessClient {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    next_id: u64,
+/// The shared stdio client plus the migration-specific polling this suite
+/// needs; generic calls (`call`, `shutdown`) go through [`Deref`].
+struct ProcessClient(McpStdioProcess);
+
+impl Deref for ProcessClient {
+    type Target = McpStdioProcess;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ProcessClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl ProcessClient {
     fn spawn(store: &std::path::Path, home: &std::path::Path, extractor: bool) -> Self {
-        let mut command = daemon_command(store, home);
+        let mut command = McpStdioProcess::command(store, home);
         if extractor {
             command.env("VELESDB_MEMORY_EXTRACTOR", "outline");
         }
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn daemon");
-        let stdin = child.stdin.take().expect("stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("stdout"));
-        let mut client = Self {
-            child,
-            stdin: Some(stdin),
-            stdout,
-            next_id: 1,
-        };
-        client.initialize();
-        client
-    }
-
-    fn initialize(&mut self) {
-        self.request(
-            "initialize",
-            json!({
-                "protocolVersion":"2024-11-05",
-                "capabilities":{},
-                "clientInfo":{"name":"online-migration-process","version":"1"}
-            }),
-        );
-        self.send(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+        Self(McpStdioProcess::spawn(command, "online-migration-process"))
     }
 
     fn start_migration(&mut self) {
@@ -267,17 +253,6 @@ impl ProcessClient {
                 "verification_reserve_ms":10
             }),
         );
-    }
-
-    fn call(&mut self, name: &str, arguments: Value) -> Value {
-        let mut params = json!({"name":name});
-        params["arguments"] = arguments;
-        let response = self.request("tools/call", params);
-        assert_ne!(
-            response["result"]["isError"], true,
-            "tool {name}: {response}"
-        );
-        response["result"]["structuredContent"].clone()
     }
 
     fn wait_for_phase(&mut self, expected: &str) {
@@ -356,56 +331,6 @@ impl ProcessClient {
             if cursor.is_none() {
                 return memories;
             }
-        }
-    }
-
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut frame = json!({"jsonrpc":"2.0","id":id,"method":method});
-        frame["params"] = params;
-        self.send(&frame);
-        let mut line = String::new();
-        self.stdout.read_line(&mut line).expect("read response");
-        let response: Value = serde_json::from_str(&line).expect("JSON response");
-        assert_eq!(response["id"], id, "unexpected response: {response}");
-        assert!(
-            response.get("error").is_none(),
-            "request failed: {response}"
-        );
-        response
-    }
-
-    fn send(&mut self, frame: &Value) {
-        let stdin = self.stdin.as_mut().expect("live stdin");
-        serde_json::to_writer(&mut *stdin, frame).expect("write frame");
-        stdin.write_all(b"\n").expect("newline");
-        stdin.flush().expect("flush");
-    }
-
-    fn shutdown(&mut self) {
-        drop(self.stdin.take());
-        let status = self.child.wait().expect("daemon exit");
-        assert!(status.success(), "daemon status: {status}");
-    }
-}
-
-fn daemon_command(store: &std::path::Path, home: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_velesdb-memory"));
-    command
-        .env("HOME", home)
-        .env("VELESDB_MEMORY_PATH", store)
-        .env("VELESDB_MEMORY_EMBEDDER", "hash")
-        .env("VELESDB_MEMORY_QUIET", "1")
-        .env_remove("VELESDB_MEMORY_CONFIG");
-    command
-}
-
-impl Drop for ProcessClient {
-    fn drop(&mut self) {
-        if self.stdin.is_some() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
         }
     }
 }

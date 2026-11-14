@@ -87,6 +87,32 @@ mod tests {
         );
     }
 
+    /// A section length whose low 32 bits equal the real length
+    /// (`(1 << 32) + 3`) must be rejected on every target: on wasm32 an
+    /// `as usize` cast truncated it to `3` and the forged header was accepted.
+    #[test]
+    fn test_snapshot_section_length_truncating_to_real_length_is_rejected() {
+        use crate::storage::snapshot::crc32_hash;
+
+        let state = MemoryState {
+            semantic: vec![1, 2, 3],
+            episodic: vec![4, 5, 6],
+            procedural: vec![7, 8, 9],
+            ttl: vec![10, 11, 12],
+        };
+        let mut data = create_snapshot(&state);
+        data[5..13].copy_from_slice(&((1u64 << 32) + 3).to_le_bytes());
+        let crc_offset = data.len() - 4;
+        let crc = crc32_hash(&data[..crc_offset]);
+        data[crc_offset..].copy_from_slice(&crc.to_le_bytes());
+
+        let result = load_snapshot(&data);
+        assert!(
+            matches!(result, Err(SnapshotError::CorruptedData(_))),
+            "truncating section length must yield CorruptedData, got {result:?}"
+        );
+    }
+
     /// Audit #2590: `save_snapshot_to_file` must go through the shared
     /// `atomic_write` barriers — a fault at the parent-directory fsync
     /// must fail the save (a barrier not wired would pass vacuously),
