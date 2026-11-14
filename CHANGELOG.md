@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The install wizard settles the embedding model against the store.** It
+  defaults to the model the store's provenance records, so rewiring a
+  harness no longer starts a store filled by `bge-m3` on `hash` — which the
+  server refuses. `--embedder ollama --embedder-model <name>` or menu `[4]`
+  picks another one from a ranked catalog (`all-minilm` 384d,
+  `nomic-embed-text` 768d, `mxbai-embed-large`/`bge-m3` 1024d, plus local
+  Ollama embedding models). With consent the wizard installs Ollama, pulls
+  the model, probes its real dimension, and runs `migrate-embeddings` on a
+  store recorded for another model. Stdio entries and the daemon installer
+  now name their embedder explicitly.
+
 - **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
   config file (`--config`, `VELESDB_CONFIG`, `./velesdb.toml`) but had no way
   to say which one it read or what it applied. The new commands resolve the

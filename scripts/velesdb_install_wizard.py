@@ -43,12 +43,14 @@ import sys
 import textwrap
 import types
 from pathlib import Path
+from typing import Callable
 
 if sys.platform == "win32":
     import msvcrt  # noqa: F401  (Windows byte-range locking)
 else:
     import fcntl
 
+import wizard_embedder
 import wizard_release
 
 DEFAULT_STORE = Path.home() / ".velesdb-memory"
@@ -465,7 +467,10 @@ def propose_mode(harnesses: list[dict], lock: dict) -> str:
     return "daemon" if len(installed) > 1 else "stdio"
 
 
-def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: bool = True) -> dict:
+def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: bool = True,
+               embedder: "tuple[str | None, str | None]" = (None, None)) -> dict:
+    """`embedder` is (--embedder, --embedder-model); unset, the store's
+    recorded model is kept (see wizard_embedder.default_embedder)."""
     plat = detect_platform()
     harnesses = detect_harnesses(home, plat["os"], scan_cli=scan_cli)
     lock = detect_lock(store)
@@ -481,12 +486,16 @@ def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: b
         actions.append(
             {"step": "daemon", "detail": f"one shared HTTPS daemon on 127.0.0.1:{port} holds the lock once (install-memory-daemon)"}
         )
+    profile = wizard_embedder.read_store(store)
+    chosen = wizard_embedder.describe(wizard_embedder.select_embedder(*embedder, profile), profile)
+    actions += _embedder_actions(chosen)
     for h in harnesses:
         if not h["installed"]:
             continue
         current = h["velesdb_memory_entry"]
         target = "http" if proposed == "daemon" else "stdio"
-        if current != target:
+        # a stdio entry carries the embedder in its env, so it is rewritten too
+        if current != target or target == "stdio":
             actions.append(
                 {"step": "wire", "harness": h["name"], "from": current or "absent", "to": target}
             )
@@ -497,8 +506,37 @@ def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: b
         "lock": lock,
         "harnesses": harnesses,
         "proposed_mode": proposed,
+        "embedder": chosen,
         "actions": actions,
     }
+
+
+def _embedder_actions(chosen: dict) -> list[dict]:
+    dim = f"{chosen['dimension']}d" if chosen["dimension"] else "dimension probed after pull"
+    actions = [{"step": "embedder", "detail": f"{chosen['backend']}/{chosen['model']} ({dim}) — store {chosen['verdict']}"}]
+    if chosen["verdict"] == wizard_embedder.MIGRATE:
+        actions.append({"step": "migrate", "detail": f"re-embed the store ({chosen['store_model'] or 'unrecorded'}, "
+                                                     f"{chosen['store_dimension']}d) with velesdb-memory migrate-embeddings"})
+    return actions
+
+
+def plan_embedder(plan: dict) -> "wizard_embedder.Embedder":
+    section = plan.get("embedder")
+    return wizard_embedder.from_plan(section) if section else wizard_embedder.HASH
+
+
+def server_env(store: Path, embedder: "wizard_embedder.Embedder") -> "dict[str, str]":
+    """What a stdio velesdb-memory needs: its store and its embedder."""
+    return {"VELESDB_MEMORY_PATH": str(store), **wizard_embedder.server_env(embedder)}
+
+
+def _embedder_line(plan: dict) -> str:
+    e = plan.get("embedder")
+    if not e:
+        return "hash"
+    dim = f"{e['dimension']}d" if e["dimension"] else "?d"
+    stored = f"{e['store_model'] or 'non enregistré'}, {e['store_dimension']}d" if e["store_dimension"] else "aucun store"
+    return f"{e['backend']}/{e['model']} ({dim}) — store : {stored} → {e['verdict']}"
 
 
 def print_plan(plan: dict) -> None:
@@ -512,6 +550,7 @@ def print_plan(plan: dict) -> None:
     else:
         print("Lock:     free")
     print(f"Mode proposé: {plan['proposed_mode']}")
+    print(f"Embeddings: {_embedder_line(plan)}")
     print("Harnais détectés:")
     for h in plan["harnesses"]:
         if h["installed"]:
@@ -619,20 +658,23 @@ def is_source_checkout() -> bool:
             and (REPO_ROOT / "crates" / "velesdb-memory").is_dir() and shutil.which("cargo") is not None)
 
 
-def daemon_installer_cmd(plat: dict, port: int, store: Path, yes: bool, from_release: bool) -> "list[str] | None":
+def daemon_installer_cmd(plat: dict, port: int, store: Path, yes: bool, from_release: bool,
+                         embedder: "wizard_embedder.Embedder" = wizard_embedder.HASH) -> "list[str] | None":
     script = daemon_installer_script(plat["os"])
+    flags = wizard_embedder.daemon_flags(embedder, plat["os"])
     if plat["os"] == "windows":
         ps = shutil.which("pwsh") or shutil.which("powershell")
         if ps is None:
             return None
         cmd = [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
-               "-Port", str(port), "-Store", str(store)]
+               "-Port", str(port), "-Store", str(store), *flags]
         return cmd + (["-Yes"] if yes else []) + (["-FromRelease"] if from_release else [])
-    cmd = ["bash", str(script), f"--port={port}", f"--store={store}"]
+    cmd = ["bash", str(script), f"--port={port}", f"--store={store}", *flags]
     return cmd + (["--yes"] if yes else []) + (["--from-release"] if from_release else [])
 
 
-def run_daemon_installer(plat: dict, port: int, store: Path, yes: bool) -> "tuple[bool, str]":
+def run_daemon_installer(plat: dict, port: int, store: Path, yes: bool,
+                         embedder: "wizard_embedder.Embedder" = wizard_embedder.HASH) -> "tuple[bool, str]":
     """Really run install-memory-daemon, then probe /health. Returns (ok,
     detail). From a checkout it builds there (cwd = the checkout, which its
     `git rev-parse` needs); otherwise it installs the sha256-verified release
@@ -642,7 +684,7 @@ def run_daemon_installer(plat: dict, port: int, store: Path, yes: bool) -> "tupl
     if not script.exists():
         return False, f"daemon installer not found: {script}"
     source = is_source_checkout()
-    cmd = daemon_installer_cmd(plat, port, store, yes, from_release=not source)
+    cmd = daemon_installer_cmd(plat, port, store, yes, from_release=not source, embedder=embedder)
     if cmd is None:
         return False, "powershell/pwsh not found for install-memory-daemon.ps1"
     try:
@@ -758,8 +800,8 @@ def write_json_atomic(path: Path, mutate, dry: bool = True) -> bool:
     return True
 
 
-def _stdio_entry(bin_path: str, store: Path) -> dict:
-    return {"command": bin_path, "env": {"VELESDB_MEMORY_PATH": str(store)}}
+def _stdio_entry(bin_path: str, env: "dict[str, str]") -> dict:
+    return {"command": bin_path, "env": dict(env)}
 
 
 def _http_entry(port: int) -> dict:
@@ -771,8 +813,10 @@ def _run_cli(cmd: "list[str]") -> "subprocess.CompletedProcess":
     return subprocess.run(cmd, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
 
 
-def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, store: Path, dry: bool = True) -> str:
-    """Wire one harness to the chosen mode. Returns a status string."""
+def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, env: "dict[str, str]",
+                 dry: bool = True) -> str:
+    """Wire one harness to the chosen mode; `env` is a stdio entry's
+    environment (see server_env). Returns a status string."""
     kind = harness["kind"]
     name = harness["name"]
     target = "http" if mode == "daemon" else "stdio"
@@ -788,7 +832,8 @@ def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, st
         if target == "http":
             cmd += ["--transport", "http", f"https://127.0.0.1:{port}/mcp"]
         else:
-            cmd += ["--env", f"VELESDB_MEMORY_PATH={store}", "--", str(bin_path)]
+            cmd += [arg for key, value in env.items() for arg in ("--env", f"{key}={value}")]
+            cmd += ["--", str(bin_path)]
         r = _run_cli(cmd)
         return f"{name}: {'wired ' + target if r.returncode == 0 else 'FAILED: ' + (r.stderr or '').strip()}"
 
@@ -799,27 +844,27 @@ def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, st
     path = Path(config)
 
     if kind == "codex-toml":
-        return wire_codex_toml(path, target, str(bin_path), port, store, dry)
+        return wire_codex_toml(path, target, str(bin_path), port, env, dry)
     if kind == "vibe-toml":
-        return wire_vibe_toml(path, target, str(bin_path), port, store, dry)
+        return wire_vibe_toml(path, target, str(bin_path), port, env, dry)
 
     def mutate(data: dict) -> dict:
         if kind in ("mcp-json", "devin-envelope"):
             servers = data.setdefault("mcpServers", {})
             # replace in place: the stdio entry is overwritten, never duplicated
-            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(str(bin_path), store)
+            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(str(bin_path), env)
         elif kind == "zed-context-servers":
             servers = data.setdefault("context_servers", {})
             servers["velesdb-memory"] = (
                 {"url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
-                else {"command": {"path": str(bin_path), "args": [], "env": {"VELESDB_MEMORY_PATH": str(store)}}}
+                else {"command": {"path": str(bin_path), "args": [], "env": dict(env)}}
             )
         elif kind == "opencode-mcp":
             servers = data.setdefault("mcp", {})
             servers["velesdb-memory"] = (
                 {"type": "remote", "url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
                 else {"type": "local", "command": [str(bin_path)], "enabled": True,
-                      "environment": {"VELESDB_MEMORY_PATH": str(store)}}
+                      "environment": dict(env)}
             )
         return data
 
@@ -831,6 +876,11 @@ def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, st
 
 def _toml_escape(value: str) -> str:
     return value.replace(chr(92), chr(92)*2).replace(chr(34), chr(92)+chr(34))
+
+
+def _toml_inline_table(env: "dict[str, str]") -> str:
+    pairs = ", ".join(f'{key} = "{_toml_escape(value)}"' for key, value in env.items())
+    return f"{{ {pairs} }}"
 
 
 def _replace_toml_section(text: str, header: str, new_body_lines: "list[str]") -> str:
@@ -860,13 +910,13 @@ def _replace_toml_section(text: str, header: str, new_body_lines: "list[str]") -
     return "\n".join(out) + "\n"
 
 
-def wire_codex_toml(path: Path, target: str, bin_path: str, port: int, store: Path, dry: bool) -> str:
+def wire_codex_toml(path: Path, target: str, bin_path: str, port: int, env: "dict[str, str]", dry: bool) -> str:
     text = _read_text(path) if path.exists() else ""
     if target == "http":
         body = [f'url = "https://127.0.0.1:{port}/mcp"']
     else:
         body = [f'command = "{_toml_escape(bin_path)}"', "args = []",
-                f'env = {{ VELESDB_MEMORY_PATH = "{_toml_escape(str(store))}" }}']
+                f"env = {_toml_inline_table(env)}"]
     new = _replace_toml_section(text, "[mcp_servers.velesdb-memory]", body)
     try:
         import tomllib
@@ -883,7 +933,7 @@ def wire_codex_toml(path: Path, target: str, bin_path: str, port: int, store: Pa
     return f"codex: wired {target} ({path})"
 
 
-def wire_vibe_toml(path: Path, target: str, bin_path: str, port: int, store: Path, dry: bool) -> str:
+def wire_vibe_toml(path: Path, target: str, bin_path: str, port: int, env: "dict[str, str]", dry: bool) -> str:
     """Vibe reads ~/.vibe/config.toml: mcp_servers is an inline array of objects
     { name = "velesdb-memory", url|command, transport? }. We replace the object
     whose name matches by brace-matching, or append one before the closing ']'."""
@@ -893,7 +943,7 @@ def wire_vibe_toml(path: Path, target: str, bin_path: str, port: int, store: Pat
                f'transport = "streamable-http" }}')
     else:
         obj = (f'{{ name = "velesdb-memory", command = "{_toml_escape(bin_path)}", '
-               f'args = [], env = {{ VELESDB_MEMORY_PATH = "{_toml_escape(str(store))}" }} }}')
+               f"args = [], env = {_toml_inline_table(env)} }}")
     new = _replace_vibe_mcp_entry(text, obj)
     if dry:
         return f"vibe: would update {path} ({target})"
@@ -1061,38 +1111,73 @@ def install_hooks(plan: dict) -> list[str]:
     return [_deploy_hooks(sync, client, plan) for client in clients]
 
 
-def _prepare_server(plan: dict, dry: bool, yes: bool) -> "tuple[str | None, list[str], bool]":
-    """(binary path, statuses, ok to wire). stdio needs a binary on disk;
-    daemon mode delegates the binary to install-memory-daemon, then needs
-    /health to answer before any harness is rewired."""
-    if plan["proposed_mode"] != "daemon":
-        bin_path, status = ensure_binary(plan["platform"], dry=dry)
-        return bin_path, [status], True
-    if dry:
-        return None, ["daemon: would run install-memory-daemon (installs the binary), then probe /health"], True
-    ok, detail = run_daemon_installer(plan["platform"], plan.get("port", 18090), Path(plan["store"]), yes)
+_NOT_REWIRED = "harnesses: NOT rewired — configs untouched"
+
+
+def _readable_store(plan: dict, embedder: "wizard_embedder.Embedder",
+                    session: "wizard_embedder.Session") -> "tuple[str | None, list[str], bool]":
+    """(binary path, statuses, ok). stdio needs a binary on disk; so does a
+    store migration, which must also precede any daemon start (the daemon
+    refuses a store its embedder cannot read)."""
+    daemon = plan["proposed_mode"] == "daemon"
+    store = Path(plan["store"])
+    statuses: list[str] = []
+    bin_path = None
+    if not daemon or wizard_embedder.needs_migration(embedder, store):
+        bin_path, status = ensure_binary(plan["platform"], dry=session.dry)
+        statuses.append(status)
+    ok, more = wizard_embedder.reconcile_store(embedder, store, bin_path, session, locked=plan.get("lock", {}).get("locked", False))
+    return bin_path, statuses + more, ok
+
+
+def _prepare_server(plan: dict, embedder: "wizard_embedder.Embedder",
+                    session: "wizard_embedder.Session") -> "tuple[str | None, list[str], bool]":
+    """(binary path, statuses, ok to wire). Daemon mode delegates the binary
+    to install-memory-daemon, then needs /health to answer before any
+    harness is rewired."""
+    bin_path, statuses, ok = _readable_store(plan, embedder, session)
     if not ok:
-        return None, [f"daemon: FAILED — {detail}",
-                      "harnesses: NOT rewired — the daemon endpoint is not answering; configs untouched"], False
-    return None, [f"daemon: up — {detail}"], True
+        return None, statuses + [_NOT_REWIRED], False
+    if plan["proposed_mode"] != "daemon":
+        return bin_path, statuses, True
+    if session.dry:
+        return None, statuses + ["daemon: would run install-memory-daemon (installs the binary), then probe /health"], True
+    ok, detail = run_daemon_installer(plan["platform"], plan.get("port", 18090), Path(plan["store"]),
+                                      session.yes, embedder)
+    if not ok:
+        return None, statuses + [f"daemon: FAILED — {detail}",
+                                 "harnesses: NOT rewired — the daemon endpoint is not answering; configs untouched"], False
+    return None, statuses + [f"daemon: up — {detail}"], True
 
 
-def apply_plan(plan: dict, dry: bool = True, yes: bool = False) -> list[str]:
+def _decline(_question: str) -> bool:
+    """--apply asks nothing: a step needing consent is refused unless --yes."""
+    return False
+
+
+def apply_plan(plan: dict, dry: bool = True, yes: bool = False,
+               confirm: "Callable[[str], bool]" = _decline) -> list[str]:
     """Execute the plan's actions. Returns per-action status strings; any
     status containing FAILED or REFUSED means the apply did not fully succeed
     (main() turns that into a non-zero exit code)."""
-    mode = plan["proposed_mode"]
-    bin_path, statuses, ok = _prepare_server(plan, dry, yes)
+    session = wizard_embedder.Session(wizard_embedder.Ops(), confirm, yes=yes, dry=dry)
+    embedder, statuses = wizard_embedder.prepare_ollama(plan_embedder(plan), plan["platform"]["os"], session)
+    if embedder is None:
+        return statuses + [_NOT_REWIRED]
+    bin_path, more, ok = _prepare_server(plan, embedder, session)
+    statuses += more
     if not ok:
         return statuses
+    mode = plan["proposed_mode"]
     target = "http" if mode == "daemon" else "stdio"
+    env = server_env(Path(plan["store"]), embedder)
     for h in plan["harnesses"]:
         if not h["installed"]:
             continue
-        if h["velesdb_memory_entry"] == target:
+        if target == "http" and h["velesdb_memory_entry"] == target:
             statuses.append(f"{h['name']}: already {target} — untouched")
             continue
-        statuses.append(wire_harness(h, mode, bin_path, plan.get("port", 18090), Path(plan["store"]), dry=dry))
+        statuses.append(wire_harness(h, mode, bin_path, plan.get("port", 18090), env, dry=dry))
     if not dry:
         statuses += install_skills(plan) + install_hooks(plan)
     return statuses
@@ -1164,6 +1249,7 @@ def print_plan_pretty(plan: dict) -> None:
         f"Store      : {plan['store']}",
         f"Lock       : {lock_line}",
         f"Mode proposé : {_paint(plan['proposed_mode'], '36', color)}",
+        f"Embeddings : {_embedder_line(plan)}",
         "",
         "Harnais détectés :",
     ]
@@ -1184,13 +1270,37 @@ def print_plan_pretty(plan: dict) -> None:
     print(_box("velesdb-memory — assistant d'installation", lines, color))
 
 
+def _ask_yes_no(question: str) -> bool:
+    try:
+        return input(f"{question} [y/N] ").strip().lower() in ("y", "yes", "o", "oui")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
+def _choose_embedder(plan: dict, args) -> dict:
+    """The embeddings menu: catalog + local Ollama models, ranked against
+    the store. Returns the plan rebuilt for the chosen model."""
+    store = wizard_embedder.read_store(Path(plan["store"]))
+    local = wizard_embedder.Ops().tags() or []
+    try:
+        chosen = wizard_embedder.choose_embedder(store, local, input)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return plan
+    selection = (chosen.backend, None if chosen.backend == "hash" else chosen.model)
+    return build_plan(Path(args.home), Path(plan["store"]), args.mode, plan["port"],
+                      scan_cli=not args.no_cli_scan, embedder=selection)
+
+
 def interactive_menu(plan: dict, args) -> int:
-    """Numbered menu on a TTY: apply / json / quit. EOF or Ctrl-C -> quit
-    (dry-run), so piping the wizard never blocks."""
+    """Numbered menu on a TTY: apply / json / quit / embeddings. EOF or
+    Ctrl-C -> quit (dry-run), so piping the wizard never blocks."""
     choices = {
         "1": "Appliquer ce plan maintenant",
         "2": "Voir le plan en JSON",
         "3": "Quitter sans rien changer (dry-run)",
+        "4": "Choisir le modèle d'embeddings (Ollama, local)",
     }
     color = _ui_color()
     while True:
@@ -1198,18 +1308,22 @@ def interactive_menu(plan: dict, args) -> int:
         for k, label in choices.items():
             print(_paint(f"  [{k}] {label}", "36" if k == "1" else "0", color))
         try:
-            ans = input("Choix [1/2/3] : ").strip().lower()
+            ans = input("Choix [1/2/3/4] : ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
         if ans in ("2", "json"):
             print(json.dumps(plan, indent=2, ensure_ascii=False))
             continue
+        if ans == "4":
+            plan = _choose_embedder(plan, args)
+            print_plan_pretty(plan)
+            continue
         if ans in ("3", "q", "n", ""):
             return 0
         if ans in ("1", "y", "apply"):
             print("Application du plan :")
-            statuses = apply_plan(plan, dry=False, yes=args.yes)
+            statuses = apply_plan(plan, dry=False, yes=args.yes, confirm=_ask_yes_no)
             for status in statuses:
                 print(f"  - {status}")
             return 1 if _statuses_failed(statuses) else 0
@@ -1234,7 +1348,12 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--json", action="store_true", help="print the plan as JSON (machine-readable)")
     parser.add_argument("--no-cli-scan", action="store_true", help="detect harnesses by config files only (testing)")
     parser.add_argument("--apply", action="store_true", help="execute the plan (non-interactive)")
-    parser.add_argument("--yes", action="store_true", help="forwarded to the daemon installer (assume yes to its prompts)")
+    parser.add_argument("--yes", action="store_true",
+                        help="assume yes: install Ollama, pull the model, migrate the store, daemon installer prompts")
+    parser.add_argument("--embedder", choices=["hash", "ollama"], default=None,
+                        help="embedding backend (default: the model the store records, else hash)")
+    parser.add_argument("--embedder-model", default=None,
+                        help="Ollama embedding model, e.g. bge-m3, all-minilm, nomic-embed-text, mxbai-embed-large")
     parser.add_argument("--version", action="store_true", help="print version and publisher, then exit")
     args = parser.parse_args(argv)
     if args.version:
@@ -1247,7 +1366,10 @@ def main(argv: "list[str] | None" = None) -> int:
     if not 1 <= args.port <= 65535:
         parser.error("--port must be in 1..65535")
 
-    plan = build_plan(Path(args.home), Path(args.store), args.mode, args.port, scan_cli=not args.no_cli_scan)
+    if args.embedder == "hash" and args.embedder_model:
+        parser.error("--embedder-model needs --embedder=ollama")
+    plan = build_plan(Path(args.home), Path(args.store), args.mode, args.port, scan_cli=not args.no_cli_scan,
+                      embedder=(args.embedder, args.embedder_model))
     if args.json:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
         return 0

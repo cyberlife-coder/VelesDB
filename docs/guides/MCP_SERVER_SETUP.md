@@ -55,7 +55,19 @@ skills and the [agent hooks](../../integrations/agent-hooks/README.md) —
 working-context load/save, recall-before-edit and the context compiler — for
 every installed harness that has them (Claude Code, Codex, Windsurf, Devin),
 after checking `bash` and `jq`: without them it installs no hook and says
-what to add. Every config write is backed up and
+what to add. It settles the embedding model too — see [Embedding backend](#embedding-backend):
+by default the model the store's `embedding-provenance.json` records, so
+rewiring a harness never switches a store back to `hash`; otherwise the one
+chosen with `--embedder ollama --embedder-model <name>` or menu `[4]`, which
+ranks `all-minilm` (384d), `nomic-embed-text` (768d), `mxbai-embed-large` and
+`bge-m3` (1024d) and the local Ollama embedding models by what the store can
+read. It offers to install Ollama (`brew`, `winget`, or Ollama's Linux script,
+downloaded and shown before it runs) and to pull the model, probes the
+model's real dimension, and re-embeds a store recorded for another model or
+dimension with `velesdb-memory migrate-embeddings` only with consent — under
+`--apply`, only with `--yes`; declined, no harness is rewired. Stdio entries
+carry `VELESDB_MEMORY_EMBEDDER`/`_MODEL`; the daemon installer gets
+`--embedder`/`--ollama-model`. Every config write is backed up and
 atomic (unique tmp + rename + post-write validation, original file mode kept,
 symlinks refused). See #2759.
 
