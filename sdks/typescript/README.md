@@ -647,8 +647,8 @@ Execute a VelesQL query. Supports SELECT, WHERE, vector NEAR, GROUP BY, HAVING, 
 >   velesdb-wasm's executor evaluates — over the points the SDK wrote, in REST's `/query` shape.
 >
 > Aggregations (`GROUP BY`, `COUNT`, …), `MATCH`, DDL and mutations through `query()`, and
-> on velesdb-wasm 8.0.0 every non-`NEAR` statement, throw `NOT_SUPPORTED` instead of silently
-> ignoring clauses. Accordingly, `db.capabilities().velesqlQuery` is `false` on WASM.
+> every non-`NEAR` statement on a binding shipped before `attachStore`, throw `NOT_SUPPORTED`
+> instead of silently ignoring clauses. Accordingly, `db.capabilities().velesqlQuery` is `false` on WASM.
 
 ```typescript
 // Vector similarity search
