@@ -142,6 +142,15 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("update-ca-certificates", result.stdout)
         self.assertIn("NODE_EXTRA_CA_CERTS", result.stdout)
         self.assertFalse(sudo_log.exists())
+    def test_the_summary_names_the_journal_when_the_unit_does_not_answer(self) -> None:
+        result = self.run_script("""
+            detect_daemon_kind
+            DAEMON_ALREADY_RUNNING=0 EMBEDDER=hash
+            print_summary
+        """, FAKE_CURL_RC="7")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("journalctl --user -u velesdb-memory.service", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
