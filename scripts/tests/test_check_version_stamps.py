@@ -106,5 +106,19 @@ class HardcodedAssertTests(unittest.TestCase):
             self.assertEqual(mod.hardcoded_assert_violations(root), [])
 
 
+
+class StampPatternTests(unittest.TestCase):
+    """What the --base diff mode calls a version stamp."""
+
+    def test_a_crate_name_beside_a_version_is_a_stamp(self):
+        for line in ("Applies to: velesdb-core 8.2.0", "velesdb-memory 0.18.0.", "currently velesdb-node 0.18.0"):
+            self.assertIsNotNone(mod.STAMP_RE.search(line), line)
+
+    def test_an_ipv4_address_is_not_a_version(self):
+        # README.md names `velesdb-memory` and https://127.0.0.1:18090 on one line;
+        # the dotted quad held `127.0.0` and `0.0.1` as two fake versions.
+        line = "A missing `velesdb-memory` is installed, then `https://127.0.0.1:18090/health` answers."
+        self.assertIsNone(mod.STAMP_RE.search(line))
+
 if __name__ == "__main__":
     unittest.main()

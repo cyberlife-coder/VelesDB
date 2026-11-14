@@ -63,6 +63,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `velesdb.toml` sections behave identically. The feature is optional, so a
   CLI-only build keeps axum/rustls out and fails `serve` with a pointer to
   the feature or the standalone binary.
+
+### Fixed
+
+- **Install wizard works on a machine with no checkout and no Rust**
+  (#2759). In stdio mode — the default for one harness — `--apply` never
+  installed `velesdb-memory`: on a fresh machine it refused every harness
+  and exited 1. It now installs the latest `velesdb-memory-v*` release
+  archive, sha256-verified against its sidecar (`cargo install
+  velesdb-memory` as fallback). The packaged build bundles what it runs —
+  the daemon installers, `sync-skills.py` and the skill sources — and
+  installs skills in-process (a packaged `sys.executable` is the wizard
+  itself); outside a checkout, daemon mode passes `--from-release`, which
+  `install-memory-daemon.sh|.ps1` now accept without a git checkout.
+  `package_wizard.py` names assets per target triple with `.sha256`
+  sidecars and ships the macOS `.dmg` with a Terminal `.command` launcher
+  instead of an `.app` that opened no terminal; `validate_package.py`
+  reads the signature from PyInstaller's compressed archive, so it no
+  longer reports every official build as NOT VERIFIED.
+
 ## [8.2.0] - 2026-11-09
 
 ### Added
