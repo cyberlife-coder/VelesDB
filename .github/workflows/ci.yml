@@ -1427,6 +1427,88 @@ jobs:
         shell: bash
         run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
 
+  # ===========================================================================
+  # Mobile cross-build
+  # velesdb-mobile ships to iOS and Android through UniFFI, yet no job ever
+  # compiled it for either: its targets lived only in a Cargo.toml comment,
+  # and the `cli-mobile` test leg builds the host target. A dependency that
+  # does not build for a mobile target, or a UniFFI export that breaks the
+  # bindgen, therefore reached a release unseen.
+  #
+  # - Android: a real build AND link of the cdylib with the NDK clang the
+  #   ubuntu-latest image already ships ($ANDROID_NDK_LATEST_HOME), for the
+  #   device (aarch64) and emulator (x86_64) ABIs.
+  # - iOS: type-checked for device and simulator. Linking an iOS cdylib needs
+  #   Apple's toolchain, which only a macOS runner has; the crate has no C
+  #   build dependency, so `cargo check` already sees every target-specific
+  #   cfg and API the link would.
+  # - Bindings: Kotlin and Swift are generated from the built library with the
+  #   crate's own `uniffi-bindgen`, so a broken export fails here instead of in
+  #   an app build.
+  # ===========================================================================
+  mobile-cross-build:
+    name: Mobile Cross-Build (Android link, iOS check, UniFFI bindings)
+    if: github.event.action != 'edited' || github.event.changes.base != null
+    runs-on: ubuntu-latest
+    needs: [code-changed]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.code-changed.outputs.relevant == 'true'
+
+      - name: Install the toolchain rust-toolchain.toml pins, with the mobile targets
+        if: needs.code-changed.outputs.relevant == 'true'
+        run: |
+          rustup toolchain install --no-self-update --profile minimal
+          rustup target add aarch64-linux-android x86_64-linux-android aarch64-apple-ios aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: needs.code-changed.outputs.relevant == 'true'
+        with:
+          shared-key: "velesdb-ci-mobile"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Build and link for Android (device + emulator)
+        if: needs.code-changed.outputs.relevant == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:?ubuntu-latest no longer ships the Android NDK}"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # API 24 (Android 7.0) is the floor the UniFFI Kotlin runtime supports.
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$bin/aarch64-linux-android24-clang"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$bin/x86_64-linux-android24-clang"
+          for target in aarch64-linux-android x86_64-linux-android; do
+            cargo build --locked -p velesdb-mobile --lib --target "$target"
+            test -s "target/$target/debug/libvelesdb_mobile.so"
+          done
+
+      - name: Type-check for iOS (device + simulator)
+        if: needs.code-changed.outputs.relevant == 'true'
+        run: |
+          cargo check --locked -p velesdb-mobile --lib --target aarch64-apple-ios
+          cargo check --locked -p velesdb-mobile --lib --target aarch64-apple-ios-sim
+
+      - name: Generate Kotlin and Swift bindings from the Android library
+        if: needs.code-changed.outputs.relevant == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/uniffi"
+          lib="target/aarch64-linux-android/debug/libvelesdb_mobile.so"
+          for lang in kotlin swift; do
+            cargo run --locked -q -p velesdb-mobile --bin uniffi-bindgen -- \
+              generate --library "$lib" --language "$lang" --no-format --out-dir "$out/$lang"
+          done
+          test -s "$out/kotlin/uniffi/velesdb_mobile/velesdb_mobile.kt"
+          test -s "$out/swift/velesdb_mobile.swift"
+          test -s "$out/swift/velesdb_mobileFFI.h"
+
+      - name: Skipped — docs-only diff
+        if: needs.code-changed.outputs.relevant != 'true'
+        shell: bash
+        run: echo "Only root *.md/*.txt or docs/** (outside docs/reference/) changed — heavy steps skipped to save CI minutes (code-changed filter)."
+
   wasm-check:
     name: WASM Build Check
     if: github.event.action != 'edited' || github.event.changes.base != null
@@ -2906,7 +2988,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, security, semver-checks, hygiene, wasm-check, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, fuzz-compile, public-trait-api, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
+    needs: [lint, test, security, semver-checks, hygiene, wasm-check, mobile-cross-build, memory-feature-matrix, internal-bench-check, drop-tightening-check, openapi-drift, mcp-doc-contract, velesql-conformance, perf-smoke, fuzz-compile, public-trait-api, bench-sift1m-compile, perf-gate-e2e, python-sdk-tests, python-integrations, node-binding-tests, node-binding-tests-windows, gate-contracts, doc-contract, promise-contract, production-gates, propagation-guard, binary-size, pr-governance, sonarcloud]
     # The ONE job that must not carry the title/body-edit guard, and #2232 is
     # why. Guarded, it skipped on a body edit -- and branch protection accepts a
     # `skipped` required check, so the PR read CLEAN with no gate having run on
@@ -2986,6 +3068,7 @@ jobs:
           [[ "${{ needs.lint.result }}" == "success" ]] && \
           [[ "${{ needs.test.result }}" == "success" ]] && \
           [[ "${{ needs.wasm-check.result }}" == "success" ]] && \
+          [[ "${{ needs.mobile-cross-build.result }}" == "success" ]] && \
           [[ "${{ needs.memory-feature-matrix.result }}" == "success" ]] && \
           [[ "${{ needs.internal-bench-check.result }}" == "success" ]] && \
           [[ "${{ needs.drop-tightening-check.result }}" == "success" ]] && \
