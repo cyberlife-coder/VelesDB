@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 const DECISION: &str = "Booked the aisle seat on Robert's flight";
 const REASON: &str = "Knee surgery last month limits leg movement";
 const QUESTION: &str = "why the aisle seat on Robert's flight?";
+const RELATION: &str = "because";
 
 #[test]
 fn given_a_reason_linked_in_one_process_when_a_new_process_asks_why_then_it_walks_to_the_reason() {
@@ -37,7 +38,7 @@ fn given_a_reason_linked_in_one_process_when_a_new_process_asks_why_then_it_walk
     let decision = id_of(&first.call("remember", json!({"fact": DECISION})));
     first.call(
         "relate",
-        json!({"from": decision, "to": reason, "relation": "because"}),
+        json!({"from": decision, "to": reason, "relation": RELATION}),
     );
     first.shutdown();
 
@@ -59,9 +60,18 @@ fn given_a_reason_linked_in_one_process_when_a_new_process_asks_why_then_it_walk
         "reason must be one link away: {explanation}"
     );
     assert_eq!(reached["id_str"], reason.as_str());
+
+    // `why` walks links whatever their label, so reaching the reason does not
+    // prove the link kept its type: assert the exact edge came back.
+    let edges = explanation["edges"].as_array().expect("edges");
+    let persisted = edges.iter().any(|edge| {
+        edge["from_str"] == decision.as_str()
+            && edge["to_str"] == reason.as_str()
+            && edge["relation"] == RELATION
+    });
     assert!(
-        !explanation["edges"].as_array().expect("edges").is_empty(),
-        "the typed link must survive the restart: {explanation}"
+        persisted,
+        "the `{RELATION}` link decision -> reason must survive the restart: {explanation}"
     );
 }
 
