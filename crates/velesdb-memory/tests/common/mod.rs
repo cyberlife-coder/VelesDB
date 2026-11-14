@@ -8,6 +8,11 @@ use serde_json::Value;
 use tempfile::TempDir;
 use velesdb_memory::{HashEmbedder, MemoryService, Metadata};
 
+/// The binary only builds with `mcp` (`required-features`), so its
+/// `CARGO_BIN_EXE_*` path only exists then.
+#[cfg(feature = "mcp")]
+pub mod mcp_stdio;
+
 /// Embedding dimension matching the SDK's `DEFAULT_DIMENSION`.
 pub const DIM: usize = 384;
 
