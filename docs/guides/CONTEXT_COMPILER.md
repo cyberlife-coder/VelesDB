@@ -704,20 +704,24 @@ reports `risk: high`. `--tool-output`
 ([`context::prune_tool_output`](../../crates/velesdb-memory/src/context/tool_output.rs))
 keeps, in this order of priority: **diagnostic** lines (shaped like a tool's
 report of a problem — `error:`, `error[E…]`, `FAILED`, `panicked at`,
-`Traceback (most recent call last)`, `exit code`, …), the last 10 and first 5
-lines, lines naming a query argument or carrying a negative constraint, one
-line of context around each diagnostic, then whatever is nearest. Runs of
+`Traceback (most recent call last)`, `exit code`, …), negative constraints
+(the line an agent must not act against), the last 10 and first 5 lines, lines
+naming a query argument, one line of context around each diagnostic, then
+whatever is nearest. An output whose whole-text estimate already fits is
+returned unpruned. Runs of
 identical lines collapse to one line marked `[×N]`; every elided run becomes
 `[… N lines elided …]` in place.
 
 `risk` is `low` when nothing was elided, `medium` when only non-diagnostic
-lines were, and `high` only when a diagnostic line did not fit. Measured on
+lines were, and `high` only when a diagnostic line did not fit — a dropped
+negative constraint reads `medium`, since changelog prose is full of
+"never". Measured on
 this repository at a 4 000-token budget, the fragment path against
 `--tool-output`:
 
 | Input | Fragment path | `--tool-output` |
 |---|---|---|
-| `git log --stat -40` (17 398 tokens) | `high` | 3 793 tokens, `medium` |
+| `git log --stat -40 cd69dd9f` (18 813 tokens) | `high` | 3 792 tokens, `medium` |
 | `ls -laR crates/velesdb-memory/src` (8 064 tokens) | `high` | 3 861 tokens, `medium` |
 | `CHANGELOG.md`, first 60 KB (19 800 tokens) | `high` | 3 812 tokens, `medium` |
 | a 400-test `unittest -v` run with one failure (8 487 tokens) | `high` | 3 892 tokens, `medium` — the `FAIL` line, its `AssertionError` and the `FAILED (failures=1)` summary kept verbatim |

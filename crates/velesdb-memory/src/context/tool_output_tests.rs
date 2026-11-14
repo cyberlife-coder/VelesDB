@@ -176,3 +176,35 @@ fn uppercase_markers_are_whole_tokens() {
     assert!(!is_diagnostic("ERRORLESS mode enabled"));
     assert!(!is_diagnostic("the build failed to reproduce once"));
 }
+
+#[test]
+fn output_estimated_within_budget_is_kept_whole_even_when_line_costs_overshoot() {
+    // Per-line costs (+1 per newline) overshoot the whole-text estimate on
+    // short lines: 120 one-letter lines must not be pruned at a budget the
+    // text as a whole fits.
+    let text = (0..120)
+        .map(|i| if i % 2 == 0 { "a" } else { "b" })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let budget = HeuristicEstimator.estimate(&text);
+    let pruned = prune(&text, "", budget);
+    assert_eq!(pruned.elided_lines, 0);
+    assert_eq!(pruned.content, text);
+    assert_eq!(pruned.risk, FidelityRisk::Low);
+}
+
+#[test]
+fn a_negative_constraint_outranks_head_and_tail() {
+    let long = "x".repeat(400);
+    let mut lines: Vec<String> = (0..40).map(|i| format!("{long} {i}")).collect();
+    lines.insert(
+        20,
+        "warning text aside: do not run cargo clean before the bisect".to_owned(),
+    );
+    let pruned = prune(&lines.join("\n"), "", 400);
+    assert!(
+        pruned.content.contains("do not run cargo clean"),
+        "{}",
+        pruned.content
+    );
+}

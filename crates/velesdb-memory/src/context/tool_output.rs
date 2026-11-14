@@ -30,14 +30,19 @@
 //!    The shape matters, not the word: a changelog sentence about a fixed
 //!    error is prose, and treating every such word as critical is how the
 //!    first version of this pruner still reported `high` on `cat CHANGELOG.md`.
-//! 3. Then the last [`ToolOutputPolicy::tail_lines`] (summaries print last)
+//! 3. Then negative constraints (the line-level test
+//!    `preserve.negative_constraint` uses): the line an agent must not act
+//!    against.
+//! 4. Then the last [`ToolOutputPolicy::tail_lines`] (summaries print last)
 //!    and the first [`ToolOutputPolicy::head_lines`].
-//! 4. Then **relevant** lines: a negative constraint (the line-level test
-//!    `preserve.negative_constraint` uses), a term of the caller's query —
-//!    its non-flag arguments, since the program name and flags echo
-//!    everywhere in their own output — and
-//!    [`ToolOutputPolicy::context_lines`] around each diagnostic line.
-//! 5. Remaining budget goes to the lines nearest what is already kept.
+//! 5. Then lines naming a term of the caller's query — its non-flag
+//!    arguments, since the program name and flags echo everywhere in their
+//!    own output — and [`ToolOutputPolicy::context_lines`] around each
+//!    diagnostic line.
+//! 6. Remaining budget goes to the lines nearest what is already kept.
+//!
+//! An output whose whole-text estimate already fits is returned unpruned:
+//! the per-line costs the selection uses over-approximate on short lines.
 //!
 //! Every elided run is replaced in place by `[… N lines elided …]`, so the
 //! reader knows exactly where and how much is missing.
@@ -140,16 +145,28 @@ pub fn prune_tool_output(
     estimator: &dyn TokenEstimator,
 ) -> PrunedToolOutput {
     let lines = collapse_consecutive(text);
-    let terms = query_terms(query);
-    let diagnostic: Vec<bool> = lines.iter().map(|line| is_diagnostic(line)).collect();
-    let relevant: Vec<bool> = lines.iter().map(|line| is_relevant(line, &terms)).collect();
+    // Per-line costs below over-approximate (each line rounds up and pays for
+    // its newline), so an output that fits as a whole is never pruned by them.
+    let whole = lines.join("\n");
+    if estimator.estimate(&whole) <= token_budget {
+        return PrunedToolOutput {
+            tokens_in: estimator.estimate(text),
+            tokens_out: estimator.estimate(&whole),
+            risk: FidelityRisk::Low,
+            content: whole,
+            elided_lines: 0,
+            salient_dropped: 0,
+        };
+    }
+    let classes = LineClasses::of(&lines, &query_terms(query));
+    let diagnostic = &classes.diagnostic;
     let costs: Vec<u64> = lines
         .iter()
         .map(|line| estimator.estimate(line) + 1)
         .collect();
     let marker_cost = estimator.estimate("[… 99999 lines elided …]") + 1;
     let mut selection = Selection::new(&costs, marker_cost, token_budget);
-    for index in priority_order(&diagnostic, &relevant, policy) {
+    for index in priority_order(&classes, policy) {
         selection.try_keep(index);
     }
     let content = render(&lines, &selection.kept);
@@ -222,21 +239,49 @@ fn is_diagnostic(line: &str) -> bool {
             .any(|token| UPPERCASE_MARKERS.contains(&token))
 }
 
-fn is_relevant(line: &str, terms: &[String]) -> bool {
+fn names_a_query_term(line: &str, terms: &[String]) -> bool {
     let lowered = line.to_lowercase();
-    terms.iter().any(|term| lowered.contains(term.as_str())) || line_has_negative_constraint(line)
+    terms.iter().any(|term| lowered.contains(term.as_str()))
+}
+
+/// What each line is, as far as the budget order cares.
+struct LineClasses {
+    diagnostic: Vec<bool>,
+    constraint: Vec<bool>,
+    query: Vec<bool>,
+}
+
+impl LineClasses {
+    fn of(lines: &[String], terms: &[String]) -> Self {
+        Self {
+            diagnostic: lines.iter().map(|line| is_diagnostic(line)).collect(),
+            constraint: lines
+                .iter()
+                .map(|line| line_has_negative_constraint(line))
+                .collect(),
+            query: lines
+                .iter()
+                .map(|line| names_a_query_term(line, terms))
+                .collect(),
+        }
+    }
 }
 
 /// Every line index once, in the order the budget should be spent:
-/// diagnostic, tail, head, relevant, diagnostic context, then the rest by
-/// distance to those.
-fn priority_order(diagnostic: &[bool], relevant: &[bool], policy: &ToolOutputPolicy) -> Vec<usize> {
-    let len = diagnostic.len();
-    let mut order: Vec<usize> = (0..len).filter(|&i| diagnostic[i]).collect();
+/// diagnostic, negative constraint, tail, head, query term, diagnostic
+/// context, then the rest by distance to those. A constraint outranks the
+/// framing because it is the line an agent must not act against (`do NOT run
+/// cargo clean` in a build log); its loss still reads `medium`, not `high`,
+/// because changelog prose is full of "never".
+fn priority_order(classes: &LineClasses, policy: &ToolOutputPolicy) -> Vec<usize> {
+    let len = classes.diagnostic.len();
+    let flagged = |flags: &[bool]| (0..len).filter(|&i| flags[i]).collect::<Vec<_>>();
+    let mut order = flagged(&classes.diagnostic);
+    order.extend(flagged(&classes.constraint));
     order.extend(len.saturating_sub(policy.tail_lines)..len);
     order.extend(0..policy.head_lines.min(len));
-    order.extend((0..len).filter(|&i| relevant[i]));
-    for index in (0..len).filter(|&i| diagnostic[i]) {
+    order.extend(flagged(&classes.query));
+    for index in flagged(&classes.diagnostic) {
         let start = index.saturating_sub(policy.context_lines);
         let end = (index + policy.context_lines + 1).min(len);
         order.extend(start..end);

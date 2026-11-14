@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The `PostToolUse` hook compresses tool output line by line when the
+  binary supports it** (`integrations/agent-hooks`). It probes
+  `velesdb-memory compile-stdin --tool-output` once per session and binary,
+  passes the Bash command as the query, and keeps the fragment compiler on a
+  release without the flag. With the fragment compiler, `git log`, `ls -l`,
+  changelogs and failing test runs all came back `risk: high` and passed
+  through uncompressed; see `crates/velesdb-memory/CHANGELOG.md`.
+
 - **BREAKING (cli): `velesdb data import` validates before writing**
   (#2726). The command parses the whole input file first; on the first
   invalid record it aborts without creating or modifying the collection —
