@@ -56,6 +56,9 @@ import {
   describeWasmThrow,
 } from './wasm-helpers';
 
+// VelesQL executor over the attached stores
+import { WasmVelesQL, isExecutorSelect } from './wasm-velesql';
+
 // Search & query delegates
 import {
   wasmSearch,
@@ -131,6 +134,9 @@ import {
 export class WasmBackend implements IVelesDBBackend {
   private wasmModule: WasmModule | null = null;
   private collections: Map<string, CollectionData> = new Map();
+  // VelesQL over the collections' stores, when the binding can share them
+  // (`wasm-velesql.ts`); `null` on velesdb-wasm 8.0.0.
+  private velesql: WasmVelesQL | null = null;
   private _initialized = false;
   // Memoized single-shot init promise. Subsequent concurrent calls to init()
   // await the same in-flight initialization instead of racing into duplicate
@@ -190,6 +196,7 @@ export class WasmBackend implements IVelesDBBackend {
       // and must not flip _initialized back to true after close() reset it.
       if (this._initGen !== gen) { return; }
       this.wasmModule = mod;
+      this.velesql = WasmVelesQL.create(mod);
       this._initialized = true;
     } catch (error) {
       // Probed on 6.0.0: this loader rejects with a
@@ -213,6 +220,8 @@ export class WasmBackend implements IVelesDBBackend {
       freeSparse(data.sparseIds);
     }
     this.collections.clear();
+    this.velesql?.free();
+    this.velesql = null;
     this._initialized = false;
     this._initInFlight = null;
     // Drop the WASM module reference so a future init() picks up a fresh
@@ -251,6 +260,7 @@ export class WasmBackend implements IVelesDBBackend {
     const dimension = config.dimension ?? 0;
     const metric = config.metric ?? 'cosine';
     const store = this.wasmModule!.VectorStore.new_with_mode(dimension, metric, mode);
+    this.velesql?.attach(name, store);
     this.collections.set(name, {
       config: { ...config, metric },
       store,
@@ -264,6 +274,8 @@ export class WasmBackend implements IVelesDBBackend {
     this.ensureInitialized();
     const collection = this.collections.get(name);
     if (!collection) { throw new NotFoundError(`Collection '${name}'`); }
+    // The executor shares the store: drop its reference before freeing it.
+    this.velesql?.detach(name);
     collection.store.free();
     freeSparse(collection.sparseIds);
     this.collections.delete(name);
@@ -449,6 +461,10 @@ export class WasmBackend implements IVelesDBBackend {
 
   async query(c: string, q: string, p?: Record<string, unknown>): Promise<QueryApiResponse> {
     this.ensureInitialized();
+    if (this.velesql && isExecutorSelect(q)) {
+      if (!this.collections.has(c)) { throw new NotFoundError(`Collection '${c}'`); }
+      return this.velesql.select(c, q, p);
+    }
     return wasmQuery(buildWasmContext(this.wasmModule!, this.collections), c, q, p);
   }
 

@@ -117,4 +117,12 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
 
     expect(point).toEqual({ id: '1', vector: [1, 0], payload: RUST });
   });
+
+  it('query runs a VelesQL WHERE over the payloads the backend wrote', async () => {
+    // The collection's store is attached to the binding's WasmDatabase, so
+    // the executor filters the very points upserted above (was NOT_SUPPORTED).
+    const response = await db.query('docs', "SELECT * FROM docs WHERE category = 'docs' LIMIT 10");
+
+    expect('results' in response && response.results.map(r => r.id)).toEqual([2]);
+  });
 });
