@@ -258,6 +258,178 @@ class FreshMachineTests(unittest.TestCase):
         self.assertFalse(mod._statuses_failed(statuses), statuses)
 
 
+def _make_store(root: Path, dim: int, model: "str | None", points: int = 3) -> Path:
+    """A store laid out as velesdb-memory writes it."""
+    for name in ("_semantic_memory", "_episodic_memory", "_procedural_memory"):
+        (root / name).mkdir(parents=True)
+        (root / name / "config.json").write_text(json.dumps({"name": name, "dimension": dim, "point_count": points}))
+    if model is not None:
+        (root / "embedding-provenance.json").write_text(json.dumps({"model": model, "dimension": dim}))
+    return root
+
+
+class EmbedderStepTests(unittest.TestCase):
+    """Given a store, the wizard keeps (or migrates to) the model that can read it."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.cfg = self.home / ".cursor" / "mcp.json"
+        self.cfg.parent.mkdir(parents=True)
+        self.cfg.write_text('{"mcpServers": {}}', encoding="utf-8")
+        self.bin = self.home / "bin" / "velesdb-memory"
+        self.bin.parent.mkdir()
+        self.bin.write_bytes(b"bin")
+
+    def plan(self, store: Path, embedder=(None, None)) -> dict:
+        plan = mod.build_plan(self.home, store, "stdio", 18090, scan_cli=False, embedder=embedder)
+        plan["harnesses"] = [{"name": "cursor", "kind": "mcp-json", "config": str(self.cfg),
+                              "velesdb_memory_entry": "stdio", "installed": True}]
+        return plan
+
+    def entry(self) -> dict:
+        return json.loads(self.cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
+
+    def ollama(self, dims: dict):
+        ops = mod.wizard_embedder.Ops
+        return unittest.mock.patch.multiple(
+            ops, tags=lambda _self: [f"{m}:latest" for m in dims],
+            embed_dimension=lambda _self, model: dims.get(model))
+
+    def test_the_plan_keeps_the_model_the_store_records(self):
+        plan = self.plan(_make_store(self.home / "s", 1024, "bge-m3"))
+        self.assertEqual((plan["embedder"]["backend"], plan["embedder"]["model"]), ("ollama", "bge-m3"))
+        self.assertEqual(plan["embedder"]["verdict"], "match")
+
+    def test_forcing_another_model_plans_a_migration(self):
+        plan = self.plan(_make_store(self.home / "s", 384, "hash"), embedder=("ollama", "bge-m3"))
+        self.assertEqual(plan["embedder"]["verdict"], "migrate")
+        self.assertIn("migrate", [a["step"] for a in plan["actions"]])
+
+    def test_a_stdio_entry_already_wired_is_rewritten_with_the_store_s_model(self):
+        plan = self.plan(_make_store(self.home / "s", 1024, "bge-m3"))
+        with self.ollama({"bge-m3": 1024}), unittest.mock.patch.object(mod, "find_binary", return_value=self.bin):
+            statuses = mod.apply_plan(plan, dry=False)
+        self.assertFalse(mod._statuses_failed(statuses), statuses)
+        self.assertEqual(self.entry()["env"], {"VELESDB_MEMORY_PATH": str(self.home / "s"),
+                                               "VELESDB_MEMORY_EMBEDDER": "ollama",
+                                               "VELESDB_MEMORY_EMBEDDER_MODEL": "bge-m3"})
+
+    def test_apply_without_yes_never_migrates_and_touches_no_config(self):
+        plan = self.plan(_make_store(self.home / "s", 384, "hash"), embedder=("ollama", "bge-m3"))
+        with self.ollama({"bge-m3": 1024}), unittest.mock.patch.object(mod, "find_binary", return_value=self.bin), \
+             unittest.mock.patch.object(mod.wizard_embedder.Ops, "run") as run:
+            statuses = mod.apply_plan(plan, dry=False)
+        self.assertTrue(mod._statuses_failed(statuses))
+        run.assert_not_called()
+        self.assertEqual(json.loads(self.cfg.read_text(encoding="utf-8")), {"mcpServers": {}})
+
+    def test_yes_migrates_with_the_target_embedder_then_wires(self):
+        plan = self.plan(_make_store(self.home / "s", 384, "hash"), embedder=("ollama", "bge-m3"))
+        with self.ollama({"bge-m3": 1024}), unittest.mock.patch.object(mod, "find_binary", return_value=self.bin), \
+             unittest.mock.patch.object(mod.wizard_embedder.Ops, "run", return_value=0) as run:
+            statuses = mod.apply_plan(plan, dry=False, yes=True)
+        self.assertFalse(mod._statuses_failed(statuses), statuses)
+        cmd, env = run.call_args.args
+        self.assertEqual(cmd[1], "migrate-embeddings")
+        self.assertEqual(env["VELESDB_MEMORY_EMBEDDER_MODEL"], "bge-m3")
+        self.assertEqual(self.entry()["env"]["VELESDB_MEMORY_EMBEDDER_MODEL"], "bge-m3")
+
+    def test_the_daemon_installer_is_told_the_embedder(self):
+        cmd = mod.daemon_installer_cmd({"os": "linux", "arch": "x86_64"}, 18090, self.home / "s", yes=False,
+                                       from_release=True, embedder=mod.wizard_embedder.Embedder("ollama", "bge-m3", 1024))
+        self.assertIn("--embedder=ollama", cmd)
+        self.assertIn("--ollama-model=bge-m3", cmd)
+
+    def test_embedder_model_with_hash_is_a_usage_error(self):
+        with self.assertRaises(SystemExit):
+            mod.main(["--embedder", "hash", "--embedder-model", "bge-m3", "--dry-run", "--home", str(self.home),
+                      "--store", str(self.home / "s"), "--no-cli-scan"])
+
+
+class StdioRewireKeepsUserSettingsTests(unittest.TestCase):
+    """Rewiring a stdio entry for a new embedder keeps what the user set."""
+
+    USER_ENV = {"VELESDB_MEMORY_EXTRACTOR": "ollama", "VELESDB_MEMORY_EXTRACTOR_MODEL": "qwen3",
+                "VELESDB_MEMORY_OLLAMA_MODEL": "all-minilm", "VELESDB_MEMORY_PATH": "/old/store"}
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.bin = self.home / "bin" / "velesdb-memory"
+        self.bin.parent.mkdir()
+        self.bin.write_bytes(b"bin")
+        self.env = mod.server_env(self.home / "store", mod.wizard_embedder.Embedder("ollama", "bge-m3", 1024))
+
+    def expected_env(self) -> dict:
+        return {"VELESDB_MEMORY_EXTRACTOR": "ollama", "VELESDB_MEMORY_EXTRACTOR_MODEL": "qwen3", **self.env}
+
+    def wire(self, kind: str, config: Path, **extra) -> str:
+        harness = {"name": kind, "kind": kind, "config": str(config), "velesdb_memory_entry": "stdio",
+                   "installed": True, **extra}
+        return mod.wire_harness(harness, "stdio", str(self.bin), 18090, self.env, dry=False)
+
+    def test_json_entry_keeps_the_extractor_and_args_and_drops_the_legacy_model_alias(self):
+        cfg = self.home / "mcp.json"
+        cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {
+            "command": "/old/velesdb-memory", "args": ["--quiet"], "env": self.USER_ENV}}}), encoding="utf-8")
+        self.wire("mcp-json", cfg)
+        entry = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
+        self.assertEqual(entry["env"], self.expected_env())
+        self.assertEqual(entry["args"], ["--quiet"])
+        self.assertEqual(entry["command"], str(self.bin))
+
+    def test_an_http_entry_switched_to_stdio_carries_nothing_over(self):
+        cfg = self.home / "mcp.json"
+        cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {
+            "url": "https://127.0.0.1:18090/mcp", "type": "http"}}}), encoding="utf-8")
+        self.wire("mcp-json", cfg)
+        entry = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
+        self.assertEqual(entry, {"command": str(self.bin), "env": self.env})
+
+    def test_zed_and_opencode_entries_keep_the_users_variables(self):
+        zed = self.home / "zed.json"
+        zed.write_text(json.dumps({"context_servers": {"velesdb-memory": {"command": {
+            "path": "/old", "args": [], "env": self.USER_ENV}}}}), encoding="utf-8")
+        self.wire("zed-context-servers", zed)
+        self.assertEqual(json.loads(zed.read_text())["context_servers"]["velesdb-memory"]["command"]["env"],
+                         self.expected_env())
+        oc = self.home / "opencode.json"
+        oc.write_text(json.dumps({"mcp": {"velesdb-memory": {"type": "local", "command": ["/old", "--quiet"],
+                                                               "environment": self.USER_ENV}}}), encoding="utf-8")
+        self.wire("opencode-mcp", oc)
+        entry = json.loads(oc.read_text())["mcp"]["velesdb-memory"]
+        self.assertEqual(entry["environment"], self.expected_env())
+        self.assertEqual(entry["command"], [str(self.bin), "--quiet"])
+
+    @unittest.skipIf(sys.version_info < (3, 11), "tomllib reads the existing entry")
+    def test_codex_toml_keeps_the_users_variables(self):
+        import tomllib
+        cfg = self.home / "config.toml"
+        cfg.write_text('[mcp_servers.velesdb-memory]\ncommand = "/old"\nargs = ["--quiet"]\n'
+                       'env = { VELESDB_MEMORY_EXTRACTOR = "ollama", VELESDB_MEMORY_EXTRACTOR_MODEL = "qwen3", '
+                       'VELESDB_MEMORY_OLLAMA_MODEL = "all-minilm" }\n', encoding="utf-8")
+        self.wire("codex-toml", cfg)
+        entry = tomllib.loads(cfg.read_text(encoding="utf-8"))["mcp_servers"]["velesdb-memory"]
+        self.assertEqual(entry["env"], self.expected_env())
+        self.assertEqual(entry["args"], ["--quiet"])
+
+    def test_claude_code_is_re_added_with_the_variables_of_its_user_scope_entry(self):
+        claude_json = self.home / ".claude.json"
+        claude_json.write_text(json.dumps({"mcpServers": {"velesdb-memory": {
+            "type": "stdio", "command": "/old", "args": [], "env": self.USER_ENV}}}), encoding="utf-8")
+        ok = unittest.mock.Mock(returncode=0, stderr="")
+        with unittest.mock.patch.object(mod.shutil, "which", return_value="/usr/bin/claude"), \
+             unittest.mock.patch.object(mod, "_run_cli", return_value=ok) as run:
+            self.wire("claude-cli", self.home / "unused", claude_json=str(claude_json))
+        add = run.call_args_list[-1].args[0]
+        pairs = dict(add[i + 1].split("=", 1) for i, a in enumerate(add) if a == "--env")
+        self.assertEqual(pairs, self.expected_env())
+        self.assertEqual(add[-2:], ["--", str(self.bin)])
+
+
 class PackagedBuildTests(unittest.TestCase):
     """What a PyInstaller build reads must exist at its repo-relative path."""
 
@@ -387,7 +559,7 @@ class ApplyTests(unittest.TestCase):
         cfg.parent.mkdir(parents=True)
         cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {"command": "/old/bin"}}}), encoding="utf-8")
         harness = {"name": "cursor", "kind": "mcp-json", "config": str(cfg), "velesdb_memory_entry": "stdio", "installed": True}
-        status = mod.wire_harness(harness, "daemon", "/bin/velesdb-memory", 18090, home / "store", dry=False)
+        status = mod.wire_harness(harness, "daemon", "/bin/velesdb-memory", 18090, mod.server_env(home / "store", mod.wizard_embedder.HASH), dry=False)
         self.assertIn("wired http", status)
         entry = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
         self.assertEqual(entry["url"], "https://127.0.0.1:18090/mcp")
@@ -397,7 +569,7 @@ class ApplyTests(unittest.TestCase):
         cfg = home / ".codex" / "config.toml"
         cfg.parent.mkdir(parents=True)
         cfg.write_text('[mcp_servers.other]\ncommand = "/x"\n', encoding="utf-8")
-        status = mod.wire_codex_toml(cfg, "http", "/bin/velesdb-memory", 18090, home / "store", dry=False)
+        status = mod.wire_codex_toml(cfg, "http", "/bin/velesdb-memory", 18090, mod.server_env(home / "store", mod.wizard_embedder.HASH), dry=False)
         self.assertIn("wired http", status)
         text = cfg.read_text(encoding="utf-8")
         self.assertIn('[mcp_servers.velesdb-memory]', text)
@@ -458,7 +630,7 @@ class LockSwitchTests(unittest.TestCase):
         cfg.parent.mkdir(parents=True)
         cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {"command": "/old"}}}), encoding="utf-8")
         harness = {"name": "cursor", "kind": "mcp-json", "config": str(cfg), "velesdb_memory_entry": "stdio", "installed": True}
-        mod.wire_harness(harness, "daemon", "/bin/velesdb-memory", 18090, home / "store", dry=False)
+        mod.wire_harness(harness, "daemon", "/bin/velesdb-memory", 18090, mod.server_env(home / "store", mod.wizard_embedder.HASH), dry=False)
         servers = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
         self.assertEqual(list(servers).count("velesdb-memory"), 1)
         self.assertNotIn("command", servers["velesdb-memory"])
@@ -597,6 +769,23 @@ class InteractiveUiTests(unittest.TestCase):
             ap.assert_called_once()
             self.assertFalse(ap.call_args.kwargs.get("dry", True))
 
+    def test_embeddings_choice_rebuilds_the_plan_then_applies_it_with_consent_prompts(self):
+        args = types.SimpleNamespace(port=18090, yes=False, home="/tmp/h", mode=None, no_cli_scan=True)
+        rebuilt = {**self._plan(), "embedder": {"backend": "ollama", "model": "bge-m3", "dimension": 1024,
+                                                "verdict": "fresh", "store_model": None, "store_dimension": None,
+                                                "store_has_facts": False}}
+        answers = iter(["4", "4", "1"])  # menu [4], catalog entry 4, then apply
+        with unittest.mock.patch("builtins.input", side_effect=lambda *a: next(answers)), \
+             unittest.mock.patch.object(mod.wizard_embedder.Ops, "tags", return_value=[]), \
+             unittest.mock.patch.object(mod, "build_plan", return_value=rebuilt) as bp, \
+             unittest.mock.patch.object(mod, "print_plan_pretty"), \
+             unittest.mock.patch.object(mod, "apply_plan", return_value=["ok"]) as ap:
+            self.assertEqual(mod.interactive_menu(self._plan(), args), 0)
+        picked = mod.wizard_embedder.rank_models(mod.wizard_embedder.StoreProfile(False), [])[3].name
+        self.assertEqual(bp.call_args.kwargs["embedder"], ("ollama", picked))
+        self.assertIs(ap.call_args.args[0], rebuilt)
+        self.assertIs(ap.call_args.kwargs["confirm"], mod._ask_yes_no)
+
     def test_json_choice_then_quit(self):
         import io, contextlib
         buf = io.StringIO()
@@ -707,14 +896,14 @@ class AuditFixRegressionTests(unittest.TestCase):
         fake_bin.parent.mkdir(parents=True)
         fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
         harness = {"name": "vibe", "kind": "vibe-toml", "config": str(cfg), "velesdb_memory_entry": "http", "installed": True}
-        mod.wire_harness(harness, "daemon", str(fake_bin), 18090, home / "store", dry=False)
+        mod.wire_harness(harness, "daemon", str(fake_bin), 18090, mod.server_env(home / "store", mod.wizard_embedder.HASH), dry=False)
         import tomllib
         data = tomllib.loads(cfg.read_text(encoding="utf-8"))
         entries = [e for e in data["mcp_servers"] if e.get("name") == "velesdb-memory"]
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["url"], "https://127.0.0.1:18090/mcp")
         # stdio switch replaces the same object, no duplicate
-        mod.wire_harness(harness, "stdio", str(fake_bin), 18090, home / "store", dry=False)
+        mod.wire_harness(harness, "stdio", str(fake_bin), 18090, mod.server_env(home / "store", mod.wizard_embedder.HASH), dry=False)
         data = tomllib.loads(cfg.read_text(encoding="utf-8"))
         entries = [e for e in data["mcp_servers"] if e.get("name") == "velesdb-memory"]
         self.assertEqual(len(entries), 1)
@@ -726,7 +915,7 @@ class AuditFixRegressionTests(unittest.TestCase):
         cfg = home / ".codex" / "config.toml"
         cfg.parent.mkdir(parents=True)
         cfg.write_text('[mcp_servers.velesdb-memory]\ncommand = "/old"\nargs = ["--http"]\n\n[other]\nk = 1\n', encoding="utf-8")
-        out = mod.wire_codex_toml(cfg, "http", "/bin/velesdb-memory", 18090, home / "s", dry=False)
+        out = mod.wire_codex_toml(cfg, "http", "/bin/velesdb-memory", 18090, mod.server_env(home / "s", mod.wizard_embedder.HASH), dry=False)
         self.assertIn("wired", out)
         import tomllib
         data = tomllib.loads(cfg.read_text(encoding="utf-8"))
@@ -763,7 +952,7 @@ class AuditFixRegressionTests(unittest.TestCase):
         cfg.parent.mkdir(parents=True)
         cfg.write_text('{"mcpServers": {}}', encoding="utf-8")
         h = {"name": "cursor", "kind": "mcp-json", "config": str(cfg), "velesdb_memory_entry": None, "installed": True}
-        out = mod.wire_harness(h, "stdio", None, 18090, home / "s", dry=False)
+        out = mod.wire_harness(h, "stdio", None, 18090, mod.server_env(home / "s", mod.wizard_embedder.HASH), dry=False)
         self.assertIn("REFUSED", out)
         self.assertEqual(json.loads(cfg.read_text(encoding="utf-8")), {"mcpServers": {}})
 

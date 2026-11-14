@@ -28,7 +28,24 @@ guide is everything else.
 
 ## Install
 
-**The guided way (recommended, macOS / Linux / Windows):**
+**The guided way (recommended, macOS / Linux / Windows), in one line:**
+
+```bash
+# Linux · macOS
+curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.ps1 | iex
+```
+
+`scripts/install-wizard.sh` and `scripts/install-wizard.ps1` find the newest
+`velesdb-memory-v*` release that carries a wizard for the machine, verify it against its `.sha256` sidecar, and run it from a temporary
+directory. A machine with no native build — Intel macOS, other architectures —
+gets the source bundle, run with `python3` 3.9+. Wizard flags go after
+`| sh -s --` (PowerShell: `& ([scriptblock]::Create((irm …))) --dry-run`).
+From a checkout:
 
 ```bash
 python3 scripts/velesdb_install_wizard.py            # interactive on a TTY: boxed plan + menu [1] apply [2] JSON [3] quit
@@ -55,17 +72,40 @@ skills and the [agent hooks](../../integrations/agent-hooks/README.md) —
 working-context load/save, recall-before-edit and the context compiler — for
 every installed harness that has them (Claude Code, Codex, Windsurf, Devin),
 after checking `bash` and `jq`: without them it installs no hook and says
-what to add. Every config write is backed up and
+what to add. It settles the embedding model too — see [Embedding backend](#embedding-backend):
+by default the model the store's `embedding-provenance.json` records, so
+rewiring a harness never switches a store back to `hash`; otherwise the one
+chosen with `--embedder ollama --embedder-model <name>` or menu `[4]`, which
+ranks `all-minilm` (384d), `nomic-embed-text` (768d), `mxbai-embed-large` and
+`bge-m3` (1024d) and the local Ollama embedding models by what the store can
+read. It offers to install Ollama (`brew`, `winget`, or Ollama's Linux script,
+downloaded and shown before it runs) and to pull the model, probes the
+model's real dimension, and re-embeds a store recorded for another model or
+dimension with `velesdb-memory migrate-embeddings` only with consent — under
+`--apply`, only with `--yes`; declined, no harness is rewired. Stdio entries
+carry `VELESDB_MEMORY_EMBEDDER`/`_MODEL`; the daemon installer gets
+`--embedder`/`--ollama-model`. An Ollama on another endpoint is named with
+`--ollama-url` (or the `VELESDB_MEMORY_EMBEDDER_URL` the server reads). A
+rewired stdio entry keeps every variable the wizard does not own — an
+extractor, a TTL, a log filter — and its arguments. Every config write is backed up and
 atomic (unique tmp + rename + post-write validation, original file mode kept,
 symlinks refused). See #2759.
 
-**Packaged installers (no Python needed to run them):**
-`python3 scripts/package_wizard.py --apply` builds one for the machine it runs
-on — `velesdb-install-wizard-<target>.exe` (Windows), `.tar.gz` plus a `.dmg`
-whose `.command` launcher opens Terminal (macOS), `.tar.gz` (Linux). The
-binary bundles the daemon installers and the skills, embeds a discreet
-**WiScale** publisher signature, and each asset gets a `<asset>.sha256`
-sidecar — verify before running: `python3 scripts/validate_package.py <asset>`.
+**Release assets (no Python needed to run them):** each `velesdb-memory-v*`
+release publishes, per target, `velesdb-install-wizard-<target>.tar.gz`
+(`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` — built on Ubuntu
+22.04, so glibc 2.35+ — and `aarch64-apple-darwin`, which also gets a `.dmg`
+whose `.command` launcher opens Terminal), the Windows x64
+`velesdb-install-wizard-x86_64-pc-windows-msvc.exe` (Windows on ARM runs it
+under emulation), and the source bundle `velesdb-install-wizard-src.tar.gz`.
+The binaries bundle the daemon installers, the skills and the agent hooks,
+embed a discreet **WiScale** publisher signature, and each asset gets a
+`<asset>.sha256` sidecar — verify a manual download before running it:
+`python3 scripts/validate_package.py <asset>`. The checksum proves the
+transfer, not the publisher (the sidecar ships in the same release).
+`python3 scripts/package_wizard.py --apply` builds the same asset for the
+machine it runs on (`--source` for the source bundle); `release-memory.yml`
+runs it on one runner per target, since PyInstaller does not cross-compile.
 
 **One command, with a Rust toolchain present:**
 

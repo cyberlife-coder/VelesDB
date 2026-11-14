@@ -36,6 +36,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets the binary and the client wiring. Trusting the local CA needs root on
   Linux, so the script prints the commands instead of running them.
 
+- **The install wizard settles the embedding model against the store.** It
+  defaults to the model the store's provenance records, so rewiring a
+  harness no longer starts a store filled by `bge-m3` on `hash` — which the
+  server refuses. `--embedder ollama --embedder-model <name>` or menu `[4]`
+  picks another one from a ranked catalog (`all-minilm` 384d,
+  `nomic-embed-text` 768d, `mxbai-embed-large`/`bge-m3` 1024d, plus local
+  Ollama embedding models). With consent the wizard installs Ollama, pulls
+  the model, probes its real dimension, and runs `migrate-embeddings` on a
+  store recorded for another model. Stdio entries and the daemon installer
+  now name their embedder explicitly; a rewired entry keeps the variables
+  and arguments the wizard does not own, and `--ollama-url` names a
+  non-default Ollama endpoint.
+
+- **One-line install of the agent-memory wizard, from the release assets.**
+  `release-memory.yml` now builds the packaged install wizard on one runner
+  per target (Linux x86_64 and aarch64 on Ubuntu 22.04, Apple Silicon with a
+  `.dmg`, Windows x64), smoke-tests and verifies each build, and attaches it
+  with a `.sha256` sidecar to the `velesdb-memory-v*` release, together with
+  a source bundle (`velesdb-install-wizard-src.tar.gz`) for Intel macOS and
+  other platforms (Python 3.9+). `scripts/install-wizard.sh`
+  (`curl … | sh`) and `scripts/install-wizard.ps1` (`irm … | iex`) pick the
+  newest release that carries a wizard for the machine, refuse a download
+  whose checksum does not match, and run it. `validate_package.py` also
+  verifies the source bundle.
+
 - **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
   config file (`--config`, `VELESDB_CONFIG`, `./velesdb.toml`) but had no way
   to say which one it read or what it applied. The new commands resolve the

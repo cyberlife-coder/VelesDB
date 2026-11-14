@@ -81,14 +81,18 @@ def pyinstaller_entry(executable: bytes, name: str) -> "bytes | None":
 
 
 def wizard_binary(asset: Path) -> "bytes | None":
-    """The wizard executable an asset carries; None for a .dmg."""
+    """What carries the signature: the wizard executable (the asset itself,
+    or its `.tar.gz` member), or the source bundle's build meta module;
+    None for a .dmg."""
     if asset.name.endswith(".dmg"):
         return None
-    if asset.name.endswith(".tar.gz"):
-        with tarfile.open(asset, "r:gz") as tar:
-            member = tar.extractfile(BINARY)
-            return member.read() if member is not None else b""
-    return asset.read_bytes()
+    if not asset.name.endswith(".tar.gz"):
+        return asset.read_bytes()
+    with tarfile.open(asset, "r:gz") as tar:
+        names = set(tar.getnames())
+        member = BINARY if BINARY in names else f"{BINARY}/scripts/{META_ENTRY}"
+        handle = tar.extractfile(member) if member in names else None
+        return handle.read() if handle is not None else b""
 
 
 def publisher(executable: bytes) -> "str | None":

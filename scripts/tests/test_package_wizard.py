@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import struct
@@ -98,8 +99,32 @@ class PackagePlanTests(unittest.TestCase):
 
     def test_windows_version_resource_has_wiscale(self):
         rc = pkg.windows_version_resource("0.18.0")
-        self.assertIn('"CompanyName", "WiScale"', rc)
-        self.assertIn("0,18,0,0", rc)
+        self.assertIn("StringStruct('CompanyName', 'WiScale')", rc)
+        self.assertIn("filevers=(0, 18, 0, 0)", rc)
+
+    def test_windows_version_resource_is_the_python_expression_pyinstaller_evals(self):
+        # PyInstaller's load_version_info_from_text_file runs eval() on the
+        # file: only its versioninfo constructors and literals may appear.
+        allowed = {"VSVersionInfo", "FixedFileInfo", "StringFileInfo", "StringTable",
+                   "StringStruct", "VarFileInfo", "VarStruct"}
+        tree = ast.parse(pkg.windows_version_resource("0.18.0"), mode="eval")
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        self.assertLessEqual(names, allowed)
+        self.assertEqual(tree.body.func.id, "VSVersionInfo")
+
+    def test_windows_version_resource_loads_with_pyinstallers_own_parser(self):
+        try:
+            import PyInstaller.compat as compat
+            if not hasattr(compat, "win32api"):  # only imported on Windows; unused by the parser
+                compat.win32api = None
+            from PyInstaller.utils.win32 import versioninfo
+        except ImportError:
+            self.skipTest("PyInstaller (and pefile) not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "version.txt"
+            path.write_text(pkg.windows_version_resource("0.18.0"), encoding="utf-8")
+            info = versioninfo.load_version_info_from_text_file(str(path))
+        self.assertIn("WiScale", str(info))
 
     def test_build_meta_carries_signature_and_version(self):
         src = pkg.build_meta_source("9.9.9")
@@ -123,6 +148,56 @@ class PackagePlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(pkg.main(["--target", "x86_64-unknown-linux-gnu", "--out", d]), 0)
             self.assertEqual(list(Path(d).iterdir()), [])
+
+
+
+class SourceBundleTests(unittest.TestCase):
+    """The asset for a platform with no native build (Intel Macs): the wizard
+    and every resource it reads, runnable with any python3 >= 3.9."""
+
+    def test_the_wizard_modules_are_found_through_its_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "entry.py").write_text("import json\nimport helper_a\n", encoding="utf-8")
+            (root / "helper_a.py").write_text("from helper_b import x\n", encoding="utf-8")
+            (root / "helper_b.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "unused.py").write_text("", encoding="utf-8")
+            names = [p.name for p in pkg.wizard_modules(root / "entry.py")]
+        self.assertEqual(names, ["entry.py", "helper_a.py", "helper_b.py"])
+
+    def test_bundle_carries_the_wizard_and_everything_it_reads(self):
+        names = {arc for _, arc in pkg.source_members()}
+        self.assertIn("scripts/velesdb_install_wizard.py", names)
+        self.assertIn("scripts/wizard_release.py", names)
+        self.assertIn("scripts/sync-agent-hooks.py", names)
+        self.assertIn("integrations/agent-hooks/shared/hooks/lib/common.sh", names)
+        self.assertIn("crates/velesdb-memory/skill/velesdb-memory/SKILL.md", names)
+        self.assertFalse(any("/test/" in n or "__pycache__" in n for n in names), names)
+
+    def test_extracted_bundle_runs_and_verifies(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "dist"
+            out.mkdir()
+            asset = pkg.build_source_bundle("0.18.0", out)
+            pkg.write_sidecar(asset)
+            self.assertEqual(asset.name, "velesdb-install-wizard-src.tar.gz")
+            ok, logs = ver.verify(asset)
+            self.assertTrue(ok, logs)
+            with tarfile.open(asset) as tar:
+                tar.extractall(Path(d) / "x", filter="data")
+            root = Path(d) / "x" / "velesdb-install-wizard"
+            run = subprocess.run([sys.executable, str(root / "scripts" / "velesdb_install_wizard.py"), "--version"],
+                                 capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("velesdb-install-wizard 0.18.0", run.stdout)
+            self.assertIn("WISCALE-PKG-SIG v1", run.stdout)
+
+    def test_the_source_build_runs_its_own_bundle(self):
+        with tempfile.TemporaryDirectory() as d:
+            asset = pkg.build_source_bundle("0.18.0", Path(d))
+            self.assertIsNone(pkg.smoke_source_bundle(asset, "0.18.0"))
+            self.assertIn("not 'velesdb-install-wizard 0.19.0'", pkg.smoke_source_bundle(asset, "0.19.0"))
 
 
 class VerifyPackageTests(unittest.TestCase):

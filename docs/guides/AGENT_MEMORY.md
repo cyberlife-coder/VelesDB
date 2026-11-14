@@ -89,8 +89,17 @@ For the **MCP server** (`velesdb-memory`, used by agent harnesses), the guided
 installer detects your harnesses and the store lock and wires everything:
 
 ```bash
-python3 scripts/velesdb_install_wizard.py --apply    # see docs/guides/MCP_SERVER_SETUP.md
+# Linux · macOS
+curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.sh | sh
 ```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.ps1 | iex
+```
+
+From a checkout: `python3 scripts/velesdb_install_wizard.py --apply`. Details,
+release assets and verification: [MCP_SERVER_SETUP.md](MCP_SERVER_SETUP.md#install).
 
 For the **Python SDK** (embedded, same process):
 

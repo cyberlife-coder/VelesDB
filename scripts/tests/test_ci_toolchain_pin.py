@@ -227,6 +227,8 @@ SCRIPTS_THAT_ONLY_NAME_A_TOOL = {
     "scripts/bench-memory-extraction.py": "runs no Rust tool: it names `cargo build` in the rebuild hint of a "
                                           "daemon error, and `cross` is a variable and a word of prose",
     "scripts/check-ai-attribution.py": "runs git only; it names the refusal-vector test in its help text",
+    "scripts/package_wizard.py": "runs PyInstaller, tar and the bundled wizard's `--version` only; it names "
+                                 "velesdb_install_wizard.py, whose `cargo install` fallback runs under `--apply` alone",
     "scripts/check-doc-contract.sh": "runs grep only; it names run-production-gates.sh in its header comment",
     "scripts/check-mcp-doc-contract.py": "runs `git ls-files` only; the scripts it names are files it reads",
     "integrations/agent-hooks/test/hooks.test.sh": "names cargo in comments and in a hook payload it feeds as data",
