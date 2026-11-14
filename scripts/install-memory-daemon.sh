@@ -7,7 +7,8 @@
 # store's single-writer flock lets only ONE of those processes actually hold
 # it open — so only one client can use memory at a time. This script builds
 # `velesdb-memory` with the HTTP transport, runs ONE daemon (a macOS launchd
-# agent), and wires every supported client to it instead.
+# agent, or a systemd user unit on Linux), and wires every supported client to
+# it instead.
 #
 # The daemon serves HTTPS by default (a locally-generated CA + leaf
 # certificate — some clients, e.g. Claude Desktop's "Add custom connector"
@@ -113,6 +114,12 @@ CODEX_WIRING_STATUS="not attempted"
 
 PLIST_LABEL="com.velesdb.memory"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+SYSTEMD_UNIT="velesdb-memory.service"
+# Resolved by resolve_systemd_unit_path from the user manager's environment.
+SYSTEMD_UNIT_PATH=""
+# launchd | systemd | none — set by detect_daemon_kind.
+DAEMON_KIND="none"
+DAEMON_SUPPORTED=0
 BIN_PATH="$HOME/.cargo/bin/velesdb-memory"
 DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 WINDSURF_CONFIG="$HOME/.codeium/windsurf/mcp_config.json"
@@ -176,13 +183,48 @@ preflight() {
     }
   fi
 
-  if [ "$(uname -s)" = "Darwin" ]; then
-    DAEMON_SUPPORTED=1
-  else
-    DAEMON_SUPPORTED=0
-    echo -e "${YELLOW}⚠️  Non-macOS host detected — step 5 (launchd daemon) is macOS-only.${NC}"
-    echo -e "${YELLOW}   Generate a systemd unit yourself; this script still builds the binary and wires clients.${NC}"
+  detect_daemon_kind
+  if [ "$DAEMON_KIND" = "none" ]; then
+    echo -e "${YELLOW}⚠️  No supported service manager (launchd on macOS, a systemd user session on Linux) — step 5 is skipped.${NC}"
+    echo -e "${YELLOW}   This script still installs the binary and wires clients; start \`velesdb-memory --http --http-port $PORT\` yourself.${NC}"
   fi
+}
+
+# ---- Service manager: launchd (macOS) or a systemd user unit (Linux) -------
+# A Linux host without a user bus (a container, an SSH session without
+# lingering) has no `systemctl --user`; it gets no service rather than a
+# unit nothing would ever start.
+detect_daemon_kind() {
+  case "$(uname -s)" in
+    Darwin) DAEMON_KIND="launchd" ;;
+    Linux)
+      if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+        DAEMON_KIND="systemd"
+      else
+        DAEMON_KIND="none"
+      fi
+      ;;
+    *) DAEMON_KIND="none" ;;
+  esac
+  if [ "$DAEMON_KIND" = "none" ]; then DAEMON_SUPPORTED=0; else DAEMON_SUPPORTED=1; fi
+}
+
+# The unit directory the running user manager searches: its own
+# XDG_CONFIG_HOME, not this shell's — the manager started before this
+# script, and a unit written elsewhere is "not found" by `enable`.
+resolve_systemd_unit_path() {
+  local config_home
+  config_home="$(systemctl --user show-environment 2>/dev/null | sed -n 's/^XDG_CONFIG_HOME=//p' | head -1)"
+  SYSTEMD_UNIT_PATH="${config_home:-$HOME/.config}/systemd/user/$SYSTEMD_UNIT"
+}
+
+# Where the running daemon's stderr goes, for "check …" hints.
+daemon_log_hint() {
+  case "$DAEMON_KIND" in
+    launchd) echo "$HOME/Library/Logs/velesdb-memory/daemon.err.log" ;;
+    systemd) echo "journalctl --user -u $SYSTEMD_UNIT" ;;
+    *) echo "the daemon's own output" ;;
+  esac
 }
 
 # ---- 2. Embedder resolution ----------------------------------------------
@@ -453,6 +495,17 @@ resolve_latest_release_tag() {
   echo "$tag"
 }
 
+# place_binary SRC: install SRC as $BIN_PATH. Staged beside the target, then
+# renamed over it: a rename replaces a binary a running daemon executes,
+# where an in-place copy fails ("Text file busy") and aborts an upgrade.
+place_binary() {
+  mkdir -p "$(dirname "$BIN_PATH")"
+  local staged="$BIN_PATH.new.$$"
+  cp "$1" "$staged"
+  chmod +x "$staged"
+  mv -f "$staged" "$BIN_PATH"
+}
+
 install_from_release() {
   local tag target asset base_url tmp_dir archive_path checksum_path expected actual
 
@@ -526,22 +579,159 @@ install_from_release() {
     exit 1
   fi
 
-  mkdir -p "$(dirname "$BIN_PATH")"
-  cp "$tmp_dir/velesdb-memory" "$BIN_PATH"
-  chmod +x "$BIN_PATH"
+  place_binary "$tmp_dir/velesdb-memory"
   rm -rf "$tmp_dir"
 
   echo -e "${GREEN}✅ Installed $BIN_PATH from $tag$([ "$SKIP_CHECKSUM" = "1" ] && echo ' (unverified — --skip-checksum)')${NC}"
 }
 
-# ---- 5. launchd daemon (macOS only) ----------------------------------------
+# ---- 5. The daemon service ------------------------------------------------
 setup_daemon() {
   DAEMON_ALREADY_RUNNING=0
-  if [ "$DAEMON_SUPPORTED" != "1" ]; then
-    echo -e "${YELLOW}⏭  Skipping daemon setup (non-macOS) — start \`velesdb-memory --http --http-port $PORT\` yourself.${NC}"
+  case "$DAEMON_KIND" in
+    launchd) setup_launchd_daemon ;;
+    systemd) setup_systemd_daemon ;;
+    *) echo -e "${YELLOW}⏭  Skipping daemon setup (no service manager) — start \`velesdb-memory --http --http-port $PORT\` yourself.${NC}" ;;
+  esac
+}
+
+# check_port_free [own]: refuse a port another program already listens on.
+# With `own`, a holder running exactly $BIN_PATH is let through (launchd:
+# `ps -o comm=` gives macOS's full executable path). The systemd path passes
+# nothing: it runs only once its own unit is stopped or absent, so any
+# holder — even another velesdb-memory on another store — is foreign, and
+# clients wired to it would reach the wrong store.
+check_port_free() {
+  if ! command -v lsof >/dev/null 2>&1; then
     return 0
   fi
+  local holder_pid holder_cmd
+  holder_pid="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+  if [ -z "$holder_pid" ]; then
+    return 0
+  fi
+  holder_cmd="$(ps -o comm= -p "$holder_pid" 2>/dev/null || true)"
+  if [ "${1:-}" != "own" ] || [ "$holder_cmd" != "$BIN_PATH" ]; then
+    echo -e "${RED}❌ Port $PORT is already in use by another process ($holder_cmd, pid $holder_pid).${NC}"
+    echo -e "${RED}   Re-run with --port=<other-port>, or stop that process first.${NC}"
+    exit 1
+  fi
+}
 
+# Per-request observability (#1780). The deployed daemon logs by default —
+# a daemon that says nothing is undiagnosable (#1727 cost two wrong
+# diagnoses that way). The default filter below is the payload-safe incident
+# preset declared in crates/velesdb-memory/src/logging.rs
+# (INCIDENT_PRESET — a crate test refuses drift between these two
+# files): per-request events plus rmcp's session lifecycle, never request
+# content. Export VELESDB_MEMORY_LOG before running this installer to pick
+# another filter, or export it EMPTY to deploy a silent daemon — the same
+# blank-means-silence contract the daemon itself applies to the variable
+# (hence `-`, not `:-`: only an UNSET variable gets the default).
+resolve_log_filter() {
+  LOG_FILTER="${VELESDB_MEMORY_LOG-info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug}"
+}
+
+# The daemon serves HTTPS by default and generates its CA + leaf cert on
+# first start (see velesdb_memory::tls) — this check uses --cacert to trust
+# exactly THAT CA rather than the system trust store, so it succeeds
+# regardless of whether (or how quickly) the trust step that follows does.
+wait_for_health() {
+  local ca_cert="$TLS_DIR/ca-cert.pem"
+  echo -e "${YELLOW}⏳ Waiting for the daemon to answer /health...${NC}"
+  local waited=0
+  while ! curl -fsS --max-time 1 --cacert "$ca_cert" "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
+    waited=$((waited + 1))
+    if [ "$waited" -ge 5 ]; then
+      echo -e "${YELLOW}⚠️  No response from /health within 5s — check $(daemon_log_hint)${NC}"
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+# systemd_escape VALUE: VALUE inside a double-quoted unit-file word — `%`
+# starts a specifier, `\` and `"` are quoting. exec_escape also doubles `$`,
+# which ExecStart= (unlike Environment=) expands.
+systemd_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '%s' "$value"
+}
+
+exec_escape() {
+  local value
+  value="$(systemd_escape "$1")"
+  printf '%s' "${value//\$/\$\$}"
+}
+
+# The unit: the same daemon, environment and logging as the launchd agent;
+# its stderr goes to the journal.
+write_systemd_unit() {
+  local env_lines=(
+    "VELESDB_MEMORY_PATH=$STORE"
+    "VELESDB_MEMORY_TLS_DIR=$TLS_DIR"
+    "VELESDB_MEMORY_EMBEDDER=$EMBEDDER"
+    "VELESDB_MEMORY_OLLAMA_URL=$OLLAMA_URL"
+    "VELESDB_MEMORY_OLLAMA_MODEL=$OLLAMA_MODEL"
+  )
+  # Wired only when a model was given: see EXTRACTOR_MODEL's declaration.
+  if [ -n "$EXTRACTOR_MODEL" ]; then
+    env_lines+=("VELESDB_MEMORY_EXTRACTOR=ollama" "VELESDB_MEMORY_EXTRACTOR_MODEL=$EXTRACTOR_MODEL")
+  fi
+  # Empty TTL means "permanent": the key is omitted, as the server defaults.
+  if [ -n "$TTL" ]; then
+    env_lines+=("VELESDB_MEMORY_DEFAULT_TTL=$TTL")
+  fi
+  if [ -n "${LOG_FILTER// /}" ]; then
+    env_lines+=("VELESDB_MEMORY_LOG=$LOG_FILTER")
+  fi
+  printf '%s\n' "[Unit]" "Description=velesdb-memory MCP daemon (https://127.0.0.1:$PORT/mcp)" "" "[Service]" \
+    "ExecStart=\"$(exec_escape "$BIN_PATH")\" --http --http-port $PORT"
+  local line
+  for line in "${env_lines[@]}"; do
+    printf 'Environment="%s"\n' "$(systemd_escape "$line")"
+  done
+  printf '%s\n' "Restart=on-failure" "RestartSec=2" "" "[Install]" "WantedBy=default.target"
+}
+
+# ---- 5a. systemd user unit (Linux) -------------------------------------------
+setup_systemd_daemon() {
+  resolve_systemd_unit_path
+  if systemctl --user is-active --quiet "$SYSTEMD_UNIT"; then
+    if [ "$FORCE_RESTART" != "1" ]; then
+      echo -e "${GREEN}✅ $SYSTEMD_UNIT is already active — skipping (pass --force-restart to restart).${NC}"
+      DAEMON_ALREADY_RUNNING=1
+      trust_local_ca "$TLS_DIR/ca-cert.pem"
+      return 0
+    fi
+    echo -e "${YELLOW}🔁 --force-restart: stopping the existing $SYSTEMD_UNIT...${NC}"
+    systemctl --user stop "$SYSTEMD_UNIT" || true
+  fi
+  check_port_free
+  resolve_log_filter
+  mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")"
+  write_systemd_unit > "$SYSTEMD_UNIT_PATH"
+  systemctl --user daemon-reload
+  if ! systemctl --user enable --now "$SYSTEMD_UNIT"; then
+    echo -e "${RED}❌ systemctl --user enable --now $SYSTEMD_UNIT failed — see $(daemon_log_hint)${NC}"
+    exit 1
+  fi
+  echo -e "${GREEN}✅ $SYSTEMD_UNIT enabled ($SYSTEMD_UNIT_PATH) — it starts with your session.${NC}"
+  echo -e "${YELLOW}   To keep it running after you log out: loginctl enable-linger \"\$USER\"${NC}"
+  # Clients are wired only to a unit that answers: wiring them to a port the
+  # unit never bound would hand them whatever else listens there.
+  if ! wait_for_health; then
+    echo -e "${RED}❌ $SYSTEMD_UNIT did not answer /health — clients NOT wired. See $(daemon_log_hint)${NC}"
+    exit 1
+  fi
+  trust_local_ca "$TLS_DIR/ca-cert.pem"
+}
+
+# ---- 5b. launchd agent (macOS) -----------------------------------------------
+setup_launchd_daemon() {
   local uid
   uid="$(id -u)"
 
@@ -561,18 +751,7 @@ setup_daemon() {
     launchctl bootout "gui/$uid/$PLIST_LABEL" 2>/dev/null || true
   fi
 
-  if command -v lsof >/dev/null 2>&1; then
-    local holder_pid holder_cmd
-    holder_pid="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
-    if [ -n "$holder_pid" ]; then
-      holder_cmd="$(ps -o comm= -p "$holder_pid" 2>/dev/null || true)"
-      if [ "$holder_cmd" != "$BIN_PATH" ]; then
-        echo -e "${RED}❌ Port $PORT is already in use by another process ($holder_cmd, pid $holder_pid).${NC}"
-        echo -e "${RED}   Re-run with --port=<other-port>, or stop that process first.${NC}"
-        exit 1
-      fi
-    fi
-  fi
+  check_port_free own
 
   mkdir -p "$HOME/Library/Logs/velesdb-memory"
   mkdir -p "$(dirname "$PLIST_PATH")"
@@ -592,18 +771,7 @@ setup_daemon() {
     TTL_PLIST_ENTRY="    <key>VELESDB_MEMORY_DEFAULT_TTL</key><string>$TTL</string>"
   fi
 
-  # Per-request observability (#1780). The deployed daemon logs by default —
-  # its stderr already lands in ~/Library/Logs/velesdb-memory/daemon.err.log,
-  # and a daemon that says nothing is undiagnosable (#1727 cost two wrong
-  # diagnoses that way). The default filter below is the payload-safe incident
-  # preset declared in crates/velesdb-memory/src/logging.rs
-  # (INCIDENT_PRESET — a crate test refuses drift between these two
-  # files): per-request events plus rmcp's session lifecycle, never request
-  # content. Export VELESDB_MEMORY_LOG before running this installer to pick
-  # another filter, or export it EMPTY to deploy a silent daemon — the same
-  # blank-means-silence contract the daemon itself applies to the variable
-  # (hence `-`, not `:-`: only an UNSET variable gets the default).
-  LOG_FILTER="${VELESDB_MEMORY_LOG-info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug}"
+  resolve_log_filter
   LOG_PLIST_ENTRY=""
   if [ -n "${LOG_FILTER// /}" ]; then
     LOG_PLIST_ENTRY="    <key>VELESDB_MEMORY_LOG</key><string>$LOG_FILTER</string>"
@@ -667,24 +835,24 @@ PLIST
   fi
   launchctl enable "gui/$uid/$PLIST_LABEL"
 
-  # The daemon serves HTTPS by default and generates its CA + leaf cert on
-  # first start (see velesdb_memory::tls) — this internal health check uses
-  # --cacert to trust exactly THAT CA rather than the system trust store, so
-  # it succeeds immediately regardless of whether (or how quickly) the
-  # keychain-trust step below completes.
-  local ca_cert="$TLS_DIR/ca-cert.pem"
-  echo -e "${YELLOW}⏳ Waiting for the daemon to answer /health...${NC}"
-  local waited=0
-  while ! curl -fsS --max-time 1 --cacert "$ca_cert" "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
-    waited=$((waited + 1))
-    if [ "$waited" -ge 5 ]; then
-      echo -e "${YELLOW}⚠️  No response from /health within 5s — check $HOME/Library/Logs/velesdb-memory/daemon.err.log${NC}"
-      break
-    fi
-    sleep 1
-  done
+  wait_for_health || true
+  trust_local_ca "$TLS_DIR/ca-cert.pem"
+}
 
-  trust_local_ca "$ca_cert"
+# Linux has no per-user trust store an installer can write without root, so
+# it says what to run instead of escalating on its own.
+linux_ca_guidance() {
+  local ca_cert="$1"
+  if curl -fsS --max-time 2 "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    echo -e "${GREEN}✅ Local CA already trusted (strict HTTPS request to the daemon succeeded).${NC}"
+    return 0
+  fi
+  echo ""
+  echo -e "${BLUE}🔐 The daemon's local CA is $ca_cert. Trusting it needs root, so this script does not:${NC}"
+  echo "     Debian/Ubuntu: sudo cp \"$ca_cert\" /usr/local/share/ca-certificates/velesdb-memory.crt && sudo update-ca-certificates"
+  echo "     Fedora/Arch:   sudo trust anchor --store \"$ca_cert\""
+  echo -e "${YELLOW}   Node-based clients (Claude Code, the Desktop bridge) can trust it without root:${NC}"
+  echo "     export NODE_EXTRA_CA_CERTS=\"$ca_cert\""
 }
 
 # Run "$@" with a hard wall-clock timeout of $1 seconds, killing it (and
@@ -731,6 +899,10 @@ trust_local_ca() {
     return 0
   fi
   if [ "$DAEMON_SUPPORTED" != "1" ]; then
+    return 0
+  fi
+  if [ "$DAEMON_KIND" = "systemd" ]; then
+    linux_ca_guidance "$ca_cert"
     return 0
   fi
   if ! command -v security >/dev/null 2>&1; then
@@ -1059,6 +1231,14 @@ do_uninstall() {
   uid="$(id -u)"
   launchctl bootout "gui/$uid/$PLIST_LABEL" >/dev/null 2>&1 || true
   rm -f "$PLIST_PATH"
+  if command -v systemctl >/dev/null 2>&1; then
+    resolve_systemd_unit_path
+  fi
+  if [ -n "$SYSTEMD_UNIT_PATH" ] && [ -f "$SYSTEMD_UNIT_PATH" ]; then
+    systemctl --user disable --now "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
+    rm -f "$SYSTEMD_UNIT_PATH"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+  fi
 
   if command -v claude >/dev/null 2>&1; then
     claude mcp remove velesdb-memory -s user >/dev/null 2>&1 || true
@@ -1102,10 +1282,10 @@ print_summary() {
         echo -e "  Daemon:    ${GREEN}running${NC} → https://127.0.0.1:$PORT/mcp"
       fi
     else
-      echo -e "  Daemon:    ${YELLOW}not confirmed up${NC} — check $HOME/Library/Logs/velesdb-memory/daemon.err.log"
+      echo -e "  Daemon:    ${YELLOW}not confirmed up${NC} — check $(daemon_log_hint)"
     fi
   else
-    echo -e "  Daemon:    ${YELLOW}not started (non-macOS)${NC}"
+    echo -e "  Daemon:    ${YELLOW}not started (no service manager)${NC}"
   fi
   for client in claude-code codex claude-desktop windsurf devin; do
     if [ "$client" = "codex" ]; then
@@ -1135,7 +1315,7 @@ main() {
   # entry point for this script's client-wiring logic (idempotent by
   # construction: every wiring step backs up and merges, never overwrites).
   if [ "$WIRE_ONLY" = "1" ]; then
-    if [ "$(uname -s)" = "Darwin" ]; then DAEMON_SUPPORTED=1; else DAEMON_SUPPORTED=0; fi
+    detect_daemon_kind
     if ! curl -fsS --max-time 2 --cacert "$TLS_DIR/ca-cert.pem" "https://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
       echo -e "${YELLOW}⚠️  No daemon answering on https://127.0.0.1:$PORT/health — --wire-only only re-wires${NC}"
       echo -e "${YELLOW}   clients; run the full installer (without --wire-only) if the daemon was never set up.${NC}"
@@ -1170,4 +1350,7 @@ main() {
   print_summary
 }
 
-main
+# Sourcing the script (its tests do) defines the functions without running.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main
+fi

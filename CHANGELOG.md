@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`install-memory-daemon.sh` runs the shared daemon on Linux** as a
+  systemd user unit (`~/.config/systemd/user/velesdb-memory.service`, logs in
+  `journalctl --user -u velesdb-memory`), with the same environment and
+  logging as the macOS launchd agent; `--force-restart` and `--uninstall`
+  cover it. Before, Linux got no service, so the install wizard's health gate
+  refused daemon mode there. A host without a systemd user session still
+  gets the binary and the client wiring. Trusting the local CA needs root on
+  Linux, so the script prints the commands instead of running them.
+
 - **The install wizard settles the embedding model against the store.** It
   defaults to the model the store's provenance records, so rewiring a
   harness no longer starts a store filled by `bge-m3` on `hash` — which the
