@@ -46,6 +46,10 @@ on:
         description: 'Build and attach the --features ollama,http,extract daemon archives to the GitHub Release'
         type: boolean
         default: true
+      publish_wizard:
+        description: 'Build and attach the packaged install wizard (per-target binaries + source bundle) to the GitHub Release'
+        type: boolean
+        default: true
 
 concurrency:
   group: release-memory-${{ github.ref }}
@@ -652,6 +656,116 @@ jobs:
           fi
           ls -la daemon-archives/
           gh release upload "$TAG" daemon-archives/* --clobber
+
+  # ===========================================================================
+  # 9. Package the install wizard, per target, plus its source bundle
+  # ===========================================================================
+  #
+  # PyInstaller cannot cross-compile, so each target builds on its own runner.
+  # Linux builds on 22.04: a PyInstaller binary needs the glibc of the machine
+  # that built it or newer, and 22.04's is older than ubuntu-latest's, so more
+  # distributions can run it. There is no Intel macOS runner here (see the
+  # macos-13 note in release.yml), so Intel Macs get the source bundle, which
+  # the one-line installer runs with the system python3.
+  build-wizard:
+    name: Build install wizard (${{ matrix.target }})
+    needs: validate
+    if: github.event_name == 'push' || inputs.publish_wizard
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu,  host: ubuntu-22.04,     exe: velesdb-install-wizard }
+          - { target: aarch64-unknown-linux-gnu, host: ubuntu-22.04-arm, exe: velesdb-install-wizard }
+          - { target: aarch64-apple-darwin,      host: macos-latest,     exe: velesdb-install-wizard }
+          - { target: x86_64-pc-windows-msvc,    host: windows-latest,   exe: velesdb-install-wizard-x86_64-pc-windows-msvc.exe }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller==6.22.3
+
+      - name: Package the wizard
+        run: python scripts/package_wizard.py --apply --target ${{ matrix.target }} --version ${{ needs.validate.outputs.version }} --out dist
+
+      - name: Smoke-test the binary and verify every asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./dist/${{ matrix.exe }} --version | tee version.txt
+          grep -q "velesdb-install-wizard ${{ needs.validate.outputs.version }}" version.txt
+          grep -q "WISCALE-PKG-SIG v1" version.txt
+          home="$(mktemp -d)"
+          ./dist/${{ matrix.exe }} --home "$home" --store "$home/store" --no-cli-scan --json > plan.json
+          python -c "import json; json.load(open('plan.json'))"
+          for asset in dist/velesdb-install-wizard-*; do
+            case "$asset" in *.sha256) continue ;; esac
+            python scripts/validate_package.py "$asset"
+          done
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wizard-${{ matrix.target }}
+          path: dist/velesdb-install-wizard-*
+          if-no-files-found: error
+
+  build-wizard-source:
+    name: Build install wizard (source bundle)
+    needs: validate
+    if: github.event_name == 'push' || inputs.publish_wizard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build and verify the source bundle
+        run: |
+          set -euo pipefail
+          python3 scripts/package_wizard.py --source --version ${{ needs.validate.outputs.version }} --out dist
+          python3 scripts/validate_package.py dist/velesdb-install-wizard-src.tar.gz
+          mkdir unpacked && tar -xzf dist/velesdb-install-wizard-src.tar.gz -C unpacked
+          python3 unpacked/velesdb-install-wizard/scripts/velesdb_install_wizard.py --version \
+            | grep -q "velesdb-install-wizard ${{ needs.validate.outputs.version }}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wizard-source
+          path: dist/velesdb-install-wizard-src.tar.gz*
+          if-no-files-found: error
+
+  # Same release, same create-if-missing race as publish-daemon-archive above.
+  publish-wizard:
+    name: Attach install wizard to release
+    needs: [validate, build-wizard, build-wizard-source]
+    if: github.event_name == 'push' || inputs.publish_wizard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download every wizard asset
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: wizard-assets
+          pattern: wizard-*
+          merge-multiple: true
+
+      - name: Attach them to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: velesdb-memory-v${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --latest=false --notes "velesdb-memory $TAG" || true
+          fi
+          ls -la wizard-assets/
+          gh release upload "$TAG" wizard-assets/* --clobber
 
   # Meme raison que dans release.yml : c'est CE pipeline qui a creusé l'ecart.
   # Les releases 0.11.3, 0.11.4 et 0.11.5 ont toutes atterri sur main sans

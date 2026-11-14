@@ -34,6 +34,7 @@ import argparse
 import ast
 import hashlib
 import importlib.util
+import io
 import json
 import platform
 import re
@@ -52,6 +53,12 @@ META_MODULE = "_wizard_build_meta"
 PUBLISHER = "WiScale"
 SIGNATURE_PREFIX = "WISCALE-PKG-SIG v1"
 COMMAND_LAUNCHER = "VelesDB Install Wizard.command"
+#: The cross-platform asset: the wizard as Python source, for a platform no
+#: native build covers (PyInstaller cannot cross-compile, and the release
+#: matrix has no Intel macOS runner). Runs with any python3 >= 3.9.
+SOURCE_ASSET = f"{BINARY}-src.tar.gz"
+#: The wizard's own modules, beside the resources bundled_data() lists.
+WIZARD_MODULES: tuple[str, ...] = ("scripts/velesdb_install_wizard.py", "scripts/wizard_release.py")
 
 #: (os, arch) -> target triple of the binary a native build produces.
 _TARGETS: dict[tuple[str, str], str] = {
@@ -144,6 +151,34 @@ def _top_level_imports(script: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             names.add(node.module.split(".")[0])
     return names
+
+
+def source_members() -> list[tuple[Path, str]]:
+    """(file, repo-relative name) for the source bundle: the wizard modules
+    and every bundled resource, directories expanded (bytecode caches out)."""
+    members = [(REPO_ROOT / rel, rel) for rel in WIZARD_MODULES]
+    for source, dest in bundled_data():
+        if source.is_file():
+            members.append((source, f"{dest}/{source.name}"))
+            continue
+        members += [(f, (Path(dest) / f.relative_to(source)).as_posix())
+                    for f in sorted(source.rglob("*")) if f.is_file() and "__pycache__" not in f.parts]
+    return members
+
+
+def build_source_bundle(version: str, out: Path) -> Path:
+    """`velesdb-install-wizard-src.tar.gz`: everything under one
+    `velesdb-install-wizard/` directory laid out as in the repository, plus
+    the signed build meta module beside the wizard."""
+    asset = out / SOURCE_ASSET
+    meta = build_meta_source(version).encode("utf-8")
+    with tarfile.open(asset, "w:gz") as tar:
+        for source, name in source_members():
+            tar.add(source, arcname=f"{BINARY}/{name}")
+        info = tarfile.TarInfo(f"{BINARY}/scripts/{META_MODULE}.py")
+        info.size, info.mode = len(meta), 0o644
+        tar.addfile(info, io.BytesIO(meta))
+    return asset
 
 
 def build_meta_source(version: str) -> str:
@@ -313,7 +348,15 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--version", default=None, help="default: crates/velesdb-memory version")
     parser.add_argument("--out", default=str(REPO_ROOT / "dist"))
     parser.add_argument("--apply", action="store_true", help="really run PyInstaller (+hdiutil on macOS)")
+    parser.add_argument("--source", action="store_true",
+                        help=f"build {SOURCE_ASSET} instead (no PyInstaller, any machine)")
     args = parser.parse_args(argv)
+    if args.source:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        asset = build_source_bundle(args.version or memory_version(), out)
+        print(f"asset: {asset} ({write_sidecar(asset).name})")
+        return 0
 
     target = args.target or detect_target()
     version = args.version or memory_version()

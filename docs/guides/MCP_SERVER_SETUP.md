@@ -28,7 +28,25 @@ guide is everything else.
 
 ## Install
 
-**The guided way (recommended, macOS / Linux / Windows):**
+**The guided way (recommended, macOS / Linux / Windows), in one line:**
+
+```bash
+# Linux · macOS
+curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.ps1 | iex
+```
+
+`scripts/install-wizard.sh` and `scripts/install-wizard.ps1` find the newest
+`velesdb-memory-v*` release that carries a wizard for the machine (from
+0.18.0), verify it against its `.sha256` sidecar, and run it from a temporary
+directory. A machine with no native build — Intel macOS, other architectures —
+gets the source bundle, run with `python3` 3.9+. Wizard flags go after
+`| sh -s --` (PowerShell: `& ([scriptblock]::Create((irm …))) --dry-run`).
+From a checkout:
 
 ```bash
 python3 scripts/velesdb_install_wizard.py            # interactive on a TTY: boxed plan + menu [1] apply [2] JSON [3] quit
@@ -59,13 +77,21 @@ what to add. Every config write is backed up and
 atomic (unique tmp + rename + post-write validation, original file mode kept,
 symlinks refused). See #2759.
 
-**Packaged installers (no Python needed to run them):**
-`python3 scripts/package_wizard.py --apply` builds one for the machine it runs
-on — `velesdb-install-wizard-<target>.exe` (Windows), `.tar.gz` plus a `.dmg`
-whose `.command` launcher opens Terminal (macOS), `.tar.gz` (Linux). The
-binary bundles the daemon installers and the skills, embeds a discreet
-**WiScale** publisher signature, and each asset gets a `<asset>.sha256`
-sidecar — verify before running: `python3 scripts/validate_package.py <asset>`.
+**Release assets (no Python needed to run them):** each `velesdb-memory-v*`
+release publishes, per target, `velesdb-install-wizard-<target>.tar.gz`
+(`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` — built on Ubuntu
+22.04, so glibc 2.35+ — and `aarch64-apple-darwin`, which also gets a `.dmg`
+whose `.command` launcher opens Terminal), the Windows x64
+`velesdb-install-wizard-x86_64-pc-windows-msvc.exe` (Windows on ARM runs it
+under emulation), and the source bundle `velesdb-install-wizard-src.tar.gz`.
+The binaries bundle the daemon installers, the skills and the agent hooks,
+embed a discreet **WiScale** publisher signature, and each asset gets a
+`<asset>.sha256` sidecar — verify a manual download before running it:
+`python3 scripts/validate_package.py <asset>`. The checksum proves the
+transfer, not the publisher (the sidecar ships in the same release).
+`python3 scripts/package_wizard.py --apply` builds the same asset for the
+machine it runs on (`--source` for the source bundle); `release-memory.yml`
+runs it on one runner per target, since PyInstaller does not cross-compile.
 
 **One command, with a Rust toolchain present:**
 

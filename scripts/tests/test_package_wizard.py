@@ -125,6 +125,39 @@ class PackagePlanTests(unittest.TestCase):
             self.assertEqual(list(Path(d).iterdir()), [])
 
 
+
+class SourceBundleTests(unittest.TestCase):
+    """The asset for a platform with no native build (Intel Macs): the wizard
+    and every resource it reads, runnable with any python3 >= 3.9."""
+
+    def test_bundle_carries_the_wizard_and_everything_it_reads(self):
+        names = {arc for _, arc in pkg.source_members()}
+        self.assertIn("scripts/velesdb_install_wizard.py", names)
+        self.assertIn("scripts/wizard_release.py", names)
+        self.assertIn("scripts/sync-agent-hooks.py", names)
+        self.assertIn("integrations/agent-hooks/shared/hooks/lib/common.sh", names)
+        self.assertIn("crates/velesdb-memory/skill/velesdb-memory/SKILL.md", names)
+        self.assertFalse(any("/test/" in n or "__pycache__" in n for n in names), names)
+
+    def test_extracted_bundle_runs_and_verifies(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "dist"
+            out.mkdir()
+            asset = pkg.build_source_bundle("0.18.0", out)
+            pkg.write_sidecar(asset)
+            self.assertEqual(asset.name, "velesdb-install-wizard-src.tar.gz")
+            ok, logs = ver.verify(asset)
+            self.assertTrue(ok, logs)
+            with tarfile.open(asset) as tar:
+                tar.extractall(Path(d) / "x", filter="data")
+            root = Path(d) / "x" / "velesdb-install-wizard"
+            run = subprocess.run([sys.executable, str(root / "scripts" / "velesdb_install_wizard.py"), "--version"],
+                                 capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("velesdb-install-wizard 0.18.0", run.stdout)
+            self.assertIn("WISCALE-PKG-SIG v1", run.stdout)
+
 class VerifyPackageTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
