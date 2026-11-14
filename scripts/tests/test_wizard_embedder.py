@@ -122,6 +122,13 @@ class OllamaTests(unittest.TestCase):
         self.assertEqual(emb.server_env(emb.HASH), {"VELESDB_MEMORY_EMBEDDER": "hash"})
 
 
+    def test_a_versioned_local_model_keeps_its_tag(self):
+        ranked = emb.rank_models(emb.StoreProfile(exists=False), ["snowflake-arctic-embed:335m"])
+        self.assertIn("snowflake-arctic-embed:335m", [c.name for c in ranked])
+        self.assertTrue(emb.is_installed("snowflake-arctic-embed:335m", ["snowflake-arctic-embed:335m"]))
+        self.assertFalse(emb.is_installed("snowflake-arctic-embed", ["snowflake-arctic-embed:335m"]))
+        self.assertTrue(emb.is_installed("bge-m3", ["bge-m3:latest"]))
+
     def test_local_embedding_models_outside_the_catalog_are_offered_chat_models_are_not(self):
         ranked = emb.rank_models(emb.StoreProfile(exists=False), ["llama3.2:3b", "snowflake-arctic-embed:latest"])
         names = [c.name for c in ranked]
@@ -164,9 +171,37 @@ class WiringTests(unittest.TestCase):
         self.assertEqual(emb.daemon_flags(emb.HASH, "macos"), ["--embedder=hash"])
 
     def test_migration_stages_next_to_the_store(self):
-        cmd = emb.migration_cmd("/bin/vm", Path("/home/u/.velesdb-memory"))
+        cmd = emb.migration_cmd("/bin/vm", Path("/home/u/.velesdb-memory"), stamp="20261114T120000Z")
         self.assertEqual(cmd, ["/bin/vm", "migrate-embeddings", "--store", "/home/u/.velesdb-memory",
-                               "--destination", "/home/u/.velesdb-memory.embedder-migration"])
+                               "--destination", "/home/u/.velesdb-memory.migration-20261114T120000Z"])
+
+    def test_each_migration_gets_its_own_destination(self):
+        # a completed migration leaves a committed journal beside its destination,
+        # and migrate-embeddings refuses to rerun there (switchover.rs entry_state)
+        store = Path("/home/u/.velesdb-memory")
+        first = emb.migration_cmd("/bin/vm", store, stamp="20261114T120000Z")[-1]
+        second = emb.migration_cmd("/bin/vm", store, stamp="20261115T090000Z")[-1]
+        self.assertNotEqual(first, second)
+
+    def test_a_custom_endpoint_reaches_the_server_and_the_daemon(self):
+        bge = emb.Embedder("ollama", "bge-m3", 1024, url="http://127.0.0.1:11435")
+        self.assertEqual(emb.server_env(bge)["VELESDB_MEMORY_EMBEDDER_URL"], "http://127.0.0.1:11435")
+        self.assertIn("--ollama-url=http://127.0.0.1:11435", emb.daemon_flags(bge, "linux"))
+        self.assertEqual(emb.daemon_flags(bge, "windows")[-2:], ["-OllamaUrl", "http://127.0.0.1:11435"])
+
+    def test_the_endpoint_is_the_one_the_server_would_read(self):
+        self.assertEqual(emb.resolve_url("http://h:1/", {}), "http://h:1")
+        self.assertEqual(emb.resolve_url(None, {"VELESDB_MEMORY_OLLAMA_URL": "http://h:2"}), "http://h:2")
+        self.assertEqual(emb.resolve_url(None, {"VELESDB_MEMORY_EMBEDDER_URL": "http://h:3",
+                                                "VELESDB_MEMORY_OLLAMA_URL": "http://h:2"}), "http://h:3")
+        self.assertIsNone(emb.resolve_url(None, {}))
+        self.assertIsNone(emb.resolve_url("http://localhost:11434", {}))
+
+    def test_owned_keys_cover_aliases_and_leave_the_users_variables(self):
+        owned = emb.owned_env_keys(emb.server_env(emb.Embedder("ollama", "bge-m3", 1024, url="http://h:1")))
+        self.assertTrue({"VELESDB_MEMORY_OLLAMA_MODEL", "VELESDB_MEMORY_OLLAMA_URL"} <= owned)
+        self.assertNotIn("VELESDB_MEMORY_EXTRACTOR", owned)
+        self.assertNotIn("VELESDB_MEMORY_OLLAMA_URL", emb.owned_env_keys(emb.server_env(emb.HASH)))
 
     def test_probed_dimension_reads_the_first_vector(self):
         self.assertEqual(emb.probed_dimension({"embeddings": [[0.1] * 768]}), 768)

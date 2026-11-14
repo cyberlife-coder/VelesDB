@@ -222,6 +222,9 @@ def detect_harnesses(home: Path, os_name: str, scan_cli: bool = True) -> list[di
             "config": str(config_path) if config_path else None,
             "velesdb_memory_entry": read_mcp_entry(h["kind"], config_path),
         }
+        if h["kind"] == "claude-cli":
+            # where `claude mcp add --scope user` keeps the entry it wrote
+            entry["claude_json"] = str(_expand("~/.claude.json", home))
         found.append(entry)
     return found
 
@@ -468,9 +471,10 @@ def propose_mode(harnesses: list[dict], lock: dict) -> str:
 
 
 def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: bool = True,
-               embedder: "tuple[str | None, str | None]" = (None, None)) -> dict:
+               embedder: "tuple[str | None, str | None]" = (None, None), ollama_url: "str | None" = None) -> dict:
     """`embedder` is (--embedder, --embedder-model); unset, the store's
-    recorded model is kept (see wizard_embedder.default_embedder)."""
+    recorded model is kept (see wizard_embedder.default_embedder).
+    `ollama_url` is a non-default Ollama endpoint (wizard_embedder.resolve_url)."""
     plat = detect_platform()
     harnesses = detect_harnesses(home, plat["os"], scan_cli=scan_cli)
     lock = detect_lock(store)
@@ -487,7 +491,7 @@ def build_plan(home: Path, store: Path, mode: str | None, port: int, scan_cli: b
             {"step": "daemon", "detail": f"one shared HTTPS daemon on 127.0.0.1:{port} holds the lock once (install-memory-daemon)"}
         )
     profile = wizard_embedder.read_store(store)
-    chosen = wizard_embedder.describe(wizard_embedder.select_embedder(*embedder, profile), profile)
+    chosen = wizard_embedder.describe(wizard_embedder.select_embedder(*embedder, profile, url=ollama_url), profile)
     actions += _embedder_actions(chosen)
     for h in harnesses:
         if not h["installed"]:
@@ -800,8 +804,65 @@ def write_json_atomic(path: Path, mutate, dry: bool = True) -> bool:
     return True
 
 
-def _stdio_entry(bin_path: str, env: "dict[str, str]") -> dict:
-    return {"command": bin_path, "env": dict(env)}
+def merge_env(existing: object, env: "dict[str, str]") -> "dict[str, str]":
+    """`env` over an existing stdio entry's environment: the wizard replaces
+    only what it owns (wizard_embedder.owned_env_keys); an extractor, a TTL
+    or a log filter the user set survives a rewire."""
+    owned = wizard_embedder.owned_env_keys(env)
+    kept = {k: v for k, v in existing.items() if k not in owned} if isinstance(existing, dict) else {}
+    return {**kept, **env}
+
+
+def _stdio_part(entry: object) -> dict:
+    """An existing entry worth merging into: a stdio one, never an http one."""
+    if not isinstance(entry, dict) or "url" in entry or entry.get("type") in ("remote", "http"):
+        return {}
+    return entry
+
+
+def _stdio_entry(bin_path: str, env: "dict[str, str]", old: object = None) -> dict:
+    old = _stdio_part(old)
+    return {**old, "command": bin_path, "env": merge_env(old.get("env"), env)}
+
+
+def _zed_stdio_entry(bin_path: str, env: "dict[str, str]", old: object = None) -> dict:
+    command = _stdio_part(old).get("command")
+    command = command if isinstance(command, dict) else {}
+    return {"command": {**command, "path": bin_path, "args": command.get("args", []),
+                        "env": merge_env(command.get("env"), env)}}
+
+
+def _opencode_stdio_entry(bin_path: str, env: "dict[str, str]", old: object = None) -> dict:
+    old = _stdio_part(old)
+    command = old.get("command") if isinstance(old.get("command"), list) else []
+    return {**old, "type": "local", "command": [bin_path, *command[1:]], "enabled": True,
+            "environment": merge_env(old.get("environment"), env)}
+
+
+def _claude_stdio_entry(harness: dict) -> dict:
+    """The user-scope entry `claude mcp add` wrote, from ~/.claude.json."""
+    try:
+        data = json.loads(_read_text(Path(harness.get("claude_json") or Path.home() / ".claude.json")))
+    except (OSError, ValueError):
+        return {}
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    return _stdio_part(servers.get("velesdb-memory")) if isinstance(servers, dict) else {}
+
+
+def _toml_table(text: str) -> dict:
+    """Parsed TOML, or {} where tomllib is missing (Python < 3.11) or the text
+    does not parse: the merge then keeps nothing, as before."""
+    try:
+        import tomllib
+        return tomllib.loads(text)
+    except ImportError:
+        return {}
+    except ValueError:
+        return {}
+
+
+def _toml_array(items: "list[str]") -> str:
+    return "[" + ", ".join(f'"{_toml_escape(str(item))}"' for item in items) + "]"
 
 
 def _http_entry(port: int) -> dict:
@@ -827,13 +888,16 @@ def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, en
             return f"{name}: claude CLI not found — skipped"
         if dry:
             return f"{name}: would run `claude mcp add --transport {target} --scope user velesdb-memory`"
+        old = _claude_stdio_entry(harness)
         _run_cli(["claude", "mcp", "remove", "velesdb-memory", "-s", "user"])
         cmd = ["claude", "mcp", "add", "--scope", "user", "velesdb-memory"]
         if target == "http":
             cmd += ["--transport", "http", f"https://127.0.0.1:{port}/mcp"]
         else:
-            cmd += [arg for key, value in env.items() for arg in ("--env", f"{key}={value}")]
-            cmd += ["--", str(bin_path)]
+            merged = merge_env(old.get("env"), env)
+            cmd += [arg for key, value in merged.items() for arg in ("--env", f"{key}={value}")]
+            args = old.get("args") if isinstance(old.get("args"), list) else []
+            cmd += ["--", str(bin_path), *map(str, args)]
         r = _run_cli(cmd)
         return f"{name}: {'wired ' + target if r.returncode == 0 else 'FAILED: ' + (r.stderr or '').strip()}"
 
@@ -852,19 +916,19 @@ def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, en
         if kind in ("mcp-json", "devin-envelope"):
             servers = data.setdefault("mcpServers", {})
             # replace in place: the stdio entry is overwritten, never duplicated
-            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(str(bin_path), env)
+            old = servers.get("velesdb-memory")
+            servers["velesdb-memory"] = _http_entry(port) if target == "http" else _stdio_entry(str(bin_path), env, old)
         elif kind == "zed-context-servers":
             servers = data.setdefault("context_servers", {})
             servers["velesdb-memory"] = (
                 {"url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
-                else {"command": {"path": str(bin_path), "args": [], "env": dict(env)}}
+                else _zed_stdio_entry(str(bin_path), env, servers.get("velesdb-memory"))
             )
         elif kind == "opencode-mcp":
             servers = data.setdefault("mcp", {})
             servers["velesdb-memory"] = (
                 {"type": "remote", "url": f"https://127.0.0.1:{port}/mcp"} if target == "http"
-                else {"type": "local", "command": [str(bin_path)], "enabled": True,
-                      "environment": dict(env)}
+                else _opencode_stdio_entry(str(bin_path), env, servers.get("velesdb-memory"))
             )
         return data
 
@@ -915,8 +979,11 @@ def wire_codex_toml(path: Path, target: str, bin_path: str, port: int, env: "dic
     if target == "http":
         body = [f'url = "https://127.0.0.1:{port}/mcp"']
     else:
-        body = [f'command = "{_toml_escape(bin_path)}"', "args = []",
-                f"env = {_toml_inline_table(env)}"]
+        section = _toml_section(text, "[mcp_servers.velesdb-memory]") or []
+        old = _stdio_part(_toml_table("\n".join(section)))
+        args = old.get("args") if isinstance(old.get("args"), list) else []
+        body = [f'command = "{_toml_escape(bin_path)}"', f"args = {_toml_array(args)}",
+                f"env = {_toml_inline_table(merge_env(old.get('env'), env))}"]
     new = _replace_toml_section(text, "[mcp_servers.velesdb-memory]", body)
     try:
         import tomllib
@@ -942,8 +1009,13 @@ def wire_vibe_toml(path: Path, target: str, bin_path: str, port: int, env: "dict
         obj = (f'{{ name = "velesdb-memory", url = "https://127.0.0.1:{port}/mcp", '
                f'transport = "streamable-http" }}')
     else:
+        servers = _toml_table(text).get("mcp_servers")
+        olds = [e for e in servers if isinstance(e, dict) and e.get("name") == "velesdb-memory"] \
+            if isinstance(servers, list) else []
+        old = _stdio_part(olds[0]) if olds else {}
+        args = old.get("args") if isinstance(old.get("args"), list) else []
         obj = (f'{{ name = "velesdb-memory", command = "{_toml_escape(bin_path)}", '
-               f"args = [], env = {_toml_inline_table(env)} }}")
+               f"args = {_toml_array(args)}, env = {_toml_inline_table(merge_env(old.get('env'), env))} }}")
     new = _replace_vibe_mcp_entry(text, obj)
     if dry:
         return f"vibe: would update {path} ({target})"
@@ -1160,8 +1232,10 @@ def apply_plan(plan: dict, dry: bool = True, yes: bool = False,
     """Execute the plan's actions. Returns per-action status strings; any
     status containing FAILED or REFUSED means the apply did not fully succeed
     (main() turns that into a non-zero exit code)."""
-    session = wizard_embedder.Session(wizard_embedder.Ops(), confirm, yes=yes, dry=dry)
-    embedder, statuses = wizard_embedder.prepare_ollama(plan_embedder(plan), plan["platform"]["os"], session)
+    wanted = plan_embedder(plan)
+    session = wizard_embedder.Session(wizard_embedder.Ops(wanted.url or wizard_embedder.OLLAMA_URL), confirm,
+                                      yes=yes, dry=dry)
+    embedder, statuses = wizard_embedder.prepare_ollama(wanted, plan["platform"]["os"], session)
     if embedder is None:
         return statuses + [_NOT_REWIRED]
     bin_path, more, ok = _prepare_server(plan, embedder, session)
@@ -1282,7 +1356,8 @@ def _choose_embedder(plan: dict, args) -> dict:
     """The embeddings menu: catalog + local Ollama models, ranked against
     the store. Returns the plan rebuilt for the chosen model."""
     store = wizard_embedder.read_store(Path(plan["store"]))
-    local = wizard_embedder.Ops().tags() or []
+    url = (plan.get("embedder") or {}).get("url")
+    local = wizard_embedder.Ops(url or wizard_embedder.OLLAMA_URL).tags() or []
     try:
         chosen = wizard_embedder.choose_embedder(store, local, input)
     except (EOFError, KeyboardInterrupt):
@@ -1290,7 +1365,7 @@ def _choose_embedder(plan: dict, args) -> dict:
         return plan
     selection = (chosen.backend, None if chosen.backend == "hash" else chosen.model)
     return build_plan(Path(args.home), Path(plan["store"]), args.mode, plan["port"],
-                      scan_cli=not args.no_cli_scan, embedder=selection)
+                      scan_cli=not args.no_cli_scan, embedder=selection, ollama_url=url)
 
 
 def interactive_menu(plan: dict, args) -> int:
@@ -1330,15 +1405,7 @@ def interactive_menu(plan: dict, args) -> int:
         print("Choix invalide.")
 
 
-def main(argv: "list[str] | None" = None) -> int:
-    # Legacy Windows consoles (cp1252/cp850) must never crash on a glyph:
-    # replace unencodable chars instead of raising UnicodeEncodeError.
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(errors="replace")
-            except (OSError, ValueError):
-                pass
+def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--store", default=str(DEFAULT_STORE), help="store directory (default: ~/.velesdb-memory)")
     parser.add_argument("--mode", choices=["stdio", "daemon"], default=None, help="force install mode (default: proposed)")
@@ -1354,7 +1421,22 @@ def main(argv: "list[str] | None" = None) -> int:
                         help="embedding backend (default: the model the store records, else hash)")
     parser.add_argument("--embedder-model", default=None,
                         help="Ollama embedding model, e.g. bge-m3, all-minilm, nomic-embed-text, mxbai-embed-large")
+    parser.add_argument("--ollama-url", default=None,
+                        help="Ollama endpoint (default: VELESDB_MEMORY_EMBEDDER_URL, else http://localhost:11434)")
     parser.add_argument("--version", action="store_true", help="print version and publisher, then exit")
+    return parser
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    # Legacy Windows consoles (cp1252/cp850) must never crash on a glyph:
+    # replace unencodable chars instead of raising UnicodeEncodeError.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
+    parser = _argument_parser()
     args = parser.parse_args(argv)
     if args.version:
         print(f"velesdb-install-wizard {__version__} — {PUBLISHER}")
@@ -1369,7 +1451,8 @@ def main(argv: "list[str] | None" = None) -> int:
     if args.embedder == "hash" and args.embedder_model:
         parser.error("--embedder-model needs --embedder=ollama")
     plan = build_plan(Path(args.home), Path(args.store), args.mode, args.port, scan_cli=not args.no_cli_scan,
-                      embedder=(args.embedder, args.embedder_model))
+                      embedder=(args.embedder, args.embedder_model),
+                      ollama_url=wizard_embedder.resolve_url(args.ollama_url, dict(os.environ)))
     if args.json:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
         return 0

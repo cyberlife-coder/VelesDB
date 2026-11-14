@@ -67,7 +67,10 @@ model's real dimension, and re-embeds a store recorded for another model or
 dimension with `velesdb-memory migrate-embeddings` only with consent — under
 `--apply`, only with `--yes`; declined, no harness is rewired. Stdio entries
 carry `VELESDB_MEMORY_EMBEDDER`/`_MODEL`; the daemon installer gets
-`--embedder`/`--ollama-model`. Every config write is backed up and
+`--embedder`/`--ollama-model`. An Ollama on another endpoint is named with
+`--ollama-url` (or the `VELESDB_MEMORY_EMBEDDER_URL` the server reads). A
+rewired stdio entry keeps every variable the wizard does not own — an
+extractor, a TTL, a log filter — and its arguments. Every config write is backed up and
 atomic (unique tmp + rename + post-write validation, original file mode kept,
 symlinks refused). See #2759.
 

@@ -24,6 +24,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
@@ -74,6 +75,23 @@ class Embedder:
     backend: str  # "hash" | "ollama"
     model: str
     dimension: "int | None"  # None until probed (a model outside the catalog)
+    url: "str | None" = None  # an Ollama endpoint other than OLLAMA_URL
+
+
+#: The server's endpoint variables and their legacy aliases (remote_endpoint.rs:
+#: the EMBEDDER_ name wins and the pair is reported as a conflict).
+_ALIASES = {
+    "VELESDB_MEMORY_EMBEDDER_MODEL": "VELESDB_MEMORY_OLLAMA_MODEL",
+    "VELESDB_MEMORY_EMBEDDER_URL": "VELESDB_MEMORY_OLLAMA_URL",
+}
+
+
+def resolve_url(flag: "str | None", environ: "dict[str, str]") -> "str | None":
+    """--ollama-url, else the endpoint the server itself would read from this
+    environment; None for the default."""
+    url = flag or environ.get("VELESDB_MEMORY_EMBEDDER_URL") or environ.get("VELESDB_MEMORY_OLLAMA_URL")
+    url = (url or "").strip().rstrip("/")
+    return None if url in ("", OLLAMA_URL) else url
 
 
 HASH = Embedder("hash", "hash", HASH_DIMENSION)
@@ -149,6 +167,16 @@ def local_models(tags: dict) -> list[str]:
     return [str(m.get("name")) for m in tags.get("models", []) if isinstance(m, dict) and m.get("name")]
 
 
+def _exact(name: str) -> str:
+    """The name Ollama resolves the same way: `x:latest` is `x`, `x:335m` is not."""
+    return _bare(name) if name.endswith(":latest") else name
+
+
+def is_installed(name: str, local: "list[str]") -> bool:
+    exact = {_exact(m) for m in local}
+    return _exact(name) in exact
+
+
 def _looks_like_embedder(name: str) -> bool:
     bare = _bare(name).lower()
     return any(hint in bare for hint in _EMBEDDING_HINTS)
@@ -157,10 +185,9 @@ def _looks_like_embedder(name: str) -> bool:
 def rank_models(store: StoreProfile, local: "list[str]") -> list[Candidate]:
     """Catalog models, then local embedding models outside it; usable ones
     first, installed before not."""
-    installed = {_bare(m) for m in local}
-    candidates = [Candidate(m.name, m.dimension, m.size, m.note, m.name in installed,
+    candidates = [Candidate(m.name, m.dimension, m.size, m.note, is_installed(m.name, local),
                             compatibility(store, m.name, m.dimension)) for m in CATALOG]
-    extra = sorted({_bare(m) for m in local if _looks_like_embedder(m) and _catalog_model(m) is None})
+    extra = sorted({_exact(m) for m in local if _looks_like_embedder(m) and _catalog_model(m) is None})
     candidates += [Candidate(name, None, "local", "installed in Ollama", True,
                              compatibility(store, name, None)) for name in extra]
     order = {MATCH: 0, FRESH: 0, UNVERIFIED: 1, UNKNOWN: 1, MIGRATE: 2}
@@ -181,8 +208,15 @@ def default_embedder(store: StoreProfile) -> Embedder:
     return Embedder("ollama", store.model, store.dimension or (known.dimension if known else None))
 
 
-def select_embedder(backend: "str | None", model: "str | None", store: StoreProfile) -> Embedder:
-    """--embedder / --embedder-model, or the store's default."""
+def select_embedder(backend: "str | None", model: "str | None", store: StoreProfile,
+                    url: "str | None" = None) -> Embedder:
+    """--embedder / --embedder-model, or the store's default; `url` is the
+    Ollama endpoint (see resolve_url)."""
+    chosen = _selection(backend, model, store)
+    return chosen if chosen.backend == "hash" else replace(chosen, url=url)
+
+
+def _selection(backend: "str | None", model: "str | None", store: StoreProfile) -> Embedder:
     if backend is None and model is None:
         return default_embedder(store)
     if backend == "hash":
@@ -199,6 +233,7 @@ def describe(embedder: Embedder, store: StoreProfile) -> dict:
         "backend": embedder.backend,
         "model": embedder.model,
         "dimension": embedder.dimension,
+        "url": embedder.url,
         "verdict": compatibility(store, embedder.model, embedder.dimension),
         "store_model": store.model,
         "store_dimension": store.dimension,
@@ -207,7 +242,7 @@ def describe(embedder: Embedder, store: StoreProfile) -> dict:
 
 
 def from_plan(section: dict) -> Embedder:
-    return Embedder(section["backend"], section["model"], section.get("dimension"))
+    return Embedder(section["backend"], section["model"], section.get("dimension"), section.get("url"))
 
 
 def server_env(embedder: Embedder) -> dict[str, str]:
@@ -216,27 +251,44 @@ def server_env(embedder: Embedder) -> dict[str, str]:
     states what it was wired for."""
     if embedder.backend == "hash":
         return {"VELESDB_MEMORY_EMBEDDER": "hash"}
-    return {"VELESDB_MEMORY_EMBEDDER": embedder.backend, "VELESDB_MEMORY_EMBEDDER_MODEL": embedder.model}
+    env = {"VELESDB_MEMORY_EMBEDDER": embedder.backend, "VELESDB_MEMORY_EMBEDDER_MODEL": embedder.model}
+    if embedder.url:
+        env["VELESDB_MEMORY_EMBEDDER_URL"] = embedder.url
+    return env
+
+
+def owned_env_keys(env: "dict[str, str]") -> set[str]:
+    """The variables a wizard-written `env` replaces in an existing entry:
+    its own, their legacy aliases, and the model whatever the backend (a
+    stale model under `hash` is a trap for the next switch back). Every
+    other variable — an extractor, a TTL, a log filter — is the user's."""
+    owned = set(env) | {"VELESDB_MEMORY_EMBEDDER_MODEL"}
+    return owned | {_ALIASES[k] for k in owned if k in _ALIASES}
 
 
 def daemon_flags(embedder: Embedder, os_name: str) -> list[str]:
     """install-memory-daemon flags. Always explicit: the wizard runs the
     installer without a terminal, where an unset embedder falls back to hash."""
+    ollama = embedder.backend == "ollama"
     if os_name == "windows":
-        flags = ["-Embedder", embedder.backend]
-        return flags + (["-OllamaModel", embedder.model] if embedder.backend == "ollama" else [])
-    flags = [f"--embedder={embedder.backend}"]
-    return flags + ([f"--ollama-model={embedder.model}"] if embedder.backend == "ollama" else [])
+        flags = ["-Embedder", embedder.backend] + (["-OllamaModel", embedder.model] if ollama else [])
+        return flags + (["-OllamaUrl", embedder.url] if ollama and embedder.url else [])
+    flags = [f"--embedder={embedder.backend}"] + ([f"--ollama-model={embedder.model}"] if ollama else [])
+    return flags + ([f"--ollama-url={embedder.url}"] if ollama and embedder.url else [])
 
 
 def needs_migration(embedder: Embedder, store_dir: Path) -> bool:
     return compatibility(read_store(store_dir), embedder.model, embedder.dimension) == MIGRATE
 
 
-def migration_cmd(binary: str, store: Path) -> list[str]:
+def migration_cmd(binary: str, store: Path, stamp: "str | None" = None) -> list[str]:
     """Offline migration: rebuilt next to the store (same filesystem, the
-    final switch is a rename), then switched into place."""
-    destination = store.with_name(store.name + ".embedder-migration")
+    final switch is a rename), then switched into place. One destination per
+    migration: a completed one leaves its journal beside its destination,
+    and a rerun there is refused as already done. An interrupted run is
+    resumed by rerunning the exact command, which the failure status gives."""
+    stamp = stamp or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    destination = store.with_name(f"{store.name}.migration-{stamp}")
     return [binary, "migrate-embeddings", "--store", str(store), "--destination", str(destination)]
 
 
@@ -394,7 +446,7 @@ def _ensure_ollama(os_name: str, s: Session) -> "tuple[list[str] | None, list[st
 
 
 def _ensure_model(embedder: Embedder, local: "list[str]", s: Session) -> "tuple[Embedder | None, list[str]]":
-    if embedder.model not in {_bare(m) for m in local} | set(local):
+    if not is_installed(embedder.model, local):
         known = _catalog_model(embedder.model)
         size = f" ({known.size})" if known else ""
         if not s.agree(f"Download the embedding model {embedder.model}{size} with `ollama pull`?"):
@@ -445,6 +497,10 @@ def reconcile_store(embedder: Embedder, store_dir: Path, binary: "str | None", s
     cmd = migration_cmd(binary, store_dir)
     code = s.ops.run(cmd, server_env(embedder))
     if code != 0:
-        return False, [f"embedder: FAILED — `{' '.join(cmd)}` exited {code}; the store is unchanged or resumable"]
+        return False, [f"embedder: FAILED — migrate-embeddings exited {code}; the store is unchanged or resumable — "
+                       f"resume with the same environment ({_env_line(embedder)}): {' '.join(cmd)}"]
     return True, [f"embedder: store migrated to {embedder.model}"]
 
+
+def _env_line(embedder: Embedder) -> str:
+    return " ".join(f"{k}={v}" for k, v in server_env(embedder).items())

@@ -36,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ollama embedding models). With consent the wizard installs Ollama, pulls
   the model, probes its real dimension, and runs `migrate-embeddings` on a
   store recorded for another model. Stdio entries and the daemon installer
-  now name their embedder explicitly.
+  now name their embedder explicitly; a rewired entry keeps the variables
+  and arguments the wizard does not own, and `--ollama-url` names a
+  non-default Ollama endpoint.
 
 - **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
   config file (`--config`, `VELESDB_CONFIG`, `./velesdb.toml`) but had no way

@@ -348,6 +348,88 @@ class EmbedderStepTests(unittest.TestCase):
                       "--store", str(self.home / "s"), "--no-cli-scan"])
 
 
+class StdioRewireKeepsUserSettingsTests(unittest.TestCase):
+    """Rewiring a stdio entry for a new embedder keeps what the user set."""
+
+    USER_ENV = {"VELESDB_MEMORY_EXTRACTOR": "ollama", "VELESDB_MEMORY_EXTRACTOR_MODEL": "qwen3",
+                "VELESDB_MEMORY_OLLAMA_MODEL": "all-minilm", "VELESDB_MEMORY_PATH": "/old/store"}
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.bin = self.home / "bin" / "velesdb-memory"
+        self.bin.parent.mkdir()
+        self.bin.write_bytes(b"bin")
+        self.env = mod.server_env(self.home / "store", mod.wizard_embedder.Embedder("ollama", "bge-m3", 1024))
+
+    def expected_env(self) -> dict:
+        return {"VELESDB_MEMORY_EXTRACTOR": "ollama", "VELESDB_MEMORY_EXTRACTOR_MODEL": "qwen3", **self.env}
+
+    def wire(self, kind: str, config: Path, **extra) -> str:
+        harness = {"name": kind, "kind": kind, "config": str(config), "velesdb_memory_entry": "stdio",
+                   "installed": True, **extra}
+        return mod.wire_harness(harness, "stdio", str(self.bin), 18090, self.env, dry=False)
+
+    def test_json_entry_keeps_the_extractor_and_args_and_drops_the_legacy_model_alias(self):
+        cfg = self.home / "mcp.json"
+        cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {
+            "command": "/old/velesdb-memory", "args": ["--quiet"], "env": self.USER_ENV}}}), encoding="utf-8")
+        self.wire("mcp-json", cfg)
+        entry = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
+        self.assertEqual(entry["env"], self.expected_env())
+        self.assertEqual(entry["args"], ["--quiet"])
+        self.assertEqual(entry["command"], str(self.bin))
+
+    def test_an_http_entry_switched_to_stdio_carries_nothing_over(self):
+        cfg = self.home / "mcp.json"
+        cfg.write_text(json.dumps({"mcpServers": {"velesdb-memory": {
+            "url": "https://127.0.0.1:18090/mcp", "type": "http"}}}), encoding="utf-8")
+        self.wire("mcp-json", cfg)
+        entry = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
+        self.assertEqual(entry, {"command": str(self.bin), "env": self.env})
+
+    def test_zed_and_opencode_entries_keep_the_users_variables(self):
+        zed = self.home / "zed.json"
+        zed.write_text(json.dumps({"context_servers": {"velesdb-memory": {"command": {
+            "path": "/old", "args": [], "env": self.USER_ENV}}}}), encoding="utf-8")
+        self.wire("zed-context-servers", zed)
+        self.assertEqual(json.loads(zed.read_text())["context_servers"]["velesdb-memory"]["command"]["env"],
+                         self.expected_env())
+        oc = self.home / "opencode.json"
+        oc.write_text(json.dumps({"mcp": {"velesdb-memory": {"type": "local", "command": ["/old", "--quiet"],
+                                                               "environment": self.USER_ENV}}}), encoding="utf-8")
+        self.wire("opencode-mcp", oc)
+        entry = json.loads(oc.read_text())["mcp"]["velesdb-memory"]
+        self.assertEqual(entry["environment"], self.expected_env())
+        self.assertEqual(entry["command"], [str(self.bin), "--quiet"])
+
+    @unittest.skipIf(sys.version_info < (3, 11), "tomllib reads the existing entry")
+    def test_codex_toml_keeps_the_users_variables(self):
+        import tomllib
+        cfg = self.home / "config.toml"
+        cfg.write_text('[mcp_servers.velesdb-memory]\ncommand = "/old"\nargs = ["--quiet"]\n'
+                       'env = { VELESDB_MEMORY_EXTRACTOR = "ollama", VELESDB_MEMORY_EXTRACTOR_MODEL = "qwen3", '
+                       'VELESDB_MEMORY_OLLAMA_MODEL = "all-minilm" }\n', encoding="utf-8")
+        self.wire("codex-toml", cfg)
+        entry = tomllib.loads(cfg.read_text(encoding="utf-8"))["mcp_servers"]["velesdb-memory"]
+        self.assertEqual(entry["env"], self.expected_env())
+        self.assertEqual(entry["args"], ["--quiet"])
+
+    def test_claude_code_is_re_added_with_the_variables_of_its_user_scope_entry(self):
+        claude_json = self.home / ".claude.json"
+        claude_json.write_text(json.dumps({"mcpServers": {"velesdb-memory": {
+            "type": "stdio", "command": "/old", "args": [], "env": self.USER_ENV}}}), encoding="utf-8")
+        ok = unittest.mock.Mock(returncode=0, stderr="")
+        with unittest.mock.patch.object(mod.shutil, "which", return_value="/usr/bin/claude"), \
+             unittest.mock.patch.object(mod, "_run_cli", return_value=ok) as run:
+            self.wire("claude-cli", self.home / "unused", claude_json=str(claude_json))
+        add = run.call_args_list[-1].args[0]
+        pairs = dict(add[i + 1].split("=", 1) for i, a in enumerate(add) if a == "--env")
+        self.assertEqual(pairs, self.expected_env())
+        self.assertEqual(add[-2:], ["--", str(self.bin)])
+
+
 class PackagedBuildTests(unittest.TestCase):
     """What a PyInstaller build reads must exist at its repo-relative path."""
 
