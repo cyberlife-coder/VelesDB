@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -88,10 +89,18 @@ _ALIASES = {
 
 def resolve_url(flag: "str | None", environ: "dict[str, str]") -> "str | None":
     """--ollama-url, else the endpoint the server itself would read from this
-    environment; None for the default."""
+    environment; None for the default.
+
+    Raises ValueError for anything but an http(s) URL with a host: the wizard
+    fetches it and writes it into every harness config and the daemon."""
     url = flag or environ.get("VELESDB_MEMORY_EMBEDDER_URL") or environ.get("VELESDB_MEMORY_OLLAMA_URL")
     url = (url or "").strip().rstrip("/")
-    return None if url in ("", OLLAMA_URL) else url
+    if url in ("", OLLAMA_URL):
+        return None
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(f"the Ollama endpoint must be an http(s) URL with a host, not {url!r}")
+    return url
 
 
 HASH = Embedder("hash", "hash", HASH_DIMENSION)
@@ -415,16 +424,34 @@ def install_ollama(os_name: str, s: Session) -> str:
     """Install Ollama with the user's consent. Returns a status."""
     command = ollama_install_command(os_name, s.ops.has)
     if command is None and os_name == "linux":
-        script = s.ops.fetch_installer()
-        if script is None:
-            return f"ollama: FAILED — could not download {LINUX_INSTALL_SCRIPT}"
-        digest = hashlib.sha256(script.read_bytes()).hexdigest()
-        s.say(f"Ollama's installer, downloaded to {script} (sha256 {digest[:16]}…) — read it before agreeing.")
-        command = ["sh", str(script)]
+        return _run_downloaded_installer(s)
     if command is None:
         return "ollama: FAILED — not installed and no package manager found; see https://ollama.com/download"
     if not s.agree(f"Install Ollama with `{' '.join(command)}`?"):
         return "ollama: REFUSED — not installed (declined; --yes to accept, --embedder=hash to stay offline)"
+    return _installed_by(command, s)
+
+
+def _run_downloaded_installer(s: Session) -> str:
+    """Ollama's Linux install script. Unlike a package manager, nothing
+    verifies what was downloaded, so `--yes` never runs it: only a person's
+    explicit answer does. The downloaded copy is removed either way."""
+    script = s.ops.fetch_installer()
+    if script is None:
+        return f"ollama: FAILED — could not download {LINUX_INSTALL_SCRIPT}"
+    try:
+        digest = hashlib.sha256(script.read_bytes()).hexdigest()
+        s.say(f"Ollama's installer, downloaded to {script} (sha256 {digest[:16]}…) — read it before agreeing.")
+        command = ["sh", str(script)]
+        if not s.confirm(f"Install Ollama with `{' '.join(command)}`?"):
+            return (f"ollama: REFUSED — a downloaded installer needs an explicit answer, never --yes; "
+                    f"review and run {LINUX_INSTALL_SCRIPT} yourself, or --embedder=hash to stay offline")
+        return _installed_by(command, s)
+    finally:
+        script.unlink(missing_ok=True)
+
+
+def _installed_by(command: "list[str]", s: Session) -> str:
     if s.ops.run(command) != 0:
         return f"ollama: FAILED — `{' '.join(command)}` did not succeed"
     return "ollama: installed"
