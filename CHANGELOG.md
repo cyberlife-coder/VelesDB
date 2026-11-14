@@ -119,6 +119,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Agent memory: forged 64-bit lengths rejected on 32-bit targets**
+  (2026-11-14). `validate_binary_header` (TTL and temporal-index state) and
+  the snapshot `read_section` cast an untrusted `u64` to `usize` with `as`
+  before bounding it, so on wasm32 a count of `(1 << 32) + n` truncated to
+  `n` and a header that lied about its length was accepted. Both now use
+  `usize::try_from` and reject the value; 64-bit behaviour is unchanged.
+
 - **VelesQL: compound-query `OFFSET` windows the combined result on the
   `Database` path** (2026-11-13). `Database::execute_query` — behind the
   server's `/query` and the CLI REPL — applied a compound query's `OFFSET` to
