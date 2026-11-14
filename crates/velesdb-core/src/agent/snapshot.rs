@@ -234,7 +234,10 @@ fn read_section(
     payload_end: usize,
     label: &str,
 ) -> Result<Vec<u8>, SnapshotError> {
-    let section_len = read_u64(&data[*offset..])? as usize;
+    let truncated = || SnapshotError::CorruptedData(format!("{label} data truncated"));
+    // Checked, not `as`: on a 32-bit target (wasm32) `(1 << 32) + n` would
+    // truncate to `n` and pass the bound below with the wrong length.
+    let section_len = usize::try_from(read_u64(&data[*offset..])?).map_err(|_| truncated())?;
     *offset += 8;
     // Checked: a forged/corrupt `section_len` near `usize::MAX` must not wrap
     // `*offset + section_len` (which could spuriously pass the bound and then
@@ -242,7 +245,7 @@ fn read_section(
     let end = offset
         .checked_add(section_len)
         .filter(|end| *end <= payload_end)
-        .ok_or_else(|| SnapshotError::CorruptedData(format!("{label} data truncated")))?;
+        .ok_or_else(truncated)?;
     let section = data[*offset..end].to_vec();
     *offset = end;
     Ok(section)
