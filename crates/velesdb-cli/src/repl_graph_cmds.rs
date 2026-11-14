@@ -350,15 +350,9 @@ fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
         Err(r) => return r,
     };
 
-    let (payload_parts, vector_parts) = split_vector_flag(&parts[4..]);
-    let payload: serde_json::Value = match serde_json::from_str(&payload_parts.join(" ")) {
-        Ok(v) => v,
-        Err(e) => return CommandResult::Error(format!("Invalid JSON: {e}")),
-    };
-    let embedding = match vector_parts.map(parse_vector) {
-        None => None,
-        Some(Ok(vector)) => Some(vector),
-        Some(Err(message)) => return CommandResult::Error(message),
+    let (payload, embedding) = match parse_payload_and_vector(&parts[4..].join(" ")) {
+        Ok(parsed) => parsed,
+        Err(message) => return CommandResult::Error(message),
     };
 
     // Same core call as `velesdb graph store-payload [--vector]`.
@@ -377,21 +371,39 @@ fn cmd_graph_store_payload(db: &Database, parts: &[&str]) -> CommandResult {
     CommandResult::Continue
 }
 
-/// Splits `<json…> [--vector <json…>]`: the REPL tokenizes on whitespace, so
-/// both the payload and the vector may arrive in several pieces.
-fn split_vector_flag<'a>(args: &'a [&'a str]) -> (&'a [&'a str], Option<&'a [&'a str]>) {
-    match args.iter().position(|arg| *arg == "--vector") {
-        Some(flag) => (&args[..flag], Some(&args[flag + 1..])),
-        None => (args, None),
+/// Parses `<json_payload> [--vector <json_array>]`.
+///
+/// The REPL tokenizes on whitespace and this re-joins the tokens, so a
+/// `--vector` word may sit inside a JSON string of the payload. The payload's
+/// end is therefore found by parsing it, and only the text after it can hold
+/// the option.
+fn parse_payload_and_vector(args: &str) -> Result<(serde_json::Value, Option<Vec<f32>>), String> {
+    let mut values = serde_json::Deserializer::from_str(args).into_iter::<serde_json::Value>();
+    let payload = match values.next() {
+        Some(Ok(payload)) => payload,
+        Some(Err(e)) => return Err(format!("Invalid JSON: {e}")),
+        None => return Err("Invalid JSON: the payload is missing".to_string()),
+    };
+    let rest = args[values.byte_offset()..].trim();
+    if rest.is_empty() {
+        return Ok((payload, None));
+    }
+    match rest.strip_prefix("--vector") {
+        Some(value) if value.is_empty() || value.starts_with(char::is_whitespace) => {
+            Ok((payload, Some(parse_vector(value.trim())?)))
+        }
+        _ => Err(format!(
+            "Unexpected text after the JSON payload: {rest} (expected --vector <json_array>)"
+        )),
     }
 }
 
 /// Parses the `--vector` value, a JSON array of numbers.
-fn parse_vector(parts: &[&str]) -> Result<Vec<f32>, String> {
-    if parts.is_empty() {
+fn parse_vector(value: &str) -> Result<Vec<f32>, String> {
+    if value.is_empty() {
         return Err("--vector needs a JSON array, e.g. --vector [0.1,0.2,0.3]".to_string());
     }
-    serde_json::from_str(&parts.join(" ")).map_err(|e| format!("Invalid vector JSON: {e}"))
+    serde_json::from_str(value).map_err(|e| format!("Invalid vector JSON: {e}"))
 }
 
 fn cmd_graph_get_payload(db: &Database, parts: &[&str]) -> CommandResult {
