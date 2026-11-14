@@ -22,7 +22,7 @@ pub struct SemanticResult {
 /// Semantic Memory for AI agents in WASM.
 ///
 /// Stores knowledge facts as vectors with similarity search. Fact content text
-/// is kept in the underlying [`VectorStore`] payload (mirroring the core
+/// is kept in the underlying [`VectorStore`](crate::VectorStore) payload (mirroring the core
 /// `SemanticMemory`) rather than in a separate map, so the payload is the single
 /// source of truth for content while the store is live.
 ///

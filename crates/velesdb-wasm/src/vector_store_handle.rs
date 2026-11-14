@@ -31,7 +31,7 @@ use crate::vector_store::StoreState;
 ///
 /// Every mode keeps the f32 vectors and scores them exactly, returning the
 /// same results as a `velesdb-core` collection with that mode; the mode saves
-/// no memory in the browser (see [`StorageMode`]).
+/// no memory in the browser (see [`StorageMode`](crate::StorageMode)).
 ///
 /// A handle over shared state; see the module docs.
 #[wasm_bindgen]
@@ -233,7 +233,7 @@ impl VectorStore {
     /// the core `sparse_search` contract and returns an **error** when the
     /// store has no sparse index, so callers can distinguish "index missing"
     /// from "no matches". Scoring is delegated unchanged to the
-    /// recall-verified [`sparse::SparseIndex`] kernel.
+    /// recall-verified [`SparseIndex`](crate::sparse::SparseIndex) kernel.
     ///
     /// Returns a JSON array of `{doc_id, score}` objects sorted by score
     /// descending, truncated to `k`.
@@ -325,7 +325,7 @@ impl VectorStore {
     }
 
     /// Returns memory usage estimate in bytes: ids plus the f32 vectors,
-    /// which every storage mode keeps (see [`StorageMode`]).
+    /// which every storage mode keeps (see [`StorageMode`](crate::StorageMode)).
     #[wasm_bindgen]
     #[must_use]
     pub fn memory_usage(&self) -> usize {
