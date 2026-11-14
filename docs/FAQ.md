@@ -280,8 +280,9 @@ cargo build -p velesdb-wasm --no-default-features --target wasm32-unknown-unknow
   introspection (SHOW COLLECTIONS, DESCRIBE, EXPLAIN), and graph statements
   (INSERT NODE/EDGE, SELECT EDGES). No REST server required.
 - **Graph queries** via the in-memory `GraphStore` (nodes, edges, traversal):
-  graph statements (`INSERT NODE/EDGE`, `SELECT EDGES`) and `MATCH` patterns up
-  to **2 hops** run against a per-collection in-memory graph created lazily.
+  graph statements (`INSERT NODE/EDGE`, `SELECT EDGES`) and single-pattern,
+  fixed-length `MATCH` (any number of hops) run against a per-collection
+  in-memory graph created lazily.
   (`CREATE GRAPH COLLECTION` DDL is rejected — use `GraphStore` directly.)
 - All distance metrics (cosine, euclidean, dot product, hamming, jaccard).
 - f16/bf16 half-precision vector storage (50% memory reduction).
@@ -295,7 +296,8 @@ cargo build -p velesdb-wasm --no-default-features --target wasm32-unknown-unknow
   not write-ahead durability.
 - HNSW indexing — `CREATE INDEX` is accepted as a no-op for API parity;
   search stays brute-force.
-- `MATCH` patterns beyond 2 hops (rejected with a descriptive error).
+- Multi-pattern `MATCH` and variable-length relationships (`[*1..3]`),
+  rejected with a descriptive error.
 - `TRAIN QUANTIZER` / PQ training (requires the `persistence`/`rayon` stack).
 - Multi-threaded indexing (rayon) and streaming ingestion (tokio).
 

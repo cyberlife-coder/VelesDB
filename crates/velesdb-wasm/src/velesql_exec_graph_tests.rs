@@ -326,16 +326,23 @@ fn test_select_edges_on_missing_graph_errors() {
 }
 
 #[test]
-fn test_match_beyond_2_hops_rejected() {
+fn test_match_beyond_2_hops_executes_through_the_public_entry_point() {
+    // Was rejected ("more than 2 hops"). The seed has two KNOWS edges, so a
+    // 3-hop chain is a valid query with no match — not an error.
     let mut db = DatabaseInner::new();
     seed_graph(&mut db);
-    let err = execute(
+    let result = execute(
         &mut db,
-        "MATCH (a:P)-[:R]->(b:P)-[:R]->(c:P)-[:R]->(d:P) RETURN a LIMIT 10",
+        "MATCH (a:Person)-[:KNOWS]->(b)-[:KNOWS]->(c)-[:KNOWS]->(d) RETURN a LIMIT 10",
         None,
+    )
+    .expect("test: a 3-hop MATCH executes");
+    assert_eq!(result.kind(), "rows");
+    assert_eq!(
+        result.row_count(),
+        0,
+        "no 3-hop KNOWS chain exists in the seed"
     );
-    assert!(err.is_err());
-    assert!(err.expect_err("test: err").contains("more than 2 hops"));
 }
 
 #[test]
