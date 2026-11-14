@@ -114,6 +114,23 @@ thing whenever the compiled view is not enough.
 
 ## Installation
 
+The guided installer installs the binary, wires every detected harness
+(single-client stdio, or the shared daemon when the store is locked) and adds
+the skills and agent hooks:
+
+```bash
+# Linux · macOS
+curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.ps1 | iex
+```
+
+It needs a `velesdb-memory` release that publishes the wizard (the release
+workflow attaches it from now on). With a Rust toolchain, the binary alone:
+
 ```bash
 cargo install velesdb-memory
 ```

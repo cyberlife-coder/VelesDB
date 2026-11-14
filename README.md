@@ -46,7 +46,19 @@ Query: "tech + music"
 
 An embedding model determines the vector dimension, while your similarity semantics determine the metric. Both are fixed when a collection is created; to change either, create a new collection and re-index your documents.
 
-**Give your agent a persistent memory — the guided installer:**
+**Give your agent a persistent memory — the guided installer, one line per OS:**
+
+```bash
+# Linux · macOS
+curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.ps1 | iex
+```
+
+They work from the first `velesdb-memory-v*` release that publishes the wizard; until then they say so, and the checkout commands below do the same job. Each one downloads the newest `velesdb-memory-v*` release's wizard for your machine, checks its `.sha256` sidecar, and runs it; nothing is left behind but what the wizard installs. Pass wizard flags with `| sh -s -- --dry-run` (Windows: `& ([scriptblock]::Create((irm …/install-wizard.ps1))) --dry-run`). From a checkout, the same wizard runs with Python 3.9+:
 
 ```bash
 python3 scripts/velesdb_install_wizard.py            # interactive: boxed plan + menu [1] apply [2] JSON [3] quit
@@ -56,11 +68,13 @@ python3 scripts/velesdb_install_wizard.py --json     # machine-readable plan
 
 The wizard detects your platform (macOS / Linux / Windows) and which harnesses are installed (Claude Code, Codex, Cursor, Cline, Zed, OpenCode, Claude Desktop, Windsurf, Devin, Vibe), checks whether the memory store is already locked by a running process (`VELES-031`), and picks single-client stdio or one shared local daemon accordingly. A missing `velesdb-memory` is installed from the latest `velesdb-memory-v*` release archive (sha256-verified; `cargo install` as fallback). In daemon mode it runs `scripts/install-memory-daemon.sh|.ps1` (launchd on macOS, a Scheduled Task on Windows — on Linux no service is installed yet, so the health gate below refuses daemon mode) and only rewires your harnesses once `https://127.0.0.1:18090/health` answers. It then installs the skills and the [agent hooks](integrations/agent-hooks/README.md) — working-context load/save, recall-before-edit and the context compiler for oversized tool results — for every harness that has them; the hooks need `bash` and `jq`, and without them the wizard installs none and says what to add. It also settles the embedding model, whose dimension is fixed by the store: by default the one the store records (rewiring never switches a store back to `hash`), or one you pick — menu `[4]`, or `--embedder ollama --embedder-model bge-m3` (also `all-minilm` 384d, `nomic-embed-text` 768d, `mxbai-embed-large` 1024d, or any local Ollama embedding model). It offers to install Ollama and pull the model, probes the model's real dimension, and re-embeds an incompatible store with `velesdb-memory migrate-embeddings` only with your consent (`--yes` under `--apply`). Every config write is backed up and atomic; `--apply` exits non-zero if any step fails.
 
-**No Python on the target machine?** `python3 scripts/package_wizard.py --apply` builds a self-contained installer for the machine it runs on (PyInstaller does not cross-compile) — `velesdb-install-wizard-<target>.exe` (Windows), `.tar.gz` + `.dmg` with a double-click Terminal launcher (macOS), `.tar.gz` (Linux) — each with a `.sha256` sidecar and an embedded **WiScale** publisher signature. Verify one before running it:
+**Release assets.** Every `velesdb-memory-v*` release built by the current release workflow carries the wizard as a self-contained build — no Python needed: `velesdb-install-wizard-x86_64-pc-windows-msvc.exe` (Windows x64, also run by Windows on ARM), `…-aarch64-apple-darwin.tar.gz` and `.dmg` with a double-click Terminal launcher (Apple Silicon), `…-x86_64-unknown-linux-gnu.tar.gz` and `…-aarch64-unknown-linux-gnu.tar.gz` (glibc 2.35+), and `velesdb-install-wizard-src.tar.gz` for everything else, Intel Macs included (Python 3.9+). Each asset has a `.sha256` sidecar and an embedded **WiScale** publisher signature; to check a download by hand:
 
 ```bash
 python3 scripts/validate_package.py velesdb-install-wizard-x86_64-unknown-linux-gnu.tar.gz   # sha256 sidecar + embedded WiScale signature
 ```
+
+The checksum proves the transfer, not the publisher: the sidecar comes from the same release. To build one yourself, `python3 scripts/package_wizard.py --apply` packages the wizard for the machine it runs on (`--source` for the source bundle).
 
 Prefer the manual commands? `cargo install velesdb-memory`, then `claude mcp add velesdb-memory -- ~/.cargo/bin/velesdb-memory`, and install the skills from a verified release with the repo script:
 
@@ -237,7 +251,7 @@ No figure here is an estimate from a slide; each links to the log or script in t
 |---|---|---|
 | Try it in one file | [`velesdb`](https://pypi.org/project/velesdb/) (Python 3.9+) | Fastest onboarding path |
 | Embed the engine | [`velesdb-core`](https://crates.io/crates/velesdb-core) (Rust) | The engine itself |
-| Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; `.mcpb` bundles on the [MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) |
+| Give my agent memory | [`velesdb-memory`](crates/velesdb-memory) | MCP server + context compiler, any MCP client; [one-line guided install](#getting-started-in-60-seconds); `.mcpb` bundles on the [MCP Registry](https://registry.modelcontextprotocol.io/?q=velesdb-memory) |
 | Call it from Node | [`@wiscale/velesdb-memory-node`](https://www.npmjs.com/package/@wiscale/velesdb-memory-node) | Memory wedge ([full engine via server + TS SDK](crates/velesdb-node/README.md#need-the-full-engine)) |
 | Run it in a browser | [`@wiscale/velesdb-sdk`](https://www.npmjs.com/package/@wiscale/velesdb-sdk) | WASM, ~710 KB gzipped, fully client-side |
 | Serve it over HTTP | [`velesdb-server`](https://crates.io/crates/velesdb-server) | 54 REST endpoints — [API reference](docs/reference/api-reference.md) · [OpenAPI](docs/openapi.yaml) · [server security](docs/guides/SERVER_SECURITY.md) |
