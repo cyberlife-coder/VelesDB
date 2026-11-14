@@ -143,8 +143,8 @@ jobs:
   # schedules the whole workflow. This job is where a docs-only PR pays ~1
   # minute instead of a full build: it diffs base..head and reports
   # `relevant=false` when every changed file is docs-only (a root-level
-  # *.md/*.txt, or anything under docs/ except docs/reference/, which the
-  # push trigger treats as CI-relevant). Heavy jobs `needs:` it and AND its
+  # *.md/*.txt, any AGENTS.md, or anything under docs/ except docs/reference/,
+  # which the push trigger treats as CI-relevant). Heavy jobs `needs:` it and AND its
   # output into every step-level `if:`, then no-op in success — never via a
   # job-level `if:`, which would report `skipped` and break the ci-success
   # chain that demands `success` (#2232). Fail-safe direction: any diff
@@ -203,6 +203,7 @@ jobs:
             case "$f" in
               docs/reference/*) relevant=true ;;   # push paths treat these as CI-relevant
               docs/*) ;;                            # other docs are docs-only
+              AGENTS.md|*/AGENTS.md) ;;             # agent instructions are never compiled — docs-only anywhere
               *.md|*.txt)
                 # Only ROOT-level md/txt are docs-only; a README inside
                 # crates/, scripts/, sdks/... is package content — relevant.
