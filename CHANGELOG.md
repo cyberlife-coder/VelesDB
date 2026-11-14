@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One-line install of the agent-memory wizard, from the release assets.**
+  `release-memory.yml` now builds the packaged install wizard on one runner
+  per target (Linux x86_64 and aarch64 on Ubuntu 22.04, Apple Silicon with a
+  `.dmg`, Windows x64), smoke-tests and verifies each build, and attaches it
+  with a `.sha256` sidecar to the `velesdb-memory-v*` release, together with
+  a source bundle (`velesdb-install-wizard-src.tar.gz`) for Intel macOS and
+  other platforms (Python 3.9+). `scripts/install-wizard.sh`
+  (`curl … | sh`) and `scripts/install-wizard.ps1` (`irm … | iex`) pick the
+  newest release that carries a wizard for the machine, refuse a download
+  whose checksum does not match, and run it. `validate_package.py` also
+  verifies the source bundle.
+
 - **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
   config file (`--config`, `VELESDB_CONFIG`, `./velesdb.toml`) but had no way
   to say which one it read or what it applied. The new commands resolve the

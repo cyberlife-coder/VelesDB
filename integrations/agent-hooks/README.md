@@ -106,6 +106,28 @@ any ❌ above): Cascade hooks reference,
 there); Codex hooks reference, <https://learn.chatgpt.com/docs/hooks>
 (`developers.openai.com/codex/hooks` redirects there).
 
+## Install with the guided installer
+
+The [install wizard](../../docs/guides/MCP_SERVER_SETUP.md#install) installs
+these hooks for every detected host that has them (Claude Code, Codex,
+Windsurf, Devin), with the `velesdb-memory` binary and the skills, after
+checking `bash` and `jq`:
+
+```bash
+# Linux · macOS
+curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.ps1 | iex
+```
+
+The packaged wizard bundles this directory, so no checkout is needed; it
+calls the same `scripts/sync-agent-hooks.py --install --client <host>` the
+sections below describe. It needs a velesdb-memory release that
+publishes the wizard (the release workflow attaches it from now on).
+
 ## Install — Claude Code
 
 Both variants need `bash` and `jq` on `PATH`. The installer refuses to create

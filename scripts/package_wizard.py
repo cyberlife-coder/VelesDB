@@ -34,6 +34,7 @@ import argparse
 import ast
 import hashlib
 import importlib.util
+import io
 import json
 import platform
 import re
@@ -52,6 +53,10 @@ META_MODULE = "_wizard_build_meta"
 PUBLISHER = "WiScale"
 SIGNATURE_PREFIX = "WISCALE-PKG-SIG v1"
 COMMAND_LAUNCHER = "VelesDB Install Wizard.command"
+#: The cross-platform asset: the wizard as Python source, for a platform no
+#: native build covers (PyInstaller cannot cross-compile, and the release
+#: matrix has no Intel macOS runner). Runs with any python3 >= 3.9.
+SOURCE_ASSET = f"{BINARY}-src.tar.gz"
 
 #: (os, arch) -> target triple of the binary a native build produces.
 _TARGETS: dict[tuple[str, str], str] = {
@@ -146,6 +151,67 @@ def _top_level_imports(script: Path) -> set[str]:
     return names
 
 
+def wizard_modules(entry: Path = WIZARD) -> list[Path]:
+    """The wizard and every sibling module it imports, transitively — derived
+    from the imports, so a new module cannot be left out of the bundle."""
+    found, pending = [entry], [entry]
+    while pending:
+        for name in sorted(_top_level_imports(pending.pop())):
+            module = entry.parent / f"{name}.py"
+            if module.is_file() and module not in found:
+                found.append(module)
+                pending.append(module)
+    return found
+
+
+def source_members() -> list[tuple[Path, str]]:
+    """(file, repo-relative name) for the source bundle: the wizard modules
+    and every bundled resource, directories expanded (bytecode caches out)."""
+    members = [(path, path.relative_to(REPO_ROOT).as_posix()) for path in wizard_modules()]
+    for source, dest in bundled_data():
+        if source.is_file():
+            members.append((source, f"{dest}/{source.name}"))
+            continue
+        members += [(f, (Path(dest) / f.relative_to(source)).as_posix())
+                    for f in sorted(source.rglob("*")) if f.is_file() and "__pycache__" not in f.parts]
+    return members
+
+
+def build_source_bundle(version: str, out: Path) -> Path:
+    """`velesdb-install-wizard-src.tar.gz`: everything under one
+    `velesdb-install-wizard/` directory laid out as in the repository, plus
+    the signed build meta module beside the wizard."""
+    asset = out / SOURCE_ASSET
+    meta = build_meta_source(version).encode("utf-8")
+    with tarfile.open(asset, "w:gz") as tar:
+        for source, name in source_members():
+            tar.add(source, arcname=f"{BINARY}/{name}")
+        info = tarfile.TarInfo(f"{BINARY}/scripts/{META_MODULE}.py")
+        info.size, info.mode = len(meta), 0o644
+        tar.addfile(info, io.BytesIO(meta))
+    return asset
+
+
+def smoke_source_bundle(asset: Path, version: str) -> "str | None":
+    """Extract the bundle and run its wizard's `--version` with this Python,
+    as install-wizard.sh runs it; None when it reports this build, else what went wrong. The
+    bundle checks itself as it is built, so no workflow has to run a script
+    that exists only inside it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(asset) as tar:
+            tar.extractall(tmp, filter="data")
+        wizard = Path(tmp) / BINARY / "scripts" / "velesdb_install_wizard.py"
+        try:
+            run = subprocess.run([sys.executable, str(wizard), "--version"], capture_output=True,
+                                 text=True, timeout=120, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"the bundled wizard did not start: {exc}"
+    expected = f"{BINARY} {version}"
+    if run.returncode != 0 or expected not in run.stdout or SIGNATURE_PREFIX not in run.stdout:
+        return f"the bundled wizard's --version printed {run.stdout.strip()!r} (exit {run.returncode}), not {expected!r}"
+    return None
+
+
 def build_meta_source(version: str) -> str:
     """Generated module compiled into the binary: the discreet signature."""
     return (
@@ -156,34 +222,34 @@ def build_meta_source(version: str) -> str:
 
 
 def windows_version_resource(version: str) -> str:
-    """RC file compiled into the .exe — the visible 'signature' in Explorer
-    properties (CompanyName / LegalCopyright), discreet but attributable."""
-    parts = re.findall(r"\d+", version)[:4]
-    filever = ",".join(parts + ["0"] * (4 - len(parts)))
+    """The --version-file compiled into the .exe — the visible 'signature' in
+    Explorer properties (CompanyName / LegalCopyright), discreet but
+    attributable. PyInstaller reads it with `eval()`: it is the Python
+    `VSVersionInfo` serialization (PyInstaller/utils/win32/versioninfo.py),
+    not RC syntax."""
+    parts = [int(p) for p in re.findall(r"\d+", version)[:4]]
+    filever = tuple(parts + [0] * (4 - len(parts)))
+    strings = [
+        ("CompanyName", PUBLISHER),
+        ("ProductName", "VelesDB Install Wizard"),
+        ("FileDescription", "velesdb-memory installer wizard"),
+        ("FileVersion", version),
+        ("LegalCopyright", f"(c) {PUBLISHER}"),
+        ("InternalName", BINARY),
+        ("OriginalFilename", f"{BINARY}.exe"),
+        ("ProductVersion", version),
+    ]
+    structs = ",\n          ".join(f"StringStruct({k!r}, {v!r})" for k, v in strings)
     return f"""VSVersionInfo(
-  VERSIONINFO,
-  FILEVERSION {filever},
-  PRODUCTVERSION {filever},
-  FILEOS 0x40004,
-  FILETYPE 0x1,
-  BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-      BLOCK "040904b0"
-      BEGIN
-        VALUE "CompanyName", "{PUBLISHER}"
-        VALUE "ProductName", "VelesDB Install Wizard"
-        VALUE "FileDescription", "velesdb-memory installer wizard"
-        VALUE "LegalCopyright", "(c) {PUBLISHER}"
-        VALUE "InternalName", "{BINARY}"
-        VALUE "OriginalFilename", "{BINARY}.exe"
-      END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-      VALUE "Translation", 0x409, 1200
-    END
-  END
+  ffi=FixedFileInfo(filevers={filever}, prodvers={filever}, mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+          {structs}])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
 )
 """
 
@@ -313,7 +379,20 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--version", default=None, help="default: crates/velesdb-memory version")
     parser.add_argument("--out", default=str(REPO_ROOT / "dist"))
     parser.add_argument("--apply", action="store_true", help="really run PyInstaller (+hdiutil on macOS)")
+    parser.add_argument("--source", action="store_true",
+                        help=f"build {SOURCE_ASSET} instead (no PyInstaller, any machine)")
     args = parser.parse_args(argv)
+    if args.source:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        version = args.version or memory_version()
+        asset = build_source_bundle(version, out)
+        problem = smoke_source_bundle(asset, version)
+        if problem:
+            print(f"source bundle REFUSED: {problem}", file=sys.stderr)
+            return 1
+        print(f"asset: {asset} ({write_sidecar(asset).name}, runs)")
+        return 0
 
     target = args.target or detect_target()
     version = args.version or memory_version()
