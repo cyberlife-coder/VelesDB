@@ -347,6 +347,12 @@ class EmbedderStepTests(unittest.TestCase):
             mod.main(["--embedder", "hash", "--embedder-model", "bge-m3", "--dry-run", "--home", str(self.home),
                       "--store", str(self.home / "s"), "--no-cli-scan"])
 
+    def test_an_ollama_url_that_is_not_http_is_a_usage_error(self):
+        with self.assertRaises(SystemExit) as cm:
+            mod.main(["--ollama-url", "file:///etc/passwd", "--dry-run", "--home", str(self.home),
+                      "--store", str(self.home / "s"), "--no-cli-scan"])
+        self.assertEqual(cm.exception.code, 2)
+
 
 class StdioRewireKeepsUserSettingsTests(unittest.TestCase):
     """Rewiring a stdio entry for a new embedder keeps what the user set."""

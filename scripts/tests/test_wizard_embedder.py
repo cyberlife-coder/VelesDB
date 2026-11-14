@@ -197,6 +197,16 @@ class WiringTests(unittest.TestCase):
         self.assertIsNone(emb.resolve_url(None, {}))
         self.assertIsNone(emb.resolve_url("http://localhost:11434", {}))
 
+    def test_an_endpoint_that_is_not_http_is_refused(self):
+        # The URL is fetched by the wizard and written into every harness
+        # config and the daemon: only an http(s) endpoint with a host is one.
+        for bad in ("file:///etc/passwd", "ftp://h:1", "localhost:11434", "http://", "javascript:alert(1)"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                emb.resolve_url(bad, {})
+        with self.assertRaises(ValueError):
+            emb.resolve_url(None, {"VELESDB_MEMORY_OLLAMA_URL": "file:///tmp/x"})
+        self.assertEqual(emb.resolve_url("https://ollama.lan:443", {}), "https://ollama.lan:443")
+
     def test_owned_keys_cover_aliases_and_leave_the_users_variables(self):
         owned = emb.owned_env_keys(emb.server_env(emb.Embedder("ollama", "bge-m3", 1024, url="http://h:1")))
         self.assertTrue({"VELESDB_MEMORY_OLLAMA_MODEL", "VELESDB_MEMORY_OLLAMA_URL"} <= owned)
@@ -212,8 +222,8 @@ class WiringTests(unittest.TestCase):
 class FakeOps:
     """Records commands; Ollama answers once `up` is true."""
 
-    def __init__(self, up=True, models=(), dims=None, commands=(), rc=0):
-        self.up, self.models, self.dims = up, list(models), dims or {}
+    def __init__(self, up=True, models=(), dims=None, commands=(), rc=0, installer=None):
+        self.up, self.models, self.dims, self.installer = up, list(models), dims or {}, installer
         self.commands, self.rc, self.ran = set(commands), rc, []
         self.url = "http://localhost:11434"
 
@@ -235,7 +245,7 @@ class FakeOps:
         return self.dims.get(model)
 
     def fetch_installer(self):
-        return None
+        return self.installer
 
 
 def session(ops, answer=True, yes=False):
@@ -275,6 +285,41 @@ class OllamaStepTests(unittest.TestCase):
         self.assertIsNone(ready)
         self.assertEqual(ops.ran, [])
         self.assertIn("ollama serve", statuses[0])
+
+    def _downloaded_installer(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        script = Path(tmp.name) / "ollama-install.sh"
+        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        return script
+
+    def test_yes_never_runs_a_downloaded_installer(self):
+        # --yes accepts what a package manager verifies, never a script
+        # fetched from the network: that one needs a person's explicit answer.
+        script = self._downloaded_installer()
+        ops = FakeOps(up=False, installer=script)
+        ready, statuses = emb.prepare_ollama(emb.Embedder("ollama", "all-minilm", 384), "linux",
+                                             session(ops, answer=False, yes=True))
+        self.assertIsNone(ready)
+        self.assertEqual(ops.ran, [])
+        self.assertIn("REFUSED", statuses[0])
+        self.assertIn(emb.LINUX_INSTALL_SCRIPT, statuses[0])
+        self.assertFalse(script.exists())
+
+    def test_yes_still_accepts_a_package_manager_install(self):
+        # brew/winget verify what they install, so --yes stands for consent.
+        ops = FakeOps(up=False, dims={"all-minilm": 384}, commands={"brew"})
+        _, statuses = emb.prepare_ollama(emb.Embedder("ollama", "all-minilm", 384), "macos",
+                                         session(ops, answer=False, yes=True))
+        self.assertEqual(ops.ran[0], (["brew", "install", "ollama"], None))
+        self.assertEqual(statuses[0], "ollama: installed")
+
+    def test_the_downloaded_installer_runs_on_an_explicit_answer_then_is_removed(self):
+        script = self._downloaded_installer()
+        ops = FakeOps(up=False, installer=script)
+        emb.prepare_ollama(emb.Embedder("ollama", "all-minilm", 384), "linux", session(ops, answer=True))
+        self.assertEqual(ops.ran[0], (["sh", str(script)], None))
+        self.assertFalse(script.exists())
 
     def test_hash_needs_no_ollama(self):
         ops = FakeOps(up=False)

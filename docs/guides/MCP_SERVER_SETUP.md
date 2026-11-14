@@ -79,13 +79,15 @@ chosen with `--embedder ollama --embedder-model <name>` or menu `[4]`, which
 ranks `all-minilm` (384d), `nomic-embed-text` (768d), `mxbai-embed-large` and
 `bge-m3` (1024d) and the local Ollama embedding models by what the store can
 read. It offers to install Ollama (`brew`, `winget`, or Ollama's Linux script,
-downloaded and shown before it runs) and to pull the model, probes the
+downloaded and shown before it runs; `--yes` never runs that script, only an
+explicit answer does) and to pull the model, probes the
 model's real dimension, and re-embeds a store recorded for another model or
 dimension with `velesdb-memory migrate-embeddings` only with consent — under
 `--apply`, only with `--yes`; declined, no harness is rewired. Stdio entries
 carry `VELESDB_MEMORY_EMBEDDER`/`_MODEL`; the daemon installer gets
 `--embedder`/`--ollama-model`. An Ollama on another endpoint is named with
-`--ollama-url` (or the `VELESDB_MEMORY_EMBEDDER_URL` the server reads). A
+`--ollama-url` (or the `VELESDB_MEMORY_EMBEDDER_URL` the server reads), an
+http(s) URL with a host; anything else is refused. A
 rewired stdio entry keeps every variable the wizard does not own — an
 extractor, a TTL, a log filter — and its arguments. Every config write is backed up and
 atomic (unique tmp + rename + post-write validation, original file mode kept,
