@@ -17,14 +17,15 @@ use crate::graph_store::WasmGraphStore;
 use crate::observer::{gate, WasmObserver, WasmQueryOperationKind};
 use crate::parsing;
 use crate::store_new;
-use crate::vector_store::VectorStore;
+use crate::store_state::StoreState;
 use crate::wasm_error::WasmError;
+use crate::VectorStore;
 
 // ---------------------------------------------------------------------------
 // Shared inner store
 // ---------------------------------------------------------------------------
 
-pub(crate) type SharedStore = Rc<RefCell<VectorStore>>;
+pub(crate) type SharedStore = Rc<RefCell<StoreState>>;
 type SharedGraph = Rc<RefCell<WasmGraphStore>>;
 
 // ---------------------------------------------------------------------------
@@ -157,18 +158,29 @@ impl DatabaseInner {
         Ok(())
     }
 
+    /// Registers `store` as collection `name` without copying it: whoever
+    /// else holds the same `Rc` (a JS `VectorStore` handle) keeps reading
+    /// and writing the very points VelesQL sees. Refuses a taken name, so an
+    /// attach never silently replaces a collection.
+    pub(crate) fn attach_shared_store(
+        &mut self,
+        name: &str,
+        store: SharedStore,
+    ) -> Result<(), String> {
+        if self.collections.contains_key(name) {
+            return Err(format!("Collection '{name}' already exists"));
+        }
+        self.collections.insert(name.to_owned(), store);
+        Ok(())
+    }
+
     /// Installs a pre-built store under `name`. Test-only helper used to
     /// seed non-Full storage modes without going through the public DDL
     /// surface (which currently only supports Full). Returns an error if
     /// a collection by that name already exists.
     #[cfg(test)]
-    pub(crate) fn install_store(&mut self, name: &str, store: VectorStore) -> Result<(), String> {
-        if self.collections.contains_key(name) {
-            return Err(format!("Collection '{name}' already exists"));
-        }
-        self.collections
-            .insert(name.to_owned(), Rc::new(RefCell::new(store)));
-        Ok(())
+    pub(crate) fn install_store(&mut self, name: &str, store: StoreState) -> Result<(), String> {
+        self.attach_shared_store(name, Rc::new(RefCell::new(store)))
     }
 
     /// Creates a metadata-only collection (dimension = 0, no vectors).
@@ -273,6 +285,14 @@ pub struct WasmDatabase {
     inner: DatabaseInner,
 }
 
+#[cfg(test)]
+impl WasmDatabase {
+    /// The executor state behind this handle, for native tests.
+    pub(crate) fn inner_mut(&mut self) -> &mut DatabaseInner {
+        &mut self.inner
+    }
+}
+
 impl Default for WasmDatabase {
     fn default() -> Self {
         Self::new()
@@ -325,6 +345,20 @@ impl WasmDatabase {
         DatabaseInner::validate_name(name).map_err(WasmError::into_js_value)?;
         self.inner
             .create_collection(name, dimension, metric)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Attaches an existing `VectorStore` as collection `name`, sharing its
+    /// data rather than copying it: `executeQuery` then reads and writes the
+    /// same points the store handle does, in both directions.
+    ///
+    /// # Errors
+    /// Returns an error if `name` is invalid or already taken.
+    #[wasm_bindgen(js_name = attachStore)]
+    pub fn attach_store(&mut self, name: &str, store: &VectorStore) -> Result<(), JsValue> {
+        DatabaseInner::validate_name(name).map_err(WasmError::into_js_value)?;
+        self.inner
+            .attach_shared_store(name, store.shared_state())
             .map_err(|e| JsValue::from_str(&e))
     }
 

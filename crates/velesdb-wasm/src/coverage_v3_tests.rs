@@ -108,7 +108,7 @@ fn test_sparse_index_search_scored_no_matching_terms_is_empty() {
 }
 
 // =========================================================================
-// VectorStore::search_sparse_scored — delegate behind search_sparse
+// StoreState::search_sparse_scored — delegate behind search_sparse
 // (vector_store.rs ~L366-367 / L628-639; exercises the k==0 and
 //  length-mismatch propagation from the underlying kernel)
 // =========================================================================
@@ -144,7 +144,7 @@ fn test_vector_store_search_sparse_scored_mismatch_propagates() {
 }
 
 // =========================================================================
-// VectorStore::insert_batch_raw — wasm-bindgen method, native happy path
+// StoreState::insert_batch_raw — wasm-bindgen method, native happy path
 // (vector_store.rs ~L609-617; success branch never builds a JsValue)
 // =========================================================================
 

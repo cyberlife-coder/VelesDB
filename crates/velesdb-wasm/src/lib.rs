@@ -79,6 +79,7 @@ mod store_get;
 mod store_insert;
 mod store_new;
 mod store_search;
+mod store_state;
 mod text_search;
 mod vector_ops;
 mod vector_store;
@@ -120,6 +121,7 @@ pub use memory_service::WasmMemoryService;
 pub use observer::{
     WasmAccessDecision, WasmObserver, WasmQueryAccessContext, WasmQueryOperationKind,
 };
+pub(crate) use store_state::StoreState;
 pub use vector_store::VectorStore;
 pub use velesdb_core::DistanceMetric;
 

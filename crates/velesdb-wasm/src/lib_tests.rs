@@ -4,20 +4,20 @@ use super::*;
 
 #[test]
 fn test_storage_mode_full() {
-    let store = VectorStore::new(4, "cosine").unwrap();
+    let store = StoreState::new(4, "cosine").unwrap();
     assert_eq!(store.storage_mode(), "full");
     assert_eq!(store.len(), 0);
 }
 
 #[test]
 fn test_storage_mode_sq8() {
-    let store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
+    let store = StoreState::new_with_mode(4, "cosine", "sq8").unwrap();
     assert_eq!(store.storage_mode(), "sq8");
 }
 
 #[test]
 fn test_storage_mode_binary() {
-    let store = VectorStore::new_with_mode(4, "cosine", "binary").unwrap();
+    let store = StoreState::new_with_mode(4, "cosine", "binary").unwrap();
     assert_eq!(store.storage_mode(), "binary");
 }
 
@@ -29,7 +29,7 @@ fn test_every_storage_mode_keeps_f32_and_costs_the_same_memory() {
     #[allow(clippy::cast_precision_loss)]
     let vector: Vec<f32> = (0..768).map(|i| (i as f32) * 0.001 - 0.3).collect();
     for mode in ["full", "sq8", "binary", "pq", "rabitq"] {
-        let mut store = VectorStore::new_with_mode(768, "cosine", mode).unwrap();
+        let mut store = StoreState::new_with_mode(768, "cosine", mode).unwrap();
         store.insert(1, &vector).unwrap();
 
         assert_eq!(store.len(), 1);
@@ -43,7 +43,7 @@ fn test_every_storage_mode_keeps_f32_and_costs_the_same_memory() {
 
 #[test]
 fn test_remove_sq8() {
-    let mut store = VectorStore::new_with_mode(4, "cosine", "sq8").unwrap();
+    let mut store = StoreState::new_with_mode(4, "cosine", "sq8").unwrap();
     store.insert(1, &[1.0, 2.0, 3.0, 4.0]).unwrap();
     store.insert(2, &[5.0, 6.0, 7.0, 8.0]).unwrap();
 
@@ -56,7 +56,7 @@ fn test_remove_sq8() {
 #[test]
 fn test_clear_all_modes() {
     for mode in ["full", "sq8", "binary", "pq", "rabitq"] {
-        let mut store = VectorStore::new_with_mode(4, "cosine", mode).unwrap();
+        let mut store = StoreState::new_with_mode(4, "cosine", mode).unwrap();
         store.insert(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
         store.insert(2, &[0.0, 1.0, 0.0, 0.0]).unwrap();
 
@@ -139,7 +139,7 @@ fn test_fuse_results_empty() {
 // The method is tested via wasm-pack test in CI.
 
 // =============================================================================
-// VectorStore::search_sparse — query the store's pre-built sparse index
+// StoreState::search_sparse — query the store's pre-built sparse index
 // =============================================================================
 
 #[test]

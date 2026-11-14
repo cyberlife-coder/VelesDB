@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`WasmDatabase.attachStore(name, store)`**: registers an existing
+  `VectorStore` as a collection without copying it, so `executeQuery` and
+  the store handle read and write the same points in both directions. A
+  store created from JavaScript used to be invisible to the VelesQL
+  executor; `VectorStore` is now a handle over shared state, with an
+  unchanged JavaScript API. A taken name is refused.
 - **`VectorStore::sparse_remove(doc_id)`** and **`SparseIndex::remove`**:
   delete a document's sparse postings. The in-memory sparse index could
   only grow — a deleted or replaced point kept matching sparse queries and

@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 use crate::store_insert::insert_with_payload;
 use crate::store_new::create_store;
-use crate::{DistanceMetric, StorageMode, VectorStore};
+use crate::{DistanceMetric, StorageMode, StoreState};
 
 #[derive(Deserialize)]
 struct Dataset {
@@ -86,7 +86,7 @@ fn load_fixture() -> Fixture {
         .expect("parse fidelity fixture")
 }
 
-fn build_store(ds: &Dataset) -> VectorStore {
+fn build_store(ds: &Dataset) -> StoreState {
     let metric: DistanceMetric = ds
         .metric
         .parse()
@@ -98,7 +98,7 @@ fn build_store(ds: &Dataset) -> VectorStore {
     store
 }
 
-fn run_case(store: &VectorStore, case: &Case, query: &[f32]) -> Vec<(u64, f32)> {
+fn run_case(store: &StoreState, case: &Case, query: &[f32]) -> Vec<(u64, f32)> {
     match case.kind.as_str() {
         "near" => store.search_scored(query, case.top_k),
         "hybrid_rrf" => store.hybrid_search_scored(
@@ -145,7 +145,7 @@ fn test_every_wasm_divergence_is_pinned() {
 #[test]
 fn test_search_fidelity_fixture_cases() {
     let fixture = load_fixture();
-    let mut stores: HashMap<String, VectorStore> = HashMap::new();
+    let mut stores: HashMap<String, StoreState> = HashMap::new();
     stores.insert(
         fixture.dataset.collection.clone(),
         build_store(&fixture.dataset),

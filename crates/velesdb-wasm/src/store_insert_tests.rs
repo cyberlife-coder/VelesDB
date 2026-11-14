@@ -12,7 +12,7 @@ use crate::store_insert::{insert_batch_raw, insert_vector, insert_with_payload, 
 use crate::store_new::create_store;
 use crate::{DistanceMetric, StorageMode};
 
-fn mk_full_store(dim: usize) -> crate::VectorStore {
+fn mk_full_store(dim: usize) -> crate::StoreState {
     create_store(dim, DistanceMetric::Euclidean, StorageMode::Full)
 }
 

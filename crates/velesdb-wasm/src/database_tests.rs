@@ -200,8 +200,8 @@ fn test_create_then_delete_then_create_same_name() {
     assert_eq!(store.borrow().dimension(), 8);
 }
 
-// Note: dimension-mismatch tests on VectorStore::insert use JsValue::from_str
-// internally, which panics on non-wasm32. That path is covered by VectorStore's
+// Note: dimension-mismatch tests on StoreState::insert use JsValue::from_str
+// internally, which panics on non-wasm32. That path is covered by StoreState's
 // own wasm-bindgen-test suite. Here we only verify the DatabaseInner contract.
 
 #[test]

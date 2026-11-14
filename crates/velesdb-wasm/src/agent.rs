@@ -5,7 +5,9 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-use crate::{store_insert, VectorStore};
+#[cfg(doc)]
+use crate::VectorStore;
+use crate::{store_insert, StoreState};
 
 /// Semantic memory result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,7 +47,7 @@ pub struct SemanticResult {
 /// ```
 #[wasm_bindgen]
 pub struct SemanticMemory {
-    store: VectorStore,
+    store: StoreState,
 }
 
 impl SemanticMemory {
@@ -69,7 +71,7 @@ impl SemanticMemory {
     /// Creates a new `SemanticMemory` with the given embedding dimension.
     #[wasm_bindgen(constructor)]
     pub fn new(dimension: usize) -> Result<SemanticMemory, JsValue> {
-        let store = VectorStore::new(dimension, "cosine")?;
+        let store = StoreState::new(dimension, "cosine")?;
         Ok(Self { store })
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Provides efficient binary format for persistence.
 
-use crate::{DistanceMetric, StorageMode, VectorStore};
+use crate::{DistanceMetric, StorageMode, StoreState};
 use wasm_bindgen::JsValue;
 
 /// v1 header size (magic4 + version1 + dim4 + metric1 + count8). v1 stored only
@@ -81,7 +81,7 @@ fn write_payloads(out: &mut Vec<u8>, payloads: &[Option<serde_json::Value>]) {
 /// build reject a v3 blob ("Unsupported version: 3") rather than load a
 /// quantized-mode store with empty code buffers. The sparse index is not
 /// persisted (rebuilt on demand), as in v1/v2.
-pub fn export_to_bytes(store: &VectorStore) -> Vec<u8> {
+pub fn export_to_bytes(store: &StoreState) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"VELS");
     bytes.push(FORMAT_VERSION);
@@ -163,7 +163,7 @@ fn read_payloads(
 }
 
 /// Deserializes a `VectorStore`, dispatching on the format version byte.
-pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
+pub fn import_from_bytes(bytes: &[u8]) -> Result<StoreState, JsValue> {
     if bytes.len() < 5 {
         return Err(JsValue::from_str("Invalid data: too short"));
     }
@@ -181,7 +181,7 @@ pub fn import_from_bytes(bytes: &[u8]) -> Result<VectorStore, JsValue> {
 /// blob and the payloads; v2 adds four quantized blobs between the last two,
 /// from which [`legacy::reconstruct_vectors`] rebuilds the f32 vectors of a
 /// quantized-mode store.
-fn import_v2_or_v3(bytes: &[u8], version: u8) -> Result<VectorStore, JsValue> {
+fn import_v2_or_v3(bytes: &[u8], version: u8) -> Result<StoreState, JsValue> {
     if bytes.len() < HEADER_SIZE_V2 {
         return Err(JsValue::from_str("Invalid data: too short"));
     }
@@ -218,7 +218,7 @@ fn import_v2_or_v3(bytes: &[u8], version: u8) -> Result<VectorStore, JsValue> {
     check_vector_count(data.len(), count, dimension).map_err(|e| JsValue::from_str(&e))?;
     let payloads = read_payloads(bytes, &mut offset, count)?;
 
-    Ok(VectorStore {
+    Ok(StoreState {
         ids,
         data,
         payloads,
@@ -278,7 +278,7 @@ pub(crate) fn v1_layout(count: usize, dimension: usize) -> Result<V1Layout, Stri
     })
 }
 
-fn import_v1(bytes: &[u8]) -> Result<VectorStore, JsValue> {
+fn import_v1(bytes: &[u8]) -> Result<StoreState, JsValue> {
     if bytes.len() < HEADER_SIZE {
         return Err(JsValue::from_str("Invalid data: too short"));
     }
@@ -352,7 +352,7 @@ fn import_v1(bytes: &[u8]) -> Result<VectorStore, JsValue> {
         offset += 8 + data_bytes_len;
     }
 
-    Ok(VectorStore {
+    Ok(StoreState {
         ids,
         data,
         payloads: vec![None; count],
