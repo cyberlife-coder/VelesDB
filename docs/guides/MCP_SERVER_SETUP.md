@@ -48,8 +48,8 @@ fight over the lock. A missing `velesdb-memory` binary is installed from the
 latest `velesdb-memory-v*` release archive (sha256-verified against its
 sidecar, `cargo install velesdb-memory` as fallback) before any harness is
 wired. In daemon mode `--apply` runs `scripts/install-memory-daemon.sh|.ps1`
-(launchd on macOS, a Scheduled Task on Windows; on Linux it installs no
-service yet, so the health gate refuses daemon mode) and only rewires the
+(launchd on macOS, a systemd user unit on Linux, a Scheduled Task on
+Windows) and only rewires the
 harnesses once `https://127.0.0.1:18090/health` answers. It then installs the
 skills and the [agent hooks](../../integrations/agent-hooks/README.md) —
 working-context load/save, recall-before-edit and the context compiler — for
@@ -367,7 +367,8 @@ With `VELESDB_MEMORY_LOG` set, every `/mcp` request leaves one stderr line
 outside-identical incident cases apart: a request that **never arrived**
 leaves no line, one **refused** (expired/unknown session) leaves its `404`,
 one **handled** leaves its `2xx` plus the tool line. On macOS the launchd
-daemon's stderr lands in `~/Library/Logs/velesdb-memory/daemon.err.log`, and
+daemon's stderr lands in `~/Library/Logs/velesdb-memory/daemon.err.log`, on
+Linux in the journal (`journalctl --user -u velesdb-memory`), and
 the installer deploys with the incident preset
 (`info,rmcp::service=error,rmcp::transport::worker=debug,rmcp::transport::streamable_http_server=debug`)
 already on: those events never carry request content — canary tests hold the
@@ -540,6 +541,18 @@ hand:
 certutil -addstore -user Root "$env:USERPROFILE\.velesdb-memory-tls\ca-cert.pem"
 ```
 
+**Linux.** There is no per-user trust store an installer can write without
+root, so `install-memory-daemon.sh` prints the commands instead of running
+them:
+
+```bash
+# Debian / Ubuntu
+sudo cp ~/.velesdb-memory-tls/ca-cert.pem /usr/local/share/ca-certificates/velesdb-memory.crt
+sudo update-ca-certificates
+# Fedora / Arch
+sudo trust anchor --store ~/.velesdb-memory-tls/ca-cert.pem
+```
+
 **Node-based tools** (Claude Code's CLI, Electron apps like Claude Desktop) do
 not always consult the OS keychain for TLS trust the way `curl` and Safari do.
 If one still reports a certificate error after the step above, point it at the
@@ -599,14 +612,19 @@ claude mcp add --transport http velesdb-memory https://127.0.0.1:18090/mcp
 ```
 
 [`scripts/install-memory-daemon.sh`](../../scripts/install-memory-daemon.sh)
-automates all of this end to end on macOS: building with the right features,
-running the daemon as a `launchd` agent, trusting the local CA in your login
-keychain, and wiring Claude Code / Codex CLI / Claude Desktop / Windsurf /
-Devin CLI. See
+automates all of this end to end: building with the right features, running
+the daemon as a `launchd` agent (macOS) or a systemd user unit (Linux),
+trusting the local CA (macOS login keychain; on Linux it prints the commands,
+which need root), and wiring Claude Code / Codex CLI / Claude Desktop /
+Windsurf / Devin CLI. See
 `--help` for the flags (`--embedder`, `--port`, `--store`, `--tls-dir`,
 `--ttl`, `--skip-client`, `--skip-ca-trust`, `--wire-only`, `--from-release`,
-`--uninstall`, …). On Linux it still builds and wires clients but skips daemon
-setup — see the script's own non-macOS notice.
+`--uninstall`, …). On Linux the unit is
+`~/.config/systemd/user/velesdb-memory.service` (`systemctl --user status
+velesdb-memory`); it runs while you are logged in, and `loginctl enable-linger
+"$USER"` keeps it running after logout. A Linux host without a systemd user
+session (a container, a bare SSH login) gets no service: the script still
+installs the binary and wires the clients, and says so.
 
 ## Claude Desktop (macOS / Windows)
 
