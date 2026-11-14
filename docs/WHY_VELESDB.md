@@ -42,7 +42,10 @@ All data stays on the device. This matters for:
 
 - **Privacy-sensitive applications** (medical, legal, financial)
 - **Offline-capable agents** (mobile, desktop, edge devices)
-- **Air-gapped environments** (defense, regulated industries)
+- **Air-gapped environments** (defense, regulated industries) — turn the
+  server's and CLI's version check off there (`VELESDB_NO_UPDATE_CHECK=1`, or
+  `[update_check] enabled = false`); it is their only outbound call and carries
+  no stored data ([what it sends](guides/CONFIGURATION.md#update-check-and-telemetry))
 
 ### Simplified Operations
 
