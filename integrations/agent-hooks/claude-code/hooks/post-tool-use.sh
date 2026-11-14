@@ -197,6 +197,17 @@ command -v "$bin" >/dev/null 2>&1 || passthrough
 # released before `compile-stdin` ignores the subcommand and starts the MCP
 # server instead. Probing with a tiny corpus under the watchdog tells the two
 # apart without any version guessing, and without risking a hang.
+# One capability probe: a tiny corpus, the given extra flags, a valid verdict.
+probe_compile() {
+  # shellcheck disable=SC2154 # read_exact_line sets probe_out (printf -v)
+  printf 'probe corpus for the capability check\n' \
+    | run_with_watchdog "$probe_timeout" "$probe_out" "$bin" compile-stdin --budget 4096 "$@" \
+    && jq -e '
+      has("content")
+      and (.risk == "low" or .risk == "medium" or .risk == "high")
+    ' "$probe_out" >/dev/null 2>&1
+}
+
 probe_timeout="${VELESDB_HOOK_PROBE_TIMEOUT:-10}"
 positive_decimal_at_most "$probe_timeout" 60 || passthrough
 # Each compilation attempt gets a watchdog of its own, bounded like the probe's.
@@ -216,20 +227,27 @@ else
   if ! read_exact_line probe_out private_temp_file "compile-stdin-probe-out-${probe_key}"; then
     passthrough
   fi
-  if printf 'probe corpus for the capability check\n' \
-    | run_with_watchdog "$probe_timeout" "$probe_out" "$bin" compile-stdin --budget 4096 \
-    && jq -e '
-      has("content")
-      and (.risk == "low" or .risk == "medium" or .risk == "high")
-    ' "$probe_out" >/dev/null 2>&1; then
-    write_private_marker "$probe_marker" "yes" || passthrough
+  # A binary that compiles at all is then asked for the line pruner
+  # (`--tool-output`); one that rejects the flag — every release before it — keeps
+  # the fragment compiler. The second probe only runs after the first
+  # succeeded, so a hanging pre-compile-stdin binary costs one watchdog, not two.
+  if probe_compile; then
+    if probe_compile --tool-output; then
+      write_private_marker "$probe_marker" "tool" || passthrough
+    else
+      write_private_marker "$probe_marker" "yes" || passthrough
+    fi
   else
     write_private_marker "$probe_marker" "no" || passthrough
   fi
   rm -f "$probe_out"
 fi
 valid_private_marker "$probe_marker" || passthrough
-[ "$(cat "$probe_marker")" = "yes" ] || passthrough  # exact-read-ok: the marker holds the literal yes
+capability="$(cat "$probe_marker")"  # exact-read-ok: the marker holds one literal word, yes|tool|no
+case "$capability" in
+  yes|tool) ;;
+  *) passthrough ;;
+esac
 
 budget="${VELESDB_HOOK_TOKEN_BUDGET:-2000}"
 # Checked before the arithmetic below reads it. The cap cannot refuse a budget
@@ -244,12 +262,23 @@ if ! read_exact_line compiled_file private_temp_file "compile-stdin-result"; the
   passthrough
 fi
 
-# One compilation attempt at $1 tokens, into $compiled_file.
+# The query is the command that produced the output: the line pruner keeps the
+# lines naming its arguments. Older payloads without one fall back to the tool.
+read_exact_line query jq -r '.tool_input.command // empty' <<<"$payload" || query=""
+[ -n "$query" ] || query="$tool_name output"
+mode_flags=()
+if [ "$capability" = "tool" ]; then
+  mode_flags=(--tool-output)
+fi
+
+# One compilation attempt at $1 tokens, into $compiled_file. The mode flag goes
+# last and expands through `+`: bash 3.2 (macOS) treats an empty array as unset
+# under `set -u`.
 compile_at() {
   # shellcheck disable=SC2154 # read_exact_line sets compiled_file (printf -v)
   printf '%s' "$text" \
     | run_with_watchdog "$compile_timeout" "$compiled_file" "$bin" compile-stdin --budget "$1" \
-      --query "$tool_name output"
+      --query "$query" ${mode_flags[@]+"${mode_flags[@]}"}
 }
 
 field() {

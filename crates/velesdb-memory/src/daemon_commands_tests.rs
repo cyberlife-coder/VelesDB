@@ -29,6 +29,7 @@ fn tight_budget_actually_shrinks_the_payload() {
     let options = CompileStdinOptions {
         token_budget: 1_500,
         query: "what did the worker do".to_owned(),
+        ..CompileStdinOptions::default()
     };
     let compiled = parse(&compile_stdin_json(&noisy_tool_output(), &options).unwrap());
 
@@ -65,6 +66,7 @@ fn budget_too_small_for_any_fragment_is_an_error() {
     let options = CompileStdinOptions {
         token_budget: 50,
         query: String::new(),
+        ..CompileStdinOptions::default()
     };
     let error = compile_stdin_json(&noisy_tool_output(), &options).unwrap_err();
     let message = error.to_string();
@@ -79,6 +81,7 @@ fn compilation_is_byte_identical_across_runs() {
     let options = CompileStdinOptions {
         token_budget: 1_500,
         query: "worker batches".to_owned(),
+        ..CompileStdinOptions::default()
     };
     let first = compile_stdin_json(&noisy_tool_output(), &options).unwrap();
     let second = compile_stdin_json(&noisy_tool_output(), &options).unwrap();
@@ -101,6 +104,7 @@ fn flags_default_and_override() {
         CompileStdinOptions {
             token_budget: DEFAULT_COMPILE_STDIN_BUDGET,
             query: String::new(),
+            tool_output: false,
         }
     );
     let parsed = parse_compile_stdin_args(&[
@@ -169,4 +173,44 @@ fn the_refusals_keep_their_wording() {
         CompileStdinError::ZeroBudget.to_string(),
         "--budget must be greater than 0"
     );
+}
+
+#[test]
+fn tool_output_flag_takes_no_value() {
+    let parsed = parse_compile_stdin_args(&[
+        "--tool-output".to_owned(),
+        "--budget".to_owned(),
+        "512".to_owned(),
+    ])
+    .unwrap();
+    assert!(parsed.tool_output);
+    assert_eq!(parsed.token_budget, 512);
+}
+
+#[test]
+fn tool_output_ships_value_dense_output_the_fragment_path_refuses() {
+    // An `ls -l`-shaped listing: digits on every line. The fragment compiler
+    // reports `high` at any cut (or fits nothing); the line pruner elides it
+    // at `medium`.
+    let listing = (0..600)
+        .map(|i| {
+            format!(
+                "-rw-r--r-- 1 user staff {} Nov 13 12:{:02} file_{i}.rs",
+                1000 + i,
+                i % 60
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut options = parse_compile_stdin_args(&["--budget".to_owned(), "800".to_owned()]).unwrap();
+    // Control: the fragment path cannot ship this — an error (nothing fits)
+    // or a `high` verdict, both of which the hook turns into a passthrough.
+    if let Ok(json) = compile_stdin_json(&listing, &options) {
+        assert_eq!(parse(&json)["risk"], "high");
+    }
+    options.tool_output = true;
+    let pruned = parse(&compile_stdin_json(&listing, &options).unwrap());
+    assert_eq!(pruned["risk"], "medium");
+    assert!(pruned["tokens_out"].as_u64().unwrap() <= 800);
+    assert!(pruned["content"].as_str().unwrap().contains("lines elided"));
 }

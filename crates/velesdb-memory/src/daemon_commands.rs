@@ -241,6 +241,10 @@ pub(crate) const DEFAULT_COMPILE_STDIN_BUDGET: u64 = 2_000;
 pub(crate) struct CompileStdinOptions {
     token_budget: u64,
     query: String,
+    /// `--tool-output`: prune line by line
+    /// ([`velesdb_memory::context::prune_tool_output`]) instead of compiling
+    /// fragments — the shape of one command's output, not of a transcript.
+    tool_output: bool,
 }
 
 #[cfg(feature = "context")]
@@ -249,6 +253,7 @@ impl Default for CompileStdinOptions {
         Self {
             token_budget: DEFAULT_COMPILE_STDIN_BUDGET,
             query: String::new(),
+            tool_output: false,
         }
     }
 }
@@ -327,6 +332,11 @@ pub(crate) fn parse_compile_stdin_args(
                 options.token_budget = parse_compile_stdin_budget(value_after(args, index, flag)?)?;
             }
             "--query" => options.query.clone_from(value_after(args, index, flag)?),
+            "--tool-output" => {
+                options.tool_output = true;
+                index += 1;
+                continue;
+            }
             other => {
                 return Err(FlagError::Unknown {
                     command: "compile-stdin",
@@ -356,6 +366,9 @@ pub(crate) fn compile_stdin_json(
 
     if text.trim().is_empty() {
         return Err("compile-stdin received empty input on stdin".into());
+    }
+    if options.tool_output {
+        return prune_stdin_json(text, options);
     }
 
     let outcome = segment_transcript(text, &SegmentationPolicy::default())?;
@@ -395,6 +408,40 @@ pub(crate) fn compile_stdin_json(
         tokens_out: compiled.insights.tokens_out,
         tokens_saved: compiled.insights.tokens_saved,
         risk: format!("{:?}", compiled.risk).to_lowercase(),
+    };
+    Ok(serde_json::to_string(&output)?)
+}
+
+/// `compile-stdin --tool-output`: the same JSON payload, from the line-level
+/// pruner. Like the fragment path, a result that keeps no line at all is an
+/// error rather than an empty replacement.
+#[cfg(feature = "context")]
+fn prune_stdin_json(
+    text: &str,
+    options: &CompileStdinOptions,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use velesdb_memory::context::{prune_tool_output, HeuristicEstimator, ToolOutputPolicy};
+
+    let pruned = prune_tool_output(
+        text,
+        &options.query,
+        options.token_budget,
+        &ToolOutputPolicy::default(),
+        &HeuristicEstimator,
+    );
+    if pruned.elided_lines > 0 && pruned.content.lines().all(|line| line.starts_with("[… ")) {
+        return Err(format!(
+            "a budget of {} tokens keeps none of the {} input tokens; raise --budget",
+            options.token_budget, pruned.tokens_in
+        )
+        .into());
+    }
+    let output = CompileStdinOutput {
+        tokens_saved: pruned.tokens_in.saturating_sub(pruned.tokens_out),
+        content: pruned.content,
+        tokens_in: pruned.tokens_in,
+        tokens_out: pruned.tokens_out,
+        risk: format!("{:?}", pruned.risk).to_lowercase(),
     };
     Ok(serde_json::to_string(&output)?)
 }
