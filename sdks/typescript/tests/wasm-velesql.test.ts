@@ -69,10 +69,35 @@ class MockWasmDatabase {
   }
 }
 
+/**
+ * What the binding's own parser reports for each statement the tests send:
+ * the SDK routes on these flags, never on the statement's text.
+ */
+const PARSED: Record<string, { isSelect: boolean; isAggregation?: boolean; collectionName?: string }> = {
+  "SELECT * FROM docs WHERE category = 'tech' LIMIT 10": { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  'SELECT * FROM docs WHERE vector NEAR $v AND category = $c LIMIT 5': { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  "SELECT * FROM other WHERE category = 'x'": { isSelect: true, isAggregation: false, collectionName: 'other' },
+  "SELECT * FROM docs WHERE title = 'Having fun'": { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  'SELECT "from archive" FROM docs': { isSelect: true, isAggregation: false, collectionName: 'docs' },
+  'SELECT category, COUNT(*) FROM docs GROUP BY category': { isSelect: true, isAggregation: true, collectionName: 'docs' },
+  'MATCH (a)-[:R]->(b) RETURN a': { isSelect: false, isAggregation: false },
+  'INSERT INTO docs (id, vector) VALUES (1, $v)': { isSelect: false, isAggregation: false, collectionName: 'docs' },
+};
+
+const parseFree = vi.fn();
+const MockVelesQL = {
+  parse: vi.fn((sql: string) => {
+    const flags = PARSED[sql];
+    if (!flags) { throw `VelesQL parse error in: ${sql}`; }
+    return { ...flags, free: parseFree };
+  }),
+};
+
 const moduleWithExecutor = {
   default: vi.fn(() => Promise.resolve()),
   VectorStore: MockVectorStore,
   WasmDatabase: MockWasmDatabase,
+  VelesQL: MockVelesQL,
 };
 let wasmModule: Record<string, unknown> = moduleWithExecutor;
 
@@ -80,6 +105,7 @@ vi.mock('@wiscale/velesdb-wasm', () => ({
   get default() { return wasmModule.default; },
   get VectorStore() { return wasmModule.VectorStore; },
   get WasmDatabase() { return wasmModule.WasmDatabase; },
+  get VelesQL() { return wasmModule.VelesQL; },
 }));
 vi.mock('../src/backends/wasm-node-loader', () => ({
   isNodeRuntime: () => false,
@@ -155,9 +181,8 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('when the executor rejects the statement, then its message surfaces as BAD_REQUEST', async () => {
+  it('when the binding cannot parse the statement, then its message surfaces as BAD_REQUEST', async () => {
     const backend = await backendWithDocs();
-    MockWasmDatabase.last!.nextError = 'VelesQL parse error at position 7';
 
     const error = await backend
       .query('docs', 'SELECT * FROM docs WHERE ???')
@@ -165,7 +190,52 @@ describe('WASM backend VelesQL through an attached WasmDatabase', () => {
 
     expect(error).toBeInstanceOf(VelesDBError);
     expect(error).toMatchObject({ code: 'BAD_REQUEST' });
-    expect((error as Error).message).toContain('VelesQL parse error at position 7');
+    expect((error as Error).message).toContain('VelesQL parse error');
+    expect(MockWasmDatabase.last!.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it('when the executor rejects the statement, then its message surfaces as BAD_REQUEST', async () => {
+    const backend = await backendWithDocs();
+    MockWasmDatabase.last!.nextError = 'Unknown column at position 7';
+
+    const error = await backend
+      .query('docs', "SELECT * FROM docs WHERE category = 'tech' LIMIT 10")
+      .catch((e: unknown) => e);
+
+    expect(error).toMatchObject({ code: 'BAD_REQUEST' });
+    expect((error as Error).message).toContain('Unknown column at position 7');
+  });
+
+  it.each([
+    ['an aggregate keyword inside a string literal', "SELECT * FROM docs WHERE title = 'Having fun'"],
+    ['"from" inside a quoted column name', 'SELECT "from archive" FROM docs'],
+  ])('when the statement has %s, then the parser routes it to the executor', async (_what, sql) => {
+    const backend = await backendWithDocs();
+
+    await backend.query('docs', sql);
+
+    expect(MockWasmDatabase.last!.executeQuery).toHaveBeenCalledWith(sql, null);
+  });
+
+  it('when a statement was parsed, then its parse handle is freed', async () => {
+    const backend = await backendWithDocs();
+    parseFree.mockClear();
+
+    await backend.query('docs', "SELECT * FROM docs WHERE category = 'tech' LIMIT 10");
+
+    expect(parseFree).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a binding whose parser predates isAggregation, when query() runs a WHERE, then it keeps the previous behaviour', async () => {
+    wasmModule = {
+      ...moduleWithExecutor,
+      VelesQL: { parse: () => ({ isSelect: true, collectionName: 'docs', free: vi.fn() }) },
+    };
+    const backend = await backendWithDocs();
+
+    await expect(
+      backend.query('docs', "SELECT * FROM docs WHERE category = 'tech' LIMIT 10")
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
   });
 
   it.each([

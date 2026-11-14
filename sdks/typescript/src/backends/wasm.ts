@@ -57,7 +57,7 @@ import {
 } from './wasm-helpers';
 
 // VelesQL executor over the attached stores
-import { WasmVelesQL, isExecutorSelect } from './wasm-velesql';
+import { WasmVelesQL } from './wasm-velesql';
 
 // Search & query delegates
 import {
@@ -67,6 +67,7 @@ import {
   wasmHybridSearch,
   wasmMultiQuerySearch,
   wasmQuery,
+  isPureNearQuery,
 } from './wasm-search';
 
 // Unsupported-feature stubs (pre-Wave 4)
@@ -461,9 +462,10 @@ export class WasmBackend implements IVelesDBBackend {
 
   async query(c: string, q: string, p?: Record<string, unknown>): Promise<QueryApiResponse> {
     this.ensureInitialized();
-    if (this.velesql && isExecutorSelect(q)) {
+    if (this.velesql && !isPureNearQuery(q)) {
       if (!this.collections.has(c)) { throw new NotFoundError(`Collection '${c}'`); }
-      return this.velesql.select(c, q, p);
+      const selected = this.velesql.trySelect(c, q, p);
+      if (selected) { return selected; }
     }
     return wasmQuery(buildWasmContext(this.wasmModule!, this.collections), c, q, p);
   }

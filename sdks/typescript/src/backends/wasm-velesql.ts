@@ -2,44 +2,34 @@
  * WASM Backend — VelesQL through a `WasmDatabase`
  *
  * The backend owns one `VectorStore` per collection. A velesdb-wasm binding
- * that exposes `WasmDatabase.attachStore` (after 8.0.0) can share each of
- * those stores with its VelesQL executor, so a `SELECT … WHERE …` runs over
- * the very points the backend wrote — payloads included, since every upsert
- * already stores them in the binding. velesdb-wasm 8.0.0 has no such method:
+ * that exposes `WasmDatabase.attachStore` can share each of those stores with
+ * its VelesQL executor, so a `SELECT … WHERE …` runs over the very points the
+ * backend wrote — payloads included, since every upsert already stores them
+ * in the binding. A binding shipped before `attachStore` has no such method:
  * {@link WasmVelesQL.create} then returns `null` and `query()` keeps its
  * pure-`NEAR`-only behaviour.
  *
- * Scope: read-only `SELECT`. Aggregations, `MATCH`, `EXPLAIN` and statements
- * that change the schema or the data stay on their existing paths until each
- * has a REST-identical mapping — a DDL run here would create a collection the
- * backend does not know.
+ * Statements are classified by the binding's own parser (`VelesQL.parse`),
+ * never by scanning their text: a keyword inside a string literal, a comment
+ * or a quoted identifier cannot change the route.
+ *
+ * Scope: read-only, non-aggregate `SELECT`. Aggregations, `MATCH`, `EXPLAIN`
+ * and statements that change the schema or the data stay on their existing
+ * paths until each has a REST-identical mapping — a DDL run here would create
+ * a collection the backend does not know.
  * @packageDocumentation
  */
 
 import { VelesDBError } from '../types';
 import type { QueryResponse } from '../types';
-import { isLikelyAggregationQuery, isLikelyDdlOrMutationQuery } from './query-backend';
-import { isPureNearQuery } from './wasm-search';
 import { describeWasmThrow } from './wasm-helpers';
-import type { WasmModule, WasmVectorStore, WasmVelesQLDatabase } from './wasm-types';
-
-const SELECT = /^\s*SELECT\b/i;
-const FROM_NAME = /\bFROM\s+([A-Za-z_]\w*)/i;
-
-/**
- * Whether the executor answers `queryString`: a read-only `SELECT` that is
- * neither the pure-`NEAR` shape (kept on `VectorStore.query()`) nor an
- * aggregation, a graph read or a statement `isLikelyDdlOrMutationQuery`
- * routes elsewhere.
- */
-export function isExecutorSelect(queryString: string): boolean {
-  return (
-    SELECT.test(queryString) &&
-    !isPureNearQuery(queryString) &&
-    !isLikelyAggregationQuery(queryString) &&
-    !isLikelyDdlOrMutationQuery(queryString)
-  );
-}
+import type {
+  WasmModule,
+  WasmParsedQuery,
+  WasmVectorStore,
+  WasmVelesQLDatabase,
+  WasmVelesQLParser,
+} from './wasm-types';
 
 /** Serialize `params` for the executor: typed arrays become JSON arrays. */
 function paramsJson(params: Record<string, unknown> | undefined): string | undefined {
@@ -51,21 +41,34 @@ function paramsJson(params: Record<string, unknown> | undefined): string | undef
   );
 }
 
+/**
+ * Whether the executor takes the statement: a `SELECT` the parser does not
+ * class as an aggregation. A parser too old to report `isAggregation` answers
+ * `false`, leaving the statement to the backend's previous path.
+ */
+function isExecutorSelect(parsed: WasmParsedQuery): boolean {
+  return parsed.isSelect && parsed.isAggregation === false;
+}
+
 /** The VelesQL executor of one backend, over the stores it attaches. */
 export class WasmVelesQL {
-  private constructor(private readonly db: WasmVelesQLDatabase) {}
+  private constructor(
+    private readonly db: WasmVelesQLDatabase,
+    private readonly parser: WasmVelesQLParser
+  ) {}
 
   /** An executor for `mod`, or `null` when the binding cannot share stores. */
   static create(mod: WasmModule): WasmVelesQL | null {
     // Probe with `in`, not a read: a module namespace without the export (and
     // a test double of one) may throw on reading a name it does not define.
-    if (!('WasmDatabase' in mod) || mod.WasmDatabase === undefined) { return null; }
+    if (!('WasmDatabase' in mod) || !('VelesQL' in mod)) { return null; }
+    if (mod.WasmDatabase === undefined || mod.VelesQL === undefined) { return null; }
     const db = new mod.WasmDatabase();
     if (typeof db.attachStore !== 'function') {
       db.free();
       return null;
     }
-    return new WasmVelesQL(db);
+    return new WasmVelesQL(db, mod.VelesQL);
   }
 
   /** Share `store` with the executor as collection `name`. */
@@ -78,15 +81,52 @@ export class WasmVelesQL {
     this.db.delete_collection(name);
   }
 
-  /** Run a read-only `SELECT` against `collection`, shaped as REST's `/query`. */
-  select(collection: string, queryString: string, params?: Record<string, unknown>): QueryResponse {
-    const from = FROM_NAME.exec(queryString)?.[1];
-    if (from !== undefined && from !== collection) {
+  /**
+   * Run `queryString` against `collection` when it is the executor's — a
+   * read-only, non-aggregate `SELECT` — shaped as REST's `/query`; `null`
+   * when the statement belongs to another path. Invalid VelesQL, a `FROM`
+   * naming another collection and executor errors are `BAD_REQUEST`.
+   */
+  trySelect(
+    collection: string,
+    queryString: string,
+    params?: Record<string, unknown>
+  ): QueryResponse | null {
+    const target = this.selectTarget(queryString);
+    if (target === null) { return null; }
+    if (target !== undefined && target !== collection) {
       throw new VelesDBError(
-        `Query targets collection '${from}' but was executed against '${collection}'.`,
+        `Query targets collection '${target}' but was executed against '${collection}'.`,
         'BAD_REQUEST'
       );
     }
+    return this.execute(queryString, params);
+  }
+
+  /** Release the executor; the stores stay owned by their handles. */
+  free(): void {
+    this.db.free();
+  }
+
+  /**
+   * The collection an executor `SELECT` reads (`undefined` when it names
+   * none), or `null` when the statement is not one.
+   */
+  private selectTarget(queryString: string): string | undefined | null {
+    let parsed: WasmParsedQuery;
+    try {
+      parsed = this.parser.parse(queryString);
+    } catch (error) {
+      throw new VelesDBError(describeWasmThrow(error), 'BAD_REQUEST');
+    }
+    try {
+      return isExecutorSelect(parsed) ? parsed.collectionName : null;
+    } finally {
+      parsed.free();
+    }
+  }
+
+  private execute(queryString: string, params?: Record<string, unknown>): QueryResponse {
     const started = performance.now();
     let result;
     try {
@@ -106,10 +146,5 @@ export class WasmVelesQL {
     } finally {
       result.free();
     }
-  }
-
-  /** Release the executor; the stores stay owned by their handles. */
-  free(): void {
-    this.db.free();
   }
 }

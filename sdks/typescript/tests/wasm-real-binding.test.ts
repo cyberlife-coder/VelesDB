@@ -125,4 +125,16 @@ describe.skipIf(!PKG)('WASM backend over the real velesdb-wasm build (#2332)', (
 
     expect('results' in response && response.results.map(r => r.id)).toEqual([2]);
   });
+
+  it('query classifies by the parser: an aggregate word inside a literal is still a WHERE', async () => {
+    const response = await db.query('docs', "SELECT * FROM docs WHERE title = 'hello rust' OR title = 'Having fun' LIMIT 10");
+
+    expect('results' in response && response.results.map(r => r.id)).toEqual([1]);
+  });
+
+  it('query keeps refusing a real aggregation on WASM', async () => {
+    await expect(
+      db.query('docs', 'SELECT category, COUNT(*) FROM docs GROUP BY category')
+    ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
+  });
 });

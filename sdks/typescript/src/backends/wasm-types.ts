@@ -223,6 +223,30 @@ export interface WasmVelesQLDatabase {
   free(): void;
 }
 
+/**
+ * What the backend reads from the binding's `VelesQL.parse()`: the statement
+ * class, from the AST, so nothing is guessed from the statement's text.
+ */
+export interface WasmParsedQuery {
+  /** A `SELECT` (not `MATCH`, DML, DDL, introspection or admin). */
+  readonly isSelect: boolean;
+  /**
+   * Core's `is_aggregation_query`. Declared by hand: absent on bindings that
+   * predate it, and the backend then leaves the statement to its old path.
+   */
+  readonly isAggregation?: boolean;
+  /** The collection the statement reads, when it names one. */
+  readonly collectionName?: string;
+  /** Release the parse result's WASM memory. */
+  free(): void;
+}
+
+/** The binding's VelesQL parser. */
+export interface WasmVelesQLParser {
+  /** Parse one statement; throws the parser's message on invalid VelesQL. */
+  parse(query: string): WasmParsedQuery;
+}
+
 /** Typed interface for the @wiscale/velesdb-wasm module. */
 export interface WasmModule {
   /** WASM initialization function (must be called once before use).
@@ -243,6 +267,9 @@ export interface WasmModule {
 
   /** WasmDatabase class constructor: the VelesQL executor (`wasm-velesql.ts`). */
   WasmDatabase?: new () => WasmVelesQLDatabase;
+
+  /** The VelesQL parser the backend classifies statements with (`wasm-velesql.ts`). */
+  VelesQL?: WasmVelesQLParser;
 
   /** Fuse dense + sparse search results via Reciprocal Rank Fusion. */
   hybrid_search_fuse(...args: AllParams<typeof bindingHybridSearchFuse>): WasmSparseResult[];
