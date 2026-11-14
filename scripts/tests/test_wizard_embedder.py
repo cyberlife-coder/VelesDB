@@ -306,6 +306,14 @@ class OllamaStepTests(unittest.TestCase):
         self.assertIn(emb.LINUX_INSTALL_SCRIPT, statuses[0])
         self.assertFalse(script.exists())
 
+    def test_yes_still_accepts_a_package_manager_install(self):
+        # brew/winget verify what they install, so --yes stands for consent.
+        ops = FakeOps(up=False, dims={"all-minilm": 384}, commands={"brew"})
+        _, statuses = emb.prepare_ollama(emb.Embedder("ollama", "all-minilm", 384), "macos",
+                                         session(ops, answer=False, yes=True))
+        self.assertEqual(ops.ran[0], (["brew", "install", "ollama"], None))
+        self.assertEqual(statuses[0], "ollama: installed")
+
     def test_the_downloaded_installer_runs_on_an_explicit_answer_then_is_removed(self):
         script = self._downloaded_installer()
         ops = FakeOps(up=False, installer=script)
