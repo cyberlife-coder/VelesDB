@@ -38,11 +38,11 @@ fn output_that_fits_is_returned_whole_at_low_risk() {
 #[test]
 fn value_dense_filler_is_elided_at_medium_risk_not_refused() {
     // The shape `preserve.exact_values` made critical as a whole: every line
-    // carries digits. Line by line, none of them is salient.
+    // carries digits. Line by line, none of them is a diagnostic.
     let text = listing(400);
     let pruned = prune(&text, "", 600);
     assert!(pruned.elided_lines > 0);
-    assert_eq!(pruned.salient_dropped, 0);
+    assert_eq!(pruned.diagnostic_dropped, 0);
     assert_eq!(pruned.risk, FidelityRisk::Medium);
     assert!(
         pruned.tokens_out <= 600,
@@ -78,7 +78,7 @@ fn a_line_matching_the_query_is_kept() {
 }
 
 #[test]
-fn negative_constraints_are_salient() {
+fn negative_constraints_are_kept() {
     let mut lines: Vec<String> = listing(300).lines().map(str::to_owned).collect();
     lines.insert(200, "NOTE: do not run the migration twice".to_owned());
     let pruned = prune(&lines.join("\n"), "", 500);
@@ -96,13 +96,13 @@ fn head_and_tail_frame_the_elided_middle() {
 }
 
 #[test]
-fn salient_lines_beyond_the_budget_raise_high_risk() {
+fn diagnostic_lines_beyond_the_budget_raise_high_risk() {
     let text = (0..400)
         .map(|i| format!("error: test case {i} failed with exit code 101"))
         .collect::<Vec<_>>()
         .join("\n");
     let pruned = prune(&text, "", 300);
-    assert!(pruned.salient_dropped > 0);
+    assert!(pruned.diagnostic_dropped > 0);
     assert_eq!(pruned.risk, FidelityRisk::High);
 }
 
@@ -157,7 +157,7 @@ fn prose_about_errors_is_not_a_diagnostic() {
         .collect::<Vec<_>>()
         .join("\n");
     let pruned = prune(&text, "cat CHANGELOG.md", 600);
-    assert_eq!(pruned.salient_dropped, 0);
+    assert_eq!(pruned.diagnostic_dropped, 0);
     assert_eq!(pruned.risk, FidelityRisk::Medium);
 }
 

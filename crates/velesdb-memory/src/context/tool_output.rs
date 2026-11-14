@@ -93,7 +93,7 @@ const UPPERCASE_MARKERS: &[&str] = &[
 /// Query terms shorter than this match too much to mean anything.
 const MIN_QUERY_TERM_CHARS: usize = 3;
 
-/// How many framing lines [`prune_tool_output`] keeps around the salient ones.
+/// How many framing lines [`prune_tool_output`] keeps around the diagnostic ones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutputPolicy {
     /// Leading lines kept: what the command printed first. Default `5`.
@@ -101,7 +101,7 @@ pub struct ToolOutputPolicy {
     /// Trailing lines kept, before the head: summaries and exit status print
     /// last. Default `10`.
     pub tail_lines: usize,
-    /// Lines kept on each side of a salient line. Default `1`.
+    /// Lines kept on each side of a diagnostic line. Default `1`.
     pub context_lines: usize,
 }
 
@@ -131,7 +131,7 @@ pub struct PrunedToolOutput {
     pub elided_lines: usize,
     /// How many of those were diagnostic lines — the losses that make the
     /// risk [`FidelityRisk::High`].
-    pub salient_dropped: usize,
+    pub diagnostic_dropped: usize,
 }
 
 /// Prune `text` to at most `token_budget` estimated tokens — see the module
@@ -155,7 +155,7 @@ pub fn prune_tool_output(
             risk: FidelityRisk::Low,
             content: whole,
             elided_lines: 0,
-            salient_dropped: 0,
+            diagnostic_dropped: 0,
         };
     }
     let classes = LineClasses::of(&lines, &query_terms(query));
@@ -171,21 +171,21 @@ pub fn prune_tool_output(
     }
     let content = render(&lines, &selection.kept);
     let elided_lines = selection.kept.iter().filter(|kept| !**kept).count();
-    let salient_dropped = (0..lines.len())
+    let diagnostic_dropped = (0..lines.len())
         .filter(|&i| diagnostic[i] && !selection.kept[i])
         .count();
     PrunedToolOutput {
         tokens_in: estimator.estimate(text),
         tokens_out: estimator.estimate(&content),
-        risk: risk_of(elided_lines, salient_dropped),
+        risk: risk_of(elided_lines, diagnostic_dropped),
         content,
         elided_lines,
-        salient_dropped,
+        diagnostic_dropped,
     }
 }
 
-fn risk_of(elided_lines: usize, salient_dropped: usize) -> FidelityRisk {
-    if salient_dropped > 0 {
+fn risk_of(elided_lines: usize, diagnostic_dropped: usize) -> FidelityRisk {
+    if diagnostic_dropped > 0 {
         FidelityRisk::High
     } else if elided_lines > 0 {
         FidelityRisk::Medium
