@@ -106,6 +106,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI-only build keeps axum/rustls out and fails `serve` with a pointer to
   the feature or the standalone binary.
 
+### Security
+
+- **The install wizard never runs a downloaded installer under `--yes`**
+  (`scripts/wizard_embedder.py`). On Linux, Ollama is installed with
+  Ollama's own script, which nothing verifies once downloaded; `--apply --yes`
+  ran it without anyone reading it. It now needs an explicit answer, `--yes`
+  is refused with the command to run by hand, and the downloaded copy is
+  removed either way. `brew` and `winget` installs keep `--yes`.
+
+- **The wizard refuses an Ollama endpoint that is not an http(s) URL with a
+  host.** `--ollama-url`, `VELESDB_MEMORY_EMBEDDER_URL` and
+  `VELESDB_MEMORY_OLLAMA_URL` were fetched and written into every harness
+  config and the daemon unchecked, so a `file://` value was read as a local
+  file. Anything else is now a usage error (exit 2).
+
 ### Fixed
 
 - **MATCH rows carry the score of a WHERE `similarity()` on any alias.** When
