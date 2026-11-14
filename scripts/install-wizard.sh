@@ -42,13 +42,22 @@ native_target() {
 }
 
 # memory_tags LISTING: velesdb-memory-vX.Y.Z tags of a downloaded release
-# listing, newest first (GitHub lists releases that way; a suffixed tag is a
-# prerelease and is skipped). Downloaded first, not piped: POSIX sh has no
-# pipefail, and a failed listing must not read as "no wizard released".
+# listing, newest first (GitHub lists releases that way), drafts and
+# prereleases skipped — the flag, not the tag name, makes a prerelease.
+# Each release object carries its tag_name, draft and prerelease fields in
+# some order, before its assets (which carry none of them); splitting on
+# commas puts every field on its own line, pretty-printed or not. Downloaded
+# first, not piped: POSIX sh has no pipefail, and a failed listing must not
+# read as "no wizard released".
 memory_tags() {
-  grep -o '"tag_name": *"velesdb-memory-v[0-9]*\.[0-9]*\.[0-9]*"' "$1" \
-    | sed 's/.*"\(velesdb-memory-v[^"]*\)"/\1/' \
-    | head -n "$MAX_TAGS"
+  tr ',' '\n' < "$1" | awk '
+    /"tag_name" *:/ { tag = $0; sub(/.*"tag_name" *: *"/, "", tag); sub(/".*/, "", tag); draft = ""; pre = "" }
+    /"draft" *:/ { draft = ($0 ~ /true/) ? "true" : "false" }
+    /"prerelease" *:/ { pre = ($0 ~ /true/) ? "true" : "false" }
+    tag != "" && draft != "" && pre != "" {
+      if (draft == "false" && pre == "false" && tag ~ /^velesdb-memory-v[0-9]+\.[0-9]+\.[0-9]+$/) print tag
+      tag = ""
+    }' | head -n "$MAX_TAGS"
 }
 
 sha256_of() {

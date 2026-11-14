@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import io
 import struct
@@ -98,8 +99,32 @@ class PackagePlanTests(unittest.TestCase):
 
     def test_windows_version_resource_has_wiscale(self):
         rc = pkg.windows_version_resource("0.18.0")
-        self.assertIn('"CompanyName", "WiScale"', rc)
-        self.assertIn("0,18,0,0", rc)
+        self.assertIn("StringStruct('CompanyName', 'WiScale')", rc)
+        self.assertIn("filevers=(0, 18, 0, 0)", rc)
+
+    def test_windows_version_resource_is_the_python_expression_pyinstaller_evals(self):
+        # PyInstaller's load_version_info_from_text_file runs eval() on the
+        # file: only its versioninfo constructors and literals may appear.
+        allowed = {"VSVersionInfo", "FixedFileInfo", "StringFileInfo", "StringTable",
+                   "StringStruct", "VarFileInfo", "VarStruct"}
+        tree = ast.parse(pkg.windows_version_resource("0.18.0"), mode="eval")
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        self.assertLessEqual(names, allowed)
+        self.assertEqual(tree.body.func.id, "VSVersionInfo")
+
+    def test_windows_version_resource_loads_with_pyinstallers_own_parser(self):
+        try:
+            import PyInstaller.compat as compat
+            if not hasattr(compat, "win32api"):  # only imported on Windows; unused by the parser
+                compat.win32api = None
+            from PyInstaller.utils.win32 import versioninfo
+        except ImportError:
+            self.skipTest("PyInstaller (and pefile) not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "version.txt"
+            path.write_text(pkg.windows_version_resource("0.18.0"), encoding="utf-8")
+            info = versioninfo.load_version_info_from_text_file(str(path))
+        self.assertIn("WiScale", str(info))
 
     def test_build_meta_carries_signature_and_version(self):
         src = pkg.build_meta_source("9.9.9")

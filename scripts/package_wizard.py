@@ -202,34 +202,34 @@ def build_meta_source(version: str) -> str:
 
 
 def windows_version_resource(version: str) -> str:
-    """RC file compiled into the .exe — the visible 'signature' in Explorer
-    properties (CompanyName / LegalCopyright), discreet but attributable."""
-    parts = re.findall(r"\d+", version)[:4]
-    filever = ",".join(parts + ["0"] * (4 - len(parts)))
+    """The --version-file compiled into the .exe — the visible 'signature' in
+    Explorer properties (CompanyName / LegalCopyright), discreet but
+    attributable. PyInstaller reads it with `eval()`: it is the Python
+    `VSVersionInfo` serialization (PyInstaller/utils/win32/versioninfo.py),
+    not RC syntax."""
+    parts = [int(p) for p in re.findall(r"\d+", version)[:4]]
+    filever = tuple(parts + [0] * (4 - len(parts)))
+    strings = [
+        ("CompanyName", PUBLISHER),
+        ("ProductName", "VelesDB Install Wizard"),
+        ("FileDescription", "velesdb-memory installer wizard"),
+        ("FileVersion", version),
+        ("LegalCopyright", f"(c) {PUBLISHER}"),
+        ("InternalName", BINARY),
+        ("OriginalFilename", f"{BINARY}.exe"),
+        ("ProductVersion", version),
+    ]
+    structs = ",\n          ".join(f"StringStruct({k!r}, {v!r})" for k, v in strings)
     return f"""VSVersionInfo(
-  VERSIONINFO,
-  FILEVERSION {filever},
-  PRODUCTVERSION {filever},
-  FILEOS 0x40004,
-  FILETYPE 0x1,
-  BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-      BLOCK "040904b0"
-      BEGIN
-        VALUE "CompanyName", "{PUBLISHER}"
-        VALUE "ProductName", "VelesDB Install Wizard"
-        VALUE "FileDescription", "velesdb-memory installer wizard"
-        VALUE "LegalCopyright", "(c) {PUBLISHER}"
-        VALUE "InternalName", "{BINARY}"
-        VALUE "OriginalFilename", "{BINARY}.exe"
-      END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-      VALUE "Translation", 0x409, 1200
-    END
-  END
+  ffi=FixedFileInfo(filevers={filever}, prodvers={filever}, mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+          {structs}])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
 )
 """
 

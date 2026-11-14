@@ -88,8 +88,11 @@ class ShellBootstrapTests(unittest.TestCase):
     def serve(self, url: str, payload: bytes) -> None:
         (self.net / _url_key(url)).write_bytes(payload)
 
-    def release_list(self, *tags: str) -> None:
-        self.serve(API, json.dumps([{"tag_name": t, "prerelease": False, "draft": False} for t in tags]).encode())
+    def release_list(self, *tags: str, prerelease: "tuple[str, ...]" = (), draft: "tuple[str, ...]" = ()) -> None:
+        # GitHub's field order: tag_name, then draft, then prerelease, then assets
+        releases = [{"tag_name": t, "name": f"{t}, notes", "draft": t in draft, "prerelease": t in prerelease,
+                     "assets": [{"name": "x.tar.gz", "uploader": {"login": "bot"}}]} for t in tags]
+        self.serve(API, json.dumps(releases, indent=2).encode())
 
     def native_asset(self, tag: str, target: str, sha: "str | None" = None) -> None:
         wizard = f'#!/bin/sh\necho "native $*" > "{self.ran}"\n'.encode()
@@ -128,6 +131,15 @@ class ShellBootstrapTests(unittest.TestCase):
         self.assertIn("velesdb-memory-v0.19.0", result.stdout + result.stderr)
         self.assertTrue(self.ran.read_text().startswith("native"))
 
+    def test_prereleases_and_drafts_are_skipped_whatever_their_tag(self) -> None:
+        tags = ("velesdb-memory-v0.20.0", "velesdb-memory-v0.19.1", "velesdb-memory-v0.19.0")
+        self.release_list(*tags, prerelease=(tags[0],), draft=(tags[1],))
+        for tag in tags:
+            self.native_asset(tag, "x86_64-unknown-linux-gnu")
+        result = self.run_bootstrap("Linux", "x86_64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("velesdb-memory-v0.19.0", result.stderr)
+
     def test_a_checksum_mismatch_runs_nothing(self) -> None:
         self.release_list("velesdb-memory-v0.19.0")
         self.native_asset("velesdb-memory-v0.19.0", "x86_64-unknown-linux-gnu", sha="0" * 64)
@@ -152,11 +164,11 @@ class ShellBootstrapTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("velesdb_install_wizard.py", result.stderr)
 
-
     def test_an_unreachable_release_listing_is_reported_as_such(self) -> None:
         result = self.run_bootstrap("Linux", "x86_64")  # nothing served at all
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("could not list the releases", result.stderr)
+
 
 class PowerShellBootstrapTests(unittest.TestCase):
     """Dot-sources install-wizard.ps1 (which then defines, not runs, its entry

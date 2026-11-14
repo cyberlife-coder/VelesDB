@@ -1902,6 +1902,16 @@
       "script": "scripts/bump_version.py",
       "reason": "Release-time only, by design: release.yml:124 runs it to rewrite the version stamps before publishing. There is nothing for it to assert on a pull request. Same class as check-crates-io-versions.sh.",
       "issue": null
+    },
+    {
+      "script": "scripts/package_wizard.py",
+      "reason": "Not in `CI Success`, by design: it is the build step of the install-wizard release assets, run by `release-memory.yml`'s `build-wizard` and `build-wizard-source` jobs on one runner per target (PyInstaller does not cross-compile), so it can only run on a velesdb-memory release. It exits non-zero on a failed build, which fails the job, and `publish-wizard` needs every build, so a release never ships a partial set. scripts.tests.test_package_wizard proves the asset names, the bundled resources, the source bundle and the build signature.",
+      "issue": null
+    },
+    {
+      "script": "scripts/validate_package.py",
+      "reason": "Not in `CI Success`, by design: it verifies each install-wizard asset (sha256 sidecar and the embedded WiScale build signature) after `release-memory.yml` builds it and before `publish-wizard` uploads it, so it only has assets to read on a velesdb-memory release; users run the same check on a download. scripts.tests.test_package_wizard proves it accepts an official build and refuses a mismatched sidecar or an unsigned binary.",
+      "issue": null
     }
   ],
   "not_a_gate": [
@@ -1918,5 +1928,5 @@
       "reason": "A measurement harness, not a gate: manual-dispatch probe for #1944 whose exit 1 means 'a case scored fatal' - a result to record, which is why the workflow runs it with `|| true` and fails only on a missing result file. It refuses nothing on any merge path and sits outside CI Success by design."
     }
   ],
-  "last_updated": "2026-11-11"
+  "last_updated": "2026-11-14"
 }
