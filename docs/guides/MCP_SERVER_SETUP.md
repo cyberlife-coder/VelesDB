@@ -44,17 +44,23 @@ per OS, `~` / `%APPDATA%` / `%USERPROFILE%`), checks whether the memory store
 is currently **locked** by a live process (see below), and proposes the right
 mode: single-harness `stdio`, or one shared HTTPS `daemon` when several
 harnesses — or an already-running direct `velesdb-memory` — would otherwise
-fight over the lock. In daemon mode `--apply` really starts the daemon via
-`scripts/install-memory-daemon.sh|.ps1` and only rewires the harnesses once
-`https://127.0.0.1:18090/health` answers. Every config write is backed up and
+fight over the lock. A missing `velesdb-memory` binary is installed from the
+latest `velesdb-memory-v*` release archive (sha256-verified against its
+sidecar, `cargo install velesdb-memory` as fallback) before any harness is
+wired. In daemon mode `--apply` runs `scripts/install-memory-daemon.sh|.ps1`
+(launchd on macOS, a Scheduled Task on Windows; on Linux it installs no
+service yet, so the health gate refuses daemon mode) and only rewires the
+harnesses once `https://127.0.0.1:18090/health` answers. Every config write is backed up and
 atomic (unique tmp + rename + post-write validation, original file mode kept,
 symlinks refused). See #2759.
 
-**Packaged installers (no Python needed):** Releases carry
-`velesdb-install-wizard.exe` (Windows), `VelesDB Install Wizard.app` / `.dmg`
-(macOS) and a Linux binary / `.tar.gz`, each embedding a discreet **WiScale**
-publisher signature plus a sha256 manifest — verify before running:
-`python3 scripts/validate_package.py <artifact>`.
+**Packaged installers (no Python needed to run them):**
+`python3 scripts/package_wizard.py --apply` builds one for the machine it runs
+on — `velesdb-install-wizard-<target>.exe` (Windows), `.tar.gz` plus a `.dmg`
+whose `.command` launcher opens Terminal (macOS), `.tar.gz` (Linux). The
+binary bundles the daemon installers and the skills, embeds a discreet
+**WiScale** publisher signature, and each asset gets a `<asset>.sha256`
+sidecar — verify before running: `python3 scripts/validate_package.py <asset>`.
 
 **One command, with a Rust toolchain present:**
 

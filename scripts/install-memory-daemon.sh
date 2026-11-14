@@ -167,10 +167,14 @@ preflight() {
     exit 1
   fi
 
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-    echo -e "${RED}❌ not inside a git checkout of VelesDB — run this script from within the repo${NC}"
-    exit 1
-  }
+  # Only a source build needs the checkout: --from-release installs the
+  # prebuilt archive, which is how the packaged install wizard runs this.
+  if [ "$FROM_RELEASE" != "1" ]; then
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+      echo -e "${RED}❌ not inside a git checkout of VelesDB — run this script from within the repo (or pass --from-release)${NC}"
+      exit 1
+    }
+  fi
 
   if [ "$(uname -s)" = "Darwin" ]; then
     DAEMON_SUPPORTED=1

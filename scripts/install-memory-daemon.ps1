@@ -202,12 +202,16 @@ function Invoke-Preflight {
         exit 1
     }
 
-    try {
-        $script:RepoRoot = (git rev-parse --show-toplevel 2>$null)
-        if (-not $script:RepoRoot) { throw 'not a git checkout' }
-    } catch {
-        Write-ErrorMsg 'Not inside a git checkout of VelesDB — run this script from within the repo.'
-        exit 1
+    # Only a source build needs the checkout: -FromRelease installs the
+    # prebuilt archive, which is how the packaged install wizard runs this.
+    if (-not $FromRelease) {
+        try {
+            $script:RepoRoot = (git rev-parse --show-toplevel 2>$null)
+            if (-not $script:RepoRoot) { throw 'not a git checkout' }
+        } catch {
+            Write-ErrorMsg 'Not inside a git checkout of VelesDB — run this script from within the repo (or use -FromRelease).'
+            exit 1
+        }
     }
 
     $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1

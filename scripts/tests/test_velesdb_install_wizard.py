@@ -13,6 +13,9 @@ import unittest.mock
 from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "velesdb_install_wizard.py"
+# the wizard imports its sibling `wizard_release`, as it does when run as a script
+if str(SCRIPT_PATH.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 
 def _load_script() -> types.ModuleType:
@@ -169,6 +172,117 @@ class PlanTests(unittest.TestCase):
             rc = mod.main(["--home", d, "--store", str(home / "s"), "--dry-run", "--json", "--no-cli-scan"])
             self.assertEqual(rc, 0)
 
+
+
+class FreshMachineTests(unittest.TestCase):
+    """A machine with no checkout, no velesdb-memory and no Rust toolchain —
+    what a packaged wizard or a one-line install meets."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.cfg = self.home / ".cursor" / "mcp.json"
+        self.cfg.parent.mkdir(parents=True)
+        self.cfg.write_text('{"mcpServers": {}}', encoding="utf-8")
+        self.plan = {
+            "platform": {"os": "linux", "arch": "x86_64"}, "store": str(self.home / "s"), "port": 18090,
+            "proposed_mode": "stdio", "actions": [],
+            "harnesses": [{"name": "cursor", "kind": "mcp-json", "config": str(self.cfg),
+                           "velesdb_memory_entry": None, "installed": True}],
+        }
+        self.fake_bin = self.home / ".local" / "bin" / "velesdb-memory"
+
+    def _release_installs(self, *args, **kwargs):
+        self.fake_bin.parent.mkdir(parents=True, exist_ok=True)
+        self.fake_bin.write_bytes(b"bin")
+        return mod.wizard_release.Installed(path=self.fake_bin, tag="velesdb-memory-v0.18.0")
+
+    def test_stdio_apply_installs_the_release_binary_then_wires(self):
+        with unittest.mock.patch.object(mod, "find_binary", return_value=None), \
+             unittest.mock.patch.object(mod.wizard_release, "download_binary", side_effect=self._release_installs):
+            statuses = mod.apply_plan(self.plan, dry=False)
+        self.assertFalse(mod._statuses_failed(statuses), statuses)
+        self.assertIn("velesdb-memory-v0.18.0", statuses[0])
+        entry = json.loads(self.cfg.read_text(encoding="utf-8"))["mcpServers"]["velesdb-memory"]
+        self.assertEqual(entry["command"], str(self.fake_bin))
+
+    def test_release_failure_without_cargo_fails_and_touches_nothing(self):
+        boom = mod.wizard_release.ReleaseError("offline")
+        with unittest.mock.patch.object(mod, "find_binary", return_value=None), \
+             unittest.mock.patch.object(mod.wizard_release, "download_binary", side_effect=boom), \
+             unittest.mock.patch.object(mod.shutil, "which", return_value=None):
+            statuses = mod.apply_plan(self.plan, dry=False)
+        self.assertTrue(mod._statuses_failed(statuses))
+        self.assertIn("offline", statuses[0])
+        self.assertEqual(json.loads(self.cfg.read_text(encoding="utf-8")), {"mcpServers": {}})
+
+    def test_release_failure_falls_back_to_cargo_install_of_the_published_crate(self):
+        boom = mod.wizard_release.ReleaseError("no asset for this platform")
+        done = unittest.mock.Mock(returncode=0, stderr="")
+        with unittest.mock.patch.object(mod, "find_binary", side_effect=[None, self.fake_bin]), \
+             unittest.mock.patch.object(mod.wizard_release, "download_binary", side_effect=boom), \
+             unittest.mock.patch.object(mod.shutil, "which", return_value="/usr/bin/cargo"), \
+             unittest.mock.patch.object(mod.subprocess, "run", return_value=done) as run:
+            path, status = mod.ensure_binary(self.plan["platform"], dry=False)
+        self.assertEqual(path, str(self.fake_bin))
+        self.assertEqual(run.call_args.args[0], ["cargo", "install", "velesdb-memory", "--locked"])
+
+    def test_daemon_mode_outside_a_checkout_installs_from_the_release(self):
+        with unittest.mock.patch.object(mod, "is_source_checkout", return_value=False), \
+             unittest.mock.patch.object(mod.subprocess, "run", return_value=unittest.mock.Mock(returncode=0)) as run, \
+             unittest.mock.patch.object(mod, "probe_health", return_value=(True, "HTTP 200")):
+            ok, _ = mod.run_daemon_installer({"os": "linux", "arch": "x86_64"}, 18090, self.home / "s", yes=True)
+        self.assertTrue(ok)
+        self.assertIn("--from-release", run.call_args.args[0])
+        self.assertIsNone(run.call_args.kwargs["cwd"])
+
+    def test_daemon_mode_in_a_checkout_builds_from_it(self):
+        with unittest.mock.patch.object(mod, "is_source_checkout", return_value=True), \
+             unittest.mock.patch.object(mod.subprocess, "run", return_value=unittest.mock.Mock(returncode=0)) as run, \
+             unittest.mock.patch.object(mod, "probe_health", return_value=(True, "HTTP 200")):
+            mod.run_daemon_installer({"os": "linux", "arch": "x86_64"}, 18090, self.home / "s", yes=False)
+        self.assertNotIn("--from-release", run.call_args.args[0])
+        self.assertEqual(run.call_args.kwargs["cwd"], str(mod.REPO_ROOT))
+
+    def test_windows_daemon_outside_a_checkout_passes_from_release(self):
+        cmd = mod.daemon_installer_cmd({"os": "windows", "arch": "x86_64"}, 18090, self.home / "s",
+                                       yes=True, from_release=True)
+        if cmd is not None:  # None only where no PowerShell is installed
+            self.assertEqual(cmd[-2:], ["-Yes", "-FromRelease"])
+
+    def test_successful_daemon_apply_reports_no_failure(self):
+        plan = {**self.plan, "proposed_mode": "daemon"}
+        with unittest.mock.patch.object(mod, "run_daemon_installer", return_value=(True, "/health: HTTP 200")):
+            statuses = mod.apply_plan(plan, dry=False)
+        self.assertFalse(mod._statuses_failed(statuses), statuses)
+
+
+class PackagedBuildTests(unittest.TestCase):
+    """What a PyInstaller build reads must exist at its repo-relative path."""
+
+    def test_bundled_resources_exist_in_the_checkout(self):
+        for rel in mod.BUNDLED_RESOURCES:
+            self.assertTrue((mod.REPO_ROOT / rel).is_file(), rel)
+
+    def test_runtime_resources_resolve_under_resource_root(self):
+        self.assertEqual(mod.daemon_installer_script("linux"), mod.RESOURCE_ROOT / "scripts" / "install-memory-daemon.sh")
+        for os_name in ("linux", "windows"):
+            rel = mod.daemon_installer_script(os_name).relative_to(mod.RESOURCE_ROOT).as_posix()
+            self.assertIn(rel, mod.BUNDLED_RESOURCES)
+
+    def test_skills_install_in_process_never_via_sys_executable(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan = {"harnesses": [{"name": "claude-code", "installed": True}]}
+            with unittest.mock.patch.dict(os.environ, {"CLAUDE_SKILLS_DIR": d}), \
+                 unittest.mock.patch.object(mod.subprocess, "run") as run:
+                statuses = mod.install_skills(plan)
+            run.assert_not_called()
+            self.assertEqual(statuses, ["skills claude: ok"])
+            self.assertTrue((Path(d) / "velesdb-memory" / "SKILL.md").is_file())
+
+    def test_version_comes_from_the_build_not_a_constant(self):
+        self.assertEqual(mod.__version__, mod.BUILD_VERSION or "source")
 
 if __name__ == "__main__":
     unittest.main()
@@ -593,9 +707,11 @@ class AuditFixRegressionTests(unittest.TestCase):
         self.assertIn("REFUSED", out)
         self.assertEqual(json.loads(cfg.read_text(encoding="utf-8")), {"mcpServers": {}})
 
-    def test_install_binary_returns_none_not_sentence(self):
+    def test_ensure_binary_dry_run_returns_none_not_sentence(self):
         with unittest.mock.patch.object(mod, "find_binary", return_value=None):
-            self.assertIsNone(mod.install_binary({"os": "linux", "arch": "x86_64"}, dry=False))
+            path, status = mod.ensure_binary({"os": "linux", "arch": "x86_64"}, dry=True)
+        self.assertIsNone(path)
+        self.assertIn("would install", status)
 
     # -- daemon health gate: no rewiring when the daemon is not up (apply S1 / xplat S2)
     def test_apply_plan_daemon_failure_skips_rewiring(self):
@@ -605,8 +721,7 @@ class AuditFixRegressionTests(unittest.TestCase):
             "harnesses": [{"name": "cursor", "kind": "mcp-json", "config": "/tmp/c.json", "velesdb_memory_entry": None, "installed": True}],
             "actions": [],
         }
-        with unittest.mock.patch.object(mod, "install_binary", return_value="/bin/x"), \
-             unittest.mock.patch.object(mod, "run_daemon_installer", return_value=(False, "boom")), \
+        with unittest.mock.patch.object(mod, "run_daemon_installer", return_value=(False, "boom")), \
              unittest.mock.patch.object(mod, "wire_harness") as wh:
             statuses = mod.apply_plan(plan, dry=False, yes=True)
             wh.assert_not_called()

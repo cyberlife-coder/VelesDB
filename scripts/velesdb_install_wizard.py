@@ -29,6 +29,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import re
@@ -38,6 +41,7 @@ import tempfile
 import subprocess
 import sys
 import textwrap
+import types
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -45,21 +49,32 @@ if sys.platform == "win32":
 else:
     import fcntl
 
+import wizard_release
+
 DEFAULT_STORE = Path.home() / ".velesdb-memory"
 LOCK_FILENAME = "velesdb.lock"
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-#: Discreet publisher marker, embedded in packaged builds (exe/dmg/app) and
-#: printed by --version. Real code signing happens in the release pipeline
-#: (signtool / codesign with CI secrets) — never in this repo.
+#: True inside a PyInstaller build (scripts/package_wizard.py).
+FROZEN = bool(getattr(sys, "frozen", False))
+#: Where the wizard's runtime resources live, at their repo-relative paths:
+#: PyInstaller's extraction directory in a packaged build (package_wizard.py
+#: bundles them via BUNDLED_RESOURCES), the checkout otherwise.
+RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", REPO_ROOT))
+#: Discreet publisher marker, embedded in packaged builds and printed by
+#: --version. Real code signing happens in the release pipeline (signtool /
+#: codesign with CI secrets) — never in this repo.
 PUBLISHER = "WiScale"
-__version__ = "1.0.0"
 try:
     # injected at packaging time by scripts/package_wizard.py (compiled into
-    # the exe/app/dmg binary) — proves the artifact is an official build
-    from _wizard_build_meta import BUILD_SIGNATURE  # type: ignore
+    # the packaged binary) — proves the artifact is an official build
+    from _wizard_build_meta import BUILD_SIGNATURE, BUILD_VERSION  # type: ignore
 except ImportError:
     BUILD_SIGNATURE = None
+    BUILD_VERSION = None
+#: The velesdb-memory release a packaged wizard was built with; a checkout
+#: has no release version of its own.
+__version__ = BUILD_VERSION or "source"
 
 #: One entry per supported harness. `configs` is a flat, OS-agnostic candidate
 #: list (first existing wins). `kind` says how the MCP entry is read/written.
@@ -519,19 +534,27 @@ def print_plan(plan: dict) -> None:
 # PR-B: apply
 # ---------------------------------------------------------------------------
 
-RELEASE_REPO = "cyberlife-coder/VelesDB"
+#: Resources the wizard reads at runtime, repo-relative. package_wizard.py
+#: bundles exactly these (plus the skill sources sync-skills.py declares), so a
+#: packaged build finds them under RESOURCE_ROOT as a checkout does.
+BUNDLED_RESOURCES: tuple[str, ...] = (
+    "scripts/install-memory-daemon.sh",
+    "scripts/install-memory-daemon.ps1",
+    "scripts/sync-skills.py",
+)
 
 
 def find_binary() -> Path | None:
     """An already-installed velesdb-memory binary, if any (velesdb-memory.exe
-    on Windows)."""
+    on Windows): PATH, cargo's bin dir, the wizard's own release install
+    location, then a checkout's release build."""
     exe = ".exe" if sys.platform == "win32" else ""
     on_path = shutil.which(f"velesdb-memory{exe}")
     if on_path:
         return Path(on_path)
     candidates = [
         Path.home() / ".cargo" / "bin" / f"velesdb-memory{exe}",
-        Path.home() / ".local" / "bin" / f"velesdb-memory{exe}",
+        wizard_release.install_path(detect_platform(), Path.home(), os.environ),
         REPO_ROOT / "target" / "release" / f"velesdb-memory{exe}",
     ]
     for c in candidates:
@@ -540,42 +563,81 @@ def find_binary() -> Path | None:
     return None
 
 
-def install_binary(plat: dict, dry: bool = True) -> "str | None":
-    """Resolve an existing velesdb-memory binary to a REAL path, or None.
-    The wizard never writes a descriptive sentence into a `command` field:
-    installation itself (release asset with sha256 sidecar, or cargo) is done
-    by scripts/install-memory-daemon.sh|.ps1, which apply_plan runs in daemon
-    mode — see run_daemon_installer()."""
+def _cargo_install() -> "tuple[Path | None, str]":
+    """Fallback for a platform the release does not cover: build the published
+    crate. Never the checkout — a packaged wizard has none."""
+    if shutil.which("cargo") is None:
+        return None, "cargo not found"
+    try:
+        r = subprocess.run(["cargo", "install", "velesdb-memory", "--locked"],
+                           capture_output=True, text=True, timeout=1800, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"cargo install failed to start: {e}"
+    if r.returncode != 0:
+        return None, f"cargo install exited {r.returncode}: {(r.stderr or '').strip()[-200:]}"
+    return find_binary(), "cargo install velesdb-memory"
+
+
+def ensure_binary(plat: dict, dry: bool = True) -> "tuple[str | None, str]":
+    """Return (real binary path or None, status). Installs one when none is on
+    disk: the sha256-verified release archive first, `cargo install` second.
+    A `command` field only ever receives a path that exists."""
     existing = find_binary()
-    return str(existing) if existing else None
+    if existing:
+        return str(existing), f"binary: {existing}"
+    if dry:
+        return None, "binary: would install velesdb-memory from the latest velesdb-memory-v* release (sha256-verified)"
+    try:
+        installed = wizard_release.download_binary(plat, Path.home())
+        return str(installed.path), f"binary: installed {installed.path} from {installed.tag} (sha256 OK)"
+    except wizard_release.ReleaseError as release_error:
+        path, detail = _cargo_install()
+        if path is None:
+            return None, f"binary: FAILED — release: {release_error}; fallback: {detail}"
+        return str(path), f"binary: installed {path} ({detail})"
 
 
 def daemon_installer_script(os_name: str) -> Path:
     name = "install-memory-daemon.ps1" if os_name == "windows" else "install-memory-daemon.sh"
-    return SCRIPT_DIR / name
+    return RESOURCE_ROOT / "scripts" / name
 
 
-def run_daemon_installer(plat: dict, port: int, store: Path, yes: bool) -> "tuple[bool, str]":
-    """Really run install-memory-daemon (absolute path, anchored to this repo),
-    then probe /health. Returns (ok, detail). The daemon installer does the
-    sha256-verified release download / build and the OS wiring (launchd /
-    Scheduled Task); the wizard refuses to wire harnesses to an http endpoint
-    that does not answer."""
+def is_source_checkout() -> bool:
+    """A git checkout with cargo: the daemon installer can build from it.
+    Anything else — packaged build, copied script — installs from the release."""
+    return (not FROZEN and (REPO_ROOT / ".git").exists()
+            and (REPO_ROOT / "crates" / "velesdb-memory").is_dir() and shutil.which("cargo") is not None)
+
+
+def daemon_installer_cmd(plat: dict, port: int, store: Path, yes: bool, from_release: bool) -> "list[str] | None":
     script = daemon_installer_script(plat["os"])
-    if not script.exists():
-        return False, f"daemon installer not found: {script}"
     if plat["os"] == "windows":
         ps = shutil.which("pwsh") or shutil.which("powershell")
         if ps is None:
-            return False, "powershell/pwsh not found for install-memory-daemon.ps1"
+            return None
         cmd = [ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
                "-Port", str(port), "-Store", str(store)]
-        if yes:
-            cmd.append("-Yes")
-    else:
-        cmd = ["bash", str(script), f"--port={port}", f"--store={store}"] + (["--yes"] if yes else [])
+        return cmd + (["-Yes"] if yes else []) + (["-FromRelease"] if from_release else [])
+    cmd = ["bash", str(script), f"--port={port}", f"--store={store}"]
+    return cmd + (["--yes"] if yes else []) + (["--from-release"] if from_release else [])
+
+
+def run_daemon_installer(plat: dict, port: int, store: Path, yes: bool) -> "tuple[bool, str]":
+    """Really run install-memory-daemon, then probe /health. Returns (ok,
+    detail). From a checkout it builds there (cwd = the checkout, which its
+    `git rev-parse` needs); otherwise it installs the sha256-verified release
+    archive. The wizard refuses to wire harnesses to an http endpoint that
+    does not answer."""
+    script = daemon_installer_script(plat["os"])
+    if not script.exists():
+        return False, f"daemon installer not found: {script}"
+    source = is_source_checkout()
+    cmd = daemon_installer_cmd(plat, port, store, yes, from_release=not source)
+    if cmd is None:
+        return False, "powershell/pwsh not found for install-memory-daemon.ps1"
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL,
+                           cwd=str(REPO_ROOT) if source else None)
     except (OSError, subprocess.SubprocessError) as e:
         return False, f"daemon installer failed to start: {e}"
     if r.returncode != 0:
@@ -705,7 +767,7 @@ def wire_harness(harness: dict, mode: str, bin_path: "str | None", port: int, st
     name = harness["name"]
     target = "http" if mode == "daemon" else "stdio"
     if target == "stdio" and (bin_path is None or not Path(bin_path).exists()):
-        return f"{name}: REFUSED — no velesdb-memory binary on disk; run scripts/install-memory-daemon first"
+        return f"{name}: REFUSED — no velesdb-memory binary on disk (the binary step failed)"
     if kind == "claude-cli":
         if shutil.which("claude") is None:
             return f"{name}: claude CLI not found — skipped"
@@ -877,44 +939,78 @@ def _replace_vibe_mcp_entry(text: str, new_obj: str) -> str:
     return text
 
 
+def _load_sync_skills() -> types.ModuleType:
+    """sync-skills.py, imported (its name has a dash) rather than run: in a
+    packaged build `sys.executable` is the wizard itself, not a Python."""
+    path = RESOURCE_ROOT / "scripts" / "sync-skills.py"
+    spec = importlib.util.spec_from_file_location("velesdb_sync_skills", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: sync-skills client -> the harness that loads its skills.
+SKILL_CLIENTS: tuple[tuple[str, str], ...] = (("claude", "claude-code"), ("codex", "codex"))
+
+
+def _deploy_skills(sync: types.ModuleType, client: str) -> str:
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = sync.deploy(sync.installed_root(client), f"installed for {client}")
+    except (OSError, SystemExit) as e:
+        return f"skills {client}: FAILED: {e}"
+    return f"skills {client}: {'ok' if rc == 0 else f'FAILED (exit {rc})'}"
+
+
+def install_skills(plan: dict) -> list[str]:
+    """Skills for the installed harnesses that load them (Claude Code, Codex)."""
+    installed = {h["name"] for h in plan["harnesses"] if h["installed"]}
+    clients = [client for client, harness in SKILL_CLIENTS if harness in installed]
+    if not clients:
+        return []
+    try:
+        sync = _load_sync_skills()
+    except (ImportError, OSError, SyntaxError) as e:
+        return [f"skills: FAILED: {e}"]
+    return [_deploy_skills(sync, client) for client in clients]
+
+
+def _prepare_server(plan: dict, dry: bool, yes: bool) -> "tuple[str | None, list[str], bool]":
+    """(binary path, statuses, ok to wire). stdio needs a binary on disk;
+    daemon mode delegates the binary to install-memory-daemon, then needs
+    /health to answer before any harness is rewired."""
+    if plan["proposed_mode"] != "daemon":
+        bin_path, status = ensure_binary(plan["platform"], dry=dry)
+        return bin_path, [status], True
+    if dry:
+        return None, ["daemon: would run install-memory-daemon (installs the binary), then probe /health"], True
+    ok, detail = run_daemon_installer(plan["platform"], plan.get("port", 18090), Path(plan["store"]), yes)
+    if not ok:
+        return None, [f"daemon: FAILED — {detail}",
+                      "harnesses: NOT rewired — the daemon endpoint is not answering; configs untouched"], False
+    return None, [f"daemon: up — {detail}"], True
+
+
 def apply_plan(plan: dict, dry: bool = True, yes: bool = False) -> list[str]:
     """Execute the plan's actions. Returns per-action status strings; any
     status containing FAILED or REFUSED means the apply did not fully succeed
     (main() turns that into a non-zero exit code)."""
-    statuses: list[str] = []
     mode = plan["proposed_mode"]
-    port = plan.get("port", 18090)
-    store = Path(plan["store"])
-    bin_path = install_binary(plan["platform"], dry=dry)
-    if bin_path is None:
-        statuses.append("binary: NOT FOUND on disk (PATH, ~/.cargo/bin, ~/.local/bin, repo target/release)")
-    else:
-        statuses.append(f"binary: {bin_path}")
-    if mode == "daemon" and not dry:
-        ok, detail = run_daemon_installer(plan["platform"], port, store, yes)
-        statuses.append(f"daemon: {'up — ' + detail if ok else 'FAILED — ' + detail}")
-        if not ok:
-            statuses.append("harnesses: NOT rewired — the daemon endpoint is not answering; configs untouched")
-            return statuses
+    bin_path, statuses, ok = _prepare_server(plan, dry, yes)
+    if not ok:
+        return statuses
+    target = "http" if mode == "daemon" else "stdio"
     for h in plan["harnesses"]:
         if not h["installed"]:
             continue
-        target = "http" if mode == "daemon" else "stdio"
         if h["velesdb_memory_entry"] == target:
             statuses.append(f"{h['name']}: already {target} — untouched")
             continue
-        statuses.append(wire_harness(h, mode, bin_path, port, store, dry=dry))
-    # skills for harnesses that support them (path anchored to this repo, not the CWD)
+        statuses.append(wire_harness(h, mode, bin_path, plan.get("port", 18090), Path(plan["store"]), dry=dry))
     if not dry:
-        sync = SCRIPT_DIR / "sync-skills.py"
-        for client in ("claude", "codex"):
-            if any(h["name"] == ("claude-code" if client == "claude" else "codex") and h["installed"] for h in plan["harnesses"]):
-                try:
-                    r = subprocess.run([sys.executable, str(sync), "--install", "--client", client],
-                                       capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
-                    statuses.append(f"skills {client}: {'ok' if r.returncode == 0 else 'FAILED: ' + (r.stderr or '').strip()[-200:]}")
-                except (OSError, subprocess.SubprocessError) as e:
-                    statuses.append(f"skills {client}: FAILED: {e}")
+        statuses += install_skills(plan)
     return statuses
 
 
@@ -1077,7 +1173,7 @@ def main(argv: "list[str] | None" = None) -> int:
         statuses = apply_plan(plan, dry=False, yes=args.yes)
         for status in statuses:
             print(f"  - {status}")
-        return 1 if any(("FAILED" in st or "REFUSED" in st or "NOT FOUND" in st) for st in statuses) else 0
+        return 1 if _statuses_failed(statuses) else 0
     if args.dry_run or not (sys.stdin.isatty() and sys.stdout.isatty()):
         print_plan(plan)
         print("\n(dry-run: --apply pour exécuter, ou lancez sans flag en interactif)", file=sys.stderr)
@@ -1087,7 +1183,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
 
 def _statuses_failed(statuses: "list[str]") -> bool:
-    return any(("FAILED" in st or "REFUSED" in st or "NOT FOUND" in st) for st in statuses)
+    return any(("FAILED" in st or "REFUSED" in st) for st in statuses)
 
 
 if __name__ == "__main__":

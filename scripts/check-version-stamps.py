@@ -30,9 +30,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+#: The version is a dotted triple that is not part of a longer dotted run:
+#: `127.0.0.1` holds `127.0.0` and `0.0.1`, and an IPv4 address beside a
+#: crate name is no stamp.
 STAMP_RE = re.compile(
     r"(?i)\b(?:velesdb-core|velesdb-memory|velesdb-node|velesdb-wasm|"
-    r"tauri-plugin-velesdb|workspace|applies to|currently)\b[^\n]*?\b\d+\.\d+\.\d+\b"
+    r"tauri-plugin-velesdb|workspace|applies to|currently)\b[^\n]*?(?<!\d\.)\b\d+\.\d+\.\d+\b(?!\.\d)"
 )
 HARDCODED_VERSION_ASSERT_RE = re.compile(r'\.contains\(\s*"(\d+\.\d+\.\d+)"\s*\)')
 VERSIONED_MD_EXCLUDE = re.compile(r"(^|/)CHANGELOG\.md$")
