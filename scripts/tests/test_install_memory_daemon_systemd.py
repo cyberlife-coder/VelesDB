@@ -27,7 +27,9 @@ FAKE_SYSTEMCTL = r"""#!/bin/sh
 # `--user is-active` reports the unit active when FAKE_ACTIVE=1.
 printf '%s\n' "$*" >> "$FAKE_SYSTEMCTL_LOG"
 case "$*" in
-  "--user show-environment") [ "${FAKE_USER_BUS:-1}" = "1" ] ;;
+  "--user show-environment")
+    [ -n "${FAKE_MANAGER_XDG:-}" ] && echo "XDG_CONFIG_HOME=$FAKE_MANAGER_XDG"
+    [ "${FAKE_USER_BUS:-1}" = "1" ] ;;
   "--user is-active --quiet velesdb-memory.service") [ "${FAKE_ACTIVE:-0}" = "1" ] ;;
   *) exit 0 ;;
 esac
@@ -38,7 +40,9 @@ FAKES = {
     "uname": "#!/bin/sh\necho Linux\n",
     "curl": '#!/bin/sh\nexit "${FAKE_CURL_RC:-0}"\n',  # 0: /health answers over a trusted CA
     "sudo": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_SUDO_LOG"\n',
-    "lsof": "#!/bin/sh\nexit 1\n",  # nothing listens on the port
+    # FAKE_LISTENER=pid:command: that process listens on the port; else nothing does
+    "lsof": '#!/bin/sh\n[ -n "${FAKE_LISTENER:-}" ] || exit 1\necho "${FAKE_LISTENER%%:*}"\n',
+    "ps": '#!/bin/sh\necho "${FAKE_LISTENER#*:}"\n',
 }
 
 
@@ -59,7 +63,7 @@ class SystemdUnitTests(unittest.TestCase):
         self.log = self.root / "systemctl.log"
         self.unit = self.home / ".config" / "systemd" / "user" / "velesdb-memory.service"
 
-    def run_script(self, body: str, **env: str) -> subprocess.CompletedProcess:
+    def run_script(self, body: str, shell_xdg: "str | None" = None, **env: str) -> subprocess.CompletedProcess:
         script = f'source "{SHELL_INSTALLER}"\n' + textwrap.dedent(body)
         full_env = {
             "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
@@ -68,6 +72,8 @@ class SystemdUnitTests(unittest.TestCase):
             **env,
         }
         full_env.pop("XDG_CONFIG_HOME", None)
+        if shell_xdg is not None:
+            full_env["XDG_CONFIG_HOME"] = shell_xdg
         return subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True, timeout=60)
 
     def calls(self) -> list[str]:
@@ -142,6 +148,37 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("update-ca-certificates", result.stdout)
         self.assertIn("NODE_EXTRA_CA_CERTS", result.stdout)
         self.assertFalse(sudo_log.exists())
+    def test_the_unit_goes_where_the_user_manager_looks_not_where_the_shell_points(self) -> None:
+        manager_xdg = self.root / "manager-config"
+        result = self.install(shell_xdg=str(self.root / "shell-config"), FAKE_MANAGER_XDG=str(manager_xdg))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((manager_xdg / "systemd" / "user" / "velesdb-memory.service").exists())
+        self.assertFalse((self.root / "shell-config").exists())
+
+    def test_a_port_held_by_another_velesdb_memory_is_refused(self) -> None:
+        result = self.install(FAKE_LISTENER="4242:/home/u/test/bin/velesdb-memory")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already in use", result.stdout)
+        self.assertNotIn("--user enable --now velesdb-memory.service", self.calls())
+
+    def test_a_unit_that_never_answers_wires_no_client(self) -> None:
+        result = self.install(FAKE_CURL_RC="7")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("clients NOT wired", result.stdout)
+
+    def test_an_upgrade_replaces_the_binary_a_running_daemon_executes(self) -> None:
+        running = self.home / "bin" / "velesdb-memory"
+        running.parent.mkdir()
+        shutil.copy(shutil.which("sleep"), running)
+        daemon = subprocess.Popen([str(running), "30"])
+        self.addCleanup(daemon.wait)
+        self.addCleanup(daemon.kill)
+        new = self.root / "new-velesdb-memory"
+        new.write_bytes(b"#!/bin/sh\necho new\n")
+        result = self.run_script(f'BIN_PATH="{running}"\nplace_binary "{new}"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(running.read_bytes(), new.read_bytes())
+
     def test_the_summary_names_the_journal_when_the_unit_does_not_answer(self) -> None:
         result = self.run_script("""
             detect_daemon_kind

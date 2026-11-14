@@ -115,7 +115,8 @@ CODEX_WIRING_STATUS="not attempted"
 PLIST_LABEL="com.velesdb.memory"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 SYSTEMD_UNIT="velesdb-memory.service"
-SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SYSTEMD_UNIT"
+# Resolved by resolve_systemd_unit_path from the user manager's environment.
+SYSTEMD_UNIT_PATH=""
 # launchd | systemd | none — set by detect_daemon_kind.
 DAEMON_KIND="none"
 DAEMON_SUPPORTED=0
@@ -206,6 +207,15 @@ detect_daemon_kind() {
     *) DAEMON_KIND="none" ;;
   esac
   if [ "$DAEMON_KIND" = "none" ]; then DAEMON_SUPPORTED=0; else DAEMON_SUPPORTED=1; fi
+}
+
+# The unit directory the running user manager searches: its own
+# XDG_CONFIG_HOME, not this shell's — the manager started before this
+# script, and a unit written elsewhere is "not found" by `enable`.
+resolve_systemd_unit_path() {
+  local config_home
+  config_home="$(systemctl --user show-environment 2>/dev/null | sed -n 's/^XDG_CONFIG_HOME=//p' | head -1)"
+  SYSTEMD_UNIT_PATH="${config_home:-$HOME/.config}/systemd/user/$SYSTEMD_UNIT"
 }
 
 # Where the running daemon's stderr goes, for "check …" hints.
@@ -485,6 +495,17 @@ resolve_latest_release_tag() {
   echo "$tag"
 }
 
+# place_binary SRC: install SRC as $BIN_PATH. Staged beside the target, then
+# renamed over it: a rename replaces a binary a running daemon executes,
+# where an in-place copy fails ("Text file busy") and aborts an upgrade.
+place_binary() {
+  mkdir -p "$(dirname "$BIN_PATH")"
+  local staged="$BIN_PATH.new.$$"
+  cp "$1" "$staged"
+  chmod +x "$staged"
+  mv -f "$staged" "$BIN_PATH"
+}
+
 install_from_release() {
   local tag target asset base_url tmp_dir archive_path checksum_path expected actual
 
@@ -558,9 +579,7 @@ install_from_release() {
     exit 1
   fi
 
-  mkdir -p "$(dirname "$BIN_PATH")"
-  cp "$tmp_dir/velesdb-memory" "$BIN_PATH"
-  chmod +x "$BIN_PATH"
+  place_binary "$tmp_dir/velesdb-memory"
   rm -rf "$tmp_dir"
 
   echo -e "${GREEN}✅ Installed $BIN_PATH from $tag$([ "$SKIP_CHECKSUM" = "1" ] && echo ' (unverified — --skip-checksum)')${NC}"
@@ -576,9 +595,12 @@ setup_daemon() {
   esac
 }
 
-# Refuse a port another program already listens on. A velesdb-memory
-# holder is ours (a restart in progress); `ps -o comm=` gives a basename on
-# Linux and may give a path on macOS, so basenames are compared.
+# check_port_free [own]: refuse a port another program already listens on.
+# With `own`, a holder running exactly $BIN_PATH is let through (launchd:
+# `ps -o comm=` gives macOS's full executable path). The systemd path passes
+# nothing: it runs only once its own unit is stopped or absent, so any
+# holder — even another velesdb-memory on another store — is foreign, and
+# clients wired to it would reach the wrong store.
 check_port_free() {
   if ! command -v lsof >/dev/null 2>&1; then
     return 0
@@ -589,7 +611,7 @@ check_port_free() {
     return 0
   fi
   holder_cmd="$(ps -o comm= -p "$holder_pid" 2>/dev/null || true)"
-  if [ "$(basename "$holder_cmd")" != "$(basename "$BIN_PATH")" ]; then
+  if [ "${1:-}" != "own" ] || [ "$holder_cmd" != "$BIN_PATH" ]; then
     echo -e "${RED}❌ Port $PORT is already in use by another process ($holder_cmd, pid $holder_pid).${NC}"
     echo -e "${RED}   Re-run with --port=<other-port>, or stop that process first.${NC}"
     exit 1
@@ -622,7 +644,7 @@ wait_for_health() {
     waited=$((waited + 1))
     if [ "$waited" -ge 5 ]; then
       echo -e "${YELLOW}⚠️  No response from /health within 5s — check $(daemon_log_hint)${NC}"
-      break
+      return 1
     fi
     sleep 1
   done
@@ -677,6 +699,7 @@ write_systemd_unit() {
 
 # ---- 5a. systemd user unit (Linux) -------------------------------------------
 setup_systemd_daemon() {
+  resolve_systemd_unit_path
   if systemctl --user is-active --quiet "$SYSTEMD_UNIT"; then
     if [ "$FORCE_RESTART" != "1" ]; then
       echo -e "${GREEN}✅ $SYSTEMD_UNIT is already active — skipping (pass --force-restart to restart).${NC}"
@@ -698,7 +721,12 @@ setup_systemd_daemon() {
   fi
   echo -e "${GREEN}✅ $SYSTEMD_UNIT enabled ($SYSTEMD_UNIT_PATH) — it starts with your session.${NC}"
   echo -e "${YELLOW}   To keep it running after you log out: loginctl enable-linger \"\$USER\"${NC}"
-  wait_for_health
+  # Clients are wired only to a unit that answers: wiring them to a port the
+  # unit never bound would hand them whatever else listens there.
+  if ! wait_for_health; then
+    echo -e "${RED}❌ $SYSTEMD_UNIT did not answer /health — clients NOT wired. See $(daemon_log_hint)${NC}"
+    exit 1
+  fi
   trust_local_ca "$TLS_DIR/ca-cert.pem"
 }
 
@@ -723,7 +751,7 @@ setup_launchd_daemon() {
     launchctl bootout "gui/$uid/$PLIST_LABEL" 2>/dev/null || true
   fi
 
-  check_port_free
+  check_port_free own
 
   mkdir -p "$HOME/Library/Logs/velesdb-memory"
   mkdir -p "$(dirname "$PLIST_PATH")"
@@ -807,7 +835,7 @@ PLIST
   fi
   launchctl enable "gui/$uid/$PLIST_LABEL"
 
-  wait_for_health
+  wait_for_health || true
   trust_local_ca "$TLS_DIR/ca-cert.pem"
 }
 
@@ -1203,7 +1231,10 @@ do_uninstall() {
   uid="$(id -u)"
   launchctl bootout "gui/$uid/$PLIST_LABEL" >/dev/null 2>&1 || true
   rm -f "$PLIST_PATH"
-  if [ -f "$SYSTEMD_UNIT_PATH" ]; then
+  if command -v systemctl >/dev/null 2>&1; then
+    resolve_systemd_unit_path
+  fi
+  if [ -n "$SYSTEMD_UNIT_PATH" ] && [ -f "$SYSTEMD_UNIT_PATH" ]; then
     systemctl --user disable --now "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
     rm -f "$SYSTEMD_UNIT_PATH"
     systemctl --user daemon-reload >/dev/null 2>&1 || true
