@@ -116,7 +116,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   projected nothing, and `ORDER BY similarity()` kept traversal order, so ASC
   and DESC returned the same rows. Rows now carry the similarity of the node
   that leaf targets, the score VectorFirst already reported for a
-  similarity on the start node.
+  similarity on the start node. And `ORDER BY similarity()` is
+  most-similar-first under a distance metric too: it sorted the raw score,
+  so on a Euclidean collection `DESC` put the farthest node first, unlike
+  `ORDER BY similarity(field, $v)` and the SELECT side.
 
 - **The install wizard installs the agent hooks, and the hooks find the
   binary it installed** (#2759). The wizard wired the harnesses and copied the

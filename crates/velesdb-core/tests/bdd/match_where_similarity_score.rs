@@ -61,9 +61,13 @@ fn setup_author_with_docs(db: &Database) {
 }
 
 fn run(db: &Database, order: &str) -> Vec<SearchResult> {
+    run_above(db, 0.5, order)
+}
+
+fn run_above(db: &Database, threshold: f32, order: &str) -> Vec<SearchResult> {
     let sql = format!(
         "MATCH (a:Person)-[:WROTE]->(d:Doc) \
-         WHERE similarity(d.embedding, $v) > 0.5 \
+         WHERE similarity(d.embedding, $v) > {threshold} \
          RETURN d.name, similarity() ORDER BY similarity() {order}"
     );
     let mut params = vector_param(&QUERY);
@@ -132,4 +136,41 @@ fn scenario_row_score_is_the_similarity_of_the_aliased_node() {
             row.point.id
         );
     }
+}
+
+/// GIVEN the same graph in a Euclidean collection, where the score is a
+///       distance (lower = more similar)
+/// WHEN the MATCH orders by `similarity()` DESC, then ASC
+/// THEN DESC is still most-similar first (closest doc first), as for
+///      `ORDER BY similarity(field, $v)` and on the SELECT side.
+#[test]
+fn scenario_order_by_similarity_desc_is_most_similar_first_under_a_distance_metric() {
+    let (_dir, db) = create_test_db();
+    db.create_vector_collection("kg", 2, velesdb_core::DistanceMetric::Euclidean)
+        .expect("test: create kg");
+    let vc = db.get_vector_collection("kg").expect("test: get kg");
+    vc.upsert(vec![
+        Point::new(100, vec![0.0, 1.0], Some(json!({"_labels": ["Person"]}))),
+        Point::new(1, vec![0.6, 0.8], Some(json!({"_labels": ["Doc"]}))),
+        Point::new(2, vec![0.8, 0.6], Some(json!({"_labels": ["Doc"]}))),
+        Point::new(3, vec![1.0, 0.0], Some(json!({"_labels": ["Doc"]}))),
+    ])
+    .expect("test: upsert kg");
+    for (edge_id, doc) in [(10u64, 1u64), (11, 2), (12, 3)] {
+        vc.add_edge(GraphEdge::new(edge_id, 100, doc, "WROTE").expect("test: edge"))
+            .expect("test: add edge");
+    }
+
+    // Under a distance metric `similarity(...) > 1.0` keeps distance < 1.0:
+    // all three docs (0.894, 0.632, 0.0 from the query).
+    assert_eq!(
+        ids(&run_above(&db, 1.0, "DESC")),
+        vec![3, 2, 1],
+        "closest doc first"
+    );
+    assert_eq!(
+        ids(&run_above(&db, 1.0, "ASC")),
+        vec![1, 2, 3],
+        "farthest doc first"
+    );
 }
