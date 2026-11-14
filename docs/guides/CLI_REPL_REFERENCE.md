@@ -266,10 +266,16 @@ filters on all three:
 
 ```sql
 CREATE GRAPH COLLECTION kg (dimension = 4, metric = 'cosine');
+```
+
+```text
 .graph store-payload kg 100 {"name":"Ada","kind":"author","_labels":["Person"]} --vector [0.9,0.1,0.0,0.0]
 .graph store-payload kg 1 {"name":"LSM-tree internals","_labels":["Doc"]} --vector [0.9,0.1,0.0,0.0]
 .graph add-edge kg 1 100 1 WROTE
 \use kg
+```
+
+```sql
 MATCH (a:Person)-[:WROTE]->(d:Doc) WHERE similarity(d.embedding, [1.0, 0.0, 0.0, 0.0]) > 0.8 AND a.kind = 'author' RETURN a.name, d.name;
 ```
 
