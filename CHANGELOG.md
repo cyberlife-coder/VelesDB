@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`curl … | sh`) and `scripts/install-wizard.ps1` (`irm … | iex`) pick the
   newest release that carries a wizard for the machine, refuse a download
   whose checksum does not match, and run it. `validate_package.py` also
-  verifies the source bundle. First published with velesdb-memory 0.18.0.
+  verifies the source bundle.
 
 - **`velesdb config path|show|validate|edit`** (#2725). The CLI could read a
   config file (`--config`, `VELESDB_CONFIG`, `./velesdb.toml`) but had no way

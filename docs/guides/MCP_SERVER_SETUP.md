@@ -41,8 +41,7 @@ irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/insta
 ```
 
 `scripts/install-wizard.sh` and `scripts/install-wizard.ps1` find the newest
-`velesdb-memory-v*` release that carries a wizard for the machine (from
-0.18.0), verify it against its `.sha256` sidecar, and run it from a temporary
+`velesdb-memory-v*` release that carries a wizard for the machine, verify it against its `.sha256` sidecar, and run it from a temporary
 directory. A machine with no native build — Intel macOS, other architectures —
 gets the source bundle, run with `python3` 3.9+. Wizard flags go after
 `| sh -s --` (PowerShell: `& ([scriptblock]::Create((irm …))) --dry-run`).

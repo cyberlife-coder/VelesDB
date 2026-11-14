@@ -125,8 +125,8 @@ irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/insta
 
 The packaged wizard bundles this directory, so no checkout is needed; it
 calls the same `scripts/sync-agent-hooks.py --install --client <host>` the
-sections below describe. It needs a velesdb-memory release from 0.18.0, the
-first to publish the wizard.
+sections below describe. It needs a velesdb-memory release that
+publishes the wizard (the release workflow attaches it from now on).
 
 ## Install — Claude Code
 

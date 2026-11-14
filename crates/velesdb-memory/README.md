@@ -128,8 +128,8 @@ curl -fsSL https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/script
 irm https://raw.githubusercontent.com/cyberlife-coder/VelesDB/main/scripts/install-wizard.ps1 | iex
 ```
 
-It needs a `velesdb-memory` release from 0.18.0, the first to publish the
-wizard. With a Rust toolchain, the binary alone:
+It needs a `velesdb-memory` release that publishes the wizard (the release
+workflow attaches it from now on). With a Rust toolchain, the binary alone:
 
 ```bash
 cargo install velesdb-memory
