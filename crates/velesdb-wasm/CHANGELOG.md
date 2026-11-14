@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`MATCH` runs patterns of any fixed length**: the executor hard-coded 0-,
+  1- and 2-hop shapes and rejected longer ones ("more than 2 hops"), so the
+  browser build could not answer a query the native build does. A single
+  depth-first path walk now binds one relationship per step, for any number
+  of hops; unnamed nodes take positional aliases (`a`, `b`, `c`, `d`, …).
+- **An edge is traversed at most once per `MATCH` path**, as core enforces
+  (relationship isomorphism). An undirected 2-hop pattern used to walk the
+  same edge back, returning `a = c` paths core never returns.
+- **Variable-length relationships (`[*1..3]`) are rejected** with a clear
+  error instead of being executed as a single hop with wrong results.
+
 ### Added
 
 - **`VectorStore::sparse_remove(doc_id)`** and **`SparseIndex::remove`**:
