@@ -193,6 +193,13 @@ class SourceBundleTests(unittest.TestCase):
             self.assertIn("velesdb-install-wizard 0.18.0", run.stdout)
             self.assertIn("WISCALE-PKG-SIG v1", run.stdout)
 
+    def test_the_source_build_runs_its_own_bundle(self):
+        with tempfile.TemporaryDirectory() as d:
+            asset = pkg.build_source_bundle("0.18.0", Path(d))
+            self.assertIsNone(pkg.smoke_source_bundle(asset, "0.18.0"))
+            self.assertIn("not 'velesdb-install-wizard 0.19.0'", pkg.smoke_source_bundle(asset, "0.19.0"))
+
+
 class VerifyPackageTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

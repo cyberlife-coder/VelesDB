@@ -725,11 +725,9 @@ jobs:
       - name: Build and verify the source bundle
         run: |
           set -euo pipefail
+          # --source extracts the bundle and runs its wizard's --version before it writes the sidecar
           python3 scripts/package_wizard.py --source --version ${{ needs.validate.outputs.version }} --out dist
           python3 scripts/validate_package.py dist/velesdb-install-wizard-src.tar.gz
-          mkdir unpacked && tar -xzf dist/velesdb-install-wizard-src.tar.gz -C unpacked
-          python3 unpacked/velesdb-install-wizard/scripts/velesdb_install_wizard.py --version \
-            | grep -q "velesdb-install-wizard ${{ needs.validate.outputs.version }}"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

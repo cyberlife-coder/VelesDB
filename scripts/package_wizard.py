@@ -192,6 +192,26 @@ def build_source_bundle(version: str, out: Path) -> Path:
     return asset
 
 
+def smoke_source_bundle(asset: Path, version: str) -> "str | None":
+    """Extract the bundle and run its wizard's `--version` with this Python,
+    as install-wizard.sh runs it; None when it reports this build, else what went wrong. The
+    bundle checks itself as it is built, so no workflow has to run a script
+    that exists only inside it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(asset) as tar:
+            tar.extractall(tmp, filter="data")
+        wizard = Path(tmp) / BINARY / "scripts" / "velesdb_install_wizard.py"
+        try:
+            run = subprocess.run([sys.executable, str(wizard), "--version"], capture_output=True,
+                                 text=True, timeout=120, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"the bundled wizard did not start: {exc}"
+    expected = f"{BINARY} {version}"
+    if run.returncode != 0 or expected not in run.stdout or SIGNATURE_PREFIX not in run.stdout:
+        return f"the bundled wizard's --version printed {run.stdout.strip()!r} (exit {run.returncode}), not {expected!r}"
+    return None
+
+
 def build_meta_source(version: str) -> str:
     """Generated module compiled into the binary: the discreet signature."""
     return (
@@ -365,8 +385,13 @@ def main(argv: "list[str] | None" = None) -> int:
     if args.source:
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
-        asset = build_source_bundle(args.version or memory_version(), out)
-        print(f"asset: {asset} ({write_sidecar(asset).name})")
+        version = args.version or memory_version()
+        asset = build_source_bundle(version, out)
+        problem = smoke_source_bundle(asset, version)
+        if problem:
+            print(f"source bundle REFUSED: {problem}", file=sys.stderr)
+            return 1
+        print(f"asset: {asset} ({write_sidecar(asset).name}, runs)")
         return 0
 
     target = args.target or detect_target()
