@@ -1002,7 +1002,7 @@ HOOK_CLIENTS: tuple[tuple[str, str], ...] = (
 )
 #: The hooks are bash scripts that parse every payload with jq.
 HOOK_PREREQUISITES: tuple[str, ...] = ("bash", "jq")
-_JQ_INSTALL_HINT = {"macos": "brew install jq", "windows": "winget install jqlang.jq (bash: Git for Windows)",
+_HOOK_PREREQUISITES_HINT = {"macos": "brew install jq", "windows": "winget install jqlang.jq (bash: Git for Windows)",
                     "linux": "your package manager, e.g. sudo apt install jq"}
 
 
@@ -1025,7 +1025,7 @@ def install_hooks(plan: dict) -> list[str]:
         return []
     missing = _missing_tools(HOOK_PREREQUISITES)
     if missing:
-        hint = _JQ_INSTALL_HINT.get(plan["platform"]["os"], "install them")
+        hint = _HOOK_PREREQUISITES_HINT.get(plan["platform"]["os"], "install them")
         return [f"hooks: SKIPPED — {' and '.join(missing)} not found ({hint}); re-run the wizard once installed"]
     try:
         sync = _load_resource_script("sync-agent-hooks.py")
