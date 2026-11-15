@@ -2233,6 +2233,12 @@ jobs:
       # `npm test` (not a hardcoded filename) so every __test__/*.spec.mjs file —
       # including new ones like skills-sync.spec.mjs — is picked up automatically;
       # see package.json's "test" script for the single source of truth on the glob.
+      - name: Run the crate's own Rust unit tests (error mapping, task trampoline)
+        # The cdylib is excluded from `cargo test --workspace`, so these were
+        # never executed anywhere; they link and run fine standalone.
+        if: needs.code-changed.outputs.relevant == 'true'
+        run: cargo test -p velesdb-node --lib -- --test-threads=1
+
       - name: Build napi addon + run Node tests
         if: needs.code-changed.outputs.relevant == 'true'
         run: python3 scripts/run-node-binding-tests.py --root .
