@@ -443,25 +443,33 @@ async fn plan_only_explain_gates_a_match_addressed_by_the_collection_param() {
     );
 }
 
-/// GIVEN the observer denies `items` — wait: stream is graph; use a graph coll.
+/// GIVEN `items` is a graph collection the observer then denies
 /// WHEN the SSE traversal endpoint is hit
-/// THEN the denial refuses it instead of streaming an unscoped traversal —
-///      previously this endpoint consulted no observer at all.
+/// THEN the denial itself refuses it, instead of streaming an unscoped
+///      traversal — previously this endpoint consulted no observer at all.
+///      Allowed first, the same request streams: the gate is what refuses.
 #[tokio::test]
 async fn stream_traverse_honours_the_read_gate() {
-    let (_dir, app, observer) = setup().await;
-    // `items` is a vector collection; the stream endpoint answers non-2xx on
-    // a denied read regardless of collection type.
+    let dir = TempDir::new().expect("test: dir");
+    let observer = Arc::new(PolicyObserver::default());
+    let db = velesdb_core::Database::open_with_observer(dir.path(), observer.clone())
+        .expect("test: open db");
+    let (app, _state) = create_full_app(db);
+    common::create_graph_collection(&app, "items").await;
+    let uri = "/collections/items/graph/traverse/stream?start_node=1";
+
+    let (status, body) = send(&app, "GET", uri, None).await;
+    assert_eq!(status, StatusCode::OK, "allowed stream traversal: {body}");
+
     observer.set(Rule::Deny);
-    let (status, body) = send(
-        &app,
-        "GET",
-        "/collections/items/graph/traverse/stream?start_node=1",
-        None,
-    )
-    .await;
+    let (status, body) = send(&app, "GET", uri, None).await;
     assert!(
         !status.is_success(),
         "denied stream traversal must refuse, got {status}: {body}"
+    );
+    assert!(
+        body.to_string()
+            .contains("read denied by governance policy"),
+        "{status}: {body}"
     );
 }
