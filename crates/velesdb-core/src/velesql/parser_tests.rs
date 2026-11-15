@@ -576,6 +576,35 @@ fn test_parse_with_clause_ef_search_past_u64_max_parses_as_float() {
     assert!(value.as_float().is_some(), "{value:?}");
 }
 
+/// A numeric literal too large for `f64` is refused at parse time. Past ~309
+/// digits the float value is infinite, which JSON cannot represent: it became
+/// `null`, and `WHERE x = 1000…0` matched `{"x": null}`. (VelesQL has no
+/// exponent syntax, so only digit count reaches this.)
+#[test]
+fn test_parse_refuses_a_literal_too_large_for_f64() {
+    let huge = format!("1{}", "0".repeat(400));
+    for sql in [
+        format!("SELECT * FROM docs WHERE x = {huge}"),
+        format!("SELECT * FROM docs WHERE x = {huge}.5"),
+        format!("SELECT * FROM docs WHERE x BETWEEN 0 AND {huge}"),
+    ] {
+        let err = Parser::parse(&sql).expect_err("an infinite literal must be refused");
+        assert!(
+            err.message.contains("out of range"),
+            "{sql}: {}",
+            err.message
+        );
+    }
+}
+
+/// The largest finite literals still parse, as floats.
+#[test]
+fn test_parse_keeps_the_largest_finite_literals() {
+    let near_max = format!("1{}", "0".repeat(300));
+    assert!(Parser::parse(&format!("SELECT * FROM docs WHERE x = {near_max}")).is_ok());
+    assert!(Parser::parse(&format!("SELECT * FROM docs WHERE x = {near_max}.5")).is_ok());
+}
+
 // ========== JOIN clause tests (EPIC-031 US-004) ==========
 
 #[test]
