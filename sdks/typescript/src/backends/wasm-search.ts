@@ -710,6 +710,15 @@ const PURE_NEAR_QUERY =
   /^\s*select\s+\*\s+from\s+([a-z_]\w*)\s+where\s+vector\s+near\s+\$([a-z_]\w*)(?:\s+limit\s+(\d+))?\s*(?:;\s*)?$/i;
 
 /**
+ * Whether `queryString` is the pure top-k `NEAR` shape `wasmQuery` answers
+ * with `VectorStore.query()`; the backend sends every other read-only
+ * `SELECT` to the VelesQL executor when the binding has one.
+ */
+export function isPureNearQuery(queryString: string): boolean {
+  return PURE_NEAR_QUERY.test(queryString);
+}
+
+/**
  * The pure-NEAR shape with a LIMIT token that failed the grammar above:
  * `LIMIT -1`, `LIMIT +5`, `LIMIT 1e3`, `LIMIT abc`. Read only when
  * `PURE_NEAR_QUERY` did not match, so it fires exactly where the statement

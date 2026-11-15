@@ -9,6 +9,7 @@ import type { CollectionConfig } from '../types';
 import type { SparseVector } from '../types';
 import type {
   VectorStore as BindingVectorStore,
+  WasmDatabase as BindingWasmDatabase,
   hybrid_search_fuse as bindingHybridSearchFuse,
 } from '@wiscale/velesdb-wasm';
 
@@ -190,6 +191,62 @@ export interface WasmVectorStoreConstructor {
   ): WasmVectorStore;
 }
 
+/** What the backend reads from a `WasmDatabase.executeQuery` result. */
+export interface WasmQueryResult {
+  /** Statement class: `rows`, `mutation`, `deletion`, `ddl`, `train`, `admin`. */
+  readonly kind: string;
+  /** Rows returned (or affected). */
+  readonly rowCount: number;
+  /** The rows as a JSON array. */
+  readonly rowsJson: string;
+  /** Release the result's WASM memory. */
+  free(): void;
+}
+
+/**
+ * The VelesQL executor of a velesdb-wasm `WasmDatabase`, over the stores the
+ * backend attaches to it (`wasm-velesql.ts`).
+ */
+export interface WasmVelesQLDatabase {
+  /**
+   * Register an existing store as collection `name`, sharing it rather than
+   * copying it. Declared by hand, like {@link WasmVectorStore.sparse_remove}:
+   * velesdb-wasm 8.0.0, the floor of the SDK's dependency range, has no such
+   * method, and the backend then keeps its pre-executor behaviour.
+   */
+  attachStore?(name: string, store: WasmVectorStore): void;
+  /** Drop collection `name` from the database (the attached store lives on in its handle). */
+  delete_collection(...args: AllParams<BindingWasmDatabase['delete_collection']>): void;
+  /** Execute one VelesQL statement; `params_json` is a JSON object or `null`. */
+  executeQuery(sql: string, params_json: string | null): WasmQueryResult;
+  /** Release the database's WASM memory. */
+  free(): void;
+}
+
+/**
+ * What the backend reads from the binding's `VelesQL.parse()`: the statement
+ * class, from the AST, so nothing is guessed from the statement's text.
+ */
+export interface WasmParsedQuery {
+  /** A `SELECT` (not `MATCH`, DML, DDL, introspection or admin). */
+  readonly isSelect: boolean;
+  /**
+   * Core's `is_aggregation_query`. Declared by hand: absent on bindings that
+   * predate it, and the backend then leaves the statement to its old path.
+   */
+  readonly isAggregation?: boolean;
+  /** The collection the statement reads, when it names one. */
+  readonly collectionName?: string;
+  /** Release the parse result's WASM memory. */
+  free(): void;
+}
+
+/** The binding's VelesQL parser. */
+export interface WasmVelesQLParser {
+  /** Parse one statement; throws the parser's message on invalid VelesQL. */
+  parse(query: string): WasmParsedQuery;
+}
+
 /** Typed interface for the @wiscale/velesdb-wasm module. */
 export interface WasmModule {
   /** WASM initialization function (must be called once before use).
@@ -207,6 +264,12 @@ export interface WasmModule {
 
   /** VectorStore class constructor. */
   VectorStore: WasmVectorStoreConstructor;
+
+  /** WasmDatabase class constructor: the VelesQL executor (`wasm-velesql.ts`). */
+  WasmDatabase?: new () => WasmVelesQLDatabase;
+
+  /** The VelesQL parser the backend classifies statements with (`wasm-velesql.ts`). */
+  VelesQL?: WasmVelesQLParser;
 
   /** Fuse dense + sparse search results via Reciprocal Rank Fusion. */
   hybrid_search_fuse(...args: AllParams<typeof bindingHybridSearchFuse>): WasmSparseResult[];
