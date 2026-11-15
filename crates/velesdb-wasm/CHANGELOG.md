@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`WasmDatabase.addEdge(name, edgeJson)`, `getEdges(name, label?)`,
+  `removeEdge(name, id)` and `edgeCount(name)`** behave like REST
+  `/collections/{name}/graph/edges`, over the graph store a `MATCH` on that
+  collection reads. The collection must exist and both endpoints must be its
+  nodes; without an explicit `id`, the id is core's (source, target, label)
+  hash; properties can be any JSON. VelesQL `INSERT EDGE` takes literal
+  scalars only, so before this a client building edges from data had to
+  splice strings into a statement.
 - **`WasmDatabase.executeMatch(sql, paramsJson)`** returns `MATCH` rows in
   core's `MatchResult` shape, `[{ bindings, depth, projected }]`, which is what
   REST `POST /collections/{name}/match` returns. It projects RETURN with

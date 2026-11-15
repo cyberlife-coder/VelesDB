@@ -53,6 +53,7 @@ use wasm_bindgen::prelude::*;
 
 mod agent;
 mod database;
+mod database_graph;
 mod filter;
 mod fusion;
 mod graph;

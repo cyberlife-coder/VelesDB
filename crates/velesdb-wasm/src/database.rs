@@ -513,6 +513,64 @@ impl WasmDatabase {
         .map_err(|e| JsValue::from_str(&e))?;
         serde_json::to_string(&rows).map_err(|e| JsValue::from_str(&e.to_string()))
     }
+
+    /// Adds an edge to collection `name` and returns its id, as REST
+    /// `POST /collections/{name}/graph/edges` does. `edge_json` is a JSON
+    /// object `{ id?, source, target, label, properties? }`; without `id` the
+    /// id is derived from (source, target, label) as on every VelesDB engine.
+    /// A MATCH on `name` reads the edge.
+    ///
+    /// # Errors
+    /// Returns a `JsValue` error string when `edge_json` is malformed, the
+    /// collection does not exist, an endpoint is not one of its nodes (its
+    /// points, or nodes written with `INSERT NODE`), or the id is taken.
+    #[wasm_bindgen(js_name = addEdge)]
+    pub fn add_edge(&mut self, name: &str, edge_json: &str) -> Result<u64, JsValue> {
+        let edge = serde_json::from_str(edge_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid edge: {e}")))?;
+        self.inner
+            .add_edge(name, edge)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// The edges of collection `name` as a JSON array string of
+    /// `{ id, source, target, label, properties? }`, optionally only those
+    /// labelled `label`.
+    ///
+    /// # Errors
+    /// Returns a `JsValue` error string when the collection does not exist or
+    /// the read gate denies it.
+    #[wasm_bindgen(js_name = getEdges)]
+    pub fn get_edges(&self, name: &str, label: Option<String>) -> Result<String, JsValue> {
+        let edges = self
+            .inner
+            .edges(name, label.as_deref())
+            .map_err(|e| JsValue::from_str(&e))?;
+        serde_json::to_string(&edges).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Removes edge `id` from collection `name`; `false` when it was absent.
+    ///
+    /// # Errors
+    /// Returns a `JsValue` error string when the collection does not exist.
+    #[wasm_bindgen(js_name = removeEdge)]
+    pub fn remove_edge(&mut self, name: &str, id: u64) -> Result<bool, JsValue> {
+        self.inner
+            .remove_edge(name, id)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// The number of edges in collection `name`.
+    ///
+    /// # Errors
+    /// Returns a `JsValue` error string when the collection does not exist or
+    /// the read gate denies it.
+    #[wasm_bindgen(js_name = edgeCount)]
+    pub fn edge_count(&self, name: &str) -> Result<usize, JsValue> {
+        self.inner
+            .edge_count(name)
+            .map_err(|e| JsValue::from_str(&e))
+    }
 }
 
 // ---------------------------------------------------------------------------

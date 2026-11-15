@@ -84,7 +84,8 @@ runs the same MATCH and returns a JSON string of rows in core's
 `MatchResult` shape, the rows of REST `POST /collections/{name}/match`:
 
 ```javascript
-db.executeQuery("INSERT EDGE INTO docs (source = 1, target = 2, label = 'CITES')", null);
+// Edges as data (like REST /graph/edges); VelesQL INSERT EDGE takes literals only.
+db.addEdge('docs', JSON.stringify({ source: 1, target: 2, label: 'CITES', properties: { weight: 0.5 } }));
 
 const rows = JSON.parse(db.executeMatch(
   "MATCH (a)-[:CITES]->(b) RETURN b.title AS cited, b.id",
