@@ -69,6 +69,8 @@ interface BuilderState {
   matchClauses: string[];
   /** SELECT-mode source table/collection (set via {@link VelesQLBuilder.from}). */
   fromClause?: string;
+  /** SELECT-mode table alias (set via {@link VelesQLBuilder.from}), emitted as `AS <alias>`. */
+  fromAlias?: string;
   /** SELECT-mode projection columns (set via {@link VelesQLBuilder.select}). */
   selectColumns?: string[];
   whereClauses: string[];
@@ -78,7 +80,8 @@ interface BuilderState {
   /** topK from {@link VelesQLBuilder.nearVector}, applied as a LIMIT fallback. */
   topKValue?: number;
   offsetValue?: number;
-  orderByClause?: string;
+  /** Accumulated ORDER BY keys (multi-key sort), in call order. */
+  orderByClauses?: string[];
   returnClause?: string;
   fusionOptions?: FusionOptions;
   currentNode?: string;
@@ -118,6 +121,7 @@ export class VelesQLBuilder {
     this.state = {
       matchClauses: state?.matchClauses ?? [],
       fromClause: state?.fromClause,
+      fromAlias: state?.fromAlias,
       selectColumns: state?.selectColumns,
       whereClauses: state?.whereClauses ?? [],
       whereOperators: state?.whereOperators ?? [],
@@ -125,7 +129,7 @@ export class VelesQLBuilder {
       limitValue: state?.limitValue,
       topKValue: state?.topKValue,
       offsetValue: state?.offsetValue,
-      orderByClause: state?.orderByClause,
+      orderByClauses: state?.orderByClauses ? [...state.orderByClauses] : undefined,
       returnClause: state?.returnClause,
       fusionOptions: state?.fusionOptions,
       currentNode: state?.currentNode,
@@ -140,6 +144,7 @@ export class VelesQLBuilder {
       whereClauses: [...this.state.whereClauses],
       whereOperators: [...this.state.whereOperators],
       params: { ...this.state.params },
+      orderByClauses: this.state.orderByClauses ? [...this.state.orderByClauses] : undefined,
       ...updates,
     });
   }
@@ -169,7 +174,10 @@ export class VelesQLBuilder {
    * builder emits a `SELECT` statement instead of a `MATCH`.
    *
    * @param collection - Source collection/table name
-   * @param alias - Optional alias (kept for `WHERE`/`ORDER BY` references)
+   * @param alias - Optional table alias, emitted as `FROM <collection> AS <alias>`
+   *   (core grammar supports both `AS` and bare alias, EPIC-052 US-003). The
+   *   alias is what makes `SELECT d.*` valid; dotted references like
+   *   `d.category` in WHERE remain JSON paths into the payload, as in core.
    *
    * @example
    * ```typescript
@@ -180,12 +188,13 @@ export class VelesQLBuilder {
    *   .orderBy('score', 'DESC')
    *   .limit(10)
    *   .toVelesQL();
-   * // => "SELECT * FROM documents WHERE vector NEAR $q AND d.category = $cat ORDER BY score DESC LIMIT 10"
+   * // => "SELECT * FROM documents AS d WHERE vector NEAR $q AND d.category = $cat ORDER BY score DESC LIMIT 10"
    * ```
    */
   from(collection: string, alias?: string): VelesQLBuilder {
     return this.clone({
       fromClause: collection,
+      fromAlias: alias,
       currentNode: alias,
     });
   }
@@ -429,14 +438,18 @@ export class VelesQLBuilder {
   }
 
   /**
-   * Add ORDER BY clause
-   * 
+   * Add an ORDER BY key. Repeated calls accumulate — core supports multi-key
+   * sorts (`ORDER BY a, b DESC`) — instead of the previous call silently
+   * overwriting the earlier ones.
+   *
    * @param field - Field to order by
    * @param direction - Sort direction (ASC or DESC)
    */
   orderBy(field: string, direction?: 'ASC' | 'DESC'): VelesQLBuilder {
     const orderClause = direction ? `${field} ${direction}` : field;
-    return this.clone({ orderByClause: orderClause });
+    return this.clone({
+      orderByClauses: [...(this.state.orderByClauses ?? []), orderClause],
+    });
   }
 
   /**
@@ -520,16 +533,26 @@ export class VelesQLBuilder {
   }
 
   private buildSelect(): string {
+    // Fail fast on clauses SELECT cannot express instead of silently dropping
+    // them: RETURN is MATCH-only (the projection comes from select()).
+    if (this.state.returnClause !== undefined) {
+      throw new Error(
+        'return() is only valid in MATCH mode; in SELECT mode use select() for the projection'
+      );
+    }
     const projection = this.state.selectColumns?.length
       ? this.state.selectColumns.join(', ')
       : '*';
-    const parts: string[] = [`SELECT ${projection} FROM ${this.state.fromClause}`];
+    const fromAlias = this.state.fromAlias ? ` AS ${this.state.fromAlias}` : '';
+    const parts: string[] = [
+      `SELECT ${projection} FROM ${this.state.fromClause}${fromAlias}`,
+    ];
 
     if (this.state.whereClauses.length > 0) {
       parts.push(`WHERE ${this.buildWhereClause()}`);
     }
-    if (this.state.orderByClause) {
-      parts.push(`ORDER BY ${this.state.orderByClause}`);
+    if (this.state.orderByClauses?.length) {
+      parts.push(`ORDER BY ${this.state.orderByClauses.join(', ')}`);
     }
     const limit = this.resolveLimit();
     if (limit !== undefined) {
@@ -548,6 +571,17 @@ export class VelesQLBuilder {
     if (this.state.matchClauses.length === 0) {
       throw new Error('Query must call match() or from() before toVelesQL()');
     }
+    // Fail fast on clauses the MATCH grammar cannot express instead of
+    // silently dropping them: no OFFSET, no USING FUSION, no SELECT projection.
+    if (this.state.offsetValue !== undefined) {
+      throw new Error('OFFSET is not supported in MATCH mode (the grammar has no MATCH ... OFFSET)');
+    }
+    if (this.state.fusionOptions !== undefined) {
+      throw new Error('fusion() is not supported in MATCH mode; use it on a from() SELECT query');
+    }
+    if (this.state.selectColumns !== undefined) {
+      throw new Error('select() is not supported in MATCH mode; use return() for the projection');
+    }
 
     const parts: string[] = [`MATCH ${this.state.matchClauses.join(', ')}`];
 
@@ -558,8 +592,8 @@ export class VelesQLBuilder {
     // RETURN is mandatory in MATCH mode and MUST precede ORDER BY/LIMIT.
     parts.push(`RETURN ${this.state.returnClause ?? '*'}`);
 
-    if (this.state.orderByClause) {
-      parts.push(`ORDER BY ${this.state.orderByClause}`);
+    if (this.state.orderByClauses?.length) {
+      parts.push(`ORDER BY ${this.state.orderByClauses.join(', ')}`);
     }
     const limit = this.resolveLimit();
     if (limit !== undefined) {

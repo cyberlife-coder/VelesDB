@@ -288,8 +288,28 @@ describe('VelesQLBuilder', () => {
         .limit(10);
 
       expect(builder.toVelesQL()).toBe(
-        "SELECT * FROM documents WHERE vector NEAR $queryVector AND d.category = $cat ORDER BY score DESC LIMIT 10"
+        "SELECT * FROM documents AS d WHERE vector NEAR $queryVector AND d.category = $cat ORDER BY score DESC LIMIT 10"
       );
+    });
+
+    it('emits the FROM alias (previously dropped silently)', () => {
+      const q = velesql().from('docs', 'd').select(['d.*']).toVelesQL();
+      expect(q).toBe('SELECT d.* FROM docs AS d');
+    });
+
+    it('accumulates repeated orderBy calls into a multi-key sort', () => {
+      const q = velesql().from('docs').orderBy('a').orderBy('b', 'DESC').toVelesQL();
+      expect(q).toBe('SELECT * FROM docs ORDER BY a, b DESC');
+    });
+
+    it('throws instead of silently dropping return() in SELECT mode', () => {
+      expect(() => velesql().from('docs').return(['a']).toVelesQL()).toThrow(/return\(\)/);
+    });
+
+    it('throws instead of silently dropping offset()/fusion()/select() in MATCH mode', () => {
+      expect(() => velesql().match('n').offset(5).toVelesQL()).toThrow(/OFFSET/);
+      expect(() => velesql().match('n').fusion('rrf').toVelesQL()).toThrow(/fusion\(\)/);
+      expect(() => velesql().match('n').select(['a']).toVelesQL()).toThrow(/select\(\)/);
     });
 
     it('should place LIMIT/OFFSET before USING FUSION', () => {
