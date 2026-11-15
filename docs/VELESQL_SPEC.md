@@ -578,7 +578,8 @@ transparently. Results are identical in both paths.
 
 ### BETWEEN
 
-Test if a value falls within a range (inclusive):
+Test if a value falls within a range (inclusive). `x BETWEEN a AND b` is
+exactly `x >= a AND x <= b`, for number, string and date bounds alike:
 
 ```sql
 SELECT * FROM docs WHERE price BETWEEN 10 AND 100;
@@ -593,7 +594,7 @@ Case-sensitive pattern matching with wildcards:
 | Wildcard | Meaning |
 |----------|---------|
 | `%` | Any sequence of characters (including empty) |
-| `_` | Exactly one character |
+| `_` | Exactly one character (a Unicode character, not a byte: `'caf_'` matches `café`) |
 
 ```sql
 -- Suffix match
@@ -1148,6 +1149,11 @@ any other scalar conditions.
 - When `FROM` has no alias, any anchor alias is accepted.
 
 `NOT MATCH` applies the same rule uniformly (exact dual of the positive case).
+
+**No `@collection` in a predicate (V011).** A predicate tests the FROM
+collection's own graph; it reads no other collection, so a `@collection`
+annotation on any of its nodes is refused rather than ignored. Read an
+annotated collection's properties with a standalone `MATCH` statement.
 
 > **Note.** Implicit binding is *not* Cypher's existential MATCH semantics:
 > the leftmost node always binds to the candidate row. `MATCH (ctx)-[:R]->(f)`
@@ -1984,23 +1990,28 @@ A node is enclosed in parentheses with optional alias, labels, and properties:
 
 #### Cross-Collection Annotation (`@collection`)
 
-The `@collection` suffix on a node pattern specifies which collection the node's data
-should be resolved from. This enables cross-collection MATCH queries where the graph
-traversal runs on one collection (the primary/edge collection) and node payloads are
-enriched from other collections.
+The `@collection` suffix on a node pattern gives the node the properties of the
+point with the same id in another collection. The graph traversal runs on one
+collection (the primary/edge collection); the annotated node's properties are the
+union of its own payload and that point's.
 
 ```sql
--- Products in 'catalog' graph, enriched with pricing from 'inventory' collection
-MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory)
-RETURN p.name, w.price, w.stock
+-- Products in the 'catalog' graph, priced and stocked in 'inventory'
+MATCH (p:Product)-[:STORED_IN]->(w:Warehouse@inventory {stock: 0})
+WHERE w.price < 100
+RETURN p.name, w.name, w.price
+ORDER BY w.price DESC
 LIMIT 20
 ```
 
 When using `@collection`:
-- The graph traversal (edges) runs on the primary collection specified via `_collection` param or `FROM` clause
-- Node payloads are looked up from the annotated collection after traversal
-- Enriched fields are prefixed with the node alias (e.g., `w.price`, `w.stock`)
-- If the annotated collection doesn't exist, the enrichment is silently skipped
+- The graph traversal (edges) runs on the primary collection specified via the `_collection` param or the `FROM` clause.
+- **WHERE, ORDER BY, RETURN and the pattern's inline properties** all read the union, during the walk: `WHERE w.price < 100` filters on the annotated collection, and three-valued logic applies to it as to any property.
+- **The node's own fields win a collision**, so an annotation adds properties and never overwrites the node's identity. Labels are always the graph's own: `(w:Product@inventory)` matches only nodes labelled `Product` in the graph.
+- A column without an alias (`WHERE price < 100`) reads the traversal target's own payload; qualify it (`w.price`) to read the annotation.
+- RETURN projects with the alias prefix (`w.price`); `RETURN w` projects every property of the union.
+- An annotation naming no collection refuses the query (`VELES-002`), and the read gate decides every annotated collection as a graph-traversal read of its own. A denied one refuses the query.
+- REST `/collections/{name}/match` runs a bare clause the same way: the same gate, the same properties, the same ordering.
 
 #### Relationship Patterns
 
@@ -2133,11 +2144,18 @@ The query planner automatically chooses the optimal strategy:
 
 | Strategy | When Used | Description |
 |----------|-----------|-------------|
-| **GraphFirst** | No similarity condition | Traverse graph, then filter |
-| **VectorFirst** | Similarity on start node | Vector search, then validate graph |
+| **GraphFirst** | Every other MATCH | Walk the pattern from every node its first node matches |
+| **VectorFirst** | `LIMIT`, and a `similarity(start.field, $v) >`/`>=` threshold joined to WHERE by `AND` | Walk the pattern from the nodes nearest `$v`, nearest first |
 
-No strategy runs both: GraphFirst enumerates every row a VectorFirst search
-could return, so a union would add nothing and cost both.
+Both strategies run the same walk: the whole pattern (labels, inline
+properties, every hop), the whole WHERE (the `similarity()` leaf included),
+each path its own row. VectorFirst only chooses where the walk starts, so it
+returns the rows GraphFirst returns: it applies only when the nearest start
+nodes are the ones the rows come from — one pattern, an explicit `LIMIT`, the
+first `similarity()` leaf scoring the start node towards "closer", and any
+`ORDER BY` being `similarity() DESC`. Its seeds grow until the walk has its
+`LIMIT` of rows, the collection is exhausted, or the farthest seed fails the
+threshold. No strategy runs both.
 
 ### REST API
 
@@ -2324,10 +2342,8 @@ The result includes the estimated plan (identical to `EXPLAIN`) plus:
 > **Note:** `nodes_visited` / `edges_traversed` are an **approximate, best-effort
 > lower bound** on the graph traversal across all MATCH strategies — not exact
 > figures. For **GraphFirst** they are the start nodes examined plus the
-> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy (a
-> `similarity()` predicate on the start node) they are the candidate nodes
-> evaluated plus the per-candidate existence-BFS edges/nodes — each BFS uses
-> `limit(1)` and so undercounts the true frontier.
+> edges/nodes reached; for the similarity-anchored **VectorFirst** strategy
+> they are the same counts over the seeded walk (its seeds as start nodes).
 
 **`feedback_calibration` fields (v1.15.0+, EXPLAIN ANALYZE only):**
 

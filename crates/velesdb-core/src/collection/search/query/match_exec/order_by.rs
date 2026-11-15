@@ -36,6 +36,7 @@ impl Collection {
         expr: &OrderByExpr,
         descending: bool,
         params: &HashMap<String, serde_json::Value>,
+        sources: &super::MatchSources,
     ) -> Result<()> {
         match expr {
             OrderByExpr::SimilarityBare => {
@@ -47,7 +48,9 @@ impl Collection {
                 Self::sort_match_by_depth(results, descending);
                 Ok(())
             }
-            OrderByExpr::Field(f) => self.order_match_results_by_property(results, f, descending),
+            OrderByExpr::Field(f) => {
+                self.order_match_results_by_property(results, f, descending, sources)
+            }
             OrderByExpr::Similarity(sim) => {
                 self.sort_match_by_similarity(results, sim, descending, params)
             }

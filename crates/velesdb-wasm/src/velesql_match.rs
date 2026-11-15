@@ -25,10 +25,11 @@ type CrossRef = (String, SharedStore);
 
 /// Collects `@collection` cross-references from a MATCH clause.
 ///
-/// Mirrors core's `enrich_match_results_cross_collection`: only nodes with
-/// **both** an explicit alias and a collection annotation are enriched, and a
-/// reference to a missing collection is silently skipped (the MATCH still
-/// returns its graph results). The referenced collection's store is resolved
+/// Only nodes with **both** an explicit alias and a collection annotation are
+/// enriched, and a reference to a missing collection is silently skipped
+/// (the MATCH still returns its graph results) — unlike core, which reads an
+/// annotation during the walk and refuses a missing one (see
+/// `match_exec::sources` in `velesdb-core`). The referenced collection's store is resolved
 /// once here and reused for every result row.
 ///
 /// WASM note: lacking a `FROM` clause, the executor also reuses the *first*
@@ -361,7 +362,7 @@ impl PathWalk<'_> {
             })
             .collect();
         where_holds(cond, &bound, nodes, self.params, &|leaf| {
-            crate::velesql_where::matches(leaf, first.id, Some(&merged), self.params)
+            crate::velesql_where::truth(leaf, first.id, Some(&merged), self.params)
         })
     }
 }

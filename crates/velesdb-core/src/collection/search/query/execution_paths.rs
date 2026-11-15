@@ -59,11 +59,23 @@ impl Collection {
         })?;
 
         // BUG-8: explicit anchor — or a bare FROM, where any anchor is accepted.
-        if from_aliases.is_empty() || from_aliases.iter().any(|a| a == &anchor_alias) {
-            return Ok(anchor_alias);
+        // Otherwise the leftmost node binds implicitly to the FROM rows.
+        if !from_aliases.is_empty() && from_aliases.iter().all(|a| a != &anchor_alias) {
+            Self::check_implicit_anchor_guards(predicate, &anchor_alias, from_aliases)?;
         }
-        Self::check_implicit_anchor_guards(predicate, &anchor_alias, from_aliases)?;
-        // Implicit anchor: the leftmost node binds to the FROM rows.
+        // A predicate tests the FROM collection's own graph: it does not read
+        // an annotated collection, so an annotation is refused, not ignored.
+        if let Some(collection) = predicate
+            .pattern
+            .nodes
+            .iter()
+            .find_map(|node| node.collection.as_deref())
+        {
+            return Err(crate::error::Error::Query(format!(
+                "a MATCH predicate in SELECT WHERE cannot read @{collection}; use a \
+                 standalone MATCH statement to read an annotated collection's properties"
+            )));
+        }
         Ok(anchor_alias)
     }
 

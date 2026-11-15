@@ -651,13 +651,16 @@ impl Database {
         }
     }
 
-    /// Routes a MATCH query to its target collection and applies cross-collection
-    /// enrichment, returning results plus the graph-traversal counters
-    /// `(nodes_visited, edges_traversed)` measured during execution (for
-    /// EXPLAIN ANALYZE; the plain execution path discards them).
+    /// Routes a MATCH query to its target collection, returning results plus
+    /// the graph-traversal counters `(nodes_visited, edges_traversed)`
+    /// measured during execution (for EXPLAIN ANALYZE; the plain execution
+    /// path discards them).
     ///
     /// The target is the collection the read gate decided on: the query's
     /// `FROM`, else a `"_collection"` key in `params` (programmatic API).
+    /// Each `@collection` annotation is resolved here, before the MATCH takes
+    /// any collection lock, so the annotated nodes' properties are read
+    /// during the walk — by WHERE, ORDER BY, RETURN and the pattern alike.
     fn execute_match_routed(
         &self,
         authorized: &AuthorizedQuery<'_>,
@@ -665,21 +668,15 @@ impl Database {
     ) -> Result<(Vec<SearchResult>, u64, u64)> {
         let query = authorized.query();
         let coll = self.resolve_read_target(authorized, MATCH_TARGET_MISSING)?;
-        let counted = coll.execute_query_counted(query, params)?;
+        let sources = self.match_sources(query.match_clause.as_ref())?;
+        let counted = coll.execute_query_counted_reading(query, params, &sources)?;
         let (mut results, nodes_visited, edges_traversed) = (
             counted.results,
             counted.nodes_visited,
             counted.edges_traversed,
         );
-        // Cross-collection enrichment: if any node pattern has a @collection
-        // annotation, look up payloads from those collections and merge them
-        // into the projected fields.
-        if let Some(mc) = &query.match_clause {
-            self.enrich_match_results_cross_collection(mc, &mut results);
-        }
         // MATCH `RETURN` has no implicit LIMIT — `search.max_results` is the
-        // ceiling that bounds it (#2591), applied post-enrichment so the
-        // merged payload columns cannot move a row past the cut.
+        // ceiling that bounds it (#2591).
         results.truncate(self.config.search.max_results);
         Ok((results, nodes_visited, edges_traversed))
     }
@@ -793,6 +790,28 @@ impl Database {
         names
     }
 
+    /// The collections `clause`'s `@collection` annotations name, resolved
+    /// before the MATCH takes any lock (see `match_exec::sources`). A clause
+    /// without annotations, or no clause, resolves nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::CollectionNotFound`] for an annotation naming no collection.
+    pub(super) fn match_sources(
+        &self,
+        clause: Option<&crate::velesql::MatchClause>,
+    ) -> Result<crate::collection::search::query::match_exec::MatchSources> {
+        clause.map_or_else(
+            || Ok(crate::collection::search::query::match_exec::MatchSources::default()),
+            |clause| {
+                crate::collection::search::query::match_exec::MatchSources::for_clause(
+                    clause,
+                    |name| self.resolve_collection(name),
+                )
+            },
+        )
+    }
+
     /// Resolves a collection by name from all typed registries.
     ///
     /// Priority: vector collections first, then graph, then metadata.
@@ -888,9 +907,7 @@ impl Database {
         params: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<crate::collection::search::query::pushdown::PushdownAnalysis> {
         if let Some(cond) = single_query.select.where_clause.take() {
-            single_query.select.where_clause = Some(
-                crate::collection::Collection::resolve_condition_params(&cond, params)?,
-            );
+            single_query.select.where_clause = Some(crate::velesql::bind_condition(&cond, params)?);
         }
 
         let analysis = Self::analyze_join_pushdown_for_select(&single_query.select);

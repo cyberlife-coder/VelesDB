@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A `VectorFirst` MATCH returns the rows a full walk returns** (core,
+  2026-11-15). The strategy the planner picks for a `similarity()` on the
+  start node replaced the MATCH walk with a shortcut: one row per start node
+  holding only the start binding (`RETURN d, r` lost `r` and collapsed every
+  path into one row), the target's labels and inline properties unchecked,
+  the threshold applied in the metric's direction whatever its operator
+  (`similarity(...) < 0.5` returned the near nodes), a `similarity()` under
+  `OR` taken as satisfied, and an implicit cap of 100 rows without a `LIMIT`.
+  It now only seeds the shared walk with the nodes nearest the query vector,
+  growing the seeds until the `LIMIT` is reached, and is chosen only when
+  those seeds hold the rows (an explicit `LIMIT`, a top-level `similarity() >`
+  or `>=` on the start node, any `ORDER BY` being `similarity() DESC`); every
+  other shape walks every start node. A relationship alias no longer forces
+  `GraphFirst`: the seeded walk binds it.
+
+- **BREAKING (behavior): a `@collection`-annotated MATCH node carries that
+  collection's properties everywhere the MATCH reads properties** (core,
+  server, 2026-11-15). The annotation was only a post-hoc pass merging the
+  annotated point into returned rows, so `WHERE w.price < 100`, `ORDER BY
+  w.price` and `(w:Warehouse@pricing {stock: 0})` never saw `pricing`, the
+  annotated node's labels were never checked, and a colliding field overwrote
+  the node's own. Now WHERE, ORDER BY, RETURN and inline pattern properties
+  read the union of the node's payload and its annotated point's, during the
+  walk; the node's own fields win a collision, and labels stay the graph's.
+  An annotation naming no collection refuses the query instead of being
+  skipped. The graph's property indexes no longer narrow an annotated alias
+  by a property they cannot see. A graph predicate in a SELECT WHERE
+  (`WHERE MATCH (...)`), which reads no other collection, refuses an
+  annotated node (`V011`) instead of ignoring it. The MATCH holds the annotated collections'
+  read guards next to its target's, taken in one total order across
+  collections (`docs/CONCURRENCY_MODEL.md`).
+
+  REST `/collections/{name}/match` runs through the new
+  `Database::match_query` (capped by `search.max_results`, and an expired,
+  unswept annotated point adds nothing): it gates every annotated collection, as `/query`
+  does, reads the annotations the same way, and orders rows through the same
+  planner as `/query` (guard rails included) instead of calling the
+  collection's unplanned entry points.
+
 - **BREAKING (behavior): WHERE follows SQL's three-valued logic for every
   predicate** (core, 2026-11-15). The spec promised it, yet only
   `similarity()` had an UNKNOWN: a comparison on a field that is `null` or
@@ -154,6 +193,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file. Anything else is now a usage error (exit 2).
 
 ### Fixed
+
+- **`LIKE`/`ILIKE` `_` matches one character, not one byte.** The matcher
+  compiled patterns and scanned text byte by byte, so on UTF-8 text `'caf_'`
+  did not match `"café"`, and `'__'` matched the single character `"é"` (two
+  bytes). Patterns and text are now matched character by character, as the
+  WASM executor already did. ILIKE compares each character's own lowercase
+  mapping instead of lowercasing the whole string first, which turned `İ`
+  into two scalars that filled two `_`.
+
+- **WASM `WHERE` answers as the server does.** The WASM executor evaluated
+  `WHERE` with its own copy of the predicate logic, which had drifted from
+  core: it was two-valued, so `NOT (x = 'a')` admitted a payload without `x`
+  that core's three-valued `WHERE` excludes, `LIKE` ignored `\` escapes and
+  core's guardrails, and a `$param` bound to an array was compared instead of
+  refused. It now binds parameters with core's binder
+  (`velesql::bind_condition`, moved out of the persistence-only `Collection`
+  so both builds share it) and matches with core's payload filter, compiled
+  once per query. The `similarity()` SELECT and the MATCH `WHERE`, which
+  score some leaves themselves, fold them with core's leaves in Kleene logic
+  over the now-public `Filter::evaluate_point`, so a `NOT` above an UNKNOWN
+  leaf no longer admits the row.
+
+- **`BETWEEN` with string or date bounds matches the range.** It converted
+  its bounds with a numbers-only converter, so a string bound became `null`:
+  `date BETWEEN '2024-01-01' AND '2024-12-31'`, the example in
+  `docs/VELESQL_SPEC.md`, matched nothing. The bounds now convert like a
+  comparison's value, so `x BETWEEN a AND b` returns what
+  `x >= a AND x <= b` returns. The WASM executor already did. Root cause:
+  core carried three VelesQL-value-to-JSON converters; the payload filter,
+  the MATCH index prefilter and DML writes now all use `Value::to_json`.
 
 - **A numeric literal too large for an `f64` is refused at parse time**
   (core, 2026-11-15). Past ~309 digits, `WHERE x = 1000…0` parsed to an

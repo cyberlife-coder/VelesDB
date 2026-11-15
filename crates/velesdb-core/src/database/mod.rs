@@ -25,13 +25,13 @@ pub(crate) type StrategyProbeSlot = std::sync::Arc<crate::guardrails::ExecutedSt
 
 mod admin_executor;
 mod collection_ops;
-mod cross_collection;
 mod ddl_executor;
 mod dml_executor;
 mod gated_search;
 mod graph_ops;
 mod introspection_executor;
 mod join_pushdown;
+mod match_query;
 mod metadata_ops;
 mod persistence;
 mod query_engine;
@@ -75,6 +75,7 @@ mod query_join_tests;
 mod stats_tests;
 
 pub use gated_search::GatedRead;
+pub use match_query::MatchScoring;
 
 /// Database instance managing collections and storage.
 ///

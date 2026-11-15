@@ -434,36 +434,59 @@ fn like_match(text: &str, pattern: &str, case_insensitive: bool) -> Option<bool>
     })
 }
 
+/// One element of a compiled LIKE pattern. Patterns and texts are matched
+/// character by character (Unicode scalar values), so `_` is one character
+/// and never one byte of a multi-byte UTF-8 character.
 #[derive(Clone, Copy)]
 enum Token {
     AnySeq,
     AnyOne,
-    Literal(u8),
+    Literal(CharKey),
 }
 
-fn tokenize_like_pattern(pattern: &[u8]) -> Vec<Token> {
-    let mut out = Vec::with_capacity(pattern.len());
-    let mut i = 0;
-    while i < pattern.len() {
-        match pattern[i] {
-            b'\\' if i + 1 < pattern.len() => {
-                out.push(Token::Literal(pattern[i + 1]));
-                i += 2;
+/// What a LIKE literal compares a text character by: the character itself,
+/// or for ILIKE its full lowercase mapping — at most three scalars in
+/// Unicode, `\0`-padded (only `\0` lowercases to `\0`, so the padding is
+/// unambiguous). One key per *original* character: lowercasing a whole
+/// string first would turn `İ` into two scalars (`i` + U+0307) and let it
+/// fill two `_`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CharKey([char; 3]);
+
+impl CharKey {
+    fn of(c: char, case_insensitive: bool) -> Self {
+        let mut key = ['\0'; 3];
+        if !case_insensitive {
+            key[0] = c;
+        } else if c.is_ascii() {
+            key[0] = c.to_ascii_lowercase();
+        } else {
+            for (slot, lower) in key.iter_mut().zip(c.to_lowercase()) {
+                *slot = lower;
             }
-            b'%' => {
+        }
+        Self(key)
+    }
+}
+
+fn tokenize_like_pattern(pattern: &str, case_insensitive: bool) -> Vec<Token> {
+    let literal = |c| Token::Literal(CharKey::of(c, case_insensitive));
+    let mut out = Vec::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(escaped) => out.push(literal(escaped)),
+                // A trailing backslash escapes nothing: it is itself.
+                None => out.push(literal('\\')),
+            },
+            '%' => {
                 if !matches!(out.last(), Some(Token::AnySeq)) {
                     out.push(Token::AnySeq);
                 }
-                i += 1;
             }
-            b'_' => {
-                out.push(Token::AnyOne);
-                i += 1;
-            }
-            c => {
-                out.push(Token::Literal(c));
-                i += 1;
-            }
+            '_' => out.push(Token::AnyOne),
+            c => out.push(literal(c)),
         }
     }
     out
@@ -479,12 +502,12 @@ thread_local! {
 
 /// A LIKE pattern compiled once and reused across candidate rows.
 ///
-/// Holds the tokenized pattern (already lowercased for ILIKE) plus two DP
+/// Holds the tokenized pattern (literals keyed for ILIKE) plus two DP
 /// buffers that are resized/reset in place on each [`Self::run`] call rather
 /// than reallocated. `source` keeps the *original* pattern bytes so the cache
 /// can verify identity by content.
 struct CompiledLikePattern {
-    /// Original (pre-lowercasing) pattern bytes — the cache identity key.
+    /// Original pattern bytes — the cache identity key.
     source: Vec<u8>,
     case_insensitive: bool,
     tokens: Vec<Token>,
@@ -493,20 +516,13 @@ struct CompiledLikePattern {
 }
 
 impl CompiledLikePattern {
-    /// Tokenizes `pattern`, lowercasing it first for the case-insensitive path
-    /// so the (identical-per-row) pattern lowercase happens exactly once.
+    /// Tokenizes `pattern`, keying its literals once (lowercased for ILIKE),
+    /// so the identical-per-row pattern work happens exactly once.
     fn compile(pattern: &str, case_insensitive: bool) -> Self {
-        let lowered;
-        let pattern_bytes = if case_insensitive {
-            lowered = pattern.to_lowercase();
-            lowered.as_bytes()
-        } else {
-            pattern.as_bytes()
-        };
         Self {
             source: pattern.as_bytes().to_vec(),
             case_insensitive,
-            tokens: tokenize_like_pattern(pattern_bytes),
+            tokens: tokenize_like_pattern(pattern, case_insensitive),
             dp_prev: Vec::new(),
             dp_curr: Vec::new(),
         }
@@ -520,20 +536,13 @@ impl CompiledLikePattern {
 
     /// Runs the rolling-DP match of `text` against the compiled tokens,
     /// reusing the DP buffers (`O(text_len * token_len)` time, `O(token_len)`
-    /// memory). For ILIKE the text is lowercased per row (unavoidable, as it
-    /// differs across candidates); the pattern lowercase is already amortized.
+    /// memory). Each text character is keyed once (lowercased for ILIKE),
+    /// so it fills exactly one `_` whatever its lowercase expands to.
     fn run(&mut self, text: &str) -> bool {
-        let lowered;
-        let text_bytes = if self.case_insensitive {
-            lowered = text.to_lowercase();
-            lowered.as_bytes()
-        } else {
-            text.as_bytes()
-        };
-
         // Disjoint field borrows so tokens can be read while the DP buffers are
         // mutated.
         let Self {
+            case_insensitive,
             tokens,
             dp_prev,
             dp_curr,
@@ -554,13 +563,14 @@ impl CompiledLikePattern {
 
         dp_curr.clear();
         dp_curr.resize(n + 1, false);
-        for &ch in text_bytes {
+        for ch in text.chars() {
+            let key = CharKey::of(ch, *case_insensitive);
             dp_curr.fill(false);
             for (j, tok) in tokens.iter().enumerate() {
                 dp_curr[j + 1] = match tok {
                     Token::AnySeq => dp_curr[j] || dp_prev[j + 1],
                     Token::AnyOne => dp_prev[j],
-                    Token::Literal(c) => dp_prev[j] && ch == *c,
+                    Token::Literal(c) => dp_prev[j] && key == *c,
                 };
             }
             std::mem::swap(dp_prev, dp_curr);

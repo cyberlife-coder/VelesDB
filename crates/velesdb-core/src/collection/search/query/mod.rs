@@ -241,7 +241,9 @@ impl Collection {
         let ctx = self.prepare_query_context(query, client_id)?;
 
         // MATCH queries take a completely separate path (no extraction needed).
-        if let Some(results) = self.try_dispatch_match(query, params, &ctx)? {
+        if let Some(results) =
+            self.try_dispatch_match(query, params, &ctx, &match_exec::MatchSources::default())?
+        {
             return Ok((results, None));
         }
 

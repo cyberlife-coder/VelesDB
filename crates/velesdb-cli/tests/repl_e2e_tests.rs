@@ -466,14 +466,14 @@ fn setup_cross_collection_enrichment() -> (std::path::PathBuf, TempDir) {
     (db_path, temp)
 }
 
-/// Regression test for the CLI `@collection` cross-collection MATCH enrichment.
+/// Regression test for the CLI `@collection` cross-collection MATCH.
 ///
 /// Before the fix, the REPL routed every MATCH query to
-/// `Collection::execute_query`, bypassing
-/// `Database::enrich_match_results_cross_collection`, so the `@pricing`
-/// annotation was parsed but silently dropped. After the fix the query is
-/// routed through `Database::execute_query`, which enriches the `w` binding
-/// with `pricing` fields — the `w.price` / `w.stock` columns must render.
+/// `Collection::execute_query`, which cannot see other collections, so the
+/// `@pricing` annotation was parsed but silently dropped. The query is now
+/// routed through `Database::execute_query`, which resolves the annotation:
+/// the `w` binding carries the `pricing` fields, and the `w.price` /
+/// `w.stock` columns must render.
 #[test]
 fn test_repl_match_at_collection_enrichment() {
     let (db_path, _temp) = setup_cross_collection_enrichment();
