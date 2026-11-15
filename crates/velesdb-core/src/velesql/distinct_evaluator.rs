@@ -103,8 +103,9 @@ pub(crate) fn compute_distinct_key(
         // SELECT * or SELECT DISTINCT *: use full payload as key
         payload.map_or_else(|| "null".to_string(), canonical_json_string)
     } else {
-        // SELECT DISTINCT col1, col2: use specific columns. `id` is the
-        // point id, as in every clause, not a payload field of that name;
+        // SELECT DISTINCT col1, col2: use specific columns, a dotted one
+        // (`c.name`, `meta.lang`) by path as the projection reads it. `id` is
+        // the point id, as in every clause, not a payload field of that name;
         // numbers key as `GROUP BY` keys them (`group_key::normalise`), so
         // `1` and `1.0`, or `0` and `-0.0`, are one value.
         columns
@@ -113,7 +114,9 @@ pub(crate) fn compute_distinct_key(
                 let value = if col == "id" {
                     Some(Cow::Owned(serde_json::Value::from(result.point.id)))
                 } else {
-                    payload.and_then(|p| p.get(col)).map(Cow::Borrowed)
+                    payload
+                        .and_then(|p| super::grouping::payload_path(p, col))
+                        .map(Cow::Borrowed)
                 };
                 value.map_or_else(
                     || "null".to_string(),

@@ -1,144 +1,63 @@
-//! JOIN execution for the WASM VelesQL executor (S4-13).
+//! JOIN execution for the WASM VelesQL executor.
 //!
-//! Implements INNER JOIN and LEFT JOIN via a nested-loop algorithm — fine
-//! for WASM datasets which are typically small (< 100K rows). Supports
-//! only equality predicates (`ON a.col = b.col`), which covers the 95 %
-//! case and keeps the executor readable.
-//!
-//! Row layout in the join pipeline (see [`JoinedRow::values`]):
-//! 1. A **flat mirror** of both tables' columns at the root (last-writer
-//!    wins on collision — the alias-qualified form below is the
-//!    unambiguous way to disambiguate, same as standard SQL).
-//! 2. A **nested object per alias** so alias-qualified references like
-//!    `WHERE orders.total > 40` traverse into `orders → total` via
-//!    [`crate::filter::get_nested_field`]'s split-on-dot navigation.
-//!
-//! The two shapes coexist so bare columns (`WHERE total > 40`) still
-//! work while alias-qualified refs no longer silently fail.
+//! INNER and LEFT JOIN by a nested loop — fine for browser-sized datasets —
+//! on one equality (`ON a.col = b.col`, oriented as core orients it, or
+//! `USING (col)`). A joined row is built as core builds it
+//! ([`velesdb_core::velesql::scope_base`] / [`velesdb_core::velesql::merge_side`]):
+//! the base point's id and score, each side's fields flat and under its alias.
+//! The joined rows then go through the SELECT pipeline like any scan — WHERE
+//! here, then DISTINCT, ORDER BY, projection and OFFSET / LIMIT in
+//! `velesql_select` — so `o.amount`, `c.name` and a self-join's two `name`s
+//! read as in core.
 
-use velesdb_core::velesql::{JoinClause, JoinType, SelectStatement};
+use velesdb_core::velesql::{
+    merge_side, scope_base, side_alias, JoinClause, JoinType, SelectStatement,
+};
 
 use crate::database::DatabaseInner;
-use crate::velesql_result::QueryResultRow;
 use crate::velesql_scan::{scan_all, OwnedScanRow};
 use crate::velesql_value::Params;
 use crate::velesql_where;
 
-/// Executes a SELECT with one or more JOIN clauses. Applies the WHERE
-/// clause as a post-filter on the joined row set (so WHERE can reference
-/// left or right columns uniformly).
-pub(crate) fn execute(
+/// The joined rows of a SELECT with JOIN clauses that its WHERE holds for, in
+/// base order.
+pub(crate) fn joined_rows(
     db: &DatabaseInner,
     stmt: &SelectStatement,
     params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
-    let left_rows = scan_all(db, &stmt.from, None, params)?;
-    let mut accumulator: Vec<JoinedRow> = left_rows
+) -> Result<Vec<OwnedScanRow>, String> {
+    let from_alias = side_alias(stmt.from_alias.first().map(String::as_str), &stmt.from);
+    let mut rows: Vec<OwnedScanRow> = scan_all(db, &stmt.from, None, params)?
         .into_iter()
-        .map(|r| JoinedRow::from_left(r, &stmt.from))
+        .map(|(id, score, payload)| (id, score, Some(scope_base(payload, from_alias, id))))
         .collect();
-
     for join in &stmt.joins {
-        accumulator = apply_join(db, accumulator, join, params)?;
+        rows = apply_join(db, rows, join, params)?;
     }
-
-    project_rows(&accumulator, stmt, params)
-}
-
-/// A row in the join pipeline. `values` maps every visible column (prefixed
-/// by alias when needed) to its JSON value. `id` carries the left-side id
-/// for display; subsequent joins don't change the id.
-struct JoinedRow {
-    id: u64,
-    values: serde_json::Map<String, serde_json::Value>,
-}
-
-impl JoinedRow {
-    fn from_left(row: OwnedScanRow, default_alias: &str) -> Self {
-        let (id, _score, payload) = row;
-        let mut values = serde_json::Map::new();
-        if let Some(serde_json::Value::Object(obj)) = &payload {
-            for (k, v) in obj {
-                values.insert(k.clone(), v.clone());
-            }
-        }
-        values.insert("id".to_string(), serde_json::json!(id));
-        // Alias-scoped nested mirror: `WHERE users.name = ...` navigates
-        // `users → name` through `get_nested_field`. The nested object
-        // always carries the node id so `WHERE users.id = ...` resolves
-        // even when the payload itself has no `id` key.
-        values.insert(
-            default_alias.to_string(),
-            nest_payload_with_id(payload.as_ref(), id),
-        );
-        Self { id, values }
-    }
-
-    fn merge_right(&self, right_row: &OwnedScanRow, right_alias: &str) -> Self {
-        let mut values = self.values.clone();
-        let (right_id, _score, right_payload) = right_row;
-        if let Some(serde_json::Value::Object(obj)) = right_payload {
-            for (k, v) in obj {
-                // Flat mirror: last-writer wins on collision. Documented in
-                // the module docstring — use the alias-qualified form to
-                // disambiguate, same as standard SQL.
-                values.insert(k.clone(), v.clone());
-            }
-        }
-        // Alias-scoped nested mirror for the right side. Overwrites any
-        // prior entry (e.g. a null-padded placeholder from LEFT JOIN).
-        values.insert(
-            right_alias.to_string(),
-            nest_payload_with_id(right_payload.as_ref(), *right_id),
-        );
-        Self {
-            id: self.id,
-            values,
-        }
-    }
-
-    fn merge_right_null(&self, right_alias: &str) -> Self {
-        let mut values = self.values.clone();
-        // Alias-scoped nested mirror for the un-matched right side: the
-        // alias exists but its `id` is null. `WHERE foo.id IS NULL` works
-        // via `get_nested_field`.
-        values.insert(
-            right_alias.to_string(),
-            serde_json::json!({ "id": serde_json::Value::Null }),
-        );
-        Self {
-            id: self.id,
-            values,
-        }
-    }
-}
-
-/// Clones `payload` into an object with the row id injected as `"id"`.
-///
-/// Used to build the alias-scoped nested mirror in [`JoinedRow`]. A
-/// `None` or non-object payload yields `{"id": <id>}` so that
-/// `get_nested_field("alias.id")` still works.
-fn nest_payload_with_id(payload: Option<&serde_json::Value>, id: u64) -> serde_json::Value {
-    let mut obj = match payload {
-        Some(serde_json::Value::Object(map)) => map.clone(),
-        _ => serde_json::Map::new(),
+    let Some(cond) = &stmt.where_clause else {
+        return Ok(rows);
     };
-    obj.insert("id".to_string(), serde_json::json!(id));
-    serde_json::Value::Object(obj)
+    let mut kept = Vec::with_capacity(rows.len());
+    for row in rows {
+        if velesql_where::matches(cond, row.0, row.2.as_ref(), params)? {
+            kept.push(row);
+        }
+    }
+    Ok(kept)
 }
 
 fn apply_join(
     db: &DatabaseInner,
-    accumulator: Vec<JoinedRow>,
+    accumulator: Vec<OwnedScanRow>,
     join: &JoinClause,
     params: &Params,
-) -> Result<Vec<JoinedRow>, String> {
+) -> Result<Vec<OwnedScanRow>, String> {
     reject_unsupported_join(join)?;
-    let alias = join.alias.clone().unwrap_or_else(|| join.table.clone());
+    let alias = side_alias(join.alias.as_deref(), &join.table).to_string();
     let right_rows = scan_all(db, &join.table, None, params)?;
     let (left_key, right_key) = equality_keys(join, &alias)?;
 
-    let mut out: Vec<JoinedRow> = Vec::new();
+    let mut out: Vec<OwnedScanRow> = Vec::new();
     for left in &accumulator {
         join_one_left_row(
             left,
@@ -154,23 +73,32 @@ fn apply_join(
 }
 
 fn join_one_left_row(
-    left: &JoinedRow,
+    left: &OwnedScanRow,
     right_rows: &[OwnedScanRow],
     alias: &str,
     left_key: &str,
     right_key: &str,
     join: &JoinClause,
-    out: &mut Vec<JoinedRow>,
+    out: &mut Vec<OwnedScanRow>,
 ) {
+    let (id, score, payload) = left;
     let mut matched_any = false;
     for right in right_rows {
         if rows_match(left, right, left_key, right_key, alias) {
-            out.push(left.merge_right(right, alias));
+            let empty = serde_json::Map::new();
+            let fields = right
+                .2
+                .as_ref()
+                .and_then(|p| p.as_object())
+                .unwrap_or(&empty);
+            let merged = merge_side(payload.clone(), alias, fields, Some(right.0));
+            out.push((*id, *score, Some(merged)));
             matched_any = true;
         }
     }
     if !matched_any && matches!(join.join_type, JoinType::Left) {
-        out.push(left.merge_right_null(alias));
+        let merged = merge_side(payload.clone(), alias, &serde_json::Map::new(), None);
+        out.push((*id, *score, Some(merged)));
     }
 }
 
@@ -226,13 +154,21 @@ fn key_of(ref_: &velesdb_core::velesql::ColumnRef, join_alias: &str) -> String {
 }
 
 fn rows_match(
-    left: &JoinedRow,
+    left: &OwnedScanRow,
     right: &OwnedScanRow,
     left_key: &str,
     right_key: &str,
     right_alias: &str,
 ) -> bool {
-    let left_val = lookup_join_key(&left.values, left_key);
+    // `id` is the base point's id, as in every clause.
+    let left_val = if left_key == "id" {
+        Some(serde_json::json!(left.0))
+    } else {
+        left.2
+            .as_ref()
+            .and_then(|p| p.as_object())
+            .and_then(|values| lookup_join_key(values, left_key))
+    };
     let right_val = extract_right_value(right, right_key, right_alias);
     match (left_val, right_val) {
         (Some(a), Some(b)) => crate::velesql_value::json_values_equal(&a, &b),
@@ -267,40 +203,6 @@ fn extract_right_value(row: &OwnedScanRow, key: &str, alias: &str) -> Option<ser
     payload
         .as_ref()
         .and_then(|p| crate::filter::get_nested_field(p, col).cloned())
-}
-
-fn project_rows(
-    rows: &[JoinedRow],
-    stmt: &SelectStatement,
-    params: &Params,
-) -> Result<Vec<QueryResultRow>, String> {
-    let mut out = Vec::with_capacity(rows.len());
-    let offset = stmt.offset.unwrap_or(0);
-    let limit = stmt.limit.unwrap_or(u64::MAX);
-    let mut skipped: u64 = 0;
-    for row in rows {
-        if !where_passes(row, stmt, params)? {
-            continue;
-        }
-        if skipped < offset {
-            skipped = skipped.saturating_add(1);
-            continue;
-        }
-        if (out.len() as u64) >= limit {
-            break;
-        }
-        let payload = serde_json::Value::Object(row.values.clone());
-        out.push(QueryResultRow::synthetic(payload)?);
-    }
-    Ok(out)
-}
-
-fn where_passes(row: &JoinedRow, stmt: &SelectStatement, params: &Params) -> Result<bool, String> {
-    let Some(cond) = &stmt.where_clause else {
-        return Ok(true);
-    };
-    let payload = serde_json::Value::Object(row.values.clone());
-    velesql_where::matches(cond, row.id, Some(&payload), params)
 }
 
 #[cfg(test)]

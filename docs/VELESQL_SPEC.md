@@ -326,6 +326,28 @@ FROM <table1> [[AS] <alias1>]
 > (see `validate_join_condition` in `join.rs` and
 > `Database::try_indexed_join` in `database/query_join.rs`).
 
+### Joined rows
+
+One definition serves every engine (`velesql::scope_base` / `merge_side`,
+core and WASM). A joined row is the base point — its id and score — whose
+payload carries each side twice:
+
+- **under its alias** (the table name when it has none), with that side's
+  `id`: `o.amount`, `c.name`, `c.id` read that side in WHERE, ORDER BY,
+  GROUP BY, DISTINCT and the projection, so a self-join's `e.name` and
+  `m.name` stay apart;
+- **flat**, every field at the root, a later side overwriting an earlier one
+  of the same name, so a bare `amount` still reads.
+
+A LEFT JOIN row without a match carries the alias with a `null` id.
+
+As in SQL, WHERE filters the joined rows, then DISTINCT, ORDER BY, OFFSET and
+LIMIT (10 by default) apply to them, and an aggregate groups them. A WHERE
+predicate on one INNER join side is pushed below the join as an
+optimization; one on the outer side of a LEFT join is not, since it must see
+the null-filled row: `LEFT JOIN c ... WHERE c.id IS NULL` finds the rows
+without a match, and `WHERE c.price > 10` drops them.
+
 ### ON Condition
 
 Specify the join equality condition:
