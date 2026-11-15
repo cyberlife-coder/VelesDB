@@ -15,6 +15,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use super::where_eval::resolve_query_vector;
+use super::where_similarity_score::first_similarity_condition;
 use super::{MatchResult, MatchStorageGuards};
 use crate::collection::graph::{concurrent_bfs_stream, StreamingConfig};
 use crate::collection::types::Collection;
@@ -298,20 +299,13 @@ impl Collection {
 ///
 /// Returns `Error::Query` when no similarity condition is found.
 fn extract_similarity_condition(where_clause: Option<&Condition>) -> Result<&SimilarityCondition> {
-    fn find_sim(cond: &Condition) -> Option<&SimilarityCondition> {
-        match cond {
-            Condition::Similarity(sim) => Some(sim),
-            Condition::And(l, r) | Condition::Or(l, r) => find_sim(l).or_else(|| find_sim(r)),
-            Condition::Not(inner) | Condition::Group(inner) => find_sim(inner),
-            _ => None,
-        }
-    }
-
-    where_clause.and_then(find_sim).ok_or_else(|| {
-        Error::Query(
-            "VectorFirst strategy requires a similarity condition in WHERE clause".to_string(),
-        )
-    })
+    where_clause
+        .and_then(first_similarity_condition)
+        .ok_or_else(|| {
+            Error::Query(
+                "VectorFirst strategy requires a similarity condition in WHERE clause".to_string(),
+            )
+        })
 }
 
 /// Returns the WHERE clause with the first `Similarity` leaf replaced by nothing.

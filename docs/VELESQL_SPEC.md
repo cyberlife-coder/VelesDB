@@ -2042,6 +2042,13 @@ RETURN similarity()                -- Pre-computed similarity score
 RETURN a.name, similarity() AS score
 ```
 
+`similarity()` (in `RETURN` and in `ORDER BY`) and each row's score are the
+similarity of the node targeted by the first `similarity()` leaf of `WHERE`:
+`d` in `WHERE similarity(d.embedding, $v) > 0.8`, the traversal target for a
+bare field. This holds on every alias of the pattern, whichever execution
+strategy the planner picks. Without a similarity leaf, a row's score falls
+back to its depth, `1 / (depth + 1)`.
+
 ### Full Examples
 
 ```sql
