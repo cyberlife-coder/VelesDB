@@ -227,7 +227,7 @@ The same loop is available outside the REPL as
 | `.graph remove-edge <col> <edge_id>` | Remove an edge by ID |
 | `.graph count <col>` | Show edge and node count |
 | `.graph search <col> <vector_json> [k]` | Search by embedding similarity (requires embeddings) |
-| `.graph store-payload <col> <node_id> <json>` | Store JSON payload on a node |
+| `.graph store-payload <col> <node_id> <json> [--vector <json_array>]` | Store JSON payload on a node; `--vector` also stores its embedding (graph collections created with a dimension), so the node answers `similarity()` in MATCH |
 | `.graph get-payload <col> <node_id>` | Retrieve node payload |
 | `.graph nodes <col> [--page N]` | Paginated node browsing (20 per page) |
 | `.graph help` | Full graph help |
@@ -255,9 +255,31 @@ Session commands use the backslash prefix; the dot prefix is also accepted.
 **Effect of `\use <collection>`:** sets the `collection` session setting. The
 REPL verifies that the collection exists (vector, graph, or metadata) and
 displays its type. `\use` records the active collection in the session state
-(visible via `\show`), but VelesQL queries still require an explicit
-`FROM <collection>` clause. The active collection does not automatically apply
-to dot-commands or queries.
+(visible via `\show`). A `MATCH` query or a `GROUP BY` / aggregate `SELECT`
+without `FROM` runs against the active collection; any other `SELECT` still
+needs an explicit `FROM <collection>`. Dot-commands always name their
+collection.
+
+**Example — one collection, three engines.** A graph collection with a
+dimension stores node payloads, node embeddings and edges; one `MATCH` then
+filters on all three:
+
+```sql
+CREATE GRAPH COLLECTION kg (dimension = 4, metric = 'cosine');
+```
+
+```text
+.graph store-payload kg 100 {"name":"Ada","kind":"author","_labels":["Person"]} --vector [0.9,0.1,0.0,0.0]
+.graph store-payload kg 1 {"name":"LSM-tree internals","_labels":["Doc"]} --vector [0.9,0.1,0.0,0.0]
+.graph add-edge kg 1 100 1 WROTE
+\use kg
+```
+
+```sql
+MATCH (a:Person)-[:WROTE]->(d:Doc) WHERE similarity(d.embedding, [1.0, 0.0, 0.0, 0.0]) > 0.8 AND a.kind = 'author' RETURN a.name, d.name;
+```
+
+Node labels live in the `_labels` payload key.
 
 ---
 
