@@ -155,6 +155,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`BETWEEN` with string or date bounds matches the range.** It converted
+  its bounds with a numbers-only converter, so a string bound became `null`:
+  `date BETWEEN '2024-01-01' AND '2024-12-31'`, the example in
+  `docs/VELESQL_SPEC.md`, matched nothing. The bounds now convert like a
+  comparison's value, so `x BETWEEN a AND b` returns what
+  `x >= a AND x <= b` returns. The WASM executor already did. Root cause:
+  core carried three VelesQL-value-to-JSON converters; the payload filter,
+  the MATCH index prefilter and DML writes now all use `Value::to_json`.
+
 - **A numeric literal too large for an `f64` is refused at parse time**
   (core, 2026-11-15). Past ~309 digits, `WHERE x = 1000…0` parsed to an
   infinite float, which JSON cannot hold: the filter compared `x` against

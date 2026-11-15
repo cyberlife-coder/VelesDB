@@ -214,7 +214,10 @@ impl Value {
         matches!(self, Self::Subquery(sq) if sq.references_outer_table(outer_tables))
     }
 
-    /// Converts this VelesQL value to a JSON value.
+    /// Converts this VelesQL value to a JSON value: the one conversion every
+    /// payload filter, index lookup and DML write uses, so a value compares
+    /// the same in every clause (a second, numbers-only converter once made
+    /// `BETWEEN` lose its string bounds).
     ///
     /// Literal values (integer, float, string, boolean, null) map directly
     /// to their JSON equivalents. Parameters serialize as `"$name"` strings.
