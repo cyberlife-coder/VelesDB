@@ -219,3 +219,28 @@ export interface AddEdgesBatchResponse {
    */
   added: number;
 }
+
+// ============================================================================
+// SSE streaming traversal (GET /collections/{name}/graph/traverse/stream)
+// ============================================================================
+
+/** Query params of the SSE traverse endpoint (`StreamTraverseParams`). */
+export interface StreamTraverseRequest {
+  /** Source node ID to start traversal from. */
+  startNode: number | string;
+  /** Traversal algorithm: 'bfs' (default) or 'dfs'. */
+  algorithm?: 'bfs' | 'dfs';
+  /** Maximum traversal depth. */
+  maxDepth?: number;
+  /** Maximum number of results to stream. */
+  limit?: number;
+  /** Relationship types to follow, in request order. */
+  relationshipTypes?: string[];
+}
+
+/** One SSE event of a streaming traversal. */
+export type TraverseStreamEvent =
+  | { type: 'node'; id: string | number; depth: number; path: Array<string | number> }
+  | { type: 'stats'; nodesVisited: number; elapsedMs: number }
+  | { type: 'done'; totalNodes: number; maxDepthReached: number; elapsedMs: number }
+  | { type: 'error'; message: string };

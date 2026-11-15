@@ -17,6 +17,7 @@ import type { AgentMemoryTransport } from './agent-memory-backend';
 import type { Filter } from '../filter';
 import type { QueryTransport } from './query-backend';
 import type { StreamingTransport } from './streaming-backend';
+import type { SseTransport } from './sse-backend';
 import type { SearchResult } from '../types';
 
 /** Configuration for the REST HTTP client. */
@@ -248,6 +249,15 @@ export function buildSearchTransport(config: RestHttpConfig): SearchTransport {
   return {
     requestJson: <T>(m: string, p: string, b?: unknown) => request<T>(config, m, p, b),
     sparseToRest: (sv: SparseVector) => sparseVectorToRestFormat(sv),
+  };
+}
+
+/** Build an SseTransport adapter (raw `fetch` primitives for event streams). */
+export function buildSseTransport(config: RestHttpConfig): SseTransport {
+  return {
+    baseUrl: config.baseUrl,
+    apiKey: config.apiKey,
+    timeout: config.timeout,
   };
 }
 

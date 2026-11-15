@@ -31,6 +31,8 @@ import type {
   TraverseRequest,
   TraverseParallelRequest,
   TraverseResponse,
+  TraverseStreamEvent,
+  StreamTraverseRequest,
   DegreeResponse,
   GraphCollectionConfig,
 } from './graph';
@@ -443,4 +445,9 @@ export interface IVelesDBMaintenanceBackend {
   healthCheck?(): Promise<HealthStatus>;
   /** `GET /ready` */
   readyCheck?(): Promise<HealthStatus>;
+  /** `GET /collections/{name}/graph/traverse/stream` (SSE) */
+  streamTraverse?(
+    collection: string,
+    request: StreamTraverseRequest
+  ): AsyncIterable<TraverseStreamEvent>;
 }

@@ -60,6 +60,8 @@ import type {
   CompactResult,
   ReorderResult,
   CollectionDiagnostics,
+  StreamTraverseRequest,
+  TraverseStreamEvent,
 } from '../types';
 import type { FilterInput } from '../filter';
 import type { CapabilityMap } from '../capabilities';
@@ -76,6 +78,7 @@ import {
   buildSearchTransport,
   buildQueryTransport,
   buildStreamingTransport,
+  buildSseTransport,
   buildAgentMemoryTransport,
   type RestHttpConfig,
 } from './rest-http';
@@ -124,6 +127,7 @@ import {
   vacuumCollection as _vacuumCollection, compactCollection as _compactCollection,
   reorderForLocality as _reorderForLocality, collectionDiagnostics as _collectionDiagnostics,
 } from './maintenance-backend';
+import { streamTraverse as _streamTraverse } from './sse-backend';
 import { query as _query, queryExplain as _queryExplain, collectionSanity as _collectionSanity } from './query-backend';
 import { scroll as _scroll } from './scroll-backend';
 import { getCollectionStats as _getCollectionStats, analyzeCollection as _analyzeCollection, getCollectionConfig as _getCollectionConfig } from './admin-backend';
@@ -252,6 +256,7 @@ export class RestBackend implements IVelesDBBackend {
   async compactCollection(c: string): Promise<CompactResult> { this.ensureInitialized(); return _compactCollection(buildCrudTransport(this.httpConfig), c); }
   async reorderForLocality(c: string): Promise<ReorderResult> { this.ensureInitialized(); return _reorderForLocality(buildCrudTransport(this.httpConfig), c); }
   async collectionDiagnostics(c: string): Promise<CollectionDiagnostics> { this.ensureInitialized(); return _collectionDiagnostics(buildCrudTransport(this.httpConfig), c); }
+  streamTraverse(c: string, req: StreamTraverseRequest): AsyncIterable<TraverseStreamEvent> { this.ensureInitialized(); return _streamTraverse(buildSseTransport(this.httpConfig), c, req); }
 
   // Streaming / PQ
   async trainPq(c: string, o?: PqTrainOptions): Promise<string> { this.ensureInitialized(); return _trainPq(buildStreamingTransport(this.httpConfig), c, o); }

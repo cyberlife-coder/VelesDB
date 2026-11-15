@@ -61,6 +61,8 @@ import type {
   CompactResult,
   ReorderResult,
   CollectionDiagnostics,
+  StreamTraverseRequest,
+  TraverseStreamEvent,
 } from './types';
 import type { FilterInput } from './filter';
 import type { CapabilityMap } from './capabilities';
@@ -646,6 +648,30 @@ export class VelesDB {
   async readyCheck(): Promise<HealthStatus> {
     this.ensureInitialized();
     return this.requireOps('readyCheck');
+  }
+
+  /**
+   * `GET /collections/{name}/graph/traverse/stream` — stream a graph
+   * traversal as SSE events (`node` / `stats` / `done` / `error`).
+   *
+   * Returns an async iterable: consume it with `for await (const ev of
+   * db.streamTraverse(...))`. REST only.
+   */
+  streamTraverse(
+    collection: string,
+    request: StreamTraverseRequest
+  ): AsyncIterable<TraverseStreamEvent> {
+    this.ensureInitialized();
+    requireNonEmptyString(collection, 'Collection');
+    const ops = this.backend as IVelesDBMaintenanceBackend;
+    const fn = ops.streamTraverse;
+    if (!fn) {
+      throw new VelesDBError(
+        `streamTraverse is not supported by the '${this.config.backend}' backend. Use REST backend.`,
+        'NOT_SUPPORTED'
+      );
+    }
+    return fn.call(this.backend, collection, request);
   }
 
   // ========================================================================
