@@ -70,6 +70,7 @@ import { RestBackend } from './backends/rest';
 import { AgentMemoryClient } from './agent-memory';
 import {
   requireNonEmptyString,
+  requireDimensionInRange,
   validateDocsBatch,
   validateDocument,
   validateRestPointId,
@@ -151,8 +152,13 @@ export class VelesDB {
     this.ensureInitialized();
     requireNonEmptyString(name, 'Collection name');
     const isMetadataOnly = config.collectionType === 'metadata_only';
-    if (!isMetadataOnly && (!config.dimension || config.dimension <= 0)) {
-      throw new ValidationError('Dimension must be a positive integer for vector collections');
+    if (!isMetadataOnly) {
+      if (config.dimension === undefined) {
+        throw new ValidationError('Dimension is required for vector collections');
+      }
+      // Core's validate_dimension (VELES-032): integer in 1..=65536 — checked
+      // here so the WASM path refuses what core refuses, not only REST.
+      requireDimensionInRange(config.dimension);
     }
     await this.backend.createCollection(name, config);
   }

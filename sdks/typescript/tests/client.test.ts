@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VelesDB } from '../src/client';
 import { ValidationError } from '../src/types';
+import { InvalidDimensionError } from '../src/errors';
 
 describe('VelesDB Client', () => {
   describe('constructor', () => {
@@ -61,17 +62,25 @@ describe('VelesDB Client', () => {
         .rejects.toThrow(ValidationError);
     });
 
-    it('should validate dimension', async () => {
+    it('should validate dimension against core range 1..=65536 (VELES-032)', async () => {
       (db as any).initialized = true;
       (db as any).backend = {
         createCollection: vi.fn(),
       };
 
       await expect(db.createCollection('test', { dimension: 0 }))
-        .rejects.toThrow(ValidationError);
+        .rejects.toThrow(InvalidDimensionError);
 
       await expect(db.createCollection('test', { dimension: -1 }))
-        .rejects.toThrow(ValidationError);
+        .rejects.toThrow(InvalidDimensionError);
+
+      // Core's MAX_DIMENSION: previously accepted client-side, refused by
+      // core with VELES-032 (and silently accepted on the WASM path).
+      await expect(db.createCollection('test', { dimension: 70_000 }))
+        .rejects.toMatchObject({ code: 'VELES-032' });
+
+      await expect(db.createCollection('test', { dimension: 128.5 }))
+        .rejects.toThrow(InvalidDimensionError);
     });
 
     it('should validate document ID', async () => {

@@ -8,6 +8,7 @@
 
 import type { VectorDocument, VelesDBConfig } from '../types';
 import { ValidationError } from '../types';
+import { InvalidDimensionError, InvalidVectorError } from '../errors';
 import { parseRestPointId } from '../backends/crud-backend';
 
 /** Validate that a value is a non-empty string, throwing with the given label. */
@@ -17,10 +18,45 @@ export function requireNonEmptyString(value: unknown, label: string): void {
   }
 }
 
-/** Validate that a value is a vector (number[] or Float32Array). */
+/**
+ * Core's `MAX_DIMENSION` (`validation.rs`): the largest vector dimension a
+ * collection may declare. Mirrors core so the client refuses the same values
+ * instead of letting a backend accept what core would reject.
+ */
+export const MAX_DIMENSION = 65_536;
+
+/**
+ * Core's `validate_dimension`: an integer in `1..=MAX_DIMENSION`, refused with
+ * VELES-032. Applied client-side so the WASM path (whose binding does not call
+ * `validate_dimension` at creation) refuses the same values core does.
+ */
+export function requireDimensionInRange(dimension: unknown): void {
+  if (
+    typeof dimension !== 'number' ||
+    !Number.isInteger(dimension) ||
+    dimension < 1 ||
+    dimension > MAX_DIMENSION
+  ) {
+    throw new InvalidDimensionError(
+      `dimension must be an integer in 1..=${MAX_DIMENSION} (core validate_dimension, VELES-032); got: ${String(dimension)}`
+    );
+  }
+}
+
+/** Validate that a value is a finite vector (number[] or Float32Array). */
 export function requireVector(value: unknown, label: string): void {
   if (!value || (!Array.isArray(value) && !(value instanceof Float32Array))) {
     throw new ValidationError(`${label} must be an array or Float32Array`);
+  }
+  // Same cold-boundary rule as core's `validate_vector_is_finite` (VELES-005):
+  // refuse NaN/±Inf here rather than let a backend accept what core rejects.
+  for (let i = 0; i < value.length; i++) {
+    const component = value[i] as number;
+    if (!Number.isFinite(component)) {
+      throw new InvalidVectorError(
+        `${label} component at index ${i} is not finite: ${component}`
+      );
+    }
   }
 }
 
