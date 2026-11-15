@@ -185,26 +185,94 @@ export async function deleteCollection(
   throwOnError(response, `Collection '${name}'`);
 }
 
+/**
+ * Raw wire shape of `GET /collections/{name}` — `CollectionResponse`
+ * (`crates/velesdb-core/src/api_types/responses.rs`): the point count arrives
+ * as `point_count` and the storage mode as `storage_mode`, not as the
+ * camelCase fields of the public {@link Collection} type.
+ */
+interface CollectionWire {
+  name: string;
+  dimension: number;
+  metric: string;
+  point_count: number;
+  storage_mode: string;
+}
+
+/** Map the REST wire shape of a collection to the public `Collection` type. */
+function mapCollectionWire(data: CollectionWire): Collection {
+  return {
+    name: data.name,
+    dimension: data.dimension,
+    metric: data.metric as Collection['metric'],
+    count: data.point_count,
+    storageMode: data.storage_mode as NonNullable<Collection['storageMode']>,
+  };
+}
+
 export async function getCollection(
   transport: CrudTransport,
   name: string
 ): Promise<Collection | null> {
-  const response = await transport.requestJson<Collection>(
+  const response = await transport.requestJson<CollectionWire>(
     'GET',
     collectionPath(name)
   );
   if (returnNullOnNotFound(response)) {
     return null;
   }
-  return response.data ?? null;
+  return response.data ? mapCollectionWire(response.data) : null;
 }
 
 export async function listCollections(
   transport: CrudTransport
 ): Promise<Collection[]> {
-  const response = await transport.requestJson<Collection[]>('GET', '/collections');
+  // Wire contract: `GET /collections` answers `{ "collections": [...] }` where
+  // each entry is a collection NAME — core's `list_collections()` returns
+  // `Vec<String>`. Unwrap the envelope, then hydrate each name through the
+  // typed `GET /collections/{name}` endpoint so the REST backend returns the
+  // same rich `Collection` shape as the WASM backend (which builds it from its
+  // own registry). A collection deleted between the two calls is skipped.
+  const response = await transport.requestJson<{ collections?: unknown[] }>(
+    'GET',
+    '/collections'
+  );
   throwOnError(response);
-  return response.data ?? [];
+  const entries = response.data?.collections ?? [];
+  const names = entries
+    .map((e) => (typeof e === 'string' ? e : (e as { name?: unknown })?.name))
+    .filter((n): n is string => typeof n === 'string');
+  const collections = await Promise.all(
+    names.map((n) => getCollection(transport, n))
+  );
+  return collections.filter((c): c is Collection => c !== null);
+}
+
+/**
+ * Build the `PointRequest` wire body of one document.
+ *
+ * `sparseVector` and `sparseVectors` must both reach the wire: the server
+ * accepts `sparse_vector` (default index) and `sparse_vectors` (named map) on
+ * upsert, and dropping either silently produced an empty sparse index and
+ * degraded hybrid search (the streaming backend always forwarded it).
+ */
+function docToPointWire(doc: VectorDocument): Record<string, unknown> {
+  const point: Record<string, unknown> = {
+    id: parseRestPointId(doc.id),
+    vector: toNumberArray(doc.vector),
+    payload: doc.payload,
+  };
+  if (doc.sparseVector) {
+    point.sparse_vector = sparseVectorToRestFormat(doc.sparseVector);
+  }
+  if (doc.sparseVectors) {
+    const named: Record<string, Record<string, number>> = {};
+    for (const [indexName, sv] of Object.entries(doc.sparseVectors)) {
+      named[indexName] = sparseVectorToRestFormat(sv);
+    }
+    point.sparse_vectors = named;
+  }
+  return point;
 }
 
 export async function upsert(
@@ -212,21 +280,10 @@ export async function upsert(
   collection: string,
   doc: VectorDocument
 ): Promise<void> {
-  const restId = parseRestPointId(doc.id);
-  const vector = toNumberArray(doc.vector);
-
-  // sparseVector must reach the wire: the server accepts `sparse_vector`
-  // on upsert, and dropping it silently produced an empty sparse index and
-  // degraded hybrid search (the streaming backend always forwarded it).
-  const point: Record<string, unknown> = { id: restId, vector, payload: doc.payload };
-  if (doc.sparseVector) {
-    point.sparse_vector = sparseVectorToRestFormat(doc.sparseVector);
-  }
-
   const response = await transport.requestJson(
     'POST',
     `${collectionPath(collection)}/points`,
-    { points: [point] }
+    { points: [docToPointWire(doc)] }
   );
   throwOnError(response, `Collection '${collection}'`);
 }
@@ -236,18 +293,7 @@ export async function upsertBatch(
   collection: string,
   docs: VectorDocument[]
 ): Promise<void> {
-  const vectors = docs.map(doc => {
-    // Same wire contract as single upsert: forward sparseVector when present.
-    const point: Record<string, unknown> = {
-      id: parseRestPointId(doc.id),
-      vector: toNumberArray(doc.vector),
-      payload: doc.payload,
-    };
-    if (doc.sparseVector) {
-      point.sparse_vector = sparseVectorToRestFormat(doc.sparseVector);
-    }
-    return point;
-  });
+  const vectors = docs.map(docToPointWire);
 
   const response = await transport.requestJson(
     'POST',
