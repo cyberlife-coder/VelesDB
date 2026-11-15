@@ -164,18 +164,18 @@ const MAX_EDGE_RETRIES: u32 = 1_000;
 /// Assigns a collision-free edge ID and inserts the edge, retrying on `EdgeExists`.
 ///
 /// Returns an `INTERNAL_SERVER_ERROR` response when [`MAX_EDGE_RETRIES`]
-/// consecutive IDs are all taken — this indicates a corrupted ID-space seed and
-/// should never occur in practice.
+/// probes are all taken. [`next_edge_candidate`] keeps the probes in sparse
+/// ID space, so this needs a collision on every one of them.
 #[allow(clippy::result_large_err)]
 fn insert_edge_with_retry(
     coll: &velesdb_core::collection::AnyCollection,
     req: &RelateRequest,
     properties: std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<u64, axum::response::Response> {
-    let mut next_id = coll.max_edge_id().map_or(1, |m| m.saturating_add(1));
+    let mut next_id = coll.max_edge_id().map_or(1, next_edge_candidate);
     for _ in 0..MAX_EDGE_RETRIES {
         if coll.edge_exists(next_id) {
-            next_id = next_id.saturating_add(1);
+            next_id = next_edge_candidate(next_id);
             continue;
         }
         let edge = match GraphEdge::new(next_id, req.source, req.target, &req.rel_type) {
@@ -185,7 +185,7 @@ fn insert_edge_with_retry(
         match coll.add_edge(edge) {
             Ok(()) => return Ok(next_id),
             Err(velesdb_core::Error::EdgeExists(_)) => {
-                next_id = next_id.saturating_add(1);
+                next_id = next_edge_candidate(next_id);
             }
             // Route through the shared error→status mapping (e.g.
             // NodeNotFound -> 404, not a generic 500) instead of collapsing
@@ -197,6 +197,25 @@ fn insert_edge_with_retry(
         StatusCode::INTERNAL_SERVER_ERROR,
         "edge id allocation exhausted after too many retries".to_string(),
     ))
+}
+
+/// The ID to probe after `taken` is found occupied.
+///
+/// Normally `taken + 1`: allocation starts at `max_edge_id + 1`, so the IDs
+/// above it are free. That sequence ends at `u64::MAX`, which any client can
+/// claim through `POST /graph/edges`; saturating there pinned every probe on
+/// the one taken ID. Past it, the probe jumps to a random ID instead — with far
+/// fewer than 2^64 edges stored, a random ID is almost never taken.
+fn next_edge_candidate(taken: u64) -> u64 {
+    taken.checked_add(1).unwrap_or_else(random_edge_id)
+}
+
+/// A random edge ID, from std's randomly keyed SipHash: every `RandomState`
+/// gets distinct keys (seeded randomly per thread, then advanced per
+/// instance). Good enough to avoid collisions; not meant for cryptography.
+fn random_edge_id() -> u64 {
+    use std::hash::BuildHasher;
+    std::collections::hash_map::RandomState::new().hash_one(0_u8)
 }
 
 /// Remove a relation edge by ID.
